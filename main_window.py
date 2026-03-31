@@ -183,6 +183,14 @@ scrollbar slider:hover {
     font-size: 10px;
     font-weight: bold;
 }
+.section-label {
+    margin-top: 8px;
+}
+.hint {
+    color: #4A6572;
+    font-size: 10px;
+    margin-top: -2px;
+}
 .detail-section {
     color: #4FD1C5;
     font-weight: bold;
@@ -1318,41 +1326,73 @@ class ControlPanel(Gtk.Box):
         self._src_video_btn.add_css_class("source-btn")
         self._src_video_btn.add_css_class("source-btn-left")
         self._src_video_btn.add_css_class("source-btn-active")
+        self._src_video_btn.set_tooltip_text(
+            "Wan2.2-T2V-A14B  ·  Async job-based  ·  5-second 720p MP4\n"
+            "Supports seed images for motion reference"
+        )
         self._src_video_btn.connect("clicked", lambda _: self._set_source("video"))
         src_row.append(self._src_video_btn)
         self._src_image_btn = Gtk.Button(label="🖼 FLUX Image")
         self._src_image_btn.add_css_class("source-btn")
         self._src_image_btn.add_css_class("source-btn-right")
+        self._src_image_btn.set_tooltip_text(
+            "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
+            "Blocks until image is ready (~15–90 s)"
+        )
         self._src_image_btn.connect("clicked", lambda _: self._set_source("image"))
         src_row.append(self._src_image_btn)
         self.append(src_row)
+
+        # One-line model spec shown below the toggle — updates on source change
+        self._source_desc_lbl = Gtk.Label(
+            label="async job  ·  ~3–10 min  ·  720p MP4"
+        )
+        self._source_desc_lbl.set_xalign(0)
+        self._source_desc_lbl.add_css_class("hint")
+        self.append(self._source_desc_lbl)
 
         # ── Prompt ────────────────────────────────────────────────────────────
         self.append(self._section("Prompt"))
         scroll1 = Gtk.ScrolledWindow()
         scroll1.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll1.set_size_request(-1, 100)
+        scroll1.set_size_request(-1, 90)
         self._prompt_view = Gtk.TextView()
         self._prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._prompt_view.get_buffer().set_text("")
-        ph = Gtk.Label(label="Describe the video…\n\ne.g. a cinematic shot of a red sports car driving through a rainy city at night")
+        # Placeholder text — updated when source changes
+        self._prompt_ph_text_video = (
+            "Describe the video…\n\n"
+            "e.g. a cinematic shot of a red sports car\n"
+            "driving through a rainy city at night"
+        )
+        self._prompt_ph_text_image = (
+            "Describe the image…\n\n"
+            "e.g. a lone lighthouse on a rocky cliff\n"
+            "at sunset, oil painting, dramatic sky"
+        )
+        ph = Gtk.Label(label=self._prompt_ph_text_video)
         ph.set_xalign(0)
         ph.set_yalign(0)
         ph.add_css_class("muted")
         ph.set_can_focus(False)
-        ph.set_can_target(False)   # pass all pointer/keyboard events through to the TextView below
-        # Overlay placeholder over textview
+        ph.set_can_target(False)   # pass pointer/keyboard events through to the TextView
         overlay1 = Gtk.Overlay()
         overlay1.set_child(self._prompt_view)
         overlay1.add_overlay(ph)
         self._prompt_placeholder = ph
-        self._prompt_view.get_buffer().connect("changed", lambda b: ph.set_visible(b.get_char_count() == 0))
+        self._prompt_view.get_buffer().connect(
+            "changed", lambda b: ph.set_visible(b.get_char_count() == 0)
+        )
         scroll1.set_child(overlay1)
         self.append(scroll1)
 
         # ── Prompt component chips ────────────────────────────────────────────
-        # Clicking a chip appends its text to the prompt (with a comma separator).
-        # The chip list changes when the generation source changes (video vs image).
+        # Clicking a chip appends its modifier text to the prompt.
+        # The chip list changes when source changes (video ↔ image).
+        chips_hdr = Gtk.Label(label="Style modifiers — click to append:")
+        chips_hdr.set_xalign(0)
+        chips_hdr.add_css_class("hint")
+        self.append(chips_hdr)
         self._chips_scroll = Gtk.ScrolledWindow()
         self._chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         self._chips_scroll.set_size_request(-1, -1)
@@ -1360,12 +1400,21 @@ class ControlPanel(Gtk.Box):
         self.append(self._chips_scroll)
 
         # ── Negative prompt ───────────────────────────────────────────────────
-        self.append(self._section("Negative Prompt (optional)"))
+        self.append(self._section("Negative Prompt"))
+        neg_hint = Gtk.Label(label="Steer away from: blurry, watermark, low quality, distorted")
+        neg_hint.set_xalign(0)
+        neg_hint.set_ellipsize(Pango.EllipsizeMode.END)
+        neg_hint.add_css_class("hint")
+        self.append(neg_hint)
         scroll2 = Gtk.ScrolledWindow()
         scroll2.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll2.set_size_request(-1, 60)
+        scroll2.set_size_request(-1, 52)
         self._neg_view = Gtk.TextView()
         self._neg_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._neg_view.set_tooltip_text(
+            "Describe what you do NOT want in the output.\n"
+            "Common: blurry, watermark, text overlay, distorted, low quality"
+        )
         scroll2.set_child(self._neg_view)
         self.append(scroll2)
 
@@ -1373,47 +1422,92 @@ class ControlPanel(Gtk.Box):
         self.append(self._section("Parameters"))
         param_grid = Gtk.Grid()
         param_grid.set_column_spacing(8)
-        param_grid.set_row_spacing(4)
+        param_grid.set_row_spacing(2)
 
+        # Steps — row 0 (label+spin) + row 1 (hint)
         self._steps_lbl = Gtk.Label(label="Steps (12–50):")
+        self._steps_lbl.set_xalign(1)
         param_grid.attach(self._steps_lbl, 0, 0, 1, 1)
         self._steps_spin = Gtk.SpinButton()
-        self._steps_spin.set_adjustment(Gtk.Adjustment(value=20, lower=12, upper=50, step_increment=1))
-        self._steps_spin.set_tooltip_text("More steps = better quality but slower.")
-        param_grid.attach(self._steps_spin, 1, 0, 1, 1)
-
-        param_grid.attach(Gtk.Label(label="Seed (−1 = random):"), 0, 1, 1, 1)
-        self._seed_spin = Gtk.SpinButton()
-        self._seed_spin.set_adjustment(Gtk.Adjustment(value=-1, lower=-1, upper=2**31-1, step_increment=1))
-        self._seed_spin.set_tooltip_text("−1 uses a random seed each time.")
-        param_grid.attach(self._seed_spin, 1, 1, 1, 1)
-
-        # Guidance scale — shown for FLUX (image), hidden for Wan2.2 (video)
-        self._guidance_lbl = Gtk.Label(label="Guidance (1–20):")
-        self._guidance_lbl.set_tooltip_text(
-            "Classifier-free guidance scale. Higher = closer to prompt, less creative.\n"
-            "Typical FLUX range: 2.5–7.0 (default 3.5)"
+        self._steps_spin.set_adjustment(
+            Gtk.Adjustment(value=20, lower=12, upper=50, step_increment=1)
         )
-        param_grid.attach(self._guidance_lbl, 0, 2, 1, 1)
+        self._steps_spin.set_tooltip_text(
+            "Denoising steps — each step refines the output.\n"
+            "More = sharper quality, but proportionally slower.\n"
+            "Wan2.2 sweet spot: 20–28  ·  FLUX sweet spot: 20–30"
+        )
+        param_grid.attach(self._steps_spin, 1, 0, 1, 1)
+        self._steps_hint_lbl = Gtk.Label(label="sweet spot 20–28  ·  more = sharper, slower")
+        self._steps_hint_lbl.set_xalign(0)
+        self._steps_hint_lbl.add_css_class("hint")
+        param_grid.attach(self._steps_hint_lbl, 0, 1, 2, 1)
+
+        # Seed — row 2 (label+spin) + row 3 (hint)
+        seed_lbl = Gtk.Label(label="Seed (−1=random):")
+        seed_lbl.set_xalign(1)
+        param_grid.attach(seed_lbl, 0, 2, 1, 1)
+        self._seed_spin = Gtk.SpinButton()
+        self._seed_spin.set_adjustment(
+            Gtk.Adjustment(value=-1, lower=-1, upper=2**31-1, step_increment=1)
+        )
+        self._seed_spin.set_tooltip_text(
+            "Random seed controlling the noise pattern.\n"
+            "−1 picks a new random seed every time.\n"
+            "Set a fixed value to reproduce a previous result\n"
+            "(same seed + same settings = identical output)."
+        )
+        param_grid.attach(self._seed_spin, 1, 2, 1, 1)
+        seed_hint = Gtk.Label(label="same seed + prompt → identical result")
+        seed_hint.set_xalign(0)
+        seed_hint.add_css_class("hint")
+        param_grid.attach(seed_hint, 0, 3, 2, 1)
+
+        # Guidance scale — row 4 (label+spin) + row 5 (hint)
+        # Only shown for FLUX (image); hidden for Wan2.2 (video).
+        self._guidance_lbl = Gtk.Label(label="Guidance (1–20):")
+        self._guidance_lbl.set_xalign(1)
+        self._guidance_lbl.set_tooltip_text(
+            "Classifier-free guidance scale — how strictly the model\n"
+            "follows the text prompt vs. exploring on its own.\n\n"
+            "Low (2–4): more creative, unexpected results\n"
+            "Mid (4–7): good balance — recommended range\n"
+            "High (8+): very literal, can over-saturate or distort\n\n"
+            "Rainbow/artifact issues → raise to 5–7."
+        )
+        param_grid.attach(self._guidance_lbl, 0, 4, 1, 1)
         self._guidance_spin = Gtk.SpinButton()
         self._guidance_spin.set_adjustment(
             Gtk.Adjustment(value=3.5, lower=1.0, upper=20.0, step_increment=0.5)
         )
         self._guidance_spin.set_digits(1)
         self._guidance_spin.set_tooltip_text(
-            "FLUX guidance scale (1.0–20.0). Default 3.5. Higher values follow "
-            "the prompt more strictly but reduce variety."
+            "FLUX guidance scale (1.0–20.0). Default 3.5.\n"
+            "Raise to 5–7 if you see rainbow or distortion artifacts."
         )
-        param_grid.attach(self._guidance_spin, 1, 2, 1, 1)
-        # Hidden by default (Wan2.2 doesn't use guidance scale)
+        param_grid.attach(self._guidance_spin, 1, 4, 1, 1)
+        self._guidance_hint_lbl = Gtk.Label(
+            label="3.5–7 typical  ·  rainbow artifacts → raise value"
+        )
+        self._guidance_hint_lbl.set_xalign(0)
+        self._guidance_hint_lbl.add_css_class("hint")
+        param_grid.attach(self._guidance_hint_lbl, 0, 5, 2, 1)
+
+        # Guidance rows hidden by default (Wan2.2 doesn't use guidance scale)
         self._guidance_lbl.set_visible(False)
         self._guidance_spin.set_visible(False)
+        self._guidance_hint_lbl.set_visible(False)
 
         self.append(param_grid)
 
         # ── Seed image ────────────────────────────────────────────────────────
         # Only relevant for Wan2.2 video; hidden when FLUX image source is selected.
         self._seed_img_section = self._section("Seed Image (optional)")
+        self._seed_img_section.set_tooltip_text(
+            "Reference image passed to Wan2.2 to guide motion and composition.\n"
+            "The model uses it as a visual starting point — not copied verbatim.\n"
+            "PNG or JPEG, any aspect ratio (resized internally)."
+        )
         self.append(self._seed_img_section)
         seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
@@ -1486,37 +1580,47 @@ class ControlPanel(Gtk.Box):
         self._model_source = source
         is_image = source == "image"
 
-        # Update toggle button visual state
+        # Update toggle button visual state and title
         if is_image:
             self._src_image_btn.add_css_class("source-btn-active")
             self._src_video_btn.remove_css_class("source-btn-active")
             self._title_lbl.set_label("TT IMAGE GENERATOR")
+            self._source_desc_lbl.set_label("synchronous  ·  ~15–90 s  ·  1024×1024 JPEG")
         else:
             self._src_video_btn.add_css_class("source-btn-active")
             self._src_image_btn.remove_css_class("source-btn-active")
             self._title_lbl.set_label("TT VIDEO GENERATOR")
+            self._source_desc_lbl.set_label("async job  ·  ~3–10 min  ·  720p MP4")
 
-        # Show guidance scale for FLUX, hide for Wan2.2
+        # Update prompt placeholder to match the active medium
+        self._prompt_placeholder.set_label(
+            self._prompt_ph_text_image if is_image else self._prompt_ph_text_video
+        )
+
+        # Show guidance scale + hint for FLUX; hide for Wan2.2
         self._guidance_lbl.set_visible(is_image)
         self._guidance_spin.set_visible(is_image)
+        self._guidance_hint_lbl.set_visible(is_image)
 
         # Swap chips: video chips have motion/camera keywords; image chips focus
-        # on style, lighting, and composition (no "slow dolly in" for FLUX).
+        # on style, lighting, and composition (no "slow dolly in" for static images).
         self._chips_scroll.set_child(self._make_chips_box(source))
 
-        # Hide seed image section for FLUX (text-to-image, no init image)
+        # Hide seed image section for FLUX (text-to-image, no init image support)
         self._seed_img_section.set_visible(not is_image)
         self._seed_row_widget.set_visible(not is_image)
 
-        # Adjust steps range: FLUX min is 4, Wan2.2 min is 12
+        # Adjust steps range and hint: FLUX min is 4, Wan2.2 min is 12
         if is_image:
             self._steps_lbl.set_label("Steps (4–50):")
+            self._steps_hint_lbl.set_label("sweet spot 20–30  ·  more = cleaner, slower")
             adj = self._steps_spin.get_adjustment()
             adj.set_lower(4)
             if adj.get_value() < 4:
                 adj.set_value(4)
         else:
             self._steps_lbl.set_label("Steps (12–50):")
+            self._steps_hint_lbl.set_label("sweet spot 20–28  ·  more = sharper, slower")
             adj = self._steps_spin.get_adjustment()
             adj.set_lower(12)
             if adj.get_value() < 12:
