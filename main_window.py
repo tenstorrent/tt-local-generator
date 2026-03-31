@@ -176,7 +176,60 @@ scrollbar slider:hover {
     color: #2D5566;
     font-size: 15px;
 }
+.chip-btn {
+    background-color: #0F2A35;
+    color: #81E6D9;
+    border: 1px solid #2D5566;
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+.chip-btn:hover {
+    background-color: #1A3C47;
+    border-color: #4FD1C5;
+    color: #E8F0F2;
+}
 """
+
+# ── Prompt component chips ────────────────────────────────────────────────────
+# Each entry: (button label, text appended to prompt, tooltip)
+# Grouped roughly by category: camera, lighting, motion, style, quality.
+
+_PROMPT_CHIPS = [
+    # Camera / shot
+    ("🎥 cinematic",        "cinematic shot",                  "Wide-format filmic look"),
+    ("🚁 aerial",           "aerial drone shot",               "Top-down or bird's-eye view"),
+    ("🔭 dolly in",         "slow dolly in",                   "Camera glides forward"),
+    ("↩ pan left",          "slow pan left",                   "Camera sweeps left"),
+    ("🔄 orbit",            "orbiting camera",                 "Camera circles the subject"),
+    ("📷 close-up",         "extreme close-up",                "Tight shot on subject"),
+    ("🏔 wide shot",         "wide establishing shot",          "Full scene context"),
+    ("👁 POV",              "point of view shot",              "First-person perspective"),
+    # Lighting
+    ("🌅 golden hour",      "golden hour lighting",            "Warm sunrise/sunset glow"),
+    ("🌙 moonlit",          "moonlight, night scene",          "Cool blue-silver night light"),
+    ("💡 neon",             "neon-lit, cyberpunk lighting",    "Vivid colored neon signs"),
+    ("⚡ dramatic",         "dramatic chiaroscuro lighting",   "High contrast light and shadow"),
+    ("☀ harsh noon",        "harsh noon sunlight, overexposed","Bright midday bleaching"),
+    ("🕯 candlelit",        "warm candlelight, flickering",   "Intimate low orange light"),
+    # Motion / mood
+    ("🌊 slow motion",      "slow motion, 240fps look",        "Stretched, fluid movement"),
+    ("⏩ time-lapse",        "time-lapse, sped-up motion",      "Fast-forwarded world"),
+    ("🌬 windy",            "strong wind, hair and leaves moving", "Environmental motion cues"),
+    ("🔥 intense",          "intense, high energy, dynamic",   "Kinetic, fast-paced feel"),
+    ("😌 calm",             "calm, serene, peaceful atmosphere","Tranquil, slow-moving"),
+    # Style
+    ("🎞 film grain",       "35mm film grain, analog",         "Vintage celluloid texture"),
+    ("🖤 noir",             "black and white, film noir",      "High-contrast monochrome"),
+    ("🎨 painterly",        "painterly, impressionist style",  "Brushstroke, artistic look"),
+    ("🌈 vibrant",          "vibrant colors, oversaturated",   "Bold, punchy color grading"),
+    ("🧊 cold tones",       "cold color grading, blue tones",  "Icy, desaturated blues"),
+    # Quality / composition
+    ("✨ 4K",               "4K, ultra-detailed, sharp",       "High resolution detail"),
+    ("📐 rule of thirds",   "rule of thirds composition",      "Classic photographic framing"),
+    ("🌁 depth of field",   "shallow depth of field, bokeh",   "Blurred background, sharp subject"),
+    ("🎭 photorealistic",   "photorealistic, hyperrealistic",  "Looks like real footage"),
+]
 
 _THUMB_W = 200
 _THUMB_H = 112   # 16:9
@@ -937,6 +990,25 @@ class ControlPanel(Gtk.Box):
         scroll1.set_child(overlay1)
         self.append(scroll1)
 
+        # ── Prompt component chips ────────────────────────────────────────────
+        # Clicking a chip appends its text to the prompt (with a comma separator).
+        chips_scroll = Gtk.ScrolledWindow()
+        chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        chips_scroll.set_size_request(-1, -1)
+        chips_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        chips_box.set_margin_start(2)
+        chips_box.set_margin_end(2)
+        chips_box.set_margin_top(2)
+        chips_box.set_margin_bottom(2)
+        for label, text, tip in _PROMPT_CHIPS:
+            btn = Gtk.Button(label=label)
+            btn.set_tooltip_text(tip)
+            btn.add_css_class("chip-btn")
+            btn.connect("clicked", lambda _b, t=text: self._append_to_prompt(t))
+            chips_box.append(btn)
+        chips_scroll.set_child(chips_box)
+        self.append(chips_scroll)
+
         # ── Negative prompt ───────────────────────────────────────────────────
         self.append(self._section("Negative Prompt (optional)"))
         scroll2 = Gtk.ScrolledWindow()
@@ -1116,6 +1188,21 @@ class ControlPanel(Gtk.Box):
         self._clear_seed_btn.set_sensitive(False)
 
     # ── Form helpers ───────────────────────────────────────────────────────────
+
+    def _append_to_prompt(self, text: str) -> None:
+        """Append a chip's text to the prompt, inserting a comma separator if needed."""
+        buf = self._prompt_view.get_buffer()
+        current = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).rstrip()
+        if current and not current.endswith(","):
+            new_text = current + ", " + text
+        elif current:
+            new_text = current + " " + text
+        else:
+            new_text = text
+        buf.set_text(new_text)
+        # Move cursor to end
+        buf.place_cursor(buf.get_end_iter())
+        self._prompt_view.grab_focus()
 
     def _get_prompt(self) -> str:
         buf = self._prompt_view.get_buffer()
