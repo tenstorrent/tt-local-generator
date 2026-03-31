@@ -161,6 +161,28 @@ scrollbar slider:hover {
     border-color: #4FD1C5;
     border-width: 2px;
 }
+.card-selected-image {
+    border-color: #EC96B8;
+    border-width: 2px;
+}
+.type-badge-video {
+    background-color: #1A3C47;
+    color: #4FD1C5;
+    border: 1px solid #4FD1C5;
+    border-radius: 3px;
+    padding: 0px 4px;
+    font-size: 10px;
+    font-weight: bold;
+}
+.type-badge-image {
+    background-color: #2D1A2D;
+    color: #EC96B8;
+    border: 1px solid #EC96B8;
+    border-radius: 3px;
+    padding: 0px 4px;
+    font-size: 10px;
+    font-weight: bold;
+}
 .detail-section {
     color: #4FD1C5;
     font-weight: bold;
@@ -258,6 +280,34 @@ _PROMPT_CHIPS = [
     ("🎭 photorealistic",   "photorealistic, hyperrealistic",  "Looks like real footage"),
 ]
 
+_IMAGE_PROMPT_CHIPS = [
+    # Artistic style
+    ("🎨 oil painting",    "oil painting, thick brushstrokes",    "Classic oil painting style"),
+    ("🖋 line art",        "detailed line art",                    "Clean ink illustration"),
+    ("📸 photorealistic",  "photorealistic, DSLR photo",           "Looks like a real photograph"),
+    ("🔮 fantasy",         "fantasy art, magical atmosphere",      "Otherworldly, mystical look"),
+    ("🎭 concept art",     "concept art, digital painting",        "Professional concept illustration"),
+    ("🖤 noir",            "black and white, high contrast",       "Monochrome film noir"),
+    ("🌈 vibrant",         "vibrant colors, oversaturated",        "Bold punchy color grading"),
+    ("🧊 cold tones",      "cold color grading, blue tones",       "Icy desaturated blues"),
+    ("🎞 film grain",      "35mm film grain, analog",              "Vintage film texture"),
+    # Lighting
+    ("🌅 golden hour",     "golden hour lighting, warm glow",      "Warm sunrise/sunset light"),
+    ("💡 studio",          "studio lighting, soft box",            "Clean professional lighting"),
+    ("⚡ dramatic",        "dramatic chiaroscuro lighting",        "High contrast shadows"),
+    ("🌙 moonlit",         "moonlight, night scene",               "Cool blue-silver night"),
+    ("🕯 candlelit",       "warm candlelight, intimate",           "Soft amber glow"),
+    ("💡 neon",            "neon-lit, cyberpunk lighting",         "Vivid colored neon signs"),
+    # Composition / quality
+    ("📐 rule of thirds",  "rule of thirds composition",           "Classic photographic framing"),
+    ("🌁 depth of field",  "shallow depth of field, bokeh",        "Blurred background, sharp subject"),
+    ("📷 close-up",        "extreme close-up, macro",              "Fine detail, macro shot"),
+    ("🏔 wide shot",       "wide establishing shot",               "Full scene context"),
+    ("🔲 symmetrical",     "perfectly symmetrical composition",    "Mirror-perfect balance"),
+    ("✨ ultra detail",    "ultra-detailed, 8K, sharp",            "Maximum detail and resolution"),
+    ("🌟 cinematic",       "cinematic composition, anamorphic",    "Widescreen filmic look"),
+]
+
 _THUMB_W = 200
 _THUMB_H = 112   # 16:9
 _GALLERY_COLS = 2
@@ -343,10 +393,14 @@ class GenerationCard(Gtk.Frame):
             self.add_controller(motion)
 
     def set_selected(self, selected: bool) -> None:
+        # Image cards use a pink selection border; video cards use teal.
+        css_class = ("card-selected-image"
+                     if self._record.media_type == "image"
+                     else "card-selected")
         if selected:
-            self.add_css_class("card-selected")
+            self.add_css_class(css_class)
         else:
-            self.remove_css_class("card-selected")
+            self.remove_css_class(css_class)
 
     def _build(self) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -390,8 +444,18 @@ class GenerationCard(Gtk.Frame):
         prompt_lbl.set_xalign(0)
         box.append(prompt_lbl)
 
-        # Meta row: time on left, generation duration on right
-        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        # Meta row: type badge + time on left, generation duration on right
+        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+        # Small badge: "IMG" (pink) or "VID" (teal) so type is visible at a glance
+        badge_text = "IMG" if self._record.media_type == "image" else "VID"
+        badge_css = ("type-badge-image"
+                     if self._record.media_type == "image"
+                     else "type-badge-video")
+        badge = Gtk.Label(label=badge_text)
+        badge.add_css_class(badge_css)
+        meta.append(badge)
+
         time_lbl = Gtk.Label(label=self._record.display_time)
         time_lbl.add_css_class("muted")
         dur_text = _fmt_duration(self._record.duration_s) if self._record.duration_s else ""
@@ -498,7 +562,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.set_vexpand(True)
         box.set_hexpand(True)
-        lbl = Gtk.Label(label="← Click a video to preview")
+        lbl = Gtk.Label(label="← Click a card to preview")
         lbl.add_css_class("detail-empty")
         lbl.set_vexpand(True)
         lbl.set_valign(Gtk.Align.CENTER)
@@ -928,7 +992,7 @@ class ImageViewerWindow(Gtk.Window):
 class PendingCard(Gtk.Frame):
     """Animated placeholder card shown while a generation is running."""
 
-    def __init__(self, prompt: str = ""):
+    def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
         self.set_size_request(_THUMB_W + 20, -1)
@@ -942,7 +1006,12 @@ class PendingCard(Gtk.Frame):
         box.set_margin_end(8)
         self.set_child(box)
 
-        spinner_lbl = Gtk.Label(label="⏳ Generating…")
+        # Label differs by media type so the user can tell what is in flight
+        if model_source == "image":
+            spinner_text = "🖼 Generating image…"
+        else:
+            spinner_text = "⏳ Generating video…"
+        spinner_lbl = Gtk.Label(label=spinner_text)
         spinner_lbl.add_css_class("teal")
         box.append(spinner_lbl)
 
@@ -1142,8 +1211,8 @@ class GalleryWidget(Gtk.Box):
         if self._playing_all:
             self._sync_autoplay()
 
-    def add_pending_card(self, prompt: str = "") -> PendingCard:
-        card = PendingCard(prompt=prompt)
+    def add_pending_card(self, prompt: str = "", model_source: str = "video") -> PendingCard:
+        card = PendingCard(prompt=prompt, model_source=model_source)
         self._pending = card
         self._cards.insert(0, card)
         self._relayout()
@@ -1283,22 +1352,12 @@ class ControlPanel(Gtk.Box):
 
         # ── Prompt component chips ────────────────────────────────────────────
         # Clicking a chip appends its text to the prompt (with a comma separator).
-        chips_scroll = Gtk.ScrolledWindow()
-        chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-        chips_scroll.set_size_request(-1, -1)
-        chips_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        chips_box.set_margin_start(2)
-        chips_box.set_margin_end(2)
-        chips_box.set_margin_top(2)
-        chips_box.set_margin_bottom(2)
-        for label, text, tip in _PROMPT_CHIPS:
-            btn = Gtk.Button(label=label)
-            btn.set_tooltip_text(tip)
-            btn.add_css_class("chip-btn")
-            btn.connect("clicked", lambda _b, t=text: self._append_to_prompt(t))
-            chips_box.append(btn)
-        chips_scroll.set_child(chips_box)
-        self.append(chips_scroll)
+        # The chip list changes when the generation source changes (video vs image).
+        self._chips_scroll = Gtk.ScrolledWindow()
+        self._chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self._chips_scroll.set_size_request(-1, -1)
+        self._chips_scroll.set_child(self._make_chips_box("video"))
+        self.append(self._chips_scroll)
 
         # ── Negative prompt ───────────────────────────────────────────────────
         self.append(self._section("Negative Prompt (optional)"))
@@ -1441,6 +1500,10 @@ class ControlPanel(Gtk.Box):
         self._guidance_lbl.set_visible(is_image)
         self._guidance_spin.set_visible(is_image)
 
+        # Swap chips: video chips have motion/camera keywords; image chips focus
+        # on style, lighting, and composition (no "slow dolly in" for FLUX).
+        self._chips_scroll.set_child(self._make_chips_box(source))
+
         # Hide seed image section for FLUX (text-to-image, no init image)
         self._seed_img_section.set_visible(not is_image)
         self._seed_row_widget.set_visible(not is_image)
@@ -1547,6 +1610,24 @@ class ControlPanel(Gtk.Box):
         self._seed_img_widget.add_css_class("muted")
         parent.prepend(self._seed_img_widget)
         self._clear_seed_btn.set_sensitive(False)
+
+    # ── Chips helper ───────────────────────────────────────────────────────────
+
+    def _make_chips_box(self, source: str) -> Gtk.Box:
+        """Build and return a horizontal chip box for the given source ('video'/'image')."""
+        chip_list = _PROMPT_CHIPS if source == "video" else _IMAGE_PROMPT_CHIPS
+        chips_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        chips_box.set_margin_start(2)
+        chips_box.set_margin_end(2)
+        chips_box.set_margin_top(2)
+        chips_box.set_margin_bottom(2)
+        for label, text, tip in chip_list:
+            btn = Gtk.Button(label=label)
+            btn.set_tooltip_text(tip)
+            btn.add_css_class("chip-btn")
+            btn.connect("clicked", lambda _b, t=text: self._append_to_prompt(t))
+            chips_box.append(btn)
+        return chips_box
 
     # ── Form helpers ───────────────────────────────────────────────────────────
 
@@ -1830,7 +1911,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._worker and self._worker.is_alive():
             return
 
-        pending = self._gallery.add_pending_card(prompt=prompt)
+        pending = self._gallery.add_pending_card(prompt=prompt, model_source=model_source)
         self._controls.set_busy(True)
         self._controls.clear_prompt()
 
