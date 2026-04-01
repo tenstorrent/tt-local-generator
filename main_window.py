@@ -1286,7 +1286,7 @@ class GalleryWidget(Gtk.Box):
         self._flow.set_margin_end(12)
         self._flow.set_homogeneous(True)    # all cells same width → cards fill the row
         self._flow.set_selection_mode(Gtk.SelectionMode.NONE)  # selection handled manually
-        self._flow.set_min_children_per_line(1)
+        self._flow.set_min_children_per_line(2)
         self._flow.set_max_children_per_line(8)
         self._flow.set_halign(Gtk.Align.FILL)
         self._flow.set_valign(Gtk.Align.START)
