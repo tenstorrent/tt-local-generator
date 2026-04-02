@@ -2007,15 +2007,6 @@ class ControlPanel(Gtk.Box):
         self._recover_btn.connect("clicked", lambda _: self._on_recover())
         self.append(self._recover_btn)
 
-        # ── Queue display ──────────────────────────────────────────────────────
-        self._queue_section_lbl = self._section("Queued Prompts")
-        self._queue_section_lbl.set_visible(False)
-        self.append(self._queue_section_lbl)
-
-        self._queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        self._queue_box.set_visible(False)
-        self.append(self._queue_box)
-
     # ── State ──────────────────────────────────────────────────────────────────
 
     # ── Source toggle ──────────────────────────────────────────────────────────
@@ -2439,43 +2430,6 @@ class ControlPanel(Gtk.Box):
 
     # ── Queue display ──────────────────────────────────────────────────────────
 
-    def update_queue_display(self, items: list) -> None:
-        """Rebuild the queue list. Call from main thread only."""
-        # Clear existing rows
-        child = self._queue_box.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self._queue_box.remove(child)
-            child = nxt
-
-        for i, item in enumerate(items):
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            row.add_css_class("queue-row")
-            short = item.prompt if len(item.prompt) <= 55 else item.prompt[:55] + "…"
-            lbl = Gtk.Label(label=f"{i+1}. {short}")
-            lbl.set_xalign(0)
-            lbl.set_hexpand(True)
-            lbl.add_css_class("muted")
-            lbl.set_tooltip_text(item.prompt)
-            lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            row.append(lbl)
-            rm_btn = Gtk.Button(label="×")
-            rm_btn.set_tooltip_text("Remove from queue")
-            rm_btn.connect("clicked", lambda _b, idx=i: self._on_queue_remove(idx))
-            row.append(rm_btn)
-            self._queue_box.append(row)
-
-        has = bool(items)
-        self._queue_section_lbl.set_visible(has)
-        self._queue_box.set_visible(has)
-
-    def _on_queue_remove(self, index: int) -> None:
-        # Delegate upward — MainWindow owns the queue list
-        self._remove_queue_cb(index)
-
-    def set_remove_queue_cb(self, cb) -> None:
-        """Called by MainWindow to wire remove callbacks after construction."""
-        self._remove_queue_cb = cb
 
 
 # ── Recovery dialog ────────────────────────────────────────────────────────────
@@ -2595,7 +2549,6 @@ class MainWindow(Gtk.ApplicationWindow):
             on_stop_server=self._on_stop_server,
             on_source_change=self._on_source_change,
         )
-        self._controls.set_remove_queue_cb(self._on_queue_remove)
         outer_paned.set_start_child(self._controls)
         outer_paned.set_shrink_start_child(False)
         outer_paned.set_resize_start_child(False)
@@ -2638,7 +2591,27 @@ class MainWindow(Gtk.ApplicationWindow):
         inner_paned.set_shrink_start_child(False)
 
         self._detail = DetailPanel()
-        inner_paned.set_end_child(self._detail)
+
+        # Queue display lives below the detail/preview panel on the right side.
+        self._queue_section_lbl = Gtk.Label(label="QUEUED PROMPTS")
+        self._queue_section_lbl.add_css_class("section-label")
+        self._queue_section_lbl.set_xalign(0)
+        self._queue_section_lbl.set_visible(False)
+        self._queue_section_lbl.set_margin_start(6)
+        self._queue_section_lbl.set_margin_top(6)
+
+        self._queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        self._queue_box.set_visible(False)
+        self._queue_box.set_margin_start(6)
+        self._queue_box.set_margin_end(6)
+        self._queue_box.set_margin_bottom(6)
+
+        detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        detail_wrap.append(self._detail)
+        detail_wrap.append(self._queue_section_lbl)
+        detail_wrap.append(self._queue_box)
+
+        inner_paned.set_end_child(detail_wrap)
         inner_paned.set_shrink_end_child(False)
 
         outer_paned.set_end_child(inner_paned)
@@ -2892,6 +2865,35 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Queue ──────────────────────────────────────────────────────────────────
 
+    def _update_queue_display(self) -> None:
+        """Rebuild the queue list below the preview panel. Call from main thread only."""
+        child = self._queue_box.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self._queue_box.remove(child)
+            child = nxt
+
+        for i, item in enumerate(self._queue):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            row.add_css_class("queue-row")
+            short = item.prompt if len(item.prompt) <= 55 else item.prompt[:55] + "…"
+            lbl = Gtk.Label(label=f"{i+1}. {short}")
+            lbl.set_xalign(0)
+            lbl.set_hexpand(True)
+            lbl.add_css_class("muted")
+            lbl.set_tooltip_text(item.prompt)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            row.append(lbl)
+            rm_btn = Gtk.Button(label="×")
+            rm_btn.set_tooltip_text("Remove from queue")
+            rm_btn.connect("clicked", lambda _b, idx=i: self._on_queue_remove(idx))
+            row.append(rm_btn)
+            self._queue_box.append(row)
+
+        has = bool(self._queue)
+        self._queue_section_lbl.set_visible(has)
+        self._queue_box.set_visible(has)
+
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,
                     ref_video_path="", ref_char_path="",
@@ -2900,7 +2902,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                       model_source, guidance_scale,
                                       ref_video_path, ref_char_path, animate_mode,
                                       model_id))
-        self._controls.update_queue_display(self._queue)
+        self._update_queue_display()
         self._controls.clear_prompt()   # ready for the next prompt immediately
         n = len(self._queue)
         self._set_status(f"Added to queue ({n} item{'s' if n != 1 else ''} queued)")
@@ -2908,7 +2910,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_queue_remove(self, index: int) -> None:
         if 0 <= index < len(self._queue):
             removed = self._queue.pop(index)
-            self._controls.update_queue_display(self._queue)
+            self._update_queue_display()
             short = removed.prompt[:40] + ("…" if len(removed.prompt) > 40 else "")
             self._set_status(f'Removed from queue: "{short}"')
 
@@ -2916,7 +2918,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if not self._queue:
             return False
         item = self._queue.pop(0)
-        self._controls.update_queue_display(self._queue)
+        self._update_queue_display()
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
         self._set_status(f"Auto-starting next queued prompt{suffix}…")
