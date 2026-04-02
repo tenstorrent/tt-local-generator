@@ -1732,6 +1732,7 @@ class ControlPanel(Gtk.Box):
         self._src_video_btn.set_active(True)
         src_row.append(self._src_video_btn)
         src_row.append(self._src_animate_btn)
+        self._src_animate_btn.set_visible(False)  # Animate tab hidden until Wan2.2-Animate-14B is ready
         src_row.append(self._src_image_btn)
         self.append(src_row)
 
