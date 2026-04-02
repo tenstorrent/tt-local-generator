@@ -322,7 +322,7 @@ class APIClient:
         seed: Optional[int] = None,
         guidance_scale: float = 3.5,
         image_return_format: str = "JPEG",
-    ) -> bytes:
+    ) -> Tuple[bytes, dict]:
         """
         Generate an image synchronously via the FLUX.1-dev image API.
 
@@ -339,11 +339,12 @@ class APIClient:
             image_return_format: "JPEG" or "PNG".
 
         Returns:
-            Raw image bytes decoded from the server's base64 response.
+            Tuple of (raw_image_bytes, response_metadata_dict).
+            response_metadata_dict has the 'images' key stripped (large base64).
 
         Raises:
             requests.HTTPError: On 4xx/5xx responses.
-            ValueError: If the response contains no image data.
+            ValueError: If the server returns no image data.
         """
         payload: dict = {
             "prompt": prompt,
@@ -369,4 +370,6 @@ class APIClient:
         if not images or not images[0]:
             raise ValueError(f"Server returned no image data: {data}")
 
-        return base64.b64decode(images[0])
+        image_bytes = base64.b64decode(images[0])
+        meta = {k: v for k, v in data.items() if k != "images"}
+        return image_bytes, meta

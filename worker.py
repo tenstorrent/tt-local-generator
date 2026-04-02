@@ -37,6 +37,31 @@ from api_client import APIClient
 from history_store import THUMBNAILS_DIR, GenerationRecord, HistoryStore
 
 
+# ── Metadata helpers ───────────────────────────────────────────────────────────
+
+# Keys to exclude when storing server response as extra_meta:
+# large base64 payloads and fields already captured in GenerationRecord fields.
+_META_SKIP = frozenset({
+    "images",
+    "video_b64",
+    "reference_video_b64",
+    "reference_image_b64",
+    "status",
+    "error",
+})
+
+
+def _safe_meta(data: dict) -> dict:
+    """
+    Return a copy of a server response dict safe to store as extra_meta.
+    Strips large binary/base64 fields and fields already captured elsewhere.
+    """
+    return {
+        k: v for k, v in data.items()
+        if k not in _META_SKIP and not isinstance(v, (bytes, bytearray))
+    }
+
+
 class GenerationWorker:
     """
     Runs a single video generation job end-to-end in a background thread.
@@ -62,6 +87,7 @@ class GenerationWorker:
         num_inference_steps: int,
         seed: int,
         seed_image_path: str = "",
+        model: str = "wan2.2-t2v",
     ):
         self._client = client
         self._store = store
@@ -70,6 +96,7 @@ class GenerationWorker:
         self._steps = num_inference_steps
         self._seed = seed
         self._seed_image_path = seed_image_path
+        self._model = model
         self._cancelled = False
         self._job_id_override: Optional[str] = None  # set to skip submit (recovery)
         self._lock = threading.Lock()
@@ -121,14 +148,16 @@ class GenerationWorker:
             on_progress(f"Job queued ({job_id[:8]}…)")
 
         # ── 2. Poll until complete ────────────────────────────────────────────
+        server_meta: dict = {}
         while not self._is_cancelled():
             try:
-                status, err = self._client.poll_status(job_id)
+                status, err, data = self._client.poll_status(job_id)
             except Exception as e:
                 on_error(f"Poll error: {e}")
                 return
 
             if status == "completed":
+                server_meta = _safe_meta(data)
                 break
             if status in ("failed", "cancelled"):
                 on_error(f"Job {status}: {err or 'no details'}")
@@ -163,7 +192,9 @@ class GenerationWorker:
             seed=self._seed,
             duration_s=round(duration, 1),
             seed_image_path=persisted_seed_image,
+            model=self._model,
         )
+        record.extra_meta = server_meta
 
         # ── 4. Download ───────────────────────────────────────────────────────
         try:
@@ -440,6 +471,7 @@ class ImageGenerationWorker:
         num_inference_steps: int,
         seed: int,
         guidance_scale: float = 3.5,
+        model: str = "flux.1-dev",
     ):
         self._client = client
         self._store = store
@@ -448,6 +480,7 @@ class ImageGenerationWorker:
         self._steps = num_inference_steps
         self._seed = seed
         self._guidance_scale = guidance_scale
+        self._model = model
         self._cancelled = False
         self._lock = threading.Lock()
 
@@ -483,7 +516,7 @@ class ImageGenerationWorker:
         try:
             on_progress("Generating image with FLUX.1-dev…")
             seed_arg = self._seed if self._seed >= 0 else None
-            image_bytes = self._client.generate_image(
+            image_bytes, server_meta = self._client.generate_image(
                 prompt=self._prompt,
                 negative_prompt=self._negative_prompt or None,
                 num_inference_steps=self._steps,
@@ -509,7 +542,9 @@ class ImageGenerationWorker:
             seed=self._seed,
             duration_s=round(duration, 1),
             guidance_scale=self._guidance_scale,
+            model=self._model,
         )
+        record.extra_meta = server_meta
 
         # ── 3. Save image ─────────────────────────────────────────────────────
         try:

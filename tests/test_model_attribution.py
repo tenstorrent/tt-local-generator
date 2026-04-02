@@ -133,3 +133,36 @@ def test_poll_status_passes_error_field():
     assert status == "failed"
     assert error == "OOM"
     assert data == {"status": "failed", "error": "OOM"}
+
+
+# ── _safe_meta helper ─────────────────────────────────────────────────────────
+
+from worker import _safe_meta
+
+
+def test_safe_meta_strips_images_key():
+    data = {
+        "status": "completed",
+        "images": ["AABBCC=="],   # huge base64 — must be stripped
+        "resolution": "1024x1024",
+        "frame_count": 1,
+    }
+    result = _safe_meta(data)
+    assert "images" not in result
+    assert result["resolution"] == "1024x1024"
+
+
+def test_safe_meta_strips_b64_keys():
+    data = {
+        "reference_video_b64": "AABBCC==",
+        "reference_image_b64": "DDEEFF==",
+        "output_fps": 24,
+    }
+    result = _safe_meta(data)
+    assert "reference_video_b64" not in result
+    assert "reference_image_b64" not in result
+    assert result["output_fps"] == 24
+
+
+def test_safe_meta_empty_input():
+    assert _safe_meta({}) == {}
