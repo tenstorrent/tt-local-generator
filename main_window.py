@@ -1755,6 +1755,12 @@ class ControlPanel(Gtk.Box):
         return lbl
 
     def _build(self) -> None:
+        # ── App title row: logo + name ──────────────────────────────────────────────
+        _title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        _logo_path = str(Path(__file__).parent / "assets" / "tenstorrent.png")
+        _logo_img = Gtk.Image.new_from_file(_logo_path)
+        _logo_img.set_pixel_size(28)
+        _title_row.append(_logo_img)
         self._title_lbl = Gtk.Label(label="TT VIDEO GENERATOR")
         self._title_lbl.set_xalign(0)
         self._title_lbl.add_css_class("teal")
@@ -1762,7 +1768,8 @@ class ControlPanel(Gtk.Box):
         attrs.insert(Pango.AttrFontDesc.new(
             Pango.FontDescription.from_string("sans bold 15")))
         self._title_lbl.set_attributes(attrs)
-        self.append(self._title_lbl)
+        _title_row.append(self._title_lbl)
+        self.append(_title_row)
 
         # ── Model source toggle ───────────────────────────────────────────────
         # Switches between Wan2.2 (video) and FLUX.1-dev (image) generation.
