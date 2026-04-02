@@ -93,3 +93,42 @@ def test_load_legacy_record_without_model(tmp_path, monkeypatch):
     assert len(records) == 1
     assert records[0].model == ""
     assert records[0].extra_meta == {}
+
+
+# ── APIClient.poll_status ─────────────────────────────────────────────────────
+
+from unittest.mock import MagicMock, patch
+from api_client import APIClient
+
+
+def test_poll_status_returns_three_tuple():
+    client = APIClient("http://localhost:8000")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "status": "completed",
+        "id": "job-abc",
+        "output_resolution": "720p",
+        "frame_count": 83,
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp):
+        status, error, data = client.poll_status("job-abc")
+
+    assert status == "completed"
+    assert error is None
+    assert data["output_resolution"] == "720p"
+    assert data["frame_count"] == 83
+
+
+def test_poll_status_passes_error_field():
+    client = APIClient("http://localhost:8000")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"status": "failed", "error": "OOM"}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp):
+        status, error, data = client.poll_status("job-xyz")
+
+    assert status == "failed"
+    assert error == "OOM"

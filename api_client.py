@@ -192,7 +192,7 @@ class APIClient:
             raise ValueError(f"Server response missing job ID: {data}")
         return job_id
 
-    def poll_status(self, job_id: str) -> Tuple[str, Optional[str]]:
+    def poll_status(self, job_id: str) -> Tuple[str, Optional[str], dict]:
         """
         Poll the status of a generation job.
 
@@ -200,8 +200,10 @@ class APIClient:
             job_id: The job UUID returned by submit().
 
         Returns:
-            Tuple of (status_string, error_message_or_None).
+            Tuple of (status_string, error_message_or_None, full_response_dict).
             status is one of: "queued", "in_progress", "completed", "failed", "cancelled".
+            full_response_dict contains all fields the server returned — callers may
+            stash it as extra_meta without any additional HTTP calls.
 
         Raises:
             requests.HTTPError: On 4xx/5xx responses.
@@ -216,7 +218,7 @@ class APIClient:
         data = resp.json()
         status = data.get("status", "unknown")
         error = data.get("error")
-        return status, error
+        return status, error, data
 
     def download(self, job_id: str, dest_path: Path) -> None:
         """
