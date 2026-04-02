@@ -50,6 +50,8 @@ class AttractorPool:
 
     def current_record(self):
         """Return the record most recently returned by advance()."""
+        if self._last_idx is None:
+            raise RuntimeError("current_record() called before advance()")
         return self._records[self._last_idx]
 
     def add_record(self, record) -> None:
@@ -68,7 +70,7 @@ class AttractorPool:
         self._recalc_duration()
 
     @property
-    def avg_image_duration(self) -> float:
+    def avg_video_duration(self) -> float:
         """Mean duration of video records, or 8.0 s if none exist."""
         return self._avg_dur
 

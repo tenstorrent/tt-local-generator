@@ -41,7 +41,7 @@ def test_pool_no_immediate_repeat_across_cycle():
 def test_pool_add_record_appears_later_in_cycle():
     recs = [_rec() for _ in range(4)]
     pool = AttractorPool(recs)
-    # advance once so _pool_pos = 1
+    # advance once so _pos = 1
     pool.advance()
     new_rec = _rec()
     pool.add_record(new_rec)
@@ -52,15 +52,15 @@ def test_pool_add_record_appears_later_in_cycle():
     remaining = [pool.advance() for _ in range(3)]
     assert 4 in remaining, "New record must appear later in current cycle"
 
-def test_avg_image_duration_uses_video_durations():
+def test_avg_video_duration_uses_video_durations():
     recs = [_rec("video", 6.0), _rec("video", 10.0), _rec("image", 0.0)]
     pool = AttractorPool(recs)
-    assert pool.avg_image_duration == 8.0
+    assert pool.avg_video_duration == 8.0
 
-def test_avg_image_duration_defaults_when_no_videos():
+def test_avg_video_duration_defaults_when_no_videos():
     recs = [_rec("image", 0.0), _rec("image", 0.0)]
     pool = AttractorPool(recs)
-    assert pool.avg_image_duration == 8.0
+    assert pool.avg_video_duration == 8.0
 
 def test_current_record_returns_correct_record():
     recs = [_rec() for _ in range(3)]
