@@ -111,6 +111,31 @@ class APIClient:
         except requests.RequestException:
             return False
 
+    def detect_running_model(self) -> "str | None":
+        """
+        Query the server for its loaded model ID.
+
+        Tries GET /v1/models (OpenAI-compatible endpoint). Returns the first
+        model ID string from data[0].id, or None if the endpoint is absent,
+        the response is malformed, or a network error occurs.
+
+        Never raises — all failures return None.
+        """
+        try:
+            resp = requests.get(
+                f"{self.base_url}/v1/models",
+                timeout=5,
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json().get("data", [])
+            if data:
+                return data[0].get("id")
+            return None
+        except Exception:
+            return None
+
     def model_ready(self) -> bool:
         """
         Check if the video model worker is ready to accept jobs.
