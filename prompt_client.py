@@ -2,9 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 """
-Lightweight HTTP client for the tt-prompt-gen server (port 8001).
+Prompt generation client — three-tier system backed by generate_prompt.py.
 
-The server exposes an OpenAI-compatible chat API powered by Qwen3-0.6B on CPU.
+Tier 1 (always):          Algorithmic assembly from word_banks.py
+Tier 2 (with markovify):  Markov chain trained on prompts/markov_seed.txt
+Tier 3 (Qwen server up):  LLM polishes the algo/markov slug for natural flow
+
+check_health() still reports whether the Qwen LLM server is available, which
+the UI uses to show the enhanced/algo-only dot state.  generate_prompt() never
+raises due to the LLM being down — algo/markov always produces a result.
+
 This module has no GTK dependencies and is safe to import without a display.
 
 Functions:
@@ -18,10 +25,14 @@ _DEFAULT_URL = "http://127.0.0.1:8001"
 
 def check_health(base_url: str = _DEFAULT_URL) -> bool:
     """
-    Return True if the prompt gen server is up and the model is loaded.
+    Return True if the Qwen LLM server is up and the model is loaded.
+
+    Used by the health-poll worker to drive the inspire dot colour:
+        True  → green "ready" (full three-tier generation available)
+        False → muted "algo only" (algo/markov still works, LLM not available)
 
     Calls GET /health and checks the model_ready field.  Returns False on
-    any network error, non-200 status, or missing model_ready field.
+    any network error, non-200 status, or missing/false model_ready field.
     """
     try:
         resp = requests.get(f"{base_url}/health", timeout=3)
@@ -34,54 +45,47 @@ def check_health(base_url: str = _DEFAULT_URL) -> bool:
 
 def generate_prompt(
     source: str,
-    seed_text: str,
-    system_prompt: str,
+    seed_text: str = "",
+    system_prompt: str = "",   # kept for backward compat; generate_prompt.py uses its own
     base_url: str = _DEFAULT_URL,
     max_tokens: int = 150,
 ) -> str:
     """
-    Generate a cinematic prompt via the Qwen3-0.6B server.
+    Generate a cinematic prompt using the three-tier system in generate_prompt.py.
+
+    When seed_text is provided (inspire mode with existing text in the box):
+        - If the LLM is available: polish the seed text with the LLM and return it.
+        - If the LLM is down: return the seed text unchanged.
+
+    When seed_text is empty (attractor mode, or inspire with empty box):
+        - Run algo → markov → optional LLM polish automatically.
+        - Returns the best tier available; never raises on LLM unavailability.
 
     Args:
-        source:        "video", "image", or "animate" — prefixed to the user
-                       message so the model knows which output format to use.
-        seed_text:     Existing prompt text to use as a creative seed.  Pass ""
-                       to let the model invent freely from its word banks.
-        system_prompt: Full contents of prompts/prompt_generator.md.
-        base_url:      URL of the prompt gen server (default: http://127.0.0.1:8001).
-        max_tokens:    Maximum tokens to generate (default: 150).
+        source:        "video", "image", or "animate"
+        seed_text:     Text to polish (inspire mode).  Empty = fully random.
+        system_prompt: Ignored — generate_prompt.py uses focused polishing prompts.
+        base_url:      Unused — generate_prompt.py reads LLM_URL directly.
+        max_tokens:    Unused — generate_prompt.py uses its own token limits.
 
     Returns:
-        The generated prompt string stripped of leading/trailing whitespace.
+        Prompt string, always non-empty.
 
     Raises:
-        requests.RequestException: On network or HTTP errors.
-        ValueError: If the server returns no choices or empty content.
+        RuntimeError: Only if word_banks.py or generate_prompt.py cannot be
+                      imported (i.e. the package itself is broken).
     """
-    user_content = f"{source}: {seed_text}"
-    payload = {
-        "model": "Qwen/Qwen3-0.6B",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.8,
-        "top_p": 0.9,
-    }
-    resp = requests.post(
-        f"{base_url}/v1/chat/completions",
-        json=payload,
-        headers={"Content-Type": "application/json"},
-        timeout=60,
-    )
-    resp.raise_for_status()
+    import generate_prompt as _gp  # noqa: PLC0415 (lazy import — no GTK needed at module load)
 
-    data = resp.json()
-    choices = data.get("choices", [])
-    if not choices:
-        raise ValueError(f"No choices in server response: {data}")
-    content = choices[0].get("message", {}).get("content", "").strip()
-    if not content:
-        raise ValueError(f"Empty content in server response: {data}")
-    return content
+    if seed_text.strip():
+        # Inspire mode: user provided seed — try to polish it with the LLM
+        if _gp._llm_available():
+            polished = _gp._llm_polish(seed_text.strip(), source)
+            if polished:
+                return polished
+        # LLM unavailable or polish returned nothing — return the seed as-is
+        return seed_text.strip()
+
+    # No seed — three-tier generation: algo → markov → LLM polish
+    result = _gp.generate(prompt_type=source, mode="markov", enhance=True)
+    return result["prompt"]

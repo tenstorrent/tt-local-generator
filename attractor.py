@@ -182,10 +182,10 @@ class AttractorWindow(Gtk.Window):
     def __init__(
         self,
         records: list,                        # initial pool from HistoryStore.all_records()
-        system_prompt: str,                   # contents of prompts/prompt_generator.md
         model_source: str,                    # "video" | "image" | "animate"
         on_enqueue: Callable,                 # MainWindow._on_enqueue compatible signature
         get_queue_depth: Callable[[], int],   # returns len(self._queue) in MainWindow
+        system_prompt: str = "",              # unused; kept for caller compatibility
     ) -> None:
         super().__init__(title="Attractor Mode")
         self._system_prompt = system_prompt
@@ -434,7 +434,9 @@ class AttractorWindow(Gtk.Window):
             slot._picture.set_visible(True)
         else:
             slot._picture.set_visible(False)
-            slot._video.set_loop(True)
+            # Do NOT call set_loop(True) — it prevents the notify::ended signal
+            # from firing on Gtk.MediaStream, breaking advance-on-video-end.
+            # (See CLAUDE.md: "Gtk.Video.set_loop(True) is unreliable")
             path = getattr(record, "video_path", None)
             if path:
                 slot._video.set_filename(path)
@@ -515,7 +517,6 @@ class AttractorWindow(Gtk.Window):
                 prompt = prompt_client.generate_prompt(
                     source=self._model_source,
                     seed_text="",
-                    system_prompt=self._system_prompt,
                 )
                 GLib.idle_add(self._prompt_lbl.set_label, prompt)
                 GLib.idle_add(self._set_gen_status, "⏳  queued…")

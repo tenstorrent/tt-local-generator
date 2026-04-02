@@ -1958,7 +1958,7 @@ class ControlPanel(Gtk.Box):
         _inspire_spacer.set_hexpand(True)
         inspire_row.append(_inspire_spacer)
 
-        self._inspire_dot_lbl = Gtk.Label(label="⬤ offline")
+        self._inspire_dot_lbl = Gtk.Label(label="⬤ algo only")
         self._inspire_dot_lbl.add_css_class("inspire-dot")
         inspire_row.append(self._inspire_dot_lbl)
         self.append(inspire_row)
@@ -2889,8 +2889,8 @@ class ControlPanel(Gtk.Box):
                 self._inspire_pending_seed = ""
                 self._trigger_inspire(source, seed)
         elif not self._prompt_gen_starting:
-            # Server is offline and not actively starting — show offline state
-            self._inspire_dot_lbl.set_label("⬤ offline")
+            # Server is offline and not actively starting — algo-only mode
+            self._inspire_dot_lbl.set_label("⬤ algo only")
             for cls in ("inspire-dot-ready", "inspire-dot-starting"):
                 self._inspire_dot_lbl.remove_css_class(cls)
             self._inspire_dot_lbl.add_css_class("inspire-dot")
@@ -2914,20 +2914,19 @@ class ControlPanel(Gtk.Box):
             self._inspire_btn.set_sensitive(False)
 
     def _on_inspire_clicked(self, _btn) -> None:
-        """Handle Inspire button click: show confirm box if offline, else generate."""
-        if not self._prompt_gen_ready:
-            # Reveal inline confirm box; disable button until user decides
-            self._inspire_confirm_revealer.set_reveal_child(True)
-            self._confirm_box_visible = True
-            self._inspire_btn.set_sensitive(False)
-        else:
-            source = self._model_source
-            seed_text = self._prompt_buf.get_text(
-                self._prompt_buf.get_start_iter(),
-                self._prompt_buf.get_end_iter(),
-                False,
-            ).strip()
-            self._trigger_inspire(source, seed_text)
+        """Handle Inspire button click.
+
+        Always generates — algo/markov works without Qwen.  The confirm box
+        (▶ Start / Not now) is only shown when the user explicitly wants to
+        start the Qwen server before generating.
+        """
+        source = self._model_source
+        seed_text = self._prompt_buf.get_text(
+            self._prompt_buf.get_start_iter(),
+            self._prompt_buf.get_end_iter(),
+            False,
+        ).strip()
+        self._trigger_inspire(source, seed_text)
 
     def _on_inspire_confirm_start(self, _btn) -> None:
         """User clicked ▶ Start in the confirm box — launch server and set auto-generate."""
