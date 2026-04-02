@@ -1,0 +1,183 @@
+# Prompt style chips for tt-local-generator
+# Each category has an optional `for:` list of tab keys: video, image, animate.
+# Default (no `for:`) = shown on all tabs.
+# Each chip can also have `for:` which overrides its category's `for:`.
+
+# ── Camera / Shot ─────────────────────────────────────────────────────────────
+# Video + animate share motion/camera vocabulary; image has a few camera chips too.
+
+- name: Camera / Shot
+  for: [video, animate]
+  chips:
+    - label: "🎥 cinematic"
+      text: "cinematic shot"
+      tip: "Wide-format filmic look"
+
+    - label: "🚁 aerial"
+      text: "aerial drone shot"
+      tip: "Top-down or bird's-eye view"
+
+    - label: "🔭 dolly in"
+      text: "slow dolly in"
+      tip: "Camera glides forward"
+
+    - label: "↩ pan left"
+      text: "slow pan left"
+      tip: "Camera sweeps left"
+
+    - label: "🔄 orbit"
+      text: "orbiting camera"
+      tip: "Camera circles the subject"
+
+    - label: "📷 close-up"
+      text: "extreme close-up"
+      tip: "Tight shot on subject"
+      for: [video, animate, image]
+
+    - label: "🏔 wide shot"
+      text: "wide establishing shot"
+      tip: "Full scene context"
+      for: [video, animate, image]
+
+    - label: "👁 POV"
+      text: "point of view shot"
+      tip: "First-person perspective"
+
+# ── Lighting ──────────────────────────────────────────────────────────────────
+# Shared across all tabs.
+
+- name: Lighting
+  chips:
+    - label: "🌅 golden hour"
+      text: "golden hour lighting"
+      tip: "Warm sunrise/sunset glow"
+
+    - label: "🌙 moonlit"
+      text: "moonlight, night scene"
+      tip: "Cool blue-silver night light"
+
+    - label: "💡 neon"
+      text: "neon-lit, cyberpunk lighting"
+      tip: "Vivid colored neon signs"
+
+    - label: "⚡ dramatic"
+      text: "dramatic chiaroscuro lighting"
+      tip: "High contrast light and shadow"
+
+    - label: "☀ harsh noon"
+      text: "harsh noon sunlight, overexposed"
+      tip: "Bright midday bleaching"
+      for: [video, animate]
+
+    - label: "🕯 candlelit"
+      text: "warm candlelight, flickering"
+      tip: "Intimate low orange light"
+
+    - label: "💡 studio"
+      text: "studio lighting, soft box"
+      tip: "Clean professional lighting"
+      for: [image]
+
+# ── Motion / Mood ─────────────────────────────────────────────────────────────
+# Video and animate only -- these describe temporal dynamics irrelevant to images.
+
+- name: Motion / Mood
+  for: [video, animate]
+  chips:
+    - label: "🌊 slow motion"
+      text: "slow motion, 240fps look"
+      tip: "Stretched, fluid movement"
+
+    - label: "⏩ time-lapse"
+      text: "time-lapse, sped-up motion"
+      tip: "Fast-forwarded world"
+
+    - label: "🌬 windy"
+      text: "strong wind, hair and leaves moving"
+      tip: "Environmental motion cues"
+
+    - label: "🔥 intense"
+      text: "intense, high energy, dynamic"
+      tip: "Kinetic, fast-paced feel"
+
+    - label: "😌 calm"
+      text: "calm, serene, peaceful atmosphere"
+      tip: "Tranquil, slow-moving"
+
+# ── Artistic Style ────────────────────────────────────────────────────────────
+# Shared -- style descriptors work for both images and video.
+
+- name: Artistic Style
+  chips:
+    - label: "🎞 film grain"
+      text: "35mm film grain, analog"
+      tip: "Vintage celluloid texture"
+
+    - label: "🖤 noir"
+      text: "black and white, film noir"
+      tip: "High-contrast monochrome"
+
+    - label: "🎨 painterly"
+      text: "painterly, impressionist style"
+      tip: "Brushstroke, artistic look"
+      for: [video, animate]
+
+    - label: "🌈 vibrant"
+      text: "vibrant colors, oversaturated"
+      tip: "Bold, punchy color grading"
+
+    - label: "🧊 cold tones"
+      text: "cold color grading, blue tones"
+      tip: "Icy, desaturated blues"
+
+    - label: "🎨 oil painting"
+      text: "oil painting, thick brushstrokes"
+      tip: "Classic oil painting style"
+      for: [image]
+
+    - label: "🖋 line art"
+      text: "detailed line art"
+      tip: "Clean ink illustration"
+      for: [image]
+
+    - label: "🔮 fantasy"
+      text: "fantasy art, magical atmosphere"
+      tip: "Otherworldly, mystical look"
+      for: [image]
+
+    - label: "🎭 concept art"
+      text: "concept art, digital painting"
+      tip: "Professional concept illustration"
+      for: [image]
+
+# ── Quality / Composition ─────────────────────────────────────────────────────
+# Shared across all tabs.
+
+- name: Quality / Composition
+  chips:
+    - label: "✨ 4K"
+      text: "4K, ultra-detailed, sharp"
+      tip: "High resolution detail"
+      for: [video, animate]
+
+    - label: "✨ ultra detail"
+      text: "ultra-detailed, 8K, sharp"
+      tip: "Maximum detail and resolution"
+      for: [image]
+
+    - label: "📐 rule of thirds"
+      text: "rule of thirds composition"
+      tip: "Classic photographic framing"
+
+    - label: "🌁 depth of field"
+      text: "shallow depth of field, bokeh"
+      tip: "Blurred background, sharp subject"
+
+    - label: "🎭 photorealistic"
+      text: "photorealistic, hyperrealistic"
+      tip: "Looks like real footage"
+
+    - label: "🔲 symmetrical"
+      text: "perfectly symmetrical composition"
+      tip: "Mirror-perfect balance"
+      for: [image]
