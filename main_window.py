@@ -183,6 +183,14 @@ scrollbar slider:hover {
     font-size: 10px;
     font-weight: bold;
 }
+.type-badge-model {
+    background-color: #0F2A35;
+    color: #607D8B;
+    border: 1px solid #2D5566;
+    border-radius: 3px;
+    padding: 0px 4px;
+    font-size: 10px;
+}
 .section-label {
     margin-top: 8px;
 }
@@ -378,6 +386,14 @@ _THUMB_H = 112   # 16:9
 _DETAIL_VIDEO_W = 480
 _DETAIL_VIDEO_H = 270
 
+# Maps internal model ID strings to short display names shown on gallery badges.
+# Empty string → no badge (legacy records without model attribution).
+_MODEL_DISPLAY: dict = {
+    "wan2.2-t2v":       "Wan2.2",
+    "mochi-1-preview":  "Mochi-1",
+    "flux.1-dev":       "FLUX",
+}
+
 
 def _apply_css() -> None:
     provider = Gtk.CssProvider()
@@ -451,6 +467,7 @@ class _QueueItem:
     ref_video_path: str = ""        # used when model_source == "animate"
     ref_char_path: str = ""         # used when model_source == "animate"
     animate_mode: str = "animation" # "animation" or "replacement"
+    model_id: str = ""               # specific model within the category, e.g. "wan2", "mochi", "flux"
 
 
 # ── Generation card ────────────────────────────────────────────────────────────
