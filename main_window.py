@@ -20,6 +20,7 @@ Classes:
 """
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import GdkPixbuf, GLib, Gtk, Pango
 
 from api_client import APIClient
+from chip_config import load_chips as _load_chips
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
 
@@ -251,6 +253,11 @@ scrollbar slider:hover {
     border-color: @tt_accent;
     color: @tt_text;
 }
+.chips-category-lbl {
+    color: @tt_text_muted;
+    font-size: 10px;
+    margin-top: 4px;
+}
 .source-btn {
     background-color: @tt_bg_dark;
     color: @tt_text_muted;
@@ -340,72 +347,19 @@ scrollbar slider:hover {
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
-# Each entry: (button label, text appended to prompt, tooltip)
-# Grouped roughly by category: camera, lighting, motion, style, quality.
+# Loaded once at startup from config/prompt_chips.yaml via chip_config.py.
+# Falls back to empty list if the file is missing or malformed.
 
-_PROMPT_CHIPS = [
-    # Camera / shot
-    ("🎥 cinematic",        "cinematic shot",                  "Wide-format filmic look"),
-    ("🚁 aerial",           "aerial drone shot",               "Top-down or bird's-eye view"),
-    ("🔭 dolly in",         "slow dolly in",                   "Camera glides forward"),
-    ("↩ pan left",          "slow pan left",                   "Camera sweeps left"),
-    ("🔄 orbit",            "orbiting camera",                 "Camera circles the subject"),
-    ("📷 close-up",         "extreme close-up",                "Tight shot on subject"),
-    ("🏔 wide shot",         "wide establishing shot",          "Full scene context"),
-    ("👁 POV",              "point of view shot",              "First-person perspective"),
-    # Lighting
-    ("🌅 golden hour",      "golden hour lighting",            "Warm sunrise/sunset glow"),
-    ("🌙 moonlit",          "moonlight, night scene",          "Cool blue-silver night light"),
-    ("💡 neon",             "neon-lit, cyberpunk lighting",    "Vivid colored neon signs"),
-    ("⚡ dramatic",         "dramatic chiaroscuro lighting",   "High contrast light and shadow"),
-    ("☀ harsh noon",        "harsh noon sunlight, overexposed","Bright midday bleaching"),
-    ("🕯 candlelit",        "warm candlelight, flickering",   "Intimate low orange light"),
-    # Motion / mood
-    ("🌊 slow motion",      "slow motion, 240fps look",        "Stretched, fluid movement"),
-    ("⏩ time-lapse",        "time-lapse, sped-up motion",      "Fast-forwarded world"),
-    ("🌬 windy",            "strong wind, hair and leaves moving", "Environmental motion cues"),
-    ("🔥 intense",          "intense, high energy, dynamic",   "Kinetic, fast-paced feel"),
-    ("😌 calm",             "calm, serene, peaceful atmosphere","Tranquil, slow-moving"),
-    # Style
-    ("🎞 film grain",       "35mm film grain, analog",         "Vintage celluloid texture"),
-    ("🖤 noir",             "black and white, film noir",      "High-contrast monochrome"),
-    ("🎨 painterly",        "painterly, impressionist style",  "Brushstroke, artistic look"),
-    ("🌈 vibrant",          "vibrant colors, oversaturated",   "Bold, punchy color grading"),
-    ("🧊 cold tones",       "cold color grading, blue tones",  "Icy, desaturated blues"),
-    # Quality / composition
-    ("✨ 4K",               "4K, ultra-detailed, sharp",       "High resolution detail"),
-    ("📐 rule of thirds",   "rule of thirds composition",      "Classic photographic framing"),
-    ("🌁 depth of field",   "shallow depth of field, bokeh",   "Blurred background, sharp subject"),
-    ("🎭 photorealistic",   "photorealistic, hyperrealistic",  "Looks like real footage"),
-]
+def _load_chips_safe(tab: str) -> list:
+    try:
+        return _load_chips(tab)
+    except Exception as e:
+        print(f"Warning: could not load chips for '{tab}': {e}", file=sys.stderr)
+        return []
 
-_IMAGE_PROMPT_CHIPS = [
-    # Artistic style
-    ("🎨 oil painting",    "oil painting, thick brushstrokes",    "Classic oil painting style"),
-    ("🖋 line art",        "detailed line art",                    "Clean ink illustration"),
-    ("📸 photorealistic",  "photorealistic, DSLR photo",           "Looks like a real photograph"),
-    ("🔮 fantasy",         "fantasy art, magical atmosphere",      "Otherworldly, mystical look"),
-    ("🎭 concept art",     "concept art, digital painting",        "Professional concept illustration"),
-    ("🖤 noir",            "black and white, high contrast",       "Monochrome film noir"),
-    ("🌈 vibrant",         "vibrant colors, oversaturated",        "Bold punchy color grading"),
-    ("🧊 cold tones",      "cold color grading, blue tones",       "Icy desaturated blues"),
-    ("🎞 film grain",      "35mm film grain, analog",              "Vintage film texture"),
-    # Lighting
-    ("🌅 golden hour",     "golden hour lighting, warm glow",      "Warm sunrise/sunset light"),
-    ("💡 studio",          "studio lighting, soft box",            "Clean professional lighting"),
-    ("⚡ dramatic",        "dramatic chiaroscuro lighting",        "High contrast shadows"),
-    ("🌙 moonlit",         "moonlight, night scene",               "Cool blue-silver night"),
-    ("🕯 candlelit",       "warm candlelight, intimate",           "Soft amber glow"),
-    ("💡 neon",            "neon-lit, cyberpunk lighting",         "Vivid colored neon signs"),
-    # Composition / quality
-    ("📐 rule of thirds",  "rule of thirds composition",           "Classic photographic framing"),
-    ("🌁 depth of field",  "shallow depth of field, bokeh",        "Blurred background, sharp subject"),
-    ("📷 close-up",        "extreme close-up, macro",              "Fine detail, macro shot"),
-    ("🏔 wide shot",       "wide establishing shot",               "Full scene context"),
-    ("🔲 symmetrical",     "perfectly symmetrical composition",    "Mirror-perfect balance"),
-    ("✨ ultra detail",    "ultra-detailed, 8K, sharp",            "Maximum detail and resolution"),
-    ("🌟 cinematic",       "cinematic composition, anamorphic",    "Widescreen filmic look"),
-]
+_VIDEO_CHIPS   = _load_chips_safe("video")
+_IMAGE_CHIPS   = _load_chips_safe("image")
+_ANIMATE_CHIPS = _load_chips_safe("animate")
 
 _THUMB_W = 200
 _THUMB_H = 112   # 16:9
@@ -1784,7 +1738,7 @@ class ControlPanel(Gtk.Box):
         chips_hdr.add_css_class("hint")
         self.append(chips_hdr)
         self._chips_scroll = Gtk.ScrolledWindow()
-        self._chips_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self._chips_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._chips_scroll.set_size_request(-1, -1)
         self._chips_scroll.set_child(self._make_chips_box("video"))
         self.append(self._chips_scroll)
@@ -2114,8 +2068,13 @@ class ControlPanel(Gtk.Box):
         self._guidance_spin.set_visible(is_image)
         self._guidance_hint_lbl.set_visible(is_image)
 
-        # Swap chips: video/animate share motion vocabulary; image uses style chips
-        chip_source = "image" if is_image else "video"
+        # Swap chips: each source tab has its own curated chip vocabulary
+        if is_image:
+            chip_source = "image"
+        elif is_animate:
+            chip_source = "animate"
+        else:
+            chip_source = "video"
         self._chips_scroll.set_child(self._make_chips_box(chip_source))
 
         # Seed image: only relevant for video (Wan2.2 init image)
@@ -2363,20 +2322,38 @@ class ControlPanel(Gtk.Box):
     # ── Chips helper ───────────────────────────────────────────────────────────
 
     def _make_chips_box(self, source: str) -> Gtk.Box:
-        """Build and return a horizontal chip box for the given source ('video'/'image')."""
-        chip_list = _PROMPT_CHIPS if source == "video" else _IMAGE_PROMPT_CHIPS
-        chips_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        chips_box.set_margin_start(2)
-        chips_box.set_margin_end(2)
-        chips_box.set_margin_top(2)
-        chips_box.set_margin_bottom(2)
-        for label, text, tip in chip_list:
-            btn = Gtk.Button(label=label)
-            btn.set_tooltip_text(tip)
-            btn.add_css_class("chip-btn")
-            btn.connect("clicked", lambda _b, t=text: self._append_to_prompt(t))
-            chips_box.append(btn)
-        return chips_box
+        """Build a vertically grouped chip box for *source* ('video'/'image'/'animate')."""
+        categories = {
+            "video":   _VIDEO_CHIPS,
+            "image":   _IMAGE_CHIPS,
+            "animate": _ANIMATE_CHIPS,
+        }.get(source, [])
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        outer.set_margin_start(2)
+        outer.set_margin_end(2)
+        outer.set_margin_top(2)
+        outer.set_margin_bottom(2)
+
+        for cat in categories:
+            lbl = Gtk.Label(label=cat.name)
+            lbl.set_xalign(0)
+            lbl.add_css_class("chips-category-lbl")
+            outer.append(lbl)
+
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_row_spacing(3)
+            flow.set_column_spacing(4)
+            for chip in cat.chips:
+                btn = Gtk.Button(label=chip.label)
+                btn.set_tooltip_text(chip.tip)
+                btn.add_css_class("chip-btn")
+                btn.connect("clicked", lambda _b, t=chip.text: self._append_to_prompt(t))
+                flow.append(btn)
+            outer.append(flow)
+
+        return outer
 
     # ── Form helpers ───────────────────────────────────────────────────────────
 
