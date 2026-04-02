@@ -1998,8 +1998,11 @@ class ControlPanel(Gtk.Box):
         chips_hdr.add_css_class("hint")
         self.append(chips_hdr)
         self._chips_scroll = Gtk.ScrolledWindow()
-        self._chips_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self._chips_scroll.set_size_request(-1, -1)
+        # No scrolling here — the outer ctrl_scroll handles it.
+        # Propagate natural height so all chip rows are fully visible.
+        self._chips_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+        self._chips_scroll.set_propagate_natural_height(True)
+        self._chips_scroll.set_propagate_natural_width(True)
         self._chips_scroll.set_child(self._make_chips_box("video"))
         self.append(self._chips_scroll)
 
