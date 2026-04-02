@@ -1797,7 +1797,7 @@ class ControlPanel(Gtk.Box):
         scroll1 = Gtk.ScrolledWindow()
         self._prompt_scroll = scroll1   # kept for inline-validation error styling
         scroll1.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll1.set_size_request(-1, 90)
+        scroll1.set_size_request(-1, 110)
         self._prompt_view = Gtk.TextView()
         self._prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._prompt_view.get_buffer().set_text("")
@@ -1851,13 +1851,39 @@ class ControlPanel(Gtk.Box):
         self._chips_scroll.set_child(self._make_chips_box("video"))
         self.append(self._chips_scroll)
 
+        # ── Advanced settings accordion ───────────────────────────────────────
+        # Note: self.append(self._animate_box) is deferred until after
+        # self._animate_box is fully constructed below; the accordion header/revealer
+        # are set up here, but adv_body is assembled later after all widget vars exist.
+        self._adv_revealer = Gtk.Revealer()
+        self._adv_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self._adv_revealer.set_transition_duration(150)
+        self._adv_revealer.set_reveal_child(False)
+
+        # Header button — full-width toggle
+        self._adv_hdr_btn = Gtk.Button()
+        self._adv_hdr_btn.add_css_class("adv-hdr-btn")
+        self._adv_hdr_btn.connect("clicked", self._on_adv_toggle)
+        hdr_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._adv_arrow_lbl = Gtk.Label(label="\u25b8")
+        self._adv_arrow_lbl.set_xalign(0)
+        hdr_inner.append(self._adv_arrow_lbl)
+        hdr_section_lbl = Gtk.Label(label="Advanced settings")
+        hdr_section_lbl.set_xalign(0)
+        hdr_section_lbl.set_hexpand(True)
+        hdr_inner.append(hdr_section_lbl)
+        self._adv_summary_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hdr_inner.append(self._adv_summary_box)
+        self._adv_hdr_btn.set_child(hdr_inner)
+        self.append(self._adv_hdr_btn)
+
         # ── Negative prompt ───────────────────────────────────────────────────
-        self.append(self._section("Negative Prompt"))
+        # (appended into accordion adv_body below, not directly to self)
+        _neg_section_lbl = self._section("Negative Prompt")
         neg_hint = Gtk.Label(label="Steer away from: blurry, watermark, low quality, distorted")
         neg_hint.set_xalign(0)
         neg_hint.set_ellipsize(Pango.EllipsizeMode.END)
         neg_hint.add_css_class("hint")
-        self.append(neg_hint)
         scroll2 = Gtk.ScrolledWindow()
         scroll2.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll2.set_size_request(-1, 52)
@@ -1868,10 +1894,10 @@ class ControlPanel(Gtk.Box):
             "Common: blurry, watermark, text overlay, distorted, low quality"
         )
         scroll2.set_child(self._neg_view)
-        self.append(scroll2)
 
         # ── Parameters ────────────────────────────────────────────────────────
-        self.append(self._section("Parameters"))
+        # (appended into accordion adv_body below, not directly to self)
+        _param_section_lbl = self._section("Parameters")
         param_grid = Gtk.Grid()
         param_grid.set_column_spacing(8)
         param_grid.set_row_spacing(2)
@@ -1950,17 +1976,15 @@ class ControlPanel(Gtk.Box):
         self._guidance_spin.set_visible(False)
         self._guidance_hint_lbl.set_visible(False)
 
-        self.append(param_grid)
-
         # ── Seed image ────────────────────────────────────────────────────────
         # Only relevant for Wan2.2 video; hidden when FLUX image source is selected.
+        # (appended into accordion adv_body below, not directly to self)
         self._seed_img_section = self._section("Seed Image (optional)")
         self._seed_img_section.set_tooltip_text(
             "Reference image passed to Wan2.2 to guide motion and composition.\n"
             "The model uses it as a visual starting point — not copied verbatim.\n"
             "PNG or JPEG, any aspect ratio (resized internally)."
         )
-        self.append(self._seed_img_section)
         seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
         self._seed_img_widget = Gtk.Label(label="none")
@@ -1979,12 +2003,17 @@ class ControlPanel(Gtk.Box):
         seed_btns.append(self._clear_seed_btn)
         seed_row.append(seed_btns)
         self._seed_row_widget = seed_row
-        self.append(seed_row)
 
         # ── Animate inputs ────────────────────────────────────────────────────
         # Visible only when "animate" source is active.
         self._animate_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._animate_box.add_css_class("animate-inputs-box")
         self._animate_box.set_visible(False)
+
+        _anim_title = Gtk.Label(label="💃 ANIMATE INPUTS")
+        _anim_title.set_xalign(0)
+        _anim_title.add_css_class("animate-inputs-title")
+        self._animate_box.append(_anim_title)
 
         self._animate_box.append(self._section("Motion Video"))
         mv_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -2039,7 +2068,30 @@ class ControlPanel(Gtk.Box):
         mode_row.append(self._anim_mode_repl_btn)
         self._animate_box.append(mode_row)
 
+        # Animate inputs — visible only in animate mode, positioned below chips.
+        # Appended here (after construction) so self._animate_box is ready.
         self.append(self._animate_box)
+
+        # ── Accordion body — neg prompt, params, seed image ───────────────────
+        # adv_body is the content revealed when the accordion header is clicked.
+        # All three sections (neg prompt, parameters, seed image) live here so
+        # they are hidden by default and only visible when the user opens the drawer.
+        adv_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        adv_body.add_css_class("adv-body")
+        adv_body.append(_neg_section_lbl)
+        adv_body.append(neg_hint)
+        adv_body.append(scroll2)
+        adv_body.append(_param_section_lbl)
+        adv_body.append(param_grid)
+        adv_body.append(self._seed_img_section)
+        adv_body.append(seed_row)
+        self._adv_revealer.set_child(adv_body)
+        self.append(self._adv_revealer)
+
+        # Connect spinbuttons to update summary on value change
+        self._steps_spin.connect("value-changed", lambda _: self._update_adv_summary())
+        self._seed_spin.connect("value-changed", lambda _: self._update_adv_summary())
+        self._update_adv_summary()
 
         # ── Server control ─────────────────────────────────────────────────────
         # Status row: indicator label + Start + Stop buttons side by side.
@@ -2116,6 +2168,41 @@ class ControlPanel(Gtk.Box):
         self.append(self._recover_btn)
 
     # ── State ──────────────────────────────────────────────────────────────────
+
+    # ── Advanced settings accordion ────────────────────────────────────────────
+
+    def _on_adv_toggle(self, _btn) -> None:
+        """Toggle the advanced settings accordion open/closed."""
+        self._adv_open = not self._adv_open
+        self._adv_revealer.set_reveal_child(self._adv_open)
+        self._adv_arrow_lbl.set_label("\u25be" if self._adv_open else "\u25b8")
+
+    def _update_adv_summary(self) -> None:
+        """
+        Rebuild the accordion header summary labels.
+        Shows current steps and seed values; highlights non-defaults in pink.
+        Called when steps or seed spinbuttons change, and once at build time.
+        """
+        steps_val = int(self._steps_spin.get_value())
+        seed_val = int(self._seed_spin.get_value())
+        steps_default = (steps_val == 20)
+        seed_default = (seed_val == -1)
+
+        # Clear existing summary labels
+        child = self._adv_summary_box.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self._adv_summary_box.remove(child)
+            child = nxt
+
+        # Rebuild with one label per value, styled by default/changed state
+        for text, is_default in [
+            (f"steps:{steps_val}", steps_default),
+            (f"seed:{seed_val if seed_val != -1 else chr(8722) + '1'}", seed_default),
+        ]:
+            lbl = Gtk.Label(label=text)
+            lbl.add_css_class("adv-summary" if is_default else "adv-summary-changed")
+            self._adv_summary_box.append(lbl)
 
     # ── Source toggle ──────────────────────────────────────────────────────────
 
@@ -2212,7 +2299,13 @@ class ControlPanel(Gtk.Box):
         """
         Switch the active model within the current source category.
         Updates button visual state, description label, and Start button tooltip.
+        Guard against being called before _build() has finished constructing all widgets.
         """
+        # _source_desc_lbl and _server_start_btn are constructed after the model
+        # selector buttons; set_active(True) on those buttons fires this callback
+        # mid-_build() before those widgets exist. Skip silently in that case.
+        if not hasattr(self, "_source_desc_lbl"):
+            return
         if self._model_source == "video":
             self._video_model = model
             # Active state handled by ToggleButton group (:checked CSS); no manual CSS needed.
