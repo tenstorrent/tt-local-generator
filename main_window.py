@@ -1517,7 +1517,7 @@ class ControlPanel(Gtk.Box):
 
     def __init__(
         self,
-        on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path, ref_char_path, animate_mode) -> None
+        on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path, ref_char_path, animate_mode, model_id) -> None
         on_enqueue,        # same signature
         on_cancel,         # () -> None
         on_recover,        # () -> None
@@ -2675,7 +2675,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
                      ref_video_path="", ref_char_path="",
-                     animate_mode="animation") -> None:
+                     animate_mode="animation", model_id="") -> None:
         if self._worker and self._worker.is_alive():
             return
 
@@ -2687,7 +2687,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.clear_prompt()
 
         if model_source == "image":
-            self._set_status("Generating image with FLUX.1-dev…")
+            _IMAGE_MODEL_IDS = {"flux": "flux.1-dev"}
+            model_name = _IMAGE_MODEL_IDS.get(
+                model_id or self._controls.get_image_model(), "flux.1-dev"
+            )
+            self._set_status(f"Generating image with {model_name}…")
             gen = ImageGenerationWorker(
                 client=self._client,
                 store=self._store,
@@ -2696,6 +2700,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 num_inference_steps=steps,
                 seed=seed,
                 guidance_scale=guidance_scale,
+                model=model_name,
             )
         elif model_source == "animate":
             self._set_status("Submitting Animate-14B job…")
@@ -2710,7 +2715,11 @@ class MainWindow(Gtk.ApplicationWindow):
                 animate_mode=animate_mode,
             )
         else:
-            self._set_status("Submitting video generation job…")
+            _VIDEO_MODEL_IDS = {"wan2": "wan2.2-t2v", "mochi": "mochi-1-preview"}
+            model_name = _VIDEO_MODEL_IDS.get(
+                model_id or self._controls.get_video_model(), "wan2.2-t2v"
+            )
+            self._set_status(f"Submitting {model_name} video generation job…")
             gen = GenerationWorker(
                 client=self._client,
                 store=self._store,
@@ -2719,6 +2728,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 num_inference_steps=steps,
                 seed=seed,
                 seed_image_path=seed_image_path,
+                model=model_name,
             )
         self._worker_gen = gen
 
@@ -2740,13 +2750,23 @@ class MainWindow(Gtk.ApplicationWindow):
     # ── Server start / stop ────────────────────────────────────────────────────
 
     def _on_start_server(self, model_source: str) -> None:
-        """Launch the appropriate server script in a background thread, streaming output to the log panel."""
-        if model_source == "image":
-            script_name, label = "start_flux.sh", "FLUX image"
-        elif model_source == "animate":
-            script_name, label = "start_animate.sh", "Wan2.2-Animate"
+        """Launch the server script matching the current source + model selection."""
+        _SCRIPTS = {
+            ("video",   "wan2"):  ("start_wan.sh",     "Wan2.2 video"),
+            ("video",   "mochi"): ("start_mochi.sh",   "Mochi-1 video"),
+            ("image",   "flux"):  ("start_flux.sh",    "FLUX image"),
+            ("animate", ""):      ("start_animate.sh", "Wan2.2-Animate"),
+        }
+        if model_source == "video":
+            model_key = self._controls.get_video_model()
+        elif model_source == "image":
+            model_key = self._controls.get_image_model()
         else:
-            script_name, label = "start_wan.sh", "Wan2.2 video"
+            model_key = ""
+
+        script_name, label = _SCRIPTS.get(
+            (model_source, model_key), ("start_wan.sh", "video")
+        )
         script_path = str(Path(__file__).parent / script_name)
 
         self._controls.set_server_launching(True, clear_log=True)
@@ -2822,10 +2842,11 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,
                     ref_video_path="", ref_char_path="",
-                    animate_mode="animation") -> None:
+                    animate_mode="animation", model_id="") -> None:
         self._queue.append(_QueueItem(prompt, neg, steps, seed, seed_image_path,
                                       model_source, guidance_scale,
-                                      ref_video_path, ref_char_path, animate_mode))
+                                      ref_video_path, ref_char_path, animate_mode,
+                                      model_id))
         self._controls.update_queue_display(self._queue)
         self._controls.clear_prompt()   # ready for the next prompt immediately
         n = len(self._queue)
@@ -2849,7 +2870,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._on_generate(item.prompt, item.negative_prompt,
                           item.steps, item.seed, item.seed_image_path,
                           item.model_source, item.guidance_scale,
-                          item.ref_video_path, item.ref_char_path, item.animate_mode)
+                          item.ref_video_path, item.ref_char_path, item.animate_mode,
+                          item.model_id)
         return True
 
     # ── Recovery ───────────────────────────────────────────────────────────────
