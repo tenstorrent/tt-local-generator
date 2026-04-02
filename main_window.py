@@ -1707,6 +1707,8 @@ class ControlPanel(Gtk.Box):
         on_start_server,   # (model_source: str) -> None
         on_stop_server,    # () -> None
         on_source_change,  # (model_source: str) -> None — called after the mode toggle switches
+        on_start_prompt_gen = None,  # () -> None — launch start_prompt_gen.sh --gui
+        on_inspire = None,           # (source: str, seed_text: str) -> None — start generation thread
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._on_generate = on_generate
@@ -1716,6 +1718,16 @@ class ControlPanel(Gtk.Box):
         self._on_start_server = on_start_server
         self._on_stop_server = on_stop_server
         self._on_source_change = on_source_change
+        self._on_start_prompt_gen = on_start_prompt_gen or (lambda: None)
+        self._on_inspire = on_inspire or (lambda s, t: None)
+        # ── Prompt gen server state ───────────────────────────────────────────
+        self._prompt_gen_ready: bool = False      # True when port 8001 health check passes
+        self._prompt_gen_starting: bool = False   # True while start_prompt_gen.sh is running
+        self._prompt_gen_generating: bool = False # True while waiting for generate_prompt()
+        self._confirm_box_visible: bool = False   # True while inline confirm box is shown
+        # Source + seed captured at click time for auto-generate after server starts
+        self._inspire_pending_source: "str | None" = None
+        self._inspire_pending_seed: str = ""
         self._seed_image_path = ""
         self._ref_video_path = ""      # animate: motion source video
         self._ref_char_path = ""       # animate: character image
@@ -1895,6 +1907,55 @@ class ControlPanel(Gtk.Box):
         self._prompt_error_lbl.set_halign(Gtk.Align.START)
         self._prompt_error_lbl.set_visible(False)
         self.append(self._prompt_error_lbl)
+
+        # ── Inspire row ───────────────────────────────────────────────────────
+        # "✨ Inspire me" button + status dot for the prompt gen server (port 8001).
+        inspire_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._inspire_btn = Gtk.Button(label="✨ Inspire me")
+        self._inspire_btn.add_css_class("inspire-btn")
+        self._inspire_btn.set_tooltip_text(
+            "Generate a cinematic prompt using the local Qwen3-0.6B model.\n"
+            "If the prompt box already has text, it is used as a creative seed.\n"
+            "Requires: ./start_prompt_gen.sh  (CPU-only, ~1.2 GB one-time download)"
+        )
+        self._inspire_btn.connect("clicked", self._on_inspire_clicked)
+        inspire_row.append(self._inspire_btn)
+
+        _inspire_spacer = Gtk.Box()
+        _inspire_spacer.set_hexpand(True)
+        inspire_row.append(_inspire_spacer)
+
+        self._inspire_dot_lbl = Gtk.Label(label="⬤ offline")
+        self._inspire_dot_lbl.add_css_class("inspire-dot")
+        inspire_row.append(self._inspire_dot_lbl)
+        self.append(inspire_row)
+
+        # Confirm box — hidden; slides in when Inspire is clicked while server is offline
+        self._inspire_confirm_revealer = Gtk.Revealer()
+        self._inspire_confirm_revealer.set_transition_type(
+            Gtk.RevealerTransitionType.SLIDE_DOWN
+        )
+        self._inspire_confirm_revealer.set_transition_duration(150)
+        self._inspire_confirm_revealer.set_reveal_child(False)
+        _confirm_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        _confirm_box.add_css_class("inspire-confirm-box")
+        _confirm_msg = Gtk.Label(
+            label="Prompt generator isn't running. Start it now? (~20s warm-up)"
+        )
+        _confirm_msg.set_xalign(0)
+        _confirm_msg.set_wrap(True)
+        _confirm_box.append(_confirm_msg)
+        _confirm_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._inspire_start_btn = Gtk.Button(label="▶ Start")
+        self._inspire_start_btn.add_css_class("inspire-confirm-btn")
+        self._inspire_start_btn.connect("clicked", self._on_inspire_confirm_start)
+        _confirm_btns.append(self._inspire_start_btn)
+        _inspire_cancel_btn = Gtk.Button(label="Not now")
+        _inspire_cancel_btn.connect("clicked", self._on_inspire_confirm_cancel)
+        _confirm_btns.append(_inspire_cancel_btn)
+        _confirm_box.append(_confirm_btns)
+        self._inspire_confirm_revealer.set_child(_confirm_box)
+        self.append(self._inspire_confirm_revealer)
 
         # ── Prompt component chips ────────────────────────────────────────────
         # Clicking a chip appends its modifier text to the prompt.
@@ -2754,6 +2815,124 @@ class ControlPanel(Gtk.Box):
         if self._prompt_scroll.has_css_class("prompt-error"):
             self._prompt_scroll.remove_css_class("prompt-error")
             self._prompt_error_lbl.set_visible(False)
+
+    def set_prompt_gen_state(self, ready: bool) -> None:
+        """
+        Update the inspire row dot and button sensitivity from the health poll result.
+
+        Called from the main thread via GLib.idle_add.  Handles the auto-generate
+        flow: if the server just became ready after the user clicked "▶ Start" in
+        the confirm box, fires the pending generation automatically.
+        """
+        was_starting = self._prompt_gen_starting
+        self._prompt_gen_ready = ready
+
+        if ready:
+            self._prompt_gen_starting = False
+            # Update dot to green "ready"
+            self._inspire_dot_lbl.set_label("⬤ ready")
+            for cls in ("inspire-dot", "inspire-dot-starting"):
+                self._inspire_dot_lbl.remove_css_class(cls)
+            self._inspire_dot_lbl.add_css_class("inspire-dot-ready")
+            # Restore button if not mid-generation
+            if not self._prompt_gen_generating:
+                self._inspire_btn.set_label("✨ Inspire me")
+                self._inspire_btn.remove_css_class("inspire-btn-loading")
+                self._inspire_btn.add_css_class("inspire-btn")
+                self._inspire_btn.set_sensitive(True)
+            # Auto-generate if pending from the confirm-start flow
+            if was_starting and self._inspire_pending_source is not None:
+                source = self._inspire_pending_source
+                seed = self._inspire_pending_seed
+                self._inspire_pending_source = None
+                self._inspire_pending_seed = ""
+                self._trigger_inspire(source, seed)
+        elif not self._prompt_gen_starting:
+            # Server is offline and not actively starting — show offline state
+            self._inspire_dot_lbl.set_label("⬤ offline")
+            for cls in ("inspire-dot-ready", "inspire-dot-starting"):
+                self._inspire_dot_lbl.remove_css_class(cls)
+            self._inspire_dot_lbl.add_css_class("inspire-dot")
+            if not self._prompt_gen_generating:
+                self._inspire_btn.set_label("✨ Inspire me")
+                self._inspire_btn.remove_css_class("inspire-btn-loading")
+                self._inspire_btn.add_css_class("inspire-btn")
+                self._inspire_btn.set_sensitive(True)
+
+    def set_prompt_gen_starting(self, starting: bool) -> None:
+        """Show/hide the starting… state on the inspire row button and dot."""
+        self._prompt_gen_starting = starting
+        if starting:
+            self._inspire_dot_lbl.set_label("⬤ starting…")
+            for cls in ("inspire-dot", "inspire-dot-ready"):
+                self._inspire_dot_lbl.remove_css_class(cls)
+            self._inspire_dot_lbl.add_css_class("inspire-dot-starting")
+            self._inspire_btn.set_label("⏳ Starting…")
+            self._inspire_btn.remove_css_class("inspire-btn")
+            self._inspire_btn.add_css_class("inspire-btn-loading")
+            self._inspire_btn.set_sensitive(False)
+
+    def _on_inspire_clicked(self, _btn) -> None:
+        """Handle Inspire button click: show confirm box if offline, else generate."""
+        if not self._prompt_gen_ready:
+            # Reveal inline confirm box; disable button until user decides
+            self._inspire_confirm_revealer.set_reveal_child(True)
+            self._confirm_box_visible = True
+            self._inspire_btn.set_sensitive(False)
+        else:
+            source = self._model_source
+            seed_text = self._prompt_buf.get_text(
+                self._prompt_buf.get_start_iter(),
+                self._prompt_buf.get_end_iter(),
+                False,
+            ).strip()
+            self._trigger_inspire(source, seed_text)
+
+    def _on_inspire_confirm_start(self, _btn) -> None:
+        """User clicked ▶ Start in the confirm box — launch server and set auto-generate."""
+        self._inspire_confirm_revealer.set_reveal_child(False)
+        self._confirm_box_visible = False
+        # Capture source + seed at click time so auto-generate uses the right values
+        self._inspire_pending_source = self._model_source
+        self._inspire_pending_seed = self._prompt_buf.get_text(
+            self._prompt_buf.get_start_iter(),
+            self._prompt_buf.get_end_iter(),
+            False,
+        ).strip()
+        self.set_prompt_gen_starting(True)
+        self._on_start_prompt_gen()
+
+    def _on_inspire_confirm_cancel(self, _btn) -> None:
+        """User clicked Not now — dismiss confirm box, restore button."""
+        self._inspire_confirm_revealer.set_reveal_child(False)
+        self._confirm_box_visible = False
+        self._inspire_btn.set_sensitive(True)
+
+    def _trigger_inspire(self, source: str, seed_text: str) -> None:
+        """Set loading state and call on_inspire(source, seed_text) to fire the thread."""
+        self._prompt_gen_generating = True
+        self._inspire_btn.set_label("⏳ Generating…")
+        self._inspire_btn.remove_css_class("inspire-btn")
+        self._inspire_btn.add_css_class("inspire-btn-loading")
+        self._inspire_btn.set_sensitive(False)
+        self._on_inspire(source, seed_text)
+
+    def set_inspire_result(self, text: str) -> None:
+        """Called on main thread when generation succeeds — replace textarea content."""
+        self._prompt_gen_generating = False
+        self._prompt_buf.set_text(text)
+        self._inspire_btn.set_label("✨ Inspire me")
+        self._inspire_btn.remove_css_class("inspire-btn-loading")
+        self._inspire_btn.add_css_class("inspire-btn")
+        self._inspire_btn.set_sensitive(True)
+
+    def set_inspire_error(self, msg: str) -> None:
+        """Called on main thread when generation fails — restore button state."""
+        self._prompt_gen_generating = False
+        self._inspire_btn.set_label("✨ Inspire me")
+        self._inspire_btn.remove_css_class("inspire-btn-loading")
+        self._inspire_btn.add_css_class("inspire-btn")
+        self._inspire_btn.set_sensitive(True)
 
     # ── Button handlers ────────────────────────────────────────────────────────
 
