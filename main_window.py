@@ -37,6 +37,7 @@ from api_client import APIClient
 from chip_config import load_chips as _load_chips
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
+import attractor
 import prompt_client
 
 
@@ -492,6 +493,25 @@ scrollbar slider:hover {
     color: @tt_text_muted;
     border-color: @tt_border;
     background-color: @tt_bg_darkest;
+}
+
+/* -- Attractor launch button ---------------------------------------------- */
+.attractor-launch-btn {
+    background-color: @tt_bg_darkest;
+    color: @tt_accent_light;
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 11px;
+}
+.attractor-launch-btn:hover {
+    background-color: @tt_bg_dark;
+    border-color: @tt_accent;
+    color: @tt_text;
+}
+.attractor-launch-btn:disabled {
+    color: @tt_text_muted;
+    border-color: @tt_bg_dark;
 }
 """
 
@@ -3093,6 +3113,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._auto_tab_switched = False  # True after first model detection auto-switch
         self._pg_stop: "threading.Event | None" = None  # set when prompt gen poll starts
         self._log_tail_stop: "threading.Event | None" = None  # set to stop server log tail
+        self._attractor_win: "attractor.AttractorWindow | None" = None
         self._prompt_gen_system_prompt: str = self._load_prompt_gen_system()
 
         self._build_ui()
@@ -3160,6 +3181,26 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.set_visible_child_name("video")
+        # Gallery toolbar — sits above the gallery stack
+        gallery_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        gallery_toolbar.set_margin_start(6)
+        gallery_toolbar.set_margin_end(6)
+        gallery_toolbar.set_margin_top(4)
+        gallery_toolbar.set_margin_bottom(4)
+        _tb_spacer = Gtk.Box()
+        _tb_spacer.set_hexpand(True)
+        gallery_toolbar.append(_tb_spacer)
+        self._attractor_btn = Gtk.Button(label="✦ Attractor")
+        self._attractor_btn.add_css_class("attractor-launch-btn")
+        self._attractor_btn.set_tooltip_text(
+            "Open Attractor Mode — plays all media in a kiosk loop\n"
+            "and continuously generates new content."
+        )
+        self._attractor_btn.set_sensitive(False)
+        self._attractor_btn.connect("clicked", self._on_open_attractor)
+        gallery_toolbar.append(self._attractor_btn)
+        gallery_wrap.append(gallery_toolbar)
+
         gallery_wrap.append(self._gallery_stack)
 
         # Status bar spans the full bottom of the gallery+detail area
@@ -3259,6 +3300,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if image_recs:
             self._image_gallery.load_history(image_recs)
         self._set_status(f"Loaded {len(records)} previous generation(s)")
+        self._update_attractor_btn()
 
     # ── Health worker ──────────────────────────────────────────────────────────
 
@@ -3380,6 +3422,36 @@ class MainWindow(Gtk.ApplicationWindow):
         print(f"[tt-gen] Prompt generation error: {msg}", file=sys.stderr)
         self._controls.set_inspire_error(msg)
         return False
+
+    # ── Attractor Mode ─────────────────────────────────────────────────────────
+
+    def _on_open_attractor(self, _btn=None) -> None:
+        """Open (or raise) the Attractor Mode kiosk window."""
+        if self._attractor_win is not None:
+            self._attractor_win.present()
+            return
+
+        win = attractor.AttractorWindow(
+            records=self._store.all_records(),
+            system_prompt=self._prompt_gen_system_prompt,
+            model_source=self._controls.get_model_source(),
+            on_enqueue=self._on_enqueue,
+            get_queue_depth=lambda: len(self._queue),
+        )
+        win.set_transient_for(self)
+        win.connect("destroy", self._on_attractor_closed)
+        self._attractor_win = win
+        win.present()
+        GLib.idle_add(win.start)
+
+    def _on_attractor_closed(self, _win) -> None:
+        """Called when the attractor window is destroyed."""
+        self._attractor_win = None
+
+    def _update_attractor_btn(self) -> None:
+        """Enable/disable the Attractor button based on whether any media exists."""
+        has_media = len(self._store.all_records()) > 0
+        self._attractor_btn.set_sensitive(has_media)
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
@@ -3753,6 +3825,9 @@ class MainWindow(Gtk.ApplicationWindow):
         media_path = record.media_file_path
         self._set_status(f"Done — {media_path}  ({record.duration_s:.0f}s)")
         self._start_next_queued()
+        if self._attractor_win is not None:
+            GLib.idle_add(self._attractor_win.add_record, record)
+        self._update_attractor_btn()
         return False
 
     def _on_error(self, message: str) -> bool:
