@@ -52,6 +52,7 @@ _CSS = b"""
 @define-color tt_text        #E8F0F2;
 @define-color tt_text_muted  #607D8B;
 @define-color tt_pink        #EC96B8;
+@define-color tt_success     #27AE60;
 @define-color tt_error       #FF6B6B;
 @define-color tt_bg_error_dark #2D1A1A;
 @define-color tt_bg_pink_dark  #2D1A2D;
@@ -374,7 +375,7 @@ scrollbar slider:hover {
     font-weight: bold;
     font-size: 11px;
 }
-.server-model-match  { color: #27AE60; }
+.server-model-match  { color: @tt_success; }
 .server-model-offline { color: @tt_text_muted; }
 .server-model-mismatch { color: #F4C471; }
 .server-model-starting { color: @tt_accent; }
@@ -455,23 +456,17 @@ scrollbar slider:hover {
     border-color: @tt_bg_dark;
 }
 .inspire-btn-loading {
-    background-color: @tt_bg_darkest;
     color: @tt_accent;
     border: 1px solid @tt_accent;
-    border-radius: 4px;
-    padding: 3px 8px;
-    font-size: 11px;
 }
 .inspire-dot {
     font-size: 9px;
     color: @tt_text_muted;
 }
 .inspire-dot-ready {
-    font-size: 9px;
-    color: #27AE60;
+    color: @tt_success;
 }
 .inspire-dot-starting {
-    font-size: 9px;
     color: @tt_accent;
 }
 .inspire-confirm-box {
@@ -491,6 +486,11 @@ scrollbar slider:hover {
 }
 .inspire-confirm-btn:hover {
     background-color: @tt_border;
+}
+.inspire-confirm-btn:disabled {
+    color: @tt_text_muted;
+    border-color: @tt_border;
+    background-color: @tt_bg_darkest;
 }
 """
 
