@@ -490,11 +490,87 @@ class AttractorWindow(Gtk.Window):
             )
         return False
 
-    def _generation_loop(self) -> None:
-        """Background daemon thread — implemented in Task 4."""
-        pass
+    # ── Generation loop ───────────────────────────────────────────────────
 
-    # ── Placeholder for remaining generation method (Task 4) ─────────────
+    def _generation_loop(self) -> None:
+        """
+        Background daemon thread. Continuously generates prompts and enqueues
+        new generation jobs via on_enqueue callback.
+
+        Back-pressure: if queue depth >= 2, waits 30 s before retrying (server
+        isn't consuming jobs fast enough). Stops when _gen_stop is set.
+        """
+        while not self._gen_stop.wait(0.0):
+            depth = self._get_queue_depth()
+            GLib.idle_add(self._queue_lbl.set_label, f"⏳  queue: {depth}")
+
+            if depth >= 2:
+                GLib.idle_add(self._set_gen_status, "⏸  waiting (queue full)…")
+                if self._gen_stop.wait(30.0):
+                    break
+                continue
+
+            try:
+                GLib.idle_add(self._set_gen_status, "✦  generating prompt…")
+                prompt = prompt_client.generate_prompt(
+                    source=self._model_source,
+                    seed_text="",
+                    system_prompt=self._system_prompt,
+                )
+                GLib.idle_add(self._prompt_lbl.set_label, prompt)
+                GLib.idle_add(self._set_gen_status, "⏳  queued…")
+                GLib.idle_add(self._enqueue_generation, prompt)
+            except Exception as exc:
+                GLib.idle_add(self._set_gen_status, f"⚠  {exc}")
+                if self._gen_stop.wait(15.0):
+                    break
+                continue
+
+            # Brief pause before checking queue depth again
+            self._gen_stop.wait(5.0)
+
+    def _enqueue_generation(self, prompt: str) -> None:
+        """
+        Called on the main thread via GLib.idle_add.
+        Forwards a generation request to MainWindow via the on_enqueue callback.
+        Uses the model defaults from the spec (steps=30, seed=-1, guidance=5.0).
+        """
+        self._on_enqueue(
+            prompt=prompt,
+            negative_prompt="",
+            steps=30,
+            seed=-1,
+            seed_image_path="",
+            model_source=self._model_source,
+            guidance_scale=5.0,
+            ref_video_path="",
+            ref_char_path="",
+            animate_mode="animation",
+            model_id="",
+        )
+
+    def _set_gen_status(self, text: str) -> None:
+        """Update the generation status label. Must be called on the main thread."""
+        self._gen_status_lbl.set_label(text)
+
+    # ── Record addition from MainWindow ───────────────────────────────────
+
+    def add_record(self, record) -> None:
+        """
+        Called via GLib.idle_add from MainWindow._on_finished when a new
+        generation completes. Adds the record to the live pool so it will
+        be included in future playback cycles.
+
+        If the pool was empty when this window was opened (no media yet),
+        also starts playback now that the first item has arrived.
+        """
+        was_empty = self._pool.size == 0
+        self._pool.add_record(record)
+        self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
+        self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
+        if was_empty:
+            # First item arrived — start playback
+            self._advance()
 
     def _get_current_video_stream(self):
         """Return the Gtk.MediaStream for the active video slot, or None."""
