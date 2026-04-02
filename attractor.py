@@ -11,9 +11,12 @@ Classes:
 """
 from __future__ import annotations
 
+import datetime
+import logging
 import random
 import statistics
 import threading
+from pathlib import Path
 from typing import Callable
 
 import gi
@@ -21,6 +24,18 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 import prompt_client  # noqa: E402
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_log = logging.getLogger("attractor")
+if not _log.handlers:
+    _log.setLevel(logging.DEBUG)
+    _fh = logging.FileHandler(_LOG_DIR / "attractor.log", encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-5s  %(message)s",
+                                       datefmt="%Y-%m-%d %H:%M:%S"))
+    _log.addHandler(_fh)
 
 
 class AttractorPool:
@@ -243,6 +258,7 @@ class AttractorWindow(Gtk.Window):
 
     def _on_destroy(self, _win) -> None:
         """Stop the generation loop and cancel any pending advance timer."""
+        _log.info("=== Attractor stopped ===")
         self._gen_stop.set()
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
@@ -398,6 +414,7 @@ class AttractorWindow(Gtk.Window):
         Begin playback and start the generation loop daemon thread.
         Must be called after the window is presented so the display is ready.
         """
+        _log.info("=== Attractor started — pool size: %d ===", self._pool.size)
         if self._pool.size == 0:
             self._gen_status_lbl.set_label("No media — generating first…")
         else:
@@ -429,6 +446,14 @@ class AttractorWindow(Gtk.Window):
         self._hud_prompt_lbl.set_label(prompt_text)
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
 
+        media_type = getattr(record, "media_type", "video")
+        path = getattr(record, "video_path", None) or getattr(record, "image_path", None) or "?"
+        duration = getattr(record, "duration_s", None)
+        _log.info("advance → %s  [%s]  dur=%.1fs  pool=%d",
+                  Path(path).name if path != "?" else "?",
+                  media_type,
+                  duration or 0.0,
+                  self._pool.size)
         self._schedule_advance(record)
 
     def _load_slot(self, slot: Gtk.Box, record) -> None:
@@ -487,22 +512,26 @@ class AttractorWindow(Gtk.Window):
             self._stream_handler_id = stream.connect("notify::ended", self._on_video_ended)
             # If the video already ended while we were waiting, advance now
             if stream.get_ended():
+                _log.debug("stream already ended on connect — advancing immediately")
                 GLib.idle_add(self._advance)
                 return
             # Safety net: if notify::ended never fires (broken/missing file),
             # force-advance after 2× the average video duration.
             fallback_ms = int(self._pool.avg_video_duration * 2 * 1000)
+            _log.debug("stream connected — fallback timer set for %.1f s", fallback_ms / 1000)
             self._pending_advance_source = GLib.timeout_add(
                 fallback_ms, self._on_advance_timer
             )
         else:
             # Stream not initialised yet — retry
+            _log.debug("stream not ready — retrying in 500 ms")
             self._pending_advance_source = GLib.timeout_add(
                 500, self._retry_connect_stream
             )
 
     def _on_advance_timer(self) -> bool:
-        """GLib timeout callback for image dwell time. Advances to next item."""
+        """GLib timeout callback — fires when dwell time or fallback timer expires."""
+        _log.warning("advance timer fired (fallback or image dwell) — forcing advance")
         self._pending_advance_source = None
         self._advance()
         return False  # one-shot
@@ -510,10 +539,12 @@ class AttractorWindow(Gtk.Window):
     def _on_video_ended(self, stream, _param) -> None:
         """Called when the active video stream's ended property changes."""
         if stream.get_ended():
+            _log.debug("notify::ended received — advancing")
             self._advance()
 
     def _retry_connect_stream(self) -> bool:
         """Fallback: GStreamer stream not ready at _schedule_advance time; try again."""
+        _log.debug("retry connecting stream")
         self._pending_advance_source = None
         self._connect_video_ended()
         return False
@@ -525,7 +556,7 @@ class AttractorWindow(Gtk.Window):
         Background daemon thread. Continuously generates prompts and enqueues
         new generation jobs via on_enqueue callback.
 
-        Back-pressure: if queue depth >= 2, waits 30 s before retrying (server
+        Back-pressure: if queue depth >= 3, waits 30 s before retrying (server
         isn't consuming jobs fast enough). Stops when _gen_stop is set.
         """
         while not self._gen_stop.wait(0.0):
@@ -533,7 +564,8 @@ class AttractorWindow(Gtk.Window):
             generating = self._get_is_generating()
             GLib.idle_add(self._update_work_lbl, depth, generating)
 
-            if depth >= 2:
+            if depth >= 3:
+                _log.debug("queue full (depth=%d) — waiting 30 s", depth)
                 GLib.idle_add(self._set_gen_status, "⏸  queue full…")
                 if self._gen_stop.wait(30.0):
                     break
@@ -545,10 +577,12 @@ class AttractorWindow(Gtk.Window):
                     source=self._model_source,
                     seed_text="",
                 )
+                _log.info("prompt generated (depth=%d): %s", depth, prompt[:80])
                 GLib.idle_add(self._prompt_lbl.set_label, prompt)
                 GLib.idle_add(self._set_gen_status, "⏳  submitted")
                 GLib.idle_add(self._enqueue_generation, prompt)
             except Exception as exc:
+                _log.error("prompt generation failed: %s", exc)
                 GLib.idle_add(self._set_gen_status, f"⚠  {exc}")
                 if self._gen_stop.wait(15.0):
                     break
@@ -606,6 +640,9 @@ class AttractorWindow(Gtk.Window):
         """
         if getattr(record, "media_type", "video") == "image":
             return  # images excluded from attractor playback
+        path = getattr(record, "video_path", None) or "?"
+        _log.info("new record added to pool: %s  (pool now %d)",
+                  Path(path).name if path != "?" else "?", self._pool.size + 1)
         was_empty = self._pool.size == 0
         self._pool.add_record(record)
         self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
