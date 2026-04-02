@@ -95,29 +95,41 @@ def test_generate_prompt_with_seed_polishes_via_llm_when_available():
     assert result == polished
 
 
-def test_generate_prompt_with_seed_returns_seed_when_llm_down():
-    """When seed provided but LLM offline, returns the seed unchanged."""
+def test_generate_prompt_with_seed_falls_through_to_algo_when_llm_down():
+    """When seed provided but LLM offline, falls through to fresh algo generation.
+
+    Returning the seed unchanged is useless — the user already has it.
+    """
     seed = "fox in snow"
-    with patch("generate_prompt._llm_available", return_value=False):
+    algo_result = "a red fox trots through deep snow at midnight"
+    with patch("generate_prompt._llm_available", return_value=False), \
+         patch("generate_prompt.generate", return_value={"prompt": algo_result, "source": "algo"}) as m:
         result = prompt_client.generate_prompt("video", seed)
-    assert result == seed
+    assert result == algo_result
+    m.assert_called_once_with(prompt_type="video", mode="markov", enhance=True)
 
 
-def test_generate_prompt_with_seed_returns_seed_when_polish_fails():
-    """When LLM available but polish returns None, returns the seed unchanged."""
+def test_generate_prompt_with_seed_falls_through_to_algo_when_polish_fails():
+    """When LLM available but polish returns None, falls through to fresh generation."""
     seed = "fox in snow"
+    algo_result = "a red fox trots through deep snow at midnight"
     with patch("generate_prompt._llm_available", return_value=True), \
-         patch("generate_prompt._llm_polish", return_value=None):
+         patch("generate_prompt._llm_polish", return_value=None), \
+         patch("generate_prompt.generate", return_value={"prompt": algo_result, "source": "algo"}) as m:
         result = prompt_client.generate_prompt("video", seed)
-    assert result == seed
+    assert result == algo_result
+    m.assert_called_once_with(prompt_type="video", mode="markov", enhance=True)
 
 
-def test_generate_prompt_with_seed_strips_whitespace():
-    """Seed text is stripped before use."""
+def test_generate_prompt_with_seed_strips_whitespace_for_llm():
+    """Seed text is stripped before being passed to the LLM polish function."""
     seed = "  fox in snow  "
-    with patch("generate_prompt._llm_available", return_value=False):
+    polished = "A red fox trots through deep snow at midnight"
+    with patch("generate_prompt._llm_available", return_value=True), \
+         patch("generate_prompt._llm_polish", return_value=polished) as m:
         result = prompt_client.generate_prompt("video", seed)
-    assert result == "fox in snow"
+    assert result == polished
+    m.assert_called_once_with("fox in snow", "video")
 
 
 def test_generate_prompt_ignores_system_prompt_arg():

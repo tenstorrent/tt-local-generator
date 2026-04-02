@@ -55,7 +55,9 @@ def generate_prompt(
 
     When seed_text is provided (inspire mode with existing text in the box):
         - If the LLM is available: polish the seed text with the LLM and return it.
-        - If the LLM is down: return the seed text unchanged.
+        - If the LLM is down or polish fails: fall through to fresh generation
+          (same as empty seed).  Returning the seed unchanged is never useful —
+          the user already has it and the button would appear to do nothing.
 
     When seed_text is empty (attractor mode, or inspire with empty box):
         - Run algo → markov → optional LLM polish automatically.
@@ -83,9 +85,10 @@ def generate_prompt(
             polished = _gp._llm_polish(seed_text.strip(), source)
             if polished:
                 return polished
-        # LLM unavailable or polish returned nothing — return the seed as-is
-        return seed_text.strip()
+        # LLM unavailable or polish returned nothing — fall through to fresh
+        # generation.  Returning the seed unchanged is useless (user already has
+        # it) and confusing (button flashes with no visible effect).
 
-    # No seed — three-tier generation: algo → markov → LLM polish
+    # No seed, or seed-mode fallback — three-tier generation: algo → markov → LLM
     result = _gp.generate(prompt_type=source, mode="markov", enhance=True)
     return result["prompt"]
