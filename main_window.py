@@ -3071,10 +3071,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # used in _on_finished/_on_error to update the right gallery).
         self._gen_gallery = None
         self._auto_tab_switched = False  # True after first model detection auto-switch
+        self._pg_stop: "threading.Event | None" = None  # set when prompt gen poll starts
+        self._prompt_gen_system_prompt: str = self._load_prompt_gen_system()
 
         self._build_ui()
         self._load_history()
         self._start_health_worker()
+        self._start_prompt_gen_health_worker()
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -3098,6 +3101,8 @@ class MainWindow(Gtk.ApplicationWindow):
             on_start_server=self._on_start_server,
             on_stop_server=self._on_stop_server,
             on_source_change=self._on_source_change,
+            on_start_prompt_gen=self._on_start_prompt_gen,
+            on_inspire=self._on_inspire,
         )
         outer_paned.set_start_child(self._controls)
         outer_paned.set_shrink_start_child(False)
@@ -3263,6 +3268,87 @@ class MainWindow(Gtk.ApplicationWindow):
         if ready and not (self._worker_gen and self._worker_gen._running()):
             self._set_status("Server ready — enter a prompt and click Generate")
         return False  # don't repeat (one-shot idle callback)
+
+    def _load_prompt_gen_system(self) -> str:
+        """
+        Read the system prompt for the Qwen prompt generator from disk.
+
+        Returns the file contents as a string.  Returns "" if the file is
+        missing so the feature degrades gracefully (the model will still
+        generate something, just without the cinematic mad-libs guidance).
+        """
+        path = Path(__file__).parent / "prompts" / "prompt_generator.md"
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _start_prompt_gen_health_worker(self) -> None:
+        """Start the background thread that polls the prompt gen server on port 8001."""
+        self._pg_stop = threading.Event()
+        threading.Thread(
+            target=self._prompt_gen_health_loop, daemon=True
+        ).start()
+
+    def _prompt_gen_health_loop(self) -> None:
+        """
+        Runs on background thread.  Polls the prompt gen server every 5 seconds
+        and posts the result to the main thread via GLib.idle_add.
+        """
+        while not self._pg_stop.wait(5.0):
+            ready = prompt_client.check_health()
+            # THREADING: must not touch GTK widgets here — post to main thread
+            GLib.idle_add(self._on_prompt_gen_health, ready)
+
+    def _on_prompt_gen_health(self, ready: bool) -> bool:
+        """Runs on main thread (called by GLib.idle_add)."""
+        self._controls.set_prompt_gen_state(ready)
+        return False  # one-shot idle callback
+
+    def _on_start_prompt_gen(self) -> None:
+        """
+        Launch start_prompt_gen.sh --gui in the background.
+
+        Runs silently — no log streaming.  The health poll on port 8001 will
+        detect when the server is ready.  Users can watch /tmp/tt_prompt_gen.log
+        for details.
+        """
+        script = Path(__file__).parent / "start_prompt_gen.sh"
+        subprocess.Popen(
+            [str(script), "--gui"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+
+    def _on_inspire(self, source: str, seed_text: str) -> None:
+        """
+        Start a prompt generation job in a background thread.
+
+        Called by ControlPanel._trigger_inspire() via the on_inspire callback.
+        Posts the result back to ControlPanel on the main thread.
+        """
+        system_prompt = self._prompt_gen_system_prompt
+
+        def run():
+            try:
+                text = prompt_client.generate_prompt(source, seed_text, system_prompt)
+                GLib.idle_add(self._on_inspire_result, text)
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self._on_inspire_error, str(e))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_inspire_result(self, text: str) -> bool:
+        """Runs on main thread — forward generated prompt text to ControlPanel."""
+        self._controls.set_inspire_result(text)
+        return False
+
+    def _on_inspire_error(self, msg: str) -> bool:
+        """Runs on main thread — log error and restore ControlPanel inspire button."""
+        print(f"[tt-gen] Prompt generation error: {msg}", file=sys.stderr)
+        self._controls.set_inspire_error(msg)
+        return False
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
@@ -3594,6 +3680,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def do_close_request(self) -> bool:
         self._health_stop.set()
+        if self._pg_stop:
+            self._pg_stop.set()
         if self._worker_gen:
             self._worker_gen.cancel()
         if self._server_proc and self._server_proc.poll() is None:
