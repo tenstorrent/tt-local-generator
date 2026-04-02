@@ -1638,6 +1638,7 @@ class ControlPanel(Gtk.Box):
             "FLUX.1-dev  ·  1024×1024 JPEG  ·  ~15–90 s\n"
             "Launches start_flux.sh"
         )
+        self._mdl_flux_btn.connect("clicked", lambda _: self._set_model("flux"))
         self._img_model_sel_row.append(self._mdl_flux_btn)
 
         # Video selector visible by default (video is default source)
