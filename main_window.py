@@ -1875,7 +1875,6 @@ class ControlPanel(Gtk.Box):
         self._adv_summary_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         hdr_inner.append(self._adv_summary_box)
         self._adv_hdr_btn.set_child(hdr_inner)
-        self.append(self._adv_hdr_btn)
 
         # ── Negative prompt ───────────────────────────────────────────────────
         # (appended into accordion adv_body below, not directly to self)
@@ -2071,6 +2070,7 @@ class ControlPanel(Gtk.Box):
         # Animate inputs — visible only in animate mode, positioned below chips.
         # Appended here (after construction) so self._animate_box is ready.
         self.append(self._animate_box)
+        self.append(self._adv_hdr_btn)     # accordion header — after animate inputs
 
         # ── Accordion body — neg prompt, params, seed image ───────────────────
         # adv_body is the content revealed when the accordion header is clicked.
