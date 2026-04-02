@@ -44,6 +44,8 @@ class GenerationRecord:
     media_type: str = "video"           # "video" (Wan2.2) or "image" (FLUX)
     image_path: str = ""               # Absolute path to the image file (empty for videos)
     guidance_scale: float = 0.0        # Guidance scale used (image gen only)
+    model: str = ""                    # Model identifier, e.g. "wan2.2-t2v", "mochi-1-preview", "flux.1-dev"
+    extra_meta: dict = field(default_factory=dict)  # Free-form server response metadata
 
     @classmethod
     def new(
@@ -55,6 +57,7 @@ class GenerationRecord:
         seed: int,
         duration_s: float = 0.0,
         seed_image_path: str = "",
+        model: str = "",
     ) -> "GenerationRecord":
         """Create a new video record with pre-computed storage paths."""
         ts = datetime.now()
@@ -75,6 +78,7 @@ class GenerationRecord:
             duration_s=duration_s,
             seed_image_path=seed_image_path,
             media_type="video",
+            model=model,
         )
 
     @classmethod
@@ -87,6 +91,7 @@ class GenerationRecord:
         seed: int,
         duration_s: float = 0.0,
         guidance_scale: float = 3.5,
+        model: str = "",
     ) -> "GenerationRecord":
         """Create a new image record with pre-computed storage paths (FLUX)."""
         ts = datetime.now()
@@ -108,6 +113,7 @@ class GenerationRecord:
             media_type="image",
             image_path=image_path,
             guidance_scale=guidance_scale,
+            model=model,
         )
 
     @property
@@ -173,6 +179,8 @@ class HistoryStore:
                     "media_type": r.get("media_type", "video"),
                     "image_path": r.get("image_path", ""),
                     "guidance_scale": r.get("guidance_scale", 0.0),
+                    "model": r.get("model", ""),
+                    "extra_meta": r.get("extra_meta", {}),
                 })
                 for r in raw
             ]
