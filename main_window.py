@@ -37,6 +37,7 @@ from api_client import APIClient
 from chip_config import load_chips as _load_chips
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
+import prompt_client
 
 
 # ── Tenstorrent dark palette as GTK CSS ───────────────────────────────────────
@@ -2834,8 +2835,8 @@ class ControlPanel(Gtk.Box):
             for cls in ("inspire-dot", "inspire-dot-starting"):
                 self._inspire_dot_lbl.remove_css_class(cls)
             self._inspire_dot_lbl.add_css_class("inspire-dot-ready")
-            # Restore button if not mid-generation
-            if not self._prompt_gen_generating:
+            # Restore button if not mid-generation and confirm box is not open
+            if not self._prompt_gen_generating and not self._confirm_box_visible:
                 self._inspire_btn.set_label("✨ Inspire me")
                 self._inspire_btn.remove_css_class("inspire-btn-loading")
                 self._inspire_btn.add_css_class("inspire-btn")
@@ -2853,7 +2854,7 @@ class ControlPanel(Gtk.Box):
             for cls in ("inspire-dot-ready", "inspire-dot-starting"):
                 self._inspire_dot_lbl.remove_css_class(cls)
             self._inspire_dot_lbl.add_css_class("inspire-dot")
-            if not self._prompt_gen_generating:
+            if not self._prompt_gen_generating and not self._confirm_box_visible:
                 self._inspire_btn.set_label("✨ Inspire me")
                 self._inspire_btn.remove_css_class("inspire-btn-loading")
                 self._inspire_btn.add_css_class("inspire-btn")
@@ -2890,6 +2891,7 @@ class ControlPanel(Gtk.Box):
 
     def _on_inspire_confirm_start(self, _btn) -> None:
         """User clicked ▶ Start in the confirm box — launch server and set auto-generate."""
+        self._inspire_start_btn.set_sensitive(False)
         self._inspire_confirm_revealer.set_reveal_child(False)
         self._confirm_box_visible = False
         # Capture source + seed at click time so auto-generate uses the right values
