@@ -132,3 +132,4 @@ def test_poll_status_passes_error_field():
 
     assert status == "failed"
     assert error == "OOM"
+    assert data == {"status": "failed", "error": "OOM"}
