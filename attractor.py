@@ -115,8 +115,10 @@ class AttractorPool:
 
     def _recalc_duration(self) -> None:
         durations = [
-            r.duration_s for r in self._records
-            if r.media_type == "video" and r.duration_s > 0
+            d for r in self._records
+            if getattr(r, "media_type", "video") == "video"
+            for d in (getattr(r, "duration_s", None),)
+            if d is not None and d > 0
         ]
         self._avg_dur = statistics.mean(durations) if durations else 8.0
 
@@ -205,6 +207,7 @@ class AttractorWindow(Gtk.Window):
         get_is_generating: Callable[[], bool] = lambda: False,  # True when worker is active
         system_prompt: str = "",              # unused; kept for caller compatibility
     ) -> None:
+        _log.debug("AttractorWindow.__init__ — %d records, model_source=%s", len(records), model_source)
         super().__init__(title="Attractor Mode")
         self._system_prompt = system_prompt
         self._model_source = model_source
@@ -212,6 +215,7 @@ class AttractorWindow(Gtk.Window):
         self._get_queue_depth = get_queue_depth
         self._get_is_generating = get_is_generating
         video_records = [r for r in records if getattr(r, "media_type", "video") != "image"]
+        _log.debug("pool filter: %d total → %d video records", len(records), len(video_records))
         self._pool = AttractorPool(video_records)
         self._gen_stop = threading.Event()
         self._paused = False
@@ -220,15 +224,21 @@ class AttractorWindow(Gtk.Window):
         self._stream_handler_id: int | None = None  # handler ID so we can disconnect
 
         # Load CSS (uses @define-color variables already loaded by main_window.py)
-        provider = Gtk.CssProvider()
-        provider.load_from_data(_CSS)
-        Gtk.StyleContext.add_provider_for_display(
-            self.get_display(),
-            provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
+        try:
+            provider = Gtk.CssProvider()
+            provider.load_from_data(_CSS)
+            Gtk.StyleContext.add_provider_for_display(
+                self.get_display(),
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+            _log.debug("CSS loaded OK")
+        except Exception:
+            _log.exception("CSS load failed (non-fatal)")
 
+        _log.debug("building UI")
         self._build()
+        _log.debug("UI built, maximizing")
         self.maximize()
 
         # Keyboard shortcuts

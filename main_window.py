@@ -3446,14 +3446,24 @@ class MainWindow(Gtk.ApplicationWindow):
             self._attractor_win.present()
             return
 
-        win = attractor.AttractorWindow(
-            records=self._store.all_records(),
-            system_prompt=self._prompt_gen_system_prompt,
-            model_source=self._controls.get_model_source(),
-            on_enqueue=self._on_attractor_generate,
-            get_queue_depth=lambda: len(self._queue),
-            get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
-        )
+        try:
+            win = attractor.AttractorWindow(
+                records=self._store.all_records(),
+                system_prompt=self._prompt_gen_system_prompt,
+                model_source=self._controls.get_model_source(),
+                on_enqueue=self._on_attractor_generate,
+                get_queue_depth=lambda: len(self._queue),
+                get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
+            )
+        except Exception:
+            import traceback
+            msg = traceback.format_exc()
+            print(f"[tt-gen] Attractor launch failed:\n{msg}", file=sys.stderr)
+            # Also write to the attractor log so it survives terminal close
+            import logging as _logging
+            _logging.getLogger("attractor").exception("AttractorWindow() raised")
+            self._set_status("Attractor Mode failed to open — see terminal or attractor.log")
+            return
         win.set_transient_for(self)
         win.connect("destroy", self._on_attractor_closed)
         self._attractor_win = win
