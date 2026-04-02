@@ -2321,10 +2321,7 @@ class ControlPanel(Gtk.Box):
 
         # Re-evaluate match/mismatch for the newly selected tab.
         if self._running_model is not None or self._server_ready:
-            self.set_server_state(
-                self._server_ready or (self._running_model is not None),
-                self._running_model
-            )
+            self.set_server_state(self._server_ready, self._running_model)
 
         # Notify the main window so it can switch the gallery stack to show
         # only the cards that match the newly selected generation mode.
