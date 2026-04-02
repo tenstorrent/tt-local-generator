@@ -86,6 +86,15 @@ entry, textview, spinbutton {
 entry:focus, textview:focus, spinbutton:focus {
     border-color: @tt_accent;
 }
+/* Inline validation error - applied when Generate is clicked with empty prompt */
+scrolledwindow.prompt-error {
+    border: 2px solid @tt_error;
+}
+.error-label {
+    color: @tt_error;
+    font-size: 11px;
+    margin-top: 2px;
+}
 button {
     background-color: @tt_bg_dark;
     color: @tt_text;
@@ -1714,6 +1723,7 @@ class ControlPanel(Gtk.Box):
         # ── Prompt ────────────────────────────────────────────────────────────
         self.append(self._section("Prompt"))
         scroll1 = Gtk.ScrolledWindow()
+        self._prompt_scroll = scroll1   # kept for inline-validation error styling
         scroll1.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll1.set_size_request(-1, 90)
         self._prompt_view = Gtk.TextView()
@@ -1740,11 +1750,21 @@ class ControlPanel(Gtk.Box):
         overlay1.set_child(self._prompt_view)
         overlay1.add_overlay(ph)
         self._prompt_placeholder = ph
-        self._prompt_view.get_buffer().connect(
+        self._prompt_buf = self._prompt_view.get_buffer()
+        self._prompt_buf.connect(
             "changed", lambda b: ph.set_visible(b.get_char_count() == 0)
         )
+        # Clear validation error state as soon as the user types anything
+        self._prompt_buf.connect("changed", self._on_prompt_changed)
         scroll1.set_child(overlay1)
         self.append(scroll1)
+
+        # Inline validation error label — hidden until Generate is clicked with empty prompt
+        self._prompt_error_lbl = Gtk.Label(label="Prompt cannot be empty.")
+        self._prompt_error_lbl.add_css_class("error-label")
+        self._prompt_error_lbl.set_halign(Gtk.Align.START)
+        self._prompt_error_lbl.set_visible(False)
+        self.append(self._prompt_error_lbl)
 
         # ── Prompt component chips ────────────────────────────────────────────
         # Clicking a chip appends its modifier text to the prompt.
@@ -2393,6 +2413,14 @@ class ControlPanel(Gtk.Box):
         else:
             self._clear_seed_image()
 
+    # ── Prompt validation ──────────────────────────────────────────────────────
+
+    def _on_prompt_changed(self, buf: Gtk.TextBuffer) -> None:
+        """Clear the empty-prompt error state as soon as the user types anything."""
+        if self._prompt_scroll.has_css_class("prompt-error"):
+            self._prompt_scroll.remove_css_class("prompt-error")
+            self._prompt_error_lbl.set_visible(False)
+
     # ── Button handlers ────────────────────────────────────────────────────────
 
     def _on_action_clicked(self, _btn) -> None:
@@ -2405,6 +2433,8 @@ class ControlPanel(Gtk.Box):
         else:
             prompt = self._get_prompt()
             if not prompt:
+                self._prompt_scroll.add_css_class("prompt-error")
+                self._prompt_error_lbl.set_visible(True)
                 return
         # Determine the specific model within the active category
         if self._model_source == "video":
