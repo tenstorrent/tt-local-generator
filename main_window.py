@@ -3450,7 +3450,7 @@ class MainWindow(Gtk.ApplicationWindow):
             records=self._store.all_records(),
             system_prompt=self._prompt_gen_system_prompt,
             model_source=self._controls.get_model_source(),
-            on_enqueue=self._on_enqueue,
+            on_enqueue=self._on_attractor_generate,
             get_queue_depth=lambda: len(self._queue),
         )
         win.set_transient_for(self)
@@ -3462,6 +3462,26 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_attractor_closed(self, _win) -> None:
         """Called when the attractor window is destroyed."""
         self._attractor_win = None
+
+    def _on_attractor_generate(self, prompt, neg, steps, seed, seed_image_path="",
+                                model_source="video", guidance_scale=3.5,
+                                ref_video_path="", ref_char_path="",
+                                animate_mode="animation", model_id="") -> None:
+        """
+        Called by AttractorWindow when it wants to enqueue a new generation.
+
+        Starts the generation immediately if the worker is idle; parks it in
+        the queue if a generation is already running.  This prevents prompts
+        from accumulating unprocessed when attractor mode is the first thing
+        started (before any manual generation has been triggered).
+        """
+        args = (prompt, neg, steps, seed, seed_image_path,
+                model_source, guidance_scale, ref_video_path,
+                ref_char_path, animate_mode, model_id)
+        if self._busy:
+            self._on_enqueue(*args)
+        else:
+            self._on_generate(*args)
 
     def _update_attractor_btn(self) -> None:
         """Enable/disable the Attractor button based on whether any media exists."""
