@@ -523,6 +523,7 @@ class ImageGenerationWorker:
                 seed=seed_arg,
                 guidance_scale=self._guidance_scale,
             )
+            server_meta = _safe_meta(server_meta)
         except Exception as e:
             on_error(f"Image generation failed: {e}")
             return
