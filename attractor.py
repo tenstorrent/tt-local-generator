@@ -402,7 +402,7 @@ class AttractorWindow(Gtk.Window):
         """
         if self._paused:
             return
-        idx = self._pool.advance()
+        self._pool.advance()
         record = self._pool.current_record()
 
         # Pick the inactive slot (the one not currently showing)
