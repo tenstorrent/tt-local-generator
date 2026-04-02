@@ -1686,6 +1686,11 @@ _MODEL_TO_SOURCE: dict = {
     "wan2.2-animate-14b":   "animate",
     "flux.1-dev":           "image",
 }
+# Maps server model ID → internal video-model key used by ControlPanel
+_MODEL_TO_VIDEO_KEY: dict = {
+    "wan2.2-t2v":      "wan2",
+    "mochi-1-preview": "mochi",
+}
 _MODEL_DISPLAY_SERVER: dict = {
     "wan2.2-t2v":           "Wan2.2 online",
     "mochi-1-preview":      "Mochi-1 online",
@@ -2556,6 +2561,14 @@ class ControlPanel(Gtk.Box):
                 # Collapse startup log once server confirmed ready
                 if self._server_launching:
                     self.set_server_launching(False)
+                # Sync the video model toggle to match what's actually running.
+                # e.g. when Mochi is running, select the Mochi-1 button.
+                video_key = _MODEL_TO_VIDEO_KEY.get(running_model) if running_model else None
+                if video_key and self._video_model != video_key:
+                    if video_key == "mochi":
+                        self._mdl_mochi_btn.set_active(True)
+                    else:
+                        self._mdl_wan2_btn.set_active(True)
 
         self._update_btns()
 
