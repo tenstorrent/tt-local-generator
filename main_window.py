@@ -3452,6 +3452,7 @@ class MainWindow(Gtk.ApplicationWindow):
             model_source=self._controls.get_model_source(),
             on_enqueue=self._on_attractor_generate,
             get_queue_depth=lambda: len(self._queue),
+            get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
         )
         win.set_transient_for(self)
         win.connect("destroy", self._on_attractor_closed)

@@ -187,6 +187,7 @@ class AttractorWindow(Gtk.Window):
         model_source: str,                    # "video" | "image" | "animate"
         on_enqueue: Callable,                 # MainWindow._on_enqueue compatible signature
         get_queue_depth: Callable[[], int],   # returns len(self._queue) in MainWindow
+        get_is_generating: Callable[[], bool] = lambda: False,  # True when worker is active
         system_prompt: str = "",              # unused; kept for caller compatibility
     ) -> None:
         super().__init__(title="Attractor Mode")
@@ -194,6 +195,7 @@ class AttractorWindow(Gtk.Window):
         self._model_source = model_source
         self._on_enqueue = on_enqueue
         self._get_queue_depth = get_queue_depth
+        self._get_is_generating = get_is_generating
         self._pool = AttractorPool(records)
         self._gen_stop = threading.Event()
         self._paused = False
@@ -296,13 +298,15 @@ class AttractorWindow(Gtk.Window):
         self._gen_status_lbl = Gtk.Label(label="Starting…")
         self._gen_status_lbl.add_css_class("attractor-status-lbl")
         self._gen_status_lbl.set_xalign(0)
-        self._gen_status_lbl.set_wrap(True)
+        self._gen_status_lbl.set_max_width_chars(20)
+        self._gen_status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         sidebar.append(self._gen_status_lbl)
 
         self._prompt_lbl = Gtk.Label(label="")
         self._prompt_lbl.add_css_class("attractor-prompt-lbl")
         self._prompt_lbl.set_xalign(0)
         self._prompt_lbl.set_wrap(True)
+        self._prompt_lbl.set_max_width_chars(20)
         self._prompt_lbl.set_lines(5)
         self._prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         sidebar.append(self._prompt_lbl)
@@ -483,6 +487,13 @@ class AttractorWindow(Gtk.Window):
             # If the video already ended while we were waiting, advance now
             if stream.get_ended():
                 GLib.idle_add(self._advance)
+                return
+            # Safety net: if notify::ended never fires (broken/missing file),
+            # force-advance after 2× the average video duration.
+            fallback_ms = int(self._pool.avg_video_duration * 2 * 1000)
+            self._pending_advance_source = GLib.timeout_add(
+                fallback_ms, self._on_advance_timer
+            )
         else:
             # Stream not initialised yet — retry
             self._pending_advance_source = GLib.timeout_add(
@@ -518,22 +529,23 @@ class AttractorWindow(Gtk.Window):
         """
         while not self._gen_stop.wait(0.0):
             depth = self._get_queue_depth()
-            GLib.idle_add(self._queue_lbl.set_label, f"⏳  queue: {depth}")
+            generating = self._get_is_generating()
+            GLib.idle_add(self._update_work_lbl, depth, generating)
 
             if depth >= 2:
-                GLib.idle_add(self._set_gen_status, "⏸  waiting (queue full)…")
+                GLib.idle_add(self._set_gen_status, "⏸  queue full…")
                 if self._gen_stop.wait(30.0):
                     break
                 continue
 
             try:
-                GLib.idle_add(self._set_gen_status, "✦  generating prompt…")
+                GLib.idle_add(self._set_gen_status, "✦  writing prompt…")
                 prompt = prompt_client.generate_prompt(
                     source=self._model_source,
                     seed_text="",
                 )
                 GLib.idle_add(self._prompt_lbl.set_label, prompt)
-                GLib.idle_add(self._set_gen_status, "⏳  queued…")
+                GLib.idle_add(self._set_gen_status, "⏳  submitted")
                 GLib.idle_add(self._enqueue_generation, prompt)
             except Exception as exc:
                 GLib.idle_add(self._set_gen_status, f"⚠  {exc}")
@@ -568,6 +580,17 @@ class AttractorWindow(Gtk.Window):
     def _set_gen_status(self, text: str) -> None:
         """Update the generation status label. Must be called on the main thread."""
         self._gen_status_lbl.set_label(text)
+
+    def _update_work_lbl(self, depth: int, generating: bool) -> None:
+        """Update the queue/generating status label. Must be called on the main thread."""
+        if generating and depth > 0:
+            self._queue_lbl.set_label(f"🔄  generating +{depth} queued")
+        elif generating:
+            self._queue_lbl.set_label("🔄  generating")
+        elif depth > 0:
+            self._queue_lbl.set_label(f"⏳  {depth} queued")
+        else:
+            self._queue_lbl.set_label("⬤  idle")
 
     # ── Record addition from MainWindow ───────────────────────────────────
 
