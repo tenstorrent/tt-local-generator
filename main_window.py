@@ -344,6 +344,97 @@ scrollbar slider:hover {
     background-color: @tt_bg_panel;
     padding: 4px;
 }
+
+/* -- Server row states ----------------------------------------------------- */
+.server-row-match {
+    background-color: @tt_bg_darkest;
+    border: 1px solid alpha(@tt_accent, 0.4);
+    border-radius: 4px;
+    padding: 5px 6px;
+}
+.server-row-mismatch {
+    background-color: #1A1000;
+    border: 1px solid #F4C471;
+    border-radius: 4px;
+    padding: 5px 6px;
+}
+.server-row-offline {
+    background-color: @tt_bg_darkest;
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+    padding: 5px 6px;
+}
+.server-row-starting {
+    background-color: @tt_bg_darkest;
+    border: 1px solid @tt_accent;
+    border-radius: 4px;
+    padding: 5px 6px;
+}
+.server-model-lbl {
+    font-weight: bold;
+    font-size: 11px;
+}
+.server-model-match  { color: #27AE60; }
+.server-model-offline { color: @tt_text_muted; }
+.server-model-mismatch { color: #F4C471; }
+.server-model-starting { color: @tt_accent; }
+.server-sub-lbl {
+    color: @tt_text_hint;
+    font-size: 9px;
+}
+.server-switch-btn {
+    background: transparent;
+    border: 1px solid #F4C471;
+    color: #F4C471;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+}
+.server-switch-btn:hover {
+    background: rgba(244, 196, 113, 0.15);
+}
+
+/* -- Advanced accordion ---------------------------------------------------- */
+.adv-hdr-btn {
+    background: @tt_bg_darkest;
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: @tt_text_muted;
+    font-size: 10px;
+}
+.adv-hdr-btn:hover {
+    background: @tt_bg_dark;
+    border-color: @tt_accent;
+}
+.adv-summary {
+    color: @tt_text_muted;
+    font-size: 9px;
+}
+.adv-summary-changed {
+    color: @tt_pink;
+    font-size: 9px;
+}
+.adv-body {
+    background: @tt_bg_darkest;
+    border: 1px solid @tt_border;
+    border-top: none;
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+    padding: 8px;
+}
+
+/* -- Animate inputs box ---------------------------------------------------- */
+.animate-inputs-box {
+    border: 1px solid alpha(@tt_accent, 0.5);
+    border-radius: 4px;
+    padding: 6px 7px;
+    background: @tt_bg_dark;
+}
+.animate-inputs-title {
+    color: @tt_accent;
+    font-size: 9px;
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
