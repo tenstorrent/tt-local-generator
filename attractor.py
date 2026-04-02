@@ -380,7 +380,121 @@ class AttractorWindow(Gtk.Window):
 
         return box
 
-    # ── Placeholder for playback/generation methods (Tasks 3 and 4) ──────
+    # ── Playback ──────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """
+        Begin playback and start the generation loop daemon thread.
+        Must be called after the window is presented so the display is ready.
+        """
+        if self._pool.size == 0:
+            self._gen_status_lbl.set_label("No media — generating first…")
+        else:
+            self._advance()
+        threading.Thread(
+            target=self._generation_loop, daemon=True
+        ).start()
+
+    def _advance(self) -> None:
+        """
+        Load the next media item into the inactive A/B slot and crossfade to it.
+        Does nothing if playback is paused.
+        """
+        if self._paused:
+            return
+        idx = self._pool.advance()
+        record = self._pool.current_record()
+
+        # Pick the inactive slot (the one not currently showing)
+        next_name = "b" if self._active_slot_name == "a" else "a"
+        next_slot = self._slot_b if next_name == "b" else self._slot_a
+
+        self._load_slot(next_slot, record)
+        self._stack.set_visible_child_name(next_name)
+        self._active_slot_name = next_name
+
+        # Update HUD
+        prompt_text = (getattr(record, "prompt", "") or "")[:100]
+        self._hud_prompt_lbl.set_label(prompt_text)
+        self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
+
+        self._schedule_advance(record)
+
+    def _load_slot(self, slot: Gtk.Box, record) -> None:
+        """
+        Load a GenerationRecord into a media slot widget.
+        Shows either the Gtk.Picture (images) or Gtk.Video (videos),
+        hiding the other widget.
+        """
+        if getattr(record, "media_type", "video") == "image":
+            slot._video.set_visible(False)
+            path = getattr(record, "image_path", None) or getattr(record, "thumbnail_path", None)
+            if path:
+                slot._picture.set_filename(path)
+            slot._picture.set_visible(True)
+        else:
+            slot._picture.set_visible(False)
+            slot._video.set_loop(True)
+            path = getattr(record, "video_path", None)
+            if path:
+                slot._video.set_filename(path)
+            slot._video.set_visible(True)
+
+    def _schedule_advance(self, record) -> None:
+        """
+        Schedule the next advance() call based on media type.
+        Images use a timer (avg_video_duration seconds).
+        Videos connect to the stream's notify::ended signal.
+        """
+        if self._pending_advance_source is not None:
+            GLib.source_remove(self._pending_advance_source)
+            self._pending_advance_source = None
+
+        if getattr(record, "media_type", "video") == "image":
+            ms = int(self._pool.avg_video_duration * 1000)
+            self._pending_advance_source = GLib.timeout_add(ms, self._on_advance_timer)
+        else:
+            stream = self._get_current_video_stream()
+            if stream:
+                stream.connect("notify::ended", self._on_video_ended)
+            else:
+                # Stream not ready yet — retry in 500 ms
+                self._pending_advance_source = GLib.timeout_add(
+                    500, self._retry_connect_stream
+                )
+
+    def _on_advance_timer(self) -> bool:
+        """GLib timeout callback for image dwell time. Advances to next item."""
+        self._pending_advance_source = None
+        self._advance()
+        return False  # one-shot
+
+    def _on_video_ended(self, stream, _param) -> None:
+        """Called when a video stream signals it has ended. Advances to next item."""
+        if stream.get_ended():
+            self._advance()
+
+    def _retry_connect_stream(self) -> bool:
+        """
+        Fallback: retry connecting the notify::ended signal if the GStreamer
+        stream was not ready when _schedule_advance() was called.
+        """
+        self._pending_advance_source = None
+        stream = self._get_current_video_stream()
+        if stream:
+            stream.connect("notify::ended", self._on_video_ended)
+        else:
+            # Still not ready — retry again in 500 ms
+            self._pending_advance_source = GLib.timeout_add(
+                500, self._retry_connect_stream
+            )
+        return False
+
+    def _generation_loop(self) -> None:
+        """Background daemon thread — implemented in Task 4."""
+        pass
+
+    # ── Placeholder for remaining generation method (Task 4) ─────────────
 
     def _get_current_video_stream(self):
         """Return the Gtk.MediaStream for the active video slot, or None."""
