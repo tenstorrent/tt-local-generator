@@ -40,55 +40,67 @@ from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWor
 # ── Tenstorrent dark palette as GTK CSS ───────────────────────────────────────
 
 _CSS = b"""
+/* -- Tenstorrent color palette -------------------------------------------- */
+@define-color tt_bg_panel    #0A1F28;
+@define-color tt_bg_darkest  #0F2A35;
+@define-color tt_bg_dark     #1A3C47;
+@define-color tt_border      #2D5566;
+@define-color tt_accent      #4FD1C5;
+@define-color tt_accent_light #81E6D9;
+@define-color tt_text        #E8F0F2;
+@define-color tt_text_muted  #607D8B;
+@define-color tt_pink        #EC96B8;
+@define-color tt_error       #FF6B6B;
+
 window, .view {
-    background-color: #0F2A35;
-    color: #E8F0F2;
+    background-color: @tt_bg_darkest;
+    color: @tt_text;
 }
 * {
     font-family: "Noto Sans", "Segoe UI", sans-serif;
     font-size: 13px;
-    color: #E8F0F2;
+    color: @tt_text;
 }
 .section-label {
-    color: #4FD1C5;
+    color: @tt_accent;
     font-weight: bold;
     font-size: 11px;
 }
 .muted {
-    color: #607D8B;
+    color: @tt_text_muted;
     font-size: 11px;
 }
 .teal {
-    color: #4FD1C5;
+    color: @tt_accent;
 }
 entry, textview, spinbutton {
-    background-color: #1A3C47;
-    color: #E8F0F2;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    color: @tt_text;
+    border: 1px solid @tt_border;
     border-radius: 4px;
     padding: 4px;
 }
 entry:focus, textview:focus, spinbutton:focus {
-    border-color: #4FD1C5;
+    border-color: @tt_accent;
 }
 button {
-    background-color: #1A3C47;
-    color: #E8F0F2;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    color: @tt_text;
+    border: 1px solid @tt_border;
     border-radius: 4px;
     padding: 5px 10px;
 }
 button:hover {
-    background-color: #2D5566;
-    border-color: #4FD1C5;
+    background-color: @tt_border;
+    border-color: @tt_accent;
 }
 button:disabled {
-    color: #607D8B;
-    border-color: #1A3C47;
+    color: @tt_text_muted;
+    border-color: @tt_bg_dark;
 }
 .generate-btn {
-    background-color: #4FD1C5;
-    color: #0F2A35;
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
     font-weight: bold;
     font-size: 14px;
     padding: 10px;
@@ -96,79 +108,79 @@ button:disabled {
     border-radius: 4px;
 }
 .generate-btn:hover {
-    background-color: #81E6D9;
+    background-color: @tt_accent_light;
 }
 .generate-btn:disabled {
-    background-color: #2D5566;
-    color: #607D8B;
+    background-color: @tt_border;
+    color: @tt_text_muted;
 }
 .cancel-btn {
     background-color: #2D1A1A;
-    color: #FF6B6B;
-    border: 1px solid #FF6B6B;
+    color: @tt_error;
+    border: 1px solid @tt_error;
     border-radius: 4px;
     padding: 8px;
 }
 .cancel-btn:hover {
-    background-color: #FF6B6B;
-    color: #0F2A35;
+    background-color: @tt_error;
+    color: @tt_bg_darkest;
 }
 .card {
-    background-color: #1A3C47;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
     border-radius: 6px;
     padding: 8px;
 }
 .card:hover {
-    border-color: #4FD1C5;
+    border-color: @tt_accent;
 }
 .queue-row {
-    background-color: #1A3C47;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
     border-radius: 3px;
     padding: 3px 6px;
 }
 .status-bar {
-    background-color: #0A1F28;
-    color: #607D8B;
-    border-top: 1px solid #1A3C47;
+    background-color: @tt_bg_panel;
+    color: @tt_text_muted;
+    border-top: 1px solid @tt_bg_dark;
     padding: 3px 8px;
     font-size: 12px;
 }
 progressbar trough {
-    background-color: #1A3C47;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
     border-radius: 3px;
     min-height: 8px;
 }
 progressbar progress {
-    background-color: #4FD1C5;
+    background-color: @tt_accent;
     border-radius: 3px;
 }
 scrollbar {
-    background-color: #0F2A35;
+    background-color: @tt_bg_darkest;
 }
 scrollbar slider {
-    background-color: #2D5566;
+    background-color: @tt_border;
     border-radius: 5px;
     min-width: 8px;
     min-height: 8px;
 }
 scrollbar slider:hover {
-    background-color: #4FD1C5;
+    background-color: @tt_accent;
 }
 .card-selected {
-    border-color: #4FD1C5;
+    border-color: @tt_accent;
     border-width: 2px;
 }
 .card-selected-image {
-    border-color: #EC96B8;
+    border-color: @tt_pink;
     border-width: 2px;
 }
 .type-badge-video {
-    background-color: #1A3C47;
-    color: #4FD1C5;
-    border: 1px solid #4FD1C5;
+    background-color: @tt_bg_dark;
+    color: @tt_accent;
+    border: 1px solid @tt_accent;
     border-radius: 3px;
     padding: 0px 4px;
     font-size: 10px;
@@ -176,17 +188,17 @@ scrollbar slider:hover {
 }
 .type-badge-image {
     background-color: #2D1A2D;
-    color: #EC96B8;
-    border: 1px solid #EC96B8;
+    color: @tt_pink;
+    border: 1px solid @tt_pink;
     border-radius: 3px;
     padding: 0px 4px;
     font-size: 10px;
     font-weight: bold;
 }
 .type-badge-model {
-    background-color: #0F2A35;
-    color: #607D8B;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_darkest;
+    color: @tt_text_muted;
+    border: 1px solid @tt_border;
     border-radius: 3px;
     padding: 0px 4px;
     font-size: 10px;
@@ -200,7 +212,7 @@ scrollbar slider:hover {
     margin-top: -2px;
 }
 .detail-section {
-    color: #4FD1C5;
+    color: @tt_accent;
     font-weight: bold;
     font-size: 11px;
     margin-top: 6px;
@@ -208,36 +220,36 @@ scrollbar slider:hover {
 .mono {
     font-family: monospace;
     font-size: 11px;
-    color: #607D8B;
+    color: @tt_text_muted;
 }
 .detail-empty {
-    color: #2D5566;
+    color: @tt_border;
     font-size: 15px;
 }
 .chip-btn {
-    background-color: #0F2A35;
-    color: #81E6D9;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_darkest;
+    color: @tt_accent_light;
+    border: 1px solid @tt_border;
     border-radius: 12px;
     padding: 2px 8px;
     font-size: 11px;
 }
 .chip-btn:hover {
-    background-color: #1A3C47;
-    border-color: #4FD1C5;
-    color: #E8F0F2;
+    background-color: @tt_bg_dark;
+    border-color: @tt_accent;
+    color: @tt_text;
 }
 .source-btn {
-    background-color: #1A3C47;
-    color: #607D8B;
-    border: 1px solid #2D5566;
+    background-color: @tt_bg_dark;
+    color: @tt_text_muted;
+    border: 1px solid @tt_border;
     border-radius: 0;
     padding: 4px 10px;
     font-size: 12px;
 }
 .source-btn:hover {
-    background-color: #2D5566;
-    color: #E8F0F2;
+    background-color: @tt_border;
+    color: @tt_text;
 }
 .source-btn-left {
     border-radius: 4px 0 0 4px;
@@ -251,49 +263,49 @@ scrollbar slider:hover {
     border-left-width: 0;
 }
 .source-btn-active {
-    background-color: #4FD1C5;
-    color: #0F2A35;
-    border-color: #4FD1C5;
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    border-color: @tt_accent;
     font-weight: bold;
 }
 .source-btn-active:hover {
-    background-color: #81E6D9;
+    background-color: @tt_accent_light;
 }
 .server-start-btn {
-    background-color: #1A3C47;
-    color: #4FD1C5;
-    border: 1px solid #4FD1C5;
+    background-color: @tt_bg_dark;
+    color: @tt_accent;
+    border: 1px solid @tt_accent;
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 12px;
 }
 .server-start-btn:hover {
-    background-color: #2D5566;
+    background-color: @tt_border;
 }
 .server-start-btn:disabled {
-    color: #607D8B;
-    border-color: #2D5566;
+    color: @tt_text_muted;
+    border-color: @tt_border;
 }
 .server-stop-btn {
     background-color: #2D1A1A;
-    color: #FF6B6B;
-    border: 1px solid #FF6B6B;
+    color: @tt_error;
+    border: 1px solid @tt_error;
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 12px;
 }
 .server-stop-btn:hover {
-    background-color: #FF6B6B;
-    color: #0F2A35;
+    background-color: @tt_error;
+    color: @tt_bg_darkest;
 }
 .server-stop-btn:disabled {
-    color: #607D8B;
-    border-color: #2D5566;
-    background-color: #1A3C47;
+    color: @tt_text_muted;
+    border-color: @tt_border;
+    background-color: @tt_bg_dark;
 }
 .trash-btn {
     background-color: transparent;
-    color: #607D8B;
+    color: @tt_text_muted;
     border: none;
     border-radius: 4px;
     padding: 2px 5px;
@@ -302,13 +314,13 @@ scrollbar slider:hover {
 }
 .trash-btn:hover {
     background-color: #2D1A1A;
-    color: #FF6B6B;
+    color: @tt_error;
 }
 .server-log {
     font-family: monospace;
     font-size: 10px;
-    color: #81E6D9;
-    background-color: #0A1F28;
+    color: @tt_accent_light;
+    background-color: @tt_bg_panel;
     padding: 4px;
 }
 """
