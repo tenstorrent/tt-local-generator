@@ -18,6 +18,7 @@ Classes:
     RecoveryDialog   — modal listing unknown server jobs to re-attach
     MainWindow       — top-level Gtk.ApplicationWindow
 """
+import json
 import shutil
 import subprocess
 import sys
@@ -545,6 +546,62 @@ scrollbar slider:hover {
 .attractor-launch-btn:disabled {
     color: @tt_text_muted;
     border-color: @tt_bg_dark;
+}
+
+/* -- Toolbar (logo + source + model, pinned to top of window) -------------- */
+.tt-toolbar {
+    background-color: @tt_bg_darkest;
+    border-bottom: 1px solid @tt_border;
+    padding: 4px 8px;
+    min-height: 34px;
+}
+.tt-toolbar-title {
+    color: @tt_accent;
+    font-size: 11px;
+    font-weight: bold;
+    margin-left: 4px;
+    margin-right: 8px;
+}
+
+/* -- Status bar (server dot + queue + disk + chip, pinned to bottom) ------- */
+.tt-statusbar {
+    background-color: @tt_bg_darkest;
+    border-top: 1px solid @tt_border;
+    padding: 2px 10px;
+    min-height: 24px;
+}
+.tt-statusbar-dot {
+    font-size: 8px;
+    margin-right: 4px;
+}
+.tt-statusbar-dot-ready   { color: @tt_success; }
+.tt-statusbar-dot-offline { color: @tt_text_muted; }
+.tt-statusbar-dot-starting { color: @tt_accent; }
+.tt-statusbar-seg {
+    font-size: 10px;
+    color: @tt_text_muted;
+}
+.tt-statusbar-seg-warn {
+    font-size: 10px;
+    color: #FF6B6B;
+}
+.tt-statusbar-sep {
+    color: @tt_border;
+    font-size: 10px;
+    margin-left: 8px;
+    margin-right: 8px;
+}
+/* MenuButton wrapping the server dot - no decorations, just the label content */
+.tt-statusbar-srv-btn {
+    background: transparent;
+    border: none;
+    padding: 0 4px;
+    min-height: 0;
+    min-width: 0;
+}
+.tt-statusbar-srv-btn:hover {
+    background: alpha(@tt_accent, 0.08);
+    border-radius: 3px;
 }
 """
 
@@ -1748,25 +1805,35 @@ class ControlPanel(Gtk.Box):
         return lbl
 
     def _build(self) -> None:
-        # ── App title row: logo + name ──────────────────────────────────────────────
-        _title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        # ── Toolbar (lives outside the panel scroll area, pinned at the top of the
+        #    window by MainWindow._build_ui).  Contains the logo/title, source toggle,
+        #    and model selector so the scrollable control panel can focus entirely on
+        #    prompt composition.
+        self._toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._toolbar_box.add_css_class("tt-toolbar")
+
+        # Logo + title
         _logo_path = str(Path(__file__).parent / "assets" / "tenstorrent.png")
         _logo_img = Gtk.Image.new_from_file(_logo_path)
-        _logo_img.set_pixel_size(28)
-        _title_row.append(_logo_img)
+        _logo_img.set_pixel_size(22)
+        self._toolbar_box.append(_logo_img)
         self._title_lbl = Gtk.Label(label="TT VIDEO GENERATOR")
-        self._title_lbl.set_xalign(0)
-        self._title_lbl.add_css_class("teal")
+        self._title_lbl.add_css_class("tt-toolbar-title")
         attrs = Pango.AttrList()
         attrs.insert(Pango.AttrFontDesc.new(
-            Pango.FontDescription.from_string("sans bold 15")))
+            Pango.FontDescription.from_string("sans bold 13")))
         self._title_lbl.set_attributes(attrs)
-        _title_row.append(self._title_lbl)
-        self.append(_title_row)
+        self._toolbar_box.append(self._title_lbl)
 
-        # ── Model source toggle ───────────────────────────────────────────────
-        # Switches between Wan2.2 (video) and FLUX.1-dev (image) generation.
-        self.append(self._section("Generation Source"))
+        # Divider
+        _tb_sep1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        _tb_sep1.set_margin_start(6)
+        _tb_sep1.set_margin_end(6)
+        _tb_sep1.set_margin_top(6)
+        _tb_sep1.set_margin_bottom(6)
+        self._toolbar_box.append(_tb_sep1)
+
+        # ── Source toggle (Video / Animate / Image) ───────────────────────────
         src_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._src_video_btn = Gtk.ToggleButton(label="🎬 Video")
         self._src_video_btn.add_css_class("source-btn")
@@ -1789,42 +1856,36 @@ class ControlPanel(Gtk.Box):
             "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
-        # Source button group — only one can be active at a time.
-        # set_group() links animate and image to the video button as group leader.
         self._src_animate_btn.set_group(self._src_video_btn)
         self._src_image_btn.set_group(self._src_video_btn)
-        # Connect before set_active so the toggled signal is handled at startup.
-        # Guard with b.get_active() so the callback only fires when a button is
-        # turned ON (not when it is deactivated by another group member being clicked).
         self._src_video_btn.connect("toggled", lambda b: b.get_active() and self._set_source("video"))
         self._src_animate_btn.connect("toggled", lambda b: b.get_active() and self._set_source("animate"))
         self._src_image_btn.connect("toggled", lambda b: b.get_active() and self._set_source("image"))
         self._src_video_btn.set_active(True)
         src_row.append(self._src_video_btn)
         src_row.append(self._src_animate_btn)
-        self._src_animate_btn.set_visible(False)  # Animate tab hidden until Wan2.2-Animate-14B is ready
+        self._src_animate_btn.set_visible(False)  # hidden until Wan2.2-Animate-14B is ready
         src_row.append(self._src_image_btn)
-        self.append(src_row)
+        self._toolbar_box.append(src_row)
 
         # ── Video model selector ──────────────────────────────────────────────
-        # Visible only when "video" source is active. Uses same source-btn style.
         self._model_sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self._model_sel_row.set_margin_start(4)
 
-        self._mdl_wan2_btn = Gtk.ToggleButton(label="🎬 Wan2.2")
+        self._mdl_wan2_btn = Gtk.ToggleButton(label="Wan2.2")
         self._mdl_wan2_btn.add_css_class("source-btn")
         self._mdl_wan2_btn.add_css_class("source-btn-left")
         self._mdl_wan2_btn.set_tooltip_text(
             "Wan2.2-T2V-A14B  ·  720p MP4  ·  ~3–10 min\n"
             "Launches start_wan.sh"
         )
-        self._mdl_mochi_btn = Gtk.ToggleButton(label="🎥 Mochi-1")
+        self._mdl_mochi_btn = Gtk.ToggleButton(label="Mochi-1")
         self._mdl_mochi_btn.add_css_class("source-btn")
         self._mdl_mochi_btn.add_css_class("source-btn-right")
         self._mdl_mochi_btn.set_tooltip_text(
             "Mochi-1  ·  480×848  ·  168 frames  ·  ~5–15 min\n"
             "Launches start_mochi.sh"
         )
-        # Video model button group — only one model active at a time.
         self._mdl_mochi_btn.set_group(self._mdl_wan2_btn)
         self._mdl_wan2_btn.connect("toggled", lambda b: b.get_active() and self._set_model("wan2"))
         self._mdl_mochi_btn.connect("toggled", lambda b: b.get_active() and self._set_model("mochi"))
@@ -1833,10 +1894,10 @@ class ControlPanel(Gtk.Box):
         self._model_sel_row.append(self._mdl_mochi_btn)
 
         # ── Image model selector ──────────────────────────────────────────────
-        # Single button for now; hidden until source == "image".
         self._img_model_sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self._img_model_sel_row.set_margin_start(4)
 
-        self._mdl_flux_btn = Gtk.Button(label="🖼 FLUX.1-dev")
+        self._mdl_flux_btn = Gtk.Button(label="FLUX.1-dev")
         self._mdl_flux_btn.add_css_class("source-btn")
         self._mdl_flux_btn.add_css_class("source-btn-left")
         self._mdl_flux_btn.add_css_class("source-btn-right")
@@ -1848,20 +1909,22 @@ class ControlPanel(Gtk.Box):
         self._mdl_flux_btn.connect("clicked", lambda _: self._set_model("flux"))
         self._img_model_sel_row.append(self._mdl_flux_btn)
 
-        # Video selector visible by default (video is default source)
+        # Video selector visible by default; image selector shown when source=image
         self._model_sel_row.set_visible(True)
         self._img_model_sel_row.set_visible(False)
 
-        self.append(self._model_sel_row)
-        self.append(self._img_model_sel_row)
+        self._toolbar_box.append(self._model_sel_row)
+        self._toolbar_box.append(self._img_model_sel_row)
 
-        # One-line model spec shown below the toggle — updates on source change
-        self._source_desc_lbl = Gtk.Label(
-            label="async job  ·  ~3–10 min  ·  720p MP4"
-        )
-        self._source_desc_lbl.set_xalign(0)
-        self._source_desc_lbl.add_css_class("hint")
-        self.append(self._source_desc_lbl)
+        # Spacer (MainWindow appends attractor + other buttons after this)
+        _tb_spacer = Gtk.Box()
+        _tb_spacer.set_hexpand(True)
+        self._toolbar_box.append(_tb_spacer)
+
+        # _source_desc_lbl is kept for internal _update_source_desc() calls
+        # but no longer shown in the panel — the status bar shows model info.
+        self._source_desc_lbl = Gtk.Label(label="")
+        self._source_desc_lbl.set_visible(False)
 
         # ── Prompt ────────────────────────────────────────────────────────────
         self.append(self._section("Prompt"))
@@ -2357,6 +2420,12 @@ class ControlPanel(Gtk.Box):
     def footer_box(self) -> Gtk.Box:
         """Pinned footer — MainWindow places this below ctrl_scroll."""
         return self._footer_box
+
+    @property
+    def toolbar_box(self) -> Gtk.Box:
+        """Toolbar strip (logo, source toggle, model selector) built in _build().
+        MainWindow pins this at the top of the window above the paned layout."""
+        return self._toolbar_box
 
     # ── State ──────────────────────────────────────────────────────────────────
 
@@ -3147,6 +3216,223 @@ def _small_attrs() -> Pango.AttrList:
     return attrs
 
 
+# ── Hardware status bar ────────────────────────────────────────────────────────
+
+class _StatusBar(Gtk.Box):
+    """Slim status strip pinned to the bottom of the window.
+
+    Shows four segments separated by `│` dividers:
+      ⬤ <model>  │  queue: N  │  NN GB free  │  NN°C  NNW  NNMHz
+
+    The chip telemetry segment is populated by polling `tt-smi -s` every 10 s
+    on a background thread.  All public update methods must be called on the
+    main (GTK) thread.
+    """
+
+    _DISK_WARN_BYTES = 18 * 1024 ** 3   # match _DISK_SPACE_MIN_BYTES
+
+    def __init__(self, start_cb, stop_cb) -> None:
+        """
+        Args:
+            start_cb: callable() — invoked when the user clicks Start in the server popover.
+                      The caller is responsible for determining the current model source.
+            stop_cb:  callable() — invoked when the user clicks Stop in the server popover.
+        """
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add_css_class("tt-statusbar")
+
+        def _sep() -> Gtk.Label:
+            lbl = Gtk.Label(label=" │ ")
+            lbl.add_css_class("tt-statusbar-sep")
+            return lbl
+
+        # ── Server segment: MenuButton (dot + model) → popover with controls ──
+        # Clicking the server segment opens a slim popover with Start / Stop.
+        self._srv_dot = Gtk.Label(label="⬤")
+        self._srv_dot.add_css_class("tt-statusbar-dot")
+        self._srv_dot.add_css_class("tt-statusbar-dot-offline")
+        self._srv_lbl = Gtk.Label(label="offline")
+        self._srv_lbl.add_css_class("tt-statusbar-seg")
+
+        srv_btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        srv_btn_content.append(self._srv_dot)
+        srv_btn_content.append(self._srv_lbl)
+
+        self._srv_menu_btn = Gtk.MenuButton()
+        self._srv_menu_btn.set_has_frame(False)
+        self._srv_menu_btn.add_css_class("tt-statusbar-srv-btn")
+        self._srv_menu_btn.set_child(srv_btn_content)
+
+        # Build the server-control popover
+        self._pop_status_lbl = Gtk.Label(label="Server offline")
+        self._pop_status_lbl.set_xalign(0)
+        self._pop_status_lbl.add_css_class("tt-statusbar-seg")
+
+        pop_start = Gtk.Button(label="▶  Start server")
+        pop_start.add_css_class("generate-btn")
+        pop_stop  = Gtk.Button(label="■  Stop server")
+        pop_stop.add_css_class("cancel-btn")
+
+        _popover = Gtk.Popover()
+        _popover.set_position(Gtk.PositionType.TOP)
+
+        def _start_and_close(_btn):
+            _popover.popdown()
+            start_cb()
+
+        def _stop_and_close(_btn):
+            _popover.popdown()
+            stop_cb()
+
+        pop_start.connect("clicked", _start_and_close)
+        pop_stop.connect("clicked", _stop_and_close)
+
+        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        pop_box.set_margin_top(10)
+        pop_box.set_margin_bottom(10)
+        pop_box.set_margin_start(14)
+        pop_box.set_margin_end(14)
+        pop_box.append(self._pop_status_lbl)
+        pop_box.append(pop_start)
+        pop_box.append(pop_stop)
+        _popover.set_child(pop_box)
+        self._srv_menu_btn.set_popover(_popover)
+
+        self.append(self._srv_menu_btn)
+
+        # ── Queue depth (hidden when empty) ───────────────────────────────────
+        self._q_sep = _sep()
+        self._q_sep.set_visible(False)
+        self.append(self._q_sep)
+        self._queue_lbl = Gtk.Label(label="")
+        self._queue_lbl.add_css_class("tt-statusbar-seg")
+        self._queue_lbl.set_visible(False)
+        self.append(self._queue_lbl)
+
+        # ── Disk free ─────────────────────────────────────────────────────────
+        self.append(_sep())
+        self._disk_lbl = Gtk.Label(label="")
+        self._disk_lbl.add_css_class("tt-statusbar-seg")
+        self.append(self._disk_lbl)
+
+        # ── Chip telemetry (tt-smi) ───────────────────────────────────────────
+        self._chip_sep = _sep()
+        self._chip_sep.set_visible(False)
+        self.append(self._chip_sep)
+        self._chip_lbl = Gtk.Label(label="")
+        self._chip_lbl.add_css_class("tt-statusbar-seg")
+        self._chip_lbl.set_visible(False)
+        self.append(self._chip_lbl)
+
+        # Kick off background polling; populate disk label immediately.
+        self._stop = threading.Event()
+        GLib.idle_add(self._refresh_disk)
+        threading.Thread(target=self._poll_loop, daemon=True).start()
+
+    # ── Public update methods (main-thread only) ───────────────────────────────
+
+    def _set_srv_dot(self, css_state: str, model_text: str, pop_text: str) -> None:
+        for cls in ("tt-statusbar-dot-ready", "tt-statusbar-dot-offline",
+                    "tt-statusbar-dot-starting"):
+            self._srv_dot.remove_css_class(cls)
+        self._srv_dot.add_css_class(f"tt-statusbar-dot-{css_state}")
+        self._srv_lbl.set_label(model_text)
+        self._pop_status_lbl.set_label(pop_text)
+
+    def update_server(self, ready: bool, model: "str | None") -> None:
+        """Reflect server health in the status dot and model label."""
+        if ready:
+            self._set_srv_dot("ready", model or "ready", f"● {model or 'Server'} ready")
+        else:
+            self._set_srv_dot("offline", "offline", "Server offline")
+
+    def update_starting(self) -> None:
+        """Show 'starting' state while the server launch script is running."""
+        self._set_srv_dot("starting", "starting…", "Server starting…")
+
+    def update_queue(self, depth: int) -> None:
+        """Show or hide the queue-depth segment."""
+        visible = depth > 0
+        self._queue_lbl.set_label(f"queue: {depth}" if visible else "")
+        self._queue_lbl.set_visible(visible)
+        self._q_sep.set_visible(visible)
+
+    # ── Disk / chip helpers (main-thread callbacks) ────────────────────────────
+
+    def _refresh_disk(self) -> bool:
+        """Update the disk-free label. Called on main thread."""
+        try:
+            from history_store import STORAGE_DIR
+            free = shutil.disk_usage(STORAGE_DIR).free
+            free_gb = free / (1024 ** 3)
+            self._disk_lbl.set_label(f"{free_gb:.0f} GB free")
+            if free < self._DISK_WARN_BYTES:
+                self._disk_lbl.remove_css_class("tt-statusbar-seg")
+                self._disk_lbl.add_css_class("tt-statusbar-seg-warn")
+            else:
+                self._disk_lbl.remove_css_class("tt-statusbar-seg-warn")
+                self._disk_lbl.add_css_class("tt-statusbar-seg")
+        except OSError:
+            self._disk_lbl.set_label("")
+        return GLib.SOURCE_REMOVE
+
+    def _apply_chip(self, text: str) -> bool:
+        """Apply chip telemetry string to the label. Called on main thread."""
+        visible = bool(text)
+        self._chip_lbl.set_label(text)
+        self._chip_lbl.set_visible(visible)
+        self._chip_sep.set_visible(visible)
+        return GLib.SOURCE_REMOVE
+
+    # ── Background polling loop ────────────────────────────────────────────────
+
+    def _poll_loop(self) -> None:
+        """Background thread: refresh disk + chip telemetry every 10 s."""
+        while not self._stop.wait(10.0):
+            GLib.idle_add(self._refresh_disk)
+            chip_text = self._read_chip_telemetry()
+            GLib.idle_add(self._apply_chip, chip_text)
+
+    @staticmethod
+    def _read_chip_telemetry() -> str:
+        """Query `tt-smi -s` and return a compact summary string, or '' if unavailable."""
+        try:
+            result = subprocess.run(
+                ["tt-smi", "-s"],
+                capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                return ""
+            data = json.loads(result.stdout)
+            chips = data.get("device_info", [])
+            if not chips:
+                return ""
+
+            def _f(val) -> float:
+                """Coerce tt-smi JSON values (may be int, float, or string) to float."""
+                try:
+                    return float(val) if val is not None else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+
+            temps  = [_f(c.get("telemetry", {}).get("asic_temperature")) for c in chips]
+            powers = [_f(c.get("telemetry", {}).get("power")) for c in chips]
+            clocks = [_f(c.get("telemetry", {}).get("aiclk")) for c in chips]
+            parts: list[str] = []
+            if any(temps):  parts.append(f"{max(temps):.0f}°C")
+            if any(powers): parts.append(f"{sum(powers):.0f}W")
+            if any(clocks): parts.append(f"{max(clocks):.0f}MHz")
+            return "  ".join(parts)
+        except (subprocess.TimeoutExpired, FileNotFoundError,
+                json.JSONDecodeError, OSError, KeyError):
+            return ""
+
+    def stop(self) -> None:
+        """Signal the background polling thread to exit. Call from do_close_request."""
+        self._stop.set()
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -3188,9 +3474,9 @@ class MainWindow(Gtk.ApplicationWindow):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-        # Three-pane layout: controls | gallery | detail
-        outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        self.set_child(outer_paned)
+        # Root vertical box: toolbar (top) | paned layout (middle) | status bar (bottom)
+        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_child(root_box)
 
         self._controls = ControlPanel(
             on_generate=self._on_generate,
@@ -3203,9 +3489,31 @@ class MainWindow(Gtk.ApplicationWindow):
             on_start_prompt_gen=self._on_start_prompt_gen,
             on_inspire=self._on_inspire,
         )
+
+        # ── Main toolbar ──────────────────────────────────────────────────────
+        # The toolbar strip is built inside ControlPanel (logo, source toggle,
+        # model selectors).  We append it at the top of root_box and add the
+        # Watch TT-TV button on the right side (after the internal spacer).
+        main_toolbar = self._controls.toolbar_box
+        self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
+        self._attractor_btn.add_css_class("attractor-launch-btn")
+        self._attractor_btn.set_tooltip_text(
+            "Watch TT-TV — plays all media in a kiosk loop\n"
+            "and continuously generates new content."
+        )
+        self._attractor_btn.set_sensitive(False)
+        self._attractor_btn.connect("clicked", self._on_open_attractor)
+        main_toolbar.append(self._attractor_btn)
+        root_box.append(main_toolbar)
+
+        # ── Three-pane layout: controls | gallery | detail ────────────────────
+        outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        outer_paned.set_vexpand(True)
+        root_box.append(outer_paned)
+
         # Left pane: scrollable content area on top, pinned footer below.
         # The footer (Advanced settings + Server status + action buttons) stays
-        # visible at all times; chips/prompt/toggles scroll when the window is short.
+        # visible at all times; prompt/chips/inspire scroll when the window is short.
         ctrl_scroll = Gtk.ScrolledWindow()
         ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ctrl_scroll.set_vexpand(True)
@@ -3245,29 +3553,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.set_visible_child_name("video")
-        # Gallery toolbar — sits above the gallery stack
-        gallery_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        gallery_toolbar.set_margin_start(6)
-        gallery_toolbar.set_margin_end(6)
-        gallery_toolbar.set_margin_top(4)
-        gallery_toolbar.set_margin_bottom(4)
-        _tb_spacer = Gtk.Box()
-        _tb_spacer.set_hexpand(True)
-        gallery_toolbar.append(_tb_spacer)
-        self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
-        self._attractor_btn.add_css_class("attractor-launch-btn")
-        self._attractor_btn.set_tooltip_text(
-            "Watch TT-TV — plays all media in a kiosk loop\n"
-            "and continuously generates new content."
-        )
-        self._attractor_btn.set_sensitive(False)
-        self._attractor_btn.connect("clicked", self._on_open_attractor)
-        gallery_toolbar.append(self._attractor_btn)
-        gallery_wrap.append(gallery_toolbar)
 
         gallery_wrap.append(self._gallery_stack)
 
-        # Status bar spans the full bottom of the gallery+detail area
+        # Narrow status label for generation progress messages (above status bar)
         self._status_lbl = Gtk.Label(label="Ready")
         self._status_lbl.set_xalign(0)
         self._status_lbl.add_css_class("status-bar")
@@ -3302,6 +3591,15 @@ class MainWindow(Gtk.ApplicationWindow):
 
         outer_paned.set_end_child(inner_paned)
         outer_paned.set_shrink_end_child(False)
+
+        # ── Hardware / infra status bar (pinned to window bottom) ─────────────
+        # Clicking the server segment opens a popover with Start / Stop controls.
+        # start_cb captures self._controls so it always reads the current source.
+        self._hw_statusbar = _StatusBar(
+            start_cb=lambda: self._on_start_server(self._controls.get_model_source()),
+            stop_cb=self._on_stop_server,
+        )
+        root_box.append(self._hw_statusbar)
 
     def _set_status(self, text: str) -> None:
         """Update status bar. Safe to call from main thread only."""
@@ -3401,6 +3699,10 @@ class MainWindow(Gtk.ApplicationWindow):
             self._auto_tab_switched = True
 
         self._controls.set_server_state(ready, running_model)
+
+        # Mirror server health in the hardware status bar.
+        display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
+        self._hw_statusbar.update_server(ready, display_model or None)
 
         if ready:
             # Stop tailing the Docker log — server is confirmed up
@@ -3679,6 +3981,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.set_server_launching(True, clear_log=True)
         self._controls.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
+        self._hw_statusbar.update_starting()
 
         def run():
             try:
@@ -3774,6 +4077,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.set_server_launching(True, clear_log=True)
         self._controls.append_server_log("Stopping inference server…")
         self._set_status("Stopping inference server…")
+        self._hw_statusbar.update_starting()
 
         def run():
             try:
@@ -3883,6 +4187,8 @@ class MainWindow(Gtk.ApplicationWindow):
         has = bool(self._queue)
         self._queue_section_lbl.set_visible(has)
         self._queue_box.set_visible(has)
+        # Keep the hardware status bar queue counter in sync.
+        self._hw_statusbar.update_queue(len(self._queue))
 
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,
@@ -4077,6 +4383,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._health_stop.set()
         if self._pg_stop:
             self._pg_stop.set()
+        self._hw_statusbar.stop()
         if self._log_tail_stop:
             self._log_tail_stop.set()
         if self._worker_gen:

@@ -850,9 +850,73 @@ MOOD = [
     "very still and very full",
 ]
 
+# ── Cinematic Director Styles ─────────────────────────────────────────────────
+# Each entry names a director's signature visual language in 4-8 words.
+# Sampled by _algo_video() (1-in-3 chance) and included in STYLE below.
+
+CINEMATIC_DIRECTORS = [
+    # Suspense / noir
+    "Hitchcock — voyeuristic high-angle thriller, chiaroscuro",
+    "Carol Reed — wet cobblestones, canted angle, moral fog",
+    "Billy Wilder — venetian blinds, cynical wit, cigarette smoke",
+    "Douglas Sirk — Technicolor melodrama hiding social critique",
+    "Roman Polanski — paranoia in close quarters, clipped corners",
+    # European art cinema
+    "Fellini — carnival dreamscape, baroque crowd, memory dissolve",
+    "Tarkovsky — slow-burn long take, transcendent water and fire",
+    "Bergman — faces in extreme close-up, death as quiet presence",
+    "Antonioni — alienated figure in stark modern architecture",
+    "Godard — jump cut, primary color wall, direct address",
+    "Truffaut — warm spontaneous New Wave, freeze frame",
+    "Bresson — non-actor gesture, fragmented body, spiritual ellipsis",
+    "Rohmer — naturalistic summer light, moral hesitation on a terrace",
+    "Fassbinder — frontal staging, alienated melodrama, gauze curtain",
+    "Wenders — drifter, rock music on an empty road, longing",
+    "Herzog — obsession dwarfed by impossible landscape",
+    "Pasolini — sacred poverty, non-professional faces, cracked earth",
+    "Visconti — operatic aristocratic decay, gilded surface, ruin",
+    "Cassavetes — improvised handheld, raw emotional exposure",
+    "Akerman — static duration, domestic space, feminist minimalism",
+    # Asian masters
+    "Kurosawa — widescreen epic in driving rain, weather as emotion",
+    "Ozu — tatami-level static, family at table, pillow shot",
+    "Mizoguchi — long scroll takes, female suffering in lantern light",
+    "Wong Kar-wai — neon overexposure, slow-motion missed connection",
+    "Hou Hsiao-hsien — long take, natural window light, elliptical cut",
+    "Zhang Yimou — saturated color field, folk opera sweep",
+    "Kiarostami — road and windshield, reflexivity, Iranian plateau",
+    # British realism / poetic
+    "David Lean — panoramic golden epic, lone figure in vastness",
+    "Powell & Pressburger — color as emotion, dance, Technicolor myth",
+    "Ken Loach — documentary handheld, working-class dignity",
+    "Mike Leigh — improvised kitchen-sink intimacy",
+    # American auteurs
+    "Orson Welles — deep focus, low angle, expressionist shadow",
+    "John Huston — adventure and moral complexity, wide weathered faces",
+    "Coppola — operatic family tragedy, amber candlelight",
+    "Scorsese — kinetic guilt, Catholic imagery, freeze-frame",
+    "Malick — grass, whispered voiceover, light through trees",
+    "Lynch — uncanny suburban dread, velvet curtain, distorted sound",
+    "Altman — overlapping dialogue, zoom lens, ensemble drift",
+    "PT Anderson — operatic tracking shot, American grotesque",
+    "Wes Anderson — symmetry, pastel, nostalgia rendered as grief",
+    "Fincher — dark precision, obsessive negative-fill lighting",
+    "Spike Lee — double-dolly glide, jazz cut, direct address",
+    "Jarmusch — deadpan cool, black and white, coffee and cigarettes",
+    "Van Sant — dreamlike youth, Satie-paced drift",
+    "Sofia Coppola — luxury melancholy, feminine interior silence",
+    # Contemporary / global
+    "Haneke — long take, violence withheld, clinical Austrian interior",
+    "von Trier — Dogme rawness, handheld, washed-out palette",
+    "Claire Denis — bodies, texture, elliptical West African sun",
+    "Dardenne Brothers — tight handheld behind neck, moral urgency",
+    "Nolan — fractured timeline, IMAX grain, rain on concrete",
+    "De Palma — split diopter, operatic Hitchcock homage, slow zoom",
+]
+
 # ── Artistic Style ─────────────────────────────────────────────────────────────
 
-STYLE = [
+STYLE = CINEMATIC_DIRECTORS + [
     "35mm film grain",
     "photorealistic",
     "painterly impressionist",
@@ -880,7 +944,7 @@ STYLE = [
     "MTV 1984 video aesthetic",
     "one-light warehouse photography",
     "Sesame Street primary color urban",
-    "Cinéma vérité 16mm",
+    "Cinema verite 16mm",
     "Soviet propaganda poster",
     "EC Comics horror illustration",
     "Robert Crumb underground comix",
@@ -996,3 +1060,8 @@ def style() -> str:
 
 def quality_tags(n: int = 2) -> str:
     return ", ".join(random.sample(QUALITY_TAGS, n))
+
+
+def director_style() -> str:
+    """Return a random director-inspired cinematic style string."""
+    return pick(CINEMATIC_DIRECTORS)

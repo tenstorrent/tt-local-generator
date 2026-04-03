@@ -128,15 +128,21 @@ def _algo_video() -> tuple[str, dict]:
     subj = wb.subject()
     act = wb.action()
     sett = wb.setting()
-    tw = wb.time_weather()
     cam = wb.camera()
-    lit = wb.lighting()
     mo = wb.mood()
-    slug = f"{subj} {act}, {sett}, {tw}, {cam}, {lit}, {mo}"
-    meta = {
-        "subject": subj, "action": act, "setting": sett, "time": tw,
-        "camera": cam, "lighting": lit, "mood": mo,
-    }
+    # 1-in-3 chance of a named director aesthetic instead of generic mood/style.
+    # This keeps prompts short (5 comma-separated slots) while injecting strong
+    # cinematic identity. Time-of-day and lighting are intentionally omitted from
+    # the slug — they balloon prompt length without improving short-clip generation.
+    if random.random() < 0.33:
+        style_slot = wb.director_style()
+        slug = f"{subj} {act}, {sett}, {cam}, {style_slot}"
+        meta = {"subject": subj, "action": act, "setting": sett,
+                "camera": cam, "director_style": style_slot}
+    else:
+        slug = f"{subj} {act}, {sett}, {cam}, {mo}"
+        meta = {"subject": subj, "action": act, "setting": sett,
+                "camera": cam, "mood": mo}
     return slug, meta
 
 
@@ -177,20 +183,25 @@ _ALGO_FN = {
 # ── LLM polish ─────────────────────────────────────────────────────────────────
 
 # Short, focused system prompt — the LLM only needs to polish, not select.
+# Target: <=40 words. Video models generate 4-6 second clips, so prompts must
+# describe a single contained action, not a journey. Longer prompts do not
+# produce longer or better clips — they just dilute the core image.
 _POLISH_SYSTEM = (
-    "You are a cinematic prompt editor. You receive a rough prompt slug — "
-    "a comma-separated list of scene elements — and polish it into a vivid, "
-    "specific, flowing sentence or two. Preserve all the elements given. "
-    "Add one concrete surprising detail that fits. "
-    "Keep it under 65 words. No preamble, no quotes, no explanation."
+    "You are a cinematic prompt editor for AI video generation. "
+    "You receive a slug (comma-separated scene elements) and rewrite it as one "
+    "vivid, specific sentence. Keep every element given. No additions. "
+    "Target: 30-40 words. No preamble, no quotes, no explanation."
 )
 
 _TYPE_HINT = {
-    "video": "This is a video prompt. Include at least one camera or subject motion cue.",
-    "image": "This is an image prompt. End with quality tags (e.g. ultra-detailed, 35mm film grain).",
+    "video": (
+        "Video prompt (4-6 second clip). One contained action, one location. "
+        "Include one camera or motion cue. Stay under 40 words."
+    ),
+    "image": "Image prompt. End with style/quality tags (e.g. 35mm film grain, sharp focus).",
     "animate": (
-        "This is a character animation prompt. "
-        "One character, one clear action, one emotional beat. Stay close to the slug."
+        "Character animation prompt. One character, one clear action, one emotional beat. "
+        "Stay close to the slug. Under 35 words."
     ),
 }
 
