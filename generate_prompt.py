@@ -190,7 +190,8 @@ _POLISH_SYSTEM = (
     "You are a cinematic prompt editor for AI video generation. "
     "You receive a slug (comma-separated scene elements) and rewrite it as one "
     "vivid, specific sentence. Keep every element given. No additions. "
-    "Target: 30-40 words. No preamble, no quotes, no explanation."
+    "Target: 30-40 words. No preamble, no quotes, no explanation. "
+    "Never add gore, body horror, graphic violence, jump-scare framing, or disturbing imagery."
 )
 
 _TYPE_HINT = {

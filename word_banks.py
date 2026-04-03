@@ -912,6 +912,19 @@ CINEMATIC_DIRECTORS = [
     "Dardenne Brothers — tight handheld behind neck, moral urgency",
     "Nolan — fractured timeline, IMAX grain, rain on concrete",
     "De Palma — split diopter, operatic Hitchcock homage, slow zoom",
+    # Global voices, gender diversity, human-centered depiction
+    "Agnes Varda — found-object tenderness, essay film, women's daily life",
+    "Satyajit Ray — humanist Bengali realism, natural light, quiet dignity",
+    "Ousmane Sembene — postcolonial West African labor, Wolof faces, village square",
+    "Djibril Diop Mambety — Dakar surrealist fable, trickster figure, crumbling colonial wall",
+    "Apichatpong Weerasethakul — Thai spirit cinema, jungle dissolve, dream double",
+    "Lucrecia Martel — Argentine bourgeois unease, peripheral sound, bodies in heat",
+    "Pedro Almodovar — queer Iberian melodrama, saturated red, female solidarity",
+    "Kelly Reichardt — quiet Pacific Northwest, working-class women, long empty pause",
+    "Celine Sciamma — queer portrait, soft historical light, female gaze and interiority",
+    "Jia Zhangke — post-industrial Chinese displacement, DV texture, karaoke grief",
+    "Larisa Shepitko — Soviet spiritual intensity, white light, female heroism in snow",
+    "Carlos Reygadas — Mexican slow cinema, indigenous non-actor faces, open sky",
 ]
 
 # ── Artistic Style ─────────────────────────────────────────────────────────────
