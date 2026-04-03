@@ -16,6 +16,7 @@ import logging
 import random
 import statistics
 import threading
+import traceback
 from pathlib import Path
 from typing import Callable
 
@@ -222,6 +223,11 @@ class AttractorWindow(Gtk.Window):
         self._pending_advance_source: int | None = None  # GLib source id
         self._watched_stream = None          # stream we connected notify::ended to
         self._stream_handler_id: int | None = None  # handler ID so we can disconnect
+        # Set to True by start().  add_record() defers its first-advance call until
+        # start() has run, preventing a double-advance race when a generation completes
+        # while the window is being constructed (start() is called via idle_add so it
+        # fires after __init__ returns, but add_record may also be queued via idle_add).
+        self._started: bool = False
         # After each A/B crossfade we schedule a GStreamer pipeline teardown for the
         # now-inactive slot.  Keeping a pipeline open in the hidden slot for the full
         # duration of the next video doubles steady-state fd usage and causes "Too
@@ -274,7 +280,8 @@ class AttractorWindow(Gtk.Window):
 
     def _on_destroy(self, _win) -> None:
         """Stop the generation loop and cancel any pending timers."""
-        _log.info("=== Attractor stopped ===")
+        # Log a stack trace so we can see what triggered the close.
+        _log.info("=== Attractor stopped ===\n%s", "".join(traceback.format_stack()))
         self._gen_stop.set()
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
@@ -443,6 +450,7 @@ class AttractorWindow(Gtk.Window):
         Begin playback and start the generation loop daemon thread.
         Must be called after the window is presented so the display is ready.
         """
+        self._started = True
         _log.info("=== Attractor started — pool size: %d ===", self._pool.size)
         if self._pool.size == 0:
             self._gen_status_lbl.set_label("No media — generating first…")
@@ -712,8 +720,10 @@ class AttractorWindow(Gtk.Window):
         self._pool.add_record(record)
         self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
-        if was_empty:
-            # First item arrived — start playback
+        if was_empty and self._started:
+            # First item arrived after start() — begin playback now.
+            # If start() hasn't fired yet (add_record raced ahead via idle_add),
+            # defer to start() which will see pool.size > 0 and call _advance().
             self._advance()
 
     def _get_current_video_stream(self):
