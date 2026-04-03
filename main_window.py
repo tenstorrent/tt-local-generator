@@ -686,12 +686,17 @@ class GenerationCard(Gtk.Frame):
     delete_cb(record) is called when the trash button is clicked.
     """
 
-    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb):
+    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
+                 is_playing_all_cb=None):
         super().__init__()
         self._record = record
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
+        # Callable () -> bool: returns True when the gallery's Play All mode is
+        # active.  When True, hover enter/leave do not touch play state — the
+        # gallery's _sync_autoplay owns that.
+        self._is_playing_all_cb = is_playing_all_cb or (lambda: False)
         self.add_css_class("card")
         # Minimum card width; FlowBox homogeneous layout makes all cells equal width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -875,7 +880,9 @@ class GenerationCard(Gtk.Frame):
 
     def _on_hover_enter(self, _ctrl, _x, _y) -> None:
         """Start looping the video silently when the mouse enters the card."""
-        if self._hover_video is None:
+        if self._hover_video is None or self._is_playing_all_cb():
+            # When Play All is active, _sync_autoplay owns the play state; hover
+            # events must not interfere with it.
             return
         if not self._hover_pipeline_open:
             self._open_hover_pipeline()
@@ -911,7 +918,8 @@ class GenerationCard(Gtk.Frame):
 
     def _on_hover_leave(self, _ctrl) -> None:
         """Stop the video and revert to the thumbnail when the mouse leaves."""
-        if self._hover_video is None:
+        if self._hover_video is None or self._is_playing_all_cb():
+            # Play All owns the play state — don't close the pipeline on mouse-out.
             return
         self._close_hover_pipeline()
         self._media_stack.set_visible_child_name("thumb")
@@ -1749,6 +1757,7 @@ class GalleryWidget(Gtk.Box):
             iterate_cb=self._iterate_cb,
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
+            is_playing_all_cb=lambda: self._playing_all,
         )
 
     def delete_card(self, record_id: str) -> None:
