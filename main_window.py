@@ -3241,10 +3241,10 @@ class MainWindow(Gtk.ApplicationWindow):
         _tb_spacer = Gtk.Box()
         _tb_spacer.set_hexpand(True)
         gallery_toolbar.append(_tb_spacer)
-        self._attractor_btn = Gtk.Button(label="✦ Attractor")
+        self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
         self._attractor_btn.add_css_class("attractor-launch-btn")
         self._attractor_btn.set_tooltip_text(
-            "Open Attractor Mode — plays all media in a kiosk loop\n"
+            "Watch TT-TV — plays all media in a kiosk loop\n"
             "and continuously generates new content."
         )
         self._attractor_btn.set_sensitive(False)

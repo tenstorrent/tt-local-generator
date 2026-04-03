@@ -78,6 +78,22 @@ class AttractorPool:
             raise RuntimeError("current_record() called before advance()")
         return self._records[self._last_idx]
 
+    def peek_next(self):
+        """Return the record that advance() would play next, without consuming it.
+        Returns None if the pool is empty."""
+        if not self._records:
+            return None
+        if self._pos < len(self._order):
+            return self._records[self._order[self._pos]]
+        # At end of cycle — next would be first item of a fresh shuffle.
+        # Peek without actually shuffling: return any record that isn't last.
+        if len(self._records) == 1:
+            return self._records[0]
+        for idx in range(len(self._records)):
+            if idx != self._last_idx:
+                return self._records[idx]
+        return self._records[0]
+
     def add_record(self, record) -> None:
         """
         Append a new record and insert its index at a random position after
@@ -134,11 +150,11 @@ _CSS = b"""
 .attractor-sidebar {
     background-color: @tt_bg_darkest;
     border-right: 1px solid @tt_border;
-    padding: 10px 8px;
+    padding: 10px 10px;
 }
 .attractor-header {
     color: @tt_accent;
-    font-size: 10px;
+    font-size: 13px;
     font-weight: bold;
     letter-spacing: 1px;
 }
@@ -146,25 +162,72 @@ _CSS = b"""
     color: @tt_text_muted;
     font-size: 10px;
 }
-.attractor-status-lbl {
-    color: @tt_accent_light;
+.attractor-section-lbl {
+    color: @tt_text_muted;
+    font-size: 9px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    margin-top: 4px;
+}
+/* "Coming soon" prompt cards */
+.cs-card {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
+    border-radius: 6px;
+    padding: 7px 8px;
+    margin-bottom: 3px;
+}
+.cs-card-generating {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_accent;
+    border-radius: 6px;
+    padding: 7px 8px;
+    margin-bottom: 3px;
+}
+.cs-card-tag {
+    color: @tt_text_muted;
+    font-size: 8px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+.cs-card-tag-generating {
+    color: @tt_accent;
+    font-size: 8px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+.cs-card-prompt {
+    color: @tt_text;
     font-size: 10px;
     font-style: italic;
-    min-height: 30px;   /* 2 lines - prevents layout shift when text changes */
 }
-.attractor-prompt-lbl {
+.cs-card-empty {
     color: @tt_text_muted;
     font-size: 10px;
     font-style: italic;
-    min-height: 70px;   /* 5 lines - reserves space so sidebar never shrinks */
+}
+/* "Next on TT-TV" card */
+.next-card {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
+    border-radius: 6px;
+    padding: 7px 8px;
+}
+.next-card-tag {
+    color: @tt_accent_light;
+    font-size: 8px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    margin-bottom: 5px;
 }
 .attractor-stop-btn {
-    background-color: @tt_bg_error_dark;
+    background-color: @tt_bg_darkest;
     color: @tt_error;
     border: 1px solid @tt_error;
     border-radius: 4px;
     padding: 5px 8px;
     font-size: 11px;
+    margin-top: 4px;
 }
 .attractor-stop-btn:hover {
     background-color: @tt_border;
@@ -229,7 +292,7 @@ class AttractorWindow(Gtk.Window):
         system_prompt: str = "",              # unused; kept for caller compatibility
     ) -> None:
         _log.debug("AttractorWindow.__init__ — %d records, model_source=%s", len(records), model_source)
-        super().__init__(title="Attractor Mode")
+        super().__init__(title="TT-TV")
         self._system_prompt = system_prompt
         self._model_source = model_source
         self._on_enqueue = on_enqueue
@@ -259,6 +322,9 @@ class AttractorWindow(Gtk.Window):
         # many open files" crashes after many advance cycles.
         self._pending_unload_source: int = 0  # GLib source id for the unload timer
         self._slot_to_unload = None           # Gtk.Box slot whose pipeline to teardown
+        # Prompts submitted to the generation queue; oldest = currently generating.
+        # Displayed in the "Coming soon" sidebar cards (max 3).
+        self._cs_prompts: list[str] = []
 
         # Load CSS (uses @define-color variables already loaded by main_window.py)
         try:
@@ -347,23 +413,18 @@ class AttractorWindow(Gtk.Window):
         self.set_child(outer)
 
         # ── Sidebar ───────────────────────────────────────────────────────
-        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         sidebar.add_css_class("attractor-sidebar")
-        sidebar.set_size_request(148, -1)
+        sidebar.set_size_request(260, -1)
         sidebar.set_hexpand(False)
         sidebar.set_vexpand(True)
 
-        hdr = Gtk.Label(label="✦ ATTRACTOR MODE")
+        hdr = Gtk.Label(label="📺  TT-TV")
         hdr.add_css_class("attractor-header")
         hdr.set_xalign(0)
         sidebar.append(hdr)
 
         sidebar.append(_hdivider())
-
-        self._status_lbl = Gtk.Label(label="⬤  running")
-        self._status_lbl.add_css_class("attractor-stat-lbl")
-        self._status_lbl.set_xalign(0)
-        sidebar.append(self._status_lbl)
 
         self._queue_lbl = Gtk.Label(label="⏳  queue: —")
         self._queue_lbl.add_css_class("attractor-stat-lbl")
@@ -377,27 +438,58 @@ class AttractorWindow(Gtk.Window):
 
         sidebar.append(_hdivider())
 
-        self._gen_status_lbl = Gtk.Label(label="Starting…")
-        self._gen_status_lbl.add_css_class("attractor-status-lbl")
-        self._gen_status_lbl.set_xalign(0)
-        self._gen_status_lbl.set_max_width_chars(20)
-        self._gen_status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        sidebar.append(self._gen_status_lbl)
+        # ── Coming soon cards (3 slots) ───────────────────────────────────
+        cs_hdr = Gtk.Label(label="COMING SOON")
+        cs_hdr.add_css_class("attractor-section-lbl")
+        cs_hdr.set_xalign(0)
+        sidebar.append(cs_hdr)
 
-        self._prompt_lbl = Gtk.Label(label="")
-        self._prompt_lbl.add_css_class("attractor-prompt-lbl")
-        self._prompt_lbl.set_xalign(0)
-        self._prompt_lbl.set_wrap(True)
-        self._prompt_lbl.set_max_width_chars(20)
-        self._prompt_lbl.set_lines(5)
-        self._prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        sidebar.append(self._prompt_lbl)
+        # Build 3 reusable card widgets; updated by _update_coming_soon_ui()
+        self._cs_cards: list[dict] = []
+        for _ in range(3):
+            card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            card_box.add_css_class("cs-card")
 
+            tag_lbl = Gtk.Label(label="COMING SOON")
+            tag_lbl.add_css_class("cs-card-tag")
+            tag_lbl.set_xalign(0)
+            card_box.append(tag_lbl)
+
+            prompt_lbl = Gtk.Label(label="")
+            prompt_lbl.add_css_class("cs-card-empty")
+            prompt_lbl.set_xalign(0)
+            prompt_lbl.set_wrap(True)
+            prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            prompt_lbl.set_lines(3)
+            prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            card_box.append(prompt_lbl)
+
+            sidebar.append(card_box)
+            self._cs_cards.append({"box": card_box, "tag": tag_lbl, "prompt": prompt_lbl})
+
+        # ── Spacer pushes the "Next on TT-TV" section to the bottom ──────
         spacer = Gtk.Box()
         spacer.set_vexpand(True)
         sidebar.append(spacer)
 
-        stop_btn = Gtk.Button(label="■  Stop")
+        # ── Next on TT-TV ─────────────────────────────────────────────────
+        next_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        next_card.add_css_class("next-card")
+
+        next_tag = Gtk.Label(label="NEXT ON TT-TV")
+        next_tag.add_css_class("next-card-tag")
+        next_tag.set_xalign(0)
+        next_card.append(next_tag)
+
+        self._next_thumb = Gtk.Picture()
+        self._next_thumb.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self._next_thumb.set_size_request(-1, 120)
+        self._next_thumb.set_hexpand(True)
+        next_card.append(self._next_thumb)
+
+        sidebar.append(next_card)
+
+        stop_btn = Gtk.Button(label="■  Stop TT-TV")
         stop_btn.add_css_class("attractor-stop-btn")
         stop_btn.connect("clicked", lambda _: self.close())
         sidebar.append(stop_btn)
@@ -483,9 +575,7 @@ class AttractorWindow(Gtk.Window):
             return
         self._started = True
         _log.info("=== Attractor started — pool size: %d ===", self._pool.size)
-        if self._pool.size == 0:
-            self._gen_status_lbl.set_label("No media — generating first…")
-        else:
+        if self._pool.size > 0:
             self._advance()
         threading.Thread(
             target=self._generation_loop, daemon=True
@@ -536,6 +626,9 @@ class AttractorWindow(Gtk.Window):
         prompt_text = (getattr(record, "prompt", "") or "")[:100]
         self._hud_prompt_lbl.set_label(prompt_text)
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
+
+        # Refresh "Next on TT-TV" thumbnail for the upcoming item
+        self._update_next_thumb()
 
         media_type = getattr(record, "media_type", "video")
         path = getattr(record, "video_path", None) or getattr(record, "image_path", None) or "?"
@@ -710,6 +803,12 @@ class AttractorWindow(Gtk.Window):
         """
         if not self._alive:
             return
+        # Track the submitted prompt in the "coming soon" sidebar cards.
+        # Keep newest 3; oldest is the one currently on the GPU.
+        self._cs_prompts.append(prompt)
+        if len(self._cs_prompts) > 3:
+            self._cs_prompts.pop(0)
+        self._update_coming_soon_ui()
         self._on_enqueue(
             prompt=prompt,
             neg="",
@@ -725,16 +824,83 @@ class AttractorWindow(Gtk.Window):
         )
 
     def _set_gen_status(self, text: str) -> None:
-        """Update the generation status label. Must be called on the main thread."""
-        if not self._alive:
-            return
-        self._gen_status_lbl.set_label(text)
+        """No-op: status is now shown via the coming-soon cards. Kept for _alive guard."""
+        pass  # generation status is conveyed by the coming-soon card updates
 
     def _set_prompt_lbl(self, text: str) -> None:
-        """Update the prompt label. Must be called on the main thread."""
+        """No-op: prompt is now pushed via _enqueue_generation → _update_coming_soon_ui."""
+        pass
+
+    def _update_coming_soon_ui(self) -> None:
+        """Refresh the 3 coming-soon cards from self._cs_prompts.
+
+        The first prompt (oldest) is the one currently on the GPU — shown with
+        a teal border.  Remaining slots show as regular "coming soon" cards.
+        Empty slots display a placeholder in muted style.
+        """
+        for i, card in enumerate(self._cs_cards):
+            box = card["box"]
+            tag = card["tag"]
+            prompt_lbl = card["prompt"]
+
+            # Remove old styling classes before applying new ones
+            for cls in ("cs-card", "cs-card-generating"):
+                try:
+                    box.remove_css_class(cls)
+                except Exception:
+                    pass
+
+            if i < len(self._cs_prompts):
+                text = self._cs_prompts[i]
+                is_generating = (i == 0)
+                box.add_css_class("cs-card-generating" if is_generating else "cs-card")
+                for cls in ("cs-card-tag", "cs-card-tag-generating"):
+                    try:
+                        tag.remove_css_class(cls)
+                    except Exception:
+                        pass
+                tag.add_css_class("cs-card-tag-generating" if is_generating else "cs-card-tag")
+                tag.set_label("▶ GENERATING" if is_generating else "COMING SOON")
+                for cls in ("cs-card-prompt", "cs-card-empty"):
+                    try:
+                        prompt_lbl.remove_css_class(cls)
+                    except Exception:
+                        pass
+                prompt_lbl.add_css_class("cs-card-prompt")
+                prompt_lbl.set_label(text)
+            else:
+                box.add_css_class("cs-card")
+                for cls in ("cs-card-tag", "cs-card-tag-generating"):
+                    try:
+                        tag.remove_css_class(cls)
+                    except Exception:
+                        pass
+                tag.add_css_class("cs-card-tag")
+                tag.set_label("COMING SOON")
+                for cls in ("cs-card-prompt", "cs-card-empty"):
+                    try:
+                        prompt_lbl.remove_css_class(cls)
+                    except Exception:
+                        pass
+                prompt_lbl.add_css_class("cs-card-empty")
+                prompt_lbl.set_label("…")
+
+    def _update_next_thumb(self) -> None:
+        """Update the 'Next on TT-TV' thumbnail from the pool's upcoming record."""
         if not self._alive:
             return
-        self._prompt_lbl.set_label(text)
+        record = self._pool.peek_next()
+        if record is None:
+            self._next_thumb.set_file(None)
+            return
+        thumb = getattr(record, "thumbnail_path", None)
+        if not thumb:
+            # Fall back to video_path or image_path as a static frame source
+            thumb = getattr(record, "image_path", None)
+        if thumb and Path(thumb).exists():
+            self._next_thumb.set_filename(thumb)
+        else:
+            self._next_thumb.set_file(None)
 
     def _update_work_lbl(self, depth: int, generating: bool) -> None:
         """Update the queue/generating status label. Must be called on the main thread."""
@@ -771,6 +937,13 @@ class AttractorWindow(Gtk.Window):
         self._pool.add_record(record)
         self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
+        # The oldest queued prompt just finished generating — remove it from the
+        # "coming soon" list since the video is now in the pool.
+        if self._cs_prompts:
+            self._cs_prompts.pop(0)
+            self._update_coming_soon_ui()
+        # Also refresh the "Next on TT-TV" thumbnail since the pool just grew.
+        self._update_next_thumb()
         if was_empty and self._started:
             # First item arrived after start() — begin playback now.
             # If start() hasn't fired yet (add_record raced ahead via idle_add),
