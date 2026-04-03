@@ -169,13 +169,14 @@ _CSS = b"""
     letter-spacing: 1px;
     margin-top: 4px;
 }
-/* "Coming soon" prompt cards */
+/* "Coming soon" prompt cards — identical geometry, only border/color differ */
 .cs-card {
     background-color: @tt_bg_dark;
     border: 1px solid @tt_border;
     border-radius: 6px;
     padding: 7px 8px;
     margin-bottom: 3px;
+    min-height: 74px;   /* tag(12) + gap(2) + 3-line-prompt(42) + v-padding(18) */
 }
 .cs-card-generating {
     background-color: @tt_bg_dark;
@@ -183,28 +184,33 @@ _CSS = b"""
     border-radius: 6px;
     padding: 7px 8px;
     margin-bottom: 3px;
+    min-height: 74px;   /* must match .cs-card exactly — prevents height shift on swap */
 }
 .cs-card-tag {
     color: @tt_text_muted;
     font-size: 8px;
     font-weight: bold;
     letter-spacing: 1px;
+    min-height: 12px;   /* lock tag row height regardless of text */
 }
 .cs-card-tag-generating {
     color: @tt_accent;
     font-size: 8px;
     font-weight: bold;
     letter-spacing: 1px;
+    min-height: 12px;   /* must match .cs-card-tag */
 }
 .cs-card-prompt {
     color: @tt_text;
     font-size: 10px;
     font-style: italic;
+    min-height: 42px;   /* 3 lines × 14px — keeps card height stable when text arrives */
 }
 .cs-card-empty {
     color: @tt_text_muted;
     font-size: 10px;
     font-style: italic;
+    min-height: 42px;   /* must match .cs-card-prompt */
 }
 /* "Next on TT-TV" card */
 .next-card {
@@ -212,6 +218,7 @@ _CSS = b"""
     border: 1px solid @tt_border;
     border-radius: 6px;
     padding: 7px 8px;
+    min-height: 148px;  /* tag(12) + gap(5) + thumb(120) + v-padding(11) */
 }
 .next-card-tag {
     color: @tt_accent_light;
@@ -219,6 +226,7 @@ _CSS = b"""
     font-weight: bold;
     letter-spacing: 1px;
     margin-bottom: 5px;
+    min-height: 12px;
 }
 .attractor-stop-btn {
     background-color: @tt_bg_darkest;
@@ -444,11 +452,15 @@ class AttractorWindow(Gtk.Window):
         cs_hdr.set_xalign(0)
         sidebar.append(cs_hdr)
 
-        # Build 3 reusable card widgets; updated by _update_coming_soon_ui()
+        # Build 3 reusable card widgets; updated by _update_coming_soon_ui().
+        # Card dimensions are locked (set_size_request + CSS min-height) so the
+        # sidebar never reflows when text appears or CSS classes swap.
         self._cs_cards: list[dict] = []
         for _ in range(3):
             card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             card_box.add_css_class("cs-card")
+            # Lock height: must match CSS min-height (74px) so GTK never reflows.
+            card_box.set_size_request(240, 74)
 
             tag_lbl = Gtk.Label(label="COMING SOON")
             tag_lbl.add_css_class("cs-card-tag")
@@ -462,6 +474,8 @@ class AttractorWindow(Gtk.Window):
             prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             prompt_lbl.set_lines(3)
             prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            # Reserve 3-line height immediately so card size is stable before text arrives.
+            prompt_lbl.set_size_request(-1, 42)
             card_box.append(prompt_lbl)
 
             sidebar.append(card_box)
@@ -475,6 +489,8 @@ class AttractorWindow(Gtk.Window):
         # ── Next on TT-TV ─────────────────────────────────────────────────
         next_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         next_card.add_css_class("next-card")
+        # Lock height so the bottom section never shifts when a thumbnail loads.
+        next_card.set_size_request(240, 148)
 
         next_tag = Gtk.Label(label="NEXT ON TT-TV")
         next_tag.add_css_class("next-card-tag")
@@ -485,6 +501,7 @@ class AttractorWindow(Gtk.Window):
         self._next_thumb.set_content_fit(Gtk.ContentFit.CONTAIN)
         self._next_thumb.set_size_request(-1, 120)
         self._next_thumb.set_hexpand(True)
+        self._next_thumb.set_vexpand(True)
         next_card.append(self._next_thumb)
 
         sidebar.append(next_card)
