@@ -485,6 +485,11 @@ class AttractorWindow(Gtk.Window):
             # (See CLAUDE.md: "Gtk.Video.set_loop(True) is unreliable")
             path = getattr(record, "video_path", None)
             if path:
+                # Clear the current file before loading the next one so GStreamer
+                # tears down the old pipeline synchronously before opening a new one.
+                # Without this, async pipeline teardown accumulates open file
+                # descriptors until the process hits the fd limit and crashes.
+                slot._video.set_file(None)
                 slot._video.set_filename(path)
             slot._video.set_visible(True)
 

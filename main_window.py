@@ -347,6 +347,37 @@ scrollbar slider:hover {
     background-color: @tt_bg_panel;
     padding: 4px;
 }
+.server-launch-box {
+    padding: 4px 2px 2px 2px;
+}
+.server-progress trough {
+    background-color: @tt_bg_dark;
+    border-radius: 4px;
+    min-height: 8px;
+}
+.server-progress progress {
+    background-color: @tt_accent;
+    border-radius: 4px;
+}
+.server-phase-lbl {
+    font-size: 10px;
+    color: @tt_accent_light;
+    margin-top: 1px;
+}
+.server-log-toggle {
+    font-size: 9px;
+    padding: 1px 6px;
+    min-height: 0;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid @tt_border;
+    color: @tt_text_muted;
+    border-radius: 3px;
+}
+.server-log-toggle:hover {
+    color: @tt_accent_light;
+    border-color: @tt_accent;
+}
 
 /* -- Server row states ----------------------------------------------------- */
 .server-row-match {
@@ -2311,10 +2342,42 @@ class ControlPanel(Gtk.Box):
         self._server_status_box.append(btn_col)
         self._footer_box.append(self._server_status_box)
 
-        # Collapsible log area — shown while a start/stop operation is in progress.
+        # Collapsible launch panel — shown while a start/stop operation is in progress.
+        # Contains a pulsing progress bar + phase label, with an optional raw log detail
+        # view that the user can expand via the "▸ Log" toggle button.
         self._srv_log_revealer = Gtk.Revealer()
         self._srv_log_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
         self._srv_log_revealer.set_transition_duration(150)
+        self._srv_pulse_timer: int = 0   # GLib source id; 0 when not running
+        self._srv_log_detail_open: bool = False
+
+        srv_launch_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        srv_launch_box.add_css_class("server-launch-box")
+
+        # Row 1: pulsing progress bar + "▸ Log" toggle button
+        prog_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._srv_progress_bar = Gtk.ProgressBar()
+        self._srv_progress_bar.set_hexpand(True)
+        self._srv_progress_bar.set_pulse_step(0.07)
+        self._srv_progress_bar.add_css_class("server-progress")
+        prog_row.append(self._srv_progress_bar)
+        self._srv_log_toggle = Gtk.Button(label="▸ Log")
+        self._srv_log_toggle.add_css_class("server-log-toggle")
+        self._srv_log_toggle.connect("clicked", self._on_srv_log_toggle)
+        prog_row.append(self._srv_log_toggle)
+        srv_launch_box.append(prog_row)
+
+        # Row 2: phase label ("Docker starting…", "Loading model weights…", etc.)
+        self._srv_phase_lbl = Gtk.Label(label="Starting…")
+        self._srv_phase_lbl.set_xalign(0)
+        self._srv_phase_lbl.add_css_class("server-phase-lbl")
+        srv_launch_box.append(self._srv_phase_lbl)
+
+        # Row 3: raw log text — hidden by default, toggled by the button above
+        self._srv_log_detail_revealer = Gtk.Revealer()
+        self._srv_log_detail_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self._srv_log_detail_revealer.set_transition_duration(150)
+        self._srv_log_detail_revealer.set_reveal_child(False)
         self._srv_log_buf = Gtk.TextBuffer()
         srv_log_view = Gtk.TextView.new_with_buffer(self._srv_log_buf)
         srv_log_view.set_editable(False)
@@ -2323,10 +2386,13 @@ class ControlPanel(Gtk.Box):
         srv_log_view.add_css_class("server-log")
         srv_log_scroll = Gtk.ScrolledWindow()
         srv_log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        srv_log_scroll.set_size_request(-1, 90)
+        srv_log_scroll.set_size_request(-1, 80)
         srv_log_scroll.set_child(srv_log_view)
         self._srv_log_scroll = srv_log_scroll
-        self._srv_log_revealer.set_child(srv_log_scroll)
+        self._srv_log_detail_revealer.set_child(srv_log_scroll)
+        srv_launch_box.append(self._srv_log_detail_revealer)
+
+        self._srv_log_revealer.set_child(srv_launch_box)
         self._footer_box.append(self._srv_log_revealer)
 
         # ── Buttons ────────────────────────────────────────────────────────────
@@ -2541,8 +2607,9 @@ class ControlPanel(Gtk.Box):
         self._running_model = running_model
         self._server_ready = False  # recalculated below
 
-        if self._server_launching:
-            # Launching state is driven by set_server_launching(); don't override it.
+        if self._server_launching and not ready:
+            # Still launching and health check is returning 500 — don't flash
+            # the indicator to "offline" while the start script is in progress.
             return
 
         if not ready:
@@ -2604,14 +2671,36 @@ class ControlPanel(Gtk.Box):
     # ── Server control helpers ─────────────────────────────────────────────────
 
     def set_server_launching(self, launching: bool, clear_log: bool = False) -> None:
-        """Show or hide the startup log panel and lock Start/Stop during the operation."""
+        """Show or hide the startup progress panel and lock Start/Stop during the operation."""
         self._server_launching = launching
         self._srv_log_revealer.set_reveal_child(launching)
         if clear_log:
             self._srv_log_buf.set_text("")
+            self._srv_phase_lbl.set_label("Starting…")
+            self._srv_progress_bar.set_fraction(0.0)
         # While an operation is in progress, disable both buttons to prevent overlap.
         self._server_start_btn.set_sensitive(not launching)
         self._server_stop_btn.set_sensitive(not launching)
+        # Manage the pulse animation timer.
+        if launching and not self._srv_pulse_timer:
+            self._srv_pulse_timer = GLib.timeout_add(200, self._srv_pulse_tick)
+        elif not launching and self._srv_pulse_timer:
+            GLib.source_remove(self._srv_pulse_timer)
+            self._srv_pulse_timer = 0
+
+    def _srv_pulse_tick(self) -> bool:
+        """GLib timer callback: advance the indeterminate progress bar animation."""
+        if not self._server_launching:
+            self._srv_pulse_timer = 0
+            return GLib.SOURCE_REMOVE
+        self._srv_progress_bar.pulse()
+        return GLib.SOURCE_CONTINUE
+
+    def _on_srv_log_toggle(self, _btn) -> None:
+        """Toggle raw log detail panel open/closed."""
+        self._srv_log_detail_open = not self._srv_log_detail_open
+        self._srv_log_detail_revealer.set_reveal_child(self._srv_log_detail_open)
+        self._srv_log_toggle.set_label("▾ Log" if self._srv_log_detail_open else "▸ Log")
 
     def _apply_server_row_style(self, state: str) -> None:
         """
@@ -2632,12 +2721,30 @@ class ControlPanel(Gtk.Box):
         self._server_model_lbl.add_css_class(f"server-model-{state}")
 
     def append_server_log(self, line: str) -> None:
-        """Append one line to the server startup log. Must be called on the main thread."""
+        """Append one line to the server startup log. Must be called on the main thread.
+
+        Also scans for known milestone strings to update the phase label above the
+        progress bar, giving the user a human-readable summary of where the startup is.
+        """
         end = self._srv_log_buf.get_end_iter()
         self._srv_log_buf.insert(end, line + "\n")
         # Auto-scroll the log to the bottom so the latest output is always visible.
         adj = self._srv_log_scroll.get_vadjustment()
         adj.set_value(adj.get_upper() - adj.get_page_size())
+        # Update the phase label when we hit known startup milestones.
+        # NOTE: "Application startup complete" means uvicorn is up but the model
+        # workers haven't started yet — /tt-liveness still returns 500 for several
+        # more minutes. The real readiness signal is "All devices are warmed up".
+        if "Workflow PID" in line:
+            self._srv_phase_lbl.set_label("Docker container starting…")
+        elif "Log file:" in line or "Server started in Docker" in line:
+            self._srv_phase_lbl.set_label("Container up · loading model…")
+        elif "─── tailing" in line:
+            self._srv_phase_lbl.set_label("Loading model weights…")
+        elif "Application startup complete" in line:
+            self._srv_phase_lbl.set_label("Starting model workers…")
+        elif "All devices are warmed up" in line:
+            self._srv_phase_lbl.set_label("Server ready!")
 
     def _on_start_server_clicked(self, _btn) -> None:
         self._on_start_server(self._model_source)
