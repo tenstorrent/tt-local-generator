@@ -273,6 +273,15 @@ class AttractorWindow(Gtk.Window):
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
             self._pending_advance_source = None
+        # Disconnect the notify::ended handler so a late-firing signal after
+        # window destruction doesn't call _advance() on a dead widget tree.
+        if self._watched_stream is not None and self._stream_handler_id is not None:
+            try:
+                self._watched_stream.disconnect(self._stream_handler_id)
+            except Exception:
+                pass
+        self._watched_stream = None
+        self._stream_handler_id = None
 
     def _toggle_pause(self) -> None:
         """Toggle playback pause. Generation loop is unaffected."""
@@ -357,7 +366,7 @@ class AttractorWindow(Gtk.Window):
         # A/B Stack with crossfade
         self._stack = Gtk.Stack()
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self._stack.set_transition_duration(500)
+        self._stack.set_transition_duration(250)
         self._stack.set_hexpand(True)
         self._stack.set_vexpand(True)
 

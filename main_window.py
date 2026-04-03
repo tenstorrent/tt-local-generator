@@ -686,17 +686,12 @@ class GenerationCard(Gtk.Frame):
     delete_cb(record) is called when the trash button is clicked.
     """
 
-    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
-                 is_playing_all_cb=None):
+    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb):
         super().__init__()
         self._record = record
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        # Callable () -> bool: returns True when the gallery's Play All mode is
-        # active.  When True, hover enter/leave do not touch play state — the
-        # gallery's _sync_autoplay owns that.
-        self._is_playing_all_cb = is_playing_all_cb or (lambda: False)
         self.add_css_class("card")
         # Minimum card width; FlowBox homogeneous layout makes all cells equal width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -880,9 +875,7 @@ class GenerationCard(Gtk.Frame):
 
     def _on_hover_enter(self, _ctrl, _x, _y) -> None:
         """Start looping the video silently when the mouse enters the card."""
-        if self._hover_video is None or self._is_playing_all_cb():
-            # When Play All is active, _sync_autoplay owns the play state; hover
-            # events must not interfere with it.
+        if self._hover_video is None:
             return
         if not self._hover_pipeline_open:
             self._open_hover_pipeline()
@@ -918,8 +911,7 @@ class GenerationCard(Gtk.Frame):
 
     def _on_hover_leave(self, _ctrl) -> None:
         """Stop the video and revert to the thumbnail when the mouse leaves."""
-        if self._hover_video is None or self._is_playing_all_cb():
-            # Play All owns the play state — don't close the pipeline on mouse-out.
+        if self._hover_video is None:
             return
         self._close_hover_pipeline()
         self._media_stack.set_visible_child_name("thumb")
@@ -1520,9 +1512,6 @@ class PendingCard(Gtk.Frame):
 
 # ── Gallery ────────────────────────────────────────────────────────────────────
 
-_GALLERY_AUTOPLAY_LIMIT = 4    # max cards whose videos are loaded at once during "play all"
-
-
 class GalleryWidget(Gtk.Box):
     """
     Scrollable grid of GenerationCards, newest first.
@@ -1530,12 +1519,9 @@ class GalleryWidget(Gtk.Box):
     Uses Gtk.FlowBox so the number of columns adjusts automatically as the pane
     is resized — no fixed column count.  Cards expand to fill the row.
 
-    Contains a toolbar with a "▶ Play All" / "⏸ Pause All" button that starts or
-    stops looping all visible video thumbnails simultaneously.  When the number of
-    video cards exceeds _GALLERY_AUTOPLAY_LIMIT, only the top N are played to
-    avoid excessive GStreamer resource use.  Scrolling pauses cards that scroll
-    off the top and unpauses new ones that become visible (handled by
-    _sync_autoplay()).
+    Hover-to-preview: hovering over a video card plays it silently in the
+    thumbnail.  Pipelines are loaded lazily on hover-enter and released on
+    hover-leave to minimise GStreamer resource use.
     """
 
     def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video"):
@@ -1545,26 +1531,6 @@ class GalleryWidget(Gtk.Box):
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb   # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb   # delete_cb(record: GenerationRecord) called on trash
-        self._playing_all = False
-        self._sync_autoplay_timer: int = 0  # GLib source id for debounced _sync_autoplay
-
-        # ── Toolbar ───────────────────────────────────────────────────────────
-        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        toolbar.set_margin_start(12)
-        toolbar.set_margin_end(12)
-        toolbar.set_margin_top(6)
-        toolbar.set_margin_bottom(4)
-
-        self._play_all_btn = Gtk.Button(label="▶ Play All")
-        self._play_all_btn.set_tooltip_text(
-            "Loop all video thumbnails in the gallery (limited to top "
-            f"{_GALLERY_AUTOPLAY_LIMIT} to save resources)"
-        )
-        self._play_all_btn.connect("clicked", self._toggle_play_all)
-        # Image-only gallery has no videos to play; hide the button entirely.
-        self._play_all_btn.set_visible(media_type != "image")
-        toolbar.append(self._play_all_btn)
-        self.append(toolbar)
 
         # ── Scrolled flow box ──────────────────────────────────────────────────
         # FlowBox automatically computes the number of columns that fit in the
@@ -1590,15 +1556,6 @@ class GalleryWidget(Gtk.Box):
         self._scroll.set_child(self._flow)
         self.append(self._scroll)
 
-        # Sync autoplay as user scrolls, and also when the viewport width changes
-        # (i.e. window resize changes column count).  GTK4 removed size-allocate as
-        # a public signal, so we listen to the horizontal adjustment's page-size
-        # instead — it changes whenever the scrolled window is resized.
-        self._scroll.get_vadjustment().connect("value-changed", self._on_scroll_changed)
-        self._scroll.get_hadjustment().connect(
-            "notify::page-size", lambda *_: self._sync_autoplay()
-        )
-
         self._cards: list = []                       # all card widgets, index 0 = top-left
         self._pending: Optional[PendingCard] = None
         self._selected_card: Optional[GenerationCard] = None
@@ -1611,133 +1568,19 @@ class GalleryWidget(Gtk.Box):
         card.set_selected(True)
         self._select_cb(card._record)
 
-    # ── Play all / pause all ──────────────────────────────────────────────────
-
     def _video_cards(self) -> list:
         """Return GenerationCards whose video file exists (skips pending and image cards)."""
         return [c for c in self._cards
                 if isinstance(c, GenerationCard) and c._record.video_exists]
 
     def stop_all_playback(self) -> None:
-        """Pause every playing thumbnail video and unload its pipeline.
-
-        Called externally (e.g. before launching Attractor Mode) as well as
-        internally when the Play All toggle is turned off.
-        """
-        self._playing_all = False
-        self._play_all_btn.set_label("▶ Play All")
-        if self._sync_autoplay_timer:
-            GLib.source_remove(self._sync_autoplay_timer)
-            self._sync_autoplay_timer = 0
+        """Release every open hover-preview pipeline. Called before launching Attractor Mode."""
         for card in self._video_cards():
             try:
                 card._close_hover_pipeline()
                 card._media_stack.set_visible_child_name("thumb")
             except Exception:
                 pass
-
-    def _toggle_play_all(self, _btn=None) -> None:
-        """Start or stop looping all video thumbnails in the gallery."""
-        if self._playing_all:
-            self.stop_all_playback()
-        else:
-            self._playing_all = True
-            self._play_all_btn.set_label("⏸ Pause All")
-            self._sync_autoplay()
-
-    def _cols_per_row(self) -> int:
-        """
-        Estimate the current column count from the FlowBox's allocated width.
-        Used by _sync_autoplay to convert a card's list index to a row number.
-        """
-        w = self._flow.get_allocated_width()
-        if w <= 0:
-            return 2  # sensible fallback before first allocation
-        margin = self._flow.get_margin_start() + self._flow.get_margin_end()
-        col_gap = self._flow.get_column_spacing()
-        # Minimum card width matches GenerationCard.set_size_request(_THUMB_W + 20, …)
-        card_min_w = _THUMB_W + 20
-        usable = max(card_min_w, w - margin)
-        return max(1, (usable + col_gap) // (card_min_w + col_gap))
-
-    def _sync_autoplay(self) -> None:
-        """
-        Play the top-N video cards that are visible in the viewport; pause the rest.
-        Called when play-all is active and the scroll position changes or the
-        FlowBox is resized (which changes the column count and therefore row positions).
-        """
-        if not self._playing_all:
-            return
-
-        video_cards = self._video_cards()
-        # Determine which cards are "visible" by estimating row positions from the
-        # index order.  GTK4 doesn't expose per-child coordinates cheaply without
-        # forcing a full layout pass, so we use row-index arithmetic as a proxy.
-        adj = self._scroll.get_vadjustment()
-        scroll_top = adj.get_value()
-        scroll_bottom = scroll_top + adj.get_page_size()
-
-        # Estimate card height (thumbnail + padding + labels + buttons ≈ 220px)
-        _CARD_H_EST = 220
-        cards_per_row = self._cols_per_row()
-
-        playing_count = 0
-        for i, card in enumerate(self._video_cards()):
-            row = i // cards_per_row
-            card_top = row * (_CARD_H_EST + self._flow.get_row_spacing())
-            card_bottom = card_top + _CARD_H_EST
-            is_visible = card_bottom > scroll_top and card_top < scroll_bottom
-            should_play = is_visible and playing_count < _GALLERY_AUTOPLAY_LIMIT
-
-            if card._hover_video is None:
-                continue
-            try:
-                if should_play:
-                    playing_count += 1
-                    # Open pipeline if not already open.  _open_hover_pipeline()
-                    # calls set_file(None) then set_filename() in the same call so
-                    # any previously async-tearing-down pipeline is force-completed
-                    # before the new one opens — prevents fd accumulation.
-                    if not card._hover_pipeline_open:
-                        card._open_hover_pipeline()
-                    card._media_stack.set_visible_child_name("video")
-                    stream = card._hover_video.get_media_stream()
-                    if stream is None:
-                        # Pipeline not yet ready — delegate to the retry helper.
-                        card._play_hover_stream()
-                    else:
-                        if not card._loop_connected:
-                            stream.connect("notify::ended", card._on_stream_ended)
-                            card._loop_connected = True
-                        if not stream.get_playing():
-                            stream.play()
-                else:
-                    if card._hover_pipeline_open:
-                        card._close_hover_pipeline()
-                    card._media_stack.set_visible_child_name("thumb")
-            except Exception:
-                pass
-
-    def _on_scroll_changed(self, _adj) -> None:
-        """Debounce _sync_autoplay so it fires at most once per 80 ms during scrolling.
-
-        Without debouncing, smooth-scroll events fire at ~60 Hz.  Each call may
-        open or close GStreamer pipelines; GStreamer pipeline teardown is async
-        and each pipeline holds 40-80 file descriptors while winding down.  At
-        60 Hz the teardowns pile up faster than GStreamer can release the fds,
-        exhausting the 1024 fd soft limit and crashing the process.
-        """
-        if not self._playing_all:
-            return
-        if self._sync_autoplay_timer:
-            GLib.source_remove(self._sync_autoplay_timer)
-        self._sync_autoplay_timer = GLib.timeout_add(80, self._run_sync_autoplay)
-
-    def _run_sync_autoplay(self) -> bool:
-        """Debounce target: run _sync_autoplay once after scroll activity quiets."""
-        self._sync_autoplay_timer = 0
-        self._sync_autoplay()
-        return GLib.SOURCE_REMOVE
 
     def add_pending_card(self, prompt: str = "", model_source: str = "video") -> PendingCard:
         card = PendingCard(prompt=prompt, model_source=model_source)
@@ -1777,7 +1620,6 @@ class GalleryWidget(Gtk.Box):
             iterate_cb=self._iterate_cb,
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
-            is_playing_all_cb=lambda: self._playing_all,
         )
 
     def delete_card(self, record_id: str) -> None:
