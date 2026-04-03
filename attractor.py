@@ -350,7 +350,7 @@ class AttractorWindow(Gtk.Window):
         _log.debug("building UI")
         self._build()
         _log.debug("UI built, maximizing")
-        self.fullscreen()
+        self.maximize()
 
         # Keyboard shortcuts
         ctrl = Gtk.EventControllerKey()
