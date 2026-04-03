@@ -12,6 +12,8 @@ Stores metadata and file paths for every completed generation in:
         thumbnails/      — first-frame JPEG thumbnails / image thumbnails
 """
 import json
+import os
+import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -185,14 +187,21 @@ class HistoryStore:
                 for r in raw
             ]
         except Exception:
-            # Corrupt history — start fresh rather than crash
+            # Corrupt history — back it up then start fresh
+            bak = HISTORY_FILE.with_suffix(".json.bak")
+            try:
+                shutil.copy2(HISTORY_FILE, bak)
+            except OSError:
+                pass
             self._records = []
 
     def _save(self) -> None:
-        """Persist history to disk."""
-        HISTORY_FILE.write_text(
+        """Persist history to disk atomically (write tmp, then rename)."""
+        tmp = HISTORY_FILE.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps([asdict(r) for r in self._records], indent=2)
         )
+        os.replace(tmp, HISTORY_FILE)
 
     def append(self, record: GenerationRecord) -> None:
         """Add a new record and persist immediately."""
@@ -218,3 +227,31 @@ class HistoryStore:
 
     def __len__(self) -> int:
         return len(self._records)
+
+    # ── Queue persistence ──────────────────────────────────────────────────────
+
+    _QUEUE_FILE = STORAGE_DIR / "queue.json"
+
+    def save_queue(self, items: list) -> None:
+        """Persist the pending queue to disk atomically.
+
+        Each item is a dict with the same keys as _QueueItem (prompt,
+        negative_prompt, steps, seed, seed_image_path, model_source,
+        guidance_scale, ref_video_path, ref_char_path, animate_mode, model_id).
+        Pass an empty list to clear the saved queue.
+        """
+        tmp = self._QUEUE_FILE.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(items, indent=2))
+            os.replace(tmp, self._QUEUE_FILE)
+        except OSError:
+            pass  # non-fatal; queue loss on crash is better than a crash-on-crash
+
+    def load_queue(self) -> list:
+        """Return the persisted queue items, or [] if none / corrupt."""
+        if not self._QUEUE_FILE.exists():
+            return []
+        try:
+            return json.loads(self._QUEUE_FILE.read_text())
+        except Exception:
+            return []

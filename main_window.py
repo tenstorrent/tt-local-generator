@@ -3145,6 +3145,7 @@ class MainWindow(Gtk.ApplicationWindow):
         super().__init__(application=app, title="TT Video Generator")
         self.set_default_size(1400, 800)
 
+        self._alive: bool = True   # set False in do_close_request; guards idle_add callbacks
         self._client = APIClient(server_url)
         self._store = HistoryStore()
         self._worker: Optional[threading.Thread] = None
@@ -3162,6 +3163,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._build_ui()
         self._load_history()
+        self._restore_queue()
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
 
@@ -3344,10 +3346,13 @@ class MainWindow(Gtk.ApplicationWindow):
         if not records:
             return
         # Route each record to the gallery that matches its media type.
-        video_recs = [r for r in records if r.media_type != "image"]
-        image_recs = [r for r in records if r.media_type == "image"]
+        video_recs   = [r for r in records if r.media_type == "video"]
+        animate_recs = [r for r in records if r.media_type == "animate"]
+        image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
             self._video_gallery.load_history(video_recs)
+        if animate_recs:
+            self._animate_gallery.load_history(animate_recs)
         if image_recs:
             self._image_gallery.load_history(image_recs)
         self._set_status(f"Loaded {len(records)} previous generation(s)")
@@ -3375,6 +3380,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_health_result(self, ready: bool, running_model: "str | None") -> bool:
         """Runs on main thread (called by GLib.idle_add)."""
+        if not self._alive:
+            return False
         # Auto-switch source tab on first model detection — once only.
         if running_model and not self._auto_tab_switched:
             source = _MODEL_TO_SOURCE.get(running_model)
@@ -3426,6 +3433,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_prompt_gen_health(self, ready: bool) -> bool:
         """Runs on main thread (called by GLib.idle_add)."""
+        if not self._alive:
+            return False
         self._controls.set_prompt_gen_state(ready)
         return False  # one-shot idle callback
 
@@ -3756,6 +3765,54 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Queue ──────────────────────────────────────────────────────────────────
 
+    def _persist_queue(self) -> None:
+        """Save the current queue to disk so it can be reloaded after a crash."""
+        self._store.save_queue([
+            {
+                "prompt": item.prompt,
+                "negative_prompt": item.negative_prompt,
+                "steps": item.steps,
+                "seed": item.seed,
+                "seed_image_path": item.seed_image_path,
+                "model_source": item.model_source,
+                "guidance_scale": item.guidance_scale,
+                "ref_video_path": item.ref_video_path,
+                "ref_char_path": item.ref_char_path,
+                "animate_mode": item.animate_mode,
+                "model_id": item.model_id,
+            }
+            for item in self._queue
+        ])
+
+    def _restore_queue(self) -> None:
+        """Reload a queue saved by a previous session (survives crashes)."""
+        saved = self._store.load_queue()
+        if not saved:
+            return
+        for d in saved:
+            try:
+                self._queue.append(_QueueItem(
+                    prompt=d.get("prompt", ""),
+                    negative_prompt=d.get("negative_prompt", ""),
+                    steps=d.get("steps", 20),
+                    seed=d.get("seed", -1),
+                    seed_image_path=d.get("seed_image_path", ""),
+                    model_source=d.get("model_source", "video"),
+                    guidance_scale=d.get("guidance_scale", 3.5),
+                    ref_video_path=d.get("ref_video_path", ""),
+                    ref_char_path=d.get("ref_char_path", ""),
+                    animate_mode=d.get("animate_mode", "animation"),
+                    model_id=d.get("model_id", ""),
+                ))
+            except Exception:
+                pass  # skip malformed items
+        if self._queue:
+            self._update_queue_display()
+            n = len(self._queue)
+            self._set_status(
+                f"Restored {n} queued prompt{'s' if n != 1 else ''} from last session"
+            )
+
     def _update_queue_display(self) -> None:
         """Rebuild the queue list below the preview panel. Call from main thread only."""
         child = self._queue_box.get_first_child()
@@ -3793,6 +3850,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                       model_source, guidance_scale,
                                       ref_video_path, ref_char_path, animate_mode,
                                       model_id))
+        self._persist_queue()
         self._update_queue_display()
         self._controls.clear_prompt()   # ready for the next prompt immediately
         n = len(self._queue)
@@ -3801,14 +3859,17 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_queue_remove(self, index: int) -> None:
         if 0 <= index < len(self._queue):
             removed = self._queue.pop(index)
+            self._persist_queue()
             self._update_queue_display()
             short = removed.prompt[:40] + ("…" if len(removed.prompt) > 40 else "")
             self._set_status(f'Removed from queue: "{short}"')
 
     def _start_next_queued(self) -> bool:
         if not self._queue:
+            self._persist_queue()   # ensure queue.json is cleared when fully drained
             return False
         item = self._queue.pop(0)
+        self._persist_queue()
         self._update_queue_display()
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
@@ -3923,9 +3984,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_gallery = None
         self._controls.set_busy(False)
         self._set_status(f"Error: {message}")
+        self._start_next_queued()
         return False
 
     def do_close_request(self) -> bool:
+        self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
         self._health_stop.set()
         if self._pg_stop:
             self._pg_stop.set()

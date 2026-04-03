@@ -352,7 +352,7 @@ class AnimateGenerationWorker:
         # ── 2. Poll until complete ─────────────────────────────────────────────
         while not self._is_cancelled():
             try:
-                status, err = self._client.poll_status(job_id)
+                status, err, _ = self._client.poll_status(job_id)
             except Exception as e:
                 on_error(f"Poll error: {e}")
                 return
