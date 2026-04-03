@@ -23,6 +23,8 @@ import subprocess
 import sys
 import threading
 import time
+
+_DISK_SPACE_MIN_BYTES = 18 * 1024 ** 3   # 18 GB — stop generating below this threshold
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -673,6 +675,7 @@ class _QueueItem:
     ref_char_path: str = ""         # used when model_source == "animate"
     animate_mode: str = "animation" # "animation" or "replacement"
     model_id: str = ""               # specific model within the category, e.g. "wan2", "mochi", "flux"
+    job_id_override: str = ""        # non-empty → recovery item; skip submission, poll this job ID directly
 
 
 # ── Generation card ────────────────────────────────────────────────────────────
@@ -3056,6 +3059,9 @@ class ControlPanel(Gtk.Box):
             self._animate_mode,
             current_model_id,
         )
+        # Clear the prompt fields so the user can type the next one immediately.
+        # This happens only on explicit user click, never on auto-queue or attractor paths.
+        self.clear_prompt()
         if self._busy:
             self._on_enqueue(*args)
         else:
@@ -3551,11 +3557,33 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
+    def _check_disk_space(self) -> bool:
+        """Return True if there is enough disk space to generate, False if critically low.
+
+        Shows a status-bar warning when low. Uses the tt-video-gen storage directory
+        as the reference path (videos and images are written there).
+        """
+        from history_store import STORAGE_DIR
+        try:
+            free = shutil.disk_usage(STORAGE_DIR).free
+        except OSError:
+            return True  # can't determine — allow generation rather than block it
+        if free < _DISK_SPACE_MIN_BYTES:
+            free_gb = free / (1024 ** 3)
+            self._set_status(
+                f"Disk space critically low ({free_gb:.1f} GB free) — "
+                "generation paused. Free up space to continue."
+            )
+            return False
+        return True
+
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
                      ref_video_path="", ref_char_path="",
                      animate_mode="animation", model_id="") -> None:
         if self._worker and self._worker.is_alive():
+            return
+        if not self._check_disk_space():
             return
 
         # Add the pending card to the gallery that matches the generation type,
@@ -3563,7 +3591,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_gallery = self._gallery_for_type(model_source)
         pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
         self._controls.set_busy(True)
-        self._controls.clear_prompt()
+        # Do NOT call clear_prompt() here — the user may have typed a prompt they
+        # haven't submitted yet, and auto-queue/attractor calls should not wipe it.
+        # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
 
         if model_source == "image":
             model_name = _IMAGE_MODEL_IDS.get(
@@ -3780,6 +3810,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 "ref_char_path": item.ref_char_path,
                 "animate_mode": item.animate_mode,
                 "model_id": item.model_id,
+                "job_id_override": item.job_id_override,
             }
             for item in self._queue
         ])
@@ -3803,6 +3834,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     ref_char_path=d.get("ref_char_path", ""),
                     animate_mode=d.get("animate_mode", "animation"),
                     model_id=d.get("model_id", ""),
+                    job_id_override=d.get("job_id_override", ""),
                 ))
             except Exception:
                 pass  # skip malformed items
@@ -3846,13 +3878,16 @@ class MainWindow(Gtk.ApplicationWindow):
                     model_source="video", guidance_scale=3.5,
                     ref_video_path="", ref_char_path="",
                     animate_mode="animation", model_id="") -> None:
+        if not self._check_disk_space():
+            return
         self._queue.append(_QueueItem(prompt, neg, steps, seed, seed_image_path,
                                       model_source, guidance_scale,
                                       ref_video_path, ref_char_path, animate_mode,
                                       model_id))
         self._persist_queue()
         self._update_queue_display()
-        self._controls.clear_prompt()   # ready for the next prompt immediately
+        # Do NOT call clear_prompt() here — clearing is handled by
+        # ControlPanel._on_action_clicked (user-click only), not auto-queue paths.
         n = len(self._queue)
         self._set_status(f"Added to queue ({n} item{'s' if n != 1 else ''} queued)")
 
@@ -3871,6 +3906,15 @@ class MainWindow(Gtk.ApplicationWindow):
         item = self._queue.pop(0)
         self._persist_queue()
         self._update_queue_display()
+
+        if item.job_id_override:
+            # Recovery item — use direct recovery path (no submission needed)
+            self._launch_recovery_worker(
+                item.job_id_override, item.prompt, item.negative_prompt,
+                item.steps, item.seed,
+            )
+            return True
+
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
         self._set_status(f"Auto-starting next queued prompt{suffix}…")
@@ -3928,23 +3972,54 @@ class MainWindow(Gtk.ApplicationWindow):
             self._attach_recovery_job(job)
 
     def _attach_recovery_job(self, job: dict) -> None:
+        """Attach a recovered server job.
+
+        If a generation is already running, insert the recovery item at the front
+        of the queue so it starts immediately after the current job finishes.
+        If idle, start it directly.
+        """
+        if self._worker and self._worker.is_alive():
+            # Worker is busy — queue the recovery job at high priority (front)
+            self._queue.insert(0, _QueueItem(
+                prompt=job["prompt"],
+                negative_prompt=job["negative_prompt"],
+                steps=job["steps"],
+                seed=job["seed"],
+                model_source="video",
+                job_id_override=job["id"],
+            ))
+            self._persist_queue()
+            self._update_queue_display()
+            self._set_status(
+                f"Recovery job {job['id'][:8]} queued — "
+                "will start after current generation."
+            )
+            return
+        # No active worker — start immediately.
+        self._launch_recovery_worker(
+            job["id"], job["prompt"], job["negative_prompt"],
+            job["steps"], job["seed"], job.get("status", ""),
+        )
+
+    def _launch_recovery_worker(self, job_id: str, prompt: str, neg: str,
+                                 steps: int, seed: int, status: str = "") -> None:
+        """Start a recovery GenerationWorker directly (caller must verify no worker is running)."""
         # Recovery jobs are video jobs; route to the video gallery.
-        # Model attribution is determined from the server's completed-job response.
         self._gen_gallery = self._video_gallery
         pending = self._video_gallery.add_pending_card()
-        pending.update_status(f"Recovering {job['id'][:8]}… ({job['status']})")
+        pending.update_status(f"Recovering {job_id[:8]}… ({status})")
         self._controls.set_busy(True)
 
         gen = GenerationWorker(
             client=self._client,
             store=self._store,
-            prompt=job["prompt"],
-            negative_prompt=job["negative_prompt"],
-            num_inference_steps=job["steps"],
-            seed=job["seed"],
+            prompt=prompt,
+            negative_prompt=neg,
+            num_inference_steps=steps,
+            seed=seed,
             model="",  # unknown at recovery time; server response will set it
         )
-        gen._job_id_override = job["id"]
+        gen._job_id_override = job_id
         self._worker_gen = gen
 
         self._worker = threading.Thread(
@@ -3956,7 +4031,7 @@ class MainWindow(Gtk.ApplicationWindow):
             daemon=True,
         )
         self._worker.start()
-        self._set_status(f"Re-attached job {job['id'][:8]}…")
+        self._set_status(f"Re-attached job {job_id[:8]}…")
 
     # ── Worker callbacks (all called on main thread via GLib.idle_add) ─────────
 

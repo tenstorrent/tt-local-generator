@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import logging
 import random
+import shutil
 import statistics
 import threading
 import traceback
@@ -25,6 +26,9 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 import prompt_client  # noqa: E402
+from history_store import STORAGE_DIR as _STORAGE_DIR  # noqa: E402
+
+_DISK_SPACE_MIN_BYTES = 18 * 1024 ** 3   # 18 GB — pause TT-TV generation below this
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 _LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen"
@@ -788,6 +792,19 @@ class AttractorWindow(Gtk.Window):
                 _log.debug("queue full (depth=%d) - waiting 30 s", depth)
                 GLib.idle_add(self._set_gen_status, "⏸  queue full…")
                 if self._gen_stop.wait(30.0):
+                    break
+                continue
+
+            # Check disk space before generating more — avoid filling the drive.
+            try:
+                free = shutil.disk_usage(_STORAGE_DIR).free
+            except OSError:
+                free = _DISK_SPACE_MIN_BYTES + 1  # unknown → assume OK
+            if free < _DISK_SPACE_MIN_BYTES:
+                free_gb = free / (1024 ** 3)
+                _log.warning("disk space low (%.1f GB) - pausing TT-TV generation", free_gb)
+                GLib.idle_add(self._set_gen_status, f"⚠  disk low ({free_gb:.1f} GB) - paused")
+                if self._gen_stop.wait(60.0):
                     break
                 continue
 
