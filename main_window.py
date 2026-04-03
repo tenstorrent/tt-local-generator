@@ -2340,6 +2340,11 @@ class ControlPanel(Gtk.Box):
         btn_col.append(self._server_switch_btn)
 
         self._server_status_box.append(btn_col)
+        # Server status row is hidden — state dot, model label, and Start/Stop
+        # now live in the _StatusBar popover at the bottom of the window.
+        # The widgets still exist so set_server_state() can update them internally
+        # (for sensitivity logic, switch-tab button, etc.) without needing rewiring.
+        self._server_status_box.set_visible(False)
         self._footer_box.append(self._server_status_box)
 
         # Collapsible launch panel — shown while a start/stop operation is in progress.
@@ -3268,10 +3273,12 @@ class _StatusBar(Gtk.Box):
         self._pop_status_lbl.set_xalign(0)
         self._pop_status_lbl.add_css_class("tt-statusbar-seg")
 
-        pop_start = Gtk.Button(label="▶  Start server")
-        pop_start.add_css_class("generate-btn")
-        pop_stop  = Gtk.Button(label="■  Stop server")
-        pop_stop.add_css_class("cancel-btn")
+        self._pop_start = Gtk.Button(label="▶  Start server")
+        self._pop_start.add_css_class("generate-btn")
+        self._pop_stop  = Gtk.Button(label="■  Stop server")
+        self._pop_stop.add_css_class("cancel-btn")
+        pop_start = self._pop_start
+        pop_stop  = self._pop_stop
 
         _popover = Gtk.Popover()
         _popover.set_position(Gtk.PositionType.TOP)
@@ -3345,10 +3352,17 @@ class _StatusBar(Gtk.Box):
             self._set_srv_dot("ready", model or "ready", f"● {model or 'Server'} ready")
         else:
             self._set_srv_dot("offline", "offline", "Server offline")
+        # Re-enable popover controls once the launch/stop operation has settled.
+        self._pop_start.set_sensitive(True)
+        self._pop_stop.set_sensitive(True)
 
     def update_starting(self) -> None:
         """Show 'starting' state while the server launch script is running."""
         self._set_srv_dot("starting", "starting…", "Server starting…")
+        # Disable popover buttons while the script is in flight — prevents
+        # double-starting or stopping a server that is mid-launch.
+        self._pop_start.set_sensitive(False)
+        self._pop_stop.set_sensitive(False)
 
     def update_queue(self, depth: int) -> None:
         """Show or hide the queue-depth segment."""
