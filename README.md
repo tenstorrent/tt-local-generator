@@ -24,6 +24,8 @@ All inference runs via a local [tt-inference-server](https://github.com/tenstorr
 - **Seed image** — attach a reference image to guide Wan2.2's motion and composition
 - **Style chips** — one-click prompt modifiers (camera moves, lighting, style, quality)
 - **Prompt queue** — write the next prompt while a generation is running; jobs execute in sequence automatically
+- **Queue persistence** — the queue is saved to disk on every change; if the app crashes or is restarted, pending items reload and generation resumes automatically
+- **Disk space guard** — generation is blocked (with a status warning) when the output drive has less than 18 GB free; Attractor mode pauses and retries every 60 s
 
 ### Prompt generator
 - **✨ Inspire me** — always works: three-tier system (algorithmic word banks → Markov chain → optional LLM polish)
@@ -46,10 +48,10 @@ All inference runs via a local [tt-inference-server](https://github.com/tenstorr
 - Back-pressure prevents the queue from growing beyond 2 items
 
 ### Server & setup
-- **Server control** — ▶ Start / ■ Stop the inference server from the UI; startup log streams inline; status turns teal when ready
+- **Server control** — ▶ Start / ■ Stop the inference server from the UI; a pulsing progress bar and phase label show startup progress ("Docker container starting…" → "Loading model weights…" → "Server ready!"); expand "▸ Log" to see raw output
 - **Context-aware start** — Video tab starts Wan2.2 or Mochi-1; Animate tab starts Wan2.2-Animate; Image tab starts FLUX
 - **Generation history** — all outputs saved to `~/.local/share/tt-video-gen/` and reloaded on launch
-- **Job recovery** — re-attach to server jobs that survived a UI crash
+- **Job recovery** — re-attach to server jobs that survived a UI crash; recovery works even while a queue is active (recovery jobs are inserted at the front of the queue)
 - **App icon + desktop entry** — "TT Generator" in GNOME Activities / KDE launcher
 
 ---

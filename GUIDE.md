@@ -202,12 +202,13 @@ run.py
 After `run.py` exits, the container boots independently and loads the model
 into device DRAM. This takes approximately:
 
-| Phase | Time |
-|---|---|
-| Container startup | ~30 s |
-| Python/FastAPI imports | ~1 min |
-| Model shards loading into TT DRAM | ~3–4 min |
-| **Total to "Application startup complete"** | **~5 min** |
+| Phase | Log signal | Time |
+|---|---|---|
+| Container startup | `Workflow PID …` | ~30 s |
+| Python/FastAPI imports | `─── tailing …` | ~1 min |
+| FastAPI ready (model still loading) | `Application startup complete` | ~2 min |
+| Model shards loading into TT DRAM | (progress in log) | ~3–4 min |
+| **Workers warmed up — server ready** | **`All devices are warmed up`** | **~5 min total** |
 
 Use `start_wan.sh` to watch this happen:
 
@@ -223,10 +224,24 @@ INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ```
 
-**The server is NOT ready** until you see `Application startup complete`.
-The health endpoint `/tt-liveness` returns 200 as soon as FastAPI starts, but
-the model worker may still be loading. The first `POST /v1/videos/generations`
-will return 405 until the worker is fully ready.
+**The server is NOT ready** when `Application startup complete` appears —
+that only means the FastAPI process is up. The model workers continue loading
+for several more minutes. The real readiness signal is:
+
+```
+All devices are warmed up
+```
+
+in the container log, or `"model_ready": true` in the `/tt-liveness` JSON:
+
+```bash
+curl -s http://localhost:8000/tt-liveness | python3 -m json.tool
+# → { "status": "alive", "model_ready": true, ... }
+```
+
+The first `POST /v1/videos/generations` will return 405 until `model_ready`
+is true. The UI polls `/tt-liveness` and turns the status indicator teal when
+the server is actually ready to accept jobs.
 
 ### Monitoring the running server
 
@@ -397,6 +412,7 @@ Authorization: Bearer <token>
 | `negative_prompt` | string | — | null | What to avoid. "blurry, watermark" is a good baseline. |
 | `num_inference_steps` | int | — | 20 | Range: 12–50. More steps = sharper, slower. See section 12. |
 | `seed` | int | — | random | Fix the seed to reproduce results exactly. |
+| `guidance_scale` | float | — | 5.0 | Classifier-free guidance strength. Higher = closer adherence to prompt; above ~7 can cause oversaturation. |
 
 **Returns `405 Method Not Allowed`** if the model worker is still loading.
 Poll and retry.
@@ -937,9 +953,9 @@ on the negative. The final update is:
 output = uncond + cfg_scale × (cond − uncond)
 ```
 
-The `cfg_scale` (guidance scale) is a server-side default (~7.5 for Wan2.2)
-and not currently exposed in the API. Higher guidance = stronger adherence to
-the prompt, but over-saturation/artifacts above ~12.
+The `guidance_scale` parameter (default 5.0) controls this. The UI exposes
+it in the Advanced Settings panel. Higher values = stronger adherence to the
+prompt, but over-saturation and artifacts appear above ~7 for Wan2.2.
 
 ### Prompt quality
 
