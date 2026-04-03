@@ -747,7 +747,12 @@ class GenerationCard(Gtk.Frame):
         self._media_stack.add_named(thumb, "thumb")
 
         if self._record.video_exists:
-            self._hover_video = Gtk.Video.new_for_filename(self._record.video_path)
+            # Create the widget without a file so no GStreamer pipeline is opened
+            # at construction time.  With a large history every card would eagerly
+            # open a pipeline, each holding several file-descriptors.  We load the
+            # file lazily (just before first play) and unload it (set_file(None))
+            # when the card stops playing, so only actively-playing cards hold fds.
+            self._hover_video = Gtk.Video()
             self._hover_video.set_autoplay(False)
             self._hover_video.set_loop(True)
             self._hover_video.set_hexpand(True)
@@ -758,6 +763,7 @@ class GenerationCard(Gtk.Frame):
         # Tracks whether we've wired notify::ended on the media stream for manual
         # looping.  The stream is created lazily by GStreamer (it's None until the
         # Video widget is first realized), so we connect on first play attempt.
+        # Reset to False whenever the file is unloaded (set_file(None)).
         self._loop_connected = False
 
         box.append(self._media_stack)
@@ -837,6 +843,9 @@ class GenerationCard(Gtk.Frame):
         """Start looping the video silently when the mouse enters the card."""
         if self._hover_video is None:
             return
+        # Load the file lazily — only open the GStreamer pipeline when actually needed.
+        if self._hover_video.get_file() is None:
+            self._hover_video.set_filename(self._record.video_path)
         self._media_stack.set_visible_child_name("video")
         self._play_hover_stream()
 
@@ -873,6 +882,10 @@ class GenerationCard(Gtk.Frame):
         stream = self._hover_video.get_media_stream()
         if stream is not None:
             stream.pause()
+        # Unload the pipeline to release GStreamer file-descriptors.  The next
+        # hover enter will reload via set_filename() before playing.
+        self._hover_video.set_file(None)
+        self._loop_connected = False
         self._media_stack.set_visible_child_name("thumb")
 
     def _export(self, _btn) -> None:
@@ -1576,11 +1589,15 @@ class GalleryWidget(Gtk.Box):
             self._sync_autoplay()
         else:
             self._play_all_btn.set_label("▶ Play All")
-            # Stop all currently playing thumbnail videos
+            # Stop all currently playing thumbnail videos and unload their pipelines.
             for card in self._video_cards():
                 if card._hover_video is not None:
                     try:
-                        card._hover_video.get_media_stream().pause()
+                        stream = card._hover_video.get_media_stream()
+                        if stream is not None:
+                            stream.pause()
+                        card._hover_video.set_file(None)
+                        card._loop_connected = False
                         card._media_stack.set_visible_child_name("thumb")
                     except Exception:
                         pass
@@ -1631,14 +1648,17 @@ class GalleryWidget(Gtk.Box):
 
             if card._hover_video is None:
                 continue
-            stream = card._hover_video.get_media_stream()
             try:
                 if should_play:
                     playing_count += 1
+                    # Load the pipeline lazily — only when the card is about to play.
+                    if card._hover_video.get_file() is None:
+                        card._hover_video.set_filename(card._record.video_path)
                     card._media_stack.set_visible_child_name("video")
+                    stream = card._hover_video.get_media_stream()
                     if stream is None:
-                        # Stream not yet initialized; delegate to the card's own
-                        # play helper which retries after the pipeline is ready.
+                        # Pipeline not yet ready (GStreamer initialises lazily);
+                        # delegate to the retry helper.
                         card._play_hover_stream()
                     else:
                         # Wire loop handler if this is the first time play-all
@@ -1649,8 +1669,12 @@ class GalleryWidget(Gtk.Box):
                         if not stream.get_playing():
                             stream.play()
                 else:
+                    stream = card._hover_video.get_media_stream()
                     if stream is not None and stream.get_playing():
                         stream.pause()
+                    # Unload the pipeline when scrolled out of view to release fds.
+                    card._hover_video.set_file(None)
+                    card._loop_connected = False
                     card._media_stack.set_visible_child_name("thumb")
             except Exception:
                 pass
