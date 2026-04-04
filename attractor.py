@@ -172,7 +172,6 @@ _CSS = b"""
     border-right: 1px solid @tt_border;
     padding: 8px 8px;
     min-width: 96px;
-    max-width: 96px;
 }
 .attractor-header {
     color: @tt_accent;
