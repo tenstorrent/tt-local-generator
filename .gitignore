@@ -3,4 +3,5 @@ __pycache__/
 *.swp
 .DS_Store
 .superpowers/
+.worktrees/
 prompts/markov_output.txt
