@@ -15,7 +15,6 @@ import datetime
 import logging
 import random
 import shutil
-import statistics
 import threading
 import traceback
 from pathlib import Path
@@ -23,7 +22,7 @@ from typing import Callable
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk, Pango  # noqa: E402
+from gi.repository import GLib, Gio, Gtk, Pango  # noqa: E402
 
 import prompt_client  # noqa: E402
 from history_store import STORAGE_DIR as _STORAGE_DIR  # noqa: E402
@@ -54,13 +53,18 @@ class AttractorPool:
     they appear later in the current cycle rather than immediately next.
     """
 
+    # Fixed scheduling constants.
+    # NOTE: GenerationRecord.duration_s is wall-clock *inference* time (27–634 s),
+    # NOT video playback duration.  Never use it for scheduling advances.
+    IMAGE_DWELL_MS: int = 10_000    # how long to show a still image (10 s)
+    VIDEO_FALLBACK_MS: int = 90_000  # safety-net timer if notify::ended never fires (90 s)
+
     def __init__(self, records: list) -> None:
         self._records: list = list(records)
         self._order: list[int] = []
         self._pos: int = 0
         self._last_idx: int | None = None
         self._shuffle_fresh()
-        self._recalc_duration()
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -146,13 +150,7 @@ class AttractorPool:
         elif self._last_idx is not None and self._last_idx > idx:
             self._last_idx -= 1
 
-        self._recalc_duration()
         return True
-
-    @property
-    def avg_video_duration(self) -> float:
-        """Mean duration of video records, or 8.0 s if none exist."""
-        return self._avg_dur
 
     @property
     def size(self) -> int:
@@ -169,15 +167,6 @@ class AttractorPool:
                 order[0], order[1] = order[1], order[0]
         self._order = order
         self._pos = 0
-
-    def _recalc_duration(self) -> None:
-        durations = [
-            d for r in self._records
-            if getattr(r, "media_type", "video") == "video"
-            for d in (getattr(r, "duration_s", None),)
-            if d is not None and d > 0
-        ]
-        self._avg_dur = statistics.mean(durations) if durations else 8.0
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +493,12 @@ class AttractorWindow(Gtk.Window):
         _log.info("=== Attractor stopped ===\n%s", "".join(traceback.format_stack()))
         self._gen_stop.set()
         self._att_poll_stop.set()
+        # Unsubscribe from screensaver D-Bus signal.
+        if getattr(self, "_dbus_conn", None) and getattr(self, "_dbus_sub_id", 0):
+            try:
+                self._dbus_conn.signal_unsubscribe(self._dbus_sub_id)
+            except Exception:
+                pass
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
             self._pending_advance_source = None
@@ -584,11 +579,11 @@ class AttractorWindow(Gtk.Window):
         cs_hdr.set_ellipsize(Pango.EllipsizeMode.END)
         sidebar.append(cs_hdr)
 
-        # Build 2 reusable card widgets; updated by _update_coming_soon_ui().
+        # Build 4 reusable card widgets; updated by _update_coming_soon_ui().
         # Card dimensions are locked (set_size_request + CSS min-height) so the
         # sidebar never reflows when text appears or CSS classes swap.
         self._cs_cards: list[dict] = []
-        for _ in range(2):
+        for _ in range(4):
             card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             card_box.add_css_class("cs-card")
             # Lock height: must match CSS min-height (52px) so GTK never reflows.
@@ -764,10 +759,63 @@ class AttractorWindow(Gtk.Window):
             return
         self._started = True
         _log.info("=== Attractor started - pool size: %d ===", self._pool.size)
+        self._subscribe_screensaver()
         if self._pool.size > 0:
             self._advance()
         threading.Thread(target=self._generation_loop, daemon=True).start()
         threading.Thread(target=self._att_status_poll_loop, daemon=True).start()
+
+    def _subscribe_screensaver(self) -> None:
+        """Subscribe to the org.freedesktop.ScreenSaver D-Bus signal so we can
+        pause GStreamer before the display is locked.
+
+        Without this, VA-API/GBM video decoding can segfault when the kernel
+        DRM device becomes inaccessible during a lock-screen transition.
+        KDE, GNOME, and most compositors implement this standard interface.
+        """
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            self._dbus_conn = bus          # keep reference alive
+            self._dbus_sub_id = bus.signal_subscribe(
+                None,                                      # any sender
+                "org.freedesktop.ScreenSaver",
+                "ActiveChanged",
+                "/org/freedesktop/ScreenSaver",
+                None,
+                Gio.DBusSignalFlags.NONE,
+                self._on_screensaver_changed,
+            )
+            _log.debug("screensaver D-Bus subscription OK (sub_id=%d)", self._dbus_sub_id)
+        except Exception as exc:
+            _log.warning("screensaver D-Bus subscription failed (non-fatal): %s", exc)
+            self._dbus_conn = None
+            self._dbus_sub_id = 0
+
+    def _on_screensaver_changed(self, _conn, _sender, _path, _iface, _signal, params, _udata):
+        """Screensaver activated/deactivated — pause or resume GStreamer accordingly."""
+        if not self._alive:
+            return
+        active = params[0]   # GLib.Variant bool
+        if active:
+            # Lock screen about to obscure display — pause pipeline to release
+            # DRM/VA-API resources before the compositor revokes access.
+            stream = self._get_current_video_stream()
+            if stream is not None:
+                try:
+                    stream.pause()
+                except Exception:
+                    pass
+            _log.info("screensaver active - GStreamer paused")
+        else:
+            # Unlocked — resume only if user hasn't manually paused via Space.
+            if not self._paused:
+                stream = self._get_current_video_stream()
+                if stream is not None:
+                    try:
+                        stream.play()
+                    except Exception:
+                        pass
+            _log.info("screensaver inactive - GStreamer resumed")
 
     def _advance(self) -> None:
         """
@@ -820,12 +868,28 @@ class AttractorWindow(Gtk.Window):
 
         media_type = getattr(record, "media_type", "video")
         path = getattr(record, "video_path", None) or getattr(record, "image_path", None) or "?"
-        duration = getattr(record, "duration_s", None)
-        _log.info("advance → %s  [%s]  dur=%.1fs  pool=%d",
+        gen_time = getattr(record, "duration_s", None)  # inference wall-clock time
+        model_id = getattr(record, "model", "") or ""
+        steps = getattr(record, "num_inference_steps", 0) or 0
+        _log.info("advance → %s  [%s]  gen=%.1fs  pool=%d",
                   Path(path).name if path != "?" else "?",
                   media_type,
-                  duration or 0.0,
+                  gen_time or 0.0,
                   self._pool.size)
+
+        # Update now-playing stats in the status bar.
+        # Show: model  |  N steps  |  Xs gen
+        now_parts: list[str] = []
+        if model_id:
+            now_parts.append(model_id)
+        if steps:
+            now_parts.append(f"{steps} steps")
+        if gen_time:
+            now_parts.append(f"{gen_time:.0f}s gen")
+        now_text = "  |  ".join(now_parts)
+        self._att_now_lbl.set_label(now_text)
+        self._att_now_lbl.set_visible(bool(now_text))
+
         self._schedule_advance(record)
 
     def _on_unload_timer(self) -> bool:
@@ -868,8 +932,13 @@ class AttractorWindow(Gtk.Window):
     def _schedule_advance(self, record) -> None:
         """
         Schedule the next advance() call based on media type.
-        Images use a timer (avg_video_duration seconds).
-        Videos connect to the stream's notify::ended signal.
+
+        Images: fixed IMAGE_DWELL_MS timer.
+        Videos: connect to notify::ended; VIDEO_FALLBACK_MS safety-net timer
+                in case the signal never fires (corrupt file, GStreamer issue).
+
+        NOTE: GenerationRecord.duration_s is inference wall-clock time, NOT
+        video playback duration — never use it here for scheduling.
         """
         # Cancel any pending timer
         if self._pending_advance_source is not None:
@@ -886,8 +955,9 @@ class AttractorWindow(Gtk.Window):
         self._stream_handler_id = None
 
         if getattr(record, "media_type", "video") == "image":
-            ms = int(self._pool.avg_video_duration * 1000)
-            self._pending_advance_source = GLib.timeout_add(ms, self._on_advance_timer)
+            self._pending_advance_source = GLib.timeout_add(
+                AttractorPool.IMAGE_DWELL_MS, self._on_advance_timer
+            )
         else:
             self._connect_video_ended()
 
@@ -902,12 +972,12 @@ class AttractorWindow(Gtk.Window):
                 _log.debug("stream already ended on connect - advancing immediately")
                 GLib.idle_add(self._advance)
                 return
-            # Safety net: if notify::ended never fires (broken/missing file),
-            # force-advance after 2x the average video duration.
-            fallback_ms = int(self._pool.avg_video_duration * 2 * 1000)
-            _log.debug("stream connected - fallback timer set for %.1f s", fallback_ms / 1000)
+            # Safety net: if notify::ended never fires (corrupt file, screensaver,
+            # GStreamer pipeline stall), force-advance after VIDEO_FALLBACK_MS.
+            _log.debug("stream connected - fallback timer set for %.1f s",
+                       AttractorPool.VIDEO_FALLBACK_MS / 1000)
             self._pending_advance_source = GLib.timeout_add(
-                fallback_ms, self._on_advance_timer
+                AttractorPool.VIDEO_FALLBACK_MS, self._on_advance_timer
             )
         else:
             # Stream not initialised yet - retry
@@ -1163,9 +1233,16 @@ class AttractorWindow(Gtk.Window):
             return
         if getattr(record, "media_type", "video") == "image":
             return  # images excluded from attractor playback
-        path = getattr(record, "video_path", None) or "?"
+        path = getattr(record, "video_path", None) or ""
+        if path:
+            p = Path(path)
+            if not p.exists() or p.stat().st_size < 1024:
+                # File missing or suspiciously small — skip until it's written.
+                _log.warning("add_record: skipping incomplete/missing file: %s (size=%d)",
+                             path, p.stat().st_size if p.exists() else -1)
+                return
         _log.info("new record added to pool: %s  (pool now %d)",
-                  Path(path).name if path != "?" else "?", self._pool.size + 1)
+                  Path(path).name if path else "?", self._pool.size + 1)
         was_empty = self._pool.size == 0
         self._pool.add_record(record)
         self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
@@ -1289,6 +1366,15 @@ class AttractorWindow(Gtk.Window):
         self._att_chip_lbl.add_css_class("tt-statusbar-seg")
         self._att_chip_lbl.set_visible(False)
         bar.append(self._att_chip_lbl)
+
+        bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+
+        # Now-playing card stats: model, steps, generation time.
+        # Updated immediately in _advance() on each channel change.
+        self._att_now_lbl = Gtk.Label(label="")
+        self._att_now_lbl.add_css_class("tt-statusbar-seg")
+        self._att_now_lbl.set_visible(False)
+        bar.append(self._att_now_lbl)
 
         return bar
 
