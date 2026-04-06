@@ -5,3 +5,4 @@ __pycache__/
 .superpowers/
 .worktrees/
 prompts/markov_output.txt
+batch_generate.log

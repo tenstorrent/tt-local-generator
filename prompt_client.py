@@ -89,6 +89,17 @@ def generate_prompt(
         # generation.  Returning the seed unchanged is useless (user already has
         # it) and confusing (button flashes with no visible effect).
 
-    # No seed, or seed-mode fallback — three-tier generation: algo → markov → LLM
-    result = _gp.generate(prompt_type=source, mode="markov", enhance=True)
+    # No seed, or seed-mode fallback — three-tier generation: algo → markov → LLM.
+    # Pass director style settings so prompt style preferences are respected.
+    try:
+        from app_settings import settings as _settings
+        director_prob = float(_settings.get("director_style_prob"))
+        director_pin = str(_settings.get("director_pin") or "")
+    except Exception:
+        director_prob = 0.33
+        director_pin = ""
+    result = _gp.generate(
+        prompt_type=source, mode="markov", enhance=True,
+        director_prob=director_prob, director_pin=director_pin,
+    )
     return result["prompt"]

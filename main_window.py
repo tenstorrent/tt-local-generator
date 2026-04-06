@@ -34,9 +34,10 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import GdkPixbuf, GLib, Gtk, Pango
+from gi.repository import GdkPixbuf, GLib, Gio, Gtk, Pango
 
 from api_client import APIClient
+from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
@@ -603,6 +604,35 @@ scrollbar slider:hover {
     background: alpha(@tt_accent, 0.08);
     border-radius: 3px;
 }
+
+/* -- App menu bar ---------------------------------------------------------- */
+menubar {
+    background-color: @tt_bg_panel;
+    border-bottom: 1px solid @tt_bg_dark;
+    padding: 0;
+    min-height: 0;
+}
+menubar > item {
+    padding: 2px 8px;
+    color: @tt_text_muted;
+    font-size: 11px;
+    border-radius: 0;
+}
+menubar > item:hover,
+menubar > item:selected {
+    background-color: @tt_bg_dark;
+    color: @tt_text;
+}
+/* Preferences dialog sections */
+.prefs-section-title {
+    color: @tt_accent;
+    font-weight: bold;
+    font-size: 12px;
+    margin-top: 8px;
+}
+.prefs-row {
+    padding: 4px 0;
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -633,6 +663,27 @@ _MODEL_DISPLAY: dict = {
     "flux.1-dev":         "FLUX",
     "wan2.2-animate-14b": "Animate-14B",
 }
+
+# Short director names shown in the menu + Preferences dialog, mapped to the
+# full CINEMATIC_DIRECTORS string that actually goes into the prompt slug.
+# "Random" (empty key) means sample from the full list based on director_style_prob.
+_DIRECTOR_PINS: list[tuple[str, str]] = [
+    ("Random", ""),
+    ("Kubrick",     "Kubrick — tight frame, obsessive detail, cold symmetry"),
+    ("Tarkovsky",   "Tarkovsky — slow-burn long take, transcendent water and fire"),
+    ("Fellini",     "Fellini — carnival dreamscape, baroque crowd, memory dissolve"),
+    ("Hitchcock",   "Hitchcock — voyeuristic high-angle thriller, chiaroscuro"),
+    ("Kurosawa",    "Kurosawa — widescreen epic in driving rain, weather as emotion"),
+    ("Wong Kar-wai","Wong Kar-wai — neon overexposure, slow-motion missed connection"),
+    ("Bergman",     "Bergman — faces in extreme close-up, death as quiet presence"),
+    ("Godard",      "Godard — jump cut, primary color wall, direct address"),
+    ("Varda",       "Varda — tender personal essay, sun-drenched beach, wry voice"),
+    ("Herzog",      "Herzog — obsession dwarfed by impossible landscape"),
+    ("Ozu",         "Ozu — tatami-level static, family at table, pillow shot"),
+    ("Antonioni",   "Antonioni — alienated figure in stark modern architecture"),
+]
+# Reverse map: full string → display name (for restoring menu state from settings)
+_DIRECTOR_PIN_LABEL: dict[str, str] = {v: k for k, v in _DIRECTOR_PINS}
 
 # Keys to skip when rendering record.extra_meta in the detail panel — these
 # fields are either shown elsewhere in the panel or too noisy to display.
@@ -3454,6 +3505,259 @@ class _StatusBar(Gtk.Box):
         self._stop.set()
 
 
+# ── Preferences Dialog ─────────────────────────────────────────────────────────
+
+class PreferencesDialog(Gtk.Window):
+    """
+    Application preferences dialog.
+
+    Sections:
+      • Generation — default steps quality preset, sleep-after-N counter
+      • System     — screensaver inhibit during generation
+      • Disk       — minimum free space (stop-generating threshold)
+      • TT-TV      — image dwell time, video fallback timer
+      • Prompt     — director style probability, pinned director
+
+    All widgets write through to the _settings singleton on change.
+    Pass main_window so the dialog can keep the steps spin and action states in sync.
+    """
+
+    def __init__(self, main_window: "MainWindow") -> None:
+        super().__init__(
+            title="Preferences",
+            default_width=420,
+            default_height=560,
+            resizable=False,
+        )
+        self._mw = main_window
+        self.set_transient_for(main_window)
+        self._build()
+
+    def _section(self, title: str) -> Gtk.Label:
+        lbl = Gtk.Label(label=title)
+        lbl.set_xalign(0)
+        lbl.add_css_class("prefs-section-title")
+        lbl.set_margin_top(12)
+        return lbl
+
+    def _row(self, label_text: str, widget: Gtk.Widget, hint: str = "") -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("prefs-row")
+        lbl = Gtk.Label(label=label_text)
+        lbl.set_xalign(0)
+        lbl.set_hexpand(True)
+        row.append(lbl)
+        if hint:
+            widget.set_tooltip_text(hint)
+        row.append(widget)
+        return row
+
+    def _build(self) -> None:
+        # Scrollable outer container
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        scroll.set_child(box)
+        self.set_child(scroll)
+
+        # ── Generation ────────────────────────────────────────────────────────
+        box.append(self._section("Generation"))
+
+        # Quality preset: radio buttons via Gtk.CheckButton.set_group()
+        quality_lbl = Gtk.Label(label="Default quality:")
+        quality_lbl.set_xalign(0)
+        box.append(quality_lbl)
+
+        q_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        q_row.set_margin_start(8)
+        current_steps = int(_settings.get("quality_steps"))
+        self._quality_btns: list[Gtk.CheckButton] = []
+        first_qbtn = None
+        for label, steps in [("Fast (10)", 10), ("Standard (30)", 30),
+                              ("High Quality (40)", 40)]:
+            btn = Gtk.CheckButton(label=label)
+            btn.steps_value = steps
+            if first_qbtn is None:
+                first_qbtn = btn
+            else:
+                btn.set_group(first_qbtn)
+            if steps == current_steps:
+                btn.set_active(True)
+            btn.connect("toggled", self._on_quality_toggled)
+            q_row.append(btn)
+            self._quality_btns.append(btn)
+        box.append(q_row)
+
+        # Sleep after N completions
+        sleep_spin = Gtk.SpinButton()
+        sleep_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("sleep_after_n_gens"),
+            lower=0, upper=500, step_increment=1, page_increment=10,
+        ))
+        sleep_spin.set_digits(0)
+        sleep_spin.connect("value-changed", lambda w: _settings.set(
+            "sleep_after_n_gens", int(w.get_value())
+        ))
+        box.append(self._row("Sleep after N completions:", sleep_spin,
+                             "Suspend the machine after this many successful generations. "
+                             "0 = never."))
+
+        # ── System ────────────────────────────────────────────────────────────
+        box.append(self._section("System"))
+
+        inhibit_check = Gtk.CheckButton(label="Inhibit screensaver while generating")
+        inhibit_check.set_active(bool(_settings.get("inhibit_screensaver")))
+        inhibit_check.set_tooltip_text(
+            "Calls org.freedesktop.ScreenSaver.Inhibit while a generation job is running, "
+            "preventing the screen from locking mid-job."
+        )
+        inhibit_check.connect("toggled", lambda w: _settings.set(
+            "inhibit_screensaver", w.get_active()
+        ))
+        box.append(inhibit_check)
+
+        # ── Disk ──────────────────────────────────────────────────────────────
+        box.append(self._section("Disk"))
+
+        disk_spin = Gtk.SpinButton()
+        disk_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("max_disk_gb"),
+            lower=0, upper=2000, step_increment=1, page_increment=10,
+        ))
+        disk_spin.set_digits(0)
+        disk_spin.connect("value-changed", lambda w: _settings.set(
+            "max_disk_gb", int(w.get_value())
+        ))
+        box.append(self._row(
+            "Minimum free disk space (GB):", disk_spin,
+            "Stop generating when less than this many GB remain free. "
+            "0 = use default 18 GB floor."
+        ))
+
+        # ── TT-TV ─────────────────────────────────────────────────────────────
+        self._tttv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.append(self._section("TT-TV"))
+        box.append(self._tttv_box)
+
+        dwell_spin = Gtk.SpinButton()
+        dwell_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("tttv_image_dwell_s"),
+            lower=1, upper=300, step_increment=1, page_increment=5,
+        ))
+        dwell_spin.set_digits(0)
+        dwell_spin.connect("value-changed", lambda w: _settings.set(
+            "tttv_image_dwell_s", int(w.get_value())
+        ))
+        self._tttv_box.append(self._row("Image dwell time (seconds):", dwell_spin,
+                                        "How long each still image is shown before advancing."))
+
+        fallback_spin = Gtk.SpinButton()
+        fallback_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("tttv_video_fallback_s"),
+            lower=10, upper=600, step_increment=5, page_increment=30,
+        ))
+        fallback_spin.set_digits(0)
+        fallback_spin.connect("value-changed", lambda w: _settings.set(
+            "tttv_video_fallback_s", int(w.get_value())
+        ))
+        self._tttv_box.append(self._row(
+            "Video fallback timer (seconds):", fallback_spin,
+            "Force-advance after this many seconds if the video end signal never fires "
+            "(e.g. corrupt file, GStreamer stall)."
+        ))
+
+        # ── Prompt Style ──────────────────────────────────────────────────────
+        box.append(self._section("Prompt Style"))
+
+        # Director style probability
+        dir_lbl = Gtk.Label(label="Director style in video prompts:")
+        dir_lbl.set_xalign(0)
+        box.append(dir_lbl)
+
+        dir_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        dir_row.set_margin_start(8)
+        current_prob = float(_settings.get("director_style_prob"))
+        self._dir_prob_btns: list[Gtk.CheckButton] = []
+        first_dbtn = None
+        for label, prob in [("Never", 0.0), ("Sometimes (33%)", 0.33),
+                             ("Often (66%)", 0.66), ("Always", 1.0)]:
+            btn = Gtk.CheckButton(label=label)
+            btn.prob_value = prob
+            if first_dbtn is None:
+                first_dbtn = btn
+            else:
+                btn.set_group(first_dbtn)
+            if abs(prob - current_prob) < 0.01:
+                btn.set_active(True)
+            btn.connect("toggled", self._on_dir_prob_toggled)
+            dir_row.append(btn)
+            self._dir_prob_btns.append(btn)
+        box.append(dir_row)
+
+        # Pinned director dropdown
+        director_model = Gtk.StringList()
+        for display, _ in _DIRECTOR_PINS:
+            director_model.append(display)
+        director_drop = Gtk.DropDown(model=director_model)
+        director_drop.set_size_request(180, -1)
+        current_pin = _settings.get("director_pin") or ""
+        current_label = _DIRECTOR_PIN_LABEL.get(current_pin, "Random")
+        for i, (display, _) in enumerate(_DIRECTOR_PINS):
+            if display == current_label:
+                director_drop.set_selected(i)
+                break
+        director_drop.connect("notify::selected", self._on_director_pin_changed)
+        box.append(self._row("Pinned director:", director_drop,
+                             "Always use this director's style in video prompts. "
+                             "'Random' samples from the full list based on the probability above."))
+        self._director_drop = director_drop
+
+    # ── Change handlers ────────────────────────────────────────────────────────
+
+    def _on_quality_toggled(self, btn: Gtk.CheckButton) -> None:
+        if not btn.get_active():
+            return
+        steps = btn.steps_value
+        _settings.set("quality_steps", steps)
+        self._mw._controls._steps_spin.set_value(steps)
+        # Keep menu action state in sync
+        action = self._mw.lookup_action("quality")
+        if action:
+            action.set_state(GLib.Variant("s", str(steps)))
+
+    def _on_dir_prob_toggled(self, btn: Gtk.CheckButton) -> None:
+        if not btn.get_active():
+            return
+        prob = btn.prob_value
+        _settings.set("director_style_prob", prob)
+        action = self._mw.lookup_action("director-prob")
+        if action:
+            action.set_state(GLib.Variant("s", str(int(prob * 100))))
+
+    def _on_director_pin_changed(self, drop: Gtk.DropDown, _pspec) -> None:
+        idx = drop.get_selected()
+        if idx == Gtk.INVALID_LIST_POSITION:
+            return
+        _, full_value = _DIRECTOR_PINS[idx]
+        _settings.set("director_pin", full_value)
+        action = self._mw.lookup_action("director-pin")
+        if action:
+            action.set_state(GLib.Variant("s", full_value))
+
+    def scroll_to_tttv(self) -> None:
+        """Scroll to the TT-TV section — used when opening from the TT-TV menu."""
+        def _do_scroll():
+            alloc = self._tttv_box.get_allocation()
+            adj = self.get_child().get_vadjustment()
+            adj.set_value(alloc.y)
+            return False
+        GLib.idle_add(_do_scroll)
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -3478,12 +3782,20 @@ class MainWindow(Gtk.ApplicationWindow):
         self._log_tail_stop: "threading.Event | None" = None  # set to stop server log tail
         self._attractor_win: "attractor.AttractorWindow | None" = None
         self._prompt_gen_system_prompt: str = self._load_prompt_gen_system()
+        # Settings-backed state
+        self._gen_completed_count: int = 0          # incremented in _on_finished; triggers sleep
+        self._screensaver_inhibit_cookie: "int | None" = None  # D-Bus inhibit cookie
+        self._prefs_dialog: "PreferencesDialog | None" = None  # singleton instance
 
         self._build_ui()
         self._load_history()
         self._restore_queue()
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
+
+        # Apply persisted quality preference to the steps spin button
+        saved_steps = int(_settings.get("quality_steps"))
+        self._controls._steps_spin.set_value(saved_steps)
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -3495,7 +3807,7 @@ class MainWindow(Gtk.ApplicationWindow):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-        # Root vertical box: toolbar (top) | paned layout (middle) | status bar (bottom)
+        # Root vertical box: toolbar (top) | menu bar | paned layout | status bar (bottom)
         root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root_box)
 
@@ -3515,6 +3827,9 @@ class MainWindow(Gtk.ApplicationWindow):
         # The toolbar strip is built inside ControlPanel (logo, source toggle,
         # model selectors).  We append it at the top of root_box and add the
         # Watch TT-TV button on the right side (after the internal spacer).
+        # Build and register menu actions before creating the bar
+        self._build_menu_actions()
+
         main_toolbar = self._controls.toolbar_box
         self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
         self._attractor_btn.add_css_class("attractor-launch-btn")
@@ -3526,6 +3841,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
         root_box.append(main_toolbar)
+
+        # ── App menu bar ──────────────────────────────────────────────────────
+        root_box.append(self._build_menu_bar())
 
         # ── Three-pane layout: controls | gallery | detail ────────────────────
         outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -3625,6 +3943,249 @@ class MainWindow(Gtk.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         """Update status bar. Safe to call from main thread only."""
         self._status_lbl.set_label(text)
+
+    # ── Menu bar ───────────────────────────────────────────────────────────────
+
+    def _build_menu_actions(self) -> None:
+        """Register all Gio.SimpleActions for the menu bar on this window."""
+
+        # ── File actions ──────────────────────────────────────────────────────
+        open_folder = Gio.SimpleAction.new("open-media-folder", None)
+        open_folder.connect("activate", self._on_open_media_folder)
+        self.add_action(open_folder)
+
+        prefs = Gio.SimpleAction.new("preferences", None)
+        prefs.connect("activate", lambda *_: self._open_preferences(scroll_tttv=False))
+        self.add_action(prefs)
+
+        prefs_tttv = Gio.SimpleAction.new("preferences-tttv", None)
+        prefs_tttv.connect("activate", lambda *_: self._open_preferences(scroll_tttv=True))
+        self.add_action(prefs_tttv)
+
+        # ── Generation: quality preset (radio via stateful string action) ─────
+        quality_action = Gio.SimpleAction.new_stateful(
+            "quality",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", str(int(_settings.get("quality_steps")))),
+        )
+        quality_action.connect("activate", self._on_quality_action)
+        self.add_action(quality_action)
+
+        # ── Generation: sleep after N (radio via stateful string action) ──────
+        sleep_action = Gio.SimpleAction.new_stateful(
+            "sleep-after",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", str(int(_settings.get("sleep_after_n_gens")))),
+        )
+        sleep_action.connect("activate", self._on_sleep_after_action)
+        self.add_action(sleep_action)
+
+        # ── Prompt: director style probability (radio) ─────────────────────────
+        prob_pct = str(int(float(_settings.get("director_style_prob")) * 100))
+        dir_prob_action = Gio.SimpleAction.new_stateful(
+            "director-prob",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", prob_pct),
+        )
+        dir_prob_action.connect("activate", self._on_director_prob_action)
+        self.add_action(dir_prob_action)
+
+        # ── Prompt: pinned director (radio) ────────────────────────────────────
+        dir_pin_action = Gio.SimpleAction.new_stateful(
+            "director-pin",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", _settings.get("director_pin") or ""),
+        )
+        dir_pin_action.connect("activate", self._on_director_pin_action)
+        self.add_action(dir_pin_action)
+
+        # ── View: toggle detail panel ─────────────────────────────────────────
+        toggle_detail = Gio.SimpleAction.new_stateful(
+            "toggle-detail",
+            None,
+            GLib.Variant("b", True),
+        )
+        toggle_detail.connect("activate", self._on_toggle_detail)
+        self.add_action(toggle_detail)
+        self._detail_visible: bool = True
+
+    def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
+        """Build and return the Gtk.PopoverMenuBar driven by a Gio.Menu model."""
+        menumodel = Gio.Menu()
+
+        # ── File ──────────────────────────────────────────────────────────────
+        file_menu = Gio.Menu()
+        file_menu.append("Open Media Folder", "win.open-media-folder")
+        file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
+        file_menu.append("Preferences…", "win.preferences")
+        file_menu.append("Quit", "app.quit")
+        menumodel.append_submenu("File", file_menu)
+
+        # ── Generation ────────────────────────────────────────────────────────
+        gen_menu = Gio.Menu()
+        quality_section = Gio.Menu()
+        for label, steps in [("Fast (10 steps)", "10"), ("Standard (30 steps)", "30"),
+                              ("High Quality (40 steps)", "40")]:
+            item = Gio.MenuItem.new(label, "win.quality")
+            item.set_attribute_value("target", GLib.Variant("s", steps))
+            quality_section.append_item(item)
+        gen_menu.append_section("Quality", quality_section)
+
+        sleep_section = Gio.Menu()
+        for label, val in [("Never", "0"), ("After 10 completions", "10"),
+                           ("After 20 completions", "20"), ("After 50 completions", "50")]:
+            item = Gio.MenuItem.new(label, "win.sleep-after")
+            item.set_attribute_value("target", GLib.Variant("s", val))
+            sleep_section.append_item(item)
+        gen_menu.append_section("Sleep After", sleep_section)
+        menumodel.append_submenu("Generation", gen_menu)
+
+        # ── Prompt ────────────────────────────────────────────────────────────
+        prompt_menu = Gio.Menu()
+        dir_prob_section = Gio.Menu()
+        for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
+                           ("Often (66%)", "66"), ("Always", "100")]:
+            item = Gio.MenuItem.new(label, "win.director-prob")
+            item.set_attribute_value("target", GLib.Variant("s", pct))
+            dir_prob_section.append_item(item)
+        prompt_menu.append_section("Director Style", dir_prob_section)
+
+        pin_section = Gio.Menu()
+        for display, full in _DIRECTOR_PINS:
+            item = Gio.MenuItem.new(display or "Random", "win.director-pin")
+            item.set_attribute_value("target", GLib.Variant("s", full))
+            pin_section.append_item(item)
+        prompt_menu.append_section("Pinned Director", pin_section)
+        menumodel.append_submenu("Prompt", prompt_menu)
+
+        # ── TT-TV ─────────────────────────────────────────────────────────────
+        tttv_menu = Gio.Menu()
+        tttv_menu.append("Configure TT-TV…", "win.preferences-tttv")
+        menumodel.append_submenu("TT-TV", tttv_menu)
+
+        # ── View ──────────────────────────────────────────────────────────────
+        view_menu = Gio.Menu()
+        view_menu.append("Toggle Detail Panel", "win.toggle-detail")
+        menumodel.append_submenu("View", view_menu)
+
+        return Gtk.PopoverMenuBar.new_from_model(menumodel)
+
+    # ── Menu action handlers ───────────────────────────────────────────────────
+
+    def _on_open_media_folder(self, _action, _param) -> None:
+        """Open the tt-video-gen storage directory in the desktop file manager."""
+        from history_store import STORAGE_DIR
+        try:
+            GLib.spawn_async(
+                ["xdg-open", str(STORAGE_DIR)],
+                flags=GLib.SpawnFlags.SEARCH_PATH,
+            )
+        except Exception as exc:
+            self._set_status(f"Could not open folder: {exc}")
+
+    def _open_preferences(self, scroll_tttv: bool = False) -> None:
+        """Open (or present) the Preferences dialog."""
+        if self._prefs_dialog is None or not self._prefs_dialog.get_visible():
+            self._prefs_dialog = PreferencesDialog(self)
+        self._prefs_dialog.present()
+        if scroll_tttv:
+            self._prefs_dialog.scroll_to_tttv()
+
+    def _on_quality_action(self, action: Gio.SimpleAction,
+                           param: GLib.Variant) -> None:
+        """Menu: change default quality / steps preset."""
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        steps = int(val)
+        _settings.set("quality_steps", steps)
+        self._controls._steps_spin.set_value(steps)
+        # Keep Preferences dialog in sync if open
+        if self._prefs_dialog and self._prefs_dialog.get_visible():
+            for btn in self._prefs_dialog._quality_btns:
+                btn.set_active(btn.steps_value == steps)
+
+    def _on_sleep_after_action(self, action: Gio.SimpleAction,
+                               param: GLib.Variant) -> None:
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        _settings.set("sleep_after_n_gens", int(val))
+
+    def _on_director_prob_action(self, action: Gio.SimpleAction,
+                                 param: GLib.Variant) -> None:
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        _settings.set("director_style_prob", int(val) / 100.0)
+        # Sync Preferences dialog if open
+        if self._prefs_dialog and self._prefs_dialog.get_visible():
+            prob = int(val) / 100.0
+            for btn in self._prefs_dialog._dir_prob_btns:
+                btn.set_active(abs(btn.prob_value - prob) < 0.01)
+
+    def _on_director_pin_action(self, action: Gio.SimpleAction,
+                                param: GLib.Variant) -> None:
+        full = param.get_string()
+        action.set_state(GLib.Variant("s", full))
+        _settings.set("director_pin", full)
+        # Sync Preferences dialog if open
+        if self._prefs_dialog and self._prefs_dialog.get_visible():
+            label = _DIRECTOR_PIN_LABEL.get(full, "Random")
+            for i, (display, _) in enumerate(_DIRECTOR_PINS):
+                if display == label:
+                    self._prefs_dialog._director_drop.set_selected(i)
+                    break
+
+    def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
+        self._detail_visible = not self._detail_visible
+        action.set_state(GLib.Variant("b", self._detail_visible))
+        # self._detail's parent is detail_wrap (the Box containing detail + queue).
+        # Hiding it collapses the entire right panel of the inner paned.
+        self._detail.get_parent().set_visible(self._detail_visible)
+
+    # ── Screensaver inhibit ────────────────────────────────────────────────────
+
+    def _screensaver_inhibit(self) -> None:
+        """Call org.freedesktop.ScreenSaver.Inhibit to prevent screen lock while generating."""
+        if self._screensaver_inhibit_cookie is not None:
+            return  # already inhibiting
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            result = bus.call_sync(
+                "org.freedesktop.ScreenSaver",
+                "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver",
+                "Inhibit",
+                GLib.Variant("(ss)", ("tt-video-gen", "Generation in progress")),
+                GLib.VariantType.new("(u)"),
+                Gio.DBusCallFlags.NONE,
+                5000,
+                None,
+            )
+            self._screensaver_inhibit_cookie = result.get_child_value(0).get_uint32()
+        except Exception as exc:
+            # Non-fatal — inhibit is best-effort; the unload-on-lock safety net handles the rest
+            print(f"[tt-gen] screensaver inhibit failed: {exc}", file=sys.stderr)
+
+    def _screensaver_uninhibit(self) -> None:
+        """Release a previously acquired screensaver inhibit cookie."""
+        cookie = self._screensaver_inhibit_cookie
+        if cookie is None:
+            return
+        self._screensaver_inhibit_cookie = None
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            bus.call_sync(
+                "org.freedesktop.ScreenSaver",
+                "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver",
+                "UnInhibit",
+                GLib.Variant("(u)", (cookie,)),
+                None,
+                Gio.DBusCallFlags.NONE,
+                5000,
+                None,
+            )
+        except Exception as exc:
+            print(f"[tt-gen] screensaver uninhibit failed: {exc}", file=sys.stderr)
 
     # ── Gallery helpers ────────────────────────────────────────────────────────
 
@@ -3939,7 +4500,9 @@ class MainWindow(Gtk.ApplicationWindow):
             free = shutil.disk_usage(STORAGE_DIR).free
         except OSError:
             return True  # can't determine — allow generation rather than block it
-        if free < _DISK_SPACE_MIN_BYTES:
+        max_gb = int(_settings.get("max_disk_gb"))
+        threshold = (max_gb * 1024 ** 3) if max_gb > 0 else _DISK_SPACE_MIN_BYTES
+        if free < threshold:
             free_gb = free / (1024 ** 3)
             self._set_status(
                 f"Disk space critically low ({free_gb:.1f} GB free) — "
@@ -3956,6 +4519,12 @@ class MainWindow(Gtk.ApplicationWindow):
             return
         if not self._check_disk_space():
             return
+
+        # Inhibit screensaver if the user has that preference enabled.
+        # The unload-on-lock safety net in attractor.py already handles crashes,
+        # but inhibiting prevents the lock from activating in the first place.
+        if _settings.get("inhibit_screensaver"):
+            self._screensaver_inhibit()
 
         # Add the pending card to the gallery that matches the generation type,
         # and remember that gallery so _on_finished/_on_error update the right one.
@@ -4427,10 +4996,18 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.set_busy(False)
         media_path = record.media_file_path
         self._set_status(f"Done — {media_path}  ({record.duration_s:.0f}s)")
+        self._screensaver_uninhibit()
         self._start_next_queued()
         if self._attractor_win is not None:
             GLib.idle_add(self._attractor_win.add_record, record)
         self._update_attractor_btn()
+        # Sleep-after-N: count completions and suspend if the threshold is reached
+        self._gen_completed_count += 1
+        limit = int(_settings.get("sleep_after_n_gens"))
+        if limit > 0 and self._gen_completed_count >= limit:
+            self._gen_completed_count = 0
+            self._set_status(f"Completed {limit} generation(s) — suspending…")
+            GLib.timeout_add(1500, lambda: subprocess.Popen(["systemctl", "suspend"]) and False)
         return False
 
     def _on_error(self, message: str) -> bool:
@@ -4439,6 +5016,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_gallery = None
         self._controls.set_busy(False)
         self._set_status(f"Error: {message}")
+        self._screensaver_uninhibit()
         self._start_next_queued()
         return False
 

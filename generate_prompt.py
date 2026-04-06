@@ -124,17 +124,33 @@ def _markov_sentence(prompt_type: str) -> str | None:
 
 # ── Algorithmic generators ────────────────────────────────────────────────────
 
-def _algo_video() -> tuple[str, dict]:
+def _algo_video(
+    director_prob: float = 0.33,
+    director_pin: str = "",
+) -> tuple[str, dict]:
+    """
+    Build one algorithmic video prompt slug.
+
+    Args:
+        director_prob: Probability (0.0–1.0) of using a named director aesthetic
+                       instead of a generic mood/style slot.  Default 0.33 (1-in-3).
+        director_pin:  If non-empty, always use this string as the style slot
+                       (overrides director_prob sampling entirely).
+    """
     subj = wb.subject()
     act = wb.action()
     sett = wb.setting()
     cam = wb.camera()
     mo = wb.mood()
-    # 1-in-3 chance of a named director aesthetic instead of generic mood/style.
-    # This keeps prompts short (5 comma-separated slots) while injecting strong
-    # cinematic identity. Time-of-day and lighting are intentionally omitted from
-    # the slug — they balloon prompt length without improving short-clip generation.
-    if random.random() < 0.33:
+    # Determine style slot: pinned director > prob-sampled director > generic mood.
+    # Time-of-day and lighting are intentionally omitted from the slug — they
+    # balloon prompt length without improving short-clip generation quality.
+    if director_pin:
+        style_slot = director_pin
+        slug = f"{subj} {act}, {sett}, {cam}, {style_slot}"
+        meta = {"subject": subj, "action": act, "setting": sett,
+                "camera": cam, "director_style": style_slot}
+    elif random.random() < director_prob:
         style_slot = wb.director_style()
         slug = f"{subj} {act}, {sett}, {cam}, {style_slot}"
         meta = {"subject": subj, "action": act, "setting": sett,
@@ -250,14 +266,18 @@ def generate(
     prompt_type: str = "video",
     mode: str = "algo",
     enhance: bool = True,
+    director_prob: float = 0.33,
+    director_pin: str = "",
 ) -> dict:
     """
     Generate one prompt.
 
     Args:
-        prompt_type: "video" | "image" | "animate"
-        mode: "algo" | "markov"  — base generation before optional LLM polish
-        enhance: if True and LLM server is up, polish the slug with the LLM
+        prompt_type:   "video" | "image" | "animate"
+        mode:          "algo" | "markov" — base generation before optional LLM polish
+        enhance:       if True and LLM server is up, polish the slug with the LLM
+        director_prob: probability of using a named director style in video prompts
+        director_pin:  if non-empty, always use this director name (video only)
 
     Returns:
         {
@@ -278,7 +298,10 @@ def generate(
 
     # Tier 1: Algorithmic (fallback or primary)
     if slug is None:
-        slug, _ = _ALGO_FN[prompt_type]()
+        if prompt_type == "video":
+            slug, _ = _algo_video(director_prob=director_prob, director_pin=director_pin)
+        else:
+            slug, _ = _ALGO_FN[prompt_type]()
         source = "algo"
 
     # Tier 3: LLM polish
@@ -332,6 +355,16 @@ Examples:
         "--raw", action="store_true",
         help="Output plain text instead of JSON",
     )
+    parser.add_argument(
+        "--director-prob", type=float, default=0.33, metavar="PROB",
+        help="Probability (0.0–1.0) of using a named director style in video prompts "
+             "(default: 0.33).  Ignored for image/animate types.",
+    )
+    parser.add_argument(
+        "--director", default="", metavar="NAME",
+        help="Always use this director name as the style slot in video prompts "
+             "(overrides --director-prob).  Must match an entry in CINEMATIC_DIRECTORS.",
+    )
     args = parser.parse_args()
 
     if args.mode == "markov" and not _MARKOV_AVAILABLE:
@@ -342,7 +375,11 @@ Examples:
         )
 
     results = [
-        generate(args.type, args.mode, args.enhance)
+        generate(
+            args.type, args.mode, args.enhance,
+            director_prob=args.director_prob,
+            director_pin=args.director,
+        )
         for _ in range(args.count)
     ]
 

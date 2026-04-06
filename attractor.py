@@ -25,6 +25,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gio, Gtk, Pango  # noqa: E402
 
 import prompt_client  # noqa: E402
+from app_settings import settings as _settings  # noqa: E402
 from history_store import STORAGE_DIR as _STORAGE_DIR  # noqa: E402
 
 _DISK_SPACE_MIN_BYTES = 18 * 1024 ** 3   # 18 GB — pause TT-TV generation below this
@@ -1020,8 +1021,11 @@ class AttractorWindow(Gtk.Window):
         self._stream_handler_id = None
 
         if getattr(record, "media_type", "video") == "image":
+            # Read image dwell time from settings so live changes take effect
+            # without restarting TT-TV.
+            image_dwell_ms = int(_settings.get("tttv_image_dwell_s") * 1000)
             self._pending_advance_source = GLib.timeout_add(
-                AttractorPool.IMAGE_DWELL_MS, self._on_advance_timer
+                image_dwell_ms, self._on_advance_timer
             )
         else:
             self._connect_video_ended()
@@ -1038,11 +1042,12 @@ class AttractorWindow(Gtk.Window):
                 GLib.idle_add(self._advance)
                 return
             # Safety net: if notify::ended never fires (corrupt file, screensaver,
-            # GStreamer pipeline stall), force-advance after VIDEO_FALLBACK_MS.
+            # GStreamer pipeline stall), force-advance after the configured fallback.
+            video_fallback_ms = int(_settings.get("tttv_video_fallback_s") * 1000)
             _log.debug("stream connected - fallback timer set for %.1f s",
-                       AttractorPool.VIDEO_FALLBACK_MS / 1000)
+                       video_fallback_ms / 1000)
             self._pending_advance_source = GLib.timeout_add(
-                AttractorPool.VIDEO_FALLBACK_MS, self._on_advance_timer
+                video_fallback_ms, self._on_advance_timer
             )
         else:
             # Stream not initialised yet - retry
