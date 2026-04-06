@@ -204,7 +204,9 @@ class HistoryStore:
         os.replace(tmp, HISTORY_FILE)
 
     def append(self, record: GenerationRecord) -> None:
-        """Add a new record and persist immediately."""
+        """Add a new record and persist immediately. Silently drops duplicates."""
+        if any(r.id == record.id for r in self._records):
+            return  # already in history (e.g. recovery re-run after restart)
         self._records.append(record)
         self._save()
 

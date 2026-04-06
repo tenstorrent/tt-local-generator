@@ -4857,7 +4857,16 @@ class MainWindow(Gtk.ApplicationWindow):
         self._update_queue_display()
 
         if item.job_id_override:
-            # Recovery item — use direct recovery path (no submission needed)
+            # Recovery item — skip if the job was already recovered into history
+            # (happens when app restarts after a recovery job finished: history
+            # has the card, but queue.json still has the stale entry).
+            known_ids = {r.id for r in self._store.all_records()}
+            if item.job_id_override in known_ids:
+                self._set_status(
+                    f"Recovery job {item.job_id_override[:8]}… already in history — skipping."
+                )
+                return self._start_next_queued()  # drain the rest of the queue
+            # Use direct recovery path (no submission needed)
             self._launch_recovery_worker(
                 item.job_id_override, item.prompt, item.negative_prompt,
                 item.steps, item.seed,
