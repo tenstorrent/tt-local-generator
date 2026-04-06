@@ -1713,6 +1713,17 @@ class GalleryWidget(Gtk.Box):
         return card
 
     def replace_pending_with(self, record: GenerationRecord) -> None:
+        # Guard: don't add a card if this record is already in the gallery
+        # (can happen if a recovery worker races with load_history on restart).
+        if any(isinstance(c, GenerationCard) and c._record.id == record.id
+               for c in self._cards):
+            if self._pending and self._pending in self._cards:
+                self._pending.stop_timer()
+                self._cards.remove(self._pending)
+            self._pending = None
+            self._relayout()
+            return
+
         card = self._make_card(record)
         if self._pending and self._pending in self._cards:
             self._pending.stop_timer()
@@ -1733,7 +1744,11 @@ class GalleryWidget(Gtk.Box):
             self._relayout()
 
     def load_history(self, records) -> None:
+        seen: set = set()
         for record in records:
+            if record.id in seen:
+                continue  # skip duplicates (shouldn't happen after HistoryStore dedup)
+            seen.add(record.id)
             self._cards.append(self._make_card(record))
         self._relayout()
 
@@ -4762,8 +4777,15 @@ class MainWindow(Gtk.ApplicationWindow):
         saved = self._store.load_queue()
         if not saved:
             return
+        # Track recovery job IDs seen so far to drop duplicate queue.json entries.
+        seen_overrides: set = set()
         for d in saved:
             try:
+                override = d.get("job_id_override", "")
+                if override:
+                    if override in seen_overrides:
+                        continue  # duplicate recovery entry — skip
+                    seen_overrides.add(override)
                 self._queue.append(_QueueItem(
                     prompt=d.get("prompt", ""),
                     negative_prompt=d.get("negative_prompt", ""),
@@ -4776,7 +4798,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     ref_char_path=d.get("ref_char_path", ""),
                     animate_mode=d.get("animate_mode", "animation"),
                     model_id=d.get("model_id", ""),
-                    job_id_override=d.get("job_id_override", ""),
+                    job_id_override=override,
                 ))
             except Exception:
                 pass  # skip malformed items

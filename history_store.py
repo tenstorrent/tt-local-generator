@@ -173,9 +173,12 @@ class HistoryStore:
             return
         try:
             raw = json.loads(HISTORY_FILE.read_text())
-            # Tolerate older records missing newer fields (seed_image_path, media_type, etc.)
-            self._records = [
-                GenerationRecord(**{
+            # Tolerate older records missing newer fields (seed_image_path, media_type, etc.).
+            # Deduplicate by id in case the file was ever corrupted with repeated entries.
+            seen_ids: set = set()
+            records = []
+            for r in raw:
+                rec = GenerationRecord(**{
                     **r,
                     "seed_image_path": r.get("seed_image_path", ""),
                     "media_type": r.get("media_type", "video"),
@@ -184,8 +187,10 @@ class HistoryStore:
                     "model": r.get("model", ""),
                     "extra_meta": r.get("extra_meta", {}),
                 })
-                for r in raw
-            ]
+                if rec.id not in seen_ids:
+                    seen_ids.add(rec.id)
+                    records.append(rec)
+            self._records = records
         except Exception:
             # Corrupt history — back it up then start fresh
             bak = HISTORY_FILE.with_suffix(".json.bak")

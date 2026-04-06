@@ -106,8 +106,12 @@ class AttractorPool:
     def add_record(self, record) -> None:
         """
         Append a new record and insert its index at a random position after
-        the current playback position in _order.
+        the current playback position in _order.  No-ops if a record with the
+        same id is already in the pool.
         """
+        record_id = getattr(record, "id", None)
+        if record_id and any(getattr(r, "id", None) == record_id for r in self._records):
+            return  # already in pool — skip
         new_idx = len(self._records)
         self._records.append(record)
         # Insert at any position strictly after the current pos so the new record
