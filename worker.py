@@ -99,6 +99,7 @@ class GenerationWorker:
         self._model = model
         self._cancelled = False
         self._job_id_override: Optional[str] = None  # set to skip submit (recovery)
+        self._current_job_id: Optional[str] = None   # set after submission / re-attach so callers can exclude it from recovery scans
         self._lock = threading.Lock()
 
     def cancel(self) -> None:
@@ -146,6 +147,9 @@ class GenerationWorker:
                 on_error(f"Submit failed: {e}")
                 return
             on_progress(f"Job queued ({job_id[:8]}…)")
+
+        # Expose the live job ID so MainWindow can exclude it from recovery scans.
+        self._current_job_id = job_id
 
         # ── 2. Poll until complete ────────────────────────────────────────────
         server_meta: dict = {}

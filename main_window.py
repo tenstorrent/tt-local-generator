@@ -1820,7 +1820,6 @@ class ControlPanel(Gtk.Box):
         on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path, ref_char_path, animate_mode, model_id) -> None
         on_enqueue,        # same signature
         on_cancel,         # () -> None
-        on_recover,        # () -> None
         on_start_server,   # (model_source: str) -> None
         on_stop_server,    # () -> None
         on_source_change,  # (model_source: str) -> None — called after the mode toggle switches
@@ -1831,7 +1830,6 @@ class ControlPanel(Gtk.Box):
         self._on_generate = on_generate
         self._on_enqueue = on_enqueue
         self._on_cancel = on_cancel
-        self._on_recover = on_recover
         self._on_start_server = on_start_server
         self._on_stop_server = on_stop_server
         self._on_source_change = on_source_change
@@ -2481,11 +2479,7 @@ class ControlPanel(Gtk.Box):
         self._cancel_btn.connect("clicked", lambda _: self._on_cancel())
         self._footer_box.append(self._cancel_btn)
 
-        self._recover_btn = Gtk.Button(label="⟳ Recover Jobs")
-        self._recover_btn.set_tooltip_text("Discover server jobs not in local history")
-        self._recover_btn.set_sensitive(False)
-        self._recover_btn.connect("clicked", lambda _: self._on_recover())
-        self._footer_box.append(self._recover_btn)
+        # Recover Jobs moved to File menu — no button here.
 
     @property
     def footer_box(self) -> Gtk.Box:
@@ -2870,14 +2864,7 @@ class ControlPanel(Gtk.Box):
             self._gen_btn.set_label("Generate")
             self._gen_btn.set_sensitive(self._server_ready)
             self._gen_btn.set_tooltip_text("")
-        # Recover Jobs only needs a reachable server — not a tab-matched one.
-        # _server_ready is True on tab-match; _running_model is non-None on mismatch.
-        # Either condition means the server responded to the health check.
-        # detect_running_model() can return None even when ready, so check both.
-        server_reachable = self._server_ready or self._running_model is not None
-        # Recovery is safe while a generation is running — _attach_recovery_job
-        # enqueues at the front when busy rather than starting a second worker.
-        self._recover_btn.set_sensitive(server_reachable and not self._server_launching)
+        pass  # recover button removed — sensitivity managed via win.recover-jobs action
 
     # ── Seed image ─────────────────────────────────────────────────────────────
 
@@ -3225,18 +3212,33 @@ class ControlPanel(Gtk.Box):
 
 # ── Recovery dialog ────────────────────────────────────────────────────────────
 
+_RECOVERY_DISMISS = Gtk.ResponseType.REJECT   # reuse a built-in int constant for our "Ignore" button
+
+
 class RecoveryDialog(Gtk.Dialog):
-    """Modal dialog listing unknown server jobs; user selects which to recover."""
+    """Modal dialog listing unknown server jobs; user selects which to recover.
+
+    Buttons:
+      Cancel        — close without recovering or dismissing anything.
+      🚫 Ignore     — permanently hide the checked jobs from future scans.
+      ✓ Recover     — recover the checked jobs (default action).
+
+    After the dialog emits a response, inspect:
+      .selected_jobs  — jobs to recover  (populated on OK / Recover)
+      .dismissed_jobs — jobs to ignore forever (populated on _RECOVERY_DISMISS / Ignore)
+    """
 
     def __init__(self, parent, jobs: list):
         super().__init__(title="Recover Server Jobs", transient_for=parent, modal=True)
         self.set_default_size(520, -1)
         self.selected_jobs: list = []
+        self.dismissed_jobs: list = []
         self._checkboxes: list = []
         self._jobs = jobs
 
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        self.add_button("OK", Gtk.ResponseType.OK)
+        self.add_button("Cancel",       Gtk.ResponseType.CANCEL)
+        self.add_button("🚫 Ignore",    _RECOVERY_DISMISS)
+        self.add_button("✓ Recover",    Gtk.ResponseType.OK)
         self.set_default_response(Gtk.ResponseType.OK)
 
         content = self.get_content_area()
@@ -3248,7 +3250,8 @@ class RecoveryDialog(Gtk.Dialog):
 
         header = Gtk.Label(
             label=f"Found <b>{len(jobs)}</b> server job(s) not in local history.\n"
-                  "Select jobs to re-attach.",
+                  "Check jobs to recover, then click <b>✓ Recover</b>.\n"
+                  "To hide a job from future scans, check it and click <b>🚫 Ignore</b>.",
         )
         header.set_use_markup(True)
         header.set_wrap(True)
@@ -3267,10 +3270,11 @@ class RecoveryDialog(Gtk.Dialog):
         self.connect("response", self._on_response)
 
     def _on_response(self, _dlg, response) -> None:
+        checked = [cb.job for cb in self._checkboxes if cb.get_active()]
         if response == Gtk.ResponseType.OK:
-            self.selected_jobs = [
-                cb.job for cb in self._checkboxes if cb.get_active()
-            ]
+            self.selected_jobs = checked
+        elif response == _RECOVERY_DISMISS:
+            self.dismissed_jobs = checked
 
 
 # ── Helper: Gio.ListStore from filter items ────────────────────────────────────
@@ -3849,7 +3853,6 @@ class MainWindow(Gtk.ApplicationWindow):
             on_generate=self._on_generate,
             on_enqueue=self._on_enqueue,
             on_cancel=self._on_cancel,
-            on_recover=self._on_recover,
             on_start_server=self._on_start_server,
             on_stop_server=self._on_stop_server,
             on_source_change=self._on_source_change,
@@ -3996,6 +3999,11 @@ class MainWindow(Gtk.ApplicationWindow):
         prefs_tttv.connect("activate", lambda *_: self._open_preferences(scroll_tttv=True))
         self.add_action(prefs_tttv)
 
+        recover = Gio.SimpleAction.new("recover-jobs", None)
+        recover.connect("activate", lambda *_: self._on_recover())
+        recover.set_enabled(False)   # enabled once the server is reachable
+        self.add_action(recover)
+
         # ── Generation: quality preset (radio via stateful string action) ─────
         quality_action = Gio.SimpleAction.new_stateful(
             "quality",
@@ -4051,6 +4059,8 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu = Gio.Menu()
         file_menu.append("Open Media Folder", "win.open-media-folder")
         file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
+        file_menu.append("Recover Jobs…", "win.recover-jobs")
+        file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("Quit", "app.quit")
         menumodel.append_submenu("File", file_menu)
@@ -4318,6 +4328,13 @@ class MainWindow(Gtk.ApplicationWindow):
             self._auto_tab_switched = True
 
         self._controls.set_server_state(ready, running_model)
+
+        # Enable Recover Jobs (File menu) whenever the server is reachable,
+        # regardless of which model tab is active or whether a job is running.
+        server_reachable = ready or (running_model is not None)
+        recover_action = self.lookup_action("recover-jobs")
+        if recover_action:
+            recover_action.set_enabled(server_reachable and not self._server_launching)
 
         # Mirror server health in the hardware status bar.
         display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
@@ -4649,6 +4666,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
         self._hw_statusbar.update_starting()
+        if a := self.lookup_action("recover-jobs"):
+            a.set_enabled(False)
 
         def run():
             try:
@@ -4745,6 +4764,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._controls.append_server_log("Stopping inference server…")
         self._set_status("Stopping inference server…")
         self._hw_statusbar.update_starting()
+        if a := self.lookup_action("recover-jobs"):
+            a.set_enabled(False)
 
         def run():
             try:
@@ -4927,7 +4948,22 @@ class MainWindow(Gtk.ApplicationWindow):
     # ── Recovery ───────────────────────────────────────────────────────────────
 
     def _on_recover(self) -> None:
+        # Build the full exclusion set:
+        # 1. Jobs already in local history.
         known_ids = {r.id for r in self._store.all_records()}
+        # 2. The job the current worker is actively tracking (not yet in history).
+        if self._worker_gen and self._worker and self._worker.is_alive():
+            live_id = self._worker_gen._current_job_id
+            if live_id:
+                known_ids.add(live_id)
+        # 3. Jobs already queued for recovery (don't offer them twice).
+        for item in self._queue:
+            if item.job_id_override:
+                known_ids.add(item.job_id_override)
+        # 4. Jobs the user has permanently dismissed.
+        dismissed = set(_settings.get("dismissed_job_ids") or [])
+        known_ids |= dismissed
+
         self._set_status("Scanning server for unknown jobs…")
 
         def fetch():
@@ -4964,6 +5000,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_recovery_response(self, dlg, response) -> None:
         dlg.close()
+        if response == _RECOVERY_DISMISS and dlg.dismissed_jobs:
+            # Permanently hide these jobs from future scans.
+            existing = list(_settings.get("dismissed_job_ids") or [])
+            new_ids = [j["id"] for j in dlg.dismissed_jobs if j["id"] not in existing]
+            _settings.set("dismissed_job_ids", existing + new_ids)
+            self._set_status(
+                f"Ignored {len(dlg.dismissed_jobs)} job(s) — "
+                "they won't appear in future recovery scans."
+            )
+            return
         if response != Gtk.ResponseType.OK or not dlg.selected_jobs:
             self._set_status("Recovery cancelled.")
             return

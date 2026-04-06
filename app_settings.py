@@ -45,6 +45,8 @@ DEFAULTS: dict = {
     # Prompt director style
     "director_style_prob": 0.33,    # probability a video prompt draws a named director aesthetic
     "director_pin": "",             # "" = random pick; else exact string from CINEMATIC_DIRECTORS
+    # Recovery
+    "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
 }
 
 
