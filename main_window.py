@@ -3404,8 +3404,9 @@ class _StatusBar(Gtk.Box):
         self._chip_lbl.set_visible(False)
         self.append(self._chip_lbl)
 
-        # Kick off background polling; populate disk label immediately.
+        # Kick off background polling; populate disk + chip labels immediately.
         self._stop = threading.Event()
+        self._last_chip_text: str = ""   # retain last good reading across failed polls
         GLib.idle_add(self._refresh_disk)
         threading.Thread(target=self._poll_loop, daemon=True).start()
 
@@ -3464,9 +3465,19 @@ class _StatusBar(Gtk.Box):
         return GLib.SOURCE_REMOVE
 
     def _apply_chip(self, text: str) -> bool:
-        """Apply chip telemetry string to the label. Called on main thread."""
-        visible = bool(text)
-        self._chip_lbl.set_label(text)
+        """Apply chip telemetry string to the label. Called on main thread.
+
+        If text is empty (poll failed / tt-smi unavailable), we fall back to
+        the last successful reading so the segment stays visible during
+        transient failures (e.g. tt-smi timeout while a generation is running).
+        The segment is only hidden when we have never successfully read chip
+        data at all.
+        """
+        if text:
+            self._last_chip_text = text
+        display = self._last_chip_text  # keep last good value on failure
+        visible = bool(display)
+        self._chip_lbl.set_label(display)
         self._chip_lbl.set_visible(visible)
         self._chip_sep.set_visible(visible)
         return GLib.SOURCE_REMOVE
@@ -3474,7 +3485,15 @@ class _StatusBar(Gtk.Box):
     # ── Background polling loop ────────────────────────────────────────────────
 
     def _poll_loop(self) -> None:
-        """Background thread: refresh disk + chip telemetry every 10 s."""
+        """Background thread: refresh disk + chip telemetry every 10 s.
+
+        An initial chip read is done immediately (no leading wait) so the
+        segment is populated as soon as the window appears rather than 10 s
+        after startup.
+        """
+        # Initial read — no wait so the chip segment populates right away.
+        chip_text = self._read_chip_telemetry()
+        GLib.idle_add(self._apply_chip, chip_text)
         while not self._stop.wait(10.0):
             GLib.idle_add(self._refresh_disk)
             chip_text = self._read_chip_telemetry()
@@ -3486,7 +3505,7 @@ class _StatusBar(Gtk.Box):
         try:
             result = subprocess.run(
                 ["tt-smi", "-s"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=8,
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
