@@ -3061,7 +3061,10 @@ class ControlPanel(Gtk.Box):
         all_play_btn = Gtk.Button(label="▶")
         all_play_btn.add_css_class("servers-popover-btn")
         all_play_btn.set_tooltip_text("Watch TT-TV with all videos")
-        all_play_btn.connect("clicked", lambda _: self._on_open_playlist(None))
+        all_play_btn.connect("clicked", lambda _: (
+            self._playlists_btn.get_popover().popdown(),
+            self._on_open_playlist(None),
+        ))
         all_row.append(all_play_btn)
         self._playlists_outer.append(all_row)
 
@@ -3125,7 +3128,10 @@ class ControlPanel(Gtk.Box):
             play_btn = Gtk.Button(label="▶")
             play_btn.add_css_class("servers-popover-btn")
             play_btn.set_tooltip_text(f"Watch '{pl.name}' in TT-TV")
-            play_btn.connect("clicked", lambda _b, pid=pl.id: self._on_open_playlist(pid))
+            play_btn.connect("clicked", lambda _b, pid=pl.id: (
+                self._playlists_btn.get_popover().popdown(),
+                self._on_open_playlist(pid),
+            ))
             row.append(play_btn)
 
             # Edit button — enter selection mode
@@ -6142,7 +6148,12 @@ class MainWindow(Gtk.ApplicationWindow):
     # ── Queue ──────────────────────────────────────────────────────────────────
 
     def _persist_queue(self) -> None:
-        """Save the current queue to disk so it can be reloaded after a crash."""
+        """Save the current queue to disk so it can be reloaded after a crash.
+
+        TT-TV auto-gen items (from_attractor=True) are excluded: they should
+        not survive a restart because TT-TV is no longer open, and persisting
+        them would cause the same server job to be re-submitted on next launch.
+        """
         self._store.save_queue([
             {
                 "prompt": item.prompt,
@@ -6159,6 +6170,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 "job_id_override": item.job_id_override,
             }
             for item in self._queue
+            if not item.from_attractor
         ])
 
     def _restore_queue(self) -> None:
@@ -6260,6 +6272,12 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_status(f'Removed from queue: "{short}"')
 
     def _start_next_queued(self) -> bool:
+        # Guard against a race where the recovery dialog starts a worker between
+        # the time _restore_queue() schedules this via GLib.idle_add and the time
+        # it actually fires.  Starting a second worker would produce a duplicate
+        # pending card and lose track of the first worker.
+        if self._worker and self._worker.is_alive():
+            return False
         if not self._queue:
             self._persist_queue()   # ensure queue.json is cleared when fully drained
             return False
