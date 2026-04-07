@@ -36,4 +36,8 @@ fi
 # GTK4 never tries to load any modules.
 export GTK_MODULES=""
 
+# Raise the open-file-descriptor limit so long TT-TV sessions (which cycle
+# through many GStreamer pipelines) don't hit the default 1024-FD cap.
+ulimit -n 65536 2>/dev/null || true
+
 exec "$PYTHON" "$SCRIPT_DIR/app/main.py" "$@"

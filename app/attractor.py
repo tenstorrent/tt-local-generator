@@ -420,12 +420,14 @@ class AttractorWindow(Gtk.Window):
         # mid-call when the window closes) silently no-op instead of touching
         # destroyed widgets and triggering GTK's "window shown after destroyed" crash.
         self._alive: bool = True
-        # After each A/B crossfade we schedule a GStreamer pipeline teardown for the
-        # now-inactive slot.  Keeping a pipeline open in the hidden slot for the full
-        # duration of the next video doubles steady-state fd usage and causes "Too
-        # many open files" crashes after many advance cycles.
-        self._pending_unload_source: int = 0  # GLib source id for the unload timer
-        self._slot_to_unload = None           # Gtk.Box slot whose pipeline to teardown
+        # Each _load_slot() call replaces the Gtk.Video widget in the slot rather
+        # than reusing it.  Discarded widgets land in this list; a 3-second timer
+        # drains the list by pausing + set_file(None)-ing each one so GStreamer
+        # fully reaches NULL and releases its file descriptors.  The 3-second
+        # delay prevents the PLAYING→NULL teardown from racing with the new
+        # pipeline that was just started in the replacement widget.
+        self._video_graveyard: list = []      # Gtk.Video widgets waiting for teardown
+        self._graveyard_timer: int = 0        # GLib source id for graveyard drain
         self._pending_flash_source: int = 0   # GLib source id for flash clear timer
 
         # Load CSS (uses @define-color variables already loaded by main_window.py)
@@ -507,13 +509,13 @@ class AttractorWindow(Gtk.Window):
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
             self._pending_advance_source = None
-        if self._pending_unload_source:
-            GLib.source_remove(self._pending_unload_source)
-            self._pending_unload_source = 0
+        if self._graveyard_timer:
+            GLib.source_remove(self._graveyard_timer)
+            self._graveyard_timer = 0
+        self._video_graveyard.clear()
         if self._pending_flash_source:
             GLib.source_remove(self._pending_flash_source)
             self._pending_flash_source = 0
-        self._slot_to_unload = None
         # Disconnect the notify::ended handler so a late-firing signal after
         # window destruction doesn't call _advance() on a dead widget tree.
         if self._watched_stream is not None and self._stream_handler_id is not None:
@@ -867,12 +869,12 @@ class AttractorWindow(Gtk.Window):
             if self._pending_advance_source is not None:
                 GLib.source_remove(self._pending_advance_source)
                 self._pending_advance_source = None
-            if self._pending_unload_source:
-                GLib.source_remove(self._pending_unload_source)
-                self._pending_unload_source = 0
+            if self._graveyard_timer:
+                GLib.source_remove(self._graveyard_timer)
+                self._graveyard_timer = 0
             _unload_slot_video(self._slot_a)
             _unload_slot_video(self._slot_b)
-            self._slot_to_unload = None
+            self._video_graveyard.clear()
             _log.info("screen locked - all GStreamer pipelines released")
         else:
             _log.info("screen unlocked - reloading video")
@@ -894,19 +896,6 @@ class AttractorWindow(Gtk.Window):
         if not self._alive or self._paused:
             return
 
-        # Cancel any pending unload timer.  Do NOT call _unload_slot_video eagerly
-        # here even if the timer hasn't fired yet.  The slot we're about to load
-        # into is the same one the timer would have unloaded — calling set_file(None)
-        # right before set_filename() puts two GStreamer pipelines in flight on the
-        # same slot simultaneously: the async PLAYING→NULL teardown of the old one
-        # races with the new pipeline initialising, producing "assertion 'set != NULL'
-        # failed" bursts and accumulating file descriptors (→ EMFILE crash).
-        # GTK's set_filename() handles replacing an in-flight file safely on its own.
-        if self._pending_unload_source:
-            GLib.source_remove(self._pending_unload_source)
-            self._pending_unload_source = 0
-        self._slot_to_unload = None
-
         self._pool.advance()
         record = self._pool.current_record()
 
@@ -921,17 +910,6 @@ class AttractorWindow(Gtk.Window):
         self._load_slot(next_slot, record)
         self._stack.set_visible_child_name(next_name)
         self._active_slot_name = next_name
-
-        # Schedule the now-invisible slot's pipeline teardown.
-        # 1500 ms gives GStreamer enough time to walk PLAYING→PAUSED→NULL and
-        # fully release its file descriptors before the next advance touches
-        # this slot again.  The slot is invisible during this window so there
-        # is no visual cost to the delay.
-        self._slot_to_unload = prev_slot
-        self._pending_unload_source = GLib.timeout_add(
-            1500,
-            self._on_unload_timer,
-        )
 
         # Update HUD — full prompt, no truncation
         prompt_text = (getattr(record, "prompt", "") or "")
@@ -967,14 +945,29 @@ class AttractorWindow(Gtk.Window):
 
         self._schedule_advance(record)
 
-    def _on_unload_timer(self) -> bool:
-        """GLib timer: tear down the GStreamer pipeline for the now-invisible slot."""
-        self._pending_unload_source = 0
+    def _flush_video_graveyard(self) -> bool:
+        """GLib timer: finalize all discarded Gtk.Video widgets in the graveyard.
+
+        Called 3 seconds after the first widget is added.  By then the new
+        pipeline in the replacement widget is fully running, so calling
+        set_file(None) on the old widgets cannot race with the new one.
+        """
+        self._graveyard_timer = 0
         if not self._alive:
+            self._video_graveyard.clear()
             return GLib.SOURCE_REMOVE
-        if self._slot_to_unload is not None:
-            _unload_slot_video(self._slot_to_unload)
-            self._slot_to_unload = None
+        for vid in self._video_graveyard:
+            stream = vid.get_media_stream()
+            if stream is not None:
+                try:
+                    stream.pause()
+                except Exception:
+                    pass
+            try:
+                vid.set_file(None)
+            except Exception:
+                pass
+        self._video_graveyard.clear()
         return GLib.SOURCE_REMOVE
 
     def _load_slot(self, slot: Gtk.Box, record) -> None:
@@ -982,6 +975,13 @@ class AttractorWindow(Gtk.Window):
         Load a GenerationRecord into a media slot widget.
         Shows either the Gtk.Picture (images) or Gtk.Video (videos),
         hiding the other widget.
+
+        For video records, a fresh Gtk.Video widget is created each time.
+        The old widget is detached from the slot and queued in
+        _video_graveyard; _flush_video_graveyard() finalizes it 3 seconds
+        later (well after the new pipeline is running) to avoid the
+        PLAYING→NULL async teardown racing with the new pipeline and leaking
+        file descriptors (EMFILE).
         """
         if getattr(record, "media_type", "video") == "image":
             slot._video.set_visible(False)
@@ -991,20 +991,28 @@ class AttractorWindow(Gtk.Window):
             slot._picture.set_visible(True)
         else:
             slot._picture.set_visible(False)
-            # Do NOT call set_loop(True) - it prevents the notify::ended signal
-            # from firing on Gtk.MediaStream, breaking advance-on-video-end.
-            # (See CLAUDE.md: "Gtk.Video.set_loop(True) is unreliable")
             path = getattr(record, "video_path", None)
             if path:
-                # Load the new file directly via set_filename.  The inactive slot
-                # was already unloaded by the 500 ms timer from the previous advance
-                # (_on_unload_timer → _unload_slot_video).  Calling _unload_slot_video
-                # here BEFORE set_filename causes a GStreamer race: the PLAYING→NULL
-                # teardown is asynchronous, so GStreamer threads still hold the old
-                # GstPoll object when the new pipeline starts initialising, producing
-                # bursts of "assertion 'set != NULL' failed" and eventually EMFILE.
-                # GTK's set_filename handles replacing an existing file safely.
-                slot._video.set_filename(path)
+                # Retire the old Gtk.Video widget instead of reusing it.
+                # set_filename() on a widget whose pipeline is still in an async
+                # PLAYING→NULL teardown (from a prior set_file(None) call) creates
+                # two concurrent GStreamer pipelines on the same widget, generating
+                # "assertion 'set != NULL' failed" bursts and leaking FDs.
+                # Creating a fresh widget sidesteps all teardown races entirely.
+                old_vid = slot._video
+                slot.remove(old_vid)
+                self._video_graveyard.append(old_vid)
+                if not self._graveyard_timer:
+                    self._graveyard_timer = GLib.timeout_add(3000, self._flush_video_graveyard)
+
+                vid = Gtk.Video()
+                vid.set_hexpand(True)
+                vid.set_vexpand(True)
+                vid.set_autoplay(True)
+                # Do NOT set_loop(True) — it prevents notify::ended from firing.
+                vid.set_filename(path)
+                slot._video = vid
+                slot.prepend(vid)   # video before picture in the box
             slot._video.set_visible(True)
 
     def _schedule_advance(self, record) -> None:
