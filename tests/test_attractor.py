@@ -74,3 +74,53 @@ def test_pool_size_property():
     assert pool.size == 3
     pool.add_record(_rec())
     assert pool.size == 4
+
+def test_add_record_soon_lands_within_window():
+    """soon=True should insert within the next SOON_WINDOW positions."""
+    window = AttractorPool.SOON_WINDOW
+    # Large pool so a random insert would have many possible positions far away.
+    recs = [_rec() for _ in range(50)]
+    pool = AttractorPool(recs)
+    # Advance a few times so _pos > 0.
+    for _ in range(5):
+        pool.advance()
+
+    new_rec = _rec()
+    new_rec.id = "soon-test"
+    pool.add_record(new_rec, soon=True)
+    new_idx = 50  # index appended to _records
+
+    # The new record must appear within the next SOON_WINDOW advances.
+    found_at = None
+    for step in range(window + 2):
+        idx = pool.advance()
+        if idx == new_idx:
+            found_at = step
+            break
+    assert found_at is not None, "soon record not found"
+    # Record can appear at step 1..window (step 0 is always a pre-existing record
+    # because lower = _pos+1 — the insert is never at the very-next slot).
+    assert found_at <= window, f"soon record appeared at step {found_at}, expected <= {window}"
+
+def test_add_record_soon_default_false_can_land_far():
+    """Default (soon=False) can place new records far from current position."""
+    # With a large pool, it would be astronomically unlikely for the default
+    # insert to always land in the first SOON_WINDOW slots across many trials.
+    window = AttractorPool.SOON_WINDOW
+    far_count = 0
+    trials = 30
+    for _ in range(trials):
+        recs = [_rec() for _ in range(30)]
+        pool = AttractorPool(recs)
+        pool.advance()  # _pos = 1
+        pool.add_record(_rec())
+        new_idx = 30
+        landed_far = True
+        for step in range(window):
+            if pool.advance() == new_idx:
+                landed_far = False
+                break
+        if landed_far:
+            far_count += 1
+    # At least half the trials should land outside the window.
+    assert far_count > trials // 3, "Default add_record seems to always insert near front"

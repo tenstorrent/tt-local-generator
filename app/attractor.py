@@ -103,22 +103,38 @@ class AttractorPool:
                 return self._records[idx]
         return self._records[0]
 
-    def add_record(self, record) -> None:
+    # How many positions ahead a "soon" record can land (1 = always next).
+    SOON_WINDOW: int = 3
+
+    def add_record(self, record, soon: bool = False) -> None:
         """
-        Append a new record and insert its index at a random position after
-        the current playback position in _order.  No-ops if a record with the
-        same id is already in the pool.
+        Append a new record and insert its index into the playback order.
+
+        soon=False (default): insert at a random position strictly after
+            the current playback position — anywhere from [pos+1, end].
+            Preserves natural cycle shuffling for historical records.
+
+        soon=True: insert within the next SOON_WINDOW positions so the new
+            record appears on-screen quickly regardless of pool size.  Used
+            for freshly generated videos so they debut on TT-TV soon after
+            they finish rather than waiting up to a full shuffle cycle.
+
+        No-ops if a record with the same id is already in the pool.
         """
         record_id = getattr(record, "id", None)
         if record_id and any(getattr(r, "id", None) == record_id for r in self._records):
             return  # already in pool — skip
         new_idx = len(self._records)
         self._records.append(record)
-        # Insert at any position strictly after the current pos so the new record
-        # doesn't play immediately next.  If _pos is already at or past the end of
-        # _order (cycle about to reshuffle), the only valid slot is the end.
+        # lower: never insert at pos or before (would rewind to it immediately).
+        # If _pos is already past the end (reshuffle pending), only slot is end.
         lower = min(self._pos + 1, len(self._order))
-        insert_at = random.randint(lower, len(self._order))
+        if soon:
+            # Cap the upper bound so the record lands within SOON_WINDOW slots.
+            upper = min(lower + self.SOON_WINDOW - 1, len(self._order))
+        else:
+            upper = len(self._order)
+        insert_at = random.randint(lower, upper)
         self._order.insert(insert_at, new_idx)
 
     def remove_record(self, record_id: str) -> bool:
@@ -1334,7 +1350,10 @@ class AttractorWindow(Gtk.Window):
         _log.info("new record added to pool: %s  (pool now %d)",
                   Path(path).name if path else "?", self._pool.size + 1)
         was_empty = self._pool.size == 0
-        self._pool.add_record(record)
+        # soon=True: newly generated videos land within the next SOON_WINDOW
+        # slots so they debut on-screen quickly instead of waiting through a
+        # full shuffle cycle of potentially 100+ items.
+        self._pool.add_record(record, soon=True)
         self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
         # Refresh the coming-soon display now that the queue has shifted.
