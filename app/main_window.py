@@ -739,6 +739,35 @@ menubar > item:selected {
 .prefs-row {
     padding: 4px 0;
 }
+/* -- Playlists popover -------------------------------------------------------- */
+.playlists-popover-row {
+    padding: 4px 2px;
+}
+.playlists-popover-name {
+    font-size: 11px;
+    font-weight: bold;
+    color: @tt_text;
+    min-width: 120px;
+}
+.playlists-popover-count {
+    font-size: 10px;
+    color: @tt_text_muted;
+}
+/* -- Selection mode banner ---------------------------------------------------- */
+.selection-banner {
+    background-color: alpha(#4FD1C5, 0.08);
+    border-bottom: 1px solid alpha(#4FD1C5, 0.35);
+    padding: 5px 12px;
+}
+.selection-banner-label {
+    font-size: 12px;
+    color: @tt_accent;
+    font-weight: bold;
+}
+/* -- Card checkbox overlay ---------------------------------------------------- */
+.card-check {
+    margin: 4px;
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -944,13 +973,40 @@ class GenerationCard(Gtk.Frame):
         else:
             self.remove_css_class(css_class)
 
+    def set_selection_visible(self, visible: bool) -> None:
+        """Show or hide the selection checkbox overlay."""
+        self._check.set_visible(visible)
+
+    def is_checked(self) -> bool:
+        """Return True if the selection checkbox is checked."""
+        return self._check.get_active()
+
+    def set_checked(self, checked: bool) -> None:
+        """Programmatically set the checkbox state."""
+        self._check.set_active(checked)
+
     def _build(self) -> None:
+        # Wrap the card content in a Gtk.Overlay so the selection checkbox
+        # can float in the top-left corner without affecting the card layout.
+        overlay = Gtk.Overlay()
+        self.set_child(overlay)
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
         box.set_margin_start(8)
         box.set_margin_end(8)
-        self.set_child(box)
+        overlay.set_child(box)
+
+        # Checkbox overlay: hidden until selection mode is activated.
+        # Positioned top-left; pointer events are swallowed by the checkbox so
+        # clicks on it don't bubble up to the card's GestureClick.
+        self._check = Gtk.CheckButton()
+        self._check.add_css_class("card-check")
+        self._check.set_halign(Gtk.Align.START)
+        self._check.set_valign(Gtk.Align.START)
+        self._check.set_visible(False)
+        overlay.add_overlay(self._check)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
         # The stack expands horizontally so the thumbnail fills the FlowBox cell width.
@@ -1793,6 +1849,8 @@ class GalleryWidget(Gtk.Box):
         self._cards: list = []                       # all card widgets, index 0 = top-left
         self._pending: Optional[PendingCard] = None
         self._selected_card: Optional[GenerationCard] = None
+        self._selection_mode: bool = False           # True while adding to a playlist
+        self._active_playlist_id: "str | None" = None  # playlist being edited
 
     def select_card(self, card: "GenerationCard") -> None:
         """Highlight card as selected and notify the detail panel."""
@@ -1885,6 +1943,39 @@ class GalleryWidget(Gtk.Box):
         if to_remove:
             self._relayout()
 
+    def enter_selection_mode(self, playlist_id: str, pre_checked_ids: set) -> None:
+        """
+        Activate checkbox selection mode for the given playlist.
+
+        Shows a checkbox on every video card.  Cards whose record IDs are
+        already in pre_checked_ids are pre-checked so editing a playlist
+        shows the existing membership at a glance.
+        """
+        self._selection_mode = True
+        self._active_playlist_id = playlist_id
+        for card in self._cards:
+            if not isinstance(card, GenerationCard):
+                continue
+            card.set_selection_visible(True)
+            card.set_checked(card._record.id in pre_checked_ids)
+
+    def exit_selection_mode(self) -> None:
+        """Deactivate selection mode and hide all checkboxes."""
+        self._selection_mode = False
+        self._active_playlist_id = None
+        for card in self._cards:
+            if isinstance(card, GenerationCard):
+                card.set_selection_visible(False)
+                card.set_checked(False)
+
+    def get_checked_ids(self) -> list:
+        """Return a list of record IDs for all currently checked cards."""
+        return [
+            card._record.id
+            for card in self._cards
+            if isinstance(card, GenerationCard) and card.is_checked()
+        ]
+
     def _relayout(self) -> None:
         """Re-populate the FlowBox from self._cards (newest first)."""
         # Remove all FlowBoxChild wrappers; our card widgets remain alive in self._cards.
@@ -1896,6 +1987,11 @@ class GalleryWidget(Gtk.Box):
         # Re-add every card; FlowBox automatically wraps each in a FlowBoxChild.
         for card in self._cards:
             self._flow.append(card)
+        # Re-apply selection mode checkboxes to any newly added cards.
+        if self._selection_mode and self._active_playlist_id:
+            for card in self._cards:
+                if isinstance(card, GenerationCard) and not card.is_checked():
+                    card.set_selection_visible(True)
 
 
 # ── Control panel ──────────────────────────────────────────────────────────────
@@ -1937,6 +2033,8 @@ class ControlPanel(Gtk.Box):
         on_start_prompt_gen = None,  # () -> None — launch start_prompt_gen.sh --gui
         on_inspire = None,           # (source: str, seed_text: str) -> None — start generation thread
         on_theme_queue = None,       # (source: str) -> None — generate & popover a 5-shot theme set
+        on_open_playlist = None,     # (playlist_id: str | None) -> None — open TT-TV for a playlist
+        on_enter_selection_mode = None,  # (playlist_id: str) -> None — enter grid selection mode
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._on_generate = on_generate
@@ -1948,6 +2046,8 @@ class ControlPanel(Gtk.Box):
         self._on_start_prompt_gen = on_start_prompt_gen or (lambda: None)
         self._on_inspire = on_inspire or (lambda s, t: None)
         self._on_theme_queue = on_theme_queue or (lambda s: None)
+        self._on_open_playlist = on_open_playlist or (lambda pid: None)
+        self._on_enter_selection_mode = on_enter_selection_mode or (lambda pid: None)
         self._theme_generating: bool = False  # True while theme generation is in progress
         # ── Prompt gen server state ───────────────────────────────────────────
         self._prompt_gen_ready: bool = False      # True when port 8001 health check passes
@@ -2111,6 +2211,15 @@ class ControlPanel(Gtk.Box):
         # Refresh status dots each time the popover opens.
         self._servers_popover.connect("show", self._on_servers_popover_show)
         self._toolbar_box.append(self._servers_btn)
+
+        # ── Playlists menu button ─────────────────────────────────────────────
+        self._playlists_btn = Gtk.MenuButton(label="Playlists ▾")
+        self._playlists_btn.add_css_class("servers-menu-btn")
+        self._playlists_btn.set_tooltip_text("Manage playlists / TT-TV channels")
+        self._playlists_popover = self._build_playlists_popover()
+        self._playlists_btn.set_popover(self._playlists_popover)
+        self._playlists_popover.connect("show", self._on_playlists_popover_show)
+        self._toolbar_box.append(self._playlists_btn)
 
         # _source_desc_lbl is kept for internal _update_source_desc() calls
         # but no longer shown in the panel — the status bar shows model info.
@@ -2806,6 +2915,207 @@ class ControlPanel(Gtk.Box):
             GLib.idle_add(self._set_server_row_busy, key, False)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # ── Playlists popover ──────────────────────────────────────────────────────
+
+    def _build_playlists_popover(self) -> Gtk.Popover:
+        """Build the Playlists ▾ popover with header, All Videos row, and per-playlist rows."""
+        popover = Gtk.Popover()
+        popover.set_has_arrow(False)
+        popover.set_autohide(True)
+
+        self._playlists_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._playlists_outer.set_margin_top(8)
+        self._playlists_outer.set_margin_bottom(8)
+        self._playlists_outer.set_margin_start(10)
+        self._playlists_outer.set_margin_end(10)
+
+        # Header: "Playlists" label + "+ New" button
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        hdr_lbl = Gtk.Label(label="Playlists")
+        hdr_lbl.add_css_class("servers-popover-key")
+        hdr_lbl.set_hexpand(True)
+        hdr_lbl.set_xalign(0)
+        hdr.append(hdr_lbl)
+        new_btn = Gtk.Button(label="+ New")
+        new_btn.add_css_class("servers-popover-btn")
+        new_btn.set_tooltip_text("Create a new playlist")
+        new_btn.connect("clicked", self._on_playlist_new_clicked)
+        hdr.append(new_btn)
+        self._playlists_outer.append(hdr)
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_top(4)
+        sep.set_margin_bottom(4)
+        self._playlists_outer.append(sep)
+
+        # "All Videos" fixed row
+        all_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        all_row.add_css_class("playlists-popover-row")
+        all_name = Gtk.Label(label="All Videos")
+        all_name.add_css_class("playlists-popover-name")
+        all_name.set_hexpand(True)
+        all_name.set_xalign(0)
+        all_row.append(all_name)
+        all_play_btn = Gtk.Button(label="▶")
+        all_play_btn.add_css_class("servers-popover-btn")
+        all_play_btn.set_tooltip_text("Watch TT-TV with all videos")
+        all_play_btn.connect("clicked", lambda _: self._on_open_playlist(None))
+        all_row.append(all_play_btn)
+        self._playlists_outer.append(all_row)
+
+        # Dynamic per-playlist rows are appended/rebuilt in _rebuild_playlist_rows()
+        self._playlists_rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._playlists_outer.append(self._playlists_rows_box)
+
+        popover.set_child(self._playlists_outer)
+        return popover
+
+    def _on_playlists_popover_show(self, _popover) -> None:
+        """Rebuild the dynamic playlist rows each time the popover opens."""
+        self._rebuild_playlist_rows()
+
+    def _rebuild_playlist_rows(self) -> None:
+        """Clear and rebuild the per-playlist rows from the current store."""
+        from playlist_store import playlist_store as _ps
+
+        # Remove all existing rows
+        child = self._playlists_rows_box.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self._playlists_rows_box.remove(child)
+            child = nxt
+
+        playlists = _ps.all()
+        if not playlists:
+            empty_lbl = Gtk.Label(label="No playlists yet — click + New to create one")
+            empty_lbl.add_css_class("servers-popover-label")
+            empty_lbl.set_margin_top(6)
+            empty_lbl.set_xalign(0)
+            self._playlists_rows_box.append(empty_lbl)
+            return
+
+        for pl in playlists:
+            sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            sep.set_margin_top(2)
+            sep.set_margin_bottom(2)
+            self._playlists_rows_box.append(sep)
+
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.add_css_class("playlists-popover-row")
+
+            text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            text_col.set_hexpand(True)
+            name_lbl = Gtk.Label(label=pl.name)
+            name_lbl.add_css_class("playlists-popover-name")
+            name_lbl.set_xalign(0)
+            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            name_lbl.set_max_width_chars(20)
+            text_col.append(name_lbl)
+            count = len(pl.record_ids)
+            count_lbl = Gtk.Label(label=f"{count} video{'s' if count != 1 else ''}"
+                                         + ("  •  auto-gen" if pl.auto_gen else ""))
+            count_lbl.add_css_class("playlists-popover-count")
+            count_lbl.set_xalign(0)
+            text_col.append(count_lbl)
+            row.append(text_col)
+
+            # Play button — open TT-TV for this playlist
+            play_btn = Gtk.Button(label="▶")
+            play_btn.add_css_class("servers-popover-btn")
+            play_btn.set_tooltip_text(f"Watch '{pl.name}' in TT-TV")
+            play_btn.connect("clicked", lambda _b, pid=pl.id: self._on_open_playlist(pid))
+            row.append(play_btn)
+
+            # Edit button — enter selection mode
+            edit_btn = Gtk.Button(label="✎ Edit")
+            edit_btn.add_css_class("servers-popover-btn")
+            edit_btn.set_tooltip_text(f"Add/remove videos in '{pl.name}'")
+            edit_btn.connect(
+                "clicked",
+                lambda _b, pid=pl.id: (
+                    self._playlists_btn.get_popover().popdown(),
+                    self._on_enter_selection_mode(pid),
+                ),
+            )
+            row.append(edit_btn)
+
+            # Delete button
+            del_btn = Gtk.Button(label="🗑")
+            del_btn.add_css_class("servers-popover-btn")
+            del_btn.set_tooltip_text(f"Delete playlist '{pl.name}'")
+            del_btn.connect("clicked", lambda _b, pid=pl.id, pname=pl.name:
+                            self._on_playlist_delete_clicked(pid, pname))
+            row.append(del_btn)
+
+            self._playlists_rows_box.append(row)
+
+    def _on_playlist_new_clicked(self, _btn) -> None:
+        """Show a simple name-entry dialog and create the playlist."""
+        dialog = Gtk.Dialog(title="New Playlist", modal=True)
+        dialog.set_transient_for(self.get_root())
+        dialog.set_default_size(300, -1)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        ok_btn = dialog.add_button("Create", Gtk.ResponseType.OK)
+        ok_btn.add_css_class("suggested-action")
+        ok_btn.set_sensitive(False)
+
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_margin_top(12)
+        content.set_margin_bottom(4)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+
+        lbl = Gtk.Label(label="Playlist name:")
+        lbl.set_xalign(0)
+        content.append(lbl)
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("e.g. Space Adventures")
+        entry.set_activates_default(True)
+        content.append(entry)
+
+        def _on_entry_changed(_e):
+            ok_btn.set_sensitive(bool(entry.get_text().strip()))
+
+        entry.connect("changed", _on_entry_changed)
+
+        def _on_response(dlg, resp):
+            name = entry.get_text().strip()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.OK and name:
+                from playlist_store import playlist_store as _ps
+                pl = _ps.create(name)
+                self._playlists_btn.get_popover().popdown()
+                self._on_enter_selection_mode(pl.id)
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
+    def _on_playlist_delete_clicked(self, playlist_id: str, playlist_name: str) -> None:
+        """Show a confirmation dialog then delete the playlist."""
+        dialog = Gtk.MessageDialog(
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=f"Delete playlist '{playlist_name}'?",
+            secondary_text="The videos themselves are not deleted.",
+        )
+        dialog.set_transient_for(self.get_root())
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        del_btn = dialog.add_button("Delete", Gtk.ResponseType.ACCEPT)
+        del_btn.add_css_class("destructive-action")
+
+        def _on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.ACCEPT:
+                from playlist_store import playlist_store as _ps
+                _ps.delete(playlist_id)
+                self._rebuild_playlist_rows()
+
+        dialog.connect("response", _on_response)
+        dialog.present()
 
     # ── State ──────────────────────────────────────────────────────────────────
 
@@ -4535,6 +4845,8 @@ class MainWindow(Gtk.ApplicationWindow):
             on_start_prompt_gen=self._on_start_prompt_gen,
             on_inspire=self._on_inspire,
             on_theme_queue=self._on_theme,
+            on_open_playlist=self._on_open_attractor_for_playlist,
+            on_enter_selection_mode=self._on_enter_selection_mode,
         )
 
         # ── Main toolbar ──────────────────────────────────────────────────────
@@ -4608,6 +4920,41 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.set_visible_child_name("video")
 
         gallery_wrap.append(self._gallery_stack)
+
+        # ── Selection-mode banner (hidden until user edits a playlist) ─────────
+        # A slide-down Gtk.Revealer containing a banner with the playlist name,
+        # an "Add Selected" button, and a Cancel (✕) button.
+        self._selection_banner_revealer = Gtk.Revealer()
+        self._selection_banner_revealer.set_transition_type(
+            Gtk.RevealerTransitionType.SLIDE_DOWN
+        )
+        self._selection_banner_revealer.set_transition_duration(180)
+
+        banner_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        banner_box.add_css_class("selection-banner")
+        banner_box.set_margin_start(12)
+        banner_box.set_margin_end(12)
+        banner_box.set_margin_top(4)
+        banner_box.set_margin_bottom(4)
+
+        self._selection_banner_lbl = Gtk.Label(label="")
+        self._selection_banner_lbl.add_css_class("selection-banner-label")
+        self._selection_banner_lbl.set_hexpand(True)
+        self._selection_banner_lbl.set_xalign(0)
+        banner_box.append(self._selection_banner_lbl)
+
+        self._selection_add_btn = Gtk.Button(label="Add Selected")
+        self._selection_add_btn.add_css_class("servers-popover-btn")
+        self._selection_add_btn.connect("clicked", self._on_selection_add)
+        banner_box.append(self._selection_add_btn)
+
+        cancel_btn = Gtk.Button(label="✕ Cancel")
+        cancel_btn.add_css_class("servers-popover-btn")
+        cancel_btn.connect("clicked", lambda _: self._exit_selection_mode())
+        banner_box.append(cancel_btn)
+
+        self._selection_banner_revealer.set_child(banner_box)
+        gallery_wrap.append(self._selection_banner_revealer)
 
         # Narrow status label for generation progress messages (above status bar)
         self._status_lbl = Gtk.Label(label="Ready")
@@ -4953,6 +5300,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # Sync deletion with the TT-TV pool so it stops trying to play the file.
         if self._attractor_win is not None:
             self._attractor_win.remove_record(record)
+        # Remove the record from any playlists that contained it.
+        from playlist_store import playlist_store as _ps
+        valid_ids = {r.id for r in self._store.all_records()}
+        _ps.purge_deleted_records(valid_ids)
         short = record.prompt[:50] + ("…" if len(record.prompt) > 50 else "")
         self._set_status(f'Deleted: "{short}"')
 
@@ -5200,9 +5551,96 @@ class MainWindow(Gtk.ApplicationWindow):
         if not (self._worker and self._worker.is_alive()):
             self._start_next_queued()
 
+    # ── Playlist selection mode ────────────────────────────────────────────────
+
+    def _on_enter_selection_mode(self, playlist_id: str) -> None:
+        """
+        Enter checkbox selection mode on the active gallery so the user can
+        add or remove videos from a playlist.
+
+        Scrolls back to the video tab, shows the selection banner with the
+        playlist name, and pre-checks cards already in the playlist.
+        """
+        from playlist_store import playlist_store as _ps
+        pl = _ps.get(playlist_id)
+        if pl is None:
+            return
+
+        # Switch to the video gallery tab (video playlists only for now).
+        # The gallery stack has named children; switch to the video page.
+        self._gallery_stack.set_visible_child_name("video")
+
+        pre_checked = set(pl.record_ids)
+        self._video_gallery.enter_selection_mode(playlist_id, pre_checked)
+
+        # Show the banner with an instructive label.
+        self._selection_banner_lbl.set_text(
+            f"☑  Adding to \"{pl.name}\" — check videos to include"
+        )
+        self._selection_banner_revealer.set_reveal_child(True)
+
+    def _exit_selection_mode(self) -> None:
+        """Hide the selection banner and deactivate checkboxes on all galleries."""
+        self._selection_banner_revealer.set_reveal_child(False)
+        for gallery in (self._video_gallery, self._animate_gallery, self._image_gallery):
+            gallery.exit_selection_mode()
+
+    def _on_selection_add(self, _btn) -> None:
+        """
+        Save the currently checked video IDs to the active playlist, then exit
+        selection mode.  Only replaces the playlist membership — records that
+        were previously in the playlist but are not checked get removed, and
+        newly checked records are added.
+        """
+        from playlist_store import playlist_store as _ps
+
+        # Find whichever gallery is currently in selection mode.
+        gallery = None
+        for g in (self._video_gallery, self._animate_gallery, self._image_gallery):
+            if g._selection_mode:
+                gallery = g
+                break
+
+        if gallery is None or gallery._active_playlist_id is None:
+            self._exit_selection_mode()
+            return
+
+        playlist_id = gallery._active_playlist_id
+        pl = _ps.get(playlist_id)
+        if pl is None:
+            self._exit_selection_mode()
+            return
+
+        checked_ids = gallery.get_checked_ids()
+
+        # Replace playlist contents: add new, remove unchecked.
+        # Keep existing ordering for IDs that are already there; append new ones.
+        checked_set = set(checked_ids)
+        # Remove records that were unchecked
+        for rid in list(pl.record_ids):
+            if rid not in checked_set:
+                _ps.remove_record(playlist_id, rid)
+        # Add newly checked records (deduplication is handled inside add_records)
+        if checked_ids:
+            _ps.add_records(playlist_id, checked_ids)
+
+        count = len(_ps.get(playlist_id).record_ids)
+        self._set_status(
+            f"Playlist \"{pl.name}\" updated — {count} video{'s' if count != 1 else ''}"
+        )
+        self._exit_selection_mode()
+
+    def _on_open_attractor_for_playlist(self, playlist_id: "str | None") -> None:
+        """Open TT-TV filtered to the given playlist (or all videos if None)."""
+        # Close existing attractor window so we can reopen with new filter.
+        if self._attractor_win is not None:
+            self._attractor_win.destroy()
+            self._attractor_win = None
+        self._on_open_attractor(playlist_id=playlist_id)
+
     # ── Attractor Mode ─────────────────────────────────────────────────────────
 
-    def _on_open_attractor(self, _btn=None) -> None:
+    def _on_open_attractor(self, _btn=None, playlist_id: "str | None" = None) -> None:
         """Open (or raise) the Attractor Mode kiosk window."""
         if self._attractor_win is not None:
             self._attractor_win.present()
@@ -5213,9 +5651,21 @@ class MainWindow(Gtk.ApplicationWindow):
         for gallery in (self._video_gallery, self._animate_gallery, self._image_gallery):
             gallery.stop_all_playback()
 
+        # Filter records to the chosen playlist, or use all records.
+        all_records = self._store.all_records()
+        if playlist_id is not None:
+            from playlist_store import playlist_store as _ps
+            pl = _ps.get(playlist_id)
+            playlist_record_ids = set(pl.record_ids) if pl else set()
+            records = [r for r in all_records if r.id in playlist_record_ids]
+            auto_generate = pl.auto_gen if pl else True
+        else:
+            records = all_records
+            auto_generate = True
+
         try:
             win = attractor.AttractorWindow(
-                records=self._store.all_records(),
+                records=records,
                 system_prompt=self._prompt_gen_system_prompt,
                 model_source=self._controls.get_model_source(),
                 on_enqueue=self._on_attractor_generate,
@@ -5236,6 +5686,11 @@ class MainWindow(Gtk.ApplicationWindow):
                         self._controls._running_model or "",
                         self._controls._running_model,
                     ),
+                ),
+                playlist_id=playlist_id,
+                auto_generate=auto_generate,
+                get_playlists=lambda: (
+                    __import__("playlist_store").playlist_store.all()
                 ),
             )
         except Exception:

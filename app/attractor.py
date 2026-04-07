@@ -404,6 +404,9 @@ class AttractorWindow(Gtk.Window):
         get_queue_prompts: "Callable[[], list[str]]" = lambda: [],   # prompts waiting in queue
         get_current_prompt: "Callable[[], str | None]" = lambda: None,  # prompt currently generating
         on_user_enqueue: "Callable | None" = None,  # high-priority enqueue for user-typed prompts
+        playlist_id: "str | None" = None,    # None = all videos; str = filter to this playlist
+        auto_generate: bool = True,           # whether to run the generation loop
+        get_playlists: "Callable[[], list]" = lambda: [],  # for channel switcher dropdown
     ) -> None:
         _log.debug("AttractorWindow.__init__ - %d records, model_source=%s", len(records), model_source)
         super().__init__(title="TT-TV")
@@ -417,6 +420,14 @@ class AttractorWindow(Gtk.Window):
         self._get_current_prompt = get_current_prompt
         # Fall back to regular enqueue if no priority path provided
         self._on_user_enqueue = on_user_enqueue if on_user_enqueue is not None else on_enqueue
+        # Playlist / channel state
+        self._playlist_id: "str | None" = playlist_id
+        self._auto_generate: bool = auto_generate
+        self._get_playlists: Callable = get_playlists
+        # Store ALL records so _switch_channel() can refilter from the full set.
+        # MainWindow already filtered records to the chosen playlist before passing
+        # them in, but we need the full list to support in-window channel switching.
+        self._all_records: list = list(records)
         self._att_poll_stop = threading.Event()
         video_records = [r for r in records if getattr(r, "media_type", "video") != "image"]
         _log.debug("pool filter: %d total → %d video records", len(records), len(video_records))
@@ -575,6 +586,43 @@ class AttractorWindow(Gtk.Window):
         hdr.set_max_width_chars(10)
         hdr.set_ellipsize(Pango.EllipsizeMode.END)
         sidebar.append(hdr)
+
+        sidebar.append(_hdivider())
+
+        # ── Channel selector ──────────────────────────────────────────────
+        # Shows the current playlist (channel) and lets the user switch
+        # without leaving TT-TV.  Uses a simple Gtk.DropDown backed by a
+        # Gtk.StringList; rebuilt on open via _populate_channel_dropdown().
+        ch_lbl = Gtk.Label(label="CHANNEL")
+        ch_lbl.add_css_class("attractor-section-lbl")
+        ch_lbl.set_xalign(0)
+        ch_lbl.set_max_width_chars(12)
+        sidebar.append(ch_lbl)
+
+        self._channel_model = Gtk.StringList()
+        self._channel_ids: list = []       # parallel list: index → playlist_id or None
+        self._channel_dropdown = Gtk.DropDown(model=self._channel_model)
+        self._channel_dropdown.add_css_class("attractor-stat-lbl")
+        self._channel_dropdown.set_tooltip_text("Switch TT-TV channel")
+        self._populate_channel_dropdown()
+        # Connect after populate so the initial set doesn't trigger _switch_channel.
+        self._channel_dropdown.connect("notify::selected", self._on_channel_selected)
+        sidebar.append(self._channel_dropdown)
+
+        # ── Auto-gen toggle ───────────────────────────────────────────────
+        ag_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        ag_lbl = Gtk.Label(label="Auto-gen")
+        ag_lbl.add_css_class("attractor-stat-lbl")
+        ag_lbl.set_hexpand(True)
+        ag_lbl.set_xalign(0)
+        ag_row.append(ag_lbl)
+        self._autogen_switch = Gtk.Switch()
+        self._autogen_switch.set_active(self._auto_generate)
+        self._autogen_switch.set_valign(Gtk.Align.CENTER)
+        self._autogen_switch.set_tooltip_text("Auto-generate new content for this channel")
+        self._autogen_switch.connect("notify::active", self._on_autogen_toggled)
+        ag_row.append(self._autogen_switch)
+        sidebar.append(ag_row)
 
         sidebar.append(_hdivider())
 
@@ -781,11 +829,13 @@ class AttractorWindow(Gtk.Window):
         if not self._alive:
             return
         self._started = True
-        _log.info("=== Attractor started - pool size: %d ===", self._pool.size)
+        _log.info("=== Attractor started - pool size: %d, auto_generate: %s ===",
+                  self._pool.size, self._auto_generate)
         self._subscribe_screensaver()
         if self._pool.size > 0:
             self._advance()
-        threading.Thread(target=self._generation_loop, daemon=True).start()
+        if self._auto_generate:
+            threading.Thread(target=self._generation_loop, daemon=True).start()
         threading.Thread(target=self._att_status_poll_loop, daemon=True).start()
 
     def _subscribe_screensaver(self) -> None:
@@ -1126,7 +1176,7 @@ class AttractorWindow(Gtk.Window):
         Back-pressure: if queue depth >= 3, waits 30 s before retrying (server
         isn't consuming jobs fast enough). Stops when _gen_stop is set.
         """
-        while not self._gen_stop.wait(0.0):
+        while not self._gen_stop.wait(0.0) and self._auto_generate:
             depth = self._get_queue_depth()
             generating = self._get_is_generating()
             GLib.idle_add(self._update_work_lbl, depth, generating)
@@ -1339,6 +1389,18 @@ class AttractorWindow(Gtk.Window):
             return
         if getattr(record, "media_type", "video") == "image":
             return  # images excluded from attractor playback
+        # If a playlist channel is active, only accept records that belong to it.
+        # New generations will show up in "All Videos" mode but not in a specific
+        # channel unless the user explicitly added them to that playlist.
+        if self._playlist_id is not None:
+            from playlist_store import playlist_store as _ps
+            pl = _ps.get(self._playlist_id)
+            if pl is None or getattr(record, "id", None) not in pl.record_ids:
+                _log.debug("add_record: skipping %s — not in active playlist %s",
+                           getattr(record, "id", "?"), self._playlist_id)
+                return
+        # Keep all_records up-to-date for potential _switch_channel() calls.
+        self._all_records.append(record)
         path = getattr(record, "video_path", None) or ""
         if path:
             p = Path(path)
@@ -1386,6 +1448,109 @@ class AttractorWindow(Gtk.Window):
             self._update_next_thumb()
             _log.info("record removed from pool: %s  (pool now %d)",
                       record_id, self._pool.size)
+
+    # ── Channel / playlist switching ──────────────────────────────────────
+
+    def _populate_channel_dropdown(self) -> None:
+        """
+        Fill the channel dropdown with "All Videos" plus every named playlist.
+        Selects the entry that matches self._playlist_id without triggering the
+        notify::selected signal (called before the signal is connected).
+        """
+        # Clear existing items
+        self._channel_ids = []
+        # Remove all items from StringList
+        while self._channel_model.get_n_items() > 0:
+            self._channel_model.remove(0)
+
+        # "All Videos" is always the first entry (index 0, id = None)
+        self._channel_model.append("All Videos")
+        self._channel_ids.append(None)
+
+        playlists = self._get_playlists()
+        for pl in playlists:
+            self._channel_model.append(pl.name)
+            self._channel_ids.append(pl.id)
+
+        # Select the entry matching the current playlist
+        selected_idx = 0
+        for i, pid in enumerate(self._channel_ids):
+            if pid == self._playlist_id:
+                selected_idx = i
+                break
+        self._channel_dropdown.set_selected(selected_idx)
+
+    def _on_channel_selected(self, dropdown, _pspec) -> None:
+        """Called when the user picks a different entry in the channel dropdown."""
+        idx = dropdown.get_selected()
+        if idx < 0 or idx >= len(self._channel_ids):
+            return
+        new_playlist_id = self._channel_ids[idx]
+        if new_playlist_id == self._playlist_id:
+            return  # same channel, no-op
+        self._switch_channel(new_playlist_id)
+
+    def _on_autogen_toggled(self, sw, _pspec) -> None:
+        """Called when the auto-gen switch is toggled."""
+        self._auto_generate = sw.get_active()
+        _log.info("auto-gen toggled: %s", self._auto_generate)
+        if self._auto_generate and self._started and self._alive:
+            # Restart the generation thread if it was off.
+            threading.Thread(target=self._generation_loop, daemon=True).start()
+        # If turned off, the running thread's while condition (which checks
+        # self._auto_generate) will exit at the top of the next iteration.
+        # Persist the preference to the playlist store if a playlist is active.
+        if self._playlist_id is not None:
+            from playlist_store import playlist_store as _ps
+            _ps.set_auto_gen(self._playlist_id, self._auto_generate)
+
+    def _switch_channel(self, new_playlist_id: "str | None") -> None:
+        """
+        Switch TT-TV to a different playlist channel without closing the window.
+
+        Rebuilds the pool from the stored all_records list filtered to the new
+        playlist, updates the auto-gen switch, and triggers a channel-change
+        flash to signal the transition to the user.
+        """
+        from playlist_store import playlist_store as _ps
+
+        self._playlist_id = new_playlist_id
+
+        if new_playlist_id is not None:
+            pl = _ps.get(new_playlist_id)
+            playlist_record_ids = set(pl.record_ids) if pl else set()
+            filtered = [r for r in self._all_records
+                        if getattr(r, "id", None) in playlist_record_ids
+                        and getattr(r, "media_type", "video") != "image"]
+            new_auto_gen = pl.auto_gen if pl else True
+        else:
+            filtered = [r for r in self._all_records
+                        if getattr(r, "media_type", "video") != "image"]
+            new_auto_gen = True
+
+        _log.info("_switch_channel → %s: %d records, auto_gen=%s",
+                  new_playlist_id, len(filtered), new_auto_gen)
+
+        # Replace the pool.
+        self._pool = AttractorPool(filtered)
+        self._pool_lbl.set_label(f"🎬  pool: {self._pool.size}")
+        self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
+        self._update_coming_soon_ui()
+        self._update_next_thumb()
+
+        # Update auto-gen switch (block signal to avoid recursive call).
+        was_auto_gen = self._auto_generate
+        self._auto_generate = new_auto_gen
+        self._autogen_switch.handler_block_by_func(self._on_autogen_toggled)
+        self._autogen_switch.set_active(new_auto_gen)
+        self._autogen_switch.handler_unblock_by_func(self._on_autogen_toggled)
+
+        # If auto-gen just became enabled and wasn't before, start the thread.
+        if self._auto_generate and not was_auto_gen and self._started and self._alive:
+            threading.Thread(target=self._generation_loop, daemon=True).start()
+
+        # Flash to signal the channel change, then advance to the first video.
+        self._trigger_channel_change()
 
     # ── Channel-change transition ─────────────────────────────────────────
 
