@@ -62,19 +62,27 @@ class APIClient:
     """
     Client for the tt-inference-server video generation API.
 
-    Automatically discovers the API key from the server's .env file.
-    Falls back to no-auth if the key is not found (server started with --no-auth).
+    Token resolution order (first non-empty value wins):
+      1. server_config for the given service_key  (Preferences → Servers)
+      2. AUTHORIZATION_TOKEN / API_KEY in the server's .env file
+      3. Server compiled-in default ("your-secret-key")
+
+    Tokens are re-read on every request so changes in Preferences take effect
+    immediately without restarting the app.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8000",
+                 service_key: str = "wan2.2"):
         self.base_url = base_url.rstrip("/")
-        self._api_key = _load_api_key()
+        self._service_key = service_key
 
     def _headers(self) -> dict:
-        """Build request headers, including auth token if available."""
+        """Build request headers with the current bearer token."""
+        from server_config import server_config as _sc
+        token = _sc.token(self._service_key) or _load_api_key()
         headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         return headers
 
     def list_jobs(self) -> list:

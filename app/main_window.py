@@ -4155,9 +4155,9 @@ class PreferencesDialog(Gtk.Window):
     def __init__(self, main_window: "MainWindow") -> None:
         super().__init__(
             title="Preferences",
-            default_width=420,
-            default_height=560,
-            resizable=False,
+            default_width=480,
+            default_height=660,
+            resizable=True,
         )
         self._mw = main_window
         self.set_transient_for(main_window)
@@ -4345,6 +4345,90 @@ class PreferencesDialog(Gtk.Window):
                              "Always use this director's style in video prompts. "
                              "'Random' samples from the full list based on the probability above."))
         self._director_drop = director_drop
+
+        # ── Servers ───────────────────────────────────────────────────────────
+        box.append(self._section("Servers"))
+
+        note = Gtk.Label(
+            label="Host / port changes take effect on next launch.\n"
+                  "Token changes apply immediately."
+        )
+        note.set_xalign(0)
+        note.set_margin_start(2)
+        note.set_margin_bottom(6)
+        note.add_css_class("muted")
+        box.append(note)
+
+        self._build_servers_config(box)
+
+    def _build_servers_config(self, parent: Gtk.Box) -> None:
+        """Build the per-service host / port / token grid for the Servers section."""
+        from server_config import server_config as _sc, DEFAULTS as _SC_DEFAULTS
+        import server_manager as _sm_mod
+
+        grid = Gtk.Grid()
+        grid.set_column_spacing(8)
+        grid.set_row_spacing(6)
+        grid.set_margin_start(2)
+
+        # Column header labels
+        for col, txt in enumerate(["Service", "Host", "Port", "Token"]):
+            hdr = Gtk.Label(label=txt)
+            hdr.set_xalign(0)
+            hdr.add_css_class("muted")
+            grid.attach(hdr, col, 0, 1, 1)
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_bottom(2)
+        grid.attach(sep, 0, 1, 4, 1)
+
+        for row_idx, (key, sdef) in enumerate(_sm_mod.SERVERS.items(), start=2):
+            # Service label
+            svc_lbl = Gtk.Label(label=key)
+            svc_lbl.set_xalign(0)
+            svc_lbl.set_tooltip_text(sdef.label)
+            grid.attach(svc_lbl, 0, row_idx, 1, 1)
+
+            # Host entry
+            host_entry = Gtk.Entry()
+            host_entry.set_text(_sc.get(key, "host") or "localhost")
+            host_entry.set_width_chars(14)
+            host_entry.set_placeholder_text("localhost")
+            host_entry.connect("changed", lambda w, k=key: _sc.set(k, "host", w.get_text().strip()))
+            grid.attach(host_entry, 1, row_idx, 1, 1)
+
+            # Port spin
+            port_spin = Gtk.SpinButton()
+            port_spin.set_adjustment(Gtk.Adjustment(
+                value=float(_sc.get(key, "port") or 8000),
+                lower=1, upper=65535, step_increment=1, page_increment=100,
+            ))
+            port_spin.set_digits(0)
+            port_spin.set_width_chars(6)
+            port_spin.connect("value-changed",
+                              lambda w, k=key: _sc.set(k, "port", int(w.get_value())))
+            grid.attach(port_spin, 2, row_idx, 1, 1)
+
+            # Token entry (password-masked with reveal button)
+            token_entry = Gtk.PasswordEntry()
+            token_entry.set_show_peek_icon(True)
+            current_token = _sc.get(key, "token") or ""
+            token_entry.set_text(current_token)
+            token_entry.set_placeholder_text("no auth" if not (_sc_defaults := _SC_DEFAULTS.get(key, {})).get("token") else "")
+            token_entry.set_hexpand(True)
+            token_entry.connect("changed", lambda w, k=key: _sc.set(k, "token", w.get_text()))
+            grid.attach(token_entry, 3, row_idx, 1, 1)
+
+        parent.append(grid)
+
+        # Config file path hint
+        from server_config import CONFIG_FILE
+        path_lbl = Gtk.Label(label=f"Config file: {CONFIG_FILE}")
+        path_lbl.set_xalign(0)
+        path_lbl.set_margin_top(8)
+        path_lbl.add_css_class("muted")
+        path_lbl.set_selectable(True)   # so user can copy the path
+        parent.append(path_lbl)
 
     # ── Change handlers ────────────────────────────────────────────────────────
 

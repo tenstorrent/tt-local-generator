@@ -178,9 +178,15 @@ def _check_sdef(sdef: ServerDef, timeout: float) -> bool:
     For port-8000 services with a runner_key we parse the JSON liveness body
     and confirm runner_in_use matches — so wan2.2 won't show green when mochi
     is actually loaded on port 8000.
+
+    The health URL host/port is resolved from server_config at call time so
+    changes made in Preferences take effect on the next health check without
+    restarting the app.
     """
+    from server_config import server_config as _sc
+    url = _sc.health_url(sdef.key, sdef.health_url)
     try:
-        resp = urllib.request.urlopen(sdef.health_url, timeout=timeout)
+        resp = urllib.request.urlopen(url, timeout=timeout)
         if sdef.runner_key is None:
             return True
         body = resp.read().decode("utf-8", errors="replace")
