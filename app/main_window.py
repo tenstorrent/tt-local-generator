@@ -4826,12 +4826,21 @@ class PreferencesDialog(Gtk.Window):
                               lambda w, k=key: _sc.set(k, "port", int(w.get_value())))
             grid.attach(port_spin, 2, row_idx, 1, 1)
 
-            # Token entry (password-masked with reveal button)
-            token_entry = Gtk.PasswordEntry()
-            token_entry.set_show_peek_icon(True)
+            # Token entry — masked by default, eye icon toggles visibility.
+            token_entry = Gtk.Entry()
+            token_entry.set_visibility(False)
+            token_entry.set_icon_from_icon_name(
+                Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic"
+            )
+            token_entry.set_icon_activatable(Gtk.EntryIconPosition.SECONDARY, True)
+            token_entry.connect(
+                "icon-press",
+                lambda w, _pos: w.set_visibility(not w.get_visibility()),
+            )
             current_token = _sc.get(key, "token") or ""
             token_entry.set_text(current_token)
-            token_entry.set_placeholder_text("no auth" if not (_sc_defaults := _SC_DEFAULTS.get(key, {})).get("token") else "")
+            has_default_token = bool((_SC_DEFAULTS.get(key) or {}).get("token"))
+            token_entry.set_placeholder_text("" if has_default_token else "no auth")
             token_entry.set_hexpand(True)
             token_entry.connect("changed", lambda w, k=key: _sc.set(k, "token", w.get_text()))
             grid.attach(token_entry, 3, row_idx, 1, 1)
