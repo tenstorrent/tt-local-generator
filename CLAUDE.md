@@ -436,3 +436,149 @@ used only for interactive LLM chat (not by `generate_prompt.py`).
 - **Wrong entry point**: the correct entry is `python3 run.py` in the
   `tt-inference-server` repo, not `python3 -m workflows.run_workflows`
   (that module imports `benchmarking` which isn't on the path).
+
+---
+
+## .deb packaging (Ubuntu 24.04)
+
+**What happened:** Analysed dependency taxonomy and implemented full `debian/`
+packaging infrastructure for Ubuntu 24.04 (Noble).
+
+**Original prompt:** "Analyse what it would take to package tt-local-generator
+as a .deb for Ubuntu 24.04, with embedded tt-inference-server. Identify which
+deps fit dpkg, which can reference tt-installer, and how to communicate deps
+outside both ecosystems."
+
+### Files added
+
+| File | Purpose |
+|---|---|
+| `debian/control` | Package metadata, Depends/Recommends/Suggests |
+| `debian/rules` | debhelper build rules (dh 13) |
+| `debian/postinst` | Docker CE apt setup, pip extras, .env seed, image pull, checklist |
+| `debian/prerm` | Stop managed services before removal |
+| `debian/conffiles` | Mark vendor .env as user-editable (preserved on upgrade) |
+| `debian/changelog` | Debian changelog (version 0.1.0, noble) |
+| `debian/compat` | debhelper compat level 13 |
+| `debian/copyright` | Apache-2.0 copyright declaration |
+| `bin/snapshot_vendor.sh` | Snapshot Python-only files from tt-inference-server into vendor/ |
+
+### Files modified
+
+- `app/assets/ai.tenstorrent.tt-video-gen.desktop` — `Exec=` updated from
+  hardcoded `~/code/…/tt-gen` to `/usr/bin/tt-local-gen`
+
+### Dependency taxonomy summary
+
+- **Tier 1 (dpkg):** python3-gi, python3-requests, ffmpeg, GStreamer stack, gir1.2-gtk-4.0
+- **Tier 2 (external apt):** docker-ce — added by postinst; `Recommends: docker-ce | docker.io`
+- **Tier 3 (pip-only):** markovify — installed by postinst via `pip --break-system-packages`
+- **Tier 4 (tt-installer):** torch, transformers, ttkmd — `Recommends: tt-installer`; prompt-server warns if absent
+- **Tier 5 (out-of-band):** Docker image (~15 GB, pulled by postinst), Wan2.2 weights (~118 GB, checklist item)
+
+### Build command (run on QB2 target)
+
+```bash
+# 1. Snapshot the vendor Python files
+./bin/snapshot_vendor.sh --src ~/code/tt-inference-server
+
+# 2. Build the .deb
+dpkg-buildpackage -us -uc -b
+
+# 3. Lint
+lintian ../tt-local-generator_0.1.0_amd64.deb
+
+# 4. Install
+sudo apt install ../tt-local-generator_0.1.0_amd64.deb
+```
+
+### Known issues / next steps
+
+- **`snapshot_vendor.sh` placeholder SHA:** `DEFAULT_SHA` in `bin/snapshot_vendor.sh`
+  is a placeholder. Replace with the real git SHA of the `0.11.1-bac8b34` image's
+  source commit before building for distribution.
+- **`vendor/VENDOR_SHA`:** The `vendor/` directory is gitignored. Either remove
+  the gitignore entry before a release build, or run `snapshot_vendor.sh` as part
+  of the CI pipeline.
+- **`debian/compat` vs `debhelper-compat` in control:** Both declare compat 13.
+  debhelper ≥ 12 recommends using only the `Build-Depends: debhelper-compat (= 13)`
+  form; the `debian/compat` file is kept for compatibility with older toolchains.
+- **Testing:** Active install testing must happen on QB2 (Ubuntu 24.04 amd64).
+  The Mac dev machine cannot run `dpkg-buildpackage` natively.
+
+---
+
+## .deb model packages (0.2.0)
+
+**What happened:** Added four binary model-download packages (`tt-model-wan2-t2v`,
+`tt-model-flux`, `tt-model-mochi`, `tt-model-qwen3`) that download HuggingFace
+weights at install time, with a shared debconf HF token question.
+
+**Original prompt:** "Create virtual/meta .deb packages — one per inference mode —
+that download the required HuggingFace model weights after collecting/sourcing a
+HF_TOKEN via debconf when not already present."
+
+### New files (13)
+
+| File | Purpose |
+|---|---|
+| `bin/download_model.sh` | Shared HF downloader: `--repo`, `--token`, `--skip-if-exists`, `--check-only` |
+| `debian/tt-model-wan2-t2v.templates` | debconf password question (`tt-local-generator/hf-token`) |
+| `debian/tt-model-wan2-t2v.config` | Token discovery → pre-set or prompt |
+| `debian/tt-model-wan2-t2v.postinst` | Download `Wan-AI/Wan2.2-T2V-A14B-Diffusers` (~118 GB) |
+| `debian/tt-model-flux.templates` | Same debconf question (gated-model notice in description) |
+| `debian/tt-model-flux.config` | Same token discovery pattern |
+| `debian/tt-model-flux.postinst` | Download `black-forest-labs/FLUX.1-dev` (~34 GB) |
+| `debian/tt-model-mochi.templates` | Same debconf question |
+| `debian/tt-model-mochi.config` | Same token discovery pattern |
+| `debian/tt-model-mochi.postinst` | Download `genmo/mochi-1-preview` (~20 GB) |
+| `debian/tt-model-qwen3.templates` | Same debconf question (prompt always suppressed) |
+| `debian/tt-model-qwen3.config` | Token optional; `db_fset seen true` so no prompt |
+| `debian/tt-model-qwen3.postinst` | Download `Qwen/Qwen3-0.6B` (~1.2 GB) |
+
+### Modified files (3)
+
+| File | Change |
+|---|---|
+| `debian/control` | Four new `Package:` stanzas (Architecture: all) |
+| `debian/rules` | Symlink `download_model.sh` → `/usr/bin/tt-local-gen-download-model` |
+| `debian/changelog` | Bump to 0.2.0 |
+
+### Design decisions
+
+- **Shared debconf key:** All four `.templates` files declare the same key
+  (`tt-local-generator/hf-token`). debconf merges by name, so a single `apt install`
+  of multiple packages prompts once.
+- **Immediate wipe:** Each postinst calls `db_reset` right after `db_get` — the
+  token lives in `passwords.dat` for seconds only.
+- **`runuser`:** postinst runs as root; the download script is invoked as
+  `$SUDO_USER` so weights land in the correct user's `~/.cache/huggingface/hub/`.
+- **Non-fatal downloads:** If the download fails, postinst prints retry instructions
+  and exits 0 — the package stays installed and other packages aren't rolled back.
+- **Qwen3 special case:** `tt-model-qwen3.config` always sets `seen=true` because
+  the model is fully public. A token found in the environment is still forwarded
+  for rate-limit avoidance.
+
+### Build (same as 0.1.0, produces five .deb files)
+
+```bash
+./bin/snapshot_vendor.sh --src ~/code/tt-inference-server
+dpkg-buildpackage -us -uc -b
+# Produces: tt-local-generator_0.2.0_amd64.deb
+#           tt-model-wan2-t2v_0.2.0_all.deb
+#           tt-model-flux_0.2.0_all.deb
+#           tt-model-mochi_0.2.0_all.deb
+#           tt-model-qwen3_0.2.0_all.deb
+```
+
+### Manual re-download helper
+
+```bash
+# Re-run a failed download without reinstalling the package:
+tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers
+tt-local-gen-download-model --repo black-forest-labs/FLUX.1-dev --token hf_xxxx
+tt-local-gen-download-model --repo Qwen/Qwen3-0.6B --skip-if-exists
+
+# Check whether a model is already cached:
+tt-local-gen-download-model --repo genmo/mochi-1-preview --check-only
+```

@@ -1,0 +1,102 @@
+#!/bin/bash
+# debian/tt-model-wan2-t2v.postinst — post-install for tt-model-wan2-t2v
+#
+# Downloads Wan-AI/Wan2.2-T2V-A14B-Diffusers (~118 GB) into the real user's
+# HuggingFace cache. The HF token is read from debconf, immediately wiped,
+# and passed as a CLI argument — it is never stored to disk by this script.
+#
+# If the download fails (bad network, disk full, etc.) the script prints
+# retry instructions and exits 0 so apt does not roll back the package or
+# any co-installed packages.
+
+set -euo pipefail
+
+MODEL_REPO="Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+DOWNLOAD_HELPER="/usr/lib/tt-local-generator/bin/download_model.sh"
+
+# ── Debconf action guard ───────────────────────────────────────────────────────
+case "${1:-}" in
+    configure) : ;;
+    abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+    *) exit 0 ;;
+esac
+
+# ── Load debconf and retrieve token ───────────────────────────────────────────
+# shellcheck source=/dev/null
+. /usr/share/debconf/confmodule
+
+db_get tt-local-generator/hf-token
+TOKEN="$RET"
+
+# Wipe the password from the debconf database immediately.
+db_reset tt-local-generator/hf-token || true
+
+# ── Determine the real (non-root) user ────────────────────────────────────────
+# postinst runs as root. SUDO_USER is set when the user invoked apt via sudo.
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+if [[ -z "$REAL_USER" ]] || [[ "$REAL_USER" == "root" ]]; then
+    echo "WARNING: Cannot determine non-root user. Model will be downloaded to /root/.cache."
+    echo "         Re-run as your regular user: tt-local-gen-download-model --repo $MODEL_REPO"
+fi
+
+# ── Build the download command ─────────────────────────────────────────────────
+_build_cmd() {
+    local cmd=("$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists)
+    [[ -n "$TOKEN" ]] && cmd+=(--token "$TOKEN")
+    printf '%q ' "${cmd[@]}"
+}
+
+# ── Download ───────────────────────────────────────────────────────────────────
+echo ""
+echo "====== Downloading Wan2.2-T2V-A14B-Diffusers (~118 GB) ======"
+echo "This may take a long time on first install. The package is already"
+echo "installed — you can safely Ctrl-C and re-run later:"
+echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+echo ""
+
+if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
+    # Run as the real user so the cache lands in their home directory.
+    if [[ -n "$TOKEN" ]]; then
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+else
+    # No sudo context — run directly (will write to /root/.cache).
+    if [[ -n "$TOKEN" ]]; then
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+fi
+
+exit 0

@@ -1,0 +1,15 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (required for FLUX.1-dev)
+ FLUX.1-dev (~34 GB) is a gated model. You must:
+ .
+   1. Accept the license at:
+      https://huggingface.co/black-forest-labs/FLUX.1-dev
+   2. Provide a HuggingFace token with read access.
+ .
+ Without a valid token, the download will fail. You can re-run the download
+ later with:
+   tt-local-gen-download-model --repo black-forest-labs/FLUX.1-dev
+ .
+ Your token is used once and immediately discarded — it is not stored.

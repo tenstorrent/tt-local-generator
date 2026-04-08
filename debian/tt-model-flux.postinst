@@ -1,0 +1,101 @@
+#!/bin/bash
+# debian/tt-model-flux.postinst — post-install for tt-model-flux
+#
+# Downloads black-forest-labs/FLUX.1-dev (~34 GB) into the real user's
+# HuggingFace cache. FLUX.1-dev is a gated model — the HF token must
+# correspond to an account that has accepted the model license at:
+#   https://huggingface.co/black-forest-labs/FLUX.1-dev
+#
+# The token is read from debconf, immediately wiped, and passed as a CLI
+# argument — it is never stored to disk by this script.
+#
+# If the download fails the script prints retry instructions and exits 0
+# so apt does not roll back the package or co-installed packages.
+
+set -euo pipefail
+
+MODEL_REPO="black-forest-labs/FLUX.1-dev"
+DOWNLOAD_HELPER="/usr/lib/tt-local-generator/bin/download_model.sh"
+
+# ── Debconf action guard ───────────────────────────────────────────────────────
+case "${1:-}" in
+    configure) : ;;
+    abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+    *) exit 0 ;;
+esac
+
+# ── Load debconf and retrieve token ───────────────────────────────────────────
+# shellcheck source=/dev/null
+. /usr/share/debconf/confmodule
+
+db_get tt-local-generator/hf-token
+TOKEN="$RET"
+
+# Wipe the password from the debconf database immediately.
+db_reset tt-local-generator/hf-token || true
+
+# ── Determine the real (non-root) user ────────────────────────────────────────
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+if [[ -z "$REAL_USER" ]] || [[ "$REAL_USER" == "root" ]]; then
+    echo "WARNING: Cannot determine non-root user. Model will be downloaded to /root/.cache."
+    echo "         Re-run as your regular user: tt-local-gen-download-model --repo $MODEL_REPO"
+fi
+
+# ── Download ───────────────────────────────────────────────────────────────────
+echo ""
+echo "====== Downloading FLUX.1-dev (~34 GB) ======"
+echo "FLUX.1-dev is a gated model. Ensure you have accepted the license at:"
+echo "  https://huggingface.co/black-forest-labs/FLUX.1-dev"
+echo ""
+echo "The package is installed — you can safely Ctrl-C and re-run later:"
+echo "  tt-local-gen-download-model --repo $MODEL_REPO --token <your_token>"
+echo ""
+
+if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
+    if [[ -n "$TOKEN" ]]; then
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "If the token is invalid or the license has not been accepted:"
+            echo "  1. Accept the license at https://huggingface.co/black-forest-labs/FLUX.1-dev"
+            echo "  2. Retry: tt-local-gen-download-model --repo $MODEL_REPO --token <your_token>"
+            exit 0
+        }
+    else
+        echo "WARNING: No HuggingFace token provided. FLUX.1-dev requires authentication."
+        echo "Attempting anonymous download (will likely fail for this gated model)…"
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
+        || {
+            echo ""
+            echo "ERROR: model download failed (expected — FLUX.1-dev is gated)."
+            echo "  1. Accept the license at https://huggingface.co/black-forest-labs/FLUX.1-dev"
+            echo "  2. Retry: tt-local-gen-download-model --repo $MODEL_REPO --token <your_token>"
+            exit 0
+        }
+    fi
+else
+    if [[ -n "$TOKEN" ]]; then
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "  1. Accept the license at https://huggingface.co/black-forest-labs/FLUX.1-dev"
+            echo "  2. Retry: tt-local-gen-download-model --repo $MODEL_REPO --token <your_token>"
+            exit 0
+        }
+    else
+        echo "WARNING: No token provided. Attempting anonymous download…"
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "  1. Accept the license at https://huggingface.co/black-forest-labs/FLUX.1-dev"
+            echo "  2. Retry: tt-local-gen-download-model --repo $MODEL_REPO --token <your_token>"
+            exit 0
+        }
+    fi
+fi
+
+exit 0

@@ -1,0 +1,94 @@
+#!/usr/bin/make -f
+# debian/rules — debhelper build rules for tt-local-generator
+#
+# This is a Python/shell project with no compiled components.
+# debhelper-compat 13 is set in debian/control via Build-Depends.
+
+# Fail loudly on any error inside recipe lines.
+export DH_VERBOSE = 1
+
+# Disable all automatic debhelper helpers that try to compile Python bytecode
+# or strip binaries — this is an interpreted project.
+export DEB_BUILD_OPTIONS = nocheck nostrip
+
+# ── Primary target ────────────────────────────────────────────────────────────
+%:
+	dh $@
+
+# ── Install ───────────────────────────────────────────────────────────────────
+override_dh_install:
+	# Create the installation tree under debian/tt-local-generator/
+	install -d debian/tt-local-generator/usr/lib/tt-local-generator
+	install -d debian/tt-local-generator/usr/bin
+	install -d debian/tt-local-generator/usr/share/applications
+	install -d debian/tt-local-generator/usr/share/icons/hicolor/32x32/apps
+	install -d debian/tt-local-generator/usr/share/doc/tt-local-generator
+
+	# Copy the application source tree (app/, bin/, patches/)
+	cp -r app bin patches \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/
+
+	# Copy the vendored tt-inference-server snapshot (if already materialised;
+	# otherwise snapshot_vendor.sh must be run before dpkg-buildpackage).
+	if [ -d vendor/tt-inference-server ]; then \
+	    cp -r vendor \
+	        debian/tt-local-generator/usr/lib/tt-local-generator/; \
+	else \
+	    echo "WARNING: vendor/tt-inference-server not found." \
+	         "Run bin/snapshot_vendor.sh first." >&2; \
+	fi
+
+	# Copy the top-level launchers.
+	install -m 755 tt-gen tt-ctl \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/
+
+	# ── /usr/bin/ entries ──────────────────────────────────────────────────
+	# Primary globally-namespaced names.
+	ln -s /usr/lib/tt-local-generator/tt-gen \
+	    debian/tt-local-generator/usr/bin/tt-local-gen
+	ln -s /usr/lib/tt-local-generator/tt-ctl \
+	    debian/tt-local-generator/usr/bin/tt-local-gen-ctl
+	# Model download helper — used by tt-model-* postinst scripts and
+	# exposed for manual re-runs (e.g. after a failed install).
+	ln -s /usr/lib/tt-local-generator/bin/download_model.sh \
+	    debian/tt-local-generator/usr/bin/tt-local-gen-download-model
+	# Deprecated aliases — kept for one release cycle then removed.
+	ln -s tt-local-gen \
+	    debian/tt-local-generator/usr/bin/tt-gen
+	ln -s tt-local-gen-ctl \
+	    debian/tt-local-generator/usr/bin/tt-ctl
+
+	# ── XDG assets ────────────────────────────────────────────────────────
+	install -m 644 \
+	    app/assets/ai.tenstorrent.tt-video-gen.desktop \
+	    debian/tt-local-generator/usr/share/applications/
+
+	install -m 644 \
+	    app/assets/tenstorrent.png \
+	    debian/tt-local-generator/usr/share/icons/hicolor/32x32/apps/ai.tenstorrent.tt-video-gen.png
+
+	# ── Docs ──────────────────────────────────────────────────────────────
+	install -m 644 README.md GUIDE.md \
+	    debian/tt-local-generator/usr/share/doc/tt-local-generator/
+
+# ── Fix permissions for shell scripts ─────────────────────────────────────────
+override_dh_fixperms:
+	dh_fixperms
+	# Ensure all bin/ scripts are executable after dh_fixperms normalises them.
+	find debian/tt-local-generator/usr/lib/tt-local-generator/bin \
+	     -name '*.sh' -exec chmod +x {} +
+	chmod +x \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/tt-gen \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/tt-ctl
+
+# ── Skip auto-generated Python bytecode ───────────────────────────────────────
+# dh_python3 would try to byte-compile; skip it — we use /usr/bin/python3
+# directly and .pyc files would reference the wrong install path.
+override_dh_python3:
+	# intentionally empty
+
+# ── Skip auto compression of large files ─────────────────────────────────────
+# The docker/ LFS archive is intentionally NOT included in the deb (pulled at
+# postinst time). Nothing here needs special compression handling.
+override_dh_compress:
+	dh_compress -X.sh -X.py -Xtt-gen -Xtt-ctl

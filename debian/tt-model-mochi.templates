@@ -1,0 +1,11 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for Mochi-1-preview)
+ The Mochi-1-preview model (~20 GB) is publicly available on HuggingFace.
+ .
+ A HuggingFace token can be provided to avoid API rate limits during
+ download. Leave blank to download anonymously.
+ .
+ Your token is used once and immediately discarded — it is not stored by
+ this package.

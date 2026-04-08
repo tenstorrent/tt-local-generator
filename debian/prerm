@@ -1,0 +1,31 @@
+#!/bin/bash
+# debian/prerm — pre-removal script for tt-local-generator
+#
+# Stops any managed services before the package files are removed.
+# This prevents dangling processes or missing-binary errors if the user
+# left the inference server running.
+
+set -euo pipefail
+
+TT_CTL="/usr/lib/tt-local-generator/tt-ctl"
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop all managed services gracefully if tt-ctl is present.
+        if [[ -x "$TT_CTL" ]]; then
+            echo "tt-local-generator: stopping managed services…"
+            # --quiet: don't error if services are already stopped.
+            "$TT_CTL" stop all 2>/dev/null || true
+            "$TT_CTL" stop prompt-server 2>/dev/null || true
+            echo "tt-local-generator: services stopped."
+        fi
+        ;;
+    failed-upgrade)
+        # Nothing to do on a failed upgrade rollback.
+        ;;
+    *)
+        # Unexpected argument — do nothing rather than fail.
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,35 @@
+tt-local-generator (0.2.0) noble; urgency=medium
+
+  * Add tt-model-wan2-t2v, tt-model-flux, tt-model-mochi, tt-model-qwen3
+    virtual/meta packages that download HuggingFace model weights at install
+    time via a shared bin/download_model.sh helper.
+  * Shared debconf key (tt-local-generator/hf-token, type: password) across
+    all four packages — token is prompted at most once per apt run, then
+    immediately wiped from the debconf database after use.
+  * Token discovery order: $HF_TOKEN env var → $HUGGING_FACE_HUB_TOKEN →
+    ${HF_HOME}/token → ~/.huggingface/token → /etc/tt-generator/hf_token →
+    interactive debconf prompt. Qwen3 (public model) suppresses the prompt.
+  * Download runs as the real (non-root) user via runuser so weights land in
+    the correct ~/.cache/huggingface/hub/ location.
+  * Download failures are non-fatal — apt does not roll back the package;
+    retry instructions are printed for manual re-runs.
+  * Expose /usr/bin/tt-local-gen-download-model as a globally-accessible
+    symlink to the shared helper for manual model (re-)downloads.
+  * FLUX.1-dev postinst prints gated-model guidance (license URL) on failure.
+
+ -- Tenstorrent <software@tenstorrent.com>  Tue, 08 Apr 2026 00:00:00 +0000
+
+tt-local-generator (0.1.0) noble; urgency=medium
+
+  * Initial .deb packaging for Ubuntu 24.04 (Noble Numbat).
+  * Ships app/, bin/, patches/ and a vendored tt-inference-server snapshot
+    under /usr/lib/tt-local-generator/.
+  * postinst: adds Docker CE apt source, pulls inference image
+    (ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34),
+    installs markovify, creates vendor .env from .env.default on first install.
+  * prerm: stops all managed services before removal.
+  * Adds /usr/bin/tt-local-gen and /usr/bin/tt-local-gen-ctl as the
+    globally-namespaced entry points; tt-gen and tt-ctl are deprecated aliases.
+  * Desktop entry updated to Exec=/usr/bin/tt-local-gen.
+
+ -- Tenstorrent <software@tenstorrent.com>  Mon, 07 Apr 2026 00:00:00 +0000

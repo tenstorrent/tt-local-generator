@@ -1,0 +1,94 @@
+#!/bin/bash
+# debian/tt-model-qwen3.postinst — post-install for tt-model-qwen3
+#
+# Downloads Qwen/Qwen3-0.6B (~1.2 GB) into the real user's HuggingFace
+# cache. Qwen3-0.6B is fully public — no HF token or license acceptance
+# is required.
+#
+# A token is still read from debconf (if one was entered for a co-installed
+# gated model) to avoid API rate limits. The token is immediately wiped from
+# the debconf database and is passed only as a transient CLI argument.
+#
+# If the download fails the script prints retry instructions and exits 0.
+
+set -euo pipefail
+
+MODEL_REPO="Qwen/Qwen3-0.6B"
+DOWNLOAD_HELPER="/usr/lib/tt-local-generator/bin/download_model.sh"
+
+# ── Debconf action guard ───────────────────────────────────────────────────────
+case "${1:-}" in
+    configure) : ;;
+    abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+    *) exit 0 ;;
+esac
+
+# ── Load debconf and retrieve token (optional) ─────────────────────────────────
+# shellcheck source=/dev/null
+. /usr/share/debconf/confmodule
+
+db_get tt-local-generator/hf-token
+TOKEN="$RET"
+
+# Wipe the password from the debconf database immediately.
+db_reset tt-local-generator/hf-token || true
+
+# ── Determine the real (non-root) user ────────────────────────────────────────
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+if [[ -z "$REAL_USER" ]] || [[ "$REAL_USER" == "root" ]]; then
+    echo "WARNING: Cannot determine non-root user. Model will be downloaded to /root/.cache."
+    echo "         Re-run as your regular user: tt-local-gen-download-model --repo $MODEL_REPO"
+fi
+
+# ── Download ───────────────────────────────────────────────────────────────────
+echo ""
+echo "====== Downloading Qwen3-0.6B (~1.2 GB) ======"
+echo "This is a small public model — download should complete quickly."
+echo "The package is installed — you can safely Ctrl-C and re-run later:"
+echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+echo ""
+
+if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
+    if [[ -n "$TOKEN" ]]; then
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually (no token required):"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+else
+    if [[ -n "$TOKEN" ]]; then
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually (no token required):"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually:"
+            echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+fi
+
+exit 0

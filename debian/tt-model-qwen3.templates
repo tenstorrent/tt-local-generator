@@ -1,0 +1,12 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for Qwen3-0.6B)
+ The Qwen3-0.6B model (~1.2 GB) is fully public — no token or account
+ is required to download it.
+ .
+ If you already have a HuggingFace token available (e.g. from installing
+ another tt-model-* package), it will be reused automatically to avoid
+ API rate limits. You do not need to enter anything here.
+ .
+ Your token is used once and immediately discarded — it is not stored.

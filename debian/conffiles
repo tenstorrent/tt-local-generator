@@ -1,0 +1,10 @@
+# debian/conffiles — user-editable configuration files
+#
+# dpkg will preserve these files across upgrades (rather than overwriting them)
+# and warn the user if the package provides a newer version that differs from
+# what is installed.
+#
+# The .env file for the vendored tt-inference-server contains site-specific
+# secrets (JWT_SECRET, AUTHORIZATION_TOKEN, model cache paths) and must
+# survive package upgrades without being clobbered.
+/usr/lib/tt-local-generator/vendor/tt-inference-server/.env

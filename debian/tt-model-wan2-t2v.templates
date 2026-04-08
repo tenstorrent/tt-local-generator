@@ -1,0 +1,12 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for Wan2.2-T2V)
+ The Wan2.2-T2V-A14B model (~118 GB) is publicly available on HuggingFace
+ without a license gate.
+ .
+ A HuggingFace token can be provided to avoid API rate limits during
+ download. Leave blank to download anonymously.
+ .
+ Your token is used once and immediately discarded — it is not stored by
+ this package. To skip providing a token, just press Enter.

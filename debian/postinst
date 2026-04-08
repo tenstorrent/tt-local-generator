@@ -1,0 +1,279 @@
+#!/bin/bash
+# debian/postinst — post-installation script for tt-local-generator
+#
+# Runs as root (or with sudo) on the target machine after the package files
+# have been unpacked to their final locations.
+#
+# Actions performed:
+#   1. Add Docker CE apt source + GPG key (if not already present)
+#   2. Install docker-ce + related packages
+#   3. Add the installing user to the 'docker' group
+#   4. Install pip-only packages that have no dpkg equivalent (markovify)
+#   5. Create vendor .env from .env.default if not already present
+#   6. Pull the Docker inference image (pinned SHA, fallback to :latest)
+#   7. Check for tt-installer / tenstorrent-venv
+#   8. Check for nvidia-smi and offer nvidia-container-toolkit
+#   9. Print post-install checklist
+
+set -euo pipefail
+
+INSTALL_DIR="/usr/lib/tt-local-generator"
+VENDOR_DIR="$INSTALL_DIR/vendor/tt-inference-server"
+
+# Pinned Docker image used by start_wan_qb2.sh — keep this in sync with
+# the DOCKER_IMAGE variable in bin/start_wan_qb2.sh.
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
+DOCKER_IMAGE_LATEST="ghcr.io/tenstorrent/tt-media-inference-server:latest"
+
+# Determine the user who invoked sudo (falls back to $USER if not via sudo).
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+# ── Helper: pretty section header ─────────────────────────────────────────────
+_section() {
+    echo ""
+    echo "====== $1 ======"
+}
+
+# ── Helper: check if a command exists ─────────────────────────────────────────
+_have() { command -v "$1" &>/dev/null; }
+
+# ── Debian dpkg action guard ──────────────────────────────────────────────────
+# Only run our heavy setup on fresh install or upgrade, not on abort/rollback.
+case "$1" in
+    configure)
+        : # fall through to setup below
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+# =============================================================================
+# STEP 1 — Docker CE apt source
+# =============================================================================
+_section "Setting up Docker CE apt repository"
+
+DOCKER_GPG_KEY="/etc/apt/keyrings/docker.asc"
+DOCKER_SOURCES_LIST="/etc/apt/sources.list.d/docker.list"
+
+if ! _have docker || ! docker info &>/dev/null 2>&1; then
+    echo "Docker CE not found or not running. Adding Docker CE apt source…"
+
+    # Ensure prerequisites for apt over HTTPS are present.
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release
+
+    # Add Docker's official GPG key.
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o "$DOCKER_GPG_KEY"
+    chmod a+r "$DOCKER_GPG_KEY"
+
+    # Add the stable repository.
+    ARCH="$(dpkg --print-architecture)"
+    CODENAME="$(lsb_release -cs)"
+    echo \
+        "deb [arch=${ARCH} signed-by=${DOCKER_GPG_KEY}] https://download.docker.com/linux/ubuntu ${CODENAME} stable" \
+        > "$DOCKER_SOURCES_LIST"
+
+    apt-get update -qq
+
+    # Install Docker CE packages.
+    _section "Installing Docker CE"
+    apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
+
+    echo "Docker CE installed."
+else
+    echo "Docker CE already present — skipping."
+fi
+
+# =============================================================================
+# STEP 2 — Add real user to docker group
+# =============================================================================
+if [[ -n "$REAL_USER" ]] && id "$REAL_USER" &>/dev/null; then
+    if ! id -nG "$REAL_USER" | grep -qw docker; then
+        _section "Adding $REAL_USER to docker group"
+        usermod -aG docker "$REAL_USER"
+        echo "Done. The change takes effect on next login (or run: newgrp docker)."
+    fi
+fi
+
+# =============================================================================
+# STEP 3 — pip-only packages (markovify)
+#   markovify has no dpkg equivalent in Ubuntu 24.04 main/universe.
+#   We install it into the system Python3 with --break-system-packages (PEP 668
+#   override), which is safe here because we're in a controlled deb postinst.
+# =============================================================================
+_section "Installing pip-only Python packages"
+
+PYTHON3=/usr/bin/python3
+
+if "$PYTHON3" -c "import markovify" &>/dev/null 2>&1; then
+    echo "markovify already installed — skipping."
+else
+    echo "Installing markovify (Markov prompt generator)…"
+    "$PYTHON3" -m pip install --quiet \
+        --break-system-packages \
+        "markovify>=0.9.4" \
+    && echo "markovify installed." \
+    || echo "WARNING: markovify install failed. Prompt generator will fall back to algo mode."
+fi
+
+# =============================================================================
+# STEP 4 — Create vendor .env from .env.default (first-install only)
+#   On upgrade, dpkg preserves the user-edited .env via debian/conffiles.
+# =============================================================================
+_section "Configuring vendor .env"
+
+ENV_FILE="$VENDOR_DIR/.env"
+ENV_DEFAULT="$VENDOR_DIR/.env.default"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    if [[ -f "$ENV_DEFAULT" ]]; then
+        cp "$ENV_DEFAULT" "$ENV_FILE"
+        echo "Created $ENV_FILE from .env.default"
+        echo "ACTION REQUIRED: Edit $ENV_FILE and set JWT_SECRET + AUTHORIZATION_TOKEN"
+    else
+        echo "WARNING: $ENV_DEFAULT not found. You must create $ENV_FILE manually."
+        echo "See GUIDE.md for required variables."
+    fi
+else
+    echo ".env already exists — preserving existing configuration."
+fi
+
+# =============================================================================
+# STEP 5 — Pull Docker inference image (pinned, fallback :latest)
+# =============================================================================
+_section "Pulling Docker inference image"
+
+if _have docker && docker info &>/dev/null 2>&1; then
+    echo "Pulling pinned image: $DOCKER_IMAGE"
+    if docker pull "$DOCKER_IMAGE" 2>/dev/null; then
+        echo "Pulled: $DOCKER_IMAGE"
+    else
+        echo "WARNING: Pinned image not found ($DOCKER_IMAGE)."
+        echo "Falling back to :latest…"
+        if docker pull "$DOCKER_IMAGE_LATEST"; then
+            echo "Pulled: $DOCKER_IMAGE_LATEST"
+            # Tag it with the pinned name so start_wan_qb2.sh finds it by the
+            # exact ancestor filter string without code changes.
+            docker tag "$DOCKER_IMAGE_LATEST" "$DOCKER_IMAGE"
+            echo "Tagged :latest as $DOCKER_IMAGE"
+            echo "NOTE: Verify compatibility with your tt-inference-server version."
+            echo "      See: https://github.com/tenstorrent/tt-inference-server/releases"
+        else
+            echo ""
+            echo "ERROR: Could not pull Docker inference image."
+            echo "The application will not start inference until you manually run:"
+            echo "  docker pull $DOCKER_IMAGE_LATEST"
+        fi
+    fi
+else
+    echo "Docker not available at postinst time — skipping image pull."
+    echo "After Docker is running, pull the image manually:"
+    echo "  docker pull $DOCKER_IMAGE"
+fi
+
+# =============================================================================
+# STEP 6 — Check for tt-installer / tenstorrent-venv
+# =============================================================================
+_section "Checking for tt-installer"
+
+TTVENV="${HOME:-/home/$REAL_USER}/.tenstorrent-venv"
+if [[ -n "$REAL_USER" ]]; then
+    TTVENV="/home/$REAL_USER/.tenstorrent-venv"
+fi
+
+if [[ -d "$TTVENV" ]]; then
+    echo "Found tenstorrent-venv at $TTVENV — prompt-server (Qwen3) will use it."
+else
+    echo ""
+    echo "NOTE: ~/.tenstorrent-venv not found."
+    echo "The prompt-server (LLM polish tier) requires torch + transformers."
+    echo "Install tt-installer to create this venv with the correct packages:"
+    echo "  https://github.com/tenstorrent/tt-installer"
+    echo "The application will still work; prompt generator falls back to Markov/algo."
+fi
+
+# =============================================================================
+# STEP 7 — Optional: nvidia-container-toolkit
+# =============================================================================
+if _have nvidia-smi; then
+    _section "NVIDIA GPU detected"
+    if ! _have nvidia-container-cli; then
+        echo "nvidia-container-toolkit is not installed."
+        echo "To enable GPU-accelerated containers (useful for CUDA offload):"
+        echo "  sudo apt install nvidia-container-toolkit"
+        echo "  sudo nvidia-ctk runtime configure --runtime=docker"
+        echo "  sudo systemctl restart docker"
+    else
+        echo "nvidia-container-toolkit already present."
+    fi
+fi
+
+# =============================================================================
+# Update desktop database and icon cache
+# =============================================================================
+if _have update-desktop-database; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+if _have gtk-update-icon-cache; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+fi
+
+# =============================================================================
+# POST-INSTALL CHECKLIST
+# =============================================================================
+cat <<'EOF'
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║           tt-local-generator — post-install checklist                 ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+ [✓] System packages installed
+ [✓] Docker CE configured
+ [✓] Pip extras installed (markovify)
+
+ Required before first use:
+ ─────────────────────────
+ [ ] 1. Reload your shell so docker group takes effect:
+           newgrp docker
+           (or log out and back in)
+
+ [ ] 2. Edit the inference server config:
+           /usr/lib/tt-local-generator/vendor/tt-inference-server/.env
+        Set at minimum:
+           JWT_SECRET=<any random string>
+           AUTHORIZATION_TOKEN=<same or different random string>
+
+ [ ] 3. Download Wan2.2 model weights (~118 GB):
+           huggingface-cli download Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+               --local-dir ~/.cache/huggingface/hub/Wan2.2-T2V-A14B-Diffusers
+
+ Optional:
+ ─────────
+ [ ] 4. Install tt-installer for Qwen3 prompt-server GPU support:
+           https://github.com/tenstorrent/tt-installer
+
+ [ ] 5. Launch the app:
+           tt-local-gen
+
+ [ ] 6. From the app, click Servers > Start (or tt-local-gen-ctl start wan2.2)
+        Wait for "Application startup complete" in the log panel.
+
+ Docs:  /usr/share/doc/tt-local-generator/GUIDE.md
+
+EOF
+
+exit 0
