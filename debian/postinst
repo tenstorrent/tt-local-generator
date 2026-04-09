@@ -315,8 +315,8 @@ cat <<'EOF'
            AUTHORIZATION_TOKEN=<same or different random string>
 
  [ ] 3. Download Wan2.2 model weights (~118 GB):
-           huggingface-cli download Wan-AI/Wan2.2-T2V-A14B-Diffusers \
-               --local-dir ~/.cache/huggingface/hub/Wan2.2-T2V-A14B-Diffusers
+           tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers
+        Models are stored in /opt/tenstorrent/models/hub/
 
  Optional:
  ─────────
