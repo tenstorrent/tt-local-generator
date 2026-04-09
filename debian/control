@@ -47,7 +47,7 @@ Description: GTK4 frontend for Tenstorrent AI media generation
 
 Package: tt-model-wan2-t2v
 Architecture: all
-Depends: tt-local-generator, debconf | debconf-2.0
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: Wan2.2-T2V-A14B model weights (~118 GB) for tt-local-generator
  Downloads Wan-AI/Wan2.2-T2V-A14B-Diffusers from HuggingFace into
  ~/.cache/huggingface/hub/. Required for the Video generation tab.
@@ -57,7 +57,7 @@ Description: Wan2.2-T2V-A14B model weights (~118 GB) for tt-local-generator
 
 Package: tt-model-flux
 Architecture: all
-Depends: tt-local-generator, debconf | debconf-2.0
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: FLUX.1-dev model weights (~34 GB) for tt-local-generator
  Downloads black-forest-labs/FLUX.1-dev from HuggingFace. Required for
  the Image generation tab.
@@ -68,7 +68,7 @@ Description: FLUX.1-dev model weights (~34 GB) for tt-local-generator
 
 Package: tt-model-mochi
 Architecture: all
-Depends: tt-local-generator, debconf | debconf-2.0
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: Mochi-1-preview model weights (~20 GB) for tt-local-generator
  Downloads genmo/mochi-1-preview from HuggingFace. Required for the Mochi
  inference backend. The model is publicly available; a HuggingFace account
@@ -76,7 +76,7 @@ Description: Mochi-1-preview model weights (~20 GB) for tt-local-generator
 
 Package: tt-model-qwen3
 Architecture: all
-Depends: tt-local-generator, debconf | debconf-2.0
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: Qwen3-0.6B model weights (~1.2 GB) for tt-local-generator
  Downloads Qwen/Qwen3-0.6B from HuggingFace. Required for the LLM prompt
  polish tier in the prompt-server. The model is fully public; no token

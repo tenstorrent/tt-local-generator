@@ -108,19 +108,34 @@ if [[ -z "$TOKEN" ]]; then
     fi
 fi
 
-# ── huggingface-cli discovery ──────────────────────────────────────────────────
+# ── HuggingFace CLI discovery ─────────────────────────────────────────────────
+# huggingface-hub ≥ 1.0 renamed the command from `huggingface-cli` to `hf`.
+# We check both names, preferring `hf` when both exist.
 _find_hf_cli() {
-    # 1. tt-installer venv (most up-to-date on QB2 hosts)
-    local _venv_cli="${HOME:-/root}/.tenstorrent-venv/bin/huggingface-cli"
-    if [[ -x "$_venv_cli" ]]; then
-        echo "$_venv_cli"
-        return 0
+    local _venv_dir="${HOME:-/root}/.tenstorrent-venv/bin"
+
+    # 1. tt-installer venv — check `hf` first, then legacy `huggingface-cli`
+    if [[ -x "$_venv_dir/hf" ]]; then
+        echo "$_venv_dir/hf"; return 0
+    fi
+    if [[ -x "$_venv_dir/huggingface-cli" ]]; then
+        echo "$_venv_dir/huggingface-cli"; return 0
     fi
 
-    # 2. System huggingface-cli
+    # 2. System PATH — prefer `hf`
+    if command -v hf &>/dev/null; then
+        echo "$(command -v hf)"; return 0
+    fi
     if command -v huggingface-cli &>/dev/null; then
-        echo "$(command -v huggingface-cli)"
-        return 0
+        echo "$(command -v huggingface-cli)"; return 0
+    fi
+
+    # 3. /usr/local/bin — pip installs here, may not be on PATH in postinst
+    if [[ -x "/usr/local/bin/hf" ]]; then
+        echo "/usr/local/bin/hf"; return 0
+    fi
+    if [[ -x "/usr/local/bin/huggingface-cli" ]]; then
+        echo "/usr/local/bin/huggingface-cli"; return 0
     fi
 
     return 1
@@ -128,16 +143,16 @@ _find_hf_cli() {
 
 HF_CLI=""
 if HF_CLI="$(_find_hf_cli)"; then
-    echo "Found huggingface-cli: $HF_CLI"
+    echo "Found HuggingFace CLI: $HF_CLI"
 else
-    echo "huggingface-cli not found. Installing huggingface_hub[cli] via pip…"
+    echo "HuggingFace CLI not found. Installing huggingface_hub via pip…"
     /usr/bin/python3 -m pip install --quiet --break-system-packages \
         "huggingface_hub[cli]>=0.24"
     # Retry discovery after install.
     if HF_CLI="$(_find_hf_cli)"; then
-        echo "Found huggingface-cli after install: $HF_CLI"
+        echo "Found HuggingFace CLI after install: $HF_CLI"
     else
-        echo "ERROR: huggingface-cli still not found after pip install." >&2
+        echo "ERROR: HuggingFace CLI still not found after pip install." >&2
         echo "Install manually: pip install 'huggingface_hub[cli]'" >&2
         exit 1
     fi
