@@ -2293,7 +2293,7 @@ class ControlPanel(Gtk.Box):
         self._animate_mode = "animation"
         self._server_ready = False
         self._running_model: "str | None" = None  # model ID from /v1/models, or None
-        self._adv_open: bool = False               # accordion expanded state
+        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from Generation menu
         self._server_launching = False   # True while start/stop script is running
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
@@ -2590,158 +2590,6 @@ class ControlPanel(Gtk.Box):
         self._shot_panel_widget = self._build_shot_panel()
         self.append(self._shot_panel_widget)
 
-        # ── Advanced settings accordion ───────────────────────────────────────
-        # Note: self.append(self._animate_box) is deferred until after
-        # self._animate_box is fully constructed below; the accordion header/revealer
-        # are set up here, but adv_body is assembled later after all widget vars exist.
-        self._adv_revealer = Gtk.Revealer()
-        self._adv_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self._adv_revealer.set_transition_duration(150)
-        self._adv_revealer.set_reveal_child(False)
-
-        # Header button — full-width toggle
-        self._adv_hdr_btn = Gtk.Button()
-        self._adv_hdr_btn.add_css_class("adv-hdr-btn")
-        self._adv_hdr_btn.connect("clicked", self._on_adv_toggle)
-        hdr_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._adv_arrow_lbl = Gtk.Label(label="\u25b8")
-        self._adv_arrow_lbl.set_xalign(0)
-        hdr_inner.append(self._adv_arrow_lbl)
-        hdr_section_lbl = Gtk.Label(label="Advanced settings")
-        hdr_section_lbl.set_xalign(0)
-        hdr_section_lbl.set_hexpand(True)
-        hdr_inner.append(hdr_section_lbl)
-        self._adv_summary_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        hdr_inner.append(self._adv_summary_box)
-        self._adv_hdr_btn.set_child(hdr_inner)
-
-        # ── Negative prompt ───────────────────────────────────────────────────
-        # (appended into accordion adv_body below, not directly to self)
-        _neg_section_lbl = self._section("Negative Prompt")
-        neg_hint = Gtk.Label(label="Steer away from: blurry, watermark, low quality, distorted")
-        neg_hint.set_xalign(0)
-        neg_hint.set_ellipsize(Pango.EllipsizeMode.END)
-        neg_hint.add_css_class("hint")
-        scroll2 = Gtk.ScrolledWindow()
-        scroll2.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll2.set_size_request(-1, 52)
-        self._neg_view = Gtk.TextView()
-        self._neg_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self._neg_view.set_tooltip_text(
-            "Describe what you do NOT want in the output.\n"
-            "Common: blurry, watermark, text overlay, distorted, low quality"
-        )
-        scroll2.set_child(self._neg_view)
-
-        # ── Parameters ────────────────────────────────────────────────────────
-        # (appended into accordion adv_body below, not directly to self)
-        _param_section_lbl = self._section("Parameters")
-        param_grid = Gtk.Grid()
-        param_grid.set_column_spacing(8)
-        param_grid.set_row_spacing(2)
-
-        # Steps — row 0 (label+spin) + row 1 (hint)
-        self._steps_lbl = Gtk.Label(label="Steps (12–50):")
-        self._steps_lbl.set_xalign(1)
-        param_grid.attach(self._steps_lbl, 0, 0, 1, 1)
-        self._steps_spin = Gtk.SpinButton()
-        self._steps_spin.set_adjustment(
-            Gtk.Adjustment(value=20, lower=12, upper=50, step_increment=1)
-        )
-        self._steps_spin.set_tooltip_text(
-            "Denoising steps — each step refines the output.\n"
-            "More = sharper quality, but proportionally slower.\n"
-            "Wan2.2 sweet spot: 20–28  ·  FLUX sweet spot: 20–30"
-        )
-        param_grid.attach(self._steps_spin, 1, 0, 1, 1)
-        self._steps_hint_lbl = Gtk.Label(label="sweet spot 20–28  ·  more = sharper, slower")
-        self._steps_hint_lbl.set_xalign(0)
-        self._steps_hint_lbl.add_css_class("hint")
-        param_grid.attach(self._steps_hint_lbl, 0, 1, 2, 1)
-
-        # Seed — row 2 (label+spin) + row 3 (hint)
-        seed_lbl = Gtk.Label(label="Seed (−1=random):")
-        seed_lbl.set_xalign(1)
-        param_grid.attach(seed_lbl, 0, 2, 1, 1)
-        self._seed_spin = Gtk.SpinButton()
-        self._seed_spin.set_adjustment(
-            Gtk.Adjustment(value=-1, lower=-1, upper=2**31-1, step_increment=1)
-        )
-        self._seed_spin.set_tooltip_text(
-            "Random seed controlling the noise pattern.\n"
-            "−1 picks a new random seed every time.\n"
-            "Set a fixed value to reproduce a previous result\n"
-            "(same seed + same settings = identical output)."
-        )
-        param_grid.attach(self._seed_spin, 1, 2, 1, 1)
-        seed_hint = Gtk.Label(label="same seed + prompt → identical result")
-        seed_hint.set_xalign(0)
-        seed_hint.add_css_class("hint")
-        param_grid.attach(seed_hint, 0, 3, 2, 1)
-
-        # Guidance scale — row 4 (label+spin) + row 5 (hint)
-        # Only shown for FLUX (image); hidden for Wan2.2 (video).
-        self._guidance_lbl = Gtk.Label(label="Guidance (1–20):")
-        self._guidance_lbl.set_xalign(1)
-        self._guidance_lbl.set_tooltip_text(
-            "Classifier-free guidance scale — how strictly the model\n"
-            "follows the text prompt vs. exploring on its own.\n\n"
-            "Low (2–4): more creative, unexpected results\n"
-            "Mid (4–7): good balance — recommended range\n"
-            "High (8+): very literal, can over-saturate or distort\n\n"
-            "Rainbow/artifact issues → raise to 5–7."
-        )
-        param_grid.attach(self._guidance_lbl, 0, 4, 1, 1)
-        self._guidance_spin = Gtk.SpinButton()
-        self._guidance_spin.set_adjustment(
-            Gtk.Adjustment(value=3.5, lower=1.0, upper=20.0, step_increment=0.5)
-        )
-        self._guidance_spin.set_digits(1)
-        self._guidance_spin.set_tooltip_text(
-            "FLUX guidance scale (1.0–20.0). Default 3.5.\n"
-            "Raise to 5–7 if you see rainbow or distortion artifacts."
-        )
-        param_grid.attach(self._guidance_spin, 1, 4, 1, 1)
-        self._guidance_hint_lbl = Gtk.Label(
-            label="3.5–7 typical  ·  rainbow artifacts → raise value"
-        )
-        self._guidance_hint_lbl.set_xalign(0)
-        self._guidance_hint_lbl.add_css_class("hint")
-        param_grid.attach(self._guidance_hint_lbl, 0, 5, 2, 1)
-
-        # Guidance rows hidden by default (Wan2.2 doesn't use guidance scale)
-        self._guidance_lbl.set_visible(False)
-        self._guidance_spin.set_visible(False)
-        self._guidance_hint_lbl.set_visible(False)
-
-        # ── Seed image ────────────────────────────────────────────────────────
-        # Only relevant for Wan2.2 video; hidden when FLUX image source is selected.
-        # (appended into accordion adv_body below, not directly to self)
-        self._seed_img_section = self._section("Seed Image (optional)")
-        self._seed_img_section.set_tooltip_text(
-            "Reference image passed to Wan2.2 to guide motion and composition.\n"
-            "The model uses it as a visual starting point — not copied verbatim.\n"
-            "PNG or JPEG, any aspect ratio (resized internally)."
-        )
-        seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-
-        self._seed_img_widget = Gtk.Label(label="none")
-        self._seed_img_widget.set_size_request(64, 36)
-        self._seed_img_widget.add_css_class("muted")
-        seed_row.append(self._seed_img_widget)
-
-        seed_btns = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        browse_btn = Gtk.Button(label="Browse…")
-        browse_btn.set_tooltip_text("Pick a reference image (PNG/JPG)")
-        browse_btn.connect("clicked", self._pick_seed_image)
-        seed_btns.append(browse_btn)
-        self._clear_seed_btn = Gtk.Button(label="Clear")
-        self._clear_seed_btn.set_sensitive(False)
-        self._clear_seed_btn.connect("clicked", lambda _: self._clear_seed_image())
-        seed_btns.append(self._clear_seed_btn)
-        seed_row.append(seed_btns)
-        self._seed_row_widget = seed_row
-
         # ── Animate inputs ────────────────────────────────────────────────────
         # Visible only when "animate" source is active.
         self._animate_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -2813,29 +2661,8 @@ class ControlPanel(Gtk.Box):
         # ── Pinned footer — always visible, NOT inside the scroll ─────────────
         # MainWindow places self._footer_box below ctrl_scroll so these widgets
         # remain visible regardless of how short the window is.
+        # Advanced settings are now accessed via Generation → Advanced Settings…
         self._footer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self._footer_box.append(self._adv_hdr_btn)  # accordion header
-
-        # ── Accordion body — neg prompt, params, seed image ───────────────────
-        # adv_body is the content revealed when the accordion header is clicked.
-        # All three sections (neg prompt, parameters, seed image) live here so
-        # they are hidden by default and only visible when the user opens the drawer.
-        adv_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        adv_body.add_css_class("adv-body")
-        adv_body.append(_neg_section_lbl)
-        adv_body.append(neg_hint)
-        adv_body.append(scroll2)
-        adv_body.append(_param_section_lbl)
-        adv_body.append(param_grid)
-        adv_body.append(self._seed_img_section)
-        adv_body.append(seed_row)
-        self._adv_revealer.set_child(adv_body)
-        self._footer_box.append(self._adv_revealer)
-
-        # Connect spinbuttons to update summary on value change
-        self._steps_spin.connect("value-changed", lambda _: self._update_adv_summary())
-        self._seed_spin.connect("value-changed", lambda _: self._update_adv_summary())
-        self._update_adv_summary()
 
         # ── Server status row ─────────────────────────────────────────────────
         # Two-line status box: dot + model name + sub-label + action buttons.
@@ -3865,40 +3692,18 @@ class ControlPanel(Gtk.Box):
 
     # ── State ──────────────────────────────────────────────────────────────────
 
-    # ── Advanced settings accordion ────────────────────────────────────────────
+    # ── Advanced settings dialog ───────────────────────────────────────────────
 
-    def _on_adv_toggle(self, _btn) -> None:
-        """Toggle the advanced settings accordion open/closed."""
-        self._adv_open = not self._adv_open
-        self._adv_revealer.set_reveal_child(self._adv_open)
-        self._adv_arrow_lbl.set_label("\u25be" if self._adv_open else "\u25b8")
+    def open_advanced_dialog(self) -> None:
+        """Open or present the Advanced Generation Settings dialog.
 
-    def _update_adv_summary(self) -> None:
+        Called from the Generation → Advanced Settings… menu item.
+        Creates a new AdvancedSettingsDialog on first call (or after it was
+        closed); presents the existing one if already open.
         """
-        Rebuild the accordion header summary labels.
-        Shows current steps and seed values; highlights non-defaults in pink.
-        Called when steps or seed spinbuttons change, and once at build time.
-        """
-        steps_val = int(self._steps_spin.get_value())
-        seed_val = int(self._seed_spin.get_value())
-        steps_default = (steps_val == 20)
-        seed_default = (seed_val == -1)
-
-        # Clear existing summary labels
-        child = self._adv_summary_box.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self._adv_summary_box.remove(child)
-            child = nxt
-
-        # Rebuild with one label per value, styled by default/changed state
-        for text, is_default in [
-            (f"steps:{steps_val}", steps_default),
-            (f"seed:{seed_val if seed_val != -1 else chr(8722) + '1'}", seed_default),
-        ]:
-            lbl = Gtk.Label(label=text)
-            lbl.add_css_class("adv-summary" if is_default else "adv-summary-changed")
-            self._adv_summary_box.append(lbl)
+        if self._adv_dialog is None or not self._adv_dialog.get_visible():
+            self._adv_dialog = AdvancedSettingsDialog(self)
+        self._adv_dialog.present()
 
     # ── Source toggle ──────────────────────────────────────────────────────────
 
@@ -3945,11 +3750,6 @@ class ControlPanel(Gtk.Box):
         else:
             self._prompt_placeholder.set_label(self._prompt_ph_text_video)
 
-        # Show guidance scale only for FLUX image
-        self._guidance_lbl.set_visible(is_image)
-        self._guidance_spin.set_visible(is_image)
-        self._guidance_hint_lbl.set_visible(is_image)
-
         # Swap chips: each source tab has its own curated chip vocabulary
         if is_image:
             chip_source = "image"
@@ -3958,10 +3758,6 @@ class ControlPanel(Gtk.Box):
         else:
             chip_source = "video"
         self._chips_scroll.set_child(self._make_chips_box(chip_source))
-
-        # Seed image: only relevant for video (Wan2.2 init image)
-        self._seed_img_section.set_visible(is_video)
-        self._seed_row_widget.set_visible(is_video)
 
         # Animate inputs: visible only in animate mode
         self._animate_box.set_visible(is_animate)
@@ -3975,22 +3771,6 @@ class ControlPanel(Gtk.Box):
         # Image (FLUX) uses its own separate step range and the row would be misleading.
         if hasattr(self, "_quality_row_widget"):
             self._quality_row_widget.set_visible(is_video or is_animate)
-
-        # Adjust steps range: FLUX min is 4, others min is 12
-        if is_image:
-            self._steps_lbl.set_label("Steps (4–50):")
-            self._steps_hint_lbl.set_label("sweet spot 20–30  ·  more = cleaner, slower")
-            adj = self._steps_spin.get_adjustment()
-            adj.set_lower(4)
-            if adj.get_value() < 4:
-                adj.set_value(4)
-        else:
-            self._steps_lbl.set_label("Steps (12–50):")
-            self._steps_hint_lbl.set_label("sweet spot 20–28  ·  more = sharper, slower")
-            adj = self._steps_spin.get_adjustment()
-            adj.set_lower(12)
-            if adj.get_value() < 12:
-                adj.set_value(12)
 
         # Re-evaluate match/mismatch for the newly selected tab.
         if self._running_model is not None or self._server_ready:
@@ -4235,9 +4015,11 @@ class ControlPanel(Gtk.Box):
         self._update_btns()
 
     def clear_prompt(self) -> None:
-        """Clear the prompt and negative prompt fields so the user can type the next one."""
+        """Clear the prompt field so the user can type the next one.
+        The negative prompt lives in self._neg (updated by AdvancedSettingsDialog)
+        and is intentionally preserved between generations.
+        """
         self._prompt_view.get_buffer().set_text("")
-        self._neg_view.get_buffer().set_text("")
 
     def _update_btns(self) -> None:
         # When idle: "Generate" (disabled until server ready).
@@ -4275,10 +4057,11 @@ class ControlPanel(Gtk.Box):
             self._set_seed_image(path)
 
     def _set_seed_image(self, path: str) -> None:
-        """Set the seed image path and update both the inline thumbnail well
-        (Inspire row) and the Advanced accordion display.
+        """Set the seed image path and update the inline thumbnail well (Inspire row).
 
         Pass an empty string to clear the seed image.
+        The accordion seed display was removed in Task 9 — the inline thumbnail
+        well (_seed_thumb_box) is now the sole visual indicator.
         """
         self._seed_image_path = path
 
@@ -4317,44 +4100,13 @@ class ControlPanel(Gtk.Box):
                 self._seed_thumb_box.append(lbl)
                 self._seed_thumb_box.remove_css_class("has-seed")
 
-        # ── Update the Advanced accordion display (pre-existing logic) ─────────
-        pb = _load_pixbuf(path, 64, 36)
-        # Replace the placeholder label with a Picture widget
-        parent = self._seed_img_widget.get_parent()
-        parent.remove(self._seed_img_widget)
-        if pb:
-            self._seed_img_widget = Gtk.Picture.new_for_pixbuf(pb)
-            self._seed_img_widget.set_size_request(64, 36)
-            self._seed_img_widget.set_can_shrink(False)
-            self._seed_img_widget.set_tooltip_text(path)
-        else:
-            self._seed_img_widget = Gtk.Label(label="?")
-            self._seed_img_widget.set_size_request(64, 36)
-        parent.prepend(self._seed_img_widget)
-        self._clear_seed_btn.set_sensitive(True)
-
     def _clear_seed_image(self) -> None:
-        """Clear the seed image and reset all displays (thumbnail well + accordion).
+        """Clear the seed image and reset the inline thumbnail well.
 
-        Delegates to _set_seed_image("") for the well and accordion Picture
-        widget, then resets the accordion's "none" label appearance and
-        disables the Clear button.
+        Delegates to _set_seed_image("") which handles the well reset.
+        The accordion seed display was removed in Task 9.
         """
-        # Drive the thumbnail well and accordion Picture update through the
-        # shared setter so both stay in sync.
         self._set_seed_image("")
-
-        # After _set_seed_image("") the accordion widget is a generic "?"
-        # label; replace it with the styled "none" label used when empty.
-        parent = self._seed_img_widget.get_parent()
-        if parent is not None:
-            parent.remove(self._seed_img_widget)
-            self._seed_img_widget = Gtk.Label(label="none")
-            self._seed_img_widget.set_size_request(64, 36)
-            self._seed_img_widget.add_css_class("muted")
-            parent.prepend(self._seed_img_widget)
-
-        self._clear_seed_btn.set_sensitive(False)
 
     # ── Animate file pickers ───────────────────────────────────────────────────
 
@@ -4466,20 +4218,31 @@ class ControlPanel(Gtk.Box):
         return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
 
     def _get_neg(self) -> str:
-        buf = self._neg_view.get_buffer()
-        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+        """Return the current negative prompt. Source of truth is self._neg,
+        updated in real-time by AdvancedSettingsDialog._on_neg_changed."""
+        return self._neg.strip()
 
     def _sync_neg_from_widget(self) -> None:
-        """Sync self._neg from the negative prompt TextView widget.
-        Called by AdvancedSettingsDialog when the negative prompt changes,
-        and by _on_action_clicked before building the args tuple.
+        """Sync self._neg from the Advanced dialog if it is open.
+
+        Called by _on_action_clicked before building the args tuple.
+        If the dialog is not open, self._neg is already current because
+        AdvancedSettingsDialog._on_neg_changed writes directly to self._neg.
         """
-        buf = self._neg_view.get_buffer()
-        self._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        if (
+            hasattr(self, "_adv_dialog")
+            and self._adv_dialog is not None
+            and self._adv_dialog.get_visible()
+        ):
+            buf = self._adv_dialog._neg_tv.get_buffer()
+            self._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
 
     def populate_prompts(self, prompt: str, neg: str, seed_image_path: str = "") -> None:
         self._prompt_view.get_buffer().set_text(prompt)
-        self._neg_view.get_buffer().set_text(neg)
+        # Negative prompt lives in self._neg; sync to dialog if open.
+        self._neg = neg
+        if self._adv_dialog is not None and self._adv_dialog.get_visible():
+            self._adv_dialog._neg_tv.get_buffer().set_text(neg)
         if seed_image_path and Path(seed_image_path).exists():
             self._set_seed_image(seed_image_path)
         else:
@@ -4781,9 +4544,8 @@ class ControlPanel(Gtk.Box):
         else:
             current_model_id = ""
 
-        # Sync neg prompt from widget if it still exists (pre-Task-9 Advanced accordion)
-        if hasattr(self, "_neg_view"):
-            self._sync_neg_from_widget()
+        # Sync neg prompt from dialog if it happens to be open
+        self._sync_neg_from_widget()
 
         args = (
             prompt,
@@ -5335,6 +5097,145 @@ class _StatusBar(Gtk.Box):
         self._stop.set()
 
 
+# ── Advanced Settings Dialog ───────────────────────────────────────────────────
+
+class AdvancedSettingsDialog(Gtk.Window):
+    """Non-modal dialog exposing raw generation parameters for advanced users.
+
+    Reads initial values from the ControlPanel plain state attributes and
+    writes back to them on every change, keeping the named buttons in sync.
+    Opened from Generation → Advanced Settings…
+    """
+
+    def __init__(self, panel: "ControlPanel") -> None:
+        super().__init__()
+        self._panel = panel
+        self.set_title("Advanced Generation Settings")
+        self.set_default_size(340, 320)
+        self.set_resizable(False)
+        root = panel.get_root()
+        if root:
+            self.set_transient_for(root)
+            app = root.get_application() if hasattr(root, "get_application") else None
+            if app:
+                self.set_application(app)
+        self._build()
+
+    def _build(self) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        self.set_child(box)
+
+        # ── Inference steps ───────────────────────────────────────────────────
+        steps_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        steps_lbl = Gtk.Label(label="Inference steps (10\u201350):")
+        steps_lbl.set_xalign(0)
+        steps_lbl.set_hexpand(True)
+        steps_row.append(steps_lbl)
+        self._steps_spin = Gtk.SpinButton()
+        self._steps_spin.set_adjustment(Gtk.Adjustment(
+            value=self._panel._steps,
+            lower=10, upper=50,
+            step_increment=1, page_increment=10,
+            page_size=0,
+        ))
+        self._steps_spin.connect("value-changed", self._on_steps_changed)
+        steps_row.append(self._steps_spin)
+        box.append(steps_row)
+
+        # ── Seed ──────────────────────────────────────────────────────────────
+        seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        seed_lbl = Gtk.Label(label="Seed (\u22121 = random):")
+        seed_lbl.set_xalign(0)
+        seed_lbl.set_hexpand(True)
+        seed_row.append(seed_lbl)
+        self._seed_spin = Gtk.SpinButton()
+        self._seed_spin.set_adjustment(Gtk.Adjustment(
+            value=self._panel._seed,
+            lower=-1, upper=2**31 - 1,
+            step_increment=1, page_increment=1000,
+            page_size=0,
+        ))
+        self._seed_spin.connect("value-changed", self._on_seed_changed)
+        seed_row.append(self._seed_spin)
+        box.append(seed_row)
+
+        # ── Guidance scale ────────────────────────────────────────────────────
+        guidance_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        guidance_lbl = Gtk.Label(label="Guidance scale (1\u201320):")
+        guidance_lbl.set_xalign(0)
+        guidance_lbl.set_hexpand(True)
+        guidance_row.append(guidance_lbl)
+        self._guidance_spin = Gtk.SpinButton()
+        self._guidance_spin.set_adjustment(Gtk.Adjustment(
+            value=self._panel._guidance,
+            lower=1.0, upper=20.0,
+            step_increment=0.5, page_increment=1.0,
+            page_size=0,
+        ))
+        self._guidance_spin.set_digits(1)
+        self._guidance_spin.connect("value-changed", self._on_guidance_changed)
+        guidance_row.append(self._guidance_spin)
+        box.append(guidance_row)
+
+        # ── Negative prompt ───────────────────────────────────────────────────
+        neg_lbl = Gtk.Label(label="Negative prompt:")
+        neg_lbl.set_xalign(0)
+        box.append(neg_lbl)
+        self._neg_tv = Gtk.TextView()
+        self._neg_tv.set_wrap_mode(Gtk.WrapMode.WORD)
+        self._neg_tv.set_size_request(-1, 60)
+        self._neg_tv.get_buffer().set_text(self._panel._neg)
+        self._neg_tv.get_buffer().connect("changed", self._on_neg_changed)
+        neg_scroll = Gtk.ScrolledWindow()
+        neg_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        neg_scroll.set_child(self._neg_tv)
+        neg_scroll.set_size_request(-1, 68)
+        box.append(neg_scroll)
+
+    def _on_steps_changed(self, spin: Gtk.SpinButton) -> None:
+        """Sync steps change back to panel and update QUALITY buttons."""
+        steps = int(spin.get_value())
+        # sync_quality_btn_to_steps also sets self._panel._steps
+        if hasattr(self._panel, "sync_quality_btn_to_steps"):
+            self._panel.sync_quality_btn_to_steps(steps)
+        else:
+            self._panel._steps = steps
+
+    def _on_seed_changed(self, spin: Gtk.SpinButton) -> None:
+        """Sync seed change back to panel and activate 'Keep this' seed mode."""
+        self._panel._seed = int(spin.get_value())
+        _settings.set("pinned_seed", self._panel._seed)
+        if hasattr(self._panel, "_seed_keep_btn"):
+            self._panel._seed_keep_btn.set_active(True)
+            label = (
+                f"\U0001f4cc {self._panel._seed}"
+                if self._panel._seed != -1
+                else "\U0001f4cc Keep this"
+            )
+            self._panel._seed_keep_btn.set_label(label)
+
+    def _on_guidance_changed(self, spin: Gtk.SpinButton) -> None:
+        """Sync guidance scale change back to panel."""
+        self._panel._guidance = float(spin.get_value())
+
+    def _on_neg_changed(self, buf: Gtk.TextBuffer) -> None:
+        """Sync negative prompt change back to panel directly."""
+        self._panel._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+
+    def sync_from_panel(self) -> None:
+        """Refresh dialog widgets from panel state. Called when Quality buttons change."""
+        if hasattr(self, "_steps_spin"):
+            self._steps_spin.set_value(self._panel._steps)
+        if hasattr(self, "_seed_spin"):
+            self._seed_spin.set_value(self._panel._seed)
+        if hasattr(self, "_guidance_spin"):
+            self._guidance_spin.set_value(self._panel._guidance)
+
+
 # ── Preferences Dialog ─────────────────────────────────────────────────────────
 
 class PreferencesDialog(Gtk.Window):
@@ -5682,7 +5583,8 @@ class PreferencesDialog(Gtk.Window):
             return
         steps = btn.steps_value
         _settings.set("quality_steps", steps)
-        self._mw._controls._steps_spin.set_value(steps)
+        # Update panel state and QUALITY row buttons; sync Advanced dialog if open.
+        self._mw._controls.sync_quality_btn_to_steps(steps)
         # Keep menu action state in sync
         action = self._mw.lookup_action("quality")
         if action:
@@ -5752,9 +5654,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
 
-        # Apply persisted quality preference to the steps spin button
+        # Apply persisted quality preference — drives self._steps and QUALITY buttons.
         saved_steps = int(_settings.get("quality_steps"))
-        self._controls._steps_spin.set_value(saved_steps)
+        self._controls.sync_quality_btn_to_steps(saved_steps)
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -5963,6 +5865,11 @@ class MainWindow(Gtk.ApplicationWindow):
         recover.set_enabled(False)   # enabled once the server is reachable
         self.add_action(recover)
 
+        # ── Generation: advanced settings dialog ──────────────────────────────
+        adv_action = Gio.SimpleAction.new("advanced-settings", None)
+        adv_action.connect("activate", lambda a, p: self._controls.open_advanced_dialog())
+        self.add_action(adv_action)
+
         # ── Generation: quality preset (radio via stateful string action) ─────
         quality_action = Gio.SimpleAction.new_stateful(
             "quality",
@@ -6041,6 +5948,10 @@ class MainWindow(Gtk.ApplicationWindow):
             item.set_attribute_value("target", GLib.Variant("s", val))
             sleep_section.append_item(item)
         gen_menu.append_section("Sleep After", sleep_section)
+
+        adv_section = Gio.Menu()
+        adv_section.append("Advanced Settings\u2026", "win.advanced-settings")
+        gen_menu.append_section(None, adv_section)
         menumodel.append_submenu("Generation", gen_menu)
 
         # ── Prompt ────────────────────────────────────────────────────────────
@@ -6101,7 +6012,8 @@ class MainWindow(Gtk.ApplicationWindow):
         action.set_state(GLib.Variant("s", val))
         steps = int(val)
         _settings.set("quality_steps", steps)
-        self._controls._steps_spin.set_value(steps)
+        # Update panel state and QUALITY row buttons; sync Advanced dialog if open.
+        self._controls.sync_quality_btn_to_steps(steps)
         # Keep Preferences dialog in sync if open
         if self._prefs_dialog and self._prefs_dialog.get_visible():
             for btn in self._prefs_dialog._quality_btns:
