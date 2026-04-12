@@ -5618,6 +5618,9 @@ class MainWindow(Gtk.ApplicationWindow):
             on_open_playlist=self._on_open_attractor_for_playlist,
             on_enter_selection_mode=self._on_enter_selection_mode,
         )
+        # Wire the history store so the SHOT panel seed buttons can read history.
+        # (ControlPanel._get_history_records uses self._store via this attribute.)
+        self._controls._store = self._store
 
         # ── Main toolbar ──────────────────────────────────────────────────────
         # The toolbar strip is built inside ControlPanel (logo, source toggle,
@@ -5947,10 +5950,7 @@ class MainWindow(Gtk.ApplicationWindow):
         _settings.set("quality_steps", steps)
         # Update panel state and QUALITY row buttons; sync Advanced dialog if open.
         self._controls.sync_quality_btn_to_steps(steps)
-        # Keep Preferences dialog in sync if open
-        if self._prefs_dialog and self._prefs_dialog.get_visible():
-            for btn in self._prefs_dialog._quality_btns:
-                btn.set_active(btn.steps_value == steps)
+        # (PreferencesDialog quality radio removed — QUALITY row in panel is sole control)
 
     def _on_sleep_after_action(self, action: Gio.SimpleAction,
                                param: GLib.Variant) -> None:
@@ -7191,6 +7191,8 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery.replace_pending_with(record)
         self._gen_gallery = None
         self._controls.set_busy(False)
+        # Refresh "Repeat last" availability now that history has at least one record.
+        self._controls._apply_seed_mode_from_settings()
         media_path = record.media_file_path
         self._set_status(f"Done — {media_path}  ({record.duration_s:.0f}s)")
         self._screensaver_uninhibit()
