@@ -2905,6 +2905,11 @@ class ControlPanel(Gtk.Box):
         first_btn = None
         current_steps = self._steps
 
+        # Static render time estimates per quality slot (minutes). Hardcoded because
+        # the formula steps//10*3 gives wrong values (3/9/12) for steps 10/30/40;
+        # the spec requires 3/6/9 min.
+        _RENDER_MINS = {"fast": 3, "standard": 6, "cinematic": 9}
+
         for slot, steps, display in QUALITY_PRESETS:
             btn = Gtk.ToggleButton()
             # Store preset metadata as plain Python attributes (GTK set_data is blocked).
@@ -2913,9 +2918,8 @@ class ControlPanel(Gtk.Box):
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             inner.set_halign(Gtk.Align.CENTER)
             name_lbl = Gtk.Label(label=display)
-            # Render time estimate: roughly steps/10 * 3 minutes (static approximation).
-            # Not dynamically calculated — intentionally a quick rough guide.
-            est_mins = steps // 10 * 3
+            # Render time estimate: static per-slot approximation (not formula-derived).
+            est_mins = _RENDER_MINS.get(slot, 6)
             sub_lbl = Gtk.Label(label=f"~{est_mins} min to render")
             sub_lbl.add_css_class("named-ctrl-sub")
             inner.append(name_lbl)
