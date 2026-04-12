@@ -45,8 +45,14 @@ def test_clip_frames_unknown_slot_snaps_to_standard():
     assert clip_frames("wan2", "bogus") == 81
 
 
-def test_clip_frames_unknown_model_returns_none():
+def test_clip_frames_fixed_frame_model_returns_none():
+    """Mochi is in MODELS_WITH_FIXED_FRAMES; clip_frames returns None for it."""
     assert clip_frames("mochi", "standard") is None
+
+
+def test_clip_frames_truly_unknown_model_returns_none():
+    """A model key unknown to both tables returns None (same as fixed-frame behaviour)."""
+    assert clip_frames("unknown_model_xyz", "standard") is None
 
 
 def test_mochi_in_fixed_frames():
@@ -88,7 +94,8 @@ def test_clip_label_wan2_standard():
 
 def test_clip_label_skyreels_short():
     label = clip_label("skyreels", "short")
-    assert "9" in label
+    assert "9 f" in label    # frame count
+    assert "0.4" in label    # seconds (9/24 = 0.375 → rounds to 0.4)
 
 
 def test_clip_label_mochi_fixed():

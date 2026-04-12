@@ -50,6 +50,9 @@ def clip_frames(model_key: str, slot: str) -> "int | None":
 
     Returns the standard-slot value if slot is unrecognised.
     Returns None for models in MODELS_WITH_FIXED_FRAMES (use their fixed count instead).
+    Returns None for unknown model keys (key absent from both CLIP_LENGTH_FRAMES and
+    MODELS_WITH_FIXED_FRAMES) — callers should treat this the same as a fixed-frame model
+    and fall back to a sensible default.
     """
     if model_key in MODELS_WITH_FIXED_FRAMES:
         return None
@@ -60,11 +63,15 @@ def clip_frames(model_key: str, slot: str) -> "int | None":
 
 
 def quality_steps(slot: str) -> int:
-    """Return inference step count for a quality slot name. Defaults to standard (30)."""
+    """Return inference step count for a quality slot name. Defaults to standard steps."""
     for name, steps, _ in QUALITY_PRESETS:
         if name == slot:
             return steps
-    return 30
+    # Fall back to standard preset steps so this stays in sync if QUALITY_PRESETS changes.
+    for name, steps, _ in QUALITY_PRESETS:
+        if name == "standard":
+            return steps
+    return 30  # should never reach here if QUALITY_PRESETS is well-formed
 
 
 def slot_for_steps(steps: int) -> "str | None":
