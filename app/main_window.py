@@ -2196,6 +2196,13 @@ class ControlPanel(Gtk.Box):
         self._inspire_pending_source: "str | None" = None
         self._inspire_pending_seed: str = ""
         self._seed_image_path = ""
+        # ── Generation state (source of truth for _on_action_clicked) ─────────
+        # These replace direct spin-widget reads so the Advanced dialog and the
+        # new named buttons can both drive the same values.
+        self._steps: int = int(_settings.get("quality_steps") or 20)
+        self._seed: int = -1          # -1 = random
+        self._neg: str = ""
+        self._guidance: float = 3.5
         self._ref_video_path = ""      # animate: motion source video
         self._ref_char_path = ""       # animate: character image
         self._animate_mode = "animation"
@@ -3893,6 +3900,14 @@ class ControlPanel(Gtk.Box):
         buf = self._neg_view.get_buffer()
         return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
 
+    def _sync_neg_from_widget(self) -> None:
+        """Sync self._neg from the negative prompt TextView widget.
+        Called by AdvancedSettingsDialog when the negative prompt changes,
+        and by _on_action_clicked before building the args tuple.
+        """
+        buf = self._neg_view.get_buffer()
+        self._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+
     def populate_prompts(self, prompt: str, neg: str, seed_image_path: str = "") -> None:
         self._prompt_view.get_buffer().set_text(prompt)
         self._neg_view.get_buffer().set_text(neg)
@@ -4162,12 +4177,12 @@ class ControlPanel(Gtk.Box):
         else:
             current_model_id = ""
         return {
-            "neg":            self._get_neg(),
-            "steps":          int(self._steps_spin.get_value()),
-            "seed":           int(self._seed_spin.get_value()),
+            "neg":            self._neg,
+            "steps":          self._steps,
+            "seed":           self._seed,
             "seed_image_path": self._seed_image_path,
             "model_source":   self._model_source,
-            "guidance_scale": float(self._guidance_spin.get_value()),
+            "guidance_scale": self._guidance,
             "ref_video_path": self._ref_video_path,
             "ref_char_path":  self._ref_char_path,
             "animate_mode":   self._animate_mode,
@@ -4197,14 +4212,18 @@ class ControlPanel(Gtk.Box):
         else:
             current_model_id = ""
 
+        # Sync neg prompt from widget if it still exists (pre-Task-9 Advanced accordion)
+        if hasattr(self, "_neg_view"):
+            self._sync_neg_from_widget()
+
         args = (
             prompt,
-            self._get_neg(),
-            int(self._steps_spin.get_value()),
-            int(self._seed_spin.get_value()),
+            self._neg,
+            self._steps,
+            self._seed,
             self._seed_image_path,
             self._model_source,
-            float(self._guidance_spin.get_value()),
+            self._guidance,
             self._ref_video_path,
             self._ref_char_path,
             self._animate_mode,
