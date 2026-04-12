@@ -48,6 +48,11 @@ DEFAULTS: dict = {
     # SkyReels video length
     # Valid counts: (N-1) % 4 == 0  →  9 (~0.4s), 33 (~1.4s), 65 (~2.7s), 97 (~4s)
     "skyreels_num_frames": 33,
+    # Create zone — named control state
+    "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
+    "preferred_video_model": "",          # "wan2"|"mochi"|"skyreels"|"" (auto)
+    "seed_mode":             "random",    # "random"|"repeat"|"keep"
+    "pinned_seed":           -1,          # used when seed_mode == "keep"
     # Recovery
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
 }
