@@ -2291,66 +2291,6 @@ class ControlPanel(Gtk.Box):
         src_row.append(self._src_image_btn)
         self._toolbar_box.append(src_row)
 
-        # ── Video model selector ──────────────────────────────────────────────
-        self._model_sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._model_sel_row.set_margin_start(4)
-
-        self._mdl_wan2_btn = Gtk.ToggleButton(label="Wan2.2")
-        self._mdl_wan2_btn.add_css_class("source-btn")
-        self._mdl_wan2_btn.add_css_class("source-btn-left")
-        self._mdl_wan2_btn.set_tooltip_text(
-            "Wan2.2-T2V-A14B  ·  720p MP4  ·  ~3–10 min\n"
-            "Launches start_wan_qb2.sh  (P300X2)"
-        )
-        self._mdl_mochi_btn = Gtk.ToggleButton(label="Mochi-1")
-        self._mdl_mochi_btn.add_css_class("source-btn")
-        self._mdl_mochi_btn.add_css_class("source-btn-mid")
-        self._mdl_mochi_btn.set_tooltip_text(
-            "Mochi-1  ·  480×848  ·  168 frames  ·  ~5–15 min\n"
-            "Launches start_mochi.sh"
-        )
-        self._mdl_mochi_btn.set_group(self._mdl_wan2_btn)
-
-        self._mdl_skyreels_btn = Gtk.ToggleButton(label="SkyReels")
-        self._mdl_skyreels_btn.add_css_class("source-btn")
-        self._mdl_skyreels_btn.add_css_class("source-btn-right")
-        self._mdl_skyreels_btn.set_tooltip_text(
-            "SkyReels-V2-DF-1.3B-540P  ·  480×272  ·  33 frames  ·  Blackhole\n"
-            "Launches start_skyreels.sh  (P300X2)"
-        )
-        self._mdl_skyreels_btn.set_group(self._mdl_wan2_btn)
-
-        self._mdl_wan2_btn.connect("toggled", lambda b: b.get_active() and self._set_model("wan2"))
-        self._mdl_mochi_btn.connect("toggled", lambda b: b.get_active() and self._set_model("mochi"))
-        self._mdl_skyreels_btn.connect("toggled", lambda b: b.get_active() and self._set_model("skyreels"))
-        self._mdl_wan2_btn.set_active(True)
-        self._model_sel_row.append(self._mdl_wan2_btn)
-        self._model_sel_row.append(self._mdl_mochi_btn)
-        self._model_sel_row.append(self._mdl_skyreels_btn)
-
-        # ── Image model selector ──────────────────────────────────────────────
-        self._img_model_sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._img_model_sel_row.set_margin_start(4)
-
-        self._mdl_flux_btn = Gtk.Button(label="FLUX.1-dev")
-        self._mdl_flux_btn.add_css_class("source-btn")
-        self._mdl_flux_btn.add_css_class("source-btn-left")
-        self._mdl_flux_btn.add_css_class("source-btn-right")
-        self._mdl_flux_btn.add_css_class("source-btn-active")
-        self._mdl_flux_btn.set_tooltip_text(
-            "FLUX.1-dev  ·  1024×1024 JPEG  ·  ~15–90 s\n"
-            "Launches start_flux.sh"
-        )
-        self._mdl_flux_btn.connect("clicked", lambda _: self._set_model("flux"))
-        self._img_model_sel_row.append(self._mdl_flux_btn)
-
-        # Video selector visible by default; image selector shown when source=image
-        self._model_sel_row.set_visible(True)
-        self._img_model_sel_row.set_visible(False)
-
-        self._toolbar_box.append(self._model_sel_row)
-        self._toolbar_box.append(self._img_model_sel_row)
-
         # Spacer (MainWindow appends attractor + other buttons after this)
         _tb_spacer = Gtk.Box()
         _tb_spacer.set_hexpand(True)
@@ -3457,11 +3397,6 @@ class ControlPanel(Gtk.Box):
         # Animate inputs: visible only in animate mode
         self._animate_box.set_visible(is_animate)
 
-        # Model selector rows: video selector shown for video source,
-        # image selector shown for image source, neither for animate.
-        self._model_sel_row.set_visible(is_video)
-        self._img_model_sel_row.set_visible(is_image)
-
         # Adjust steps range: FLUX min is 4, others min is 12
         if is_image:
             self._steps_lbl.set_label("Steps (4–50):")
@@ -3598,16 +3533,11 @@ class ControlPanel(Gtk.Box):
                 # Collapse startup log once server confirmed ready
                 if self._server_launching:
                     self.set_server_launching(False)
-                # Sync the video model toggle to match what's actually running.
-                # e.g. when Mochi is running, select the Mochi-1 button.
+                # Sync the internal video model state to match what's actually running.
+                # e.g. when Mochi is running, update _video_model to "mochi".
                 video_key = _MODEL_TO_VIDEO_KEY.get(running_model) if running_model else None
                 if video_key and self._video_model != video_key:
-                    if video_key == "mochi":
-                        self._mdl_mochi_btn.set_active(True)
-                    elif video_key == "skyreels":
-                        self._mdl_skyreels_btn.set_active(True)
-                    else:
-                        self._mdl_wan2_btn.set_active(True)
+                    self._set_model(video_key)
 
         self._update_btns()
 
