@@ -147,3 +147,11 @@ def test_input_widget_clear_removes_filled_class(tmp_path):
     assert w.has_css_class("input-widget-filled-char")
     w.set_value("")
     assert not w.has_css_class("input-widget-filled-char")
+
+
+@gtk_required
+def test_input_widget_always_has_base_css_class():
+    """InputWidget always carries the .input-widget CSS class."""
+    from animate_picker import InputWidget
+    w = InputWidget("motion", "MOTION VIDEO")
+    assert w.has_css_class("input-widget")

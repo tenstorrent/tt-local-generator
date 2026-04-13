@@ -198,14 +198,18 @@ class InputWidget(_GtkButtonBase):
         """
         Update the widget to show a thumbnail and filename for *path*.
         Pass an empty string to clear back to the placeholder state.
+
+        self._path is only updated when *path* is non-empty and the file exists,
+        so get_path() never returns a path that was rejected by the existence check.
         """
-        self._path = path
         filled_class = f"input-widget-filled-{self._widget_type}"
 
         # Clear existing thumb children
         self._clear_thumb()
 
         if path and Path(path).exists():
+            # Only store the path once we know the file is accessible.
+            self._path = path
             thumb_path = self._resolve_thumb_path(path)
             if thumb_path and Path(thumb_path).exists():
                 pic = Gtk.Picture.new_for_filename(thumb_path)
@@ -221,6 +225,8 @@ class InputWidget(_GtkButtonBase):
             self._name_lbl.remove_css_class("muted")
             self.add_css_class(filled_class)
         else:
+            # Clear on empty string or nonexistent path so get_path() stays consistent.
+            self._path = ""
             self._show_placeholder()
             self._name_lbl.set_label("none")
             self._name_lbl.add_css_class("muted")
