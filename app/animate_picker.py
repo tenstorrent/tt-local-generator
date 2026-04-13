@@ -694,8 +694,9 @@ class PickerPopover(Gtk.Popover if _GTK_AVAILABLE else object):
             child = child.get_next_sibling()
 
     def _set_selection(self, path: Optional[str]) -> None:
-        self._selected_path = path
-        self._use_btn.set_sensitive(path is not None)
+        # Accept non-empty string only; None or "" both mean no selection.
+        self._selected_path = path if path else None
+        self._use_btn.set_sensitive(bool(self._selected_path))
 
     # ── Action handlers ───────────────────────────────────────────────────────
 
