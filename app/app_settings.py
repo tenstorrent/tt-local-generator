@@ -55,6 +55,8 @@ DEFAULTS: dict = {
     "pinned_seed":           -1,          # used when seed_mode == "keep"
     # Recovery
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
+    # Animate picker — user-chosen disk folder
+    "motion_clips_dir": "",         # empty = Disk tab shows only Browse tile
 }
 
 
