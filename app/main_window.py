@@ -6054,10 +6054,12 @@ class MainWindow(Gtk.ApplicationWindow):
             iterate_cb=self._controls.populate_prompts,
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
+            animate_action_cb=self._on_animate_card_action,
+            motion_action_cb=self._on_motion_card_action,
         )
-        self._video_gallery = GalleryWidget(**shared_cbs, media_type="video")
+        self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="video")
-        self._image_gallery = GalleryWidget(**shared_cbs, media_type="image")
+        self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
@@ -6148,6 +6150,41 @@ class MainWindow(Gtk.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         """Update status bar. Safe to call from main thread only."""
         self._status_lbl.set_label(text)
+
+    def _on_animate_card_action(self, record: "GenerationRecord") -> None:
+        """
+        '💃 Animate' gallery card action.
+        Switches to animate source and copies the card's thumbnail as the character image.
+        The thumbnail is a first-frame still for videos — valid as a character seed.
+        """
+        # Switch to the animate source tab
+        self._controls.switch_to_source("animate")
+        # Set character image to the card's thumbnail
+        char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
+        if char_path and Path(char_path).exists():
+            self._controls.set_char_input(char_path)
+        # Flash status
+        self._flash_status("Character set ✓")
+
+    def _on_motion_card_action(self, record: "GenerationRecord") -> None:
+        """
+        '↗ Motion' gallery card action.
+        Sets the card's video_path as the motion video input WITHOUT switching source.
+        Only video/animate cards have this button (image cards don't).
+        """
+        if record.video_exists:
+            self._controls.set_motion_input(record.video_path)
+        self._flash_status("Motion set ✓")
+
+    def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
+        """Show *message* in the status label for *duration_ms* ms, then restore."""
+        current = self._status_lbl.get_label()
+        self._status_lbl.set_label(message)
+        def _restore() -> bool:
+            if self._alive:
+                self._status_lbl.set_label(current)
+            return GLib.SOURCE_REMOVE
+        GLib.timeout_add(duration_ms, _restore)
 
     # ── Menu bar ───────────────────────────────────────────────────────────────
 

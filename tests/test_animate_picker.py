@@ -218,3 +218,41 @@ def test_generation_card_stores_action_callbacks():
     assert len(animate_calls) == 1
     assert len(motion_calls)  == 1
     assert animate_calls[0].id == "test-card-0001"
+
+
+@gtk_required
+def test_gallery_card_action_callbacks_invoked():
+    """Verify animate_cb and motion_cb are stored on GenerationCard."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
+    from main_window import GenerationCard
+    from history_store import GenerationRecord
+
+    animate_calls = []
+    motion_calls = []
+
+    rec = GenerationRecord(
+        id="test-0001", prompt="test", negative_prompt="",
+        num_inference_steps=20, seed=42,
+        video_path="/nonexistent/video.mp4",
+        thumbnail_path="/nonexistent/thumb.jpg",
+        created_at="2025-01-01T00:00:00",
+        media_type="video",
+    )
+
+    card = GenerationCard(
+        rec,
+        iterate_cb=lambda r: None,
+        select_cb=lambda c: None,
+        delete_cb=lambda r: None,
+        animate_cb=lambda r: animate_calls.append(r),
+        motion_cb=lambda r: motion_calls.append(r),
+    )
+
+    # Simulate callbacks being invoked
+    card._animate_cb(rec)
+    card._motion_cb(rec)
+
+    assert len(animate_calls) == 1
+    assert len(motion_calls) == 1
+    assert animate_calls[0].id == "test-0001"
