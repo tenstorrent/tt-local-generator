@@ -1328,12 +1328,15 @@ class GenerationCard(Gtk.Frame):
     delete_cb(record) is called when the trash button is clicked.
     """
 
-    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb):
+    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
+                 animate_cb=None, motion_cb=None):
         super().__init__()
         self._record = record
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
+        self._animate_cb = animate_cb   # callable(record) or None
+        self._motion_cb  = motion_cb    # callable(record) or None — None for image cards
         self.add_css_class("card")
         # Minimum card width; FlowBox homogeneous layout makes all cells equal width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1346,9 +1349,10 @@ class GenerationCard(Gtk.Frame):
         gesture.connect("pressed", lambda *_: self._select_cb(self))
         self.add_controller(gesture)
 
-        # Hovering over a video card plays it in the thumbnail area.
-        # Image cards (FLUX) don't have a video to play, so no hover controller.
-        if record.video_exists:
+        # Hover controller: plays video on hover (video cards) OR shows action bar.
+        # Image cards without action callbacks don't need hover tracking at all.
+        has_hover = record.video_exists or animate_cb is not None or motion_cb is not None
+        if has_hover:
             motion = Gtk.EventControllerMotion()
             motion.connect("enter", self._on_hover_enter)
             motion.connect("leave", self._on_hover_leave)
@@ -1398,6 +1402,48 @@ class GenerationCard(Gtk.Frame):
         self._check.set_valign(Gtk.Align.START)
         self._check.set_visible(False)
         overlay.add_overlay(self._check)
+
+        # ── Hover action bar ─────────────────────────────────────────────────
+        # Gtk.Revealer(SLIDE_UP) overlaid at the bottom of the card thumbnail.
+        # Only added to the overlay when at least one action callback is present.
+        self._action_revealer = Gtk.Revealer()
+        self._action_revealer.set_transition_type(
+            Gtk.RevealerTransitionType.SLIDE_UP
+        )
+        self._action_revealer.set_transition_duration(150)
+        self._action_revealer.set_valign(Gtk.Align.END)
+        self._action_revealer.set_halign(Gtk.Align.FILL)
+        self._action_revealer.set_reveal_child(False)
+
+        action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        action_bar.add_css_class("hover-action-bar")
+        action_bar.set_hexpand(True)
+
+        if self._animate_cb is not None:
+            animate_btn = Gtk.Button(label="💃 Animate")
+            animate_btn.add_css_class("hover-action-btn")
+            animate_btn.add_css_class("hover-action-btn-animate")
+            animate_btn.set_can_focus(False)
+            animate_btn.connect(
+                "clicked",
+                lambda _b, rec=self._record: self._animate_cb(rec),
+            )
+            action_bar.append(animate_btn)
+
+        if self._motion_cb is not None and self._record.media_type == "video":
+            motion_btn = Gtk.Button(label="↗ Motion")
+            motion_btn.add_css_class("hover-action-btn")
+            motion_btn.add_css_class("hover-action-btn-motion")
+            motion_btn.set_can_focus(False)
+            motion_btn.connect(
+                "clicked",
+                lambda _b, rec=self._record: self._motion_cb(rec),
+            )
+            action_bar.append(motion_btn)
+
+        self._action_revealer.set_child(action_bar)
+        if self._animate_cb is not None or self._motion_cb is not None:
+            overlay.add_overlay(self._action_revealer)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
         # The stack expands horizontally so the thumbnail fills the FlowBox cell width.
@@ -1543,7 +1589,10 @@ class GenerationCard(Gtk.Frame):
         self._loop_connected = False
 
     def _on_hover_enter(self, _ctrl, _x, _y) -> None:
-        """Start looping the video silently when the mouse enters the card."""
+        """Start looping the video silently when the mouse enters the card.
+        Also reveals the hover action bar (if action callbacks were provided)."""
+        if hasattr(self, "_action_revealer"):
+            self._action_revealer.set_reveal_child(True)
         if self._hover_video is None:
             return
         if not self._hover_pipeline_open:
@@ -1579,7 +1628,10 @@ class GenerationCard(Gtk.Frame):
             GLib.idle_add(stream.play)
 
     def _on_hover_leave(self, _ctrl) -> None:
-        """Stop the video and revert to the thumbnail when the mouse leaves."""
+        """Stop the video and revert to the thumbnail when the mouse leaves.
+        Also hides the hover action bar."""
+        if hasattr(self, "_action_revealer"):
+            self._action_revealer.set_reveal_child(False)
         if self._hover_video is None:
             return
         self._close_hover_pipeline()
@@ -2233,13 +2285,16 @@ class GalleryWidget(Gtk.Box):
     hover-leave to minimise GStreamer resource use.
     """
 
-    def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video"):
+    def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video",
+                 animate_action_cb=None, motion_action_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
         self._iterate_cb = iterate_cb
-        self._select_cb = select_cb   # select_cb(record: GenerationRecord) called on click
-        self._delete_cb = delete_cb   # delete_cb(record: GenerationRecord) called on trash
+        self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
+        self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
+        self._animate_action_cb = animate_action_cb  # callable(record) or None — opens Animate dialog
+        self._motion_action_cb  = motion_action_cb   # callable(record) or None — opens Motion picker
 
         # ── Scrolled flow box ──────────────────────────────────────────────────
         # FlowBox automatically computes the number of columns that fit in the
@@ -2346,6 +2401,8 @@ class GalleryWidget(Gtk.Box):
             iterate_cb=self._iterate_cb,
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
+            animate_cb=self._animate_action_cb,
+            motion_cb=self._motion_action_cb,
         )
 
     def delete_card(self, record_id: str) -> None:

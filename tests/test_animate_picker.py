@@ -177,3 +177,44 @@ def test_mode_desc_bar_css_class_swap():
     bar.add_css_class("mode-desc-bar-repl")
     assert bar.has_css_class("mode-desc-bar-repl")
     assert not bar.has_css_class("mode-desc-bar-anim")
+
+
+@gtk_required
+def test_generation_card_stores_action_callbacks():
+    """Verify animate_cb and motion_cb are stored on GenerationCard."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
+    from main_window import GenerationCard
+    from history_store import GenerationRecord
+    import datetime
+
+    animate_calls = []
+    motion_calls  = []
+
+    rec = GenerationRecord(
+        id="test-card-0001",
+        prompt="test",
+        negative_prompt="",
+        num_inference_steps=20,
+        seed=42,
+        video_path="/nonexistent/video.mp4",
+        thumbnail_path="/nonexistent/thumb.jpg",
+        created_at=datetime.datetime.now().isoformat(),
+        media_type="video",
+    )
+
+    card = GenerationCard(
+        rec,
+        iterate_cb=lambda r: None,
+        select_cb=lambda c: None,
+        delete_cb=lambda r: None,
+        animate_cb=lambda r: animate_calls.append(r),
+        motion_cb=lambda r: motion_calls.append(r),
+    )
+
+    card._animate_cb(rec)
+    card._motion_cb(rec)
+
+    assert len(animate_calls) == 1
+    assert len(motion_calls)  == 1
+    assert animate_calls[0].id == "test-card-0001"
