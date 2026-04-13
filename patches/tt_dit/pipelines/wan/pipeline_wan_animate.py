@@ -77,6 +77,10 @@ class WanPipelineAnimate(WanPipelineI2V):
             kwargs["checkpoint_name"] = os.environ.get(
                 "MODEL_WEIGHTS_DIR", WanPipelineAnimate.CHECKPOINT
             )
+        # boundary_ratio=None disables the dual-transformer timestep switch.
+        # Animate has no transformer_2, so the default 0.875 threshold would
+        # crash with AttributeError on 'NoneType' during the last ~12.5% of steps.
+        kwargs.setdefault("boundary_ratio", None)
         return WanPipeline.create_pipeline(
             *args, pipeline_class=WanPipelineAnimate, **kwargs
         )
