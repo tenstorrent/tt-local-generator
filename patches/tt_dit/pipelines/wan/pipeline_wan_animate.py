@@ -109,10 +109,23 @@ class WanPipelineAnimate(WanPipelineI2V):
         TTNN WanTransformer3DModel (face_encoder.*, motion_encoder.*, etc.).
         Using strict=False drops these silently; we log counts for visibility.
 
+        Called both during __init__ and at every denoising step. Uses
+        self.transformer.is_loaded() to skip the expensive reload when weights
+        are already on device — the same early-exit that cache.load_model uses.
+        This avoids a ~54s full state-dict reload per step with dynamic_load=False.
+
         Note: bypasses cache.load_model intentionally — the cache layer does not
         support strict=False. This is acceptable for bring-up; a follow-up can
         add strict support to cache.load_model.
         """
+        if self.transformer.is_loaded():
+            # Weights are already on device. Delegate to the base class path which
+            # calls cache.load_model — it will also see is_loaded()=True and return
+            # immediately. This is the per-step fast path.
+            super()._prepare_transformer1()
+            return
+
+        # First load (or after dynamic unload): use strict=False for Animate-only keys.
         logger.info("Loading Animate-14B transformer weights (strict=False) ...")
         state = self.torch_transformer.state_dict()
         result = self.transformer.load_torch_state_dict(state, strict=False)
