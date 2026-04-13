@@ -6197,6 +6197,14 @@ class MainWindow(Gtk.ApplicationWindow):
             # ID so the badge always shows what is actually running.
             if hasattr(self._controls, "update_shot_panel"):
                 video_key = _MODEL_TO_VIDEO_KEY.get(running_model or "") if running_model else None
+                # Fallback: some inference servers (e.g. tt-media-inference-server) don't
+                # implement /v1/models, so running_model is None even when the server is
+                # healthy.  If the server is ready but we can't identify the model, use
+                # the user's preferred_video_model setting (defaulting to "wan2") so the
+                # SHOT panel shows as online rather than "No server · Start one".
+                if ready and video_key is None:
+                    pref = str(_settings.get("preferred_video_model") or "wan2")
+                    video_key = pref if pref in ("wan2", "mochi", "skyreels") else "wan2"
                 self._controls._shot_server_ready = bool(ready and video_key)
                 if video_key and ready:
                     # Honour the user's preferred model setting; auto-switch to
