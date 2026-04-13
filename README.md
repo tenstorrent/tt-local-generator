@@ -8,7 +8,7 @@ A GTK4 desktop UI for generating videos and images with Tenstorrent hardware.
 |------|-------|----------|
 | Video | [Wan2.2-T2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | QB2 (P300x2) |
 | Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | QB2 (P300x2) |
-| Video | [SkyReels-V2-DF-1.3B-540P](https://huggingface.co/Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers) | Blackhole (P150X4 / P300X2) |
+| Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | Blackhole (P300X2) — image-to-video |
 | Image | [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 4× p300c |
 | Animate | [Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-14B-720P-Diffusers) | CPU/CUDA (Phase 1) |
 
@@ -41,7 +41,7 @@ tt-local-generator/
     start_wan_qb2.sh     ← Wan2.2 on P300x2 (default)
     start_wan.sh         ← Wan2.2 on P150x4
     start_mochi.sh       ← Mochi-1 on QB2
-    start_skyreels.sh    ← SkyReels-V2-DF-1.3B-540P (Blackhole P150X4/P300X2)
+    start_skyreels_i2v.sh← SkyReels-V2-I2V-14B-540P (Blackhole P300X2) — I2V, --stop/--restart
     start_flux.sh        ← FLUX.1-dev image server
     start_animate.sh     ← Wan2.2-Animate (CPU/CUDA Phase 1)
     start_prompt_gen.sh  ← Qwen3-0.6B prompt server (CPU, port 8001)
@@ -91,11 +91,28 @@ cd ~/code/tt-local-generator
 ./bin/start_wan.sh             # Wan2.2 on P150x4
 ```
 
+### SkyReels I2V (image-to-video, Blackhole P300X2)
+
+```bash
+./bin/start_skyreels_i2v.sh                  # start — weight loading takes 30–60 min
+./bin/start_skyreels_i2v.sh --stop           # stop running container
+./bin/start_skyreels_i2v.sh --restart        # stop + start fresh (useful after a crash)
+./bin/start_skyreels_i2v.sh --device p150x4  # target P150X4 mesh instead
+```
+
+> **Before first run:** download weights (~58 GB) and apply patches:
+> ```bash
+> huggingface-cli download Skywork/SkyReels-V2-I2V-14B-540P --local-dir-use-symlinks False
+> huggingface-cli download Wan-AI/Wan2.2-T2V-A14B-Diffusers   --local-dir-use-symlinks False
+> ./bin/apply_patches.sh
+> ```
+
 ### Stop any server
 
 ```bash
 ./bin/start_wan_qb2.sh --stop
 ./bin/start_wan.sh --stop
+./bin/start_skyreels_i2v.sh --stop
 ```
 
 ---
@@ -233,13 +250,14 @@ cat vendor/VENDOR_SHA          # pinned SHA
 ./bin/apply_patches.sh         # apply patches/ to vendor/
 ```
 
-Patches are applied in six steps:
-1. Copy `patches/tt_dit/` into `vendor/` (dev_mode pipeline fixes, incl. SkyReels-V2)
+Patches are applied in seven steps:
+1. Copy `patches/tt_dit/` into `vendor/` (dev_mode pipeline fixes, incl. SkyReels-V2-I2V)
 2. Patch `run_docker_server.py` with dev_mode bind-mounts
 3. Copy `patches/media_server_config/` into `vendor/` (constants, runner, and domain overrides)
 4. Patch `run_docker_server.py` with unconditional `constants.py` bind-mount
 5. Inject `HF_HOME` bind-mount block into `run_docker_server.py`
-6. Inject SkyReels `ModelSpecTemplate` into `workflows/model_spec.py`
+6. Inject SkyReels T2V `ModelSpecTemplate` into `workflows/model_spec.py`
+7. Inject SkyReels I2V `ModelSpecTemplate` into `workflows/model_spec.py`
 
 The `.env` in `vendor/tt-inference-server/` controls Docker container environment (including `HF_HUB_OFFLINE=1` and `TT_DIT_CACHE_DIR` for weight caching across restarts).
 
