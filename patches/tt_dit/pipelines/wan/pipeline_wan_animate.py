@@ -32,11 +32,17 @@ from .pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
 # Keys present in Animate-14B state dict but absent from TTNN WanTransformer3DModel.
 # These are dropped via strict=False and logged for visibility.
+# face_adapter.* / face_encoder.* / motion_encoder.*: Animate-specific conditioning modules
+# condition_embedder.image_embedder.*: CLIP image feature embedder (not in I2V TTNN model)
+# pose_patch_embedding.*: pose conditioning patch embedding
 _ANIMATE_ONLY_KEY_PREFIXES = (
     "face_encoder.",
+    "face_adapter.",
     "motion_encoder.",
     "added_kv_proj.",
     "image_embedder.",
+    "condition_embedder.image_embedder.",
+    "pose_patch_embedding.",
 )
 
 
