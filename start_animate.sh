@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # start_animate.sh — Start the Wan2.2-Animate-14B character animation server on P300x2 (QB2).
 #
-# Uses the same Docker image as Mochi (0.10.0-555f240) which already contains the
+# Uses the same Docker image as Wan2.2 T2V (0.11.1-bac8b34) which already contains the
 # WAN I2V pipeline.  The --dev-mode flag triggers two mechanisms:
 #
 #   1. tt-media-server bind-mount:
@@ -30,7 +30,7 @@ set -euo pipefail
 
 REPO_DIR="$HOME/code/tt-inference-server"
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.10.0-555f240"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
 MODEL="Wan2.2-Animate-14B-Diffusers"
 DEVICE="p300x2"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
