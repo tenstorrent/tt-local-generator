@@ -276,6 +276,11 @@ scrollbar slider:hover {
     border-radius: 0;
     padding: 4px 10px;
     font-size: 12px;
+    min-height: 0;
+}
+.source-btn label {
+    padding: 0;
+    margin: 0;
 }
 .source-btn:hover {
     background-color: @tt_border;
