@@ -5933,6 +5933,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_default_size(1400, 800)
 
         self._alive: bool = True   # set False in do_close_request; guards idle_add callbacks
+        self._flash_restore_id: int = 0   # GLib timer id for pending _flash_status restore
+        self._flash_baseline: str = ""    # status label text captured before current flash burst
         self._client = APIClient(server_url)
         self._store = HistoryStore()
         self._worker: Optional[threading.Thread] = None
@@ -6157,12 +6159,13 @@ class MainWindow(Gtk.ApplicationWindow):
         Switches to animate source and copies the card's thumbnail as the character image.
         The thumbnail is a first-frame still for videos — valid as a character seed.
         """
-        # Switch to the animate source tab
-        self._controls.switch_to_source("animate")
-        # Set character image to the card's thumbnail
+        # Set character image first so the widget is populated before the tab
+        # becomes visible — avoids a visible blank-then-filled transition.
         char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
         if char_path and Path(char_path).exists():
             self._controls.set_char_input(char_path)
+        # Switch to the animate source tab after the input is set
+        self._controls.switch_to_source("animate")
         # Flash status
         self._flash_status("Character set ✓")
 
@@ -6174,17 +6177,31 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if record.video_exists:
             self._controls.set_motion_input(record.video_path)
-        self._flash_status("Motion set ✓")
+            self._flash_status("Motion set ✓")
+        else:
+            self._flash_status("Video file not found")
 
     def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
-        """Show *message* in the status label for *duration_ms* ms, then restore."""
-        current = self._status_lbl.get_label()
+        """Show *message* in the status label for *duration_ms* ms, then restore.
+
+        Overlapping calls cancel the pending restore to preserve the pre-flash
+        baseline.  The baseline is captured only on the *first* call in a burst;
+        subsequent calls within the same burst cancel the previous timer and
+        extend the duration without losing the original label text.
+        """
+        if self._flash_restore_id:
+            GLib.source_remove(self._flash_restore_id)
+            self._flash_restore_id = 0
+        else:
+            # First flash in this burst — capture the true baseline label
+            self._flash_baseline = self._status_lbl.get_label()
         self._status_lbl.set_label(message)
         def _restore() -> bool:
+            self._flash_restore_id = 0
             if self._alive:
-                self._status_lbl.set_label(current)
+                self._status_lbl.set_label(self._flash_baseline)
             return GLib.SOURCE_REMOVE
-        GLib.timeout_add(duration_ms, _restore)
+        self._flash_restore_id = GLib.timeout_add(duration_ms, _restore)
 
     # ── Menu bar ───────────────────────────────────────────────────────────────
 
@@ -7641,6 +7658,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def do_close_request(self) -> bool:
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
+        if self._flash_restore_id:
+            GLib.source_remove(self._flash_restore_id)
         self._health_stop.set()
         if self._pg_stop:
             self._pg_stop.set()
