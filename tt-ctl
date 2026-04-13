@@ -400,13 +400,13 @@ def cmd_queue_run(args):
         def on_progress(msg):
             print(dim(f"    {msg}"))
 
-        def on_finished(record, _r=result, _d=done):
-            _r["record"] = record
-            _d.set()
+        def on_finished(record):
+            result["record"] = record
+            done.set()
 
-        def on_error(msg, _r=result, _d=done):
-            _r["error"] = msg
-            _d.set()
+        def on_error(msg):
+            result["error"] = msg
+            done.set()
 
         t = threading.Thread(
             target=worker.run_with_callbacks,
@@ -679,7 +679,8 @@ def _build_parser() -> argparse.ArgumentParser:
     qsub = q.add_subparsers(dest="queue_cmd", metavar="SUBCOMMAND")
     qa = qsub.add_parser("add", help="Append a prompt to the queue")
     qa.add_argument("prompt")
-    qa.add_argument("--model", default="video", choices=["video","image","animate"],
+    qa.add_argument("--model", default="video",
+                    choices=["video", "image", "animate", "skyreels", "mochi"],
                     help="Model type (default: video)")
     qa.add_argument("--steps", type=int, default=30)
     qa.add_argument("--seed",  type=int, default=-1)
@@ -706,7 +707,8 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--steps", type=int, default=30)
     r.add_argument("--seed",  type=int, default=-1)
     r.add_argument("--neg",   default="", metavar="NEG_PROMPT")
-    r.add_argument("--model", default="video", choices=["video","image","animate"])
+    r.add_argument("--model", default="video",
+                   choices=["video", "image", "animate", "skyreels", "mochi"])
 
     return p
 
