@@ -1591,8 +1591,7 @@ class GenerationCard(Gtk.Frame):
     def _on_hover_enter(self, _ctrl, _x, _y) -> None:
         """Start looping the video silently when the mouse enters the card.
         Also reveals the hover action bar (if action callbacks were provided)."""
-        if hasattr(self, "_action_revealer"):
-            self._action_revealer.set_reveal_child(True)
+        self._action_revealer.set_reveal_child(True)
         if self._hover_video is None:
             return
         if not self._hover_pipeline_open:
@@ -1630,8 +1629,7 @@ class GenerationCard(Gtk.Frame):
     def _on_hover_leave(self, _ctrl) -> None:
         """Stop the video and revert to the thumbnail when the mouse leaves.
         Also hides the hover action bar."""
-        if hasattr(self, "_action_revealer"):
-            self._action_revealer.set_reveal_child(False)
+        self._action_revealer.set_reveal_child(False)
         if self._hover_video is None:
             return
         self._close_hover_pipeline()
@@ -1833,7 +1831,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         try:
             from datetime import datetime as _dt
             dt = _dt.fromisoformat(record.created_at)
-            date_str = dt.strftime("%Y-%m-%d  %H:%M")
+            date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
         except Exception:
             date_str = record.created_at or "—"
 
