@@ -84,3 +84,66 @@ def test_extract_thumbnail_returns_false_on_missing_ffmpeg(tmp_path):
         result = extract_thumbnail(src, dest)
 
     assert result is False
+
+
+# ---------- InputWidget tests (require DISPLAY) ----------
+
+import pytest
+
+
+def _gtk_available() -> bool:
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        app = Gtk.Application(application_id="test.animate.picker")
+        return True
+    except Exception:
+        return False
+
+
+gtk_required = pytest.mark.skipif(
+    not _gtk_available(), reason="GTK4 display not available"
+)
+
+
+@gtk_required
+def test_input_widget_empty_on_construction():
+    """An InputWidget constructed with no path has no filled CSS class."""
+    from animate_picker import InputWidget
+    w = InputWidget("motion", "MOTION VIDEO")
+    assert not w.has_css_class("input-widget-filled-motion")
+    assert not w.has_css_class("input-widget-filled-char")
+
+
+@gtk_required
+def test_input_widget_set_value_nonexistent_path_stays_empty():
+    """set_value with a path that doesn't exist leaves the widget empty."""
+    from animate_picker import InputWidget
+    w = InputWidget("motion", "MOTION VIDEO")
+    w.set_value("/nonexistent/path/to/clip.mp4")
+    assert not w.has_css_class("input-widget-filled-motion")
+
+
+@gtk_required
+def test_input_widget_set_value_existing_image_adds_filled_char(tmp_path):
+    """set_value with a real image file adds input-widget-filled-char class."""
+    from animate_picker import InputWidget
+    img = tmp_path / "char.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)  # minimal JPEG header
+    w = InputWidget("char", "CHARACTER")
+    w.set_value(str(img))
+    assert w.has_css_class("input-widget-filled-char")
+
+
+@gtk_required
+def test_input_widget_clear_removes_filled_class(tmp_path):
+    """set_value('') removes the filled CSS class."""
+    from animate_picker import InputWidget
+    img = tmp_path / "char.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+    w = InputWidget("char", "CHARACTER")
+    w.set_value(str(img))
+    assert w.has_css_class("input-widget-filled-char")
+    w.set_value("")
+    assert not w.has_css_class("input-widget-filled-char")
