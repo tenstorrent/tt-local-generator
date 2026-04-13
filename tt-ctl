@@ -42,7 +42,12 @@ sys.path.insert(0, str(_HERE / "app"))
 
 from api_client import APIClient          # noqa: E402
 from history_store import HistoryStore    # noqa: E402
-from worker import GenerationWorker       # noqa: E402
+from worker import (                                                    # noqa: E402
+    GenerationWorker,
+    ImageGenerationWorker,
+    AnimateGenerationWorker,
+)
+import generate_prompt as gp                                            # noqa: E402
 import server_manager as sm              # noqa: E402
 
 
@@ -89,6 +94,72 @@ def _age(iso: str) -> str:
         return f"{s//86400}d ago"
     except Exception:
         return ""
+
+
+# ── Worker selection ──────────────────────────────────────────────────────────
+
+# Maps model_source values stored in queue items to the model identifier string
+# forwarded to the inference server.
+_MODEL_FOR_SRC: dict[str, str] = {
+    "video":    "wan2.2-t2v",
+    "mochi":    "mochi-1-preview",
+    "skyreels": "skyreels-v2-df",
+    "image":    "flux.1-dev",
+    "animate":  "wan2.2-animate-14b",
+}
+
+
+def _make_worker_for_item(client: "APIClient", store: "HistoryStore", item: dict):
+    """
+    Instantiate the correct generation worker for a queue item dict.
+
+    Selects GenerationWorker, ImageGenerationWorker, or AnimateGenerationWorker
+    based on item["model_source"].  Unknown model_source values default to video.
+    """
+    src    = item.get("model_source", "video")
+    model  = _MODEL_FOR_SRC.get(src, "wan2.2-t2v")
+    prompt = item.get("prompt", "")
+    neg    = item.get("negative_prompt", "")
+    steps  = item.get("steps", 30)
+    seed   = item.get("seed", -1)
+
+    if src == "image":
+        return ImageGenerationWorker(
+            client=client,
+            store=store,
+            prompt=prompt,
+            negative_prompt=neg,
+            num_inference_steps=steps,
+            seed=seed,
+            guidance_scale=item.get("guidance_scale", 3.5),
+            model=model,
+        )
+
+    if src == "animate":
+        return AnimateGenerationWorker(
+            client=client,
+            store=store,
+            reference_video_path=item.get("ref_video_path", ""),
+            reference_image_path=item.get("ref_char_path", ""),
+            prompt=prompt,
+            num_inference_steps=steps,
+            seed=seed,
+            animate_mode=item.get("animate_mode", "animation"),
+            model=model,
+        )
+
+    # video / mochi / skyreels → GenerationWorker
+    return GenerationWorker(
+        client=client,
+        store=store,
+        prompt=prompt,
+        negative_prompt=neg,
+        num_inference_steps=steps,
+        seed=seed,
+        seed_image_path=item.get("seed_image_path", ""),
+        model=model,
+        num_frames=item.get("num_frames"),
+    )
 
 
 # ── servers ───────────────────────────────────────────────────────────────────
@@ -256,6 +327,9 @@ def cmd_queue(args):
         store.save_queue([])
         print(green("✓") + f"  Cleared {n} item(s) from queue")
 
+    elif sub == "run":
+        cmd_queue_run(args)
+
     else:
         # default: list
         if not queue:
@@ -268,6 +342,120 @@ def cmd_queue(args):
             seed  = item.get("seed", -1)
             print(f"\n  {teal(f'[{i}]')} {dim(model)}  steps={steps}  seed={seed}")
             print(_wrap(item.get("prompt", "(no prompt)")))
+
+
+# ── queue run ─────────────────────────────────────────────────────────────────
+
+def cmd_queue_run(args):
+    """
+    Drain and execute the persistent queue (blocking).
+
+    Items are removed from queue.json as they complete (success or failure).
+    Server-offline items are skipped and left in the queue for later.
+    On KeyboardInterrupt, the in-flight item is removed (it was submitted to the
+    server and can be recovered with tt-ctl recover); remaining items stay.
+    """
+    store  = HistoryStore()
+    client = _make_client(args)
+    dry_run = getattr(args, "dry_run", False)
+
+    queue = store.load_queue()
+    if not queue:
+        print(dim("Queue is empty."))
+        return
+
+    total = len(queue)
+    print(bold(f"Queue: {total} item{'s' if total != 1 else ''}"))
+
+    if dry_run:
+        for i, item in enumerate(queue):
+            src   = item.get("model_source", "video")
+            steps = item.get("steps", "?")
+            seed  = item.get("seed", -1)
+            short = item.get("prompt", "")[:72]
+            print(f"  {teal(f'[{i}]')} {dim(src)}  steps={steps}  seed={seed}")
+            print(_wrap(short))
+        return
+
+    n_done = n_failed = n_skipped = 0
+    # skipped_items: server-offline items preserved in queue after the run.
+    skipped_items: list = []
+
+    for idx, item in enumerate(queue):
+        src   = item.get("model_source", "video")
+        short = item.get("prompt", "")[:60]
+        print(f"\n  {teal(f'[{idx+1}/{total}]')} {dim(src)}  {short}")
+
+        if not client.health_check():
+            print(yellow("    ○ Server offline — skipping (item stays in queue)"))
+            n_skipped += 1
+            skipped_items.append(item)
+            continue
+
+        worker = _make_worker_for_item(client, store, item)
+
+        done   = threading.Event()
+        result: dict = {}
+
+        def on_progress(msg):
+            print(dim(f"    {msg}"))
+
+        def on_finished(record, _r=result, _d=done):
+            _r["record"] = record
+            _d.set()
+
+        def on_error(msg, _r=result, _d=done):
+            _r["error"] = msg
+            _d.set()
+
+        t = threading.Thread(
+            target=worker.run_with_callbacks,
+            kwargs=dict(on_progress=on_progress, on_finished=on_finished,
+                        on_error=on_error),
+            daemon=True,
+        )
+        t.start()
+
+        try:
+            done.wait()
+        except KeyboardInterrupt:
+            worker.cancel()
+            # Current item was submitted to server — remove it from queue.
+            # Remaining unprocessed items + any previously skipped items are kept.
+            remaining = skipped_items + list(queue[idx + 1:])
+            store.save_queue(remaining)
+            jid = getattr(worker, "_current_job_id", None) or "unknown"
+            jid_short = jid[:8] if jid != "unknown" else jid
+            print(yellow(f"\n  Cancelled. Job may still be running on server ({jid_short}…)"))
+            print(dim("  Run: tt-ctl recover   to retrieve any completed result"))
+            sys.exit(1)
+
+        if "error" in result:
+            print(red(f"    ✗ {result['error']}"))
+            n_failed += 1
+        else:
+            record = result["record"]
+            print(green("    ✓") + f"  {record.media_file_path}")
+            try:
+                dur_str = f"{record.duration_s:.0f}s"
+            except (TypeError, ValueError):
+                dur_str = str(record.duration_s)
+            print(dim(f"       {dur_str}  |  {record.model}"))
+            n_done += 1
+
+        # Remove this item from queue.json after each completion (success or fail).
+        # skipped_items + everything after current index = what remains.
+        store.save_queue(skipped_items + list(queue[idx + 1:]))
+
+    # Restore any server-offline items at their original positions (front of queue).
+    store.save_queue(skipped_items)
+
+    print()
+    parts = []
+    if n_done:    parts.append(green(f"{n_done} done"))
+    if n_failed:  parts.append(red(f"{n_failed} failed"))
+    if n_skipped: parts.append(yellow(f"{n_skipped} skipped"))
+    print("  " + "  ".join(parts) if parts else dim("  Nothing ran."))
 
 
 # ── history ───────────────────────────────────────────────────────────────────
@@ -497,6 +685,9 @@ def _build_parser() -> argparse.ArgumentParser:
     qa.add_argument("--seed",  type=int, default=-1)
     qa.add_argument("--neg",   default="", metavar="NEG_PROMPT")
     qsub.add_parser("clear", help="Empty the queue")
+    qr = qsub.add_parser("run", help="Drain and execute the queue (blocking)")
+    qr.add_argument("--dry-run", action="store_true",
+                    help="Print what would run without executing")
 
     # history
     h = sub.add_parser("history", help="Show recent completed generations")
