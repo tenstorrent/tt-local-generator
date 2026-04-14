@@ -77,6 +77,14 @@ window, .view {
     font-size: 13px;
     color: @tt_text;
 }
+/* Emoji glyphs in button labels render with Apple Color Emoji on macOS,
+   which has different advance widths than Noto Color Emoji on Linux.
+   A small letter-spacing adds breathing room after emoji without requiring
+   every label string to be touched individually. Harmless on Linux. */
+button label,
+togglebutton label {
+    letter-spacing: 1px;
+}
 .section-label {
     color: @tt_accent;
     font-weight: bold;
@@ -1686,7 +1694,7 @@ class DetailPanel(Gtk.ScrolledWindow):
     generation metadata. Populated by show_record(); shows a placeholder when empty.
     """
 
-    def __init__(self):
+    def __init__(self, download_cb=None):
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.set_vexpand(True)
@@ -1696,6 +1704,9 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._iterate_cb = None
         self._video_widget: Optional[Gtk.Video] = None
         self._play_btn: Optional[Gtk.Button] = None
+        # Callable(record_id: str, dest_path: Path) → None — injected by MainWindow.
+        # When provided, a "Download from server" button appears for missing videos.
+        self._download_cb = download_cb
         self._show_empty()
 
     def _show_empty(self) -> None:
@@ -1788,12 +1799,20 @@ class DetailPanel(Gtk.ScrolledWindow):
             ctrl_row.append(full_btn)
             content.append(ctrl_row)
         else:
-            # Video file missing — show large thumbnail or placeholder
+            # Video file missing — show large thumbnail or placeholder, and
+            # offer a download button if the server callback is available.
             if record.thumbnail_exists:
                 thumb = _make_image_widget(record.thumbnail_path, _DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
             else:
-                thumb = _make_image_widget("", _DETAIL_VIDEO_W, _DETAIL_VIDEO_H, "🎬\n(video not found)")
+                thumb = _make_image_widget("", _DETAIL_VIDEO_W, _DETAIL_VIDEO_H, "🎬\n(video not cached)")
             content.append(thumb)
+            if self._download_cb and record.id:
+                dl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                dl_btn = Gtk.Button(label="⬇ Download from server")
+                dl_btn.set_tooltip_text("Download this video from the inference server and cache it locally")
+                dl_btn.connect("clicked", self._on_download_video)
+                dl_row.append(dl_btn)
+                content.append(dl_row)
 
         # ── Prompt ────────────────────────────────────────────────────────────
         content.append(self._detail_section("Prompt"))
@@ -1966,6 +1985,25 @@ class DetailPanel(Gtk.ScrolledWindow):
         if self._record and self._record.video_exists:
             win = VideoPlayerWindow(self._record, self.get_root())
             win.present()
+
+    def _on_download_video(self, btn) -> None:
+        """Download the selected record's video from the server and reload the panel."""
+        if not self._record or not self._download_cb:
+            return
+        btn.set_sensitive(False)
+        btn.set_label("⬇ Downloading…")
+        record = self._record
+        iterate_cb = self._iterate_cb
+
+        def _do_download():
+            try:
+                self._download_cb(record.id, Path(record.video_path))
+                GLib.idle_add(self.show_record, record, iterate_cb)
+            except Exception as exc:
+                GLib.idle_add(btn.set_label, f"Download failed: {exc}")
+                GLib.idle_add(btn.set_sensitive, True)
+
+        threading.Thread(target=_do_download, daemon=True).start()
 
     def _open_image_fullscreen(self, _btn) -> None:
         if self._record and self._record.image_exists:
@@ -5910,7 +5948,9 @@ class MainWindow(Gtk.ApplicationWindow):
         inner_paned.set_start_child(gallery_wrap)
         inner_paned.set_shrink_start_child(False)
 
-        self._detail = DetailPanel()
+        self._detail = DetailPanel(
+            download_cb=lambda rec_id, dest: self._client.download(rec_id, Path(dest)),
+        )
 
         # Queue display lives below the detail/preview panel on the right side.
         self._queue_section_lbl = Gtk.Label(label="QUEUED PROMPTS")
@@ -6015,6 +6055,10 @@ class MainWindow(Gtk.ApplicationWindow):
         recover.set_enabled(False)   # enabled once the server is reachable
         self.add_action(recover)
 
+        sync = Gio.SimpleAction.new("sync-from-server", None)
+        sync.connect("activate", lambda *_: self._on_sync_from_server())
+        self.add_action(sync)
+
         # ── Generation: advanced settings dialog ──────────────────────────────
         adv_action = Gio.SimpleAction.new("advanced-settings", None)
         adv_action.connect("activate", lambda a, p: self._controls.open_advanced_dialog())
@@ -6076,6 +6120,7 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append("Open Media Folder", "win.open-media-folder")
         file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
         file_menu.append("Recover Jobs…", "win.recover-jobs")
+        file_menu.append("Sync Videos from Server…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("Quit", "app.quit")
@@ -7411,6 +7456,61 @@ class MainWindow(Gtk.ApplicationWindow):
             return
         for job in dlg.selected_jobs:
             self._attach_recovery_job(job)
+
+    def _on_sync_from_server(self) -> None:
+        """
+        File → Sync Videos from Server…
+
+        Downloads every video that has a local history record but whose video
+        file is missing on disk.  Useful when running the GUI on a different
+        machine from where the videos were generated, or after a fresh clone
+        with history synced but video files not yet transferred.
+
+        Uses the inference server's /v1/videos/generations/{id}/download
+        endpoint, so only jobs the server still has on record can be fetched.
+        """
+        missing = [
+            r for r in self._store.all_records()
+            if r.media_type in ("video", "animate")
+            and not r.video_exists
+            and r.id
+        ]
+        if not missing:
+            self._set_status("All videos are already cached locally — nothing to sync.")
+            return
+
+        self._set_status(f"Syncing {len(missing)} missing video(s) from server…")
+
+        def _worker():
+            done = 0
+            failed = 0
+            for rec in missing:
+                try:
+                    Path(rec.video_path).parent.mkdir(parents=True, exist_ok=True)
+                    self._client.download(rec.id, Path(rec.video_path))
+                    done += 1
+                    GLib.idle_add(
+                        self._set_status,
+                        f"Syncing… {done + failed}/{len(missing)} "
+                        f"({done} downloaded, {failed} failed)",
+                    )
+                except Exception:
+                    failed += 1
+
+            def _finish():
+                if failed:
+                    self._set_status(
+                        f"Sync complete: {done} downloaded, {failed} not found on server."
+                    )
+                else:
+                    self._set_status(f"Sync complete: {done} video(s) cached locally.")
+                # Refresh gallery so cards with newly-downloaded videos update.
+                self._load_history()
+                return False
+
+            GLib.idle_add(_finish)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _attach_recovery_job(self, job: dict) -> None:
         """Attach a recovered server job.

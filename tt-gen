@@ -54,6 +54,16 @@ if ! "$PYTHON" -c "import gi" 2>/dev/null; then
     exit 1
 fi
 
+# macOS: tell GStreamer where Homebrew installed its plugins.
+# Without these variables GTK4's GStreamer media backend can't find the
+# H.264 decoder (avdec_h264) or the MP4 demuxer (qtdemux), so Gtk.Video
+# shows a blank frame even though the file is present locally.
+if [[ "$(uname)" == "Darwin" ]]; then
+    BREW_PREFIX=$(brew --prefix 2>/dev/null || echo "/opt/homebrew")
+    export GST_PLUGIN_PATH="${BREW_PREFIX}/lib/gstreamer-1.0"
+    export GST_PLUGIN_SCANNER="${BREW_PREFIX}/libexec/gstreamer-1.0/gst-plugin-scanner"
+fi
+
 # GTK4 does not support gtk-modules (GTK3-only feature). KDE writes
 # colorreload-gtk-module and window-decorations-gtk-module into
 # ~/.config/gtk-4.0/settings.ini, which causes GTK4 to attempt loading
