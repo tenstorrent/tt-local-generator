@@ -160,7 +160,13 @@ class WanPipelineAnimate(WanPipelineI2V):
         Args:
             character_image: PIL.Image — character to animate.
             reference_video_frames: list[PIL.Image] | None — motion source frames.
-                Not used in v1.
+                Not forwarded to the pipeline.  The upstream Diffusers pipeline
+                requires pre-extracted pose_video and face_video (DWPose skeleton +
+                face-tracking frames), encoded by motion_encoder / face_encoder
+                modules that are not implemented in the TTNN WanTransformer3DModel
+                (dropped via strict=False at weight load).  Motion conditioning is
+                therefore absent on TT hardware; motion comes from the fine-tuned
+                Animate-14B weight distribution instead.
             **kwargs: forwarded to WanPipelineI2V.__call__.
 
         Notes:

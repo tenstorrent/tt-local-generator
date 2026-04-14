@@ -379,13 +379,25 @@ class TTWan22AnimateRunner(TTDiTRunner):
     the server is started with --dev-mode.
 
     The character image is fed as the I2V conditioning reference frame (frame_pos=0).
-    A reference video may be supplied for API compatibility but is not used in v1;
-    motion transfer is encoded in the fine-tuned Animate-14B checkpoint weights.
+
+    Motion video is NOT used in the TT hardware path.  The upstream Diffusers
+    WanPipelineAnimate.__call__ requires pre-extracted pose_video and face_video
+    streams (DWPose skeleton + face-tracking frames), which are encoded by
+    motion_encoder.* and face_encoder.* modules inside the transformer.  Those
+    modules are Animate-14B-specific and are not ported to the TTNN
+    WanTransformer3DModel — they are dropped via strict=False during weight load.
+    Without the motion_encoder and the per-block attn2.add_k_proj/v_proj
+    cross-attention projections on chip, there is no pathway to feed motion
+    conditioning into the hardware transformer.
+
+    Until the TTNN model implements these modules, the output motion comes
+    entirely from the fine-tuned weight distribution of the Animate-14B checkpoint,
+    not from an explicit reference video.
 
     Input contract (VideoGenerateRequest fields used):
       prompt              — optional style guidance (can be empty string)
       reference_image_b64 — base64-encoded JPEG/PNG of the character to animate
-      reference_video_b64 — accepted but not used in v1
+      reference_video_b64 — received but not forwarded to the pipeline (see above)
       num_inference_steps — denoising steps (default 20)
       seed                — random seed
 
