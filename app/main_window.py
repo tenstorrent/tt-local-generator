@@ -6005,7 +6005,7 @@ class MainWindow(Gtk.ApplicationWindow):
             motion_action_cb=self._on_motion_card_action,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
-        self._animate_gallery = GalleryWidget(**shared_cbs, media_type="video")
+        self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
