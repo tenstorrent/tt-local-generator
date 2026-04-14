@@ -112,7 +112,7 @@ VENV_PYTHON="$VENV_DIR/bin/python3"
 
 # ── Python packages (requirements.txt) ───────────────────────────────────────
 info "Installing pip packages into venv..."
-"$VENV_PYTHON" -m pip install requests markovify --quiet
+"$VENV_PYTHON" -m pip install requests PyYAML markovify --quiet
 success "pip packages installed."
 
 # ── Verification ─────────────────────────────────────────────────────────────
@@ -136,6 +136,7 @@ check "GTK 4.0"              "import gi; gi.require_version('Gtk','4.0'); from g
 check "GdkPixbuf 2.0"        "import gi; gi.require_version('GdkPixbuf','2.0'); from gi.repository import GdkPixbuf"
 check "Pango 1.0"            "import gi; gi.require_version('Pango','1.0'); from gi.repository import Pango"
 check "requests"             "import requests"
+check "PyYAML"               "import yaml"
 check "markovify (optional)" "import markovify"
 
 if command -v ffmpeg &>/dev/null; then
