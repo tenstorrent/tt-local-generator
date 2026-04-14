@@ -56,6 +56,37 @@ from main_window import MainWindow
 # Path to the bundled Tenstorrent icon (32×32 PNG, fetched from tenstorrent.com)
 _ICON_PATH = Path(__file__).parent / "assets" / "tenstorrent.png"
 
+_LOCALHOST = {"localhost", "127.0.0.1"}
+
+
+def _derive_prompt_url(server_url: str) -> str:
+    """
+    Derive the prompt-server base URL from the inference server URL.
+
+    Assumes the Qwen prompt server runs on the same host at port 8001.
+    Returns the default local URL unchanged when server_url is localhost.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(server_url)
+    host = parsed.hostname or "localhost"
+    if host in _LOCALHOST:
+        return "http://127.0.0.1:8001"
+    return f"http://{host}:8001"
+
+
+def _apply_remote_host_to_config(server_url: str) -> None:
+    """
+    When --server points at a non-localhost host, update all service entries in
+    server_config that still have localhost/127.0.0.1 so that the Preferences
+    dialog reflects the remote host and health checks use the right addresses.
+    Writes through to ~/.config/tt-video-gen/servers.json immediately.
+    """
+    from urllib.parse import urlparse
+    from server_config import server_config as _sc
+    host = urlparse(server_url).hostname or "localhost"
+    if host not in _LOCALHOST:
+        _sc.apply_remote_host(host)
+
 
 def main():
     parser = argparse.ArgumentParser(description="TT Local Video Generator")
@@ -73,6 +104,17 @@ def main():
     app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
 
     def on_activate(application):
+        # Request the dark variant of the current GTK theme.  This is a no-op
+        # on Linux when the system theme is already dark (KDE/GNOME dark mode),
+        # but is essential on macOS where GTK defaults to Adwaita Light and
+        # leaves un-CSS'd widgets (dialogs, native buttons, popovers) white.
+        try:
+            gtk_settings = Gtk.Settings.get_default()
+            if gtk_settings:
+                gtk_settings.set_property("gtk-application-prefer-dark-theme", True)
+        except Exception:
+            pass
+
         # Register the "quit" action on the application object so that menu
         # items using "app.quit" work.  Gtk.Application does NOT register this
         # automatically — it must be added explicitly.
@@ -95,8 +137,16 @@ def main():
                 pass
         Gtk.Window.set_default_icon_name("ai.tenstorrent.tt-video-gen")
 
-        win = MainWindow(app=application, server_url=args.server)
+        win = MainWindow(
+            app=application,
+            server_url=args.server,
+            prompt_server_url=_derive_prompt_url(args.server),
+        )
         win.present()
+
+    # Update persisted server config so Preferences shows the right host/port
+    # and the prompt-server health check hits the correct address.
+    _apply_remote_host_to_config(args.server)
 
     app.connect("activate", on_activate)
     sys.exit(app.run([sys.argv[0]] + gtk_args))

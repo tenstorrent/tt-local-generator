@@ -23,6 +23,20 @@ import requests
 _DEFAULT_URL = "http://127.0.0.1:8001"
 
 
+def configure_llm_url(base_url: str) -> None:
+    """
+    Patch the module-level LLM URL constants in generate_prompt so that
+    _llm_available() and _llm_polish() hit the correct host.
+
+    Called once at startup when --server points at a non-local machine.
+    Must be called before any generate_prompt() or check_health() call.
+    """
+    import generate_prompt as _gp
+    base = base_url.rstrip("/")
+    _gp.LLM_URL        = f"{base}/v1/chat/completions"
+    _gp.LLM_HEALTH_URL = f"{base}/health"
+
+
 def check_health(base_url: str = _DEFAULT_URL) -> bool:
     """
     Return True if the Qwen LLM server is up and the model is loaded.

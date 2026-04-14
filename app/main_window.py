@@ -5721,7 +5721,8 @@ class PreferencesDialog(Gtk.Window):
 class MainWindow(Gtk.ApplicationWindow):
     """Top-level window: owns client, store, workers, and the prompt queue."""
 
-    def __init__(self, app: Gtk.Application, server_url: str = "http://localhost:8000"):
+    def __init__(self, app: Gtk.Application, server_url: str = "http://localhost:8000",
+                 prompt_server_url: str = "http://127.0.0.1:8001"):
         super().__init__(application=app, title="TT Local Generator")
         self.set_default_size(1400, 800)
 
@@ -5729,6 +5730,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._flash_restore_id: int = 0   # GLib timer id for pending _flash_status restore
         self._flash_baseline: str = ""    # status label text captured before current flash burst
         self._client = APIClient(server_url)
+        self._prompt_server_url = prompt_server_url
+        # Patch generate_prompt module globals so LLM calls hit the right host.
+        prompt_client.configure_llm_url(prompt_server_url)
         self._store = HistoryStore()
         self._worker: Optional[threading.Thread] = None
         self._worker_gen: Optional[GenerationWorker] = None
@@ -6451,7 +6455,7 @@ class MainWindow(Gtk.ApplicationWindow):
         and posts the result to the main thread via GLib.idle_add.
         """
         while not self._pg_stop.wait(5.0):
-            ready = prompt_client.check_health()
+            ready = prompt_client.check_health(self._prompt_server_url)
             # THREADING: must not touch GTK widgets here — post to main thread
             GLib.idle_add(self._on_prompt_gen_health, ready)
 

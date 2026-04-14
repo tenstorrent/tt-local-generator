@@ -135,6 +135,26 @@ class ServerConfig:
         """Return the bearer token for service_key, or '' if none configured."""
         return self.get(service_key, "token") or ""
 
+    def apply_remote_host(self, host: str) -> None:
+        """
+        Update every service entry whose host is currently localhost or 127.0.0.1
+        to use host instead.  Writes through to disk so Preferences reflects the
+        change immediately.
+
+        Called at startup when --server points at a non-local machine, so all
+        health checks, the Preferences dialog, and the prompt server URL all
+        agree on the remote host without manual configuration.
+        """
+        _local = {"localhost", "127.0.0.1"}
+        changed = False
+        for svc in self._data.values():
+            if svc.get("host") in _local:
+                svc["host"] = host
+                changed = True
+        if changed:
+            self._save()
+            log.info("server_config: updated all localhost entries → %s", host)
+
     def all_services(self) -> dict[str, dict]:
         """Return a shallow copy of the full config dict."""
         return {k: dict(v) for k, v in self._data.items()}
