@@ -6834,6 +6834,55 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Attractor Mode ─────────────────────────────────────────────────────────
 
+    def _get_animate_inputs(self) -> "tuple[str, str]":
+        """
+        Pick (ref_video_path, ref_char_path) for TT-TV animate auto-generation.
+
+        ref_video: random bundled motion clip from motion_clips_dir.
+        ref_char:  last frame of most recent animate record (extra_meta['last_frame_path'])
+                   → fallback: thumbnail of most recent animate record
+                   → fallback: image_path of most recent FLUX image record
+                   → fallback: "" (attractor skips the cycle)
+
+        Returns ("", "") if no valid inputs can be found (no bundled clips available).
+        """
+        import random as _random
+        from animate_picker import BundledClipScanner
+
+        # ── ref_video: random bundled clip ─────────────────────────────────────
+        clips_dir = _settings.get("motion_clips_dir")
+        all_clips = [
+            clip["mp4"]
+            for clips in BundledClipScanner(clips_dir).scan().values()
+            for clip in clips
+            if clip.get("mp4")
+        ]
+        if not all_clips:
+            return "", ""
+        ref_video = _random.choice(all_clips)
+
+        # ── ref_char: last frame chain, then fallbacks ─────────────────────────
+        all_records = self._store.all_records()
+
+        # Priority 1: last frame of most recent animate record
+        for r in all_records:
+            if r.media_type != "animate":
+                continue
+            lfp = r.extra_meta.get("last_frame_path", "")
+            if lfp and Path(lfp).exists():
+                return ref_video, lfp
+            # Priority 2: thumbnail of most recent animate record
+            if r.thumbnail_path and Path(r.thumbnail_path).exists():
+                return ref_video, r.thumbnail_path
+            break  # only check the most recent animate record
+
+        # Priority 3: most recent FLUX image
+        for r in all_records:
+            if r.media_type == "image" and r.image_path and Path(r.image_path).exists():
+                return ref_video, r.image_path
+
+        return ref_video, ""
+
     def _on_open_attractor(
         self, _btn=None,
         playlist_id: "str | None" = None,
@@ -6865,12 +6914,7 @@ class MainWindow(Gtk.ApplicationWindow):
             records = all_records
             auto_generate = True
 
-        # Animate mode auto-generation is not yet implemented (needs randomised
-        # ref_video + ref_char inputs).  Disable silently so TT-TV still works
-        # as a viewer but won't flood the queue with empty-input animate jobs.
         current_source = self._controls.get_model_source()
-        if current_source == "animate":
-            auto_generate = False
 
         try:
             win = attractor.AttractorWindow(
@@ -6900,6 +6944,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 auto_generate=auto_generate,
                 get_playlists=lambda: (
                     __import__("playlist_store").playlist_store.all()
+                ),
+                get_animate_inputs=(
+                    self._get_animate_inputs if current_source == "animate" else None
                 ),
             )
         except Exception:
