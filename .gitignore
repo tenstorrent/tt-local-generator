@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.swp
 .DS_Store
+.venv/
 .superpowers/
 .worktrees/
 prompts/markov_output.txt

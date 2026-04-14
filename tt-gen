@@ -18,11 +18,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Linux: GTK4 bindings are installed as system packages (python3-gi via apt) into
 #        /usr/bin/python3's site-packages — venvs cannot see them.
 #
-# macOS: brew installs pygobject3 into the Homebrew Python's site-packages.
-#        /usr/bin/python3 on macOS is Apple's Xcode stub; use the PATH python3
-#        (resolves to /opt/homebrew/bin/python3 after `brew install python@3.x`).
+# macOS: bin/setup_macos.sh creates .venv/ with --system-site-packages, which
+#        inherits gi/PyGObject from Homebrew and adds requests/markovify via pip.
+#        Use .venv/bin/python3 when it exists; fall back to the PATH python3
+#        (e.g. /opt/homebrew/bin/python3) for users who haven't run setup yet.
 if [[ "$(uname)" == "Darwin" ]]; then
-    PYTHON=$(command -v python3 2>/dev/null || echo "/opt/homebrew/bin/python3")
+    VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python3"
+    if [[ -x "$VENV_PYTHON" ]]; then
+        PYTHON="$VENV_PYTHON"
+    else
+        PYTHON=$(command -v python3 2>/dev/null || echo "/opt/homebrew/bin/python3")
+    fi
 else
     PYTHON=/usr/bin/python3
 fi
@@ -30,7 +36,7 @@ fi
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: $PYTHON not found." >&2
     if [[ "$(uname)" == "Darwin" ]]; then
-        echo "       Install Python via Homebrew: brew install python@3.12 pygobject3 gtk4" >&2
+        echo "       Run: ./bin/setup_macos.sh" >&2
     else
         echo "       Install python3 via your package manager." >&2
     fi
@@ -41,8 +47,7 @@ fi
 if ! "$PYTHON" -c "import gi" 2>/dev/null; then
     echo "ERROR: Python GObject introspection not found for $PYTHON." >&2
     if [[ "$(uname)" == "Darwin" ]]; then
-        echo "       Run: brew install pygobject3 gtk4 gdk-pixbuf pango" >&2
-        echo "            brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav" >&2
+        echo "       Run: ./bin/setup_macos.sh" >&2
     else
         echo "       Run: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0" >&2
     fi

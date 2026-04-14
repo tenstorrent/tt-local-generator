@@ -6,6 +6,11 @@
 #
 #   ./tt-gen --server http://your-tenstorrent-machine:8000
 #
+# Creates .venv/ at the repo root using --system-site-packages so the venv
+# inherits gi/PyGObject from Homebrew while keeping pip installs isolated
+# (required because PEP 668 blocks direct pip installs into Homebrew Python
+# on macOS 13+).  tt-gen detects and uses .venv/bin/python3 automatically.
+#
 # Usage:
 #   ./bin/setup_macos.sh
 #
@@ -25,6 +30,10 @@ die()     { echo -e "${RED}[setup] ERROR:${NC} $*" >&2; exit 1; }
 
 # ── Platform check ───────────────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || die "This script is for macOS only."
+
+# Resolve repo root (one level up from bin/)
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="$REPO_DIR/.venv"
 
 info "tt-local-generator macOS setup"
 echo ""
@@ -50,7 +59,6 @@ info "Installing brew packages..."
 
 # ── Python ───────────────────────────────────────────────────────────────────
 # Install a known-good Python version; Homebrew tracks latest 3.x.
-# 'python3' formula is an alias for the latest stable release.
 brew install python3
 
 # ── GTK4 + introspection typelibs ────────────────────────────────────────────
@@ -62,8 +70,8 @@ brew install gdk-pixbuf
 brew install pango
 
 # ── PyGObject (python3 gi bindings) ──────────────────────────────────────────
-# pygobject3 places gi/ into the Homebrew Python's site-packages so
-# `python3 -c "import gi"` works without a venv.
+# pygobject3 places gi/ into the Homebrew Python's site-packages.
+# The .venv created below inherits it via --system-site-packages.
 brew install pygobject3
 
 # ── GStreamer (video playback via Gtk.Video) ──────────────────────────────────
@@ -80,29 +88,42 @@ brew install ffmpeg
 
 success "All brew packages installed."
 
-# ── Python packages (requirements.txt) ───────────────────────────────────────
+# ── Virtual environment ───────────────────────────────────────────────────────
+# Create .venv with --system-site-packages so gi (PyGObject, installed by
+# brew into the Homebrew Python) is visible inside the venv.  pip installs
+# (requests, markovify) go into the venv, keeping the Homebrew Python clean
+# and satisfying PEP 668's externally-managed-environment restriction.
 echo ""
-info "Installing Python packages..."
+info "Setting up Python virtual environment at $VENV_DIR ..."
 
-PYTHON=$(command -v python3)
-info "Using Python: $PYTHON ($(${PYTHON} --version))"
+BREW_PYTHON=$(command -v python3)
+info "Base interpreter: $BREW_PYTHON ($(${BREW_PYTHON} --version))"
 
-# Install into the Homebrew Python's user site so no venv is needed and
-# the gi bindings stay visible.
-"$PYTHON" -m pip install --upgrade pip --quiet
-"$PYTHON" -m pip install requests markovify --quiet
+if [[ -d "$VENV_DIR" ]]; then
+    warn ".venv already exists — upgrading pip and packages only."
+else
+    "$BREW_PYTHON" -m venv --system-site-packages "$VENV_DIR"
+    success "Created $VENV_DIR"
+fi
 
-success "Python packages installed."
+VENV_PYTHON="$VENV_DIR/bin/python3"
+
+"$VENV_PYTHON" -m pip install --upgrade pip --quiet
+
+# ── Python packages (requirements.txt) ───────────────────────────────────────
+info "Installing pip packages into venv..."
+"$VENV_PYTHON" -m pip install requests markovify --quiet
+success "pip packages installed."
 
 # ── Verification ─────────────────────────────────────────────────────────────
 echo ""
-info "Verifying installation..."
+info "Verifying installation (using $VENV_PYTHON)..."
 
 FAILED=0
 
 check() {
     local label="$1"; shift
-    if "$PYTHON" -c "$@" &>/dev/null; then
+    if "$VENV_PYTHON" -c "$@" &>/dev/null; then
         success "  $label"
     else
         warn "  MISSING: $label"
