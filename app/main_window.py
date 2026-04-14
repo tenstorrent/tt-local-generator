@@ -1335,14 +1335,13 @@ class GenerationCard(Gtk.Frame):
     """
 
     def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
-                 animate_cb=None, motion_cb=None):
+                 animate_cb=None):
         super().__init__()
         self._record = record
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
         self._animate_cb = animate_cb   # callable(record) or None
-        self._motion_cb  = motion_cb    # callable(record) or None — None for image cards
         self.add_css_class("card")
         # Minimum card width; FlowBox homogeneous layout makes all cells equal width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1357,7 +1356,7 @@ class GenerationCard(Gtk.Frame):
 
         # Hover controller: plays video on hover (video cards) OR shows action bar.
         # Image cards without action callbacks don't need hover tracking at all.
-        has_hover = record.video_exists or animate_cb is not None or motion_cb is not None
+        has_hover = record.video_exists or animate_cb is not None
         if has_hover:
             motion = Gtk.EventControllerMotion()
             motion.connect("enter", self._on_hover_enter)
@@ -1436,19 +1435,8 @@ class GenerationCard(Gtk.Frame):
             )
             action_bar.append(animate_btn)
 
-        if self._motion_cb is not None and self._record.media_type == "video":
-            motion_btn = Gtk.Button(label="↗ Motion")
-            motion_btn.add_css_class("hover-action-btn")
-            motion_btn.add_css_class("hover-action-btn-motion")
-            motion_btn.set_can_focus(False)
-            motion_btn.connect(
-                "clicked",
-                lambda _b, rec=self._record: self._motion_cb(rec),
-            )
-            action_bar.append(motion_btn)
-
         self._action_revealer.set_child(action_bar)
-        if self._animate_cb is not None or self._motion_cb is not None:
+        if self._animate_cb is not None:
             overlay.add_overlay(self._action_revealer)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
@@ -2290,7 +2278,7 @@ class GalleryWidget(Gtk.Box):
     """
 
     def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video",
-                 animate_action_cb=None, motion_action_cb=None):
+                 animate_action_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
@@ -2298,7 +2286,6 @@ class GalleryWidget(Gtk.Box):
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
         self._animate_action_cb = animate_action_cb  # callable(record) or None — opens Animate dialog
-        self._motion_action_cb  = motion_action_cb   # callable(record) or None — opens Motion picker
 
         # ── Scrolled flow box ──────────────────────────────────────────────────
         # FlowBox automatically computes the number of columns that fit in the
@@ -2406,7 +2393,6 @@ class GalleryWidget(Gtk.Box):
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
             animate_cb=self._animate_action_cb,
-            motion_cb=self._motion_action_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -2516,7 +2502,7 @@ class ControlPanel(Gtk.Box):
 
     def __init__(
         self,
-        on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path, ref_char_path, animate_mode, model_id) -> None
+        on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path="", ref_char_path="", animate_mode, model_id) -> None
         on_enqueue,        # same signature
         on_cancel,         # () -> None
         on_start_server,   # (model_source: str) -> None
@@ -2565,8 +2551,6 @@ class ControlPanel(Gtk.Box):
         self._seed: int = -1          # -1 = random
         self._neg: str = ""
         self._guidance: float = 3.5
-        self._ref_video_path = ""      # animate: motion source video
-        self._ref_char_path = ""       # animate: character image
         self._animate_mode = "animation"
         self._server_ready = False
         self._running_model: "str | None" = None  # model ID from /v1/models, or None
@@ -2756,10 +2740,12 @@ class ControlPanel(Gtk.Box):
         self._seed_thumb_placeholder.set_valign(Gtk.Align.CENTER)
         self._seed_thumb_box.append(self._seed_thumb_placeholder)
 
-        # Left-click: open file picker
+        # Left-click: open the image/gallery browser (PickerPopover, char mode).
+        # The seed well doubles as the animate character-image entry point so
+        # the full Gallery + Disk tabs are always available.
         thumb_click = Gtk.GestureClick()
         thumb_click.set_button(1)  # primary mouse button
-        thumb_click.connect("released", lambda g, n, x, y: self._pick_seed_image(None))
+        thumb_click.connect("released", lambda g, n, x, y: self._open_seed_picker())
         self._seed_thumb_box.add_controller(thumb_click)
 
         # Right-click: clear the seed image
@@ -2873,88 +2859,9 @@ class ControlPanel(Gtk.Box):
         self._animate_box.add_css_class("animate-inputs-box")
         self._animate_box.set_visible(False)
 
-        _anim_title = Gtk.Label(label="💃 ANIMATE INPUTS")
-        _anim_title.set_xalign(0)
-        _anim_title.add_css_class("animate-inputs-title")
-        self._animate_box.append(_anim_title)
-
-        # ── Motion Video + Character inputs (side-by-side InputWidgets) ─────────
-        # These replace the old Browse-button rows; PickerPopover is created fresh
-        # on each click so HistoryStore records are always up-to-date.
-        inputs_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-
-        self._motion_input = InputWidget("motion", "MOTION VIDEO")
-        self._char_input   = InputWidget("char",   "CHARACTER")
-
-        inputs_row.append(self._motion_input)
-        inputs_row.append(self._char_input)
-        self._animate_box.append(inputs_row)
-
-        def _open_motion_picker(_btn):
-            clips_dir = str(Path(__file__).parent / "assets" / "motion_clips")
-            picker = PickerPopover(
-                widget_type="motion",
-                clips_dir=clips_dir,
-                history_records=self._store.all_records() if hasattr(self, "_store") else [],
-                settings=_settings,
-                on_select=self.set_motion_input,
-            )
-            picker.set_parent(self._motion_input)
-            picker.popup()
-
-        def _open_char_picker(_btn):
-            clips_dir = str(Path(__file__).parent / "assets" / "motion_clips")
-            picker = PickerPopover(
-                widget_type="char",
-                clips_dir=clips_dir,
-                history_records=self._store.all_records() if hasattr(self, "_store") else [],
-                settings=_settings,
-                on_select=self.set_char_input,
-            )
-            picker.set_parent(self._char_input)
-            picker.popup()
-
-        self._motion_input.connect("clicked", _open_motion_picker)
-        self._char_input.connect("clicked", _open_char_picker)
-
-        self._animate_box.append(self._section("Animation Mode"))
-        mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._anim_mode_anim_btn = Gtk.ToggleButton(label="🔄 Animation")
-        self._anim_mode_anim_btn.add_css_class("source-btn")
-        self._anim_mode_anim_btn.add_css_class("source-btn-left")
-        self._anim_mode_anim_btn.set_tooltip_text(
-            "Character mimics the motion from the reference video"
-        )
-        self._anim_mode_repl_btn = Gtk.ToggleButton(label="🔀 Replacement")
-        self._anim_mode_repl_btn.add_css_class("source-btn")
-        self._anim_mode_repl_btn.add_css_class("source-btn-right")
-        self._anim_mode_repl_btn.set_tooltip_text(
-            "Character replaces the person in the reference video"
-        )
-        # Animate mode button group — only one mode active at a time.
-        self._anim_mode_repl_btn.set_group(self._anim_mode_anim_btn)
-        self._anim_mode_anim_btn.connect("toggled", lambda b: b.get_active() and self._set_animate_mode("animation"))
-        self._anim_mode_repl_btn.connect("toggled", lambda b: b.get_active() and self._set_animate_mode("replacement"))
-        self._anim_mode_anim_btn.set_active(True)
-        mode_row.append(self._anim_mode_anim_btn)
-        mode_row.append(self._anim_mode_repl_btn)
-        self._animate_box.append(mode_row)
-
-        # ── Mode description label ─────────────────────────────────────────────
-        # Single static line that updates when the mode toggle changes.
-        # Replaces the old hover-triggered SLIDE_DOWN Revealer which caused
-        # the ControlPanel to grow taller each time it animated open, forcing
-        # the user to scroll to reach the Generate button.
-        self._mode_desc_label = Gtk.Label(
-            label="💃 Motion is transferred · character appearance preserved"
-        )
-        self._mode_desc_label.set_xalign(0)
-        self._mode_desc_label.add_css_class("mode-desc-static")
-        self._mode_desc_label.set_wrap(False)
-        self._mode_desc_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._animate_box.append(self._mode_desc_label)
-
         # Animate inputs — visible only in animate mode, positioned below chips.
+        # Motion video and character inputs have been removed; the seed image
+        # well (above the prompt) is now the sole character image entry point.
         # Appended here (after construction) so self._animate_box is ready.
         self.append(self._animate_box)
 
@@ -4337,33 +4244,18 @@ class ControlPanel(Gtk.Box):
 
     # ── Seed image ─────────────────────────────────────────────────────────────
 
-    def _pick_seed_image(self, _btn) -> None:
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select Seed Image")
-        f = Gtk.FileFilter()
-        f.set_name("Images")
-        for pat in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"):
-            f.add_pattern(pat)
-        filters = Gio_ListStore_from_items([f])
-        dlg.set_filters(filters)
-        dlg.open(self.get_root(), None, self._seed_image_chosen)
-
-    def _seed_image_chosen(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return
-        path = gfile.get_path()
-        if path:
-            self._set_seed_image(path)
-
     def _set_seed_image(self, path: str) -> None:
         """Set the seed image path and update the inline thumbnail well (Inspire row).
 
         Pass an empty string to clear the seed image.
+        Directories are silently rejected (path must be a regular file).
         The accordion seed display was removed in Task 9 — the inline thumbnail
         well (_seed_thumb_box) is now the sole visual indicator.
         """
+        # Guard: directories pass Path.exists() but not Path.is_file().
+        # read_bytes() on a directory raises Errno 21 at generation time.
+        if path and not Path(path).is_file():
+            path = ""
         self._seed_image_path = path
 
         # ── Update the inline thumbnail well (Task 8) ─────────────────────────
@@ -4409,71 +4301,32 @@ class ControlPanel(Gtk.Box):
         """
         self._set_seed_image("")
 
-    # ── Animate input setters (public API used by PickerPopover callbacks) ────
+    def _open_seed_picker(self) -> None:
+        """Open the PickerPopover (Gallery + Disk tabs) anchored to the seed image well.
 
-    def set_motion_input(self, path: str) -> None:
-        """Set the Motion Video InputWidget and internal ref_video_path."""
-        self._ref_video_path = path
-        self._motion_input.set_value(path)
+        Used for both the Video/Image seed image and the Animate character image:
+        the seed well is the unified entry point for all image selection.
+        PickerPopover is created fresh on each click so Gallery records are current.
+        """
+        clips_dir = str(Path(__file__).parent / "assets" / "motion_clips")
+        picker = PickerPopover(
+            widget_type="char",
+            clips_dir=clips_dir,
+            history_records=self._store.all_records() if hasattr(self, "_store") else [],
+            settings=_settings,
+            on_select=self._set_seed_image,
+        )
+        picker.set_parent(self._seed_thumb_box)
+        picker.popup()
 
     def set_char_input(self, path: str) -> None:
-        """Set the Character InputWidget and internal ref_char_path."""
-        self._ref_char_path = path
-        self._char_input.set_value(path)
+        """Set the character / seed image path.
 
-    # ── Animate file pickers (fallback Browse dialogs) ────────────────────────
-
-    def _pick_ref_video(self, _btn) -> None:
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select Motion Video")
-        f = Gtk.FileFilter()
-        f.set_name("Videos")
-        for pat in ("*.mp4", "*.mov", "*.avi", "*.webm", "*.mkv"):
-            f.add_pattern(pat)
-        filters = Gio_ListStore_from_items([f])
-        dlg.set_filters(filters)
-        dlg.open(self.get_root(), None, self._ref_video_chosen)
-
-    def _ref_video_chosen(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return
-        path = gfile.get_path()
-        if path:
-            self.set_motion_input(path)
-
-    def _pick_ref_image(self, _btn) -> None:
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select Character Image")
-        f = Gtk.FileFilter()
-        f.set_name("Images")
-        for pat in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"):
-            f.add_pattern(pat)
-        filters = Gio_ListStore_from_items([f])
-        dlg.set_filters(filters)
-        dlg.open(self.get_root(), None, self._ref_image_chosen)
-
-    def _ref_image_chosen(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return
-        path = gfile.get_path()
-        if path:
-            self.set_char_input(path)
-
-    def _set_animate_mode(self, mode: str) -> None:
-        # Active state handled by ToggleButton group (:checked CSS); no manual CSS needed.
-        self._animate_mode = mode
-        if mode == "animation":
-            self._mode_desc_label.set_label(
-                "💃 Motion is transferred · character appearance preserved"
-            )
-        else:
-            self._mode_desc_label.set_label(
-                "🔀 Character replaces person in reference video"
-            )
+        Called by MainWindow._on_animate_card_action when a gallery card is
+        used as the animate character.  Routes to _set_seed_image so the
+        seed image well is updated (the separate Character InputWidget was removed).
+        """
+        self._set_seed_image(path)
 
     # ── Chips helper ───────────────────────────────────────────────────────────
 
@@ -4830,8 +4683,8 @@ class ControlPanel(Gtk.Box):
             "seed_image_path": self._seed_image_path,
             "model_source":   self._model_source,
             "guidance_scale": self._guidance,
-            "ref_video_path": self._ref_video_path,
-            "ref_char_path":  self._ref_char_path,
+            "ref_video_path": "",   # motion video removed from UI
+            "ref_char_path":  "",   # character image uses seed_image_path
             "animate_mode":   self._animate_mode,
             "model_id":       current_model_id,
         }
@@ -4840,13 +4693,9 @@ class ControlPanel(Gtk.Box):
 
     def _on_action_clicked(self, _btn) -> None:
         """Single button: Generate when idle, Add to Queue when busy."""
-        if self._model_source == "animate":
-            # Prompt is optional for animate (style guidance only); video+image are required.
-            if not self._ref_video_path or not self._ref_char_path:
-                return
-            prompt = self._get_prompt()
-        else:
-            prompt = self._get_prompt()
+        prompt = self._get_prompt()
+        if self._model_source != "animate":
+            # Animate prompt is optional (style guidance only); all other modes require one.
             if not prompt:
                 self._prompt_scroll.add_css_class("prompt-error")
                 self._prompt_error_lbl.set_visible(True)
@@ -4870,8 +4719,8 @@ class ControlPanel(Gtk.Box):
             self._seed_image_path,
             self._model_source,
             self._guidance,
-            self._ref_video_path,
-            self._ref_char_path,
+            "",   # ref_video_path — motion video removed from UI
+            "",   # ref_char_path — character image uses seed_image_path
             self._animate_mode,
             current_model_id,
         )
@@ -6002,7 +5851,6 @@ class MainWindow(Gtk.ApplicationWindow):
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
             animate_action_cb=self._on_animate_card_action,
-            motion_action_cb=self._on_motion_card_action,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
@@ -6101,30 +5949,22 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_animate_card_action(self, record: "GenerationRecord") -> None:
         """
         '💃 Animate' gallery card action.
-        Switches to animate source and copies the card's thumbnail as the character image.
-        The thumbnail is a first-frame still for videos — valid as a character seed.
-        """
-        # Set character image first so the widget is populated before the tab
-        # becomes visible — avoids a visible blank-then-filled transition.
-        char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
-        if char_path and Path(char_path).exists():
-            self._controls.set_char_input(char_path)
-        # Switch to the animate source tab after the input is set
-        self._controls.switch_to_source("animate")
-        # Flash status
-        self._flash_status("Character set ✓")
 
-    def _on_motion_card_action(self, record: "GenerationRecord") -> None:
+        Copies the card's prompt and sets its thumbnail as the seed image, then
+        switches to the animate source tab.  The thumbnail is the first-frame still
+        for video records — a valid character seed.
+
+        The seed image well is now the sole character-image entry point (the
+        separate CHARACTER InputWidget was removed).  set_char_input delegates
+        to _set_seed_image so the well is updated correctly.
         """
-        '↗ Motion' gallery card action.
-        Sets the card's video_path as the motion video input WITHOUT switching source.
-        Only video/animate cards have this button (image cards don't).
-        """
-        if record.video_exists:
-            self._controls.set_motion_input(record.video_path)
-            self._flash_status("Motion set ✓")
-        else:
-            self._flash_status("Video file not found")
+        char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
+        # Use populate_prompts to carry the card's prompt and set the seed image.
+        # This mirrors the ↺ Iterate flow, but also switches to animate mode.
+        seed = char_path if (char_path and Path(char_path).exists()) else ""
+        self._controls.populate_prompts(record.prompt, record.negative_prompt, seed)
+        self._controls.switch_to_source("animate")
+        self._flash_status("Character set ✓ — switch to Animate")
 
     def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
         """Show *message* in the status label for *duration_ms* ms, then restore.
@@ -7107,11 +6947,14 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         elif model_source == "animate":
             self._set_status("Submitting Animate-14B job…")
+            # Character image: prefer ref_char_path (attractor/TT-TV auto-gen path),
+            # fall back to seed_image_path (manual UI path — set via the seed image well).
+            char_image = ref_char_path or seed_image_path
             gen = AnimateGenerationWorker(
                 client=self._client,
                 store=self._store,
                 reference_video_path=ref_video_path,
-                reference_image_path=ref_char_path,
+                reference_image_path=char_image,
                 prompt=prompt,
                 num_inference_steps=steps,
                 seed=seed,

@@ -19,6 +19,7 @@ class SupportedModels(Enum):
     MOCHI_1 = "genmo/mochi-1-preview"
     WAN_2_2_ANIMATE = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
     SKYREELS_V2_DF_1_3B_540P = "Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers"
+    SKYREELS_V2_I2V_14B_540P = "Skywork/SkyReels-V2-I2V-14B-540P"
     WAN_2_2 = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
     DISTIL_WHISPER_LARGE_V3 = "distil-whisper/distil-large-v3"
     OPENAI_WHISPER_LARGE_V3 = "openai/whisper-large-v3"
@@ -50,6 +51,7 @@ class ModelNames(Enum):
     MOCHI_1 = "mochi-1-preview"
     WAN_2_2_ANIMATE = "Wan2.2-Animate-14B-Diffusers"
     SKYREELS_V2_DF_1_3B_540P = "SkyReels-V2-DF-1.3B-540P-Diffusers"
+    SKYREELS_V2_I2V_14B_540P = "SkyReels-V2-I2V-14B-540P"
     WAN_2_2 = "Wan2.2-T2V-A14B-Diffusers"
     DISTIL_WHISPER_LARGE_V3 = "distil-large-v3"
     OPENAI_WHISPER_LARGE_V3 = "whisper-large-v3"
@@ -86,6 +88,7 @@ class ModelRunners(Enum):
     TT_WAN_2_2 = "tt-wan2.2"
     TT_WAN_2_2_ANIMATE = "tt-wan2.2-animate"
     TT_SKYREELS_V2 = "tt-skyreels-v2"
+    TT_SKYREELS_V2_I2V = "tt-skyreels-v2-i2v"
     TT_WHISPER = "tt-whisper"
     VLLM = "vllm"
     TT_YOLOV4 = "tt-yolov4"
@@ -190,6 +193,7 @@ MODEL_RUNNER_TO_MODEL_NAMES_MAP = {
     ModelRunners.TT_MOCHI_1: {ModelNames.MOCHI_1},
     ModelRunners.TT_WAN_2_2_ANIMATE: {ModelNames.WAN_2_2_ANIMATE},
     ModelRunners.TT_SKYREELS_V2: {ModelNames.SKYREELS_V2_DF_1_3B_540P},
+    ModelRunners.TT_SKYREELS_V2_I2V: {ModelNames.SKYREELS_V2_I2V_14B_540P},
     ModelRunners.TT_WAN_2_2: {ModelNames.WAN_2_2},
     ModelRunners.SP_RUNNER: {ModelNames.WAN_2_2, ModelNames.MOCHI_1},
     ModelRunners.TT_WHISPER: {
@@ -1051,6 +1055,25 @@ ModelConfigs[(ModelRunners.TT_SKYREELS_V2, DeviceTypes.P150X4)] = {
     "request_processing_timeout_seconds": 3600,
 }
 ModelConfigs[(ModelRunners.TT_SKYREELS_V2, DeviceTypes.P300X2)] = {
+    "is_galaxy": False,
+    "device_mesh_shape": (2, 2),
+    "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
+    "max_batch_size": 1,
+    "download_weights_from_service": False,
+    "request_processing_timeout_seconds": 3600,
+}
+
+# SkyReels-V2-I2V-14B-540P on Blackhole hardware (image-to-video variant).
+# Same Blackhole device layout as DF-1.3B; larger model (~58 GB weights).
+ModelConfigs[(ModelRunners.TT_SKYREELS_V2_I2V, DeviceTypes.P150X4)] = {
+    "is_galaxy": False,
+    "device_mesh_shape": (1, 4),
+    "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
+    "max_batch_size": 1,
+    "download_weights_from_service": False,
+    "request_processing_timeout_seconds": 3600,
+}
+ModelConfigs[(ModelRunners.TT_SKYREELS_V2_I2V, DeviceTypes.P300X2)] = {
     "is_galaxy": False,
     "device_mesh_shape": (2, 2),
     "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,

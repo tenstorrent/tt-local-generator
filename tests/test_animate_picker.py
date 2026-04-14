@@ -181,7 +181,7 @@ def test_mode_desc_bar_css_class_swap():
 
 @gtk_required
 def test_generation_card_stores_action_callbacks():
-    """Verify animate_cb and motion_cb are stored on GenerationCard."""
+    """Verify animate_cb is stored on GenerationCard (motion_cb removed)."""
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
     from main_window import GenerationCard
@@ -189,7 +189,6 @@ def test_generation_card_stores_action_callbacks():
     import datetime
 
     animate_calls = []
-    motion_calls  = []
 
     rec = GenerationRecord(
         id="test-card-0001",
@@ -209,27 +208,23 @@ def test_generation_card_stores_action_callbacks():
         select_cb=lambda c: None,
         delete_cb=lambda r: None,
         animate_cb=lambda r: animate_calls.append(r),
-        motion_cb=lambda r: motion_calls.append(r),
     )
 
     card._animate_cb(rec)
-    card._motion_cb(rec)
 
     assert len(animate_calls) == 1
-    assert len(motion_calls)  == 1
     assert animate_calls[0].id == "test-card-0001"
 
 
 @gtk_required
 def test_gallery_card_action_callbacks_invoked():
-    """Verify animate_cb and motion_cb are stored on GenerationCard."""
+    """Verify animate_cb is stored on GenerationCard (motion_cb removed)."""
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
     from main_window import GenerationCard
     from history_store import GenerationRecord
 
     animate_calls = []
-    motion_calls = []
 
     rec = GenerationRecord(
         id="test-0001", prompt="test", negative_prompt="",
@@ -246,13 +241,10 @@ def test_gallery_card_action_callbacks_invoked():
         select_cb=lambda c: None,
         delete_cb=lambda r: None,
         animate_cb=lambda r: animate_calls.append(r),
-        motion_cb=lambda r: motion_calls.append(r),
     )
 
     # Simulate callbacks being invoked
     card._animate_cb(rec)
-    card._motion_cb(rec)
 
     assert len(animate_calls) == 1
-    assert len(motion_calls) == 1
     assert animate_calls[0].id == "test-0001"

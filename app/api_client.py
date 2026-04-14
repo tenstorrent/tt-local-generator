@@ -314,41 +314,57 @@ class APIClient:
         """
         Submit a Wan2.2-Animate-14B job.
 
-        Both the reference video (MP4) and character image (JPEG/PNG) are
-        base64-encoded and sent inline in the JSON payload.  The server's
-        async job machinery is identical to T2V — poll with poll_status(),
-        download with download().
+        The character image (JPEG/PNG) is base64-encoded and sent inline in
+        the JSON payload.  The reference video is omitted when empty — motion
+        conditioning is not implemented in the TTNN WanTransformer3DModel
+        (motion_encoder/face_encoder modules absent), so the server ignores
+        reference_video_b64 and motion comes from the fine-tuned weight
+        distribution instead.
+
+        The server's async job machinery is identical to T2V — poll with
+        poll_status(), download with download().
 
         Args:
             reference_video_path: Local path to the motion-source MP4.
+                Pass "" to skip video encoding (no motion conditioning on TT).
             reference_image_path: Local path to the character image.
+                Pass "" to let the server use a grey dummy frame (warmup only).
             prompt: Optional style guidance (can be empty string).
-            num_inference_steps: Denoising steps 12–50 (server default: 20).
+            num_inference_steps: Denoising steps (server default: 20).
             seed: Random seed. None means random.
-            animate_mode: "animation" (character mimics motion) or
-                          "replacement" (replace character in video).
+            animate_mode: "animation" or "replacement".
 
         Returns:
             The job ID string (UUID).
 
         Raises:
-            FileNotFoundError: If either input file is missing.
+            IsADirectoryError: Caught here and re-raised as ValueError with a
+                clear message if a directory path is passed for either input.
             requests.HTTPError: On 4xx/5xx responses.
         """
-        ref_video = Path(reference_video_path)
-        ref_image = Path(reference_image_path)
-        if not ref_video.exists():
-            raise FileNotFoundError(f"Reference video not found: {ref_video}")
-        if not ref_image.exists():
-            raise FileNotFoundError(f"Reference image not found: {ref_image}")
-
         payload: dict = {
             "prompt": prompt,
             "num_inference_steps": max(12, min(50, num_inference_steps)),
-            "reference_video_b64": base64.b64encode(ref_video.read_bytes()).decode(),
-            "reference_image_b64": base64.b64encode(ref_image.read_bytes()).decode(),
             "animate_mode": animate_mode,
         }
+
+        # Reference video — optional; omit if empty or absent.
+        if reference_video_path:
+            ref_video = Path(reference_video_path)
+            if not ref_video.is_file():
+                raise ValueError(
+                    f"Reference video is not a file: {ref_video!r}"
+                )
+            payload["reference_video_b64"] = base64.b64encode(ref_video.read_bytes()).decode()
+
+        # Character image — optional; omit to use server-side grey dummy.
+        if reference_image_path:
+            ref_image = Path(reference_image_path)
+            if not ref_image.is_file():
+                raise ValueError(
+                    f"Reference image is not a file: {ref_image!r}"
+                )
+            payload["reference_image_b64"] = base64.b64encode(ref_image.read_bytes()).decode()
         if seed is not None and seed >= 0:
             payload["seed"] = seed
 
