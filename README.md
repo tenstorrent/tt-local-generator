@@ -120,19 +120,46 @@ cd ~/code/tt-local-generator
 ## CLI tool (`tt-ctl`)
 
 ```bash
-./tt-ctl status           # server health + chip temps
+# Overview
+./tt-ctl status           # server health, queue depth, history summary (newest + oldest)
 ./tt-ctl servers          # live status of every managed service
+./tt-ctl server           # server detail + active job list
 ./tt-ctl history          # 10 most recent generations (newest first)
-./tt-ctl run "a red fox"  # generate directly from the terminal
+./tt-ctl history 25       # show last 25 instead
+./tt-ctl recover          # list server jobs not in local history
+
+# Run a generation now (blocking)
+./tt-ctl run "a red fox"
+./tt-ctl run "a red fox" --steps 50 --seed 42 --model mochi
+./tt-ctl run "a red fox" --neg "blurry, bad quality"
+# --model choices: video | image | animate | skyreels | mochi
 
 # Service management
-./tt-ctl start wan2.2         # start the Wan2.2 server
+./tt-ctl start wan2.2         # start the Wan2.2 server (non-blocking by default)
 ./tt-ctl start prompt-server  # start the Qwen prompt server
-./tt-ctl start all            # start the recommended set
+./tt-ctl start all            # start the recommended set (wan2.2 + prompt-server)
 ./tt-ctl stop  wan2.2
 ./tt-ctl restart wan2.2
+./tt-ctl start wan2.2 --blocking   # wait for the script to exit
+# Service keys: wan2.2  mochi  skyreels  flux  animate  prompt-server  all
 
-# Known service keys: wan2.2  mochi  skyreels  flux  animate  prompt-server  all
+# Queue management
+./tt-ctl queue                          # list pending items
+./tt-ctl queue add "prompt text"        # append a prompt (model: video)
+./tt-ctl queue add "prompt" --model image --steps 50 --seed 7 --neg "blurry"
+./tt-ctl queue clear                    # empty the queue
+./tt-ctl queue run                      # drain and execute the queue (blocking)
+./tt-ctl queue run --dry-run            # preview without running
+
+# Prompt generation (algorithmic / Markov / Qwen-guided)
+./tt-ctl generate                       # generate 1 prompt and run it
+./tt-ctl generate "mountain landscape"  # guided by a theme (Qwen polishes if up)
+./tt-ctl generate --count 5             # generate and run 5 prompts
+./tt-ctl generate --type image --mode markov --no-enhance
+./tt-ctl generate --count 3 --seed 10 --steps 40 --queue-only
+# --type choices: video | image | skyreels | animate
+# --mode choices: algo (default) | markov
+# --queue-only: stage prompts in queue.json without running them
 ```
 
 ---

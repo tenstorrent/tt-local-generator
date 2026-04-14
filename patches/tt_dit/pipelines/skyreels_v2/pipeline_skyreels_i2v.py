@@ -60,9 +60,12 @@ import torch
 from models.tt_dit.models.transformers.wan2_2.transformer_wan import (
     WanTransformer3DModel as TTNNWanTransformer3DModel,
 )
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.models.vae.vae_wan2_1 import WanDecoder
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils.tensor import bf16_tensor
+from models.tt_dit.utils import cache as _ttnn_cache
+from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
+from models.tt_dit.utils.tensor import bf16_tensor, typed_tensor_2dshard
 
 import ttnn
 
@@ -489,9 +492,21 @@ class SkyReelsI2VPipeline:
 
     CHECKPOINT = "Skywork/SkyReels-V2-I2V-14B-540P"
 
-    def __init__(self, diffusers_pipe, mesh_device: ttnn.MeshDevice):
+    def __init__(
+        self,
+        diffusers_pipe,
+        mesh_device: ttnn.MeshDevice,
+        tt_vae: WanDecoder,
+        vae_parallel_config: VaeHWParallelConfig,
+        vae_ccl_manager: CCLManager,
+        checkpoint_path: str,
+    ):
         self._pipe = diffusers_pipe
         self.mesh_device = mesh_device
+        self.tt_vae = tt_vae
+        self.vae_parallel_config = vae_parallel_config
+        self.vae_ccl_manager = vae_ccl_manager
+        self._checkpoint_path = checkpoint_path
 
     @staticmethod
     def create_pipeline(
@@ -548,8 +563,133 @@ class SkyReelsI2VPipeline:
             ttnn_transformer=ttnn_transformer,
         )
 
+        # ── TTNN VAE decoder ─────────────────────────────────────────────────
+        # SkyReels-V2-I2V-14B shares the same VAE architecture as WAN 2.2 T2V.
+        # Use the same WanDecoder that WanPipeline uses, with weights already
+        # loaded into diffusers_pipe.vae (replaced from Wan2.1_VAE.pth above).
+        # The VAE runs on TTNN rather than CPU, eliminating the multi-minute
+        # CPU decode that follows the diffusion steps.
+        print("[SkyReelsI2V] Building TTNN VAE decoder ...")
+        vae_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=2,
+            topology=ttnn.Topology.Linear,
+        )
+        # tp_axis=1, sp_axis=0 — matches Blackhole mesh convention used by the
+        # transformer (DiTParallelConfig above uses the same axis assignment).
+        vae_parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=tp_factor, mesh_axis=1),
+            width_parallel=ParallelFactor(factor=sp_factor, mesh_axis=0),
+        )
+        vae_cfg = diffusers_pipe.vae.config
+        tt_vae = WanDecoder(
+            base_dim=vae_cfg.base_dim,
+            z_dim=vae_cfg.z_dim,
+            dim_mult=vae_cfg.dim_mult,
+            num_res_blocks=vae_cfg.num_res_blocks,
+            attn_scales=vae_cfg.attn_scales,
+            temperal_downsample=vae_cfg.temperal_downsample,
+            out_channels=vae_cfg.out_channels,
+            is_residual=vae_cfg.is_residual,
+            mesh_device=mesh_device,
+            ccl_manager=vae_ccl_manager,
+            parallel_config=vae_parallel_config,
+            dtype=ttnn.bfloat16,
+        )
+
         print("[SkyReelsI2V] I2V pipeline ready.")
-        return SkyReelsI2VPipeline(diffusers_pipe, mesh_device)
+        return SkyReelsI2VPipeline(
+            diffusers_pipe,
+            mesh_device,
+            tt_vae,
+            vae_parallel_config,
+            vae_ccl_manager,
+            checkpoint_path,
+        )
+
+    def _prepare_vae(self) -> None:
+        """Load the TTNN VAE weights onto the mesh device (cached after first load)."""
+        _ttnn_cache.load_model(
+            self.tt_vae,
+            model_name=os.path.basename(self._checkpoint_path),
+            subfolder="vae",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: self._pipe.vae.state_dict(),
+        )
+
+    def _decode_latents_ttnn(self, latents: torch.Tensor) -> np.ndarray:
+        """
+        Decode video latents with the TTNN WanDecoder.
+
+        Mirrors the VAE decode block in WanPipeline.__call__() exactly:
+          1. Denormalise using vae.config.latents_mean / latents_std.
+          2. Permute BCTHW → BTHWC.
+          3. Pad channels and height for TTNN parallelism.
+          4. Shard across the mesh and run the TTNN decoder.
+          5. Gather back to host, strip padding, postprocess.
+
+        Args:
+            latents: (B, 16, T_lat, H_lat, W_lat) tensor in scheduler latent space.
+
+        Returns:
+            (1, T, H, W, C) float32 numpy array with pixel values in [0, 1].
+        """
+        vae_cfg = self._pipe.vae.config
+
+        # Denormalise: scheduler latents → VAE input space
+        latents = latents.to(self._pipe.vae.dtype)
+        latents_mean = (
+            torch.tensor(vae_cfg.latents_mean)
+            .view(1, vae_cfg.z_dim, 1, 1, 1)
+            .to(latents.device, latents.dtype)
+        )
+        latents_std = (
+            1.0
+            / torch.tensor(vae_cfg.latents_std)
+            .view(1, vae_cfg.z_dim, 1, 1, 1)
+            .to(latents.device, latents.dtype)
+        )
+        latents = latents / latents_std + latents_mean
+
+        # Load TTNN VAE weights (no-op after first call, served from disk cache)
+        self._prepare_vae()
+
+        # Shard and dispatch to TTNN (same logic as WanPipeline decode block)
+        tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)          # BCTHW → BTHWC
+        tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+        tt_latents_BTHWC, logical_h = conv_pad_height(
+            tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
+        )
+        tt_latents_BTHWC = typed_tensor_2dshard(
+            tt_latents_BTHWC,
+            self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                self.vae_parallel_config.width_parallel.mesh_axis: 3,
+            },
+            dtype=self.tt_vae.dtype,
+        )
+
+        tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+
+        # Gather shards back to host and strip height padding
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
+        video_torch = video_torch[:, :, :, :new_logical_h, :]       # (B, C, T, H, W)
+
+        # Postprocess via the diffusers pipeline's VideoProcessor, then convert
+        # to (1, T, H, W, C) numpy in [0, 1] — same output contract as the
+        # previous CPU VAE path.
+        video = self._pipe.video_processor.postprocess_video(video_torch, output_type="pil")
+        frames_pil = video[0]  # list of T PIL Images
+        frames_np = np.stack(
+            [np.array(f, dtype=np.float32) / 255.0 for f in frames_pil]
+        )  # (T, H, W, C)
+        return frames_np[np.newaxis]  # (1, T, H, W, C)
 
     def __call__(
         self,
@@ -600,6 +740,7 @@ class SkyReelsI2VPipeline:
 
         generator = torch.Generator().manual_seed(seed)
 
+        # Run the diffusion loop only — VAE decode happens on TTNN below.
         output = self._pipe(
             image=cond_image,
             prompt=prompt,
@@ -610,15 +751,12 @@ class SkyReelsI2VPipeline:
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             generator=generator,
-            output_type="pil",
+            output_type="latent",
         )
 
-        # Convert list of PIL frames → (1, T, H, W, C) numpy array in [0, 1]
-        frames_pil = output.frames[0]
-        frames_np = np.stack(
-            [np.array(f, dtype=np.float32) / 255.0 for f in frames_pil]
-        )  # (T, H, W, C)
-        return frames_np[np.newaxis]  # (1, T, H, W, C)
+        # output.frames is (B, 16, T_lat, H_lat, W_lat) in latent space.
+        # Decode to pixel space on TTNN hardware instead of on CPU.
+        return self._decode_latents_ttnn(output.frames)
 
 
 # ---------------------------------------------------------------------------

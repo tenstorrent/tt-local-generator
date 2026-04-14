@@ -23,13 +23,20 @@ Usage:
                                     Flags: --steps N  --model wan2|mochi|flux
                                            --server URL  --neg "negative prompt"
     tt-ctl server                   Show server model / health detail
+    tt-ctl logs [service]           Tail the log for a managed service
+                                    Default: the running inference server
+                                    Services: wan2.2 | mochi | flux | animate |
+                                              skyreels | prompt-server | docker
+                                    Flags: --lines N  --follow / -f
 
 All commands accept --server URL to override the default http://localhost:8000.
 """
 
 import argparse
+import glob as _glob
 import json
 import os
+import subprocess
 import sys
 import textwrap
 import threading
@@ -299,14 +306,20 @@ def cmd_status(args):
     # History summary
     videos = [r for r in recs if r.media_type == "video"]
     images = [r for r in recs if r.media_type == "image"]
-    recent = recs[-1] if recs else None
+    # all_records() is newest-first: recs[0] = most recent, recs[-1] = oldest
+    newest = recs[0]  if recs else None
+    oldest = recs[-1] if recs else None
     print()
     print(bold("History"))
     print(f"  {len(recs)} records  ({len(videos)} video, {len(images)} image)")
-    if recent:
-        age = _age(recent.created_at)
-        short = recent.prompt[:70] + ("…" if len(recent.prompt) > 70 else "")
-        print(f"  last: {dim(age)}  {short}")
+    if newest:
+        age   = _age(newest.created_at)
+        short = newest.prompt[:70] + ("…" if len(newest.prompt) > 70 else "")
+        print(f"  newest: {dim(age)}  {short}")
+    if oldest and oldest is not newest:
+        age   = _age(oldest.created_at)
+        short = oldest.prompt[:70] + ("…" if len(oldest.prompt) > 70 else "")
+        print(f"  oldest: {dim(age)}  {short}")
 
 
 # ── queue ─────────────────────────────────────────────────────────────────────
@@ -611,6 +624,133 @@ def cmd_server(args):
         print(dim(f"   (could not list jobs: {exc})"))
 
 
+# ── logs ─────────────────────────────────────────────────────────────────────
+
+# Maps service key → glob pattern under workflow_logs/docker_server/
+_LOG_GLOBS: dict[str, str] = {
+    "wan2.2":       "media_*_Wan2.2-T2V-A14B-Diffusers_p300x2_server.log",
+    "mochi":        "media_*_mochi-1-preview_p300x2_server.log",
+    "flux":         "media_*_FLUX.1-dev_p300x2_server.log",
+    "animate":      "media_*_Wan2.2-Animate-14B-Diffusers_p300x2_server.log",
+    "skyreels":     "media_*_SkyReels-V2-I2V-14B-540P_*_server.log",
+}
+_LOG_DIR = _HERE / "workflow_logs" / "docker_server"
+_PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")
+
+
+def _latest_log_file(service_key: str) -> Path | None:
+    """Return the most-recently-modified log file for a service, or None."""
+    pattern = _LOG_GLOBS.get(service_key)
+    if not pattern:
+        return None
+    matches = sorted(
+        _glob.glob(str(_LOG_DIR / pattern)),
+        key=lambda p: Path(p).stat().st_mtime,
+        reverse=True,
+    )
+    return Path(matches[0]) if matches else None
+
+
+def _running_container_id() -> str | None:
+    """Return the ID of the first running inference server container, if any."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=tt-inference-server",
+             "--format", "{{.ID}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        ids = result.stdout.strip().splitlines()
+        if ids:
+            return ids[0]
+        # Fallback: any container from the known image
+        result2 = subprocess.run(
+            ["docker", "ps", "--filter",
+             "ancestor=ghcr.io/tenstorrent/tt-media-inference-server",
+             "--format", "{{.ID}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        ids2 = result2.stdout.strip().splitlines()
+        return ids2[0] if ids2 else None
+    except Exception:
+        return None
+
+
+def cmd_logs(args):
+    """
+    Tail the log for a managed service.
+
+    Source priority:
+      - prompt-server        → /tmp/tt_prompt_gen.log  (static file)
+      - docker               → docker logs of the running container (live stream)
+      - wan2.2 / mochi / flux / animate / skyreels
+          → newest file in workflow_logs/docker_server/ matching the service
+            pattern, falling back to docker logs if no file found
+      - (no service given)   → docker logs of the running container
+    """
+    service  = getattr(args, "service", None)
+    follow   = getattr(args, "follow", False)
+    n_lines  = getattr(args, "lines", 50)
+
+    # ── prompt-server: static file ────────────────────────────────────────────
+    if service == "prompt-server":
+        if not _PROMPT_LOG.exists():
+            print(yellow(f"Prompt server log not found: {_PROMPT_LOG}"))
+            print(dim("  Start the prompt server first:  tt-ctl start prompt-server"))
+            return
+        print(dim(f"Log: {_PROMPT_LOG}"))
+        _tail_file(_PROMPT_LOG, n_lines, follow)
+        return
+
+    # ── docker: stream container logs directly ────────────────────────────────
+    if service == "docker" or service is None:
+        cid = _running_container_id()
+        if not cid:
+            print(yellow("No running inference server container found."))
+            print(dim("  Start a server first:  tt-ctl start skyreels"))
+            return
+        print(dim(f"Container: {cid}"))
+        _docker_logs(cid, n_lines, follow)
+        return
+
+    # ── inference services: file log, fall back to docker ────────────────────
+    log_file = _latest_log_file(service)
+    if log_file:
+        print(dim(f"Log: {log_file}"))
+        _tail_file(log_file, n_lines, follow)
+    else:
+        # No log file yet — try the running container
+        cid = _running_container_id()
+        if not cid:
+            print(yellow(f"No log file found for '{service}' and no container running."))
+            return
+        print(dim(f"No log file found for '{service}' — streaming container logs ({cid})"))
+        _docker_logs(cid, n_lines, follow)
+
+
+def _tail_file(path: Path, n_lines: int, follow: bool) -> None:
+    """Print last n_lines of a file, optionally following."""
+    cmd = ["tail", f"-n{n_lines}"]
+    if follow:
+        cmd.append("-f")
+    cmd.append(str(path))
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
+
+
+def _docker_logs(container_id: str, n_lines: int, follow: bool) -> None:
+    """Stream docker logs for a container."""
+    cmd = ["docker", "logs", f"--tail={n_lines}"]
+    if follow:
+        cmd.append("--follow")
+    cmd.append(container_id)
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
+
+
 # ── recover ───────────────────────────────────────────────────────────────────
 
 def cmd_recover(args):
@@ -792,6 +932,21 @@ def _build_parser() -> argparse.ArgumentParser:
     # server
     sub.add_parser("server", help="Server detail and job list")
 
+    # logs
+    _log_service_choices = sorted(_LOG_GLOBS.keys()) + ["prompt-server", "docker"]
+    lg = sub.add_parser("logs", help="Tail logs for a managed service or container")
+    lg.add_argument(
+        "service", nargs="?", default=None,
+        choices=_log_service_choices,
+        metavar="SERVICE",
+        help=f"Service to show logs for ({' | '.join(_log_service_choices)}); "
+             "default: running container",
+    )
+    lg.add_argument("-f", "--follow", action="store_true",
+                    help="Follow / tail the log in real time (Ctrl-C to stop)")
+    lg.add_argument("-n", "--lines", type=int, default=50, metavar="N",
+                    help="Number of lines to show (default 50)")
+
     # recover
     sub.add_parser("recover", help="List server jobs not in local history")
 
@@ -860,6 +1015,7 @@ def main():
         "queue":    cmd_queue,
         "history":  cmd_history,
         "server":   cmd_server,
+        "logs":     cmd_logs,
         "recover":  cmd_recover,
         "run":      cmd_run,
         "generate": cmd_generate,

@@ -19,7 +19,8 @@ try:
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Pango", "1.0")
-    from gi.repository import Gio, GLib, Gtk, Pango
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf, Gio, GLib, Gtk, Pango
     _GTK_AVAILABLE = True
     _GtkButtonBase = Gtk.Button
 except (ImportError, ValueError):
@@ -27,6 +28,7 @@ except (ImportError, ValueError):
     # Define a stub so the class body can be parsed without error;
     # instantiation will raise RuntimeError at runtime.
     _GTK_AVAILABLE = False
+    GdkPixbuf = None  # type: ignore[assignment]
     Gio = None  # type: ignore[assignment]
     GLib = None  # type: ignore[assignment]
     Gtk = None  # type: ignore[assignment]
@@ -324,6 +326,9 @@ class PickerPopover(Gtk.Popover if _GTK_AVAILABLE else object):
         self._settings = settings
         self._on_select = on_select
         self._selected_path: Optional[str] = None
+        # Initialized before tab-building so _set_selection() (called from
+        # _activate_tab during __init__) has a safe target to check.
+        self._use_btn: "Gtk.Button | None" = None
 
         self.add_css_class("picker-popover")
         self.set_size_request(300, -1)
@@ -643,20 +648,56 @@ class PickerPopover(Gtk.Popover if _GTK_AVAILABLE else object):
 
     # ── Selection helpers ─────────────────────────────────────────────────────
 
+    # Fixed pixel size for picker thumbnail cells.  Chosen to fit ≥3 columns in
+    # the 300 px minimum popover width (3 × 80 + 2 × 5 spacing = 250 px < 284 px
+    # available after 8 px left/right margins).
+    _CELL_W = 80
+    _CELL_H = 60
+
     def _make_thumb_cell(self, label: str, thumb_path: str, media_path: str) -> "Gtk.Widget":
-        """Return a 60×44 thumbnail cell widget for the picker grid."""
+        """Return a fixed-size thumbnail cell widget for the picker grid.
+
+        Uses GdkPixbuf to pre-scale and COVER-crop the thumbnail so the
+        Gtk.Image widget reports its natural size as exactly _CELL_W × _CELL_H.
+        This prevents Gtk.Picture's large natural image size from confusing the
+        FlowBox into allocating one giant cell per row.
+        """
+        cw, ch = self._CELL_W, self._CELL_H
+
         overlay = Gtk.Overlay()
+        overlay.set_size_request(cw, ch)
+
         frame = Gtk.Frame()
         frame.add_css_class("picker-thumb-cell")
-        frame.set_size_request(60, 44)
+        frame.set_size_request(cw, ch)
         overlay.set_child(frame)
 
         if thumb_path and Path(thumb_path).exists():
-            pic = Gtk.Picture.new_for_filename(thumb_path)
-            pic.set_can_shrink(True)
-            pic.set_hexpand(True)
-            pic.set_vexpand(True)
-            frame.set_child(pic)
+            img_widget = None
+            if GdkPixbuf is not None:
+                try:
+                    # COVER-style scale: expand uniformly until both dimensions
+                    # are ≥ cell size, then subpixbuf-crop to exact cell size.
+                    src = GdkPixbuf.Pixbuf.new_from_file(thumb_path)
+                    scale = max(cw / src.get_width(), ch / src.get_height())
+                    sw = max(cw, int(src.get_width() * scale))
+                    sh = max(ch, int(src.get_height() * scale))
+                    scaled = src.scale_simple(sw, sh, GdkPixbuf.InterpType.BILINEAR)
+                    x_off = (sw - cw) // 2
+                    y_off = (sh - ch) // 2
+                    cropped = scaled.new_subpixbuf(x_off, y_off, cw, ch)
+                    img_widget = Gtk.Image.new_from_pixbuf(cropped)
+                    img_widget.set_size_request(cw, ch)
+                except Exception:
+                    pass  # fall through to Gtk.Picture fallback
+
+            if img_widget is None:
+                # GdkPixbuf unavailable or load failed: use Gtk.Picture with
+                # can_shrink as a best-effort fallback (may mis-size in the grid).
+                img_widget = Gtk.Picture.new_for_filename(thumb_path)
+                img_widget.set_can_shrink(True)
+
+            frame.set_child(img_widget)
         else:
             icon = Gtk.Label(label="🎬")
             icon.set_valign(Gtk.Align.CENTER)
@@ -671,7 +712,7 @@ class PickerPopover(Gtk.Popover if _GTK_AVAILABLE else object):
         name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         overlay.add_overlay(name_lbl)
 
-        # Click gesture
+        # Click gesture on the overlay (outermost widget in the cell)
         gesture = Gtk.GestureClick()
         gesture.connect("pressed", lambda *_: self._on_cell_clicked(frame, media_path))
         overlay.add_controller(gesture)
@@ -698,7 +739,9 @@ class PickerPopover(Gtk.Popover if _GTK_AVAILABLE else object):
     def _set_selection(self, path: Optional[str]) -> None:
         # Accept non-empty string only; None or "" both mean no selection.
         self._selected_path = path if path else None
-        self._use_btn.set_sensitive(bool(self._selected_path))
+        # _use_btn may be None during __init__ (tabs are built before the footer)
+        if self._use_btn is not None:
+            self._use_btn.set_sensitive(bool(self._selected_path))
 
     # ── Action handlers ───────────────────────────────────────────────────────
 

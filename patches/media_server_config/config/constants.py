@@ -162,7 +162,9 @@ MODEL_SERVICE_RUNNER_MAP = {
     ModelServices.VIDEO: {
         ModelRunners.TT_MOCHI_1,
         ModelRunners.TT_WAN_2_2,
+        ModelRunners.TT_WAN_2_2_ANIMATE,
         ModelRunners.TT_SKYREELS_V2,
+        ModelRunners.TT_SKYREELS_V2_I2V,
         ModelRunners.SP_RUNNER,
     },
     ModelServices.TRAINING: {
@@ -674,6 +676,14 @@ ModelConfigs = {
         "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
         "max_batch_size": 1,
         "download_weights_from_service": False,
+    },
+    (ModelRunners.TT_WAN_2_2_ANIMATE, DeviceTypes.P300X2): {
+        "device_mesh_shape": (2, 2),
+        "is_galaxy": False,
+        "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
+        "max_batch_size": 1,
+        "download_weights_from_service": False,
+        "request_processing_timeout_seconds": 5400,  # 90 min; 14B weights across 4 chips
     },
     (ModelRunners.SP_RUNNER, DeviceTypes.N150): {
         "device_mesh_shape": (1, 1),
