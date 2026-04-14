@@ -7497,7 +7497,10 @@ class MainWindow(Gtk.ApplicationWindow):
         if limit > 0 and self._gen_completed_count >= limit:
             self._gen_completed_count = 0
             self._set_status(f"Completed {limit} generation(s) — suspending…")
-            GLib.timeout_add(1500, lambda: subprocess.Popen(["systemctl", "suspend"]) and False)
+            GLib.timeout_add(1500, lambda: (
+                subprocess.Popen(["systemctl", "suspend"])
+                if __import__("platform").system() == "Linux" else None
+            ) and False)
         return False
 
     def _on_error(self, message: str) -> bool:

@@ -13,19 +13,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Use the system Python3 — GTK4 introspection bindings are installed there,
-# not inside virtualenvs.
-PYTHON=/usr/bin/python3
+# Select the Python3 interpreter that has GTK4/GI bindings.
+#
+# Linux: GTK4 bindings are installed as system packages (python3-gi via apt) into
+#        /usr/bin/python3's site-packages — venvs cannot see them.
+#
+# macOS: brew installs pygobject3 into the Homebrew Python's site-packages.
+#        /usr/bin/python3 on macOS is Apple's Xcode stub; use the PATH python3
+#        (resolves to /opt/homebrew/bin/python3 after `brew install python@3.x`).
+if [[ "$(uname)" == "Darwin" ]]; then
+    PYTHON=$(command -v python3 2>/dev/null || echo "/opt/homebrew/bin/python3")
+else
+    PYTHON=/usr/bin/python3
+fi
 
 if [[ ! -x "$PYTHON" ]]; then
-    echo "ERROR: $PYTHON not found. Install python3 via your package manager." >&2
+    echo "ERROR: $PYTHON not found." >&2
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "       Install Python via Homebrew: brew install python@3.12 pygobject3 gtk4" >&2
+    else
+        echo "       Install python3 via your package manager." >&2
+    fi
     exit 1
 fi
 
 # Sanity-check that GTK introspection bindings are available.
 if ! "$PYTHON" -c "import gi" 2>/dev/null; then
-    echo "ERROR: Python GObject introspection (python3-gi) not found." >&2
-    echo "       Run: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0" >&2
+    echo "ERROR: Python GObject introspection not found for $PYTHON." >&2
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "       Run: brew install pygobject3 gtk4 gdk-pixbuf pango" >&2
+        echo "            brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav" >&2
+    else
+        echo "       Run: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0" >&2
+    fi
     exit 1
 fi
 

@@ -110,7 +110,8 @@ def main() -> None:
     log.info("")
     log.info("=== Batch complete: %d/%d succeeded ===", successes, len(jobs))
     log.info("Suspending system...")
-    subprocess.run(["systemctl", "suspend"])
+    if __import__("platform").system() == "Linux":
+        subprocess.run(["systemctl", "suspend"])
 
 
 if __name__ == "__main__":
