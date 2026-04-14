@@ -6865,11 +6865,18 @@ class MainWindow(Gtk.ApplicationWindow):
             records = all_records
             auto_generate = True
 
+        # Animate mode auto-generation is not yet implemented (needs randomised
+        # ref_video + ref_char inputs).  Disable silently so TT-TV still works
+        # as a viewer but won't flood the queue with empty-input animate jobs.
+        current_source = self._controls.get_model_source()
+        if current_source == "animate":
+            auto_generate = False
+
         try:
             win = attractor.AttractorWindow(
                 records=records,
                 system_prompt=self._prompt_gen_system_prompt,
-                model_source=self._controls.get_model_source(),
+                model_source=current_source,
                 on_enqueue=self._on_attractor_generate,
                 on_user_enqueue=self._on_attractor_priority_enqueue,
                 get_queue_depth=lambda: len(self._queue),
