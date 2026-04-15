@@ -268,9 +268,9 @@ _TYPE_HINT = {
 
 
 def _llm_available() -> bool:
-    """Quick health check — 2s timeout so we don't stall the caller."""
+    """Quick health check — 3s timeout to tolerate remote servers over LAN."""
     try:
-        with urllib.request.urlopen(LLM_HEALTH_URL, timeout=2) as r:
+        with urllib.request.urlopen(LLM_HEALTH_URL, timeout=3) as r:
             data = json.loads(r.read())
             return bool(data.get("model_ready"))
     except Exception:

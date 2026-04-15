@@ -38,6 +38,28 @@ if _platform.system() == "Linux":
         "vajpegdec:NONE,vacompositor:NONE,vadeinterlace:NONE,"
         "vah264enc:NONE,vah265enc:NONE",
     )
+elif _platform.system() == "Darwin":
+    # On macOS the GTK4 GStreamer media backend requires the Homebrew GStreamer
+    # plugins to be discoverable.  `brew install gstreamer` places them in
+    # $(brew --prefix gstreamer)/lib/gstreamer-1.0/ which is NOT on the default
+    # search path unless GST_PLUGIN_PATH is set explicitly.  We probe the two
+    # common Homebrew prefixes (Apple Silicon: /opt/homebrew, Intel: /usr/local)
+    # and add the first one that exists so that H.264 playback works out of the
+    # box after running setup_macos.sh.  This must happen before gi / GStreamer
+    # are imported.
+    for _brew_prefix in ("/opt/homebrew", "/usr/local"):
+        _gst_plugins = os.path.join(_brew_prefix, "lib", "gstreamer-1.0")
+        if os.path.isdir(_gst_plugins):
+            # Prepend so our path wins over any stale system GStreamer.
+            _existing = os.environ.get("GST_PLUGIN_PATH", "")
+            os.environ["GST_PLUGIN_PATH"] = (
+                f"{_gst_plugins}:{_existing}" if _existing else _gst_plugins
+            )
+            # GIO modules (needed for Gtk.Video ↔ GStreamer bridge on macOS).
+            _gio_modules = os.path.join(_brew_prefix, "lib", "gio", "modules")
+            if os.path.isdir(_gio_modules):
+                os.environ.setdefault("GIO_MODULE_DIR", _gio_modules)
+            break
 
 # Raise the open-file descriptor limit early.  GStreamer video pipelines each
 # hold ~40–80 fds (epoll, wakeup pipes, PulseAudio sockets, per-thread eventfds).

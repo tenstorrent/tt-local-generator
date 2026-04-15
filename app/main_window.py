@@ -6489,7 +6489,13 @@ class MainWindow(Gtk.ApplicationWindow):
         local_ids = {r.id for r in local_records}
         remote_records = [r for r in self._remote_records.values()
                           if r.id not in local_ids]
-        records = local_records + remote_records
+        # Sort newest-first by created_at so that remote records are interleaved
+        # with local records chronologically rather than appended at the tail.
+        records = sorted(
+            local_records + remote_records,
+            key=lambda r: getattr(r, "created_at", ""),
+            reverse=True,
+        )
         if not records:
             return
         # Route each record to the gallery that matches its media type.
