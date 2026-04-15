@@ -1694,7 +1694,7 @@ class DetailPanel(Gtk.ScrolledWindow):
     generation metadata. Populated by show_record(); shows a placeholder when empty.
     """
 
-    def __init__(self, download_cb=None):
+    def __init__(self, download_cb=None, on_localized_cb=None):
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.set_vexpand(True)
@@ -1707,6 +1707,10 @@ class DetailPanel(Gtk.ScrolledWindow):
         # Callable(record_id: str, dest_path: Path) → None — injected by MainWindow.
         # When provided, a "Download from server" button appears for missing videos.
         self._download_cb = download_cb
+        # Callable(localized_record: GenerationRecord) → None — injected by MainWindow.
+        # Called (on main thread via GLib.idle_add) after a remote video is downloaded
+        # to local storage, so MainWindow can add it to HistoryStore and refresh gallery.
+        self._on_localized_cb = on_localized_cb
         self._show_empty()
 
     def _show_empty(self) -> None:
@@ -2026,36 +2030,71 @@ class DetailPanel(Gtk.ScrolledWindow):
 
         def _do_download():
             try:
-                dest = Path(record.video_path)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-
                 if inv_video_url:
-                    # Remote inventory record — stream from the inventory server.
-                    import requests as _req
+                    # Remote inventory record — stream to the main local VIDEOS_DIR
+                    # so the resulting record is treated as a true local record and
+                    # the GTK inline video player can play it immediately.
+                    import requests as _req  # noqa: PLC0415
+                    import dataclasses  # noqa: PLC0415
+                    from history_store import VIDEOS_DIR, THUMBNAILS_DIR  # noqa: PLC0415
+                    from urllib.parse import urlparse as _up  # noqa: PLC0415
+
+                    # Derive local filename from the inventory URL path.
+                    v_filename = Path(_up(inv_video_url).path).name or f"gen_{record.id[:8]}.mp4"
+                    dest = VIDEOS_DIR / v_filename
+                    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+
                     r = _req.get(inv_video_url, stream=True, timeout=60)
                     r.raise_for_status()
                     with open(dest, "wb") as fh:
                         for chunk in r.iter_content(65_536):
                             fh.write(chunk)
-                    # Also cache the thumbnail if not already present.
-                    thumb_dest = Path(record.thumbnail_path)
-                    if inv_thumb_url and not thumb_dest.exists():
-                        try:
-                            tr = _req.get(inv_thumb_url, stream=True, timeout=10)
-                            if tr.status_code == 200:
-                                thumb_dest.parent.mkdir(parents=True, exist_ok=True)
-                                with open(thumb_dest, "wb") as fh:
-                                    for chunk in tr.iter_content(65_536):
-                                        fh.write(chunk)
-                        except Exception:
-                            pass  # thumbnail cache failure is non-fatal
+
+                    # Also download thumbnail into THUMBNAILS_DIR.
+                    new_thumb_path = record.thumbnail_path  # fallback: remote-cache path
+                    if inv_thumb_url:
+                        t_filename = Path(_up(inv_thumb_url).path).name or ""
+                        if t_filename:
+                            thumb_dest = THUMBNAILS_DIR / t_filename
+                            THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+                            if not thumb_dest.exists():
+                                try:
+                                    tr = _req.get(inv_thumb_url, stream=True, timeout=10)
+                                    if tr.status_code == 200:
+                                        with open(thumb_dest, "wb") as fh:
+                                            for chunk in tr.iter_content(65_536):
+                                                fh.write(chunk)
+                                except Exception:
+                                    pass  # thumbnail cache failure is non-fatal
+                            new_thumb_path = str(thumb_dest)
+
+                    # Build a localized record with main-storage paths and no
+                    # remote-inventory flags so the gallery treats it as local.
+                    clean_meta = {k: v for k, v in (record.extra_meta or {}).items()
+                                  if not k.startswith("_inventory_") and k != "_is_remote"}
+                    localized = dataclasses.replace(
+                        record,
+                        video_path=str(dest),
+                        thumbnail_path=new_thumb_path,
+                        extra_meta=clean_meta,
+                    )
+
+                    # Notify MainWindow (on main thread) to persist the record.
+                    if self._on_localized_cb:
+                        GLib.idle_add(self._on_localized_cb, localized)
+
+                    # Show the localized record in the detail panel.
+                    GLib.idle_add(self.show_record, localized, iterate_cb)
+
                 elif self._download_cb and record.id:
                     # Local history record — use the inference-server API.
+                    dest = Path(record.video_path)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
                     self._download_cb(record.id, dest)
+                    GLib.idle_add(self.show_record, record, iterate_cb)
                 else:
                     raise RuntimeError("No download source available for this record")
 
-                GLib.idle_add(self.show_record, record, iterate_cb)
             except Exception as exc:
                 GLib.idle_add(btn.set_label, f"Download failed: {exc}")
                 GLib.idle_add(btn.set_sensitive, True)
@@ -6042,6 +6081,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._detail = DetailPanel(
             download_cb=lambda rec_id, dest: self._client.download(rec_id, Path(dest)),
+            on_localized_cb=self._on_remote_record_localized,
         )
 
         # Queue display lives below the detail/preview panel on the right side.
@@ -6151,6 +6191,10 @@ class MainWindow(Gtk.ApplicationWindow):
         sync.connect("activate", lambda *_: self._on_sync_from_server())
         self.add_action(sync)
 
+        refresh_inv = Gio.SimpleAction.new("refresh-remote-library", None)
+        refresh_inv.connect("activate", lambda *_: self._on_refresh_remote_library())
+        self.add_action(refresh_inv)
+
         # ── Generation: advanced settings dialog ──────────────────────────────
         adv_action = Gio.SimpleAction.new("advanced-settings", None)
         adv_action.connect("activate", lambda a, p: self._controls.open_advanced_dialog())
@@ -6212,7 +6256,8 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append("Open Media Folder", "win.open-media-folder")
         file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
         file_menu.append("Recover Jobs…", "win.recover-jobs")
-        file_menu.append("Sync Videos from Server…", "win.sync-from-server")
+        file_menu.append("Refresh Remote Library", "win.refresh-remote-library")
+        file_menu.append("Download Remote Library…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("Quit", "app.quit")
@@ -6604,9 +6649,22 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         Runs on background thread.  Polls the prompt gen server every 5 seconds
         and posts the result to the main thread via GLib.idle_add.
+
+        The health URL is read from server_config at each poll (not cached) so
+        that the Preferences dialog host/port changes and --server at startup
+        are always reflected without a restart.
         """
         while not self._pg_stop.wait(5.0):
-            ready = prompt_client.check_health(self._prompt_server_url)
+            # Read from server_config dynamically — consistent with how the
+            # Servers popover checks health (server_manager._check_sdef).
+            from server_config import server_config as _sc  # noqa: PLC0415
+            url = _sc.base_url("prompt-server")
+            ready = prompt_client.check_health(url)
+            # Also keep the generate_prompt module globals in sync so LLM
+            # polish calls always hit the same host as the health check.
+            if url != self._prompt_server_url:
+                self._prompt_server_url = url
+                prompt_client.configure_llm_url(url)
             # THREADING: must not touch GTK widgets here — post to main thread
             GLib.idle_add(self._on_prompt_gen_health, ready)
 
@@ -6616,6 +6674,23 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         self._controls.set_prompt_gen_state(ready)
         return False  # one-shot idle callback
+
+    # ── Remote record localization ──────────────────────────────────────────────
+
+    def _on_remote_record_localized(self, record: GenerationRecord) -> None:
+        """Called on the main thread after a remote video is downloaded to VIDEOS_DIR.
+
+        Adds the record to the local HistoryStore and removes it from
+        self._remote_records so the gallery shows it as a regular local card
+        (with hover video preview and inline GTK player) going forward.
+
+        Called via GLib.idle_add from DetailPanel._on_download_video or
+        _on_download_remote_library so it always runs on the main thread.
+        """
+        self._store.append(record)
+        self._remote_records.pop(record.id, None)
+        # Refresh gallery so the card transitions from remote-style to local-style.
+        self._load_history()
 
     # ── Remote inventory ────────────────────────────────────────────────────────
 
@@ -7713,82 +7788,156 @@ class MainWindow(Gtk.ApplicationWindow):
         for job in dlg.selected_jobs:
             self._attach_recovery_job(job)
 
+    def _on_refresh_remote_library(self) -> None:
+        """
+        File → Refresh Remote Library
+
+        Re-fetches the inventory from the remote server — updating metadata and
+        downloading any new thumbnails — without downloading video files.  This
+        is the lightweight "sync metadata" operation.
+
+        Only available when the app was started with ``--server http://host:8000``
+        pointing at a non-local machine.
+        """
+        if not self._inventory_url:
+            self._set_status("No remote inventory configured (run with --server http://remote:8000).")
+            return
+        self._set_status("Refreshing remote library…")
+        threading.Thread(target=self._fetch_remote_inventory, daemon=True).start()
+
     def _on_sync_from_server(self) -> None:
         """
-        File → Sync Videos from Server…
+        File → Download Remote Library…
 
-        Downloads every video that has a history record (local or remote) but
-        whose video file is missing on disk.  Download sources, in priority order:
+        Downloads every remote-inventory video that is not yet cached locally,
+        saving each video to VIDEOS_DIR (the normal local-generation directory)
+        and adding it to the local HistoryStore as a warm-copy record.
 
-        1. Inventory server URL from ``extra_meta["_inventory_video_url"]`` —
-           used for remote records fetched via the inventory server.
-        2. Inference-server API (``/v1/videos/generations/{id}/download``) —
-           used for local history records whose job file the server still holds.
+        The server remains authoritative — this is purely a local cache.
+        Local history records with missing video files are also re-downloaded
+        from the inference-server API as a secondary action.
+
+        Download sources per record, in priority order:
+        1. Inventory server URL (``extra_meta["_inventory_video_url"]``) — used for
+           remote records.  Video is saved to VIDEOS_DIR (not remote-cache) so that
+           the GTK inline player can play it immediately after download.
+        2. Inference-server API (``/v1/videos/generations/{id}/download``) — used for
+           local history records whose job file the server still holds.
         """
-        # Collect all records missing a local video — local store + remote inventory.
+        import dataclasses as _dc  # noqa: PLC0415
+        from history_store import VIDEOS_DIR, THUMBNAILS_DIR  # noqa: PLC0415
+        from urllib.parse import urlparse as _up  # noqa: PLC0415
+
         local_ids = {r.id for r in self._store.all_records()}
-        remote_only = [r for r in self._remote_records.values() if r.id not in local_ids]
-        candidates = (
-            [r for r in self._store.all_records()
-             if r.media_type in ("video", "animate") and not r.video_exists and r.id]
-            + [r for r in remote_only
-               if r.media_type in ("video", "animate") and not r.video_exists]
-        )
-        if not candidates:
-            self._set_status("All videos are already cached locally — nothing to sync.")
+
+        # Remote records not yet in local store.
+        remote_pending = [
+            r for r in self._remote_records.values()
+            if r.id not in local_ids
+            and r.media_type in ("video", "animate")
+            and (rec_meta := r.extra_meta or {}).get("_inventory_video_url", "")
+            # Only queue records that have an inventory URL to download from.
+        ]
+
+        # Local history records missing their video file on disk.
+        local_missing = [
+            r for r in self._store.all_records()
+            if r.media_type in ("video", "animate") and not r.video_exists and r.id
+        ]
+
+        total = len(remote_pending) + len(local_missing)
+        if total == 0:
+            self._set_status("All videos are already cached locally — nothing to download.")
             return
 
-        self._set_status(f"Syncing {len(candidates)} missing video(s)…")
+        self._set_status(f"Downloading {total} video(s) to local library…")
 
         def _worker():
             import requests as _req  # noqa: PLC0415
             done = 0
             failed = 0
-            for rec in candidates:
+            localized: list = []  # (old_id, new_GenerationRecord) pairs
+
+            # ── Remote records → VIDEOS_DIR warm copy ────────────────────────
+            for rec in remote_pending:
                 try:
-                    dest = Path(rec.video_path)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    inv_url = (rec.extra_meta or {}).get("_inventory_video_url", "")
-                    if inv_url:
-                        # Remote inventory record — stream from inventory server.
-                        r = _req.get(inv_url, stream=True, timeout=120)
-                        r.raise_for_status()
-                        with open(dest, "wb") as fh:
-                            for chunk in r.iter_content(65_536):
-                                fh.write(chunk)
-                        # Cache thumbnail too while we're at it.
-                        thumb_url  = (rec.extra_meta or {}).get("_inventory_thumbnail_url", "")
-                        thumb_dest = Path(rec.thumbnail_path)
-                        if thumb_url and not thumb_dest.exists():
-                            try:
-                                tr = _req.get(thumb_url, stream=True, timeout=15)
-                                if tr.status_code == 200:
-                                    thumb_dest.parent.mkdir(parents=True, exist_ok=True)
-                                    with open(thumb_dest, "wb") as fh:
-                                        for chunk in tr.iter_content(65_536):
-                                            fh.write(chunk)
-                            except Exception:
-                                pass
-                    else:
-                        # Local history record — use inference-server API.
-                        self._client.download(rec.id, dest)
+                    inv_url   = (rec.extra_meta or {}).get("_inventory_video_url", "")
+                    thumb_url = (rec.extra_meta or {}).get("_inventory_thumbnail_url", "")
+                    if not inv_url:
+                        continue
+
+                    v_filename = Path(_up(inv_url).path).name or f"gen_{rec.id[:8]}.mp4"
+                    dest = VIDEOS_DIR / v_filename
+                    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+
+                    r = _req.get(inv_url, stream=True, timeout=120)
+                    r.raise_for_status()
+                    with open(dest, "wb") as fh:
+                        for chunk in r.iter_content(65_536):
+                            fh.write(chunk)
+
+                    # Thumbnail — save to THUMBNAILS_DIR if possible.
+                    new_thumb = rec.thumbnail_path  # fallback: remote-cache path
+                    if thumb_url:
+                        t_filename = Path(_up(thumb_url).path).name or ""
+                        if t_filename:
+                            thumb_dest = THUMBNAILS_DIR / t_filename
+                            THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+                            if not thumb_dest.exists():
+                                try:
+                                    tr = _req.get(thumb_url, stream=True, timeout=15)
+                                    if tr.status_code == 200:
+                                        with open(thumb_dest, "wb") as fh:
+                                            for chunk in tr.iter_content(65_536):
+                                                fh.write(chunk)
+                                except Exception:
+                                    pass
+                            new_thumb = str(thumb_dest)
+
+                    # Build a localized record with main-storage paths.
+                    clean_meta = {k: v for k, v in (rec.extra_meta or {}).items()
+                                  if not k.startswith("_inventory_") and k != "_is_remote"}
+                    localized.append(_dc.replace(
+                        rec,
+                        video_path=str(dest),
+                        thumbnail_path=new_thumb,
+                        extra_meta=clean_meta,
+                    ))
                     done += 1
                     GLib.idle_add(
                         self._set_status,
-                        f"Syncing… {done + failed}/{len(candidates)} "
-                        f"({done} downloaded, {failed} failed)",
+                        f"Downloading… {done + failed}/{total} "
+                        f"({done} done, {failed} failed)",
+                    )
+                except Exception:
+                    failed += 1
+
+            # ── Local records with missing video → inference-server API ───────
+            for rec in local_missing:
+                try:
+                    dest = Path(rec.video_path)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    self._client.download(rec.id, dest)
+                    done += 1
+                    GLib.idle_add(
+                        self._set_status,
+                        f"Downloading… {done + failed}/{total} "
+                        f"({done} done, {failed} failed)",
                     )
                 except Exception:
                     failed += 1
 
             def _finish():
+                # Persist all newly-localized records and remove from remote dict.
+                for loc_rec in localized:
+                    self._store.append(loc_rec)
+                    self._remote_records.pop(loc_rec.id, None)
                 if failed:
                     self._set_status(
-                        f"Sync complete: {done} downloaded, {failed} unavailable."
+                        f"Download complete: {done} cached locally, {failed} unavailable."
                     )
                 else:
-                    self._set_status(f"Sync complete: {done} video(s) cached locally.")
-                # Refresh gallery so newly-downloaded cards show their video.
+                    self._set_status(f"Downloaded {done} video(s) to local library.")
                 self._load_history()
                 return False
 

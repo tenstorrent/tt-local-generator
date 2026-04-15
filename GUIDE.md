@@ -26,6 +26,7 @@ to interact with it.
 10. [Chaining Generations into Longer Videos](#10-chaining-generations-into-longer-videos)
 11. [Adding a Prompt Generator](#11-adding-a-prompt-generator)
 12. [How Configuration Options Affect Output](#12-how-configuration-options-affect-output)
+13. [Running the GUI Remotely (macOS or another Linux machine)](#13-running-the-gui-remotely-macos-or-another-linux-machine)
 
 ---
 
@@ -559,13 +560,18 @@ cd ~/code/tt-local-generator
 
 # Always use the system python3, not a venv interpreter
 /usr/bin/python3 main.py
+# Or use the launcher:
+./tt-gen
 ```
 
 To point at a different server (e.g., remote or non-default port):
 
 ```bash
-/usr/bin/python3 main.py --server http://192.168.1.50:8000
+./tt-gen --server http://192.168.1.50:8000
 ```
+
+The `--server` flag sets the inference server address. The prompt server (port 8001)
+and inventory server (port 8002) are automatically derived from the same hostname.
 
 ### 8.3  UI walkthrough
 
@@ -996,6 +1002,115 @@ appearance.
 same way as a true image-to-video model. Results are stylistically influenced
 but not strictly consistent. For true I2V generation, a dedicated model like
 Wan2.2-I2V would be more appropriate.
+
+---
+
+---
+
+## 13. Running the GUI Remotely (macOS or another Linux machine)
+
+The GUI is a pure HTTP client — it never imports any TT hardware libraries. This
+means it runs on any machine that can reach the inference server over the network,
+including a macOS laptop or a second Ubuntu workstation. No Tenstorrent hardware is
+required on the client machine.
+
+### 13.1  What runs where
+
+```
+TT machine (Ubuntu, Blackhole/QB2)          Client machine (macOS or Linux laptop)
+────────────────────────────────────        ──────────────────────────────────────
+Docker container (port 8000)          HTTP  ./tt-gen --server http://tt-machine:8000
+Qwen prompt server (port 8001)  ◄──────────
+tt-ctl serve-inventory (port 8002)
+```
+
+### 13.2  Start the inventory server on the TT machine
+
+The inventory server exposes your local video library (metadata + media files) over
+HTTP so the remote GUI can browse and download it:
+
+```bash
+# On the TT machine:
+./tt-ctl serve-inventory               # listens on 0.0.0.0:8002
+./tt-ctl serve-inventory --port 9000   # custom port
+
+# Verify it is up:
+curl http://localhost:8002/inventory/health
+# → {"status": "ok", "records": 47}
+```
+
+Keep this running in a tmux pane or screen session alongside the inference server.
+
+### 13.3  Launch the GUI on the client machine
+
+```bash
+./tt-gen --server http://tt-machine:8000
+```
+
+Replace `tt-machine` with the hostname or IP of your TT machine. The GUI
+automatically derives:
+- Prompt server: `http://tt-machine:8001`
+- Inventory server: `http://tt-machine:8002`
+
+On startup the app:
+1. Fetches `http://tt-machine:8002/inventory/records` — the full video library
+2. Downloads thumbnails eagerly to `~/.local/share/tt-video-gen/remote-cache/tt-machine/`
+3. Merges remote records into the gallery (shown with their original prompts and metadata)
+
+### 13.4  Downloading videos from the remote library
+
+Click any remote card to open the detail panel. Two buttons appear:
+
+- **"Download from Remote Library"** — streams the MP4 from the inventory server
+  directly to `~/.local/share/tt-video-gen/videos/` on the client. Progress is
+  shown in the status bar. Once downloaded the video plays inline.
+- **"⧉ Open externally"** — opens the video URL in the system player
+  (`open` on macOS, `xdg-open` on Linux) without downloading it first. Useful
+  when you just want to watch without storing a local copy.
+
+### 13.5  Generating videos from the remote machine
+
+The "Generate" button works identically when pointing at a remote server — it
+submits to the inference server on the TT machine and polls for completion.
+Finished videos are downloaded automatically and added to the local gallery.
+
+### 13.6  macOS setup
+
+Install the required GTK4 stack via Homebrew:
+
+```bash
+./bin/setup_macos.sh
+```
+
+Or manually:
+
+```bash
+brew install python@3.12 pygobject3 gtk4 gdk-pixbuf pango \
+    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav ffmpeg
+pip3 install requests markovify pyyaml
+```
+
+> **Note on GStreamer on macOS:** inline video hover-previews work when the
+> gst-libav plugin is installed. If you see blank video widgets, try
+> `brew reinstall gst-libav` and restart the app. The "⧉ Open externally"
+> button is always available as a fallback.
+
+### 13.7  Firewall / port access
+
+The client needs TCP access to three ports on the TT machine:
+
+| Port | Service | Required |
+|------|---------|---------|
+| 8000 | Inference server | Yes |
+| 8001 | Prompt server (Qwen) | No — prompt generation degrades gracefully |
+| 8002 | Inventory server | No — remote gallery is unavailable without it |
+
+On UFW:
+```bash
+sudo ufw allow 8000/tcp
+sudo ufw allow 8001/tcp
+sudo ufw allow 8002/tcp
+```
 
 ---
 

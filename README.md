@@ -34,6 +34,8 @@ tt-local-generator/
     attractor.py         ← AttractorWindow — kiosk loop
     chip_config.py       ← chip definitions from config/
     app_settings.py      ← persistent settings
+    inventory_server.py  ← stdlib HTTP server (port 8002) for remote gallery access
+    server_config.py     ← per-service host/port/token config (~/.config/tt-video-gen/)
     assets/              ← tenstorrent.png icon, .desktop entry
     prompts/             ← Markov seed corpus, system prompt
     config/              ← prompt_chips.yaml
@@ -47,6 +49,8 @@ tt-local-generator/
     start_prompt_gen.sh  ← Qwen3-0.6B prompt server (CPU, port 8001)
     apply_patches.sh     ← apply patches/ to vendor/ or ~/code/tt-inference-server
     best_experience_services.sh  ← start Wan2.2 + prompt server together
+    setup_ubuntu.sh      ← one-shot Ubuntu 24.04 setup (GTK4, GStreamer, Docker)
+    setup_macos.sh       ← one-shot macOS setup (Homebrew GTK4, GStreamer)
   patches/               ← hotpatch files applied by apply_patches.sh
     media_server_config/ ← constants.py, runner, and domain overrides
     tt_dit/              ← pipeline fixes incl. SkyReels-V2 (dev_mode only)
@@ -56,7 +60,7 @@ tt-local-generator/
   docker/                ← Docker image archive (Git LFS)
     tt-media-inference-server-0.11.1-bac8b34.tar.gz
     README.md
-  tests/                 ← pytest test suite (83 tests)
+  tests/                 ← pytest test suite (196 tests)
   tt-gen                 ← launcher: starts the GUI
   tt-ctl                 ← CLI: status, history, start/stop services
   requirements.txt
@@ -127,6 +131,8 @@ cd ~/code/tt-local-generator
 ./tt-ctl history          # 10 most recent generations (newest first)
 ./tt-ctl history 25       # show last 25 instead
 ./tt-ctl recover          # list server jobs not in local history
+./tt-ctl serve-inventory          # start inventory server (port 8002) for remote GUI access
+./tt-ctl serve-inventory --port 9000  # custom port
 
 # Run a generation now (blocking)
 ./tt-ctl run "a red fox"
@@ -225,11 +231,28 @@ cd ~/code/tt-local-generator
 - **CLI companion (`tt-ctl`)** — `./tt-ctl run "a prompt"` submits a job from the terminal;
   `./tt-ctl status` shows server health, chip temps, and recent history. Scriptable.
 
+### Remote library access
+
+Run the GUI on any machine (macOS laptop, remote workstation) against a Tenstorrent server
+and still browse, play, and download the full video library:
+
+- **`--server http://host:8000`** — point the GUI at any reachable TT inference server; the
+  app automatically derives the prompt-server and inventory-server addresses from the hostname.
+- **`tt-ctl serve-inventory`** — run this on the TT machine to start a lightweight stdlib HTTP
+  server (port 8002) that exposes all local media and metadata over HTTP. No extra dependencies.
+- **Remote gallery** — the GUI fetches the remote inventory on startup, thumbnails eagerly,
+  and merges remote records into the gallery alongside any local generations.
+- **"Download from Remote Library"** — click the button in the detail panel to stream an
+  MP4 from the remote inventory server directly to your local `~/.local/share/tt-video-gen/`.
+- **"⧉ Open externally"** — opens the video in the system player (useful on macOS when
+  GStreamer inline playback is not available).
+
 ---
 
 ## Requirements
 
-- Ubuntu 22.04+ (24.04 recommended)
+### Ubuntu 22.04 / 24.04 (recommended for TT hardware)
+
 - Tenstorrent QB2 (P300x2) for Wan2.2 and Mochi-1; 4× p300c for FLUX
 - Docker
 - System `python3` with `python3-gi` (GTK4 bindings — not pip-installable)
@@ -238,6 +261,25 @@ cd ~/code/tt-local-generator
 ```bash
 sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 ffmpeg \
     libgtk-4-media-gstreamer gstreamer1.0-libav
+# Or run the automated setup:
+./bin/setup_ubuntu.sh
+```
+
+### macOS (GUI client against a remote TT server)
+
+The GUI runs on macOS for remote development — no TT hardware required on the Mac.
+Use `--server http://your-tenstorrent-machine:8000` to point at a remote server.
+
+```bash
+brew install python@3.12 pygobject3 gtk4 gdk-pixbuf pango \
+    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav ffmpeg
+# Or run the automated setup:
+./bin/setup_macos.sh
+```
+
+Then launch with:
+```bash
+./tt-gen --server http://your-tt-machine:8000
 ```
 
 Optional for LLM prompt polish:
@@ -293,7 +335,7 @@ The `.env` in `vendor/tt-inference-server/` controls Docker container environmen
 ## Running tests
 
 ```bash
-/usr/bin/python3 -m pytest tests/ -q   # 107 tests, all should pass
+/usr/bin/python3 -m pytest tests/ -q   # 196 tests, all should pass
 ```
 
 ---
