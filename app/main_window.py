@@ -48,6 +48,17 @@ import attractor
 import prompt_client
 import server_manager as _sm
 
+# On macOS the Homebrew GTK4 bottle ships without libmedia-gstreamer.dylib,
+# so Gtk.Video always returns None from get_media_stream() and shows a blank
+# frame.  When this flag is True we skip all Gtk.Video widgets and route video
+# playback through the macOS system player (QuickTime via `open`).
+_USE_SYSTEM_PLAYER: bool = sys.platform == "darwin"
+
+# On macOS, import GstPlayer which uses gtk4paintablesink to render video into
+# a Gtk.Picture without needing libmedia-gstreamer (absent from the Homebrew
+# GTK4 bottle).  On Linux, Gtk.Video works normally and this import is skipped.
+if _USE_SYSTEM_PLAYER:
+    from gst_player import GstPlayer  # noqa: E402
 
 # ── Tenstorrent dark palette as GTK CSS ───────────────────────────────────────
 
@@ -1463,20 +1474,31 @@ class GenerationCard(Gtk.Frame):
         )
         self._media_stack.add_named(thumb, "thumb")
 
-        if self._record.video_exists:
-            # Create the widget without a file so no GStreamer pipeline is opened
-            # at construction time.  With a large history every card would eagerly
-            # open a pipeline, each holding several file-descriptors.  We load the
-            # file lazily (just before first play) and unload it (set_file(None))
-            # when the card stops playing, so only actively-playing cards hold fds.
+        if self._record.video_exists and not _USE_SYSTEM_PLAYER:
+            # Linux: Create Gtk.Video without a file so no GStreamer pipeline is
+            # opened at construction time.  With a large history every card would
+            # eagerly open a pipeline, holding several file-descriptors each.
+            # We load lazily (just before first play) and unload (set_file(None))
+            # when done, so only actively-playing cards hold fds.
             self._hover_video = Gtk.Video()
             self._hover_video.set_autoplay(False)
             self._hover_video.set_loop(True)
             self._hover_video.set_hexpand(True)
             self._hover_video.set_size_request(_THUMB_W, _THUMB_H)
             self._media_stack.add_named(self._hover_video, "video")
+            self._hover_gst = None   # macOS-only; always None on Linux
+        elif self._record.video_exists:
+            # macOS: GTK4 Homebrew bottle lacks libmedia-gstreamer.dylib; use
+            # gtk4paintablesink (GstPlayer) to render inline video into a Gtk.Picture
+            # without needing to recompile GTK4.
+            self._hover_gst = GstPlayer(muted=True)
+            self._hover_gst.widget.set_hexpand(True)
+            self._hover_gst.widget.set_size_request(_THUMB_W, _THUMB_H)
+            self._media_stack.add_named(self._hover_gst.widget, "video")
+            self._hover_video = None
         else:
             self._hover_video = None
+            self._hover_gst = None
         # Tracks whether we've wired notify::ended on the media stream for manual
         # looping.  The stream is created lazily by GStreamer (it's None until the
         # Video widget is first realized), so we connect on first play attempt.
@@ -1594,6 +1616,17 @@ class GenerationCard(Gtk.Frame):
         """Start looping the video silently when the mouse enters the card.
         Also reveals the hover action bar (if action callbacks were provided)."""
         self._action_revealer.set_reveal_child(True)
+        if _USE_SYSTEM_PLAYER:
+            # macOS: load and play via GstPlayer (gtk4paintablesink → Gtk.Picture)
+            gst = getattr(self, "_hover_gst", None)
+            if gst is None or not gst.available:
+                return
+            gst.load(self._record.video_path)
+            gst.set_on_eos(self._on_gst_eos)
+            gst.play()
+            self._media_stack.set_visible_child_name("video")
+            return
+        # Linux: Gtk.Video path
         if self._hover_video is None:
             return
         if not self._hover_pipeline_open:
@@ -1628,10 +1661,26 @@ class GenerationCard(Gtk.Frame):
             stream.seek(0)
             GLib.idle_add(stream.play)
 
+    def _on_gst_eos(self) -> None:
+        """Loop the GstPlayer hover video when it reaches end-of-stream (macOS)."""
+        gst = getattr(self, "_hover_gst", None)
+        if gst is None:
+            return
+        gst.seek(0)
+        gst.play()
+
     def _on_hover_leave(self, _ctrl) -> None:
         """Stop the video and revert to the thumbnail when the mouse leaves.
         Also hides the hover action bar."""
         self._action_revealer.set_reveal_child(False)
+        if _USE_SYSTEM_PLAYER:
+            # macOS: tear down the GstPlayer pipeline to release file-descriptors
+            gst = getattr(self, "_hover_gst", None)
+            if gst is not None:
+                gst.close()
+            self._media_stack.set_visible_child_name("thumb")
+            return
+        # Linux: Gtk.Video path
         if self._hover_video is None:
             return
         self._close_hover_pipeline()
@@ -1703,6 +1752,8 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._record: Optional[GenerationRecord] = None
         self._iterate_cb = None
         self._video_widget: Optional[Gtk.Video] = None
+        # macOS inline player via gtk4paintablesink; always None on Linux
+        self._gst_player = None
         self._play_btn: Optional[Gtk.Button] = None
         # Callable(record_id: str, dest_path: Path) → None — injected by MainWindow.
         # When provided, a "Download from server" button appears for missing videos.
@@ -1737,6 +1788,12 @@ class DetailPanel(Gtk.ScrolledWindow):
             # async widget destruction to trigger it.
             self._video_widget.set_file(None)
         self._video_widget = None
+        # macOS: tear down the GstPlayer pipeline if one was created for the
+        # previous record.  This releases the file-descriptor early instead of
+        # waiting for widget destruction.
+        if self._gst_player is not None:
+            self._gst_player.close()
+            self._gst_player = None
         self._play_btn = None
         self._show_empty()
 
@@ -1755,6 +1812,10 @@ class DetailPanel(Gtk.ScrolledWindow):
                 stream.pause()
             self._video_widget.set_file(None)
         self._video_widget = None
+        # macOS: close the previous GstPlayer pipeline before building a new one
+        if self._gst_player is not None:
+            self._gst_player.close()
+            self._gst_player = None
         self._play_btn = None
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -1784,65 +1845,121 @@ class DetailPanel(Gtk.ScrolledWindow):
             img_ctrl.append(open_full_btn)
             content.append(img_ctrl)
         elif record.video_exists:
-            # Wan2.2 video — inline player with play/pause + fullscreen
-            self._video_widget = Gtk.Video.new_for_filename(record.video_path)
-            self._video_widget.set_autoplay(False)
-            self._video_widget.set_loop(True)
-            self._video_widget.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
-            self._video_widget.set_hexpand(False)
-            self._video_widget.set_halign(Gtk.Align.START)
-            content.append(self._video_widget)
-
-            # Wire GStreamer error reporting.  The media stream is created lazily
-            # (None until the Gtk.Video widget is realised), so we retry until
-            # it's available.  This surfaces codec / backend errors in the
-            # terminal (stderr) and via a status-bar flash rather than silently
-            # showing a blank frame.
-            _video_ref = self._video_widget
-
-            def _connect_stream_error(play_btn_ref=self._play_btn if hasattr(self, '_play_btn') else None):
-                if _video_ref is None or _video_ref.get_parent() is None:
-                    return False  # widget was replaced — stop retry
-                stream = _video_ref.get_media_stream()
-                if stream is None:
-                    return True  # not realised yet — retry in 200 ms
-                def _on_stream_error(s, _param):
-                    err = s.get_error()
-                    if err:
-                        import logging as _log
-                        _log.getLogger(__name__).warning(
-                            "GTK media stream error (path=%s): %s",
-                            record.video_path, err.message,
+            if _USE_SYSTEM_PLAYER:
+                # macOS: GTK4 Homebrew bottle lacks libmedia-gstreamer.dylib so
+                # Gtk.Video shows a blank frame.  Use GstPlayer (gtk4paintablesink
+                # → Gtk.Picture) for true inline video without a GTK4 recompile.
+                self._gst_player = GstPlayer(muted=False)
+                if self._gst_player.available:
+                    self._gst_player.widget.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
+                    self._gst_player.widget.set_halign(Gtk.Align.START)
+                    content.append(self._gst_player.widget)
+                    self._gst_player.load(record.video_path)
+                    # Auto-play immediately — matches hover behaviour.
+                    # The EOS callback loops seamlessly; the play button starts
+                    # as "⏸ Pause" to reflect that playback is already running.
+                    self._gst_player.play()
+                    # Re-use a closure that captures the player reference so EOS
+                    # looping still works if the panel is rebuilt (self._gst_player
+                    # may be replaced before the callback fires).
+                    _player_ref = self._gst_player
+                    _play_btn_ref = [None]   # filled in below after button is created
+                    def _on_detail_eos(p=_player_ref, btn=_play_btn_ref):
+                        p.seek(0)
+                        p.play()
+                        # Keep button label in sync after EOS-triggered restart
+                        if btn[0] is not None:
+                            btn[0].set_label("⏸ Pause")
+                    self._gst_player.set_on_eos(_on_detail_eos)
+                    ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                    self._play_btn = Gtk.Button(label="⏸ Pause")
+                    _play_btn_ref[0] = self._play_btn
+                    self._play_btn.connect("clicked", self._toggle_play)
+                    ctrl_row.append(self._play_btn)
+                    ext_btn = Gtk.Button(label="⧉ Open externally")
+                    ext_btn.set_tooltip_text(
+                        "Open the video in QuickTime or the system default player"
+                    )
+                    ext_btn.connect("clicked", self._open_external)
+                    ctrl_row.append(ext_btn)
+                    content.append(ctrl_row)
+                else:
+                    # gtk4paintablesink not available — fall back to static
+                    # thumbnail with a button to open in QuickTime.
+                    if record.thumbnail_exists:
+                        thumb_widget = _make_image_widget(
+                            record.thumbnail_path, _DETAIL_VIDEO_W, _DETAIL_VIDEO_H
                         )
-                        print(
-                            f"[GTK video] GStreamer error: {err.message}\n"
-                            f"  path: {record.video_path}\n"
-                            f"  hint: check GST_PLUGIN_PATH / install gst-libav",
-                            file=__import__('sys').stderr,
+                    else:
+                        thumb_widget = _make_image_widget(
+                            "", _DETAIL_VIDEO_W, _DETAIL_VIDEO_H, "🎬"
                         )
-                stream.connect("notify::error", _on_stream_error)
-                return False  # connected — stop retry
+                    thumb_widget.set_halign(Gtk.Align.START)
+                    content.append(thumb_widget)
+                    ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                    ext_btn = Gtk.Button(label="▶ Open in QuickTime")
+                    ext_btn.set_tooltip_text(
+                        "Open the video in the system default player (QuickTime)"
+                    )
+                    ext_btn.connect("clicked", self._open_external)
+                    ctrl_row.append(ext_btn)
+                    content.append(ctrl_row)
+            else:
+                # Linux (or macOS with GStreamer backend): inline Gtk.Video player
+                self._video_widget = Gtk.Video.new_for_filename(record.video_path)
+                self._video_widget.set_autoplay(False)
+                self._video_widget.set_loop(True)
+                self._video_widget.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
+                self._video_widget.set_hexpand(False)
+                self._video_widget.set_halign(Gtk.Align.START)
+                content.append(self._video_widget)
 
-            GLib.timeout_add(200, _connect_stream_error)
+                # Wire GStreamer error reporting.  The media stream is created lazily
+                # (None until the Gtk.Video widget is realised), so we retry until
+                # it's available.  This surfaces codec / backend errors in the
+                # terminal (stderr) rather than silently showing a blank frame.
+                _video_ref = self._video_widget
 
-            ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            self._play_btn = Gtk.Button(label="▶ Play")
-            self._play_btn.connect("clicked", self._toggle_play)
-            ctrl_row.append(self._play_btn)
-            full_btn = Gtk.Button(label="⛶ Fullscreen")
-            full_btn.set_tooltip_text("Open in maximized window (F for true fullscreen)")
-            full_btn.connect("clicked", self._open_fullscreen)
-            ctrl_row.append(full_btn)
-            # "Open in system player" — fallback for macOS where GStreamer/GTK
-            # video backend may not be available (shows blank frame in Gtk.Video).
-            ext_btn = Gtk.Button(label="⧉ Open externally")
-            ext_btn.set_tooltip_text(
-                "Open the video in the system default player (e.g. QuickTime on macOS, "
-                "totem/mpv on Linux) — useful if inline playback is blank."
-            )
-            ext_btn.connect("clicked", self._open_external)
-            ctrl_row.append(ext_btn)
-            content.append(ctrl_row)
+                def _connect_stream_error(play_btn_ref=self._play_btn if hasattr(self, '_play_btn') else None):
+                    if _video_ref is None or _video_ref.get_parent() is None:
+                        return False  # widget was replaced — stop retry
+                    stream = _video_ref.get_media_stream()
+                    if stream is None:
+                        return True  # not realised yet — retry in 200 ms
+                    def _on_stream_error(s, _param):
+                        err = s.get_error()
+                        if err:
+                            import logging as _log
+                            _log.getLogger(__name__).warning(
+                                "GTK media stream error (path=%s): %s",
+                                record.video_path, err.message,
+                            )
+                            print(
+                                f"[GTK video] GStreamer error: {err.message}\n"
+                                f"  path: {record.video_path}\n"
+                                f"  hint: check GST_PLUGIN_PATH / install gst-libav",
+                                file=__import__('sys').stderr,
+                            )
+                    stream.connect("notify::error", _on_stream_error)
+                    return False  # connected — stop retry
+
+                GLib.timeout_add(200, _connect_stream_error)
+
+                ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                self._play_btn = Gtk.Button(label="▶ Play")
+                self._play_btn.connect("clicked", self._toggle_play)
+                ctrl_row.append(self._play_btn)
+                full_btn = Gtk.Button(label="⛶ Fullscreen")
+                full_btn.set_tooltip_text("Open in maximized window (F for true fullscreen)")
+                full_btn.connect("clicked", self._open_fullscreen)
+                ctrl_row.append(full_btn)
+                ext_btn = Gtk.Button(label="⧉ Open externally")
+                ext_btn.set_tooltip_text(
+                    "Open the video in the system default player (e.g. totem/mpv on Linux)"
+                )
+                ext_btn.connect("clicked", self._open_external)
+                ctrl_row.append(ext_btn)
+                content.append(ctrl_row)
         else:
             # Video file missing — show large thumbnail or placeholder, and
             # offer a download button if there is any download source available.
@@ -2025,6 +2142,20 @@ class DetailPanel(Gtk.ScrolledWindow):
 
     def _toggle_play(self, _btn) -> None:
         import sys as _sys
+        if _USE_SYSTEM_PLAYER:
+            # macOS: drive playback through GstPlayer (gtk4paintablesink)
+            if self._gst_player is None:
+                return
+            if self._gst_player.get_playing():
+                self._gst_player.pause()
+                if self._play_btn:
+                    self._play_btn.set_label("▶ Play")
+            else:
+                self._gst_player.play()
+                if self._play_btn:
+                    self._play_btn.set_label("⏸ Pause")
+            return
+        # Linux: drive playback through Gtk.Video / GStreamer media stream
         if self._video_widget is None:
             return
         stream = self._video_widget.get_media_stream()
@@ -2542,7 +2673,14 @@ class GalleryWidget(Gtk.Box):
         """Release every open hover-preview pipeline. Called before launching Attractor Mode."""
         for card in self._video_cards():
             try:
-                card._close_hover_pipeline()
+                if _USE_SYSTEM_PLAYER:
+                    # macOS: close GstPlayer pipeline to release fds
+                    gst = getattr(card, "_hover_gst", None)
+                    if gst is not None:
+                        gst.close()
+                else:
+                    # Linux: release Gtk.Video pipeline
+                    card._close_hover_pipeline()
                 card._media_stack.set_visible_child_name("thumb")
             except Exception:
                 pass

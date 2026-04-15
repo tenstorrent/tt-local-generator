@@ -15,10 +15,22 @@ import datetime
 import logging
 import random
 import shutil
+import sys
 import threading
 import traceback
 from pathlib import Path
 from typing import Callable
+
+# On macOS the Homebrew GTK4 bottle lacks libmedia-gstreamer.dylib so
+# Gtk.Video is always a blank frame.  TT-TV uses GstPlayer (playbin +
+# gtk4paintablesink → Gtk.Picture) for inline video on macOS instead.
+_USE_SYSTEM_PLAYER: bool = sys.platform == "darwin"
+
+# On macOS, import GstPlayer which uses gtk4paintablesink to render video into
+# a Gtk.Picture without needing libmedia-gstreamer (absent from the Homebrew
+# GTK4 bottle).  On Linux, Gtk.Video works normally so this import is skipped.
+if _USE_SYSTEM_PLAYER:
+    from gst_player import GstPlayer  # noqa: E402
 
 import gi
 gi.require_version("Gtk", "4.0")
@@ -373,16 +385,24 @@ _CSS = b"""
 # ---------------------------------------------------------------------------
 
 def _unload_slot_video(slot: Gtk.Box) -> None:
-    """Pause a slot's Gtk.Video stream before calling set_file(None).
+    """Pause and release the video pipeline for a slot.
 
-    GStreamer's async state machine needs to transition from PLAYING → PAUSED
-    → NULL before it can release file descriptors.  Calling set_file(None)
-    while the stream is still PLAYING starts that transition asynchronously but
-    doesn't block - so hundreds of ms can pass before the fds are freed.
-    Pausing first moves the pipeline to PAUSED synchronously (the gst-play
-    element handles PAUSED immediately), which dramatically shortens the
-    PLAYING→NULL teardown and prevents fd accumulation across rapid advances.
+    On Linux: pauses the Gtk.Video GStreamer stream then calls set_file(None)
+    to start async teardown.  Pausing first dramatically shortens the
+    PLAYING→NULL transition, preventing fd accumulation across rapid advances.
+
+    On macOS: closes the GstPlayer pipeline (puts the pipeline in NULL state
+    and disconnects the bus).  The Gtk.Video widget is a no-op on macOS.
     """
+    # macOS GstPlayer path
+    gst = getattr(slot, "_gst_player", None)
+    if gst is not None:
+        try:
+            gst.close()
+        except Exception:
+            pass
+
+    # Linux Gtk.Video path (harmless no-op on macOS since no file is loaded)
     stream = slot._video.get_media_stream()
     if stream is not None:
         try:
@@ -569,10 +589,37 @@ class AttractorWindow(Gtk.Window):
                 pass
         self._watched_stream = None
         self._stream_handler_id = None
+        # macOS: close any open GstPlayer pipelines so fds are released promptly.
+        if _USE_SYSTEM_PLAYER:
+            for slot in (self._slot_a, self._slot_b):
+                gst = getattr(slot, "_gst_player", None)
+                if gst is not None:
+                    try:
+                        gst.close()
+                    except Exception:
+                        pass
 
     def _toggle_pause(self) -> None:
         """Toggle playback pause. Generation loop is unaffected."""
         self._paused = not self._paused
+        if _USE_SYSTEM_PLAYER:
+            # macOS: drive playback through GstPlayer (gtk4paintablesink).
+            slot = self._slot_b if self._active_slot_name == "b" else self._slot_a
+            gst = getattr(slot, "_gst_player", None)
+            if gst is not None and gst.widget.get_visible():
+                # Currently showing a video in the GstPlayer
+                if self._paused:
+                    gst.pause()
+                else:
+                    gst.play()
+            else:
+                # Showing an image — pause just cancels/resumes the dwell timer
+                if not self._paused:
+                    try:
+                        self._schedule_advance(self._pool.current_record())
+                    except RuntimeError:
+                        pass  # pool empty — nothing to reschedule
+            return
         stream = self._get_current_video_stream()
         if stream:
             if self._paused:
@@ -587,8 +634,11 @@ class AttractorWindow(Gtk.Window):
         root_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root_vbox)
 
-        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        # Paned gives the user a draggable handle to resize the sidebar.
+        # set_position(180) starts the sidebar narrower than the old fixed width.
+        outer = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         outer.set_vexpand(True)
+        outer.set_wide_handle(True)  # wider grab-handle, easier to drag
 
         # ── Sidebar ───────────────────────────────────────────────────────
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -739,7 +789,10 @@ class AttractorWindow(Gtk.Window):
         stop_btn.connect("clicked", lambda _: self.close())
         sidebar.append(stop_btn)
 
-        outer.append(sidebar)
+        outer.set_start_child(sidebar)
+        outer.set_position(180)           # initial sidebar width in pixels
+        outer.set_shrink_start_child(True)   # allow sidebar to be dragged narrower
+        outer.set_shrink_end_child(False)    # prevent player area from disappearing
 
         # ── Media player ──────────────────────────────────────────────────
         player_overlay = Gtk.Overlay()
@@ -806,25 +859,43 @@ class AttractorWindow(Gtk.Window):
         self._channel_flash.add_css_class("channel-flash")
         player_overlay.add_overlay(self._channel_flash)
 
-        outer.append(player_overlay)
+        outer.set_end_child(player_overlay)
         root_vbox.append(outer)
         root_vbox.append(self._build_att_status_bar())
 
     def _make_slot(self) -> Gtk.Box:
         """
-        Create a media slot: a Gtk.Box holding one Gtk.Video and one Gtk.Picture.
+        Create a media slot: a Gtk.Box holding one video widget and one Gtk.Picture.
         Only one is visible at a time based on the media type being displayed.
+
+        On Linux the video widget is Gtk.Video (drives libmedia-gstreamer).
+        On macOS the video widget is a GstPlayer (drives gtk4paintablesink) because
+        the Homebrew GTK4 bottle ships without libmedia-gstreamer.dylib.
         """
         box = Gtk.Box()
         box.set_hexpand(True)
         box.set_vexpand(True)
 
+        # Gtk.Video is present for structural compatibility on both platforms, but
+        # on macOS it is never shown (no GStreamer backend in the bottle).
         vid = Gtk.Video()
         vid.set_hexpand(True)
         vid.set_vexpand(True)
         vid.set_autoplay(True)
         box._video = vid
-        box.append(vid)
+
+        if _USE_SYSTEM_PLAYER:
+            # macOS: use GstPlayer (gtk4paintablesink → Gtk.Picture) for video.
+            # Gtk.Video is not added to the layout — it has no working backend.
+            gst = GstPlayer(muted=False)
+            gst.widget.set_hexpand(True)
+            gst.widget.set_vexpand(True)
+            gst.widget.set_visible(False)   # hidden until a video is loaded
+            box._gst_player = gst
+            box.append(gst.widget)
+        else:
+            box._gst_player = None
+            box.append(vid)
 
         pic = Gtk.Picture()
         pic.set_hexpand(True)
@@ -1056,22 +1127,48 @@ class AttractorWindow(Gtk.Window):
     def _load_slot(self, slot: Gtk.Box, record) -> None:
         """
         Load a GenerationRecord into a media slot widget.
-        Shows either the Gtk.Picture (images) or Gtk.Video (videos),
-        hiding the other widget.
 
-        For video records, a fresh Gtk.Video widget is created each time.
-        The old widget is detached from the slot and queued in
-        _video_graveyard; _flush_video_graveyard() finalizes it 3 seconds
-        later (well after the new pipeline is running) to avoid the
-        PLAYING→NULL async teardown racing with the new pipeline and leaking
-        file descriptors (EMFILE).
+        Images:  Always shown via Gtk.Picture (thumbnail still).
+        Videos on Linux:  A fresh Gtk.Video widget is created each time.
+                          The old widget lands in _video_graveyard for deferred
+                          teardown 3 s later (prevents EMFILE from PLAYING→NULL races).
+        Videos on macOS:  Loaded via GstPlayer (gtk4paintablesink → Gtk.Picture)
+                          because the Homebrew GTK4 bottle ships without
+                          libmedia-gstreamer.dylib and Gtk.Video is always blank.
+                          EOS fires the _on_gst_eos callback, which triggers advance.
         """
-        if getattr(record, "media_type", "video") == "image":
+        media_type = getattr(record, "media_type", "video")
+        if media_type == "image":
+            # Still image: show Gtk.Picture thumbnail, hide all video widgets.
             slot._video.set_visible(False)
-            path = getattr(record, "image_path", None) or getattr(record, "thumbnail_path", None)
+            if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
+                slot._gst_player.close()
+                slot._gst_player.widget.set_visible(False)
+            path = (getattr(record, "thumbnail_path", None)
+                    or getattr(record, "image_path", None))
             if path:
                 slot._picture.set_filename(path)
             slot._picture.set_visible(True)
+        elif _USE_SYSTEM_PLAYER:
+            # macOS video: use GstPlayer (gtk4paintablesink → Gtk.Picture).
+            # Gtk.Video has no backend on the Homebrew GTK4 bottle.
+            slot._video.set_visible(False)
+            slot._picture.set_visible(False)
+            path = getattr(record, "video_path", None)
+            gst = slot._gst_player
+            if gst is not None and path:
+                gst.close()                          # tear down any prior pipeline
+                if gst.load(path):
+                    gst.widget.set_visible(True)
+                    gst.play()
+                else:
+                    # Fallback to thumbnail if load fails
+                    gst.widget.set_visible(False)
+                    thumb = (getattr(record, "thumbnail_path", None)
+                             or getattr(record, "image_path", None))
+                    if thumb:
+                        slot._picture.set_filename(thumb)
+                    slot._picture.set_visible(True)
         else:
             slot._picture.set_visible(False)
             path = getattr(record, "video_path", None)
@@ -1124,11 +1221,21 @@ class AttractorWindow(Gtk.Window):
         self._stream_handler_id = None
 
         if getattr(record, "media_type", "video") == "image":
-            # Read image dwell time from settings so live changes take effect
-            # without restarting TT-TV.
+            # Still images always use a fixed dwell timer.
             image_dwell_ms = int(_settings.get("tttv_image_dwell_s") * 1000)
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
+            )
+        elif _USE_SYSTEM_PLAYER:
+            # macOS video: wire the GstPlayer EOS callback to advance.
+            # Also arm a fallback timer in case EOS never fires (corrupt file, etc.).
+            slot = self._slot_b if self._active_slot_name == "b" else self._slot_a
+            gst = getattr(slot, "_gst_player", None)
+            if gst is not None:
+                gst.set_on_eos(self._on_gst_eos)
+            video_fallback_ms = int(_settings.get("tttv_video_fallback_s") * 1000)
+            self._pending_advance_source = GLib.timeout_add(
+                video_fallback_ms, self._on_advance_timer
             )
         else:
             self._connect_video_ended()
@@ -1173,6 +1280,21 @@ class AttractorWindow(Gtk.Window):
         if stream.get_ended() and self._alive:
             _log.debug("notify::ended received - triggering channel change")
             self._trigger_channel_change()
+
+    def _on_gst_eos(self) -> None:
+        """GstPlayer EOS callback on macOS — fires on the GTK main thread via bus.
+
+        Called when the GstPlayer pipeline reaches end-of-stream.  Cancels the
+        fallback timer (so we don't double-advance) and triggers the channel change.
+        """
+        if not self._alive:
+            return
+        # Cancel the fallback timer that was set alongside this EOS callback
+        if self._pending_advance_source is not None:
+            GLib.source_remove(self._pending_advance_source)
+            self._pending_advance_source = None
+        _log.debug("GstPlayer EOS received - triggering channel change")
+        self._trigger_channel_change()
 
     def _retry_connect_stream(self) -> bool:
         """Fallback: GStreamer stream not ready at _schedule_advance time; try again."""

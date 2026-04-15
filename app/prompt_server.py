@@ -43,7 +43,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 parser = argparse.ArgumentParser(description="Lightweight CPU chat server")
 parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
 parser.add_argument("--port", type=int, default=8001)
-parser.add_argument("--host", default="127.0.0.1")
+parser.add_argument("--host", default="0.0.0.0")
 parser.add_argument("--max-new-tokens", type=int, default=512)
 args = parser.parse_args()
 

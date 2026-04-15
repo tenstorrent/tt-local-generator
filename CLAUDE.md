@@ -455,6 +455,13 @@ used only for interactive LLM chat (not by `generate_prompt.py`).
   `tt-inference-server` repo, not `python3 -m workflows.run_workflows`
   (that module imports `benchmarking` which isn't on the path).
 
+- **Prompt server shows "algo only" from remote Mac**: `start_prompt_gen.sh`
+  was hardcoding `--host 127.0.0.1`, binding the server to loopback only.
+  Connections from a Mac client via `--server http://quietbox:8000` were
+  refused at the network level. Fixed by changing to `--host 0.0.0.0`
+  (configurable via `PROMPT_HOST` env var). Restart the server on quietbox
+  after pulling this change.
+
 ---
 
 ## .deb packaging (Ubuntu 24.04)

@@ -181,7 +181,7 @@ PYTHON3="${HOME}/.tenstorrent-venv/bin/python3"
 "$PYTHON3" "$REPO_ROOT/app/prompt_server.py" \
     --model "$MODEL" \
     --port "$PORT" \
-    --host 127.0.0.1 \
+    --host "${PROMPT_HOST:-0.0.0.0}" \
     > "$LOG_FILE" 2>&1 &
 
 SERVER_PID=$!
