@@ -600,3 +600,41 @@ tt-local-gen-download-model --repo Qwen/Qwen3-0.6B --skip-if-exists
 # Check whether a model is already cached:
 tt-local-gen-download-model --repo genmo/mochi-1-preview --check-only
 ```
+
+---
+
+## macOS remote-client video playback (in progress — 2026-04-14)
+
+**Symptom:** Gtk.Video shows ⊘ (broken-media icon), ▶ Play does nothing, hover
+preview is blank. "Open externally" and "Export" both work (files are valid MP4s).
+
+**Root cause hypothesis:** `libmedia-gstreamer.dylib` — the GTK4↔GStreamer bridge —
+is absent from the Homebrew `gtk4` bottle. Without it `get_media_stream()` returns a
+`GtkMediaStream` already in error state; `stream.play()` silently no-ops.
+
+**Diagnostics added:**
+- `bin/test_macos.sh` — comprehensive check: GStreamer elements, `libmedia-gstreamer`
+  presence, `GST_PLUGIN_PATH`, gst-launch smoke test against a real MP4.
+- `DetailPanel._toggle_play` now calls `stream.get_error()` before `stream.play()`
+  and prints the GLib error message + hint to stderr when the stream is errored.
+- `DetailPanel.show_record` registers a `notify::error` handler via a 200 ms
+  `GLib.timeout_add` so async pipeline errors also appear on stderr.
+
+**Key check — run on the Mac:**
+```bash
+./bin/test_macos.sh        # look at section [ 6 ] for libmedia-gstreamer
+```
+
+**Likely fix if `libmedia-gstreamer` is missing:**
+```bash
+brew install --build-from-source gtk4   # rebuilds gtk4 with GStreamer backend enabled
+```
+GTK4 Homebrew bottles are pre-built before GStreamer is present, so the backend is
+compiled out. Building from source after `brew install gstreamer gst-plugins-*` picks
+it up.
+
+**`_llm_available()` timeout** raised 2 s → 3 s (`app/generate_prompt.py`) so remote
+Qwen servers on LAN don't get false-negative health checks.
+
+**Gallery ordering** fixed: `_load_history` now sorts merged local+remote records by
+`created_at` descending so downloaded records appear chronologically, not at the top.
