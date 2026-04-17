@@ -224,7 +224,14 @@
     /* Screenshot — full-bleed, breaks out of the .hero-inner max-width */
     .hero-screenshot-wrap {
       margin-top: 3rem;
-      padding: 0 clamp(.5rem, 2vw, 2rem);
+      /* Mobile: align with text (same gutter as .hero-inner).
+         Desktop (≥900px): shrink padding so the screenshot goes wide. */
+      padding: 0 clamp(1.25rem, 5vw, 5rem);
+    }
+    @media (min-width: 900px) {
+      .hero-screenshot-wrap {
+        padding: 0 clamp(.5rem, 1.5vw, 1.5rem);
+      }
     }
     .hero-screenshot {
       position: relative;
