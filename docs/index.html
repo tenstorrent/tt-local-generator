@@ -247,6 +247,15 @@
       width: 100%;
       display: block;
     }
+    /* Mobile: crop to a fixed height so the 16:9 landscape screenshot
+       doesn't shrink to a tiny strip. Shows the top of the UI. */
+    @media (max-width: 899px) {
+      .hero-screenshot img {
+        height: 260px;
+        object-fit: cover;
+        object-position: top center;
+      }
+    }
     /* Fade bottom so hero bleeds into flow section */
     .hero-screenshot::after {
       content: '';
