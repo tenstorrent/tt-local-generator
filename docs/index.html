@@ -1,0 +1,1366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tt-local-generator — AI video & image generation on Tenstorrent hardware</title>
+  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation. Create, curate, watch.">
+  <meta property="og:title" content="tt-local-generator">
+  <meta property="og:description" content="AI video, image, and animation generation on Tenstorrent hardware. Create → Curate → Watch.">
+  <meta property="og:image" content="assets/tt-local-generator-main.png">
+  <style>
+    /* ── Design tokens ─────────────────────────────────────────────── */
+    :root {
+      --bg0: #080f14;
+      --bg1: #0d1b24;
+      --bg2: #122130;
+      --card: #162838;
+      --card2: #1a3040;
+      --teal: #4fd1c5;
+      --teal-dim: #3aada2;
+      --teal-glow: rgba(79,209,197,.15);
+      --pink: #ec96b8;
+      --gold: #f4c471;
+      --green: #27ae60;
+      --red: #e05555;
+      --text: #e8f0f2;
+      --text2: #b0c4d0;
+      --muted: #607d8b;
+      --border: rgba(79,209,197,.18);
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg0);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    img, video { display: block; max-width: 100%; }
+    a { color: var(--teal); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout helpers ─────────────────────────────────────────────── */
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 clamp(1.25rem, 5vw, 5rem);
+    }
+
+    /* ── Section rhythm ─────────────────────────────────────────────── */
+    section { padding: 5rem 0; }
+    section:nth-child(even) { background: var(--bg1); }
+
+    .section-label {
+      display: inline-block;
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: .75rem;
+    }
+    .section-title {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--text);
+      margin-bottom: 1rem;
+    }
+    .section-sub {
+      font-size: 1.05rem;
+      color: var(--text2);
+      max-width: 640px;
+      margin-bottom: 3rem;
+    }
+
+    /* ── Nav ────────────────────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(8,15,20,.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: .75rem clamp(1.25rem, 5vw, 5rem);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      font-weight: 700;
+      font-size: .95rem;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .nav-logo span { color: var(--teal); }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.75rem;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: .9rem;
+      color: var(--text2);
+      transition: color .15s;
+    }
+    .nav-links a:hover { color: var(--teal); text-decoration: none; }
+    .nav-cta {
+      background: var(--teal);
+      color: #081218 !important;
+      font-weight: 700;
+      padding: .4rem .9rem;
+      border-radius: var(--radius-sm);
+      transition: background .15s !important;
+    }
+    .nav-cta:hover { background: #62ddd1 !important; text-decoration: none !important; }
+
+    /* ── Hero ───────────────────────────────────────────────────────── */
+    #hero {
+      padding: 5rem 0 0;
+      background: var(--bg0);
+      overflow: hidden;
+    }
+    .hero-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 clamp(1.25rem, 5vw, 5rem);
+    }
+    .hero-text {
+      max-width: 700px;
+      margin-bottom: 3rem;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: .78rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--teal);
+      background: var(--teal-glow);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: .3rem .85rem;
+      margin-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -.02em;
+      margin-bottom: 1.25rem;
+    }
+    h1 .accent { color: var(--teal); }
+    .hero-lead {
+      font-size: clamp(1rem, 2.5vw, 1.2rem);
+      color: var(--text2);
+      margin-bottom: 2rem;
+      max-width: 580px;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+      margin-bottom: 2.5rem;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      background: var(--teal);
+      color: #081218;
+      font-weight: 700;
+      font-size: .95rem;
+      padding: .7rem 1.5rem;
+      border-radius: var(--radius-sm);
+      transition: background .15s, transform .1s;
+    }
+    .btn-primary:hover { background: #62ddd1; text-decoration: none; transform: translateY(-1px); }
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      font-size: .95rem;
+      padding: .7rem 1.5rem;
+      border-radius: var(--radius-sm);
+      transition: border-color .15s, color .15s;
+    }
+    .btn-outline:hover { border-color: var(--teal); color: var(--teal); text-decoration: none; }
+
+    /* CLI snippet */
+    .hero-cli {
+      display: inline-flex;
+      align-items: center;
+      gap: .6rem;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .6rem 1rem;
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: .85rem;
+      color: var(--teal);
+    }
+    .hero-cli .prompt-char { color: var(--muted); }
+
+    /* Screenshot */
+    .hero-screenshot {
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 32px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(79,209,197,.08);
+    }
+    .hero-screenshot img {
+      width: 100%;
+      display: block;
+    }
+    /* Fade bottom so hero bleeds into flow section */
+    .hero-screenshot::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 35%;
+      background: linear-gradient(transparent, var(--bg0));
+      pointer-events: none;
+    }
+
+    /* ── Flow: Create → Curate → Watch ─────────────────────────────── */
+    #flow { padding: 4rem 0 5rem; background: var(--bg0); }
+    .flow-grid {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 0;
+      align-items: start;
+    }
+    .flow-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: 2.2rem;
+      color: var(--teal);
+      font-size: 1.5rem;
+      opacity: .5;
+    }
+    .flow-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem 1.75rem;
+      position: relative;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .flow-card:hover {
+      border-color: var(--teal);
+      box-shadow: 0 0 32px var(--teal-glow);
+    }
+    .flow-num {
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: .75rem;
+    }
+    .flow-title {
+      font-size: 1.6rem;
+      font-weight: 800;
+      margin-bottom: .75rem;
+      letter-spacing: -.01em;
+    }
+    .flow-desc {
+      font-size: .95rem;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+    .flow-icon {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+
+    /* ── TT-TV ──────────────────────────────────────────────────────── */
+    #tttv { padding: 5rem 0; }
+    .tttv-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+    .tttv-video-wrap {
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 24px 64px rgba(0,0,0,.5);
+      background: var(--bg0);
+    }
+    .tttv-video-wrap video {
+      width: 100%;
+      display: block;
+    }
+    .tttv-features {
+      list-style: none;
+      margin-top: 1.5rem;
+    }
+    .tttv-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: .75rem;
+      padding: .6rem 0;
+      border-bottom: 1px solid rgba(79,209,197,.08);
+      font-size: .95rem;
+      color: var(--text2);
+    }
+    .tttv-features li:last-child { border-bottom: none; }
+    .tttv-features .fi { color: var(--teal); font-size: 1rem; margin-top: .1rem; flex-shrink: 0; }
+
+    /* ── Models ─────────────────────────────────────────────────────── */
+    #models { padding: 5rem 0; }
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1.25rem;
+    }
+    .model-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .model-card:hover {
+      border-color: var(--teal);
+      box-shadow: 0 0 24px var(--teal-glow);
+    }
+    .model-type {
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      margin-bottom: .75rem;
+      padding: .25rem .6rem;
+      border-radius: 100px;
+      display: inline-block;
+    }
+    .model-type.video { color: var(--teal); background: rgba(79,209,197,.12); }
+    .model-type.image { color: var(--pink); background: rgba(236,150,184,.12); }
+    .model-type.animate { color: var(--gold); background: rgba(244,196,113,.12); }
+    .model-name {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: .4rem;
+    }
+    .model-desc {
+      font-size: .85rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .model-hw {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: .75rem;
+      border-top: 1px solid var(--border);
+      padding-top: .75rem;
+    }
+    .model-hw-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; }
+
+    /* ── Prompts ─────────────────────────────────────────────────────── */
+    #prompts { padding: 5rem 0; }
+    .tier-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+      margin-bottom: 3.5rem;
+    }
+    .tier-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+    }
+    .tier-num {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--teal-glow);
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-size: .75rem;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: .75rem;
+    }
+    .tier-name { font-size: 1rem; font-weight: 700; margin-bottom: .35rem; }
+    .tier-desc { font-size: .88rem; color: var(--text2); line-height: 1.55; }
+    .tier-badge {
+      display: inline-block;
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: .2rem .55rem;
+      border-radius: 100px;
+      margin-top: .75rem;
+    }
+    .tier-badge.always { background: rgba(39,174,96,.15); color: var(--green); }
+    .tier-badge.enhanced { background: rgba(79,209,197,.12); color: var(--teal); }
+
+    /* Prompt tabs */
+    .prompt-tabs {
+      display: flex;
+      gap: .5rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .prompt-tab {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      font-size: .85rem;
+      font-weight: 600;
+      padding: .45rem 1rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .prompt-tab.active {
+      background: var(--teal);
+      border-color: var(--teal);
+      color: #081218;
+    }
+    .prompt-tab:hover:not(.active) {
+      border-color: var(--teal);
+      color: var(--teal);
+    }
+    .prompt-panel { display: none; }
+    .prompt-panel.active { display: block; }
+
+    .prompt-examples {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+      gap: 1rem;
+    }
+    .prompt-ex {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .prompt-ex-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .5rem .9rem;
+      background: var(--card2);
+      border-bottom: 1px solid var(--border);
+    }
+    .prompt-ex-user {
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .prompt-ex-source {
+      font-size: .7rem;
+      color: var(--muted);
+    }
+    .prompt-ex-input {
+      padding: .6rem .9rem;
+      font-size: .88rem;
+      color: var(--text2);
+      border-bottom: 1px solid rgba(79,209,197,.07);
+    }
+    .prompt-ex-output {
+      padding: .75rem .9rem;
+      font-size: .9rem;
+      color: var(--text);
+      font-style: italic;
+      line-height: 1.55;
+    }
+    .prompt-ex-output::before {
+      content: '→ ';
+      color: var(--teal);
+      font-style: normal;
+      font-weight: 700;
+    }
+
+    /* Word bank teaser */
+    .wordbank-wrap {
+      margin-top: 3rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+    }
+    .wordbank-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+    .wordbank-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: .75rem;
+    }
+    .wordbank-cat {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .75rem 1rem;
+    }
+    .wordbank-cat-name {
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: .4rem;
+    }
+    .wordbank-items {
+      font-size: .8rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── Pose Library ───────────────────────────────────────────────── */
+    #poses { padding: 5rem 0; }
+    .pose-cat-label {
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 2rem 0 .75rem;
+    }
+    .pose-cat-label:first-child { margin-top: 0; }
+    .pose-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+    }
+    .pose-card {
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      cursor: pointer;
+      transition: border-color .2s, box-shadow .2s;
+      aspect-ratio: 9/16;
+    }
+    .pose-card:hover {
+      border-color: var(--teal);
+      box-shadow: 0 0 24px var(--teal-glow);
+    }
+    .pose-card img,
+    .pose-card video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      position: absolute;
+      inset: 0;
+    }
+    .pose-card .pose-vid {
+      opacity: 0;
+      transition: opacity .25s;
+    }
+    .pose-card:hover .pose-vid { opacity: 1; }
+    .pose-label {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: .6rem .75rem .75rem;
+      background: linear-gradient(transparent, rgba(8,15,20,.9));
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--text);
+      z-index: 2;
+    }
+    .pose-model-tag {
+      font-size: .68rem;
+      color: var(--teal);
+      display: block;
+      margin-top: .15rem;
+    }
+
+    /* ── Prompt architecture visual ─────────────────────────────────── */
+    .arch-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .arch-step {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .7rem 1.1rem;
+      flex: 1;
+    }
+    .arch-step-icon { font-size: 1.2rem; }
+    .arch-step-text { font-size: .9rem; }
+    .arch-step-name { font-weight: 700; display: block; }
+    .arch-step-sub { font-size: .8rem; color: var(--muted); }
+    .arch-arrow { color: var(--teal); font-size: 1.1rem; flex-shrink: 0; }
+
+    /* ── CLI block ──────────────────────────────────────────────────── */
+    .cli-block {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem 1.75rem;
+      margin-top: 2rem;
+      font-family: 'Fira Code', 'Cascadia Code', 'Courier New', monospace;
+      font-size: .85rem;
+      overflow-x: auto;
+    }
+    .cli-line { line-height: 1.9; }
+    .cli-comment { color: var(--muted); }
+    .cli-cmd { color: var(--text); }
+    .cli-flag { color: var(--teal); }
+    .cli-arg { color: var(--gold); }
+
+    /* ── Footer ─────────────────────────────────────────────────────── */
+    footer {
+      background: var(--bg0);
+      border-top: 1px solid var(--border);
+      padding: 3rem 0;
+    }
+    .footer-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 clamp(1.25rem, 5vw, 5rem);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+    .footer-brand {
+      font-weight: 700;
+      font-size: .95rem;
+    }
+    .footer-brand span { color: var(--teal); }
+    .footer-copy {
+      font-size: .85rem;
+      color: var(--muted);
+    }
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      list-style: none;
+      font-size: .9rem;
+    }
+
+    /* ── Responsive ─────────────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .flow-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+      }
+      .flow-arrow { display: none; }
+      .tttv-grid { grid-template-columns: 1fr; }
+      .prompt-examples { grid-template-columns: 1fr; }
+      .tier-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      h1 { font-size: 2.25rem; }
+      .pose-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ─────────────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <div class="nav-logo">
+      <svg width="20" height="20" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="6" fill="#4FD1C5" fill-opacity=".15"/><rect x="5" y="5" width="10" height="10" rx="2" fill="#4FD1C5"/><rect x="17" y="5" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".5"/><rect x="5" y="17" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".5"/><rect x="17" y="17" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".25"/></svg>
+      tt-local-<span>generator</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="#flow">How it works</a></li>
+      <li><a href="#models">Models</a></li>
+      <li><a href="#prompts">Prompts</a></li>
+      <li><a href="#poses">Pose Library</a></li>
+      <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ── Hero ─────────────────────────────────────────────────────────── -->
+<section id="hero">
+  <div class="hero-inner">
+    <div class="hero-text">
+      <div class="hero-badge">
+        <svg width="8" height="8"><circle cx="4" cy="4" r="4" fill="#27ae60"/></svg>
+        Runs on Tenstorrent Hardware
+      </div>
+      <h1>Local AI<br><span class="accent">video generation</span><br>for builders.</h1>
+      <p class="hero-lead">
+        Generate cinematic video, images, and animated characters on your own
+        Tenstorrent hardware. No cloud. No rate limits. Full creative control.
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/tenstorrent/tt-local-generator" class="btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.745 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          View on GitHub
+        </a>
+        <a href="https://github.com/tenstorrent/tt-local-generator#readme" class="btn-outline">
+          Read the docs
+        </a>
+      </div>
+      <div class="hero-cli">
+        <span class="prompt-char">$</span>
+        git clone https://github.com/tenstorrent/tt-local-generator &amp;&amp; ./tt-gen
+      </div>
+    </div>
+
+    <div class="hero-screenshot">
+      <img src="assets/tt-local-generator-main.png"
+           alt="tt-local-generator main interface — video generation, history gallery, and TT-TV mode"
+           width="1920" height="1080"
+           loading="eager">
+    </div>
+  </div>
+</section>
+
+<!-- ── Flow: Create → Curate → Watch ─────────────────────────────────── -->
+<section id="flow">
+  <div class="wrap">
+    <div class="section-label">The workflow</div>
+    <h2 class="section-title">Create. Curate. Watch.</h2>
+    <p class="section-sub">
+      A focused three-phase loop for building a local AI media library —
+      from a blank prompt to a polished collection you can enjoy on any screen.
+    </p>
+
+    <div class="flow-grid">
+      <div class="flow-card">
+        <span class="flow-icon">✦</span>
+        <div class="flow-num">Phase 01</div>
+        <div class="flow-title">Create</div>
+        <p class="flow-desc">
+          Write a prompt — or let the three-tier generator do it for you.
+          Submit to Wan2.2, Mochi, SkyReels, FLUX, or AnimateDiff.
+          Server management, queuing, and live progress are built in.
+        </p>
+      </div>
+
+      <div class="flow-arrow">→</div>
+
+      <div class="flow-card">
+        <span class="flow-icon">◈</span>
+        <div class="flow-num">Phase 02</div>
+        <div class="flow-title">Curate</div>
+        <p class="flow-desc">
+          Every generation lands in a persistent gallery with full metadata.
+          Hover to preview. Star favorites. Export or share.
+          A growing archive of everything your hardware has ever made.
+        </p>
+      </div>
+
+      <div class="flow-arrow">→</div>
+
+      <div class="flow-card">
+        <span class="flow-icon">▶</span>
+        <div class="flow-num">Phase 03</div>
+        <div class="flow-title">Watch</div>
+        <p class="flow-desc">
+          Switch to TT-TV — a lean-back cinematic mode that plays your
+          library as a continuous, looping experience. Your models.
+          Your prompts. Your channel.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── TT-TV ──────────────────────────────────────────────────────────── -->
+<section id="tttv">
+  <div class="wrap">
+    <div class="tttv-grid">
+      <div class="tttv-video-wrap">
+        <video autoplay muted loop playsinline preload="metadata"
+               aria-label="TT-TV mode demonstration — cinematic lean-back playback of generated videos">
+          <source src="assets/tt-local-generator-tt-tv.webm" type="video/webm">
+        </video>
+      </div>
+
+      <div>
+        <div class="section-label">TT-TV Mode</div>
+        <h2 class="section-title">Your private AI channel.</h2>
+        <p class="section-sub">
+          A full-screen cinematic viewer for your generated library.
+          No algorithm decides what you see — just your own
+          creations, playing on loop.
+        </p>
+
+        <ul class="tttv-features">
+          <li>
+            <span class="fi">▶</span>
+            Auto-advance through your entire generated library, newest first
+          </li>
+          <li>
+            <span class="fi">⟲</span>
+            Seamless looping — video ends, next begins, no interruption
+          </li>
+          <li>
+            <span class="fi">◎</span>
+            Resizable sidebar — keep the prompt and metadata visible, or go pure full-bleed
+          </li>
+          <li>
+            <span class="fi">↗</span>
+            Open in system player or export directly from the viewer
+          </li>
+          <li>
+            <span class="fi">✦</span>
+            Works remotely — connect from a Mac or laptop while hardware runs on the rack
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Models ──────────────────────────────────────────────────────────── -->
+<section id="models">
+  <div class="wrap">
+    <div class="section-label">Supported models</div>
+    <h2 class="section-title">One app. Five models.</h2>
+    <p class="section-sub">
+      Switch between text-to-video, image generation, image-to-video, and
+      character animation from a single interface. Each model has a
+      dedicated server managed by the app.
+    </p>
+
+    <div class="model-grid">
+      <div class="model-card">
+        <div class="model-type video">Text-to-Video</div>
+        <div class="model-name">Wan2.2 T2V</div>
+        <p class="model-desc">14B parameter cinematic video model. The flagship experience for long, detailed prompts.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> Wormhole · QB2 · Blackhole</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type video">Text-to-Video</div>
+        <div class="model-name">Mochi-1</div>
+        <p class="model-desc">High-motion, expressive video generation. Great for character and action-heavy prompts.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type video">Image-to-Video</div>
+        <div class="model-name">SkyReels V2</div>
+        <p class="model-desc">Fast diffusion transformer at 540P. Animates still images with physics-respecting motion.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> Blackhole P150X4 · P300X2</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type image">Image</div>
+        <div class="model-name">FLUX.1-dev</div>
+        <p class="model-desc">State-of-the-art text-to-image. Rich detail, accurate text rendering, photorealistic output.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> Wormhole · QB2</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type animate">Character Animate</div>
+        <div class="model-name">Wan2.2 Animate</div>
+        <p class="model-desc">Video-to-video character animation. Give any character a motion — or replace a person in a clip.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> CPU · CUDA (TT HW pending)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Prompt Generation ───────────────────────────────────────────────── -->
+<section id="prompts">
+  <div class="wrap">
+    <div class="section-label">Prompt generation</div>
+    <h2 class="section-title">Three tiers. Always a great prompt.</h2>
+    <p class="section-sub">
+      A built-in prompt engine with no cloud dependency. Generates cinematic,
+      specific, and evocative prompts for every model type — instantly.
+    </p>
+
+    <!-- Three-tier explanation -->
+    <div class="tier-row">
+      <div class="tier-card">
+        <div class="tier-num">1</div>
+        <div class="tier-name">Algorithmic</div>
+        <p class="tier-desc">
+          Samples from deep, curated word banks — subjects, settings, lighting,
+          camera moves, mood, style — and assembles them into a structured slug.
+          Fast, deterministic, always available. No model required.
+        </p>
+        <span class="tier-badge always">Always available</span>
+      </div>
+      <div class="tier-card">
+        <div class="tier-num">2</div>
+        <div class="tier-name">Markov</div>
+        <p class="tier-desc">
+          Trains on a seed corpus of tagged prompts and generates novel
+          recombinations at the sentence level. Produces unexpected register
+          collisions — a 1970s Betamax in an Escher staircase, a Muppet at
+          a Manhattan diner at 2am.
+        </p>
+        <span class="tier-badge always">Always available</span>
+      </div>
+      <div class="tier-card">
+        <div class="tier-num">3</div>
+        <div class="tier-name">LLM Polish</div>
+        <p class="tier-desc">
+          Qwen3-0.6B on CPU (port 8001) takes the raw slug and makes it flow
+          naturally — without re-selecting or hallucinating new elements.
+          Adds rhythm and precision without creative drift.
+        </p>
+        <span class="tier-badge enhanced">Qwen3-0.6B on CPU</span>
+      </div>
+    </div>
+
+    <!-- Architecture flow -->
+    <div class="arch-row">
+      <div class="arch-step">
+        <span class="arch-step-icon">🎲</span>
+        <span class="arch-step-text">
+          <span class="arch-step-name">Algo</span>
+          <span class="arch-step-sub">word banks → slug</span>
+        </span>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-step">
+        <span class="arch-step-icon">🔀</span>
+        <span class="arch-step-text">
+          <span class="arch-step-name">Markov</span>
+          <span class="arch-step-sub">corpus → recombine</span>
+        </span>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-step">
+        <span class="arch-step-icon">✨</span>
+        <span class="arch-step-text">
+          <span class="arch-step-name">LLM Polish</span>
+          <span class="arch-step-sub">Qwen3 → final prompt</span>
+        </span>
+      </div>
+      <span class="arch-arrow">→</span>
+      <div class="arch-step" style="background:var(--teal-glow); border-color:var(--teal);">
+        <span class="arch-step-icon">🎬</span>
+        <span class="arch-step-text" style="color:var(--teal);">
+          <span class="arch-step-name">Submit</span>
+          <span class="arch-step-sub">to any model</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Examples by model type -->
+    <div class="prompt-tabs">
+      <button class="prompt-tab active" data-tab="video">Video (Wan2.2 / Mochi)</button>
+      <button class="prompt-tab" data-tab="skyreels">SkyReels</button>
+      <button class="prompt-tab" data-tab="image">Image (FLUX)</button>
+      <button class="prompt-tab" data-tab="animate">Animate</button>
+    </div>
+
+    <div class="prompt-panel active" id="tab-video">
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Steinbeck · migrant</span>
+          </div>
+          <div class="prompt-ex-input">video: Steinbeck, migrant family, Route 66</div>
+          <div class="prompt-ex-output">A jalopy overloaded with furniture and children crests a dusty hill on Route 66, flat gold light stretching ahead, locked-off wide shot, heartbreaking and determined</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Philip K. Dick · suburban</span>
+          </div>
+          <div class="prompt-ex-input">video: Philip K. Dick suburb, TV on, nobody home</div>
+          <div class="prompt-ex-output">A 1960s California living room at midnight — the television plays a test pattern, every lamp lit, nobody in any of the chairs, handheld and uneasy, the specific dread of a familiar room at an unfamiliar hour</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Jeff Noon · Manchester rave</span>
+          </div>
+          <div class="prompt-ex-input">video: Jeff Noon, rave at dawn, pollen</div>
+          <div class="prompt-ex-output">A young woman covered in yellow pollen walks out of a Manchester warehouse at dawn, a canal behind her reflecting orange sodium vapor lights, handheld, exhausted and luminous</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Retro · Moog synthesizer</span>
+          </div>
+          <div class="prompt-ex-input">video: Moog on kitchen table, reel-to-reel, late night</div>
+          <div class="prompt-ex-output">A Moog Minimoog sits on a kitchen table at 2am, patch cables trailing off the edge, a reel-to-reel machine spinning in the background, single 60-watt bulb overhead, static wide shot, warm and obsessive</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Stephen King · dread</span>
+          </div>
+          <div class="prompt-ex-input">video: Stephen King, hotel corridor, two girls</div>
+          <div class="prompt-ex-output">Two identical girls stand at the end of a long Overlook Hotel corridor, floral wallpaper, chandeliers lit, the far end dark, a slow dolly push toward them, eerie and still</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Cartoon · Looney Tunes</span>
+          </div>
+          <div class="prompt-ex-input">video: coyote, cliff, cartoon logic, Looney Tunes</div>
+          <div class="prompt-ex-output">A coyote runs off a cliff edge and hangs in midair, looks down, flat painted desert behind, Saturday-morning cartoon palette and rubber-hose physics, locked-off wide, one frozen beat before the fall</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-skyreels">
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Nature · redwood forest</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: fog through redwood forest, morning light</div>
+          <div class="prompt-ex-output">FPS-24, morning fog rolls through a redwood forest in slow rolling waves, shafts of gold cutting between trunks a hundred feet tall, static locked-off, cathedral quiet</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Cosmic · aurora</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: aurora borealis, frozen lake</div>
+          <div class="prompt-ex-output">FPS-24, green and violet aurora ribbons ripple across a subarctic sky above a frozen lake, the ice below reflecting the light in long still pools, static wide, silent and immense</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Urban · rain, Tokyo</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: Tokyo alley, rain, figure walking away</div>
+          <div class="prompt-ex-output">FPS-24, a figure in a yellow raincoat walks away from camera down a wet Tokyo alley, neon signs stretching reflections across the cobblestones behind them, slow dolly forward, atmospheric and solitary</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Sci-fi · ring station</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: sci-fi, ring station, gas giant</div>
+          <div class="prompt-ex-output">FPS-24, a colossal ring station rotates slowly above a gas giant, the planet's amber cloud bands reflected in the hull, smooth orbital camera move, epic and weightless</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Nature · wolves in snow</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: wolves, winter, pine forest</div>
+          <div class="prompt-ex-output">FPS-24, a pack of grey wolves runs through deep snow at the edge of a pine forest, breath streaming behind them in the cold air, low-angle tracking shot, blue-hour light, wild and alive</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Ocean · dawn</span>
+          </div>
+          <div class="prompt-ex-input">skyreels: ocean waves, sea cliff, golden morning</div>
+          <div class="prompt-ex-output">FPS-24, ocean waves break against a sea cliff in golden morning light, spray catching the sun in slow arcs, static wide locked-off, the horizon flat and endless beyond</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-image">
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Stephen King · hotel</span>
+          </div>
+          <div class="prompt-ex-input">image: Overlook Hotel corridor, two girls, dread</div>
+          <div class="prompt-ex-output">Two identical girls standing at the end of a long hotel corridor, floral wallpaper, single overhead bulb swinging, the far end dark and indistinct, photorealistic, 35mm film grain, ultra-detailed, shallow depth of field</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Sci-fi · Jupiter surface</span>
+          </div>
+          <div class="prompt-ex-input">image: surface of Jupiter, cloudscape, epic scale</div>
+          <div class="prompt-ex-output">The turbulent cloudscape of Jupiter's upper atmosphere, swirling amber and cream storm bands stretching to the horizon, a vast vortex eye glowing from within, digital matte painting, ultra-detailed, 8K, masterpiece</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Retro · 1984 living room</span>
+          </div>
+          <div class="prompt-ex-input">image: 1984 living room, Saturday morning cartoons, cereal</div>
+          <div class="prompt-ex-output">A living room in 1984 — a bowl of cereal going soggy on a carpet, a CRT television showing rubber-hose cartoons in flat bright colors, warm morning light through venetian blinds casting long stripes across the room, photorealistic, 35mm film grain, shallow depth of field, masterpiece</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Kafka · impossible office</span>
+          </div>
+          <div class="prompt-ex-input">image: Kafka, office corridor, impossible length, dread</div>
+          <div class="prompt-ex-output">An office corridor that extends far beyond any building could contain, fluorescent lights in a grid above, identical doors on either side, a figure at the far end that never gets closer, ultra-detailed, 8K, sharp focus, photorealistic</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Psychedelia · Peter Max</span>
+          </div>
+          <div class="prompt-ex-input">image: Peter Max psychedelia, Yellow Submarine style</div>
+          <div class="prompt-ex-output">A swirling psychedelic landscape in Peter Max colors — flat magenta, electric blue, lime green, faces fractured into stacked layers — the Beatles as cartoon silhouettes in a sea of flowers, Yellow Submarine flat color illustration style, masterpiece, ultra-detailed</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Escher · geometry</span>
+          </div>
+          <div class="prompt-ex-input">image: Escher staircase, impossible geometry, figures</div>
+          <div class="prompt-ex-output">An Escher staircase looping forever, figures walking both up and down simultaneously, M.C. Escher lithograph style, tessellating shadows, impossible geometry rendered in precise ink line, ultra-detailed, masterpiece, sharp focus</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-animate">
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Character · fisherman</span>
+          </div>
+          <div class="prompt-ex-input">animate: old fisherman, turns toward horizon</div>
+          <div class="prompt-ex-output">An elderly fisherman slowly turns his face toward the horizon, weathered expression softening into quiet recognition, harbor at dawn, soft diffuse morning light, nostalgic and still</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Character · dancer</span>
+          </div>
+          <div class="prompt-ex-input">animate: dancer in silk, raises arms, serene</div>
+          <div class="prompt-ex-output">A woman in flowing white silk raises her arms slowly above her head with eyes closed, weight shifting to one foot, temple courtyard at dusk, warm golden backlight, serene and weightless</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Character · child, rain</span>
+          </div>
+          <div class="prompt-ex-input">animate: child with umbrella, looks up at sky</div>
+          <div class="prompt-ex-output">A small child in a yellow raincoat tilts their face upward and opens their mouth to catch rain, puddles on the pavement reflecting grey clouds, diffuse overcast light, tender and slightly broken</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Character · monk</span>
+          </div>
+          <div class="prompt-ex-input">animate: monk in orange robes, bows slowly</div>
+          <div class="prompt-ex-output">A monk in deep orange robes brings his palms together and bows from the waist with deliberate slowness, moss-covered temple courtyard, dappled morning light through leaves above, reverent and unhurried</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Word bank teaser -->
+    <div class="wordbank-wrap">
+      <div class="wordbank-title">Built-in word banks — drawn from literary tradition</div>
+      <div class="wordbank-grid">
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Literary Registers</div>
+          <div class="wordbank-items">Steinbeck · PKD · Brautigan · King · Jeff Noon · Tom Robbins · Octavia Butler · Kafka</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Retro & Electronics</div>
+          <div class="wordbank-items">Moog · TR-808 · VHS · Betamax · Speak & Spell · Theremin · dot matrix · Walkman</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Cartoon Registers</div>
+          <div class="wordbank-items">Looney Tunes · Sesame Street · Muppets · Harryhausen · Rankin/Bass · Yellow Submarine</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Camera Moves</div>
+          <div class="wordbank-items">slow dolly in · overhead crane · locked-off static · handheld shaky · rack focus · orbit</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Lighting</div>
+          <div class="wordbank-items">golden hour · sodium vapor orange · god rays · chiaroscuro · bioluminescent · TV light</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Settings</div>
+          <div class="wordbank-items">Route 66 diner · Overlook Hotel · Manchester rave · Dust Bowl · Tokyo alley · lighthouse</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Geometric / Impossible</div>
+          <div class="wordbank-items">Escher staircase · Klein bottle · tessellation · impossible corridor · grid to horizon</div>
+        </div>
+        <div class="wordbank-cat">
+          <div class="wordbank-cat-name">Subjects</div>
+          <div class="wordbank-items">red fox · lone astronaut · samurai · mechanical owl · ravegoer · crop picker · replicant</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLI quick reference -->
+    <div class="cli-block">
+      <div class="cli-line"><span class="cli-comment"># Generate a video prompt (algo + LLM polish)</span></div>
+      <div class="cli-line"><span class="cli-cmd">python3 app/generate_prompt.py</span></div>
+      <div class="cli-line">&nbsp;</div>
+      <div class="cli-line"><span class="cli-comment"># Markov mode, SkyReels type, no LLM</span></div>
+      <div class="cli-line"><span class="cli-cmd">python3 app/generate_prompt.py</span> <span class="cli-flag">--type</span> <span class="cli-arg">skyreels</span> <span class="cli-flag">--mode</span> <span class="cli-arg">markov</span> <span class="cli-flag">--no-enhance</span></div>
+      <div class="cli-line">&nbsp;</div>
+      <div class="cli-line"><span class="cli-comment"># Five prompts, raw text output</span></div>
+      <div class="cli-line"><span class="cli-cmd">python3 app/generate_prompt.py</span> <span class="cli-flag">--count</span> <span class="cli-arg">5</span> <span class="cli-flag">--raw</span></div>
+      <div class="cli-line">&nbsp;</div>
+      <div class="cli-line"><span class="cli-comment"># Start the local Qwen3-0.6B polish server (CPU, port 8001)</span></div>
+      <div class="cli-line"><span class="cli-cmd">./bin/start_prompt_gen.sh</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Pose Library ─────────────────────────────────────────────────────── -->
+<section id="poses">
+  <div class="wrap">
+    <div class="section-label">Animate mode</div>
+    <h2 class="section-title">A pose library for character animation.</h2>
+    <p class="section-sub">
+      Drive any character with a reference motion — a wave, a nod, a shaka, a Vulcan salute.
+      Hover any clip to see it play. Generated with Wan2.2-T2V as animation reference clips.
+    </p>
+
+    <div class="pose-cat-label">Gestures</div>
+    <div class="pose-grid">
+      <div class="pose-card" tabindex="0" aria-label="Hang loose — shaka sign">
+        <img src="motion_clips/gestures/hang_loose.jpg" alt="Shaka sign reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/gestures/hang_loose.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Hang Loose
+          <span class="pose-model-tag">Wan2.2-T2V · shaka sign</span>
+        </div>
+      </div>
+      <div class="pose-card" tabindex="0" aria-label="Live long and prosper — Vulcan salute">
+        <img src="motion_clips/gestures/live_long_and_prosper.jpg" alt="Vulcan salute reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/gestures/live_long_and_prosper.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Live Long &amp; Prosper
+          <span class="pose-model-tag">Wan2.2-T2V · Vulcan salute</span>
+        </div>
+      </div>
+      <div class="pose-card" tabindex="0" aria-label="Hang in there — grip and dangle">
+        <img src="motion_clips/gestures/hang_in_there.jpg" alt="Hang in there reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/gestures/hang_in_there.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Hang In There
+          <span class="pose-model-tag">Wan2.2-T2V · hanging grip</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pose-cat-label">Locomotion</div>
+    <div class="pose-grid">
+      <div class="pose-card" tabindex="0" aria-label="Walk forward — toward camera">
+        <img src="motion_clips/locomotion/walk_forward.jpg" alt="Walk forward reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/locomotion/walk_forward.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Walk Forward
+          <span class="pose-model-tag">Wan2.2-T2V · steady stride</span>
+        </div>
+      </div>
+      <div class="pose-card" tabindex="0" aria-label="Wave hello — open hand">
+        <img src="motion_clips/locomotion/wave_hello.jpg" alt="Wave hello reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/locomotion/wave_hello.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Wave Hello
+          <span class="pose-model-tag">Wan2.2-T2V · greeting wave</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pose-cat-label">Reactions</div>
+    <div class="pose-grid">
+      <div class="pose-card" tabindex="0" aria-label="Nod yes — affirming nod">
+        <img src="motion_clips/reactions/nod_yes.jpg" alt="Nod yes reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/reactions/nod_yes.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Nod Yes
+          <span class="pose-model-tag">Wan2.2-T2V · affirmation</span>
+        </div>
+      </div>
+      <div class="pose-card" tabindex="0" aria-label="Shake no — refusal">
+        <img src="motion_clips/reactions/shake_no.jpg" alt="Shake no reference frame" loading="lazy">
+        <video class="pose-vid" src="motion_clips/reactions/shake_no.mp4" muted loop playsinline preload="none"></video>
+        <div class="pose-label">
+          Shake No
+          <span class="pose-model-tag">Wan2.2-T2V · refusal</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-brand">tt-local-<span>generator</span></div>
+      <div class="footer-copy">Built on Tenstorrent hardware. All generation runs locally.</div>
+    </div>
+    <ul class="footer-links">
+      <li><a href="https://github.com/tenstorrent/tt-local-generator">GitHub</a></li>
+      <li><a href="https://github.com/tenstorrent/tt-local-generator/releases">Releases</a></li>
+      <li><a href="https://tenstorrent.com">Tenstorrent</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+  /* ── Prompt tab switching ─────────────────────────────────────────── */
+  document.querySelectorAll('.prompt-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.prompt-tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.prompt-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  /* ── Pose card hover: play video, pause on leave ─────────────────── */
+  document.querySelectorAll('.pose-card').forEach(card => {
+    const vid = card.querySelector('.pose-vid');
+    if (!vid) return;
+
+    const play = () => {
+      if (vid.readyState === 0) vid.load();
+      vid.play().catch(() => {});
+    };
+    const pause = () => { vid.pause(); vid.currentTime = 0; };
+
+    card.addEventListener('mouseenter', play);
+    card.addEventListener('mouseleave', pause);
+    card.addEventListener('focus', play);
+    card.addEventListener('blur', pause);
+  });
+
+  /* ── PostHog (matches docs.tenstorrent.com) ──────────────────────── */
+  !function(t,e){var o,n,p,r;if(!e.__SV){window.posthog=e;e._i=[];e.init=function(i,s,a){function g(t,e){var o=e.split(".");if(o.length===2){t=t[o[0]];e=o[1];}t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)));};}p=t.createElement("script");p.type="text/javascript";p.crossOrigin="anonymous";p.async=!0;p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";r=t.getElementsByTagName("script")[0];r.parentNode.insertBefore(p,r);var u=e;if(a!==void 0){u=e[a]=[];}else{a="posthog";}u.people=u.people||[];u.toString=function(t){var e="posthog";if(a!=="posthog"){e+="."+a;}if(!t){e+=" (stub)";}return e;};u.people.toString=function(){return u.toString(1)+".people (stub)";};e._i.push([i,s,a]);};e.__SV=1;}}(document,window.posthog||[]);
+  posthog.init("phc_9LMRmHrCFvQNvDkPDjYBP5dZ6WchZ5bcM6T4Qj6tb0U",{api_host:"https://us.i.posthog.com",defaults:"2025-05-24",person_profiles:"identified_only"});
+</script>
+</body>
+</html>
