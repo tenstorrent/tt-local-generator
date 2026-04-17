@@ -306,10 +306,11 @@
 
     /* ── TT-TV ──────────────────────────────────────────────────────── */
     #tttv { padding: 5rem 0; }
+    #tttv .wrap { max-width: 1440px; }
     .tttv-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4rem;
+      grid-template-columns: 1.75fr 1fr;
+      gap: 3.5rem;
       align-items: center;
     }
     .tttv-video-wrap {
@@ -708,8 +709,8 @@
 <nav>
   <div class="nav-inner">
     <div class="nav-logo">
-      <svg width="20" height="20" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="6" fill="#4FD1C5" fill-opacity=".15"/><rect x="5" y="5" width="10" height="10" rx="2" fill="#4FD1C5"/><rect x="17" y="5" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".5"/><rect x="5" y="17" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".5"/><rect x="17" y="17" width="10" height="10" rx="2" fill="#4FD1C5" fill-opacity=".25"/></svg>
-      tt-local-<span>generator</span>
+      <img src="assets/tenstorrent.png" width="24" height="24" alt="Tenstorrent" style="image-rendering:auto;border-radius:4px;">
+      <span style="color:var(--text);">tt-local-</span><span>generator</span>
     </div>
     <ul class="nav-links">
       <li><a href="#flow">How it works</a></li>
