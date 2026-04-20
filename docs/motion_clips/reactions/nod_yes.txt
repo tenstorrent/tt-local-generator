@@ -1,0 +1,5 @@
+A stocky bearded Irish man in his fifties with wire-rimmed glasses and a flannel shirt slowly nods his head yes twice, a thoughtful affirming expression on his face, slight forward lean of the torso, plain dark background, neutral studio lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 99
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T23:52:46Z

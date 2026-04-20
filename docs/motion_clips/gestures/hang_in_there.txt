@@ -1,0 +1,5 @@
+A stocky South Asian woman in her thirties with paint-stained overalls and short dark hair grips a horizontal bar with both hands and hangs, feet dangling above the ground, determined expression, slight swinging motion, plain dark background, full body visible, 480x832 portrait
+steps: 25
+seed: 42
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T22:28:26Z

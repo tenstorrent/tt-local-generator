@@ -1,0 +1,5 @@
+A young Pacific Islander man with sun-bleached wavy hair and a faded floral-print shirt extends his arm and gives a thumbs up, thumb pointing upward with a confident and friendly expression, plain dark background, natural warm lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 42
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T22:28:26Z

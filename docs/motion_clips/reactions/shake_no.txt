@@ -1,0 +1,5 @@
+A curly-haired Peruvian teenager in a hoodie shakes their head no slowly and deliberately, lips pressed together, eyebrows slightly furrowed, plain dark background, cool side lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 99
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-14T00:06:02Z

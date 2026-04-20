@@ -1,0 +1,5 @@
+A dark-skinned middle-aged woman with silver locs and crow's feet around her eyes slowly raises her right hand and holds up a peace sign, index and middle fingers extended in a V, wearing a worn linen jacket with a small enamel badge, plain dark background, cinematic side-lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 42
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T22:28:26Z

@@ -1,0 +1,5 @@
+A petite Japanese woman in her late twenties with straight black hair and a knit sweater raises her right arm and waves hello with an open hand and a warm smile, weight shifting slightly as she waves, plain dark background, warm diffused lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 42
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T23:31:10Z

@@ -1,0 +1,5 @@
+A tall Nigerian man in his forties with close-cropped grey temples and a loose linen shirt walks steadily forward toward the camera, arms swinging naturally, unhurried confident stride, plain dark background, soft front lighting, full body visible, 480x832 portrait
+steps: 25
+seed: 42
+model: Wan2.2-T2V-A14B-Diffusers
+generated: 2026-04-13T23:31:10Z
