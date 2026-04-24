@@ -16,8 +16,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            debhelper devscripts dpkg-dev fakeroot
+          # devscripts/equivs needed for mk-build-deps; devscripts also provides dch
+          sudo apt-get install -y --no-install-recommends devscripts equivs fakeroot
+          # Derive and install all Build-Depends from debian/control, including
+          # virtual packages such as debhelper-compat (= 13)
+          sudo mk-build-deps --install --remove \
+            --tool "apt-get -y --no-install-recommends" debian/control
 
       - name: Snapshot vendored tt-inference-server
         run: |
