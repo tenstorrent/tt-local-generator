@@ -37,6 +37,18 @@ override_dh_install:
 	    echo "WARNING: vendor/tt-inference-server not found." \
 	         "Run bin/snapshot_vendor.sh first." >&2; \
 	fi
+	# snapshot_vendor.sh saves the env template as .env.default; promote it to
+	# .env so the conffiles entry is satisfied (dpkg rejects packages that list
+	# conffiles they don't actually install).
+	if [ ! -f debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.env ]; then \
+	    if [ -f debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.env.default ]; then \
+	        cp debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.env.default \
+	           debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.env; \
+	    else \
+	        printf '# tt-inference-server environment\n# Edit before running.\n' > \
+	           debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.env; \
+	    fi; \
+	fi
 
 	# Copy the top-level launchers.
 	install -m 755 tt-gen tt-ctl \
