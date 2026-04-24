@@ -1,0 +1,51 @@
+name: Build and publish .deb packages
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # required to upload assets to the release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            debhelper devscripts dpkg-dev fakeroot
+
+      - name: Snapshot vendored tt-inference-server
+        run: |
+          VENDOR_SHA="$(cat vendor/VENDOR_SHA)"
+          bin/snapshot_vendor.sh --sha "$VENDOR_SHA"
+
+      - name: Stamp debian/changelog with release version
+        env:
+          DEBEMAIL: software@tenstorrent.com
+          DEBFULLNAME: Tenstorrent
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CURRENT="$(dpkg-parsechangelog --show-field Version)"
+          if [ "$VERSION" != "$CURRENT" ]; then
+            dch --newversion "${VERSION}" --distribution noble \
+              "Release ${VERSION}."
+          fi
+
+      - name: Build .deb packages
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect .deb files
+        run: |
+          mkdir -p dist/
+          mv ../*.deb dist/
+          ls -lh dist/
+
+      - name: Upload .deb packages to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
