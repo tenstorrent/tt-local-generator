@@ -91,8 +91,7 @@ Run the included setup script:
 
 ```bash
 cd ~/code/tt-local-generator
-chmod +x setup_ubuntu.sh
-./setup_ubuntu.sh
+./bin/setup_ubuntu.sh
 ```
 
 This installs:
@@ -555,7 +554,7 @@ If you ran `setup_ubuntu.sh`, all of these are already installed.
 ### 8.2  Clone and run
 
 ```bash
-git clone https://github.com/tsingletaryTT/tt-local-generator.git ~/code/tt-local-generator
+git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
 cd ~/code/tt-local-generator
 
 # Always use the system python3, not a venv interpreter
