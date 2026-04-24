@@ -56,7 +56,7 @@ git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-
 cd ~/code/tt-local-generator
 
 # Run the setup script (installs dependencies)
-./setup_ubuntu.sh
+./bin/setup_ubuntu.sh
 
 # Install Python dependencies
 pip install -r requirements.txt
