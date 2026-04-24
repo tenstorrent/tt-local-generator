@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """chip_config.py — Load prompt chip definitions from config/prompt_chips.yaml.
 
 Public API:

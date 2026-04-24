@@ -342,6 +342,24 @@ The `.env` in `vendor/tt-inference-server/` controls Docker container environmen
 
 ---
 
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
+
+- Reporting bugs via GitHub Issues
+- Suggesting new features
+- Submitting pull requests
+- Code style and testing requirements
+
+Pull requests are typically reviewed weekly. Please follow the project's coding standards and ensure tests pass before submitting.
+
+---
+
 ## License
 
-Apache 2.0
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+- **Code**: Apache-2.0 - Overall license for this project
+- See [LICENSE_understanding.txt](LICENSE_understanding.txt) for clarification on how this license applies
+
+By contributing to this project, you agree that your contributions will be licensed under the same terms.

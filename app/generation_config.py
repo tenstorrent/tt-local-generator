@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # app/generation_config.py
 """
 Pure generation configuration tables — no GTK imports.
