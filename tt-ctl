@@ -51,6 +51,8 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE / "app"))
 
+_VERSION = (_HERE / "VERSION").read_text().strip()
+
 from api_client import APIClient          # noqa: E402
 from history_store import HistoryStore    # noqa: E402
 from worker import (                                                    # noqa: E402
@@ -914,6 +916,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="CLI for tt-local-generator — works without the GUI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--version", action="version", version=f"tt-ctl {_VERSION}")
     p.add_argument("--server", default="http://localhost:8000",
                    help="Inference server URL (default: http://localhost:8000)")
 
