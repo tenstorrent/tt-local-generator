@@ -14,6 +14,8 @@ A GTK4 desktop UI for generating videos and images with Tenstorrent hardware.
 
 All inference runs via a local [tt-inference-server](https://github.com/tenstorrent/tt-inference-server) Docker container on port 8000.
 
+**[Documentation](https://docs.tenstorrent.com/tt-local-generator)** · **[GitHub](https://github.com/tenstorrent/tt-local-generator)**
+
 ![tt-local-generator](assets/tt-local-generator-main.png)
 
 ---
@@ -74,7 +76,7 @@ tt-local-generator/
 
 ```bash
 # 1. Clone and set up
-git clone https://github.com/tsingletaryTT/tt-local-generator.git ~/code/tt-local-generator
+git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
 cd ~/code/tt-local-generator
 ./setup_ubuntu.sh
 

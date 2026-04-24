@@ -232,7 +232,7 @@ if [[ -d ~/code/tt-local-generator ]]; then
     echo "  ✓ ~/code/tt-local-generator already exists — skipping clone"
 else
     echo "  Cloning tt-local-generator…"
-    git clone https://github.com/tsingletaryTT/tt-local-generator.git ~/code/tt-local-generator
+    git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
     echo "  ✓ Cloned"
 fi
 

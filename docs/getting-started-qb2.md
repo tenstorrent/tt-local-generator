@@ -56,7 +56,7 @@ mkdir -p ~/code
 cd ~/code
 
 # The app
-git clone git@github.com:tsingletaryTT/tt-local-generator.git
+git clone https://github.com/tenstorrent/tt-local-generator.git
 cd tt-local-generator
 
 # Fetch the pinned tt-inference-server shallow clone into vendor/
