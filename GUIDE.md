@@ -91,8 +91,7 @@ Run the included setup script:
 
 ```bash
 cd ~/code/tt-local-generator
-chmod +x setup_ubuntu.sh
-./setup_ubuntu.sh
+./bin/setup_ubuntu.sh
 ```
 
 This installs:
