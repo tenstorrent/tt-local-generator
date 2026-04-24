@@ -78,7 +78,7 @@ tt-local-generator/
 # 1. Clone and set up
 git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
 cd ~/code/tt-local-generator
-./setup_ubuntu.sh
+./bin/setup_ubuntu.sh
 
 # 2. Apply patches to the vendored tt-inference-server
 ./bin/apply_patches.sh
