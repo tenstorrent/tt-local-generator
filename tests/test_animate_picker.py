@@ -93,7 +93,8 @@ import pytest
 
 def _gtk_available() -> bool:
     import os
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    # Constructing real GTK widgets requires a live display; skip in headless CI.
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return False
     try:
         import gi
