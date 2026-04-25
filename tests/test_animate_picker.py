@@ -92,11 +92,13 @@ import pytest
 
 
 def _gtk_available() -> bool:
+    import os
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return False
     try:
         import gi
         gi.require_version("Gtk", "4.0")
-        from gi.repository import Gtk
-        app = Gtk.Application(application_id="test.animate.picker")
+        from gi.repository import Gtk  # noqa: F401
         return True
     except Exception:
         return False
