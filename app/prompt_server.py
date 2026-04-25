@@ -29,6 +29,7 @@ import gc
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 import torch
@@ -49,7 +50,17 @@ args = parser.parse_args()
 
 # ── App state ─────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="tt-prompt-gen", version="0.2.0")
+def _read_version() -> str:
+    version_file = Path(__file__).resolve().parent.parent / "VERSION"
+    if version_file.is_file():
+        version = version_file.read_text().strip()
+        if version:
+            return version
+    return "0.0.0"
+
+
+_VERSION = _read_version()
+app = FastAPI(title="tt-prompt-gen", version=_VERSION)
 
 _model = None
 _tokenizer = None

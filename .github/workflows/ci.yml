@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            python3 \
+            python3-gi \
+            python3-pytest \
+            python3-requests \
+            python3-yaml \
+            gir1.2-gtk-4.0
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -v
