@@ -50,6 +50,9 @@ jobs:
           ls -lh dist/
 
       - name: Upload .deb packages to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/*.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
