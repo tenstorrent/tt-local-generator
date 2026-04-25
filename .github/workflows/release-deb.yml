@@ -3,6 +3,7 @@ name: Build and publish .deb packages
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   build-deb:
@@ -29,6 +30,7 @@ jobs:
           bin/snapshot_vendor.sh --sha "$VENDOR_SHA"
 
       - name: Stamp debian/changelog with release version
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           DEBEMAIL: software@tenstorrent.com
           DEBFULLNAME: Tenstorrent
@@ -50,6 +52,7 @@ jobs:
           ls -lh dist/
 
       - name: Upload .deb packages to release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
