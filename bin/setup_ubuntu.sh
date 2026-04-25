@@ -302,7 +302,26 @@ update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 echo "  ✓ Desktop entry installed (search for 'TT Generator' in your app launcher)"
 echo ""
 
-# ── 8. Smoke-test GTK4 import ─────────────────────────────────────────────────
+# ── 8. ~/Videos/tt-local-generator symlink ───────────────────────────────────
+
+echo "── Step 8: Videos symlink ──────────────────────────────────"
+
+VIDEOS_DIR="$HOME/Videos"
+VIDEOS_LINK="$VIDEOS_DIR/tt-local-generator"
+GEN_DIR="$HOME/.local/share/tt-video-gen"
+
+mkdir -p "$VIDEOS_DIR"
+if [ -L "$VIDEOS_LINK" ]; then
+    echo "  ✓ $VIDEOS_LINK already exists — skipping"
+elif [ -e "$VIDEOS_LINK" ]; then
+    echo "  ! $VIDEOS_LINK exists but is not a symlink — leaving it alone"
+else
+    ln -s "$GEN_DIR" "$VIDEOS_LINK"
+    echo "  ✓ Created $VIDEOS_LINK → $GEN_DIR"
+fi
+echo ""
+
+# ── 9. Smoke-test GTK4 import ─────────────────────────────────────────────────
 
 echo "── Step 8: Smoke test ──────────────────────────────────────"
 /usr/bin/python3 -c "

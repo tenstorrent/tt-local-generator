@@ -285,6 +285,29 @@ if _have nvidia-smi; then
 fi
 
 # =============================================================================
+# STEP 8 — ~/Videos/tt-local-generator symlink
+#   Makes generated media discoverable in the file manager without the
+#   terminal. Created for the real (non-root) user only.
+# =============================================================================
+if [[ -n "$REAL_USER" ]] && id "$REAL_USER" &>/dev/null; then
+    _section "Creating ~/Videos/tt-local-generator symlink"
+    REAL_HOME="/home/$REAL_USER"
+    VIDEOS_LINK="$REAL_HOME/Videos/tt-local-generator"
+    GEN_DIR="$REAL_HOME/.local/share/tt-video-gen"
+    runuser -u "$REAL_USER" -- bash -c "
+        mkdir -p \"\$HOME/Videos\"
+        if [ -L \"$VIDEOS_LINK\" ]; then
+            echo \"  ✓ $VIDEOS_LINK already exists — skipping\"
+        elif [ -e \"$VIDEOS_LINK\" ]; then
+            echo \"  ! $VIDEOS_LINK exists but is not a symlink — leaving it alone\"
+        else
+            ln -s \"$GEN_DIR\" \"$VIDEOS_LINK\"
+            echo \"  ✓ Created $VIDEOS_LINK → $GEN_DIR\"
+        fi
+    "
+fi
+
+# =============================================================================
 # Update desktop database and icon cache
 # =============================================================================
 if _have update-desktop-database; then
