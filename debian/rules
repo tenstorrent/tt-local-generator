@@ -50,8 +50,10 @@ override_dh_install:
 	    fi; \
 	fi
 
-	# Copy the top-level launchers.
+	# Copy the top-level launchers and version file.
 	install -m 755 tt-gen tt-ctl \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/
+	install -m 644 VERSION \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
 
 	# ── /usr/bin/ entries ──────────────────────────────────────────────────

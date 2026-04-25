@@ -51,7 +51,10 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE / "app"))
 
-_VERSION = (_HERE / "VERSION").read_text().strip()
+try:
+    _VERSION = (_HERE / "VERSION").read_text().strip()
+except FileNotFoundError:
+    _VERSION = "unknown"
 
 from api_client import APIClient          # noqa: E402
 from history_store import HistoryStore    # noqa: E402

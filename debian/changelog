@@ -6,7 +6,7 @@ tt-local-generator (0.2.1) noble; urgency=medium
   * prompt_server.py reads its FastAPI version from VERSION instead of a
     hardcoded string.
 
- -- Tenstorrent <software@tenstorrent.com>  Thu, 24 Apr 2026 00:00:00 +0000
+ -- Tenstorrent <software@tenstorrent.com>  Fri, 24 Apr 2026 00:00:00 +0000
 
 tt-local-generator (0.2.0) noble; urgency=medium
 

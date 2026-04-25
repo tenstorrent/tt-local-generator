@@ -50,7 +50,16 @@ args = parser.parse_args()
 
 # ── App state ─────────────────────────────────────────────────────────────────
 
-_VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+def _read_version() -> str:
+    version_file = Path(__file__).resolve().parent.parent / "VERSION"
+    if version_file.is_file():
+        version = version_file.read_text().strip()
+        if version:
+            return version
+    return "0.0.0"
+
+
+_VERSION = _read_version()
 app = FastAPI(title="tt-prompt-gen", version=_VERSION)
 
 _model = None

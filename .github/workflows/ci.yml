@@ -19,9 +19,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             python3 \
+            python3-gi \
             python3-pytest \
             python3-requests \
-            python3-yaml
+            python3-yaml \
+            gir1.2-gtk-4.0
 
       - name: Run tests
         run: python3 -m pytest tests/ -v
