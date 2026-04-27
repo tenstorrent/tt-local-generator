@@ -1,5 +1,25 @@
 # tt-local-generator — developer notes
 
+## Version discipline
+
+**Always increment the version when landing changes.** The version in `VERSION`
+(at repo root) is the single source of truth — it drives the `.deb` package
+version and `tt-ctl --version`. Without a bump, the CI build produces a `.deb`
+with the same version string as the previous release, making releases
+indistinguishable and `apt` upgrades silent no-ops.
+
+- Patch bump (`0.2.1` → `0.2.2`): bug fixes, docs, word bank additions, any
+  non-breaking change.
+- Minor bump (`0.2.x` → `0.3.0`): new user-visible feature or UI change.
+- Major bump: breaking change to config, API, or install layout.
+
+When bumping:
+1. Edit `VERSION` (single line, no prefix).
+2. Prepend a new stanza to `debian/changelog` (use `dch` or edit manually).
+3. Commit both files together on a dedicated `bump/version-X.Y.Z` branch and
+   open a PR — version bumps should be their own commit so the git log is
+   unambiguous about what shipped when.
+
 ## Running the app
 
 ```bash
