@@ -1463,7 +1463,7 @@
             <div class="cli-line"><span class="cli-cmd">sudo apt install</span> <span class="cli-arg">./tt-local-generator_*.deb</span></div>
           </div>
           <p class="install-step-note">
-            Installs the app, launchers, and configures Docker CE automatically.
+            Installs the app and launchers. Docker may also be installed via recommended packages; otherwise, install and start Docker manually before first use.
           </p>
         </div>
       </div>
@@ -1539,25 +1539,19 @@
 </footer>
 
 <script>
-  /* ── Prompt tab switching ─────────────────────────────────────────── */
-  document.querySelectorAll('.prompt-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.prompt-tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.prompt-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  /* ── Generic tab switcher ─────────────────────────────────────────── */
+  function initTabs(tabSel, panelSel, idPrefix, dataKey) {
+    document.querySelectorAll(tabSel).forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll(tabSel).forEach(b => b.classList.remove('active'));
+        document.querySelectorAll(panelSel).forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(idPrefix + btn.dataset[dataKey]).classList.add('active');
+      });
     });
-  });
-
-  /* ── Install tab switching ───────────────────────────────────────── */
-  document.querySelectorAll('.install-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.install-tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.install-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('itab-' + btn.dataset.itab).classList.add('active');
-    });
-  });
+  }
+  initTabs('.prompt-tab',  '.prompt-panel',  'tab-',  'tab');
+  initTabs('.install-tab', '.install-panel', 'itab-', 'itab');
 
   /* ── Pose card hover: play video, pause on leave ─────────────────── */
   document.querySelectorAll('.pose-card').forEach(card => {
