@@ -176,6 +176,189 @@ SUBJECTS_KAFKA = [
     "a woman trying to leave a building that keeps acquiring new hallways",
 ]
 
+SUBJECTS_HOMER = [
+    "a blind singer asking for wine and beginning another ten years of the story",
+    "a warrior sitting on a beached black ship at the edge of another man's quarrel",
+    "Penelope unwinding at night what she wove by day, the suitors sleeping downstairs",
+    "Odysseus in disguise eating at his own table, watching his wife",
+    "a Cyclops lifting a stone door from a cave's mouth in morning light",
+    "a king sitting on a stone wall weeping for his dead, not ashamed of it",
+    "two armies watching two men decide a war between them, the field gone quiet",
+    "a goddess disguised as an old woman giving useless advice with great sincerity",
+    "a soldier's ghost demanding proper burial in a dream, very specific about location",
+    "Circe turning sailors into pigs, all of them still themselves inside",
+    "a bow test nobody in the hall can pass until someone nobody respects tries",
+    "a runner carrying news that has already changed by the time he arrives",
+    "a shipwrecked man sleeping in the sand under pine branches he gathered himself",
+    "a Trojan woman on the wall watching smoke from the direction of her village",
+    "a god watching a war from a cloud with complete and genuine disinterest",
+    "Achilles in his tent, furious, the war going badly without him, unmoved",
+    "an old king sneaking through enemy lines at night to beg for his son's body",
+    "a siren on a rock watching a ship slow and then turn toward her anyway",
+]
+
+SUBJECTS_CHEKHOV = [
+    "a country doctor waiting for the carriage that is already three hours late",
+    "a woman on a porch watching birch trees, not saying anything, not needing to",
+    "a professor delivering the same lecture he has given for twenty years, suddenly aware of it",
+    "a man in a hotel room in Moscow who has forgotten why he came to Moscow",
+    "a young woman deciding again not to go to Moscow after all",
+    "a soldier home from the war sitting in someone else's kitchen, not quite fitting",
+    "an old man feeding pigeons in a provincial square on a Tuesday with nothing else to do",
+    "a cherry orchard being sold to pay a debt nobody quite knows how to stop",
+    "a bishop seeing his dead mother in the congregation and beginning to cry quietly",
+    "three sisters standing at a window talking about going to Moscow",
+    "a man lying under a cart in his own orchard, looking at stars, at peace",
+    "a woman reading a letter from someone who will not come, folding it carefully",
+    "a peasant who has walked forty miles to say one thing and doesn't know how to say it",
+    "a doctor whose patients are dying of everything he knows how to name",
+    "a man who has missed his whole life sitting in a garden in the evening light",
+    "two people in a carriage who will fall in love and then not do anything about it",
+]
+
+SUBJECTS_BORGES = [
+    "a librarian walking corridor to corridor through a library that contains every book ever written",
+    "a man who can only navigate labyrinths, lost on a straight road",
+    "a gaucho who carries the memories of everyone who has carried his knife",
+    "a mirror reflecting the same room from thirty years ago",
+    "a man who reads one line of a book and cannot stop reading the same line",
+    "a tiger burning in a garden that was never a garden",
+    "two men dueling at dawn who are each other's exact double, both missing",
+    "a man whose map of the territory is the exact size of the territory",
+    "a woman who has lived her life in the wrong order and only just noticed",
+    "a library where every book is a variant of the same book, shelved by difference",
+    "a man who meets himself emerging from a house he has never entered",
+    "a scholar finding the same lost manuscript in different archives across different centuries",
+    "a man whose dreams are remembered in detail by a stranger on another continent",
+    "a garden of forking paths where every choice happens simultaneously, the gardener watching",
+    "an aleph in a cellar: a point containing all other points, visible from one angle",
+    "a cartographer who mapped a country that ceased to exist before the map was finished",
+]
+
+SUBJECTS_DOSTOEVSKY = [
+    "a student with an axe under his coat stopping at a pawnbroker's door at 7pm",
+    "a gambling man doubling down at the roulette wheel in Baden-Baden at 4am, no coat",
+    "a man who believes himself above ordinary morality, testing the proposition carefully",
+    "a holy fool being laughed at in a village square and not particularly minding",
+    "a man in an underground room writing furiously to no one, proving a point",
+    "a woman with a fever asking a question that has no answer anyone will give",
+    "a young man with beautiful ideas and no practical sense visiting a dying man",
+    "a saint in a cell being visited by the devil, calmly, over tea, taking notes",
+    "a prisoner who became himself in a Siberian labor camp for four years",
+    "a man on a bridge at midnight considering the river below for the wrong reason",
+    "a child explaining Christianity to a general who has never been explained to before",
+    "a father who has destroyed everyone who loved him, sitting in the wreckage",
+    "a man who confessed everything publicly and was not believed by anyone",
+    "a gambler sending one last telegram home before losing his coat at the tables",
+    "a murderer sitting very still in a room precisely the size of his cell in Siberia",
+    "a woman choosing between two men who will both ruin her, fully understanding both",
+]
+
+SUBJECTS_WOOLF = [
+    "a woman walking the length of a room thinking about dinner and about everything",
+    "Mrs. Dalloway buying flowers herself, because Scrope Purvis thought she looked so young",
+    "a lighthouse seen from across the water, the distance never quite the same twice",
+    "a woman writing in a room of her own with the door finally closed",
+    "a man explaining the universe to a woman who has stopped listening",
+    "a figure drifting in and out of a party, just barely there, like light in a mirror",
+    "an old man looking at his reflection in a shop window, unrecognized by it",
+    "a woman who has been very ill and come back to find the world slightly rearranged",
+    "the shadow of a moth dying against a window in the autumn afternoon",
+    "a party at which the host feels more absent than any of the guests",
+    "a woman alone on a beach watching waves and understanding something she won't explain",
+    "two scholars arguing over a manuscript in a room too cold to think in clearly",
+    "Orlando waking up in a different century in the same house, checking the mirror",
+]
+
+SUBJECTS_GARCIA_MARQUEZ = [
+    "a colonel who has been waiting seventeen years for a pension letter that is not coming",
+    "a man so lonely he has learned to speak to butterflies and they answer",
+    "a woman who has cooked the same meal for fifty years and it still makes people weep",
+    "a patriarch dying in his hammock surrounded by great-grandchildren whose names he can't place",
+    "a ghost walking through the house where she was born, everyone sees her, nobody mentions it",
+    "two men shooting at each other at dawn while a yellow butterfly watches from the fence",
+    "a village where everyone wakes from the same dream on the same night, says nothing",
+    "a woman with insomnia reading the encyclopedia in order, losing track of the alphabet",
+    "a rain that has been falling for four years eleven months and two days with no sign of stopping",
+    "an ice-seller arriving in a village that has never seen ice, holding a block up to the light",
+    "a man who lived to 132 and can remember everything that did not happen",
+    "a dead woman lying calm in the courtyard while the family argues about burial above her",
+    "a priest eating a communion wafer he brought himself into a room of identical mirrors",
+    "a child born with the exact memories of a grandmother who died the day before",
+    "a town where everyone has forgotten the names of things but keeps using them correctly",
+    "a ghost ship arriving in port crewed by the dead, who have cargo to deliver",
+]
+
+SUBJECTS_ACHEBE = [
+    "an elder taking snuff from a goatskin bag and preparing to speak before the village",
+    "a wrestler nobody has thrown in seven years lifting his hands before the match",
+    "a village deciding whether to receive the first missionary or not, taking its time",
+    "a man who beat his wife during the Week of Peace and watches what follows",
+    "a woman pounding yam at dusk, the sound carrying across three family compounds",
+    "missionaries standing in a clearing explaining God to people who have more than one",
+    "a chief in eagle-feather regalia hearing a court case from his obi stool",
+    "a son returning from school to find a father he can no longer speak to in the old ways",
+    "a man caught between two allegiances that cannot both be honored, choosing",
+    "a new road dividing a village that had only one center and is now two villages",
+    "a daughter-in-law who is not from this village, watched from every doorway",
+    "a man burying his father according to two different authorities' incompatible instructions",
+    "a market day where everything is exchanged, including things that should not travel",
+    "a titled man sitting in his obi at night, the fire low, the visitors finally gone",
+    "an Igbo-speaking clerk in a colonial office filling forms in a language he dreams in now",
+    "a village assembled for a palaver that may or may not end with a unanimous decision",
+]
+
+SUBJECTS_MISHIMA = [
+    "a young man on a destroyer watching the sea, composing his last poem carefully",
+    "a samurai contemplating his own irrelevance with enormous, precise attention",
+    "a woman wearing a kimono that belonged to someone who died beautifully and young",
+    "a boy at a boarding school discovering that beauty and cruelty are adjacent rooms",
+    "a kabuki actor putting on a woman's face slowly in a mirror, forgetting himself",
+    "a man standing in front of a temple he has decided to burn down, waiting for courage",
+    "a soldier who arrived too late for the surrender and kept fighting in the forest anyway",
+    "a body being arranged in the prescribed way, by hands that know the ritual",
+    "a tea ceremony in which one gesture takes three years to perform correctly",
+    "a man who has been rehearsing his own death since he was twenty",
+    "a perfectly made sword that has never been used, lying in its case",
+    "a general reviewing troops who do not know the war they won is being taken back",
+]
+
+SUBJECTS_BASHO = [
+    "a frog leaping into a still pond, the sound arriving just slightly after",
+    "a traveler on a mountain road at sunset, a crow settling in a bare oak ahead",
+    "an old temple gate, mossy and open, no one coming through since morning",
+    "a winter moon above the road to the far north, one set of footprints ahead",
+    "a heron frozen above a river that has stopped moving",
+    "a plum blossom falling from a branch no one is standing under",
+    "a sake brewer in Edo-period Japan pressing a cedar lid down on a fermenting vat",
+    "a monk sweeping a courtyard no wind has touched yet",
+    "a melon cooling in water at the side of a road nobody takes in July",
+    "a traveler who has been walking so long he no longer remembers what toward",
+    "a spider's web perfectly formed between two stones at a mountain pass",
+    "a dragonfly landing on a sleeping hermit's arm without waking him",
+    "cherry blossoms falling into a cup of tea no one is watching",
+    "an old pond in a garden that nobody tends anymore, still reflecting",
+]
+
+SUBJECTS_DICKENS = [
+    "a pale woman in a rotting wedding dress still seated at the table, decades stopped",
+    "a clerk copying endless documents by candlelight in a counting house at 10pm",
+    "an orphan eating gruel in a workhouse hall, holding out his bowl for more",
+    "a lawyer in fog-thick London carrying a will he has kept for thirty years",
+    "a debtor's family making the best of two rooms in a Marshalsea prison",
+    "a benefactor whose identity is carefully concealed, doing enormous and specific good",
+    "a moneylender in spectacles tapping a ledger with one finger, smiling with his mouth",
+    "a child looking through iron gates at a Christmas party inside a lit house",
+    "two friends in a prison cart at dawn making their peace in different ways",
+    "a convict on a Kentish marsh at dusk asking a terrified child to steal him a file",
+    "a destitute family arriving at the workhouse door in December in good clothes",
+    "a clerk given Christmas morning off for the first time in nineteen years",
+    "a fat innkeeper explaining everything wrong with modern London, getting some of it right",
+    "a seamstress talking her way through a Revolutionary mob with total self-possession",
+    "a Chancery clerk who has been processing one case for twenty-two years",
+    "a street urchin picking pockets on Oxford Street, improving the art",
+]
+
 SUBJECTS_GENERAL = [
     # Human figures
     "a lone astronaut",
@@ -238,12 +421,61 @@ SUBJECTS_GENERAL = [
     "a whale breaching at the edge of sunset, silhouette against orange",
     "a school of jellyfish drifting upward through a column of blue light",
     "a praying mantis on the rim of a coffee cup, studying the steam",
+    "a sea turtle surfacing in the Atlantic on a migration path she navigates by magnetic field",
+    "a honey bee navigating by sun angle across a field she has flown a thousand times",
+    "a snow leopard sitting completely still on a rock at 14,000 feet, watching something",
+    "a blue whale diving, the last view of its flukes, then silence for twenty minutes",
+    "a hummingbird motionless before a flower for 0.8 seconds, all of it in use",
+    "a fennec fox in Saharan moonlight, enormous ears rotating toward a sound below the sand",
+    "a beluga whale at the surface of an Arctic fjord, white as the ice behind it",
+    "a fruit bat colony erupting from a cave in Zambia: a million animals becoming one river",
+    "a herd of wildebeest at a river crossing, the ones at the front not wanting to go first",
+    "a Galápagos iguana staring at a camera with total and accurate indifference",
+    # Historical and global human figures
+    "a Mongolian throat singer performing alone in a valley, harmonics bouncing off both rock walls",
+    "an Aztec scribe recording a flood in accordion-fold bark paper, very precise",
+    "a Norse skald composing verse beside a dying jarl's bed, getting the kennings right",
+    "a Songhai scholar copying a medical text by hand in Timbuktu, lamplight on the page",
+    "a Balinese dancer alone in a temple rehearsing a ceremony role before sunrise",
+    "an Inuit hunter sitting motionless on sea ice above a seal's breathing hole",
+    "a Persian poet polishing one couplet for a month, then discarding it",
+    "a Greek fisherman mending nets alone on a stone quay in the Aegean at noon",
+    "an Ethiopian priest illuminating a manuscript in Ge'ez in a Lalibela cave church, lamplight on gold leaf",
+    "a Maori warrior carving a name into a post before a treaty signing, very careful",
+    "an Irish navvy in a frozen Pennsylvania ditch laying railway track, 1848",
+    "a Chinese railroad worker drilling a tunnel in the Sierra Nevada by hand, 1866",
+    "a Harlem Renaissance painter waiting for the good afternoon light on 125th Street",
+    "a suffragette being carried from a police station, looking directly at a camera",
+    "a Dakota woman outside a reservation school watching her son walk through the door",
+    "a Japanese-Brazilian coffee picker in São Paulo state at dawn, 1915",
+    "a Bengali poet writing verse that will be attributed to someone else",
+    "an Algerian poet typing a letter in French she is composing in Tamazight in her head",
+    # Specialized occupations across time
+    "a professional mourner hired to cry at a funeral, crying from her own memories",
+    "a medieval apothecary grinding something that will cure one person and harm another",
+    "a telegraph operator in 1865 receiving news of Lincoln's death, first of his town to know",
+    "a court jester in 1350 making a king laugh while the plague is three streets away",
+    "a lighthouse keeper rotating the light alone for the forty-third consecutive winter",
+    "a Viennese psychoanalyst in silence while a patient describes a dream, taking notes",
+    "a Day of the Dead altar builder in Mexico placing photographs in order of death date",
+    "a Taiwanese grandmother burning paper money for ancestors in a courtyard at dusk",
+    "a deep-space mission psychologist alone at a workstation at 3am Earth time",
+    "a civil rights lawyer in Birmingham in 1963 reading a telegram from Washington",
+    "a Pompeian baker whose loaves were found in the oven two thousand years later",
+    "a WWII code-breaker at Bletchley Park, tired, reading a message backward",
+    "a medieval mapmaker drawing coastlines that no one has verified yet",
+    "a Victorian factory inspector writing a report no one will act on until next year",
+    "a plague doctor in a beak mask standing at a door in Marseille, 1720",
 ]
 
 SUBJECTS = (
     SUBJECTS_STEINBECK + SUBJECTS_PKD + SUBJECTS_BRAUTIGAN +
     SUBJECTS_BUTLER + SUBJECTS_NOON + SUBJECTS_ROBBINS +
-    SUBJECTS_KING + SUBJECTS_KAFKA + SUBJECTS_GENERAL
+    SUBJECTS_KING + SUBJECTS_KAFKA +
+    SUBJECTS_HOMER + SUBJECTS_CHEKHOV + SUBJECTS_BORGES +
+    SUBJECTS_DOSTOEVSKY + SUBJECTS_WOOLF + SUBJECTS_GARCIA_MARQUEZ +
+    SUBJECTS_ACHEBE + SUBJECTS_MISHIMA + SUBJECTS_BASHO + SUBJECTS_DICKENS +
+    SUBJECTS_GENERAL
 )
 
 # ── Commercial subjects & settings ────────────────────────────────────────────
@@ -785,6 +1017,205 @@ SETTINGS_IMPOSSIBLE = [
     "a hall of mirrors where one reflection isn't doing what the others are",
 ]
 
+SETTINGS_ANCIENT = [
+    "a Mesopotamian ziggurat at dawn, a priest inscribing a flood tablet on wet clay",
+    "a Greek agora at mid-morning: merchants, a philosopher, an argument, a dog",
+    "a Roman forum at dusk, temple lamps lit, the marble still warm from the sun",
+    "an Egyptian papyrus workshop beside the Nile during flood season",
+    "a Minoan palace courtyard with dolphin frescoes, no one home for three thousand years",
+    "a Han dynasty imperial library, scholars copying by lamplight in coordinated silence",
+    "a Phoenician harbor: cedar stacked on the dock, purple-dye vats, ships loading salt",
+    "a Hellenistic library at Alexandria — scrolls floor to ceiling, one scholar looking for one line",
+    "a Celtic hillfort at dusk, torches on the rampart, mist rising from the valley",
+    "an Athenian theater at the height of a tragedy, ten thousand people completely still",
+    "a Persian royal road at midday, a royal courier's dust still settling as he disappears",
+    "a Roman bathhouse at 3pm: steam, tile, the sound of water, a slave with a strigil",
+    "a Mayan observatory at night, a priest reading stellar positions through a narrow slit",
+    "a Greek trireme in battle, oarsmen below deck hearing everything but seeing nothing",
+    "an Aztec market at Tlatelolco: thousands of people, an order of astonishing complexity",
+    "a Nubian temple at Abu Simbel, morning sun entering the inner sanctum precisely once a year",
+    "a gladiatorial school practice yard at dawn, four men with wooden swords, no audience",
+    "a Chinese silk-weaving workshop: the loom's mechanical roar, women at every station",
+    "a caravan halt at a desert oasis at dusk, camels, firelight, five languages at one fire",
+    "a Spartan mess hall in winter: iron discipline, bad food, no complaints from anyone",
+]
+
+SETTINGS_MEDIEVAL = [
+    "a monastery scriptorium at dawn, monks copying manuscripts by insufficient light",
+    "a castle great hall during a feast: rushes on the floor, two hounds under the table",
+    "a plague cart moving through a village that has lost a third of itself this month",
+    "a pilgrimage road in muddy October France, a hundred people going to Santiago de Compostela",
+    "a market cross at midsummer: a fair, a juggler, livestock, a man in the stocks",
+    "a walled city at night, gates closed, a watchman's torch making a slow circuit",
+    "a tournament ground the morning after: trampled earth, forgotten pennants, one broken lance",
+    "a lord's mill in autumn, the entire year's harvest arriving at once in carts",
+    "a forest clearing where a hermit has lived for twenty years without anyone knowing",
+    "a guild workshop in Bruges: weavers and dyers, the smell of mordant and new wool",
+    "a crusader hospital in Acre: iron smell, a friar with clean hands, fifty dying men",
+    "a church interior during mass in 1200: no pews, everyone standing, slightly cold, candlelit",
+    "a Viking longhouse in February: smoked meat, ice on the smoke-hole, twelve people waiting",
+    "an alchemist's tower laboratory: retorts, bellows, a ledger of failed transmutations",
+    "a battlefield two hours after: fog, mud, two armies searching for their respective dead",
+    "a printing shop in Mainz, 1454: the first printed Bible page coming off the press",
+    "a convent scriptorium: women copying medical texts that will be attributed to men",
+    "a Jewish quarter in Toledo, a scholar translating Arabic astronomy into Latin, 1150",
+]
+
+SETTINGS_RENAISSANCE = [
+    "a Florentine painter's workshop at dawn: a half-finished Madonna, an apprentice grinding lapis lazuli",
+    "an anatomical theater in Padua, 1540: a cadaver, students on raked wooden seats, silence",
+    "a Venetian counting house: ledgers, spices from the East, a letter that changes everything",
+    "a printing house in Basel printing theology the Church would prefer not to circulate",
+    "a Medici garden party at dusk: torches, music, people arguing seriously about Plato",
+    "a map-maker's studio in Lisbon, 1492: a half-drawn coastline, a room full of corrections",
+    "a Spanish galleon's cargo hold: silver from Peru in chests, a single guttering candle",
+    "an Ottoman coffeehouse in Constantinople: chess, manuscripts, an argument about the caliphate",
+    "Michelangelo on scaffolding in the Sistine Chapel in August, plaster drying faster than he works",
+    "a court performance: a masque, candles, courtiers in allegorical costume, the king watching closely",
+    "a university lecture in Bologna, 1530: Aristotle being openly challenged, everyone taking notes",
+    "a monastic library being dissolved under Henry VIII: books in a courtyard, a monk watching",
+    "a tailor's workshop making doublets for a nobleman who will be executed in six months",
+    "a woodcut workshop producing a broadsheet: the ink, the press, the smell, the purpose",
+    "a Dutch merchant's warehouse in Amsterdam, 1602: the first stock certificate being written out",
+]
+
+SETTINGS_INDUSTRIAL_AGE = [
+    "a cotton mill in Manchester, 1835: looms, child workers, a deafening mechanical roar all day",
+    "a coal mine shaft entrance at dawn: men descending, their lamps going out of sight one by one",
+    "a Victorian railway terminus at rush hour: steam, soot, a departure board, five thousand people",
+    "a Dickensian counting house at 9pm: clerks on high stools, gas light, one ledger, no sound",
+    "an iron foundry at night: molten metal pouring, men silhouetted in orange against the dark",
+    "a London slum court in 1880: five families to a house, one pump, no sky between the buildings",
+    "a Chartist meeting in a field: a thousand workers, a man on a wooden box, lanterns in the dusk",
+    "a Thames dockside at dawn: longshoremen, tea clippers unloading, fog off the river",
+    "an American textile mill town in 1870: a company store, a company church, the mill above both",
+    "a railway construction camp in the Rockies, 1867: Chinese and Irish workers eating separately",
+    "a telegraph office in 1870: the operator reading a battle report arriving in dots and dashes",
+    "a steel town at dusk, the sky orange year-round from the blast furnaces, visible for miles",
+    "a Pullman sleeping car on the Union Pacific at night, first class, curtained, going west",
+    "a Pittsburgh rolling mill: the scale of it, the heat, the noise, the men who stay",
+    "a London music hall at 10pm: working-class audience, comedians, a woman in sequins",
+    "a department store at Christmas 1890: gaslight, crowds, the first elevator in the building",
+    "a factory school: forty children in two rows, fractions on a board, all of them hungry",
+    "a patent office reading room, 1895: twelve people filing for variations of the same idea",
+    "a Union strike meeting in a basement, 1886: lit candles, a chairman, a vote being counted",
+    "a Bradford wool-sorting room: women working by window light, the dust, the noise, the count",
+]
+
+SETTINGS_WARTIME = [
+    "a WWI trench at dawn: mud, wire, the world twelve feet wide, the artillery paused",
+    "a London Underground shelter during the Blitz: families, children asleep on platforms, 1940",
+    "a field hospital in France, 1917: a surgeon working by lamplight, no morphine left at all",
+    "a war correspondent's billet in a bombed Barcelona hotel, 1937, the typewriter still working",
+    "a Pacific island two hours after the battle: a photographer walking through wreckage alone",
+    "a liberated concentration camp in April 1945: the gates open, the liberators not speaking",
+    "a Korean War MASH unit in winter: blood on snow, the sound of helicopters in the hills",
+    "a Saigon rooftop, April 29, 1975: helicopters, smoke, the street below filling",
+    "a Berlin street the night the Wall came down: strangers embracing, concrete in their pockets",
+    "a bomb shelter in Sarajevo, 1993: candles, a radio, someone reading aloud from a novel",
+    "a Dunkirk beach in June 1940: small boats arriving, soldiers in the surf, a grey English sky",
+    "a Soviet factory relocated to the Urals in winter 1941, operating three days after arrival",
+    "an occupied Paris café, 1943: four people saying nothing carefully, a German officer nearby",
+    "a Japanese-American internment camp in the California desert in summer, 1942",
+    "a refugee camp in 1947, partition: a million people and no border yet marked on the ground",
+    "a Leningrad apartment during the 900-day siege: a ration card, a journal, the cold",
+    "a fire-bombed Tokyo neighborhood in March 1945, morning after: no description does it",
+    "a field cemetery in Normandy: a chaplain reading over a row of new markers, August 1944",
+]
+
+SETTINGS_COLONIAL = [
+    "a plantation house porch in South Carolina, 1820: the silence under the cicadas",
+    "a West African slave-trade fort: the Door of No Return, the ocean, the boats",
+    "a missionary school in Kenya, 1910: children learning in a language they don't dream in yet",
+    "a colonial administrator's bungalow in Bengal: a ceiling fan, papers, the heat, a bearer",
+    "an opium trade warehouse in Canton, 1840: British merchants, Chinese customs officials",
+    "a rubber plantation in the Belgian Congo, 1905: trees bleeding latex into cups, a quota",
+    "an indigo factory in Bihar: an English overseer with a ledger, workers who are planning",
+    "a port in Havana receiving sugar ships, returning them with cloth and Bibles and rules",
+    "a hill station in British India at evening: a brass band, officers drinking, the plains below",
+    "a trading post at the edge of known (to Europeans) territory: beads, iron, a Bible, a flag",
+    "a gold rush town in the Transvaal: tents, a stamp mill, men from everywhere, fever",
+    "a Hong Kong counting house, 1895: the harbor through the window, the arithmetic of empire",
+    "a freedom fighter's cell in 1950s Nairobi: a coded letter, a map, two oil lamps, a plan",
+    "a Spanish mission in California, 1810: converts working a field the church owns",
+    "a Sepoy barracks in 1856: men talking quietly about the cartridges, what the grease is",
+]
+
+SETTINGS_SOVIET = [
+    "a collective farm morning meeting, 1936: the chairman with a clipboard, the quota unmet",
+    "a grey Moscow apartment block, 1963: eight families sharing one telephone, waiting for calls",
+    "a GULAG transit camp in Siberia: men waiting to find out where exactly they are going",
+    "a Stalin Prize ceremony: the recipient smiling for a photograph, his hands folded just so",
+    "a secret police interrogation room: a desk, one lamp, a man who has all night and knows it",
+    "the Moscow Metro, 1938: the most beautiful subway in the world, built by prisoners",
+    "a Norilsk nickel plant above the Arctic Circle: permanent winter, a slag heap, ten months dark",
+    "a Soviet genetics institute: Lysenko's portrait on the wall, the wrong chromosome on the board",
+    "a Leningrad apartment, the siege winter: a ration card, a journal, what is left of the piano",
+    "a cosmonaut training center outside Moscow: a centrifuge, a pool, a man who might go next",
+    "a KGB archive room: floor-to-ceiling folders, a clerk searching for one name since Tuesday",
+    "a communal apartment kitchen: three families eating simultaneously, extremely careful with each other",
+    "a Soviet sports palace: a gymnast training in an empty arena, a coach watching from the stands",
+    "a collective farm kitchen in 1945: buckwheat kasha, bread, women who remember before all this",
+    "a Siberian logging camp, 1951: men in padded jackets, the birch forest going on forever",
+]
+
+SETTINGS_EAST_ASIA_HISTORICAL = [
+    "an Edo period Tokyo neighborhood: wooden houses over a canal, a shamisen from an upper floor",
+    "a Song dynasty imperial examination hall: a thousand candidates, three days, one chance at everything",
+    "a Joseon Korean royal court: geomancers, eunuchs, the king eating alone in ritual silence",
+    "a Tang dynasty caravanserai on the Silk Road: camels, merchants, five languages at one fire",
+    "a samurai's house at dusk in 1868: a sliding screen, a perfect garden, the end of everything approaching",
+    "a Meiji Japan factory, 1890: women learning industrial labor on machines imported from England",
+    "a Qing dynasty Beijing opera rehearsal: painted faces, costumes heavy as armor, a bored musician",
+    "a Ming dynasty porcelain workshop in Jingdezhen: five thousand potters, one dynasty's exacting taste",
+    "a Japanese Noh stage before dawn: the mask being put on in the dark, in silence",
+    "a Han dynasty imperial court audience: the Emperor behind a screen, a minister kneeling on stone",
+    "a Heian Japan court lady's room: incense, a poem written and sealed and not sent",
+    "a Tokugawa sword-polishing room: a man working alone for six hours, perfection approachable",
+    "a Tang dynasty scholar's garden: bamboo, a rock, a pavilion, a man who has nowhere to be",
+    "a Korean independence activist running an underground press in Seoul, 1919: the ink still wet",
+    "a Korean independence movement print shop, 1919: a press, a manifesto, the risk of everything",
+]
+
+SETTINGS_GLOBAL_CITIES = [
+    "a Lagos bus park at 5am: okada bikes, generators everywhere, everyone going somewhere urgent",
+    "a Havana street during a power cut in 1997: candles in every window, children playing in the dark",
+    "a Dhaka cycle-rickshaw painter finishing an impossibly detailed panel in a repair yard at midnight",
+    "a São Paulo samba school rehearsal space at 2am: a section getting one eight-bar break exactly right",
+    "a Nairobi matatu in morning traffic: ten people in six seats, three phones playing different music",
+    "a Manila jeepney on EDSA at rush hour: twenty people, metal saints on the dashboard, moving",
+    "a Mumbai chawl courtyard at dawn: cooking fires, water filling, the whole day beginning",
+    "a Cairo coffee house during a World Cup match: forty men, twenty simultaneous arguments",
+    "a Bogotá barrio bookstore open to the street all day, no front wall, nobody asking for ID",
+    "a Karachi clifftop tea stall above the Arabian Sea, strangers sharing a wooden bench at dusk",
+    "a Buenos Aires milonga at midnight: two people, a tango, no one looking at the clock",
+    "a Lagos beach bar at sunset: pepper soup, plastic chairs, the Atlantic agreeing with everything",
+    "a Kinshasa recording studio at 2am: rumba guitarists, one microphone, the feeling already recorded",
+    "a Mexico City street market at dawn: flor de calabaza, chile, a radio, the light arriving slowly",
+    "a Beirut café, 2006: a chess game, cigarettes, the city going about its business between things",
+    "a Delhi railway station platform at 6am: four million people's decisions all happening at once",
+    "a Johannesburg township shebeen on Saturday night: music, heat, cold beer, complicated joy",
+    "an Istanbul ferry crossing the Bosphorus at dusk: tea from a glass, two continents in the frame",
+]
+
+SETTINGS_SACRED_SPACES = [
+    "the Kaaba at dawn surrounded by white-clad pilgrims in circumambulation, the scale of devotion",
+    "a Varanasi ghat at sunrise: a body burning, a prayer being said, the Ganges moving anyway",
+    "the Hagia Sophia at noon: light from high windows hitting specific floor tiles for a moment",
+    "a roadside shrine in Mexico with marigolds, a photograph, a candle, and a bottle of Coke",
+    "a Shinto forest shrine: the torii gate, the gravel path, the presence felt without being named",
+    "a Tibetan monastery at 4am: monks in debate, their voices precise and fierce in the dark",
+    "an empty Catholic church on a Tuesday: one candle burning, someone sitting, stained glass",
+    "a West African crossroads at midnight: an offering at the place where choices are made permanent",
+    "an Aboriginal sacred site in the Kimberley: a rock painting 40,000 years old, no railing",
+    "an open Montana field in early autumn where last year's Sun Dance lodge poles still stand, weathering",
+    "a Wailing Wall at dawn: slips of paper wedged into ancient stone, a man with his forehead against it",
+    "a Tamil Nadu temple at festival time: oil lamps, flowers, a crowd, the sound of a bell continuing",
+    "a rural Russian Orthodox church in winter: four people, a painted Christ, the priest's breath visible",
+    "a Lalibela rock-cut church in Ethiopia: underground, lit by one window, carved from the mountain",
+    "a Balinese cremation pyre: a tower, a crowd, an offering, the island going on with its business",
+]
+
 SETTINGS_GENERAL = [
     "a rain-soaked Tokyo alley",
     "a vast salt flat at dusk",
@@ -826,7 +1257,12 @@ SETTINGS = (
     SETTINGS_SYNTHS + SETTINGS_BROKEN_ELECTRONICS + SETTINGS_RETRO_OBJECTS +
     SETTINGS_CARTOON + SETTINGS_SESAME_MUPPETS + SETTINGS_STOP_MOTION +
     SETTINGS_PSYCHEDELIA + SETTINGS_MUSIC_VIDEO + SETTINGS_NOSTALGIA +
-    SETTINGS_IMPOSSIBLE + SETTINGS_GENERAL
+    SETTINGS_IMPOSSIBLE +
+    SETTINGS_ANCIENT + SETTINGS_MEDIEVAL + SETTINGS_RENAISSANCE +
+    SETTINGS_INDUSTRIAL_AGE + SETTINGS_WARTIME + SETTINGS_COLONIAL +
+    SETTINGS_SOVIET + SETTINGS_EAST_ASIA_HISTORICAL +
+    SETTINGS_GLOBAL_CITIES + SETTINGS_SACRED_SPACES +
+    SETTINGS_GENERAL
 )
 
 # ── Time & Weather ─────────────────────────────────────────────────────────────
@@ -1136,6 +1572,16 @@ _SUBJECT_REGISTERS = {
     "robbins": SUBJECTS_ROBBINS,
     "king": SUBJECTS_KING,
     "kafka": SUBJECTS_KAFKA,
+    "homer": SUBJECTS_HOMER,
+    "chekhov": SUBJECTS_CHEKHOV,
+    "borges": SUBJECTS_BORGES,
+    "dostoevsky": SUBJECTS_DOSTOEVSKY,
+    "woolf": SUBJECTS_WOOLF,
+    "garcia_marquez": SUBJECTS_GARCIA_MARQUEZ,
+    "achebe": SUBJECTS_ACHEBE,
+    "mishima": SUBJECTS_MISHIMA,
+    "basho": SUBJECTS_BASHO,
+    "dickens": SUBJECTS_DICKENS,
     "general": SUBJECTS_GENERAL,
     "commercial": SUBJECTS_COMMERCIAL_PRODUCTS,
 }
@@ -1158,6 +1604,16 @@ _SETTING_REGISTERS = {
     "music_video": SETTINGS_MUSIC_VIDEO,
     "nostalgia": SETTINGS_NOSTALGIA,
     "impossible": SETTINGS_IMPOSSIBLE,
+    "ancient": SETTINGS_ANCIENT,
+    "medieval": SETTINGS_MEDIEVAL,
+    "renaissance": SETTINGS_RENAISSANCE,
+    "industrial_age": SETTINGS_INDUSTRIAL_AGE,
+    "wartime": SETTINGS_WARTIME,
+    "colonial": SETTINGS_COLONIAL,
+    "soviet": SETTINGS_SOVIET,
+    "east_asia_historical": SETTINGS_EAST_ASIA_HISTORICAL,
+    "global_cities": SETTINGS_GLOBAL_CITIES,
+    "sacred_spaces": SETTINGS_SACRED_SPACES,
     "general": SETTINGS_GENERAL,
 }
 
