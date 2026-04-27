@@ -1,3 +1,20 @@
+tt-local-generator (0.2.2) noble; urgency=medium
+
+  * Massively expand prompt word banks: 10 new literary subject registers
+    (Homer, Chekhov, Borges, Dostoevsky, Woolf, García Márquez, Achebe,
+    Mishima, Bashō, Dickens) and 10 new historical/geographic setting
+    registers (Ancient, Medieval, Renaissance, Industrial Age, Wartime,
+    Colonial, Soviet, East Asia Historical, Global Cities, Sacred Spaces).
+  * Add .deb install section to homepage with gh release download instructions.
+  * Auto-create ~/Videos/tt-local-generator → ~/.local/share/tt-video-gen
+    symlink on install (postinst and setup_ubuntu.sh).
+  * Fix postinst home directory resolution via getent passwd instead of
+    hardcoded /home/$REAL_USER; guard against root user; pre-create target dir.
+  * Fix homepage Docker description to match actual postinst behavior.
+  * Refactor homepage tab-switching JS into shared initTabs() helper.
+
+ -- Tenstorrent <software@tenstorrent.com>  Sun, 27 Apr 2026 00:00:00 +0000
+
 tt-local-generator (0.2.1) noble; urgency=medium
 
   * Add VERSION file at repo root as single source of truth for the
