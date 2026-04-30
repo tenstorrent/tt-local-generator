@@ -246,9 +246,11 @@ def test_purge_playlist_items(tmp_path):
 
 def test_make_artgen_path(tmp_path):
     from media_store import make_artgen_path
-    p = make_artgen_path("abc12345", ".svg", base_dir=tmp_path / "artgen")
+    base = tmp_path / "artgen"
+    p = make_artgen_path("abc12345", ".svg", base_dir=base)
     assert p.suffix == ".svg"
     assert "abc12345" in p.name
+    assert p.parent == base  # file is inside base_dir
 
 
 def test_make_thumbnail_svg(tmp_path):
@@ -257,9 +259,9 @@ def test_make_thumbnail_svg(tmp_path):
     svg_path.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
                         '<rect width="100" height="100" fill="red"/></svg>')
     out = tmp_path / "thumb.png"
-    make_thumbnail(svg_path, out)
-    # Either a PNG was written or the SVG was copied as fallback
-    assert out.exists() or out.with_suffix(".svg").exists()
+    result = make_thumbnail(svg_path, out)
+    # Return value must point to an existing file (PNG or SVG fallback)
+    assert result.exists(), f"make_thumbnail returned {result} which does not exist"
 
 
 def test_make_thumbnail_text(tmp_path):
@@ -267,6 +269,7 @@ def test_make_thumbnail_text(tmp_path):
     txt_path = tmp_path / "verse.txt"
     txt_path.write_text("the forge\nsleeps\nin ash")
     out = tmp_path / "thumb.png"
-    make_thumbnail(txt_path, out)
-    # Always produces some file (PNG or placeholder)
-    assert out.exists()
+    result = make_thumbnail(txt_path, out)
+    # Return value must point to an existing file
+    assert result.exists(), f"make_thumbnail returned {result} which does not exist"
+    assert result == out  # text path always produces a PNG at dst

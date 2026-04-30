@@ -483,8 +483,8 @@ def make_thumbnail(src: Path, dst: Path) -> Path:
             handle.render_document(ctx, vp)
             surface.write_to_png(str(dst))
             return dst
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("make_thumbnail: Rsvg failed for %s: %s", src, exc)
         import shutil
         fallback = dst.with_suffix(".svg")
         shutil.copy2(src, fallback)
@@ -503,8 +503,8 @@ def make_thumbnail(src: Path, dst: Path) -> Path:
         draw.text((6, 6), text, fill=(232, 240, 242), font=font)
         img.save(str(dst))
         return dst
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("make_thumbnail: PIL failed for %s: %s", src, exc)
 
     _write_placeholder_png(dst)
     return dst
@@ -521,7 +521,7 @@ def _write_placeholder_png(path: Path) -> None:
 
     sig  = b"\x89PNG\r\n\x1a\n"
     ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    raw  = b"\x00\x80\x80\x80"  # filter byte + 1 grey pixel (R=G=B=128)
+    raw  = b"\x00\x80\x80\x80"  # filter byte + 1 RGB pixel (R=G=B=128, visually grey)
     idat = _chunk(b"IDAT", zlib.compress(raw))
     iend = _chunk(b"IEND", b"")
     path.write_bytes(sig + ihdr + idat + iend)
