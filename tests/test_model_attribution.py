@@ -64,31 +64,41 @@ def test_extra_meta_stored_and_retrieved():
 
 
 def test_load_legacy_record_without_model(tmp_path, monkeypatch):
-    """Records written before this feature (no 'model' key) must load without error."""
-    hist_file = tmp_path / "history.json"
-    legacy = [
-        {
-            "id": "legacy001",
-            "prompt": "old video",
-            "negative_prompt": "",
-            "num_inference_steps": 20,
-            "seed": -1,
-            "video_path": "",
-            "thumbnail_path": "",
-            "created_at": "2025-01-01T12:00:00",
-            "duration_s": 120.0,
-            # no 'model', no 'extra_meta'
-        }
-    ]
-    hist_file.write_text(json.dumps(legacy))
-
+    """Records with no 'model' key round-trip through the new SQLite store correctly."""
     import history_store as hs
-    monkeypatch.setattr(hs, "HISTORY_FILE", hist_file)
-    monkeypatch.setattr(hs, "VIDEOS_DIR", tmp_path)
-    monkeypatch.setattr(hs, "IMAGES_DIR", tmp_path)
+    import media_store as ms_mod
+    from media_store import MediaStore
+
+    # Give this test a fresh, isolated SQLite store in tmp_path
+    fresh_ms = MediaStore(tmp_path / "media.db")
+    monkeypatch.setattr(ms_mod, "_media_store_singleton", fresh_ms)
+
+    # Patch history_store dir constants so mkdir() goes to tmp_path
+    monkeypatch.setattr(hs, "STORAGE_DIR",    tmp_path)
+    monkeypatch.setattr(hs, "VIDEOS_DIR",     tmp_path)
+    monkeypatch.setattr(hs, "IMAGES_DIR",     tmp_path)
     monkeypatch.setattr(hs, "THUMBNAILS_DIR", tmp_path)
+    monkeypatch.setattr(hs.HistoryStore, "_QUEUE_FILE", tmp_path / "queue.json")
+
+    # Build a legacy-style record (no model, no extra_meta) via the dataclass
+    # and insert it directly — the new store has no JSON loader for legacy files.
+    from history_store import GenerationRecord
+    legacy_rec = GenerationRecord(
+        id="legacy001",
+        prompt="old video",
+        negative_prompt="",
+        num_inference_steps=20,
+        seed=-1,
+        video_path="",
+        thumbnail_path="",
+        created_at="2025-01-01T12:00:00",
+        duration_s=120.0,
+        # model and extra_meta default to "" and {} respectively
+    )
 
     store = HistoryStore()
+    store.append(legacy_rec)
+
     records = store.all_records()
     assert len(records) == 1
     assert records[0].model == ""
