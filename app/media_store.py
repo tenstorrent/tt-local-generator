@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -96,6 +97,7 @@ class MediaStore:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        self._lock = threading.Lock()  # serialises concurrent writes
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
@@ -177,15 +179,83 @@ class MediaStore:
         self._conn.commit()
 
     def _upsert(self, rec: MediaRecord) -> None:
-        self._conn.execute(
-            "INSERT OR IGNORE INTO media "
-            "(id,media_type,created_at,file_path,thumbnail_path,prompt,model_id,"
-            " generator_type,params,starred) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (rec.id, rec.media_type, rec.created_at, rec.file_path,
-             rec.thumbnail_path, rec.prompt, rec.model_id, rec.generator_type,
-             rec.params, rec.starred),
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO media "
+                "(id,media_type,created_at,file_path,thumbnail_path,prompt,model_id,"
+                " generator_type,params,starred) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (rec.id, rec.media_type, rec.created_at, rec.file_path,
+                 rec.thumbnail_path, rec.prompt, rec.model_id, rec.generator_type,
+                 rec.params, rec.starred),
+            )
+            self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Public CRUD API
+    # ------------------------------------------------------------------
+
+    def add(self, record: MediaRecord) -> str:
+        """Insert *record* into the store and return its id."""
+        self._upsert(record)
+        return record.id
+
+    def get(self, id: str) -> Optional[MediaRecord]:
+        """Return the MediaRecord for *id*, or None if not found."""
+        row = self._conn.execute(
+            "SELECT id,media_type,created_at,file_path,thumbnail_path,prompt,"
+            "       model_id,generator_type,params,starred "
+            "FROM media WHERE id=?", (id,)
+        ).fetchone()
+        return MediaRecord(*row) if row else None
+
+    def delete(self, id: str) -> bool:
+        """Delete the record with *id*. Returns True if a row was removed."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM media WHERE id=?", (id,))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def star(self, id: str, starred: bool) -> None:
+        """Set the starred flag on the record with *id*."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE media SET starred=? WHERE id=?", (int(starred), id)
+            )
+            self._conn.commit()
+
+    def query(
+        self,
+        media_type: Optional[str] = None,
+        generator_type: Optional[str] = None,
+        starred: Optional[bool] = None,
+        limit: Optional[int] = None,
+    ) -> list[MediaRecord]:
+        """
+        Return records matching the supplied filters, newest-first.
+
+        All filter arguments are optional; omitting them returns everything.
+        """
+        clauses, params = [], []
+        if media_type is not None:
+            clauses.append("media_type=?")
+            params.append(media_type)
+        if generator_type is not None:
+            clauses.append("generator_type=?")
+            params.append(generator_type)
+        if starred is not None:
+            clauses.append("starred=?")
+            params.append(int(starred))
+        sql = (
+            "SELECT id,media_type,created_at,file_path,thumbnail_path,prompt,"
+            "       model_id,generator_type,params,starred FROM media"
         )
-        self._conn.commit()
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC"
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        rows = self._conn.execute(sql, params).fetchall()
+        return [MediaRecord(*r) for r in rows]
 
 
 _media_store_singleton: "MediaStore | None" = None
