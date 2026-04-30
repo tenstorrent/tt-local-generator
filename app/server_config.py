@@ -81,6 +81,11 @@ DEFAULTS: dict[str, dict] = {
         "port":  8001,
         "token": "",          # prompt server has no auth
     },
+    "artgen": {
+        "host":  "localhost",
+        "port":  8000,        # same vLLM server as video/image generation
+        "token": "",
+    },
 }
 
 
