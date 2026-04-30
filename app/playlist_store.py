@@ -4,44 +4,29 @@
 """
 playlist_store.py — Named playlist management for tt-local-generator.
 
-Playlists are ordered collections of GenerationRecord IDs that can be
-used as "channels" in the TT-TV attractor window.  Each playlist also
-carries an auto_gen flag controlling whether TT-TV auto-generates new
-content when that channel is active.
+Playlists are ordered collections of media record IDs that can be used as
+"channels" in the TT-TV attractor window.  Each playlist also carries an
+auto_gen flag controlling whether TT-TV auto-generates new content when that
+channel is active.
 
-Storage: ~/.local/share/tt-video-gen/playlists.json
-Format: JSON array of playlist objects, written atomically.
+Storage: delegated to media_store (SQLite WAL database at
+         ~/.local/share/tt-video-gen/media.db).
+         PLAYLISTS_FILE is kept as a constant for backward-compatibility with
+         external scripts that may reference it, but it is no longer written.
 
-    [
-      {
-        "id": "a1b2c3d4-...",
-        "name": "Space Adventures",
-        "record_ids": ["uuid1", "uuid2", ...],
-        "auto_gen": true
-      },
-      ...
-    ]
-
-Can be read/modified by external scripts:
-
-    python3 -c "
-    import json, pathlib
-    p = pathlib.Path.home() / '.local/share/tt-video-gen/playlists.json'
-    playlists = json.loads(p.read_text())
-    print([pl['name'] for pl in playlists])
-    "
+This module is now a thin wrapper around media_store that preserves the full
+public API for existing callers.
 """
 
-import json
 import logging
-import os
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
+# Kept for backward compatibility — no longer written by this module.
 STORAGE_DIR    = Path.home() / ".local" / "share" / "tt-video-gen"
 PLAYLISTS_FILE = STORAGE_DIR / "playlists.json"
 
@@ -59,143 +44,128 @@ class Playlist:
 
 
 class PlaylistStore:
-    """
-    Persistent collection of named playlists.
-
-    All mutating methods write through to disk immediately so the JSON file
-    is always current and can be read or written by external scripts.
-    """
+    """Thin wrapper around media_store — preserves public API for existing callers."""
 
     def __init__(self) -> None:
-        self._playlists: list[Playlist] = []
-        self._load()
+        pass  # MediaStore handles all persistence
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def all(self) -> list[Playlist]:
-        """Return a copy of the playlist list (insertion order preserved)."""
-        return list(self._playlists)
+        """Return all playlists (ordered by creation time, oldest first)."""
+        from media_store import media_store as _ms
+        return [self._to_pl(r) for r in _ms.list_playlists()]
 
     def get(self, playlist_id: str) -> Optional[Playlist]:
         """Return the playlist with the given ID, or None."""
-        for pl in self._playlists:
-            if pl.id == playlist_id:
-                return pl
-        return None
+        from media_store import media_store as _ms
+        rows = [r for r in _ms.list_playlists() if r["id"] == playlist_id]
+        return self._to_pl(rows[0]) if rows else None
 
     def create(self, name: str) -> Playlist:
         """Create a new empty playlist with the given name. Returns the new Playlist."""
-        pl = Playlist(id=str(uuid.uuid4()), name=name.strip(), record_ids=[])
-        self._playlists.append(pl)
-        self._save()
-        log.info("playlist created: %r (%s)", pl.name, pl.id)
-        return pl
+        from media_store import media_store as _ms
+        pl_id = _ms.create_playlist(name.strip(), filter_expr=None, auto_gen=False)
+        log.info("playlist created: %r (%s)", name.strip(), pl_id)
+        return self.get(pl_id)
 
     def rename(self, playlist_id: str, new_name: str) -> bool:
         """Rename a playlist. Returns True if found and renamed, False otherwise."""
-        pl = self.get(playlist_id)
-        if pl is None:
-            return False
-        pl.name = new_name.strip()
-        self._save()
-        log.info("playlist renamed to %r (%s)", pl.name, playlist_id)
-        return True
+        from media_store import media_store as _ms
+        with _ms._lock:
+            cur = _ms._conn.execute(
+                "UPDATE playlists SET name=? WHERE id=?", (new_name.strip(), playlist_id)
+            )
+            _ms._conn.commit()
+        if cur.rowcount > 0:
+            log.info("playlist renamed to %r (%s)", new_name.strip(), playlist_id)
+        return cur.rowcount > 0
 
     def delete(self, playlist_id: str) -> bool:
         """Delete a playlist by ID. Returns True if found and deleted."""
-        before = len(self._playlists)
-        self._playlists = [pl for pl in self._playlists if pl.id != playlist_id]
-        if len(self._playlists) < before:
-            self._save()
+        from media_store import media_store as _ms
+        deleted = _ms.delete_playlist(playlist_id)
+        if deleted:
             log.info("playlist deleted: %s", playlist_id)
-            return True
-        return False
+        return deleted
 
     def add_records(self, playlist_id: str, record_ids: list) -> int:
         """
         Append record IDs to a playlist, deduplicating against existing entries.
         Returns the number of newly added IDs.
         """
+        from media_store import media_store as _ms
         pl = self.get(playlist_id)
         if pl is None:
             log.warning("add_records: playlist not found: %s", playlist_id)
             return 0
-        existing = set(pl.record_ids)
+        existing = {m.id for m in _ms.playlist_records(playlist_id)}
         new_ids = [rid for rid in record_ids if rid not in existing]
-        pl.record_ids.extend(new_ids)
+        for rid in new_ids:
+            _ms.add_to_playlist(playlist_id, rid)
         if new_ids:
-            self._save()
             log.info("added %d record(s) to playlist %r (%s)", len(new_ids), pl.name, playlist_id)
         return len(new_ids)
 
     def remove_record(self, playlist_id: str, record_id: str) -> bool:
         """Remove a single record ID from a playlist. Returns True if removed."""
+        from media_store import media_store as _ms
         pl = self.get(playlist_id)
-        if pl is None:
+        if pl is None or record_id not in pl.record_ids:
             return False
-        if record_id not in pl.record_ids:
-            return False
-        pl.record_ids.remove(record_id)
-        self._save()
+        _ms.remove_from_playlist(playlist_id, record_id)
         return True
 
     def set_auto_gen(self, playlist_id: str, value: bool) -> bool:
         """Set the auto_gen flag for a playlist. Returns True if found."""
-        pl = self.get(playlist_id)
-        if pl is None:
-            return False
-        pl.auto_gen = value
-        self._save()
-        return True
+        from media_store import media_store as _ms
+        with _ms._lock:
+            cur = _ms._conn.execute(
+                "UPDATE playlists SET auto_gen=? WHERE id=?", (int(value), playlist_id)
+            )
+            _ms._conn.commit()
+        return cur.rowcount > 0
 
     def purge_deleted_records(self, valid_ids: set) -> int:
         """
-        Remove any record IDs that no longer exist in the history store.
+        Remove any record IDs that no longer exist in the media store.
         Call this after deleting a generation record to keep playlists consistent.
         Returns the total number of IDs pruned.
         """
-        total = 0
-        for pl in self._playlists:
-            before = len(pl.record_ids)
-            pl.record_ids = [rid for rid in pl.record_ids if rid in valid_ids]
-            total += before - len(pl.record_ids)
-        if total:
-            self._save()
-            log.info("purged %d stale record ID(s) from playlists", total)
-        return total
+        from media_store import media_store as _ms
+        rows = _ms._conn.execute(
+            "SELECT playlist_id, media_id FROM playlist_items"
+        ).fetchall()
+        to_remove = [(pl_id, mid) for pl_id, mid in rows if mid not in valid_ids]
+        for pl_id, mid in to_remove:
+            with _ms._lock:
+                _ms._conn.execute(
+                    "DELETE FROM playlist_items WHERE playlist_id=? AND media_id=?",
+                    (pl_id, mid),
+                )
+        if to_remove:
+            _ms._conn.commit()
+            log.info("purged %d stale record ID(s) from playlists", len(to_remove))
+        return len(to_remove)
 
-    # ── Persistence ────────────────────────────────────────────────────────────
+    # ── Internal ───────────────────────────────────────────────────────────────
 
-    def _load(self) -> None:
-        try:
-            if PLAYLISTS_FILE.exists():
-                raw = json.loads(PLAYLISTS_FILE.read_text(encoding="utf-8"))
-                if isinstance(raw, list):
-                    for item in raw:
-                        if not isinstance(item, dict):
-                            continue
-                        self._playlists.append(Playlist(
-                            id=item.get("id", str(uuid.uuid4())),
-                            name=item.get("name", "Untitled"),
-                            record_ids=list(item.get("record_ids", [])),
-                            auto_gen=bool(item.get("auto_gen", True)),
-                        ))
-        except Exception as exc:
-            log.warning("playlist_store: could not load %s: %s", PLAYLISTS_FILE, exc)
-
-    def _save(self) -> None:
-        try:
-            STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-            data = json.dumps(
-                [asdict(pl) for pl in self._playlists],
-                indent=2,
-                ensure_ascii=False,
-            ) + "\n"
-            tmp = PLAYLISTS_FILE.with_suffix(".json.tmp")
-            tmp.write_text(data, encoding="utf-8")
-            os.replace(tmp, PLAYLISTS_FILE)
-        except Exception as exc:
-            log.warning("playlist_store: could not save %s: %s", PLAYLISTS_FILE, exc)
+    @staticmethod
+    def _to_pl(r: dict) -> "Playlist":
+        """Convert a media_store playlist dict into a Playlist dataclass."""
+        from media_store import media_store as _ms
+        if r["filter_expr"] is None:
+            # Hand-curated playlist: materialise record_ids from playlist_items.
+            record_ids = [m.id for m in _ms.playlist_records(r["id"])]
+        else:
+            # Live/filter playlist: record_ids is not meaningful; return empty.
+            record_ids = []
+        return Playlist(
+            id=r["id"],
+            name=r["name"],
+            record_ids=record_ids,
+            auto_gen=r["auto_gen"],
+        )
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
