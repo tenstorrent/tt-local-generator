@@ -104,8 +104,11 @@ def cmd_artgen(args) -> None:
             print(f"[auto-detected model: {model_id}]")
         else:
             print(
-                f"ERROR: no model detected at {base_url}\n"
-                "  Start a model server or use --model MODEL_ID / --base-url URL",
+                f"ERROR: no chat model detected at {base_url}\n"
+                "  artgen needs a chat/text model on port 8002 (not the diffusion server on 8000).\n"
+                "  Start one: python3 app/prompt_server.py --port 8002\n"
+                "       or:  vllm serve <model> --port 8002\n"
+                "  Override: tt-ctl artgen <type> --base-url http://localhost:8000/v1",
                 file=sys.stderr,
             )
             sys.exit(1)

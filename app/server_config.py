@@ -83,7 +83,7 @@ DEFAULTS: dict[str, dict] = {
     },
     "artgen": {
         "host":  "localhost",
-        "port":  8000,        # same vLLM server as video/image generation
+        "port":  8002,        # dedicated chat-model port — separate from diffusion server (8000)
         "token": "",
     },
 }

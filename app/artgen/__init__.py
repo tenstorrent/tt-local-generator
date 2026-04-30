@@ -9,10 +9,14 @@ share a common protocol (ArtGenerator base class) so the tt-ctl artgen command
 can route to any of them uniformly.
 
 Usage (from tt-ctl):
-    tt-ctl artgen --type landscape --palette sunset
-    tt-ctl artgen --type verse --form haiku --theme "winter forges"
-    tt-ctl artgen --freeform "a constellation map of invented stars"
-    tt-ctl artgen --type landscape --simulate
+    tt-ctl artgen landscape --palette sunset
+    tt-ctl artgen verse --form haiku --theme "winter forges"
+    tt-ctl artgen freeform --freeform "a constellation map of invented stars"
+    tt-ctl artgen landscape --simulate
+
+Requires a chat/text LLM on port 8002 (separate from the diffusion server on
+port 8000). Start one with: python3 app/prompt_server.py --port 8002
+or override per-run: tt-ctl artgen landscape --base-url http://localhost:8000/v1
 """
 
 from __future__ import annotations
