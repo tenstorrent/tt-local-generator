@@ -215,13 +215,14 @@ class MediaStore:
             self._conn.commit()
         return cur.rowcount > 0
 
-    def star(self, id: str, starred: bool) -> None:
-        """Set the starred flag on the record with *id*."""
+    def star(self, id: str, starred: bool) -> bool:
+        """Set the starred flag on the record with *id*. Returns True if the row existed."""
         with self._lock:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "UPDATE media SET starred=? WHERE id=?", (int(starred), id)
             )
             self._conn.commit()
+        return cur.rowcount > 0
 
     def query(
         self,

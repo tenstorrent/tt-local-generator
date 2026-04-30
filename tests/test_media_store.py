@@ -31,7 +31,7 @@ def test_wal_mode(tmp_path):
     assert mode == "wal"
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _rec(id="r1", media_type="artgen", generator_type="landscape", starred=0):
@@ -39,7 +39,7 @@ def _rec(id="r1", media_type="artgen", generator_type="landscape", starred=0):
     return MediaRecord(
         id=id,
         media_type=media_type,
-        created_at=datetime.utcnow().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
         file_path=f"/tmp/{id}.svg",
         thumbnail_path=f"/tmp/{id}.png",
         prompt="a mountain",
@@ -86,6 +86,12 @@ def test_star(tmp_path):
     assert store.get("r1").starred == 1
     store.star("r1", False)
     assert store.get("r1").starred == 0
+
+
+def test_star_missing_returns_false(tmp_path):
+    store = _store(tmp_path)
+    result = store.star("nonexistent", True)
+    assert result is False
 
 
 def test_query_all(tmp_path):
