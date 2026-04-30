@@ -402,7 +402,7 @@ class MediaStore:
                 self.create_playlist(
                     gt.capitalize() + "s",
                     filter_expr=f"generator_type='{gt}'",
-                    auto_gen=False,
+                    auto_gen=True,
                 )
 
 
