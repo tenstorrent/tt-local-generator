@@ -12,6 +12,7 @@ DB location: ~/.local/share/tt-video-gen/media.db
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -110,23 +111,21 @@ class MediaStore:
             return  # already migrated
         if history_file.exists():
             try:
-                import json as _json
-                raw = _json.loads(history_file.read_text())
+                raw = json.loads(history_file.read_text())
                 for r in raw:
                     self._migrate_history_row(r)
                 history_file.rename(history_bak)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("media_store: migration error: %s", exc)
         playlist_bak = playlist_file.with_suffix(".json.bak")
         if playlist_file.exists() and not playlist_bak.exists():
             try:
-                import json as _json
-                raw = _json.loads(playlist_file.read_text())
+                raw = json.loads(playlist_file.read_text())
                 for pl in raw:
                     self._migrate_playlist_row(pl)
                 playlist_file.rename(playlist_bak)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("media_store: migration error: %s", exc)
 
     def _migrate_history_row(self, r: dict) -> None:
         media_type = r.get("media_type", "video")
@@ -164,10 +163,17 @@ class MediaStore:
              datetime.now(timezone.utc).isoformat()),
         )
         for pos, mid in enumerate(pl.get("record_ids", [])):
-            self._conn.execute(
-                "INSERT OR IGNORE INTO playlist_items(playlist_id, media_id, position) VALUES (?,?,?)",
-                (pl_id, mid, pos),
-            )
+            # Guard against orphaned record_ids whose media rows no longer exist.
+            # Without this check, FK enforcement raises IntegrityError and aborts
+            # the entire playlist migration, leaving playlists.json un-renamed.
+            exists = self._conn.execute(
+                "SELECT 1 FROM media WHERE id=?", (mid,)
+            ).fetchone()
+            if exists:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO playlist_items(playlist_id, media_id, position) VALUES (?,?,?)",
+                    (pl_id, mid, pos),
+                )
         self._conn.commit()
 
     def _upsert(self, rec: MediaRecord) -> None:
@@ -182,5 +188,25 @@ class MediaStore:
         self._conn.commit()
 
 
-# Module-level singleton — import and use this everywhere.
-media_store = MediaStore()
+_media_store_singleton: "MediaStore | None" = None
+
+
+def _get_media_store() -> "MediaStore":
+    """Return the production singleton, creating it on first call."""
+    global _media_store_singleton
+    if _media_store_singleton is None:
+        _media_store_singleton = MediaStore()
+    return _media_store_singleton
+
+
+# Lazy singleton proxy — behaves like a MediaStore instance for attribute access.
+# Instantiation of the real MediaStore (and therefore the DB open + migration)
+# is deferred until the first attribute access, so importing this module during
+# tests does NOT touch ~/.local/share/tt-video-gen/media.db.
+# Use `from media_store import media_store` in other modules.
+class _MediaStoreProxy:
+    def __getattr__(self, name):
+        return getattr(_get_media_store(), name)
+
+
+media_store = _MediaStoreProxy()
