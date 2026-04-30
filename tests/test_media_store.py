@@ -137,3 +137,64 @@ def test_query_newest_first(tmp_path):
     store.add(r2)
     results = store.query()
     assert results[0].id == "new"
+
+
+def test_create_playlist(tmp_path):
+    store = _store(tmp_path)
+    pl_id = store.create_playlist("Sunsets", filter_expr="generator_type='landscape'")
+    assert pl_id
+    playlists = store.list_playlists()
+    assert len(playlists) == 1
+    assert playlists[0]["name"] == "Sunsets"
+    assert playlists[0]["filter_expr"] == "generator_type='landscape'"
+
+
+def test_playlist_records_live(tmp_path):
+    store = _store(tmp_path)
+    store.add(_rec("a", "artgen", "landscape"))
+    store.add(_rec("b", "artgen", "verse"))
+    pl_id = store.create_playlist("Land", filter_expr="generator_type='landscape'")
+    results = store.playlist_records(pl_id)
+    assert len(results) == 1 and results[0].id == "a"
+
+
+def test_add_remove_playlist_item(tmp_path):
+    store = _store(tmp_path)
+    store.add(_rec("x"))
+    pl_id = store.create_playlist("Manual", filter_expr=None)
+    store.add_to_playlist(pl_id, "x")
+    results = store.playlist_records(pl_id)
+    assert len(results) == 1 and results[0].id == "x"
+    store.remove_from_playlist(pl_id, "x")
+    assert store.playlist_records(pl_id) == []
+
+
+def test_auto_playlist_types(tmp_path):
+    store = _store(tmp_path)
+    store.add(_rec("a", "artgen", "landscape"))
+    store.add(_rec("b", "artgen", "landscape"))
+    store.add(_rec("c", "artgen", "verse"))
+    store.add(_rec("d", "video", None))
+    types = store.auto_playlist_types()
+    assert set(types) == {"landscape", "verse"}
+
+
+def test_delete_playlist(tmp_path):
+    store = _store(tmp_path)
+    pl_id = store.create_playlist("Temp")
+    assert store.delete_playlist(pl_id) is True
+    assert store.list_playlists() == []
+
+
+def test_ensure_auto_playlists(tmp_path):
+    store = _store(tmp_path)
+    store.add(_rec("a", "artgen", "landscape"))
+    store.add(_rec("b", "artgen", "verse"))
+    store.ensure_auto_playlists()
+    pls = store.list_playlists()
+    filter_exprs = {p["filter_expr"] for p in pls}
+    assert "generator_type='landscape'" in filter_exprs
+    assert "generator_type='verse'" in filter_exprs
+    # Calling again should not create duplicates
+    store.ensure_auto_playlists()
+    assert len(store.list_playlists()) == 2
