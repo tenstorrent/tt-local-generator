@@ -242,3 +242,31 @@ def test_purge_playlist_items(tmp_path):
     assert removed == 2
     remaining = [m.id for m in s.playlist_records(pl_id)]
     assert remaining == ["m1"]
+
+
+def test_make_artgen_path(tmp_path):
+    from media_store import make_artgen_path
+    p = make_artgen_path("abc12345", ".svg", base_dir=tmp_path / "artgen")
+    assert p.suffix == ".svg"
+    assert "abc12345" in p.name
+
+
+def test_make_thumbnail_svg(tmp_path):
+    from media_store import make_thumbnail
+    svg_path = tmp_path / "test.svg"
+    svg_path.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+                        '<rect width="100" height="100" fill="red"/></svg>')
+    out = tmp_path / "thumb.png"
+    make_thumbnail(svg_path, out)
+    # Either a PNG was written or the SVG was copied as fallback
+    assert out.exists() or out.with_suffix(".svg").exists()
+
+
+def test_make_thumbnail_text(tmp_path):
+    from media_store import make_thumbnail
+    txt_path = tmp_path / "verse.txt"
+    txt_path.write_text("the forge\nsleeps\nin ash")
+    out = tmp_path / "thumb.png"
+    make_thumbnail(txt_path, out)
+    # Always produces some file (PNG or placeholder)
+    assert out.exists()
