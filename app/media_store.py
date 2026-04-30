@@ -374,6 +374,42 @@ class MediaStore:
             ).fetchall()
         return [MediaRecord(*r) for r in rows]
 
+    def rename_playlist(self, playlist_id: str, new_name: str) -> bool:
+        """Rename a playlist. Returns True if found, False if not found."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE playlists SET name=? WHERE id=?", (new_name.strip(), playlist_id)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def set_playlist_auto_gen(self, playlist_id: str, value: bool) -> bool:
+        """Set the auto_gen flag on a playlist. Returns True if found, False if not found."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE playlists SET auto_gen=? WHERE id=?", (int(value), playlist_id)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def purge_playlist_items(self, valid_media_ids: set) -> int:
+        """
+        Remove from playlist_items any row whose media_id is not in valid_media_ids.
+        Returns the number of rows removed.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT playlist_id, media_id FROM playlist_items"
+            ).fetchall()
+            to_remove = [(pl_id, mid) for pl_id, mid in rows if mid not in valid_media_ids]
+            for pl_id, mid in to_remove:
+                self._conn.execute(
+                    "DELETE FROM playlist_items WHERE playlist_id=? AND media_id=?",
+                    (pl_id, mid),
+                )
+            self._conn.commit()
+        return len(to_remove)
+
     def auto_playlist_types(self) -> list[str]:
         """
         Return the distinct generator_type values for all artgen media records.

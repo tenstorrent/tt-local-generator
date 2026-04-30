@@ -198,3 +198,47 @@ def test_ensure_auto_playlists(tmp_path):
     # Calling again should not create duplicates
     store.ensure_auto_playlists()
     assert len(store.list_playlists()) == 2
+
+
+def test_rename_playlist(tmp_path):
+    s = _store(tmp_path)
+    pl_id = s.create_playlist("Old")
+    assert s.rename_playlist(pl_id, "New") is True
+    pls = {p["id"]: p for p in s.list_playlists()}
+    assert pls[pl_id]["name"] == "New"
+
+
+def test_rename_playlist_missing(tmp_path):
+    s = _store(tmp_path)
+    assert s.rename_playlist("no-such-id", "X") is False
+
+
+def test_set_playlist_auto_gen(tmp_path):
+    s = _store(tmp_path)
+    pl_id = s.create_playlist("P", auto_gen=True)
+    assert s.set_playlist_auto_gen(pl_id, False) is True
+    pls = {p["id"]: p for p in s.list_playlists()}
+    assert pls[pl_id]["auto_gen"] is False
+
+
+def test_purge_playlist_items(tmp_path):
+    from datetime import datetime, timezone
+    from media_store import MediaRecord
+    s = _store(tmp_path)
+    # Insert 3 media rows
+    for mid in ["m1", "m2", "m3"]:
+        s.add(MediaRecord(
+            id=mid, media_type="video",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            file_path="", thumbnail_path="", prompt="", model_id="",
+            generator_type=None, params="{}", starred=0,
+        ))
+    pl_id = s.create_playlist("P")
+    s.add_to_playlist(pl_id, "m1")
+    s.add_to_playlist(pl_id, "m2")
+    s.add_to_playlist(pl_id, "m3")
+    # Purge m2 and m3
+    removed = s.purge_playlist_items({"m1"})
+    assert removed == 2
+    remaining = [m.id for m in s.playlist_records(pl_id)]
+    assert remaining == ["m1"]

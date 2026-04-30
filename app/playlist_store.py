@@ -72,14 +72,10 @@ class PlaylistStore:
     def rename(self, playlist_id: str, new_name: str) -> bool:
         """Rename a playlist. Returns True if found and renamed, False otherwise."""
         from media_store import media_store as _ms
-        with _ms._lock:
-            cur = _ms._conn.execute(
-                "UPDATE playlists SET name=? WHERE id=?", (new_name.strip(), playlist_id)
-            )
-            _ms._conn.commit()
-        if cur.rowcount > 0:
+        result = _ms.rename_playlist(playlist_id, new_name)
+        if result:
             log.info("playlist renamed to %r (%s)", new_name.strip(), playlist_id)
-        return cur.rowcount > 0
+        return result
 
     def delete(self, playlist_id: str) -> bool:
         """Delete a playlist by ID. Returns True if found and deleted."""
@@ -119,12 +115,7 @@ class PlaylistStore:
     def set_auto_gen(self, playlist_id: str, value: bool) -> bool:
         """Set the auto_gen flag for a playlist. Returns True if found."""
         from media_store import media_store as _ms
-        with _ms._lock:
-            cur = _ms._conn.execute(
-                "UPDATE playlists SET auto_gen=? WHERE id=?", (int(value), playlist_id)
-            )
-            _ms._conn.commit()
-        return cur.rowcount > 0
+        return _ms.set_playlist_auto_gen(playlist_id, value)
 
     def purge_deleted_records(self, valid_ids: set) -> int:
         """
@@ -133,20 +124,10 @@ class PlaylistStore:
         Returns the total number of IDs pruned.
         """
         from media_store import media_store as _ms
-        rows = _ms._conn.execute(
-            "SELECT playlist_id, media_id FROM playlist_items"
-        ).fetchall()
-        to_remove = [(pl_id, mid) for pl_id, mid in rows if mid not in valid_ids]
-        for pl_id, mid in to_remove:
-            with _ms._lock:
-                _ms._conn.execute(
-                    "DELETE FROM playlist_items WHERE playlist_id=? AND media_id=?",
-                    (pl_id, mid),
-                )
-        if to_remove:
-            _ms._conn.commit()
-            log.info("purged %d stale record ID(s) from playlists", len(to_remove))
-        return len(to_remove)
+        removed = _ms.purge_playlist_items(valid_ids)
+        if removed:
+            log.info("purged %d stale record ID(s) from playlists", removed)
+        return removed
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
