@@ -81,3 +81,35 @@ def test_delete_persists(monkeypatch, tmp_path):
 
     store2 = HistoryStore()
     assert store2.all_records() == []
+
+
+def test_len_excludes_artgen(monkeypatch, tmp_path):
+    """len(store) must count only non-artgen records."""
+    import media_store as ms_mod
+
+    _patch_store(monkeypatch, tmp_path)
+
+    store = HistoryStore()
+
+    # Insert a normal video record via append()
+    rec = _sample_record()
+    store.append(rec)
+
+    # Insert an artgen record directly into the patched MediaStore singleton
+    from media_store import MediaRecord
+    artgen_rec = MediaRecord(
+        id="artgen-001",
+        media_type="artgen",
+        created_at="2025-01-01T00:00:00",
+        file_path="",
+        thumbnail_path="",
+        prompt="some art prompt",
+        model_id="sdxl",
+        generator_type="sdxl",
+        params="{}",
+        starred=0,
+    )
+    ms_mod._media_store_singleton.add(artgen_rec)
+
+    # len() must only count the video record, not the artgen one
+    assert len(store) == 1

@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 """
-Persistent generation history.
+Persistent generation history — thin wrapper around media_store.
 
-Stores metadata and file paths for every completed generation in:
+All video/image/animate records are stored in media.db via MediaStore.
+The JSON history.json is migrated on first launch by MediaStore.__init__.
+
+Storage layout (managed by media_store.py):
     ~/.local/share/tt-video-gen/
-        history.json     — list of GenerationRecord dicts, newest-last
+        media.db         — SQLite store (WAL mode)
         videos/          — downloaded MP4 files
         images/          — generated JPEG images (FLUX)
         thumbnails/      — first-frame JPEG thumbnails / image thumbnails
 """
 import json
 import os
-import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -245,7 +247,7 @@ class HistoryStore:
 
     def __len__(self) -> int:
         from media_store import media_store as _ms
-        return len(_ms.query())
+        return sum(1 for r in _ms.query() if r.media_type != "artgen")
 
     # ── Queue persistence (unchanged — kept in JSON) ───────────────────────────
 
