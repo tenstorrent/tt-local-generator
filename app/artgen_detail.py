@@ -260,9 +260,7 @@ class ArtgenDetail(Gtk.Box):
 
         # Markdown reading view — rich, cozy rendering for verse / palette / freeform
         self._webview = WebKit.WebView()
-        settings = self._webview.get_settings()
-        settings.set_enable_javascript(False)
-        settings.set_enable_hyperlink_auditing(False)
+        self._webview.get_settings().set_enable_javascript(False)
         self._webview.set_hexpand(True)
         self._webview.set_vexpand(True)
         self._art_stack.add_named(self._webview, "reading")
