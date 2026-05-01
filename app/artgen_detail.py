@@ -21,9 +21,11 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("WebKit", "6.0")
-from gi.repository import Gio, GLib, Gtk, Pango, WebKit
+gi.require_version("Vte", "2.91")
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango, WebKit, Vte
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -243,7 +245,33 @@ class ArtgenDetail(Gtk.Box):
         svg_scroll.set_child(self._svg_pic)
         self._art_stack.add_named(svg_scroll, "svg")
 
-        # ANSI / monospace fallback (for .ans files only)
+        # ANSI art player — VTE terminal widget renders escape codes natively
+        ansi_scroll = Gtk.ScrolledWindow()
+        ansi_scroll.set_hexpand(True)
+        ansi_scroll.set_vexpand(True)
+        ansi_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self._vte = Vte.Terminal()
+        self._vte.set_hexpand(True)
+        self._vte.set_vexpand(True)
+        # Tenstorrent dark-mode palette
+        bg = Gdk.RGBA(); bg.parse("#0F2A35")
+        fg = Gdk.RGBA(); fg.parse("#E8F0F2")
+        ansi_palette = [
+            "#000000", "#CC0000", "#4EA13A", "#C4A000",
+            "#3465A4", "#75507B", "#06989A", "#D3D7CF",
+            "#555753", "#EF2929", "#8AE234", "#FCE94F",
+            "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
+        ]
+        pal_rgba = []
+        for hx in ansi_palette:
+            c = Gdk.RGBA(); c.parse(hx); pal_rgba.append(c)
+        self._vte.set_colors(fg, bg, pal_rgba)
+        self._vte.set_audible_bell(False)
+        self._vte.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
+        ansi_scroll.set_child(self._vte)
+        self._art_stack.add_named(ansi_scroll, "ansi")
+
+        # Plain text fallback (not exposed for ANSI any more; kept as safety net)
         text_scroll = Gtk.ScrolledWindow()
         text_scroll.set_hexpand(True)
         text_scroll.set_vexpand(True)
@@ -371,9 +399,11 @@ class ArtgenDetail(Gtk.Box):
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
-            # ANSI art: monospace only — escape codes corrupt in HTML
-            self._text_view.get_buffer().set_text(raw)
-            self._art_stack.set_visible_child_name("text")
+            # Feed ANSI art into the VTE terminal for native colour rendering.
+            # reset(clear_tabstops, clear_history) wipes the previous artifact.
+            self._vte.reset(True, True)
+            self._vte.feed(raw.encode("utf-8", errors="replace"))
+            self._art_stack.set_visible_child_name("ansi")
         elif ext == ".json":
             # Palette JSON — render color swatches
             try:
