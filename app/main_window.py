@@ -1227,6 +1227,9 @@ popover.picker-popover > contents {
 .artgen-card { border-radius: 4px; background: @tt_bg_panel; }
 .artgen-card-new { border: 2px solid @tt_accent; }
 .artgen-card-placeholder { font-size: 20px; }
+.artgen-text-preview { padding: 5px 7px; }
+.artgen-preview-title { font-size: 10px; font-weight: bold; color: @tt_text; }
+.artgen-preview-body { font-size: 9px; color: @tt_muted; }
 .artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }
 .artgen-type-badge { font-size: 8px; background: alpha(@tt_bg_dark,0.8); color: @tt_accent; padding: 1px 4px; border-radius: 2px; }
 .artgen-watch-bg { background: #000; }
@@ -4373,7 +4376,7 @@ class ControlPanel(Gtk.Box):
 
         # Active state is handled automatically by the ToggleButton group (:checked CSS).
         if is_artgen:
-            self._title_lbl.set_label("TT Artgen")
+            self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
                 "generative art via LLM  ·  SVG / ANSI / verse / palette  ·  port 8002"
             )

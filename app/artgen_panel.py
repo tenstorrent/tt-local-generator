@@ -846,24 +846,16 @@ class ArtgenPanel(Gtk.Box):
             self._mini_flow.append(card)
 
     def _make_mini_card(self, rec: "MediaRecord", highlight: bool = False) -> Gtk.Box:
-        from artgen_gallery import ArtgenGallery
+        from artgen_gallery import make_card_content
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.set_size_request(100, 80)
         box.add_css_class("artgen-card")
         if highlight:
             box.add_css_class("artgen-card-new")
-        if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
-            img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
-            img.set_content_fit(Gtk.ContentFit.COVER)
-        elif rec.file_path.endswith(".svg") and Path(rec.file_path).exists():
-            img = Gtk.Picture.new_for_filename(rec.file_path)
-            img.set_content_fit(Gtk.ContentFit.COVER)
-        else:
-            img = Gtk.Label(label=ArtgenGallery._type_emoji(rec.generator_type))
-            img.add_css_class("artgen-card-placeholder")
-        img.set_hexpand(True)
-        img.set_vexpand(True)
-        box.append(img)
+        content = make_card_content(rec)
+        content.set_hexpand(True)
+        content.set_vexpand(True)
+        box.append(content)
         lbl = Gtk.Label(label=f"{rec.generator_type or '?'} · {rec.created_at[5:10]}")
         lbl.add_css_class("artgen-card-bottom")
         box.append(lbl)
