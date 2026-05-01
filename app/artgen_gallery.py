@@ -318,6 +318,17 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
     fp = Path(rec.file_path) if rec.file_path else Path()
     ext = fp.suffix.lower()
 
+    # Palette JSON: always render swatch grid — any stored thumbnail is just
+    # a PIL text render of the raw JSON, which looks terrible.
+    if ext == ".json" and fp.exists():
+        try:
+            raw = fp.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw)
+            if data.get("colors"):
+                return _palette_card_widget(data)
+        except Exception:
+            pass
+
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
         img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
         img.set_content_fit(Gtk.ContentFit.COVER)
@@ -335,14 +346,6 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
             raw = ""
     else:
         raw = ""
-
-    if ext == ".json" and raw:
-        try:
-            data = json.loads(raw)
-            if data.get("colors"):
-                return _palette_card_widget(data)
-        except Exception:
-            pass
 
     if ext == ".ans" and raw:
         return _ansi_preview_widget(raw)
