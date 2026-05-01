@@ -27,7 +27,15 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import GLib, Gtk, Pango
+from gi.repository import Gio, GLib, Gtk, Pango
+
+_WEBKIT_OK = False
+try:
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import WebKit as _WebKit
+    _WEBKIT_OK = True
+except Exception:
+    pass
 
 import artgen
 from media_store import media_store as _media_store, MediaRecord, make_artgen_path, make_thumbnail
@@ -111,6 +119,7 @@ class ArtgenPanel(Gtk.Box):
         self._auto_gen_timer_id: int | None = None
         self._auto_gen_countdown: float = 0.0
         self._auto_gen_error_streak: int = 0
+        self._preview_rec: "MediaRecord | None" = None
         self._build()
         # Start background health polling every 5 seconds.
         GLib.timeout_add_seconds(5, self._poll_health)
@@ -162,6 +171,7 @@ class ArtgenPanel(Gtk.Box):
         self._gallery = ArtgenGallery()
         self._gallery.on_card_activated = self._on_gallery_card_activated
         self._gallery.on_watch_requested = self._on_watch_requested
+        self._gallery.on_card_deleted = self._on_gallery_card_deleted
         self._sub_stack.add_named(self._gallery, "gallery")
 
         # Detail view navigated to from gallery (not a top-level tab button)
@@ -178,7 +188,7 @@ class ArtgenPanel(Gtk.Box):
         self.append(self._sub_stack)
 
     def _build_create_pane(self) -> Gtk.Box:
-        """Two-column Create tab: controls (left 240px) + latest-generations mini-grid (right)."""
+        """Two-column Create tab: controls (left 240px) + live artifact preview (right)."""
         pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         pane.set_hexpand(True)
         pane.set_vexpand(True)
@@ -186,7 +196,7 @@ class ArtgenPanel(Gtk.Box):
         # ── Left: controls ────────────────────────────────────────────────────
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         left_box.set_size_request(240, -1)
-        left_box.set_hexpand(False)   # prevent hexpand from child widgets propagating up
+        left_box.set_hexpand(False)
         left_box.add_css_class("artgen-ctrl-pane")
 
         type_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -218,40 +228,63 @@ class ArtgenPanel(Gtk.Box):
         left_box.append(ctrl_scroll)
         left_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        srv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        srv_box.set_margin_start(12); srv_box.set_margin_end(12)
-        srv_box.set_margin_top(8); srv_box.set_margin_bottom(4)
-        srv_box.append(_section_lbl("server"))
+        # ── Footer: Generate + Server popover ─────────────────────────────────
+        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        footer.set_margin_start(12); footer.set_margin_end(12)
+        footer.set_margin_top(10); footer.set_margin_bottom(12)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._gen_btn = Gtk.Button(label="✦ Generate")
+        self._gen_btn.add_css_class("artgen-generate-btn")
+        self._gen_btn.set_hexpand(True)
+        self._gen_btn.connect("clicked", self._on_generate_clicked)
+        btn_row.append(self._gen_btn)
+
+        # Server popover — keeps infrastructure out of the creative surface
+        srv_pop_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        srv_pop_content.set_margin_start(12); srv_pop_content.set_margin_end(12)
+        srv_pop_content.set_margin_top(10); srv_pop_content.set_margin_bottom(10)
+        srv_pop_content.set_size_request(210, -1)
+        srv_pop_content.append(_section_lbl("artgen server"))
         self._srv_model_dd = _dd(_ARTGEN_MODELS, "Qwen3-8B")
-        srv_box.append(_row("Model", self._srv_model_dd, label_width=46))
+        srv_pop_content.append(_row("Model", self._srv_model_dd, label_width=46))
         srv_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._srv_start_btn = Gtk.Button(label="Start")
+        self._srv_start_btn = Gtk.Button(label="▶ Start")
         self._srv_start_btn.add_css_class("artgen-srv-start-btn")
         self._srv_start_btn.connect("clicked", self._on_srv_start)
         srv_btn_row.append(self._srv_start_btn)
-        self._srv_stop_btn = Gtk.Button(label="Stop")
+        self._srv_stop_btn = Gtk.Button(label="■ Stop")
         self._srv_stop_btn.add_css_class("artgen-srv-stop-btn")
         self._srv_stop_btn.connect("clicked", self._on_srv_stop)
         srv_btn_row.append(self._srv_stop_btn)
+        srv_pop_content.append(srv_btn_row)
+        pop_health_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._health_dot = Gtk.Label(label="●")
-        self._health_dot.set_margin_start(4)
         self._health_dot.add_css_class("artgen-health-unknown")
-        srv_btn_row.append(self._health_dot)
+        pop_health_row.append(self._health_dot)
         self._srv_status_lbl = Gtk.Label(label="unknown")
         self._srv_status_lbl.set_xalign(0)
         self._srv_status_lbl.add_css_class("artgen-status")
         self._srv_status_lbl.set_hexpand(True)
-        srv_btn_row.append(self._srv_status_lbl)
-        srv_box.append(srv_btn_row)
-        left_box.append(srv_box)
+        pop_health_row.append(self._srv_status_lbl)
+        srv_pop_content.append(pop_health_row)
+        srv_popover = Gtk.Popover()
+        srv_popover.set_child(srv_pop_content)
+        srv_popover.set_position(Gtk.PositionType.TOP)
 
-        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        footer.set_margin_start(12); footer.set_margin_end(12)
-        footer.set_margin_top(10); footer.set_margin_bottom(12)
-        self._gen_btn = Gtk.Button(label="✦ Generate")
-        self._gen_btn.add_css_class("artgen-generate-btn")
-        self._gen_btn.connect("clicked", self._on_generate_clicked)
-        footer.append(self._gen_btn)
+        srv_btn_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._srv_btn_dot = Gtk.Label(label="●")
+        self._srv_btn_dot.add_css_class("artgen-health-unknown")
+        srv_btn_inner.append(self._srv_btn_dot)
+        srv_btn_inner.append(Gtk.Label(label="Server"))
+        srv_menu_btn = Gtk.MenuButton()
+        srv_menu_btn.set_child(srv_btn_inner)
+        srv_menu_btn.add_css_class("flat")
+        srv_menu_btn.set_popover(srv_popover)
+        srv_menu_btn.set_tooltip_text("Artgen server controls (model, start/stop, health)")
+        btn_row.append(srv_menu_btn)
+
+        footer.append(btn_row)
         self._status_lbl = Gtk.Label(label="Ready — choose a type and click Generate")
         self._status_lbl.set_xalign(0)
         self._status_lbl.add_css_class("artgen-status")
@@ -266,35 +299,85 @@ class ArtgenPanel(Gtk.Box):
         pane.append(left_box)
         pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
 
-        # ── Right: latest-generations mini-grid ───────────────────────────────
-        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        # ── Right: live artifact preview ───────────────────────────────────────
+        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         right_box.set_hexpand(True)
         right_box.set_vexpand(True)
-        right_box.set_margin_start(12); right_box.set_margin_end(12)
-        right_box.set_margin_top(10); right_box.set_margin_bottom(10)
 
-        mini_hdr = Gtk.Label(label="ALL GENERATIONS — click any to open in Gallery")
-        mini_hdr.set_xalign(0)
-        mini_hdr.add_css_class("section-label")
-        right_box.append(mini_hdr)
+        self._preview_stack = Gtk.Stack()
+        self._preview_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._preview_stack.set_transition_duration(220)
+        self._preview_stack.set_hexpand(True)
+        self._preview_stack.set_vexpand(True)
 
-        self._mini_flow = Gtk.FlowBox()
-        self._mini_flow.set_max_children_per_line(8)
-        self._mini_flow.set_min_children_per_line(2)
-        self._mini_flow.set_homogeneous(True)
-        self._mini_flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        self._mini_flow.set_row_spacing(6)
-        self._mini_flow.set_column_spacing(6)
-        self._mini_flow.connect("child-activated", self._on_mini_card_activated)
+        # Empty state
+        empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        empty_box.set_halign(Gtk.Align.CENTER)
+        empty_box.set_valign(Gtk.Align.CENTER)
+        empty_hint = Gtk.Label(label="✦")
+        empty_hint.add_css_class("artgen-empty-hint")
+        empty_sub = Gtk.Label(label="Your generations will appear here")
+        empty_sub.add_css_class("artgen-empty-sub")
+        empty_box.append(empty_hint)
+        empty_box.append(empty_sub)
+        self._preview_stack.add_named(empty_box, "empty")
 
-        mini_scroll = Gtk.ScrolledWindow()
-        mini_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        mini_scroll.set_vexpand(True)
-        mini_scroll.set_child(self._mini_flow)
-        right_box.append(mini_scroll)
+        # Generating state — spinner + live status
+        gen_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        gen_box.set_halign(Gtk.Align.CENTER)
+        gen_box.set_valign(Gtk.Align.CENTER)
+        self._preview_spinner = Gtk.Spinner()
+        self._preview_spinner.set_size_request(48, 48)
+        gen_box.append(self._preview_spinner)
+        self._preview_gen_lbl = Gtk.Label(label="Generating…")
+        self._preview_gen_lbl.add_css_class("artgen-status")
+        gen_box.append(self._preview_gen_lbl)
+        self._preview_stack.add_named(gen_box, "generating")
+
+        # SVG preview
+        svg_scroll = Gtk.ScrolledWindow()
+        svg_scroll.set_hexpand(True)
+        svg_scroll.set_vexpand(True)
+        self._preview_svg = Gtk.Picture()
+        self._preview_svg.set_hexpand(True)
+        self._preview_svg.set_vexpand(True)
+        self._preview_svg.set_content_fit(Gtk.ContentFit.CONTAIN)
+        svg_scroll.set_child(self._preview_svg)
+        self._preview_stack.add_named(svg_scroll, "svg")
+
+        # Reading preview (WebKit) — ANSI, text, palette
+        if _WEBKIT_OK:
+            self._preview_web = _WebKit.WebView()
+            self._preview_web.get_settings().set_enable_javascript(False)
+            self._preview_web.set_hexpand(True)
+            self._preview_web.set_vexpand(True)
+            self._preview_stack.add_named(self._preview_web, "reading")
+
+        right_box.append(self._preview_stack)
+        right_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Action bar below preview
+        action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        action_bar.set_margin_start(12); action_bar.set_margin_end(12)
+        action_bar.set_margin_top(8); action_bar.set_margin_bottom(8)
+        self._preview_meta_lbl = Gtk.Label(label="")
+        self._preview_meta_lbl.set_hexpand(True)
+        self._preview_meta_lbl.set_xalign(0)
+        self._preview_meta_lbl.add_css_class("muted")
+        action_bar.append(self._preview_meta_lbl)
+        self._preview_again_btn = Gtk.Button(label="✦ Again")
+        self._preview_again_btn.add_css_class("artgen-inspire-btn")
+        self._preview_again_btn.set_sensitive(False)
+        self._preview_again_btn.connect("clicked", lambda _: self._on_generate_clicked(None))
+        action_bar.append(self._preview_again_btn)
+        self._preview_open_btn = Gtk.Button(label="→ Open")
+        self._preview_open_btn.set_sensitive(False)
+        self._preview_open_btn.connect("clicked", self._on_preview_open)
+        action_bar.append(self._preview_open_btn)
+        right_box.append(action_bar)
 
         pane.append(right_box)
-        self._refresh_mini_grid()
+        self._show_preview_latest()
         return pane
 
     # ── Per-type controls pages ───────────────────────────────────────────────
@@ -442,6 +525,67 @@ class ArtgenPanel(Gtk.Box):
         row.append(inspire_btn)
         return row, entry
 
+    # ── Preview pane helpers ──────────────────────────────────────────────────
+
+    def _show_preview_latest(self) -> None:
+        """Populate the preview pane with the most recent artgen record, if any."""
+        records = _media_store.query(media_type="artgen")
+        if records:
+            self._show_preview(records[0])
+        else:
+            self._preview_stack.set_visible_child_name("empty")
+
+    def _show_preview(self, rec: "MediaRecord") -> None:
+        """Render *rec* in the Create-pane preview and update the action bar."""
+        from artgen_detail import _md_to_html, _ansi_to_html, _palette_to_html, _derive_title
+        import json as _json
+
+        self._preview_rec = rec
+        self._preview_again_btn.set_sensitive(True)
+        self._preview_open_btn.set_sensitive(True)
+
+        p = rec.params_dict
+        gen_s = p.get("generation_seconds", "")
+        self._preview_meta_lbl.set_label(
+            f"{rec.generator_type}  ·  {rec.created_at[:10]}"
+            + (f"  ·  {gen_s}s" if gen_s else "")
+        )
+
+        fp = Path(rec.file_path)
+        ext = fp.suffix.lower()
+
+        if ext == ".svg" and fp.exists():
+            self._preview_svg.set_file(Gio.File.new_for_path(str(fp)))
+            self._preview_stack.set_visible_child_name("svg")
+        elif _WEBKIT_OK:
+            raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
+            if ext == ".ans":
+                self._preview_web.load_html(_ansi_to_html(raw), "about:blank")
+            elif ext == ".json":
+                try:
+                    data = _json.loads(raw)
+                    html = _palette_to_html(data) if "colors" in data else _md_to_html(raw)
+                except Exception:
+                    html = _md_to_html(raw)
+                self._preview_web.load_html(html, "about:blank")
+            else:
+                title = _derive_title(rec.generator_type or "", p)
+                html = _md_to_html(raw, title=title, verse_mode=(rec.generator_type == "verse"))
+                self._preview_web.load_html(html, "about:blank")
+            self._preview_stack.set_visible_child_name("reading")
+        else:
+            self._preview_stack.set_visible_child_name("empty")
+
+    def _on_preview_open(self, _btn) -> None:
+        """Open the current preview record in the full detail view."""
+        if self._preview_rec is None:
+            return
+        records = _media_store.query(media_type="artgen")
+        self._detail_source = "create"
+        self._detail.set_back_label("← Create")
+        self._detail.show_record(self._preview_rec.id, records)
+        self._sub_stack.set_visible_child_name("detail")
+
     # ── Signal handlers ───────────────────────────────────────────────────────
 
     def _on_type_changed(self, dd: Gtk.DropDown, _pspec) -> None:
@@ -465,6 +609,10 @@ class ArtgenPanel(Gtk.Box):
         self._gen_btn.set_sensitive(False)
         self._gen_btn.set_label("Generating…")
         self._set_status("Detecting model on port 8002…")
+        # Show generating state in the preview pane
+        self._preview_spinner.start()
+        self._preview_gen_lbl.set_label("Generating…")
+        self._preview_stack.set_visible_child_name("generating")
         threading.Thread(
             target=self._run_generation,
             args=(gen_name, args),
@@ -554,10 +702,11 @@ class ArtgenPanel(Gtk.Box):
         GLib.idle_add(self._set_health, ok)
 
     def _set_health(self, ok: bool) -> None:
-        self._health_dot.remove_css_class("artgen-health-ok")
-        self._health_dot.remove_css_class("artgen-health-bad")
-        self._health_dot.remove_css_class("artgen-health-unknown")
-        self._health_dot.add_css_class("artgen-health-ok" if ok else "artgen-health-bad")
+        for dot in (self._health_dot, self._srv_btn_dot):
+            dot.remove_css_class("artgen-health-ok")
+            dot.remove_css_class("artgen-health-bad")
+            dot.remove_css_class("artgen-health-unknown")
+            dot.add_css_class("artgen-health-ok" if ok else "artgen-health-bad")
         if self._srv_status_lbl.get_label() in ("unknown", "running", "offline"):
             self._srv_status_lbl.set_label("running" if ok else "offline")
 
@@ -763,18 +912,20 @@ class ArtgenPanel(Gtk.Box):
         self._gen_btn.set_label("✦ Generate")
         self._last_out_path = Path(out_path_str)
         suffix = f"  ({elapsed}s)" if elapsed is not None else ""
-        self._set_status(f"Saved → {out_path_str}{suffix}")
+        self._set_status(f"Done  ({elapsed}s)" if elapsed is not None else "Done")
 
         # Push the new record into every live view that holds a record list.
         if rec is not None:
             self._gallery.prepend_record(rec)
-            # Prepend to watch queue if watch is already running
             if self._watch._records:
                 self._watch._records.insert(0, rec)
+            # Show the new artifact in the preview pane
+            self._preview_spinner.stop()
+            self._show_preview(rec)
         else:
             self._gallery.refresh()
-
-        self._refresh_mini_grid()
+            self._preview_spinner.stop()
+            self._show_preview_latest()
 
         if self._auto_gen:
             self._auto_gen_error_streak = 0
@@ -786,6 +937,12 @@ class ArtgenPanel(Gtk.Box):
         self._gen_btn.set_sensitive(True)
         self._gen_btn.set_label("✦ Generate")
         self._set_status(f"Error: {msg[:80]}")
+        # Return preview to whatever was showing before (or empty state)
+        self._preview_spinner.stop()
+        if self._preview_rec is not None:
+            self._show_preview(self._preview_rec)
+        else:
+            self._preview_stack.set_visible_child_name("empty")
         if self._auto_gen:
             self._auto_gen_error_streak += 1
             if self._auto_gen_error_streak >= 3:
@@ -846,9 +1003,20 @@ class ArtgenPanel(Gtk.Box):
             self._gallery_tab_btn.set_active(True)
             self._sub_stack.set_visible_child_name("gallery")
 
+    def _on_gallery_card_deleted(self, media_id: str) -> None:
+        """Called when a card is deleted via the gallery hover button."""
+        if self._preview_rec and self._preview_rec.id == media_id:
+            self._preview_rec = None
+            self._show_preview_latest()
+        if self._watch._records:
+            self._watch._records = [r for r in self._watch._records if r.id != media_id]
+
     def _on_detail_deleted(self, media_id: str) -> None:
         self._gallery.refresh()
-        self._refresh_mini_grid()
+        # If the deleted record was in the preview, advance to the next one
+        if self._preview_rec and self._preview_rec.id == media_id:
+            self._preview_rec = None
+            self._show_preview_latest()
         # Remove from watch queue so the slideshow doesn't try to display it
         if self._watch._records:
             self._watch._records = [r for r in self._watch._records if r.id != media_id]
@@ -866,46 +1034,6 @@ class ArtgenPanel(Gtk.Box):
         self._gallery_tab_btn.set_active(True)
         self._sub_stack.set_visible_child_name("gallery")
 
-    def _on_mini_card_activated(self, _flow, child) -> None:
-        box = child.get_child()
-        media_id = box.get_name() if box else ""
-        if not media_id:
-            self._switch_tab("gallery")
-            return
-        records = _media_store.query(media_type="artgen")
-        self._detail_source = "create"
-        self._detail.set_back_label("← Create")
-        self._detail.show_record(media_id, records)
-        self._sub_stack.set_visible_child_name("detail")
-
-    def _refresh_mini_grid(self) -> None:
-        while child := self._mini_flow.get_first_child():
-            self._mini_flow.remove(child)
-        records = _media_store.query(media_type="artgen")
-        if not records:
-            placeholder = Gtk.Label(label="✦\nYour generations\nwill appear here")
-            placeholder.set_xalign(0.5)
-            placeholder.add_css_class("artgen-empty-hint")
-            self._mini_flow.append(placeholder)
-            return
-        for rec in records:
-            card = self._make_mini_card(rec)
-            self._mini_flow.append(card)
-
-    def _make_mini_card(self, rec: "MediaRecord") -> Gtk.Box:
-        from artgen_gallery import make_card_content
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.set_name(rec.id)  # used by _on_mini_card_activated to open detail directly
-        box.set_size_request(100, 80)
-        box.add_css_class("artgen-card")
-        content = make_card_content(rec)
-        content.set_hexpand(True)
-        content.set_vexpand(True)
-        box.append(content)
-        lbl = Gtk.Label(label=f"{rec.generator_type or '?'} · {rec.created_at[5:10]}")
-        lbl.add_css_class("artgen-card-bottom")
-        box.append(lbl)
-        return box
 
     # ── Auto-generate section UI builder ─────────────────────────────────────
 

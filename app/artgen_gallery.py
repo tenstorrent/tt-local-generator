@@ -377,19 +377,24 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
     return lbl
 
 
+_STARRED_FILTER = "__starred__"
+
+
 class ArtgenGallery(Gtk.Box):
     """
     Full-width card grid with filter chips.
 
     on_card_activated(media_id: str)  — set before showing
     on_watch_requested(generator_type: str | None) — set before showing
+    on_card_deleted(media_id: str)    — set before showing
     """
 
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_card_activated: Optional[Callable[[str], None]] = None
         self.on_watch_requested: Optional[Callable[[Optional[str]], None]] = None
-        self._active_filter: Optional[str] = None  # None = All
+        self.on_card_deleted: Optional[Callable[[str], None]] = None
+        self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
         self._build()
 
@@ -460,9 +465,18 @@ class ArtgenGallery(Gtk.Box):
             self._chip_box.remove(child)
 
         types = sorted({r.generator_type for r in self._records if r.generator_type})
-        for label, filt in [("All", None)] + [(t, t) for t in types]:
+        has_starred = any(r.starred for r in self._records)
+
+        chips = [("All", None)]
+        if has_starred:
+            chips.append(("⭐ Starred", _STARRED_FILTER))
+        chips += [(t, t) for t in types]
+
+        for label, filt in chips:
             btn = Gtk.ToggleButton(label=label)
             btn.add_css_class("artgen-filter-chip")
+            if filt == _STARRED_FILTER:
+                btn.add_css_class("artgen-starred-chip")
             btn.set_active(filt == self._active_filter)
             btn.connect("toggled", self._on_chip_toggled, filt)
             self._chip_box.append(btn)
@@ -484,23 +498,26 @@ class ArtgenGallery(Gtk.Box):
     def _rebuild_grid(self) -> None:
         while child := self._flow.get_first_child():
             self._flow.remove(child)
-        filtered = [r for r in self._records
-                    if self._active_filter is None or r.generator_type == self._active_filter]
+        if self._active_filter == _STARRED_FILTER:
+            filtered = [r for r in self._records if r.starred]
+        else:
+            filtered = [r for r in self._records
+                        if self._active_filter is None or r.generator_type == self._active_filter]
         for rec in filtered:
             self._flow.append(self._make_card(rec))
 
-    def _make_card(self, rec: MediaRecord) -> Gtk.Box:
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_size_request(110, 90)
-        outer._media_id = rec.id  # stash for activation handler
-        outer.add_css_class("artgen-card")
+    def _make_card(self, rec: MediaRecord) -> Gtk.Overlay:
+        overlay = Gtk.Overlay()
+        overlay.set_size_request(110, 90)
+        overlay._media_id = rec.id  # stash for activation handler
+        overlay.add_css_class("artgen-card")
 
+        # Base: art content + bottom bar
+        base = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         content = make_card_content(rec)
         content.set_hexpand(True)
         content.set_vexpand(True)
-        outer.append(content)
-
-        # Bottom label: type badge + timestamp
+        base.append(content)
         bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bottom.add_css_class("artgen-card-bottom")
         type_lbl = Gtk.Label(label=(rec.generator_type or "?")[:4])
@@ -511,8 +528,77 @@ class ArtgenGallery(Gtk.Box):
         ts.set_hexpand(True)
         ts.set_xalign(1.0)
         bottom.append(ts)
-        outer.append(bottom)
-        return outer
+        base.append(bottom)
+        overlay.set_child(base)
+
+        # Hover overlay: star + delete buttons
+        hover_rev = Gtk.Revealer()
+        hover_rev.set_transition_type(Gtk.RevealerTransitionType.CROSSFADE)
+        hover_rev.set_transition_duration(100)
+        hover_rev.set_reveal_child(False)
+        hover_rev.set_halign(Gtk.Align.END)
+        hover_rev.set_valign(Gtk.Align.START)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=1)
+        actions.set_margin_top(3)
+        actions.set_margin_end(3)
+        actions.add_css_class("artgen-card-hover-actions")
+
+        star_btn = Gtk.Button(label="★" if rec.starred else "☆")
+        star_btn.add_css_class("artgen-card-action-btn")
+        star_btn.set_tooltip_text("Unstar" if rec.starred else "Star")
+
+        def _on_star(_b, _rec=rec, _sb=star_btn):
+            new = not bool(_rec.starred)
+            _ms.star(_rec.id, new)
+            _rec.starred = int(new)
+            _sb.set_label("★" if new else "☆")
+            _sb.set_tooltip_text("Unstar" if new else "Star")
+            # Refresh chips so Starred chip appears/disappears as needed
+            self._rebuild_chips()
+
+        star_btn.connect("clicked", _on_star)
+        actions.append(star_btn)
+
+        del_btn = Gtk.Button(label="🗑")
+        del_btn.add_css_class("artgen-card-action-btn")
+        del_btn.set_tooltip_text("Delete")
+
+        def _on_delete(_b, _rec=rec, _ov=overlay):
+            dialog = Gtk.AlertDialog()
+            dialog.set_message("Delete this artifact?")
+            dialog.set_detail(f"{_rec.generator_type} — {_rec.created_at[:10]}")
+            dialog.set_buttons(["Cancel", "Delete"])
+            dialog.set_cancel_button(0)
+            dialog.set_default_button(0)
+            dialog.choose(_ov.get_root(), None, _delete_confirmed, _rec.id)
+
+        def _delete_confirmed(dialog, result, media_id):
+            try:
+                btn_idx = dialog.choose_finish(result)
+            except Exception:
+                return
+            if btn_idx != 1:
+                return
+            _ms.delete(media_id)
+            self._records = [r for r in self._records if r.id != media_id]
+            self._rebuild_grid()
+            self._rebuild_chips()
+            if self.on_card_deleted:
+                self.on_card_deleted(media_id)
+
+        del_btn.connect("clicked", _on_delete)
+        actions.append(del_btn)
+        hover_rev.set_child(actions)
+        overlay.add_overlay(hover_rev)
+
+        # Show/hide hover actions via motion controller
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", lambda *_: hover_rev.set_reveal_child(True))
+        motion.connect("leave", lambda *_: hover_rev.set_reveal_child(False))
+        overlay.add_controller(motion)
+
+        return overlay
 
     # ── Signal handlers ───────────────────────────────────────────────────────
 

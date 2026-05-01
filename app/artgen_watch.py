@@ -165,6 +165,12 @@ class ArtgenWatch(Gtk.Overlay):
         self._play_btn.connect("clicked", self._on_play_pause)
         bottom.append(self._play_btn)
 
+        self._star_btn = Gtk.Button(label="☆")
+        self._star_btn.add_css_class("artgen-watch-btn")
+        self._star_btn.set_tooltip_text("Star this artifact  [S]")
+        self._star_btn.connect("clicked", lambda _: self._toggle_star())
+        bottom.append(self._star_btn)
+
         overlay_box.append(bottom)
         self.add_overlay(overlay_box)
 
@@ -225,6 +231,9 @@ class ArtgenWatch(Gtk.Overlay):
                          and isinstance(v, str))
             + f" · {rec.created_at[:10]}"
         )
+
+        self._star_btn.set_label("★" if rec.starred else "☆")
+        self._star_btn.set_tooltip_text("Unstar  [S]" if rec.starred else "Star this artifact  [S]")
 
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
@@ -338,6 +347,8 @@ class ArtgenWatch(Gtk.Overlay):
         starred = not bool(rec.starred)
         _ms.star(rec.id, starred)
         rec.starred = int(starred)
+        self._star_btn.set_label("★" if starred else "☆")
+        self._star_btn.set_tooltip_text("Unstar  [S]" if starred else "Star this artifact  [S]")
 
     def _delete_current(self) -> None:
         if not self._records:

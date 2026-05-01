@@ -1234,6 +1234,11 @@ popover.picker-popover > contents {
 .artgen-palette-name { font-size: 9px; color: @tt_muted; padding: 2px 5px; }
 .artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }
 .artgen-type-badge { font-size: 8px; background: alpha(@tt_bg_dark,0.8); color: @tt_accent; padding: 1px 4px; border-radius: 2px; }
+.artgen-card-hover-actions { background: alpha(@tt_bg_dark, 0.72); border-radius: 0 4px 0 4px; }
+.artgen-card-action-btn { min-width: 22px; min-height: 22px; padding: 1px 3px; font-size: 11px; border-radius: 3px; background: transparent; border: none; color: @tt_text; }
+.artgen-card-action-btn:hover { background: alpha(@tt_accent, 0.25); color: @tt_accent; }
+.artgen-starred-chip { color: @tt_accent; }
+.artgen-watch-btn-bar { padding: 2px 10px; font-size: 12px; }
 .artgen-watch-bg { background: #000; }
 .artgen-watch-btn { color: rgba(255,255,255,0.8); background: transparent; border: none; }
 .artgen-watch-nav-btn { font-size: 22px; background: rgba(0,0,0,0.5); border-radius: 50%; color: white; padding: 4px 10px; }
