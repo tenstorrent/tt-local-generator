@@ -10,7 +10,10 @@ Uses sub-subparsers so each generator owns its own flag namespace:
 
 from __future__ import annotations
 
+import json
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 import artgen
@@ -154,9 +157,51 @@ def cmd_artgen(args) -> None:
     # Post-process (glitch for landscape, CSS export for palette, etc.)
     artifact = gen.post_process(artifact, args)
 
-    # Save
-    out_path = Path(getattr(args, "output", None) or gen.default_output())
-    out_path.write_text(artifact, encoding="utf-8")
+    # Save — use media store path when no explicit --output so the GUI picks it up
+    explicit_out = getattr(args, "output", None)
+    if explicit_out:
+        out_path = Path(explicit_out)
+        out_path.write_text(artifact, encoding="utf-8")
+    else:
+        try:
+            from media_store import media_store as _ms, make_artgen_path, make_thumbnail
+            short_id = str(uuid.uuid4())[:8]
+            ext = Path(gen.default_output()).suffix
+            out_path = make_artgen_path(short_id, ext)
+            out_path.write_text(artifact, encoding="utf-8")
+
+            thumb_dir = out_path.parent / "thumbnails"
+            thumb_path = thumb_dir / (out_path.stem + ".png")
+            try:
+                make_thumbnail(out_path, thumb_path)
+            except Exception:
+                thumb_path = Path("")
+
+            params = {k: v for k, v in vars(args).items()
+                      if isinstance(v, (str, int, float, bool, type(None)))
+                      and k not in ("output", "max_tokens", "temperature")}
+
+            from media_store import MediaRecord
+            rec = MediaRecord(
+                id=str(uuid.uuid4()),
+                media_type="artgen",
+                created_at=datetime.now().isoformat(),
+                file_path=str(out_path),
+                thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+                prompt=prompt[:500],
+                model_id=model_id,
+                generator_type=gen_name,
+                params=json.dumps(params),
+                starred=0,
+            )
+            _ms.add(rec)
+            _ms.ensure_auto_playlists()
+        except Exception as _e:
+            # Graceful fallback: save to cwd without media-store registration
+            out_path = Path(gen.default_output())
+            out_path.write_text(artifact, encoding="utf-8")
+            print(f"  [media-store registration skipped: {_e}]")
+
     print(f"[saved → {out_path}]")
 
     if out_path.suffix.lower() == ".svg":
