@@ -85,9 +85,10 @@ def _section_lbl(text: str) -> Gtk.Label:
 # ── ArtgenPanel ───────────────────────────────────────────────────────────────
 
 _MODEL_TO_KEY: dict[str, str] = {
-    "Qwen3-8B":             "artgen-qwen3-8b",
-    "Llama-3.1-8B-Instruct": "artgen-llama-3.1-8b",
-    "Qwen2.5-7B-Instruct":  "artgen-qwen2.5-7b",
+    "Qwen3-8B":               "artgen-qwen3-8b",
+    "Llama-3.1-8B-Instruct":  "artgen-llama-3.1-8b",
+    "Qwen2.5-7B-Instruct":    "artgen-qwen2.5-7b",
+    "Llama-3.3-70B-Instruct": "artgen-llama-3.3-70b",
 }
 _ARTGEN_MODELS = list(_MODEL_TO_KEY)
 
@@ -185,6 +186,7 @@ class ArtgenPanel(Gtk.Box):
         # ── Left: controls ────────────────────────────────────────────────────
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         left_box.set_size_request(240, -1)
+        left_box.set_hexpand(False)   # prevent hexpand from child widgets propagating up
         left_box.add_css_class("artgen-ctrl-pane")
 
         type_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -271,26 +273,25 @@ class ArtgenPanel(Gtk.Box):
         right_box.set_margin_start(12); right_box.set_margin_end(12)
         right_box.set_margin_top(10); right_box.set_margin_bottom(10)
 
-        mini_hdr = Gtk.Label(label="LATEST GENERATIONS — click any to go to Gallery")
+        mini_hdr = Gtk.Label(label="ALL GENERATIONS — click any to open in Gallery")
         mini_hdr.set_xalign(0)
         mini_hdr.add_css_class("section-label")
         right_box.append(mini_hdr)
 
         self._mini_flow = Gtk.FlowBox()
-        self._mini_flow.set_max_children_per_line(4)
+        self._mini_flow.set_max_children_per_line(8)
         self._mini_flow.set_min_children_per_line(2)
         self._mini_flow.set_homogeneous(True)
         self._mini_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self._mini_flow.set_row_spacing(6)
         self._mini_flow.set_column_spacing(6)
-        self._mini_flow.set_vexpand(True)
         self._mini_flow.connect("child-activated", self._on_mini_card_activated)
-        right_box.append(self._mini_flow)
 
-        self._view_all_btn = Gtk.Button(label="→ View all in Gallery")
-        self._view_all_btn.add_css_class("flat")
-        self._view_all_btn.connect("clicked", lambda _: self._switch_tab("gallery"))
-        right_box.append(self._view_all_btn)
+        mini_scroll = Gtk.ScrolledWindow()
+        mini_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        mini_scroll.set_vexpand(True)
+        mini_scroll.set_child(self._mini_flow)
+        right_box.append(mini_scroll)
 
         pane.append(right_box)
         self._refresh_mini_grid()
@@ -545,7 +546,9 @@ class ArtgenPanel(Gtk.Box):
     def _check_health_bg(self) -> None:
         from server_manager import is_healthy
         try:
-            ok = is_healthy("artgen-qwen3-8b")
+            model = _dd_val(self._srv_model_dd)
+            key = _MODEL_TO_KEY.get(model, "artgen-qwen3-8b")
+            ok = is_healthy(key)
         except Exception:
             ok = False
         GLib.idle_add(self._set_health, ok)
@@ -598,14 +601,16 @@ class ArtgenPanel(Gtk.Box):
             # Verse generator stashes a system prompt on args._verse_system
             system_msg = getattr(args, "_verse_system", None)
             try:
-                raw = artgen.call_llm(
+                raw, usage = artgen.call_llm(
                     prompt, model_id, base_url + "/v1",
+                    max_tokens=getattr(args, "max_tokens", 4096),
                     system=system_msg,
                 )
             except Exception as e:
                 GLib.idle_add(self._finish_error, f"LLM error: {e}")
                 return
 
+            elapsed = time.monotonic() - t0
             GLib.idle_add(self._set_status, "Parsing output…")
 
             try:
@@ -635,7 +640,13 @@ class ArtgenPanel(Gtk.Box):
             params.pop("output", None)
             params.pop("max_tokens", None)
             params.pop("temperature", None)
-            params["generation_seconds"] = int(time.monotonic() - t0)
+            params["generation_seconds"] = int(elapsed)
+            completion_tokens = usage.get("completion_tokens") or 0
+            prompt_tokens = usage.get("prompt_tokens") or 0
+            if completion_tokens:
+                params["completion_tokens"] = completion_tokens
+                params["prompt_tokens"] = prompt_tokens
+                params["tokens_per_sec"] = round(completion_tokens / max(elapsed, 0.1), 1)
 
             rec = MediaRecord(
                 id=str(uuid.uuid4()),
@@ -653,7 +664,7 @@ class ArtgenPanel(Gtk.Box):
             _media_store.add(rec)
             _media_store.ensure_auto_playlists()
 
-            GLib.idle_add(self._finish_success, artifact, str(out_path), rec.id)
+            GLib.idle_add(self._finish_success, artifact, str(out_path), rec)
 
         except Exception as e:
             GLib.idle_add(self._finish_error, f"Unexpected error: {e}")
@@ -662,7 +673,9 @@ class ArtgenPanel(Gtk.Box):
         """Build an argparse-Namespace-compatible object from the current UI state."""
         args = types.SimpleNamespace()
         args.output = None
-        args.max_tokens = 4096
+        # SVG generators produce dense output; give them more headroom.
+        _SVG_TYPES = {"landscape", "skyline", "geometric", "circuit", "constellation"}
+        args.max_tokens = 12288 if gen_name in _SVG_TYPES else 4096
         args.temperature = 0.7
 
         if gen_name == "landscape":
@@ -743,7 +756,7 @@ class ArtgenPanel(Gtk.Box):
 
     # ── UI update callbacks (must only run on the GTK main thread) ────────────
 
-    def _finish_success(self, artifact: str, out_path_str: str, rec_id: str = "") -> None:
+    def _finish_success(self, artifact: str, out_path_str: str, rec: "MediaRecord | None" = None) -> None:
         elapsed = self._cancel_llm_timer()
         self._generating = False
         self._gen_btn.set_sensitive(True)
@@ -751,7 +764,18 @@ class ArtgenPanel(Gtk.Box):
         self._last_out_path = Path(out_path_str)
         suffix = f"  ({elapsed}s)" if elapsed is not None else ""
         self._set_status(f"Saved → {out_path_str}{suffix}")
+
+        # Push the new record into every live view that holds a record list.
+        if rec is not None:
+            self._gallery.prepend_record(rec)
+            # Prepend to watch queue if watch is already running
+            if self._watch._records:
+                self._watch._records.insert(0, rec)
+        else:
+            self._gallery.refresh()
+
         self._refresh_mini_grid()
+
         if self._auto_gen:
             self._auto_gen_error_streak = 0
             self._auto_maybe_schedule()
@@ -788,6 +812,12 @@ class ArtgenPanel(Gtk.Box):
             return
         if tab == "gallery":
             self._gallery.refresh()
+        elif tab == "watch":
+            # Direct tab click: load all records if the slideshow hasn't been started yet.
+            if not self._watch._records:
+                records = _media_store.query(media_type="artgen")
+                if records:
+                    self._watch.start(records)
         self._sub_stack.set_visible_child_name(tab)
 
     def _switch_tab(self, tab: str) -> None:
@@ -802,15 +832,26 @@ class ArtgenPanel(Gtk.Box):
             media_type="artgen",
             generator_type=self._gallery._active_filter,
         )
+        self._detail_source = "gallery"
+        self._detail.set_back_label("← Gallery")
         self._detail.show_record(media_id, records)
         self._sub_stack.set_visible_child_name("detail")
 
     def _on_detail_back(self) -> None:
-        self._sub_stack.set_visible_child_name("gallery")
+        source = getattr(self, "_detail_source", "gallery")
+        if source == "create":
+            self._create_tab_btn.set_active(True)
+            self._sub_stack.set_visible_child_name("create")
+        else:
+            self._gallery_tab_btn.set_active(True)
+            self._sub_stack.set_visible_child_name("gallery")
 
     def _on_detail_deleted(self, media_id: str) -> None:
         self._gallery.refresh()
         self._refresh_mini_grid()
+        # Remove from watch queue so the slideshow doesn't try to display it
+        if self._watch._records:
+            self._watch._records = [r for r in self._watch._records if r.id != media_id]
 
     def _on_watch_requested(self, generator_type: str | None) -> None:
         records = _media_store.query(media_type="artgen", generator_type=generator_type)
@@ -825,33 +866,38 @@ class ArtgenPanel(Gtk.Box):
         self._gallery_tab_btn.set_active(True)
         self._sub_stack.set_visible_child_name("gallery")
 
-    def _on_mini_card_activated(self, _flow, _child) -> None:
-        self._switch_tab("gallery")
+    def _on_mini_card_activated(self, _flow, child) -> None:
+        box = child.get_child()
+        media_id = box.get_name() if box else ""
+        if not media_id:
+            self._switch_tab("gallery")
+            return
+        records = _media_store.query(media_type="artgen")
+        self._detail_source = "create"
+        self._detail.set_back_label("← Create")
+        self._detail.show_record(media_id, records)
+        self._sub_stack.set_visible_child_name("detail")
 
     def _refresh_mini_grid(self) -> None:
         while child := self._mini_flow.get_first_child():
             self._mini_flow.remove(child)
-        recent = _media_store.query(media_type="artgen", limit=4)
-        if not recent:
+        records = _media_store.query(media_type="artgen")
+        if not records:
             placeholder = Gtk.Label(label="✦\nYour generations\nwill appear here")
             placeholder.set_xalign(0.5)
             placeholder.add_css_class("artgen-empty-hint")
             self._mini_flow.append(placeholder)
-            self._view_all_btn.set_label("→ View all in Gallery")
             return
-        total = len(_media_store.query(media_type="artgen"))
-        self._view_all_btn.set_label(f"→ View all {total} in Gallery")
-        for i, rec in enumerate(recent):
-            card = self._make_mini_card(rec, highlight=(i == 0))
+        for rec in records:
+            card = self._make_mini_card(rec)
             self._mini_flow.append(card)
 
-    def _make_mini_card(self, rec: "MediaRecord", highlight: bool = False) -> Gtk.Box:
+    def _make_mini_card(self, rec: "MediaRecord") -> Gtk.Box:
         from artgen_gallery import make_card_content
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_name(rec.id)  # used by _on_mini_card_activated to open detail directly
         box.set_size_request(100, 80)
         box.add_css_class("artgen-card")
-        if highlight:
-            box.add_css_class("artgen-card-new")
         content = make_card_content(rec)
         content.set_hexpand(True)
         content.set_vexpand(True)

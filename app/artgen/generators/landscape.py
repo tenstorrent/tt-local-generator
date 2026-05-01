@@ -154,9 +154,12 @@ def _build_prompt(
 
 
 def _parse_svg(raw: str) -> str | None:
+    import artgen as _artgen
     cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     cleaned = re.sub(r"```(?:svg|xml)?\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"```\s*", "", cleaned.strip())
+    # Attempt truncation recovery before regex search (handles missing </svg>)
+    cleaned = _artgen.repair_svg(cleaned)
     m = re.search(r"(<svg\b[^>]*?>.*?</svg>)", cleaned, re.DOTALL | re.IGNORECASE)
     if not m:
         return None

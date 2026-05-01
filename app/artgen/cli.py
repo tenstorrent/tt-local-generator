@@ -138,7 +138,7 @@ def cmd_artgen(args) -> None:
         )
         raw = resp.choices[0].message.content or ""
     else:
-        raw = artgen.call_llm(
+        raw, _usage = artgen.call_llm(
             prompt, model_id, base_url,
             max_tokens=getattr(args, "max_tokens", 4096),
             temperature=getattr(args, "temperature", 0.7),

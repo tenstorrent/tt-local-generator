@@ -6254,6 +6254,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._restore_queue()
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
+        self._start_artgen_health_worker()
         if self._inventory_url:
             self._start_inventory_fetch()
 
@@ -6924,8 +6925,10 @@ class MainWindow(Gtk.ApplicationWindow):
             # Skip while a launch/stop script is in flight — the status bar
             # stays in its "starting…" state (timer ticking) until the
             # operation finishes, then health results flow through normally.
+            # Also skip when artgen is the active source: the artgen health
+            # loop owns the status bar in that mode (it polls port 8002).
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
-            if not self._controls._server_launching:
+            if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
                 self._hw_statusbar.update_server(ready, display_model or None)
 
             if ready:
@@ -7018,6 +7021,60 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         self._controls.set_prompt_gen_state(ready)
         return False  # one-shot idle callback
+
+    # ── Artgen server health worker (port 8002) ────────────────────────────────
+
+    def _start_artgen_health_worker(self) -> None:
+        """Start background polling for the artgen LLM server on port 8002."""
+        self._artgen_health_stop = threading.Event()
+        threading.Thread(target=self._artgen_health_loop, daemon=True).start()
+
+    def _artgen_health_loop(self) -> None:
+        """Polls port 8002 every 10 s; posts result to main thread via idle_add.
+
+        All artgen-* server definitions share the same health URL
+        (http://localhost:8002/v1/models), so checking any one of them is
+        sufficient.  We also call detect_model() when healthy to show the
+        loaded model name in the status bar.
+        """
+        import artgen as _artgen
+        import server_manager as _sm
+        from server_config import server_config as _sc
+        consecutive_failures = 0
+
+        while not self._artgen_health_stop.is_set():
+            try:
+                ready = _sm.is_healthy("artgen-qwen3-8b", timeout=2.0)
+            except Exception:
+                ready = False
+
+            if ready:
+                consecutive_failures = 0
+                try:
+                    base_url = _sc.base_url("artgen")
+                    model_name = _artgen.detect_model(base_url) or "artgen"
+                except Exception:
+                    model_name = "artgen"
+            else:
+                consecutive_failures += 1
+                model_name = None
+                if consecutive_failures < 2:
+                    self._artgen_health_stop.wait(10.0)
+                    continue
+
+            GLib.idle_add(self._on_artgen_health_result, ready, model_name)
+            self._artgen_health_stop.wait(10.0)
+
+    def _on_artgen_health_result(self, ready: bool, model: "str | None") -> bool:
+        """Runs on main thread. Updates the toolbar status bar when artgen is active."""
+        if not self._alive:
+            return False
+        if self._controls.get_model_source() != "artgen":
+            return False
+        if not self._controls._server_launching:
+            label = model if (ready and model) else "offline"
+            self._hw_statusbar.update_server(ready, label)
+        return False
 
     # ── Remote record localization ──────────────────────────────────────────────
 

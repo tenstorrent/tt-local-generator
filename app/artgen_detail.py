@@ -31,14 +31,19 @@ from media_store import media_store as _ms, MediaRecord
 
 _READING_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { background: #1A3C47; min-height: 100%; }
+html { background: #1A3C47; min-height: 100%; }
 body {
-    padding: 48px 9% 72px;
+    background: #1A3C47;
     font-family: system-ui, 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
     font-size: 18px;
-    line-height: 1.78;
+    line-height: 1.82;
     color: #E8F0F2;
     -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 80px;
+}
+.content {
+    max-width: 720px;
+    margin: 0 auto;
 }
 h1 {
     font-size: 1.65em; font-weight: 700; color: #4FD1C5;
@@ -63,6 +68,7 @@ pre {
     background: #0F2A35; border-left: 3px solid #4FD1C5;
     padding: 18px 22px; border-radius: 0 6px 6px 0;
     overflow-x: auto; margin-bottom: 22px;
+    white-space: pre-wrap; word-wrap: break-word;
 }
 pre code { background: none; padding: 0; color: #E8F0F2; font-size: 0.90em; line-height: 1.6; }
 blockquote {
@@ -130,7 +136,7 @@ _HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><style>{css}</style></head>
-<body>{body}</body>
+<body><div class="content">{body}</div></body>
 </html>"""
 
 
@@ -181,12 +187,63 @@ def _palette_to_html(data: dict) -> str:
 
 _MD_EXTENSIONS = ["fenced_code", "nl2br", "tables", "sane_lists", "smarty", "attr_list"]
 
+# Extra CSS layered on top of _READING_CSS for verse/haiku content.
+_VERSE_CSS_EXTRA = """
+.content { text-align: center; max-width: 560px; }
+h1 { text-align: center; border-bottom: none; margin-bottom: 48px; }
+p {
+    font-size: 1.15em;
+    line-height: 2.1;
+    margin-bottom: 36px;
+    font-style: italic;
+    color: #C8DDE5;
+}
+"""
 
-def _md_to_html(text: str) -> str:
+
+def _derive_title(gen_type: str, params: dict) -> str:
+    """Compute a human-readable document title from generator type + params."""
+    if gen_type == "verse":
+        form = params.get("form", "verse").capitalize()
+        theme = params.get("theme", "")
+        return f"{form} — {theme}" if theme else form
+    if gen_type == "freeform":
+        prompt = params.get("freeform", "")
+        return (prompt[:72] + "…") if len(prompt) > 72 else prompt
+    if gen_type == "ansi":
+        return params.get("subject", "")
+    return ""
+
+
+def _md_to_html(text: str, title: str = "", verse_mode: bool = False) -> str:
     """Convert markdown text to a themed HTML document for the reading view."""
+
+    # Strip outer triple-backtick fence that LLMs sometimes add around their output.
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        inner = stripped[3:]
+        if inner.startswith("\n"):
+            inner = inner[1:]
+        # Remove trailing fence
+        inner = inner[:inner.rfind("```")].rstrip()
+        text = inner
+
+    # Dedent: if every non-empty line has consistent leading whitespace, strip it.
+    # This catches LLM outputs indented with 4 spaces (which markdown reads as code).
+    lines = text.splitlines()
+    non_empty = [l for l in lines if l.strip()]
+    if non_empty:
+        common = len(non_empty[0]) - len(non_empty[0].lstrip())
+        if common > 0 and all(l.startswith(" " * common) for l in non_empty):
+            text = "\n".join(l[common:] if l.strip() else l for l in lines)
+
+    # Prepend title as H1 unless the text already starts with a heading.
+    if title and not text.lstrip().startswith("#"):
+        import html as _html
+        text = f"# {_html.escape(title)}\n\n{text}"
+
     try:
         import markdown as _markdown
-        # Try full extension set; fall back gracefully if any aren't installed
         exts = _MD_EXTENSIONS[:]
         while exts:
             try:
@@ -200,7 +257,9 @@ def _md_to_html(text: str) -> str:
     except Exception:
         import html as _html
         body = f"<pre>{_html.escape(text)}</pre>"
-    return _HTML_TEMPLATE.format(css=_READING_CSS, body=body)
+
+    css = _READING_CSS + (_VERSE_CSS_EXTRA if verse_mode else "")
+    return _HTML_TEMPLATE.format(css=css, body=body)
 
 
 # xterm-256 default colour table (indices 0-255) — same as in artgen_gallery
@@ -222,63 +281,38 @@ def _build_ansi_pal() -> list[str]:
 
 _ANSI_PAL = _build_ansi_pal()
 
-_ANSI_CSS = """
-  body { margin: 0; background: #0a0a0a; font-family: 'Courier New', monospace;
-         font-size: 13px; line-height: 1.2; white-space: pre; overflow: auto;
-         color: #cccccc; }
-  span { display: inline; }
-"""
-
 
 def _ansi_to_html(text: str) -> str:
     """
-    Convert ANSI escape sequences to an HTML document with inline <span> styles.
-    Handles SGR 0 (reset), 1 (bold), 30-37/90-97 (fg), 40-47/100-107 (bg),
-    38;5;N / 48;5;N (256-colour), 38;2;R;G;B / 48;2;R;G;B (truecolour).
+    Convert ANSI escape sequences to a full-viewport CSS-grid HTML document.
+    Each pixel cell becomes a <div> coloured by its background colour; the
+    grid fills 100vw × 100vh so the art always fills the entire detail view.
+    Handles: SGR 0 (reset), 40-47/100-107 (8-colour bg), 48;5;N (256-colour),
+    48;2;R;G;B (truecolour).
     """
     import re
-    import html as _html
 
-    fg_col: str | None = None
-    bg_col: str | None = None
-    bold = False
-    parts: list[str] = []
-    # Track whether a <span> is open
-    span_open = False
+    # Normalise escape variants to actual ESC byte.
+    text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b")
+    text = text.replace("\\e", "\x1b").replace("^[", "\x1b")
+    text = re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
 
-    def close_span() -> None:
-        nonlocal span_open
-        if span_open:
-            parts.append("</span>")
-            span_open = False
-
-    def open_span() -> None:
-        nonlocal span_open
-        styles: list[str] = []
-        if fg_col:
-            styles.append(f"color:{fg_col}")
-        if bg_col:
-            styles.append(f"background:{bg_col}")
-        if bold:
-            styles.append("font-weight:bold")
-        if styles:
-            parts.append(f'<span style="{";".join(styles)}">')
-            span_open = True
+    DEFAULT = "#000000"
+    bg = DEFAULT
+    grid: list[list[str]] = [[]]
 
     i = 0
     n = len(text)
     while i < n:
         ch = text[i]
         if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
-            # Find end of CSI sequence
             j = i + 2
             while j < n and text[j] not in "ABCDEFGHJKSTfm":
                 j += 1
             if j < n and text[j] == "m":
-                close_span()
-                raw_params = text[i + 2:j]
+                params = text[i + 2 : j]
                 nums: list[int] = []
-                for p in raw_params.split(";") if raw_params else []:
+                for p in (params.split(";") if params else []):
                     try:
                         nums.append(int(p))
                     except ValueError:
@@ -289,52 +323,62 @@ def _ansi_to_html(text: str) -> str:
                 while k < len(nums):
                     v = nums[k]
                     if v == 0:
-                        fg_col = bg_col = None; bold = False
-                    elif v == 1:
-                        bold = True
-                    elif 30 <= v <= 37:
-                        fg_col = _ANSI_PAL[v - 30]
-                    elif 90 <= v <= 97:
-                        fg_col = _ANSI_PAL[v - 90 + 8]
+                        bg = DEFAULT
                     elif 40 <= v <= 47:
-                        bg_col = _ANSI_PAL[v - 40]
+                        bg = _ANSI_PAL[v - 40]
                     elif 100 <= v <= 107:
-                        bg_col = _ANSI_PAL[v - 100 + 8]
-                    elif v in (38, 48):
-                        target = "fg" if v == 38 else "bg"
+                        bg = _ANSI_PAL[v - 100 + 8]
+                    elif v == 48:
                         if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            colour = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
+                            bg = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
                             k += 2
                         elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            colour = "#{:02x}{:02x}{:02x}".format(
+                            bg = "#{:02x}{:02x}{:02x}".format(
                                 max(0, min(255, nums[k + 2])),
                                 max(0, min(255, nums[k + 3])),
                                 max(0, min(255, nums[k + 4])),
                             )
                             k += 4
-                        else:
-                            k += 1; continue
-                        if target == "fg":
-                            fg_col = colour
-                        else:
-                            bg_col = colour
                     k += 1
-                open_span()
             i = j + 1
+        elif ch == "\n":
+            grid.append([])
+            bg = DEFAULT
+            i += 1
         elif ch == "\r":
             i += 1
-        elif ch == "\n":
-            close_span()
-            parts.append("\n")
-            open_span()
-            i += 1
         else:
-            parts.append(_html.escape(ch))
+            grid[-1].append(bg)
             i += 1
 
-    close_span()
-    body_text = "".join(parts)
-    return f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{_ANSI_CSS}</style></head><body>{body_text}</body></html>"
+    # Drop empty trailing rows
+    while grid and not grid[-1]:
+        grid.pop()
+
+    if not grid:
+        return "<html><body style='background:#000'></body></html>"
+
+    num_rows = len(grid)
+    num_cols = max((len(r) for r in grid), default=1)
+
+    # Build one <div> per cell; empty cells default to black.
+    cells: list[str] = []
+    for row in grid:
+        for j in range(num_cols):
+            colour = row[j] if j < len(row) else DEFAULT
+            cells.append(f'<div style="background:{colour}"></div>')
+
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+        "*{margin:0;padding:0;box-sizing:border-box}"
+        "html,body{width:100%;height:100%;background:#000;overflow:hidden}"
+        f"#g{{display:grid;width:100%;height:100%;"
+        f"grid-template-columns:repeat({num_cols},1fr);"
+        f"grid-template-rows:repeat({num_rows},1fr)}}"
+        "</style></head><body>"
+        f'<div id="g">{"".join(cells)}</div>'
+        "</body></html>"
+    )
 
 
 class ArtgenDetail(Gtk.Box):
@@ -358,10 +402,10 @@ class ArtgenDetail(Gtk.Box):
         hdr.set_margin_top(8)
         hdr.set_margin_bottom(8)
 
-        back_btn = Gtk.Button(label="← Gallery")
-        back_btn.add_css_class("flat")
-        back_btn.connect("clicked", lambda _: self.on_back and self.on_back())
-        hdr.append(back_btn)
+        self._back_btn = Gtk.Button(label="← Gallery")
+        self._back_btn.add_css_class("flat")
+        self._back_btn.connect("clicked", lambda _: self.on_back and self.on_back())
+        hdr.append(self._back_btn)
 
         self._title_lbl = Gtk.Label(label="")
         self._title_lbl.set_hexpand(True)
@@ -429,12 +473,14 @@ class ArtgenDetail(Gtk.Box):
 
         art_box.append(self._art_stack)
         body.append(art_box)
-        body.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self._sidebar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        body.append(self._sidebar_sep)
 
         # Sidebar
         sidebar_scroll = Gtk.ScrolledWindow()
         sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         sidebar_scroll.set_size_request(260, -1)
+        self._sidebar_scroll = sidebar_scroll
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         sidebar.set_margin_start(12)
@@ -476,6 +522,9 @@ class ArtgenDetail(Gtk.Box):
         self.append(body)
 
     # ── Public ────────────────────────────────────────────────────────────────
+
+    def set_back_label(self, label: str) -> None:
+        self._back_btn.set_label(label)
 
     def show_record(self, media_id: str, records: list[MediaRecord]) -> None:
         """Display the record with media_id; records is the current filter list."""
@@ -529,25 +578,29 @@ class ArtgenDetail(Gtk.Box):
         ext = fp.suffix.lower()
         raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
 
+        gen_type = rec.generator_type or ""
+        doc_title = _derive_title(gen_type, p)
+        verse_mode = gen_type == "verse"
+
         if ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
-            # Render ANSI escape codes as styled HTML spans in the WebView.
             self._webview.load_html(_ansi_to_html(raw), "about:blank")
             self._art_stack.set_visible_child_name("reading")
         elif ext == ".json":
             # Palette JSON — render color swatches
             try:
                 data = json.loads(raw)
-                html = _palette_to_html(data) if "colors" in data else _md_to_html(raw)
+                html = _palette_to_html(data) if "colors" in data else _md_to_html(raw, title=doc_title)
             except Exception:
-                html = _md_to_html(raw)
+                html = _md_to_html(raw, title=doc_title)
             self._webview.load_html(html, "about:blank")
             self._art_stack.set_visible_child_name("reading")
         else:
-            # verse .txt, freeform — render as markdown
-            self._webview.load_html(_md_to_html(raw), "about:blank")
+            # verse .txt, freeform — render as markdown reading view
+            html = _md_to_html(raw, title=doc_title, verse_mode=verse_mode)
+            self._webview.load_html(html, "about:blank")
             self._art_stack.set_visible_child_name("reading")
 
     # ── Handlers ──────────────────────────────────────────────────────────────

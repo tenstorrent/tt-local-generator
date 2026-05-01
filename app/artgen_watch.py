@@ -18,8 +18,15 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
+try:
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import WebKit as _WebKit
+    _WEBKIT_OK = True
+except Exception:
+    _WEBKIT_OK = False
 from gi.repository import Gdk, Gio, GLib, Gtk
 
+from artgen_detail import _ansi_to_html
 from media_store import media_store as _ms, MediaRecord
 
 _DWELL_DEFAULT = 10   # seconds between auto-advances
@@ -80,6 +87,14 @@ class ArtgenWatch(Gtk.Overlay):
         self._text_view.set_margin_top(40)
         text_scroll.set_child(self._text_view)
         self._art_stack.add_named(text_scroll, "text")
+
+        if _WEBKIT_OK:
+            self._ansi_web = _WebKit.WebView()
+            self._ansi_web.set_hexpand(True)
+            self._ansi_web.set_vexpand(True)
+            self._art_stack.add_named(self._ansi_web, "ansi")
+        else:
+            self._ansi_web = None
 
         self._bg.append(self._art_stack)
         self.set_child(self._bg)
@@ -212,9 +227,15 @@ class ArtgenWatch(Gtk.Overlay):
         )
 
         fp = Path(rec.file_path)
-        if fp.suffix.lower() == ".svg" and fp.exists():
+        ext = fp.suffix.lower()
+        if ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
+        elif ext == ".ans" and fp.exists() and self._ansi_web is not None:
+            raw = fp.read_text(encoding="utf-8", errors="replace")
+            html = _ansi_to_html(raw)
+            self._ansi_web.load_html(html, "file:///")
+            self._art_stack.set_visible_child_name("ansi")
         else:
             text = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
             self._text_view.get_buffer().set_text(text)

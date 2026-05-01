@@ -86,6 +86,30 @@ DEFAULTS: dict[str, dict] = {
         "port":  8002,        # dedicated chat-model port — separate from diffusion server (8000)
         "token": "",
     },
+    # Per-model artgen keys — all share port 8002 but only one runs at a time.
+    "artgen-qwen3-8b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-llama-3.1-8b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-qwen2.5-7b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-llama-3.3-70b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen_auto": {
+        "delay": 3,
+    },
 }
 
 

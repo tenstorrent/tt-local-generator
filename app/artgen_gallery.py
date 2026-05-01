@@ -229,8 +229,15 @@ def _parse_ansi_cells(
     row = col = 0
     cells: list[tuple[int,int,tuple[float,float,float]]] = []
     i = 0
-    n = len(text)
 
+    # Normalise escape variants to actual ESC byte (handles files saved before fix).
+    # Must happen before n = len(text) — normalisation shrinks the string.
+    if "\x1b" not in text:
+        import re as _re
+        text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b").replace("^[", "\x1b")
+        text = _re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
+
+    n = len(text)
     while i < n:
         ch = text[i]
 
@@ -334,6 +341,16 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
         except Exception:
             pass
 
+    # ANSI: always render the colour-grid — any stored thumbnail is a PIL text
+    # render of the raw escape codes, which looks terrible.
+    if ext == ".ans" and fp.exists():
+        try:
+            raw = fp.read_text(encoding="utf-8", errors="replace")
+            if raw.strip():
+                return _ansi_preview_widget(raw)
+        except Exception:
+            pass
+
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
         img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
         img.set_content_fit(Gtk.ContentFit.COVER)
@@ -351,9 +368,6 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
             raw = ""
     else:
         raw = ""
-
-    if ext == ".ans" and raw:
-        return _ansi_preview_widget(raw)
 
     if ext in (".txt", ".md") and raw.strip():
         return _text_preview_widget(raw)

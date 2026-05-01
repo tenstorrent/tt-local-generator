@@ -129,9 +129,12 @@ def call_llm(
     temperature: float = 0.7,
     on_token=None,  # unused — kept for API compatibility
     system: str | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """
-    Send *prompt* to an OpenAI-compatible chat endpoint and return the response.
+    Send *prompt* to an OpenAI-compatible chat endpoint.
+
+    Returns (text, usage) where usage is the API usage dict:
+        {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
 
     Uses urllib.request (stdlib only) so it is safe to call from GTK background
     threads — the openai/httpx client interacts poorly with GLib's event loop.
@@ -166,7 +169,50 @@ def call_llm(
     )
     with urllib.request.urlopen(req, timeout=300) as r:
         body = json.loads(r.read())
-    return body["choices"][0]["message"]["content"] or ""
+    text = body["choices"][0]["message"]["content"] or ""
+    usage = body.get("usage", {})
+    return text, usage
+
+
+# ── SVG repair ────────────────────────────────────────────────────────────────
+
+
+def repair_svg(raw: str) -> str:
+    """
+    Attempt to recover a truncated SVG.
+
+    Strategy:
+    1. Drop the last line if it doesn't end with '>' (cut mid-attribute).
+    2. Close unclosed <g> groups.
+    3. Append </svg> if missing.
+
+    Returns the (possibly repaired) SVG string, or the original if no <svg>
+    opener is found.
+    """
+    import re as _re
+
+    m = _re.search(r"<svg\b", raw, _re.IGNORECASE)
+    if not m:
+        return raw
+
+    body = raw[m.start():]
+
+    # Already complete
+    if _re.search(r"</svg\s*>", body, _re.IGNORECASE):
+        return body
+
+    # Drop incomplete last line (ends mid-token/mid-attribute)
+    lines = body.rstrip().splitlines()
+    while lines and not lines[-1].rstrip().endswith(">"):
+        lines.pop()
+    body = "\n".join(lines)
+
+    # Close unclosed <g> groups (self-closing <g/> don't count)
+    open_g  = len(_re.findall(r"<g(?:\s[^>]*)?>", body, _re.IGNORECASE))
+    close_g = len(_re.findall(r"</g\s*>",          body, _re.IGNORECASE))
+    body += "\n" + "\n".join("</g>" for _ in range(max(0, open_g - close_g)))
+    body += "\n</svg>"
+    return body
 
 
 # ── Lazy generator import ─────────────────────────────────────────────────────

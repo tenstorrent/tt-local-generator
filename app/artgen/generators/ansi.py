@@ -117,4 +117,6 @@ class AnsiGenerator(ArtGenerator):
         cleaned = cleaned.replace("\\e", "\033")
         # Some LLMs emit ^[ for ESC
         cleaned = cleaned.replace("^[", "\033")
+        # Llama-3.3 emits bare octal 033[ (no backslash) — treat as ESC[
+        cleaned = re.sub(r"(?<![\\x\d])033\[", "\033[", cleaned)
         return cleaned

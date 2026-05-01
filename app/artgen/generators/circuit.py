@@ -108,8 +108,10 @@ class CircuitGenerator(ArtGenerator):
 
     def parse_output(self, raw: str, args) -> str:
         import re
+        import artgen as _artgen
         cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
         cleaned = re.sub(r"```\w*\s*|```", "", cleaned).strip()
+        cleaned = _artgen.repair_svg(cleaned)
         m = re.search(r"(<svg\b[^>]*?>.*?</svg>)", cleaned, re.DOTALL | re.IGNORECASE)
         if not m:
             raise ValueError("LLM response did not contain valid SVG markup")

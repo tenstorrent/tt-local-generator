@@ -46,12 +46,14 @@ _BIN = _REPO_ROOT / "bin"
 class ServerDef:
     """Describes one managed service.
 
-    runner_key — optional: the value of `runner_in_use` returned by /tt-liveness
-                 when this specific model is loaded.  Only set for port-8000
-                 services.  When present, is_healthy() confirms both that the
-                 server is up AND that the correct model is loaded.  Services
-                 without runner_key (e.g. prompt-server) are checked by HTTP 2xx
-                 alone.
+    runner_key  — optional: the value of `runner_in_use` returned by /tt-liveness
+                  when this specific model is loaded.  Only set for port-8000
+                  services.  When present, is_healthy() confirms both that the
+                  server is up AND that the correct model is loaded.  Services
+                  without runner_key (e.g. prompt-server, artgen) are checked by
+                  HTTP 2xx alone.
+    extra_args  — additional CLI args appended to every start/stop invocation of
+                  the script (e.g. ["--model", "Qwen3-8B"] for artgen services).
     """
     key: str          # short CLI name: "wan2.2", "prompt-server"
     label: str        # human-readable display label
@@ -59,6 +61,7 @@ class ServerDef:
     health_url: str   # URL for health check — GET must return 2xx when ready
     stop_flag: str = "--stop"  # flag the script accepts to stop the service
     runner_key: Optional[str] = None  # expected runner_in_use value (port-8000 only)
+    extra_args: tuple = field(default_factory=tuple)  # model-specific args for start/stop
 
 
 # Ordered: "all" starts these in sequence.
@@ -109,6 +112,37 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8001/health",
             # No runner_key — health is checked by HTTP 2xx alone.
         ),
+        # Artgen chat/text LLMs — all share port 8002.  Only one runs at a time.
+        # Health checked via the OpenAI-compatible /v1/models endpoint (any 2xx = up).
+        # The start script's --model flag selects which weights to load.
+        ServerDef(
+            key="artgen-qwen3-8b",
+            label="Artgen  Qwen3-8B",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "Qwen3-8B"),
+        ),
+        ServerDef(
+            key="artgen-llama-3.1-8b",
+            label="Artgen  Llama-3.1-8B-Instruct",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "Llama-3.1-8B-Instruct"),
+        ),
+        ServerDef(
+            key="artgen-qwen2.5-7b",
+            label="Artgen  Qwen2.5-7B-Instruct",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "Qwen2.5-7B-Instruct"),
+        ),
+        ServerDef(
+            key="artgen-llama-3.3-70b",
+            label="Artgen  Llama-3.3-70B-Instruct",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "Llama-3.3-70B-Instruct"),
+        ),
     ]
 }
 
@@ -151,7 +185,7 @@ def start(
     """
     results = []
     for sdef in _resolve(key):
-        cmd = ["bash", str(_script_path(sdef))]
+        cmd = ["bash", str(_script_path(sdef)), *sdef.extra_args]
         if gui:
             cmd.append("--gui")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -163,7 +197,7 @@ def stop(key: str, timeout: Optional[int] = 30) -> list[subprocess.CompletedProc
     """Stop server(s) identified by key (or 'all')."""
     results = []
     for sdef in _resolve(key):
-        cmd = ["bash", str(_script_path(sdef)), sdef.stop_flag]
+        cmd = ["bash", str(_script_path(sdef)), *sdef.extra_args, sdef.stop_flag]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         results.append(result)
     return results
