@@ -21,11 +21,9 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-gi.require_version("Gdk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("WebKit", "6.0")
-gi.require_version("Vte", "2.91")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango, WebKit, Vte
+from gi.repository import Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -177,6 +175,140 @@ def _md_to_html(text: str) -> str:
     return _HTML_TEMPLATE.format(css=_READING_CSS, body=body)
 
 
+# xterm-256 default colour table (indices 0-255) — same as in artgen_gallery
+def _build_ansi_pal() -> list[str]:
+    sys16 = [
+        "#000000","#AA0000","#00AA00","#AA5500","#0000AA","#AA00AA","#00AAAA","#AAAAAA",
+        "#555555","#FF5555","#55FF55","#FFFF55","#5555FF","#FF55FF","#55FFFF","#FFFFFF",
+    ]
+    pal: list[str] = list(sys16)
+    for r6 in range(6):
+        for g6 in range(6):
+            for b6 in range(6):
+                cv = lambda x: 0 if x == 0 else 55 + x * 40
+                pal.append("#{:02x}{:02x}{:02x}".format(cv(r6), cv(g6), cv(b6)))
+    for k in range(24):
+        v = 8 + k * 10
+        pal.append("#{:02x}{:02x}{:02x}".format(v, v, v))
+    return pal
+
+_ANSI_PAL = _build_ansi_pal()
+
+_ANSI_CSS = """
+  body { margin: 0; background: #0a0a0a; font-family: 'Courier New', monospace;
+         font-size: 13px; line-height: 1.2; white-space: pre; overflow: auto;
+         color: #cccccc; }
+  span { display: inline; }
+"""
+
+
+def _ansi_to_html(text: str) -> str:
+    """
+    Convert ANSI escape sequences to an HTML document with inline <span> styles.
+    Handles SGR 0 (reset), 1 (bold), 30-37/90-97 (fg), 40-47/100-107 (bg),
+    38;5;N / 48;5;N (256-colour), 38;2;R;G;B / 48;2;R;G;B (truecolour).
+    """
+    import re
+    import html as _html
+
+    fg_col: str | None = None
+    bg_col: str | None = None
+    bold = False
+    parts: list[str] = []
+    # Track whether a <span> is open
+    span_open = False
+
+    def close_span() -> None:
+        nonlocal span_open
+        if span_open:
+            parts.append("</span>")
+            span_open = False
+
+    def open_span() -> None:
+        nonlocal span_open
+        styles: list[str] = []
+        if fg_col:
+            styles.append(f"color:{fg_col}")
+        if bg_col:
+            styles.append(f"background:{bg_col}")
+        if bold:
+            styles.append("font-weight:bold")
+        if styles:
+            parts.append(f'<span style="{";".join(styles)}">')
+            span_open = True
+
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
+            # Find end of CSI sequence
+            j = i + 2
+            while j < n and text[j] not in "ABCDEFGHJKSTfm":
+                j += 1
+            if j < n and text[j] == "m":
+                close_span()
+                raw_params = text[i + 2:j]
+                nums: list[int] = []
+                for p in raw_params.split(";") if raw_params else []:
+                    try:
+                        nums.append(int(p))
+                    except ValueError:
+                        nums.append(0)
+                if not nums:
+                    nums = [0]
+                k = 0
+                while k < len(nums):
+                    v = nums[k]
+                    if v == 0:
+                        fg_col = bg_col = None; bold = False
+                    elif v == 1:
+                        bold = True
+                    elif 30 <= v <= 37:
+                        fg_col = _ANSI_PAL[v - 30]
+                    elif 90 <= v <= 97:
+                        fg_col = _ANSI_PAL[v - 90 + 8]
+                    elif 40 <= v <= 47:
+                        bg_col = _ANSI_PAL[v - 40]
+                    elif 100 <= v <= 107:
+                        bg_col = _ANSI_PAL[v - 100 + 8]
+                    elif v in (38, 48):
+                        target = "fg" if v == 38 else "bg"
+                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
+                            colour = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
+                            k += 2
+                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
+                            colour = "#{:02x}{:02x}{:02x}".format(
+                                max(0, min(255, nums[k + 2])),
+                                max(0, min(255, nums[k + 3])),
+                                max(0, min(255, nums[k + 4])),
+                            )
+                            k += 4
+                        else:
+                            k += 1; continue
+                        if target == "fg":
+                            fg_col = colour
+                        else:
+                            bg_col = colour
+                    k += 1
+                open_span()
+            i = j + 1
+        elif ch == "\r":
+            i += 1
+        elif ch == "\n":
+            close_span()
+            parts.append("\n")
+            open_span()
+            i += 1
+        else:
+            parts.append(_html.escape(ch))
+            i += 1
+
+    close_span()
+    body_text = "".join(parts)
+    return f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{_ANSI_CSS}</style></head><body>{body_text}</body></html>"
+
+
 class ArtgenDetail(Gtk.Box):
 
     def __init__(self) -> None:
@@ -245,33 +377,7 @@ class ArtgenDetail(Gtk.Box):
         svg_scroll.set_child(self._svg_pic)
         self._art_stack.add_named(svg_scroll, "svg")
 
-        # ANSI art player — VTE terminal widget renders escape codes natively
-        ansi_scroll = Gtk.ScrolledWindow()
-        ansi_scroll.set_hexpand(True)
-        ansi_scroll.set_vexpand(True)
-        ansi_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self._vte = Vte.Terminal()
-        self._vte.set_hexpand(True)
-        self._vte.set_vexpand(True)
-        # Tenstorrent dark-mode palette
-        bg = Gdk.RGBA(); bg.parse("#0F2A35")
-        fg = Gdk.RGBA(); fg.parse("#E8F0F2")
-        ansi_palette = [
-            "#000000", "#CC0000", "#4EA13A", "#C4A000",
-            "#3465A4", "#75507B", "#06989A", "#D3D7CF",
-            "#555753", "#EF2929", "#8AE234", "#FCE94F",
-            "#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
-        ]
-        pal_rgba = []
-        for hx in ansi_palette:
-            c = Gdk.RGBA(); c.parse(hx); pal_rgba.append(c)
-        self._vte.set_colors(fg, bg, pal_rgba)
-        self._vte.set_audible_bell(False)
-        self._vte.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
-        ansi_scroll.set_child(self._vte)
-        self._art_stack.add_named(ansi_scroll, "ansi")
-
-        # Plain text fallback (not exposed for ANSI any more; kept as safety net)
+        # Plain text fallback (kept for any edge cases)
         text_scroll = Gtk.ScrolledWindow()
         text_scroll.set_hexpand(True)
         text_scroll.set_vexpand(True)
@@ -399,11 +505,9 @@ class ArtgenDetail(Gtk.Box):
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
-            # Feed ANSI art into the VTE terminal for native colour rendering.
-            # reset(clear_tabstops, clear_history) wipes the previous artifact.
-            self._vte.reset(True, True)
-            self._vte.feed(raw.encode("utf-8", errors="replace"))
-            self._art_stack.set_visible_child_name("ansi")
+            # Render ANSI escape codes as styled HTML spans in the WebView.
+            self._webview.load_html(_ansi_to_html(raw), "about:blank")
+            self._art_stack.set_visible_child_name("reading")
         elif ext == ".json":
             # Palette JSON — render color swatches
             try:
