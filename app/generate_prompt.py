@@ -190,6 +190,18 @@ def _algo_animate() -> tuple[str, dict]:
     return slug, meta
 
 
+def _algo_artgen() -> tuple[str, dict]:
+    """
+    Return a short thematic seed phrase for artgen's Inspire button.
+
+    Unlike video/image slugs (which are cinematic sentences), artgen seeds are
+    compact evocative phrases — 3-8 words — suitable as verse themes, palette
+    moods, ANSI subjects, or visual generator inspiration hints.
+    """
+    theme = wb.artgen_theme()
+    return theme, {"theme": theme}
+
+
 def _algo_skyreels() -> tuple[str, dict]:
     """
     Build one algorithmic SkyReels prompt slug.
@@ -229,6 +241,7 @@ _ALGO_FN = {
     "animate": _algo_animate,
     "commercial": _algo_commercial,
     "skyreels": _algo_skyreels,
+    "artgen": _algo_artgen,
 }
 
 # ── LLM polish ─────────────────────────────────────────────────────────────────
@@ -263,6 +276,13 @@ _TYPE_HINT = {
         "Nature, animals, wide landscapes, urban atmosphere, or cosmic. "
         "Use specific cinematic language: dolly, track, shallow depth of field, golden hour. "
         "Under 30 words. No preamble, no quotes."
+    ),
+    "artgen": (
+        "Artgen theme seed. Produce one evocative phrase (3-8 words) suitable as a theme "
+        "for generative art: a mood, a visual atmosphere, an emotional texture, or a short "
+        "poetic image. Examples: 'volcanic winter twilight', 'the weight of forgotten names', "
+        "'copper and verdigris', 'neon monastery at 4am'. "
+        "No sentences, no camera directions, no explanation. Just the phrase."
     ),
 }
 

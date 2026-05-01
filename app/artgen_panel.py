@@ -1253,6 +1253,10 @@ class ArtgenPanel(Gtk.Box):
         self._auto_restore_controls()
         if not self._auto_gen:
             return
+        # If the user started a manual generation while we were inspiring, drop this
+        # auto cycle — _finish_success will call _auto_maybe_schedule for the next one.
+        if self._generating:
+            return
 
         # Types that accept free-form text from Inspire
         _TEXT_TYPES = {"verse", "palette", "ansi", "freeform"}
