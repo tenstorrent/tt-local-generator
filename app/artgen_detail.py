@@ -27,110 +27,152 @@ from gi.repository import Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
 
-# ── Reading-view HTML template ────────────────────────────────────────────────
+# ── Reading-view helpers ──────────────────────────────────────────────────────
 
 _READING_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { background: #1A3C47; }
+html, body { background: #1A3C47; }
 body {
     max-width: 680px;
     margin: 0 auto;
     padding: 48px 36px 64px;
-    font-family: 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
+    font-family: system-ui, 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
     font-size: 17px;
     line-height: 1.75;
     color: #E8F0F2;
-    background: #1A3C47;
     -webkit-font-smoothing: antialiased;
 }
 h1 {
-    font-size: 1.55em;
-    font-weight: 700;
-    color: #4FD1C5;
+    font-size: 1.55em; font-weight: 700; color: #4FD1C5;
     border-bottom: 1px solid rgba(79,209,197,0.25);
-    padding-bottom: 10px;
-    margin-bottom: 20px;
-    margin-top: 0;
+    padding-bottom: 10px; margin-bottom: 20px; margin-top: 0;
 }
-h2 {
-    font-size: 1.2em;
-    font-weight: 600;
-    color: #81E6D9;
-    margin-top: 32px;
-    margin-bottom: 10px;
-}
-h3 {
-    font-size: 1.05em;
-    font-weight: 600;
-    color: #B0C4DE;
-    margin-top: 24px;
-    margin-bottom: 8px;
-}
+h2 { font-size: 1.2em; font-weight: 600; color: #81E6D9; margin-top: 32px; margin-bottom: 10px; }
+h3 { font-size: 1.05em; font-weight: 600; color: #B0C4DE; margin-top: 24px; margin-bottom: 8px; }
 p { margin-bottom: 16px; }
 strong { font-weight: 700; color: #F0F7FA; }
 em { font-style: italic; color: #EC96B8; }
 code {
     font-family: 'JetBrains Mono', 'Fira Code', 'Liberation Mono', monospace;
-    font-size: 0.88em;
-    background: #0F2A35;
-    color: #4FD1C5;
-    padding: 2px 7px;
-    border-radius: 4px;
+    font-size: 0.88em; background: #0F2A35; color: #4FD1C5;
+    padding: 2px 7px; border-radius: 4px;
 }
 pre {
-    background: #0F2A35;
-    border-left: 3px solid #4FD1C5;
-    padding: 16px 20px;
-    border-radius: 0 6px 6px 0;
-    overflow-x: auto;
-    margin-bottom: 20px;
+    background: #0F2A35; border-left: 3px solid #4FD1C5;
+    padding: 16px 20px; border-radius: 0 6px 6px 0;
+    overflow-x: auto; margin-bottom: 20px;
 }
-pre code {
-    background: none;
-    padding: 0;
-    color: #E8F0F2;
-    font-size: 0.92em;
-    line-height: 1.55;
-}
+pre code { background: none; padding: 0; color: #E8F0F2; font-size: 0.92em; line-height: 1.55; }
 blockquote {
-    border-left: 3px solid #4FD1C5;
-    margin: 20px 0;
-    padding: 4px 0 4px 20px;
-    color: #B0C4DE;
-    font-style: italic;
+    border-left: 3px solid #4FD1C5; margin: 20px 0;
+    padding: 4px 0 4px 20px; color: #B0C4DE; font-style: italic;
 }
-hr {
-    border: none;
-    border-top: 1px solid rgba(79,209,197,0.2);
-    margin: 32px 0;
-}
+hr { border: none; border-top: 1px solid rgba(79,209,197,0.2); margin: 32px 0; }
 ul, ol { padding-left: 24px; margin-bottom: 16px; }
 li { margin-bottom: 6px; }
 """
 
-_READING_TEMPLATE = """\
+_PALETTE_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #0F2A35; }
+body {
+    font-family: system-ui, 'Fira Sans', 'Liberation Sans', sans-serif;
+    font-size: 15px; line-height: 1.6; color: #E8F0F2;
+    padding: 0 0 48px;
+    -webkit-font-smoothing: antialiased;
+}
+.strip { display: flex; width: 100%; height: 80px; }
+.strip-seg { flex: 1; }
+.info { max-width: 680px; margin: 0 auto; padding: 32px 36px 0; }
+h1 { font-size: 1.5em; font-weight: 700; color: #4FD1C5; margin-bottom: 12px; }
+.lore {
+    font-size: 15px; line-height: 1.7; color: #B0C4DE;
+    font-style: italic; margin-bottom: 28px;
+    border-left: 3px solid rgba(79,209,197,0.35); padding-left: 16px;
+}
+.swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+}
+.swatch {
+    border-radius: 8px; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.swatch-block { width: 100%; height: 80px; }
+.swatch-label {
+    background: rgba(15,42,53,0.85); padding: 8px 10px;
+}
+.swatch-hex {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px; font-weight: 600; color: #E8F0F2;
+    letter-spacing: 0.05em;
+}
+.swatch-role { font-size: 11px; color: #607D8B; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
+"""
+
+_HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8">
-<style>{css}</style>
-</head>
+<head><meta charset="UTF-8"><style>{css}</style></head>
 <body>{body}</body>
 </html>"""
+
+
+def _luminance(hex_color: str) -> float:
+    """Approximate relative luminance of a hex color (0=black, 1=white)."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return 0.5
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+def _palette_to_html(data: dict) -> str:
+    """Build a palette-viewer HTML page from the parsed palette JSON."""
+    import html as _html
+    name = _html.escape(data.get("name", "Palette"))
+    lore = _html.escape(data.get("lore", ""))
+    colors = data.get("colors", [])
+
+    strip_segs = "".join(
+        f'<div class="strip-seg" style="background:{c.get("hex","#888")};"></div>'
+        for c in colors
+    )
+
+    swatch_cards = []
+    for c in colors:
+        hex_val = c.get("hex", "#888888")
+        role = _html.escape(c.get("role", ""))
+        swatch_cards.append(
+            f'<div class="swatch">'
+            f'<div class="swatch-block" style="background:{hex_val};"></div>'
+            f'<div class="swatch-label">'
+            f'<div class="swatch-hex">{_html.escape(hex_val)}</div>'
+            f'<div class="swatch-role">{role}</div>'
+            f'</div></div>'
+        )
+
+    body = (
+        f'<div class="strip">{strip_segs}</div>'
+        f'<div class="info">'
+        f'<h1>{name}</h1>'
+        f'<p class="lore">{lore}</p>'
+        f'<div class="swatches">{"".join(swatch_cards)}</div>'
+        f'</div>'
+    )
+    return _HTML_TEMPLATE.format(css=_PALETTE_CSS, body=body)
 
 
 def _md_to_html(text: str) -> str:
     """Convert markdown text to a themed HTML document for the reading view."""
     try:
         import markdown as _markdown
-        body = _markdown.markdown(
-            text,
-            extensions=["fenced_code", "nl2br"],
-        )
+        body = _markdown.markdown(text, extensions=["fenced_code", "nl2br"])
     except Exception:
-        # Fallback: wrap in <pre> if markdown conversion fails
         import html as _html
         body = f"<pre>{_html.escape(text)}</pre>"
-    return _READING_TEMPLATE.format(css=_READING_CSS, body=body)
+    return _HTML_TEMPLATE.format(css=_READING_CSS, body=body)
 
 
 class ArtgenDetail(Gtk.Box):
@@ -325,18 +367,27 @@ class ArtgenDetail(Gtk.Box):
         # Artifact
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
+        raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
+
         if ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
             # ANSI art: monospace only — escape codes corrupt in HTML
-            text = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
-            self._text_view.get_buffer().set_text(text)
+            self._text_view.get_buffer().set_text(raw)
             self._art_stack.set_visible_child_name("text")
+        elif ext == ".json":
+            # Palette JSON — render color swatches
+            try:
+                data = json.loads(raw)
+                html = _palette_to_html(data) if "colors" in data else _md_to_html(raw)
+            except Exception:
+                html = _md_to_html(raw)
+            self._webview.load_html(html, "about:blank")
+            self._art_stack.set_visible_child_name("reading")
         else:
-            # Everything else (verse .txt, palette .json, freeform) — render as markdown
-            raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
-            self._webview.load_html(_md_to_html(raw), None)
+            # verse .txt, freeform — render as markdown
+            self._webview.load_html(_md_to_html(raw), "about:blank")
             self._art_stack.set_visible_child_name("reading")
 
     # ── Handlers ──────────────────────────────────────────────────────────────
