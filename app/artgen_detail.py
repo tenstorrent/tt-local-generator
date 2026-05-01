@@ -22,9 +22,115 @@ from typing import Callable, Optional
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gio, GLib, Gtk, Pango
+gi.require_version("WebKit", "6.0")
+from gi.repository import Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
+
+# ── Reading-view HTML template ────────────────────────────────────────────────
+
+_READING_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: #1A3C47; }
+body {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 48px 36px 64px;
+    font-family: 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
+    font-size: 17px;
+    line-height: 1.75;
+    color: #E8F0F2;
+    background: #1A3C47;
+    -webkit-font-smoothing: antialiased;
+}
+h1 {
+    font-size: 1.55em;
+    font-weight: 700;
+    color: #4FD1C5;
+    border-bottom: 1px solid rgba(79,209,197,0.25);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    margin-top: 0;
+}
+h2 {
+    font-size: 1.2em;
+    font-weight: 600;
+    color: #81E6D9;
+    margin-top: 32px;
+    margin-bottom: 10px;
+}
+h3 {
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #B0C4DE;
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+p { margin-bottom: 16px; }
+strong { font-weight: 700; color: #F0F7FA; }
+em { font-style: italic; color: #EC96B8; }
+code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Liberation Mono', monospace;
+    font-size: 0.88em;
+    background: #0F2A35;
+    color: #4FD1C5;
+    padding: 2px 7px;
+    border-radius: 4px;
+}
+pre {
+    background: #0F2A35;
+    border-left: 3px solid #4FD1C5;
+    padding: 16px 20px;
+    border-radius: 0 6px 6px 0;
+    overflow-x: auto;
+    margin-bottom: 20px;
+}
+pre code {
+    background: none;
+    padding: 0;
+    color: #E8F0F2;
+    font-size: 0.92em;
+    line-height: 1.55;
+}
+blockquote {
+    border-left: 3px solid #4FD1C5;
+    margin: 20px 0;
+    padding: 4px 0 4px 20px;
+    color: #B0C4DE;
+    font-style: italic;
+}
+hr {
+    border: none;
+    border-top: 1px solid rgba(79,209,197,0.2);
+    margin: 32px 0;
+}
+ul, ol { padding-left: 24px; margin-bottom: 16px; }
+li { margin-bottom: 6px; }
+"""
+
+_READING_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>{css}</style>
+</head>
+<body>{body}</body>
+</html>"""
+
+
+def _md_to_html(text: str) -> str:
+    """Convert markdown text to a themed HTML document for the reading view."""
+    try:
+        import markdown as _markdown
+        body = _markdown.markdown(
+            text,
+            extensions=["fenced_code", "nl2br"],
+        )
+    except Exception:
+        # Fallback: wrap in <pre> if markdown conversion fails
+        import html as _html
+        body = f"<pre>{_html.escape(text)}</pre>"
+    return _READING_TEMPLATE.format(css=_READING_CSS, body=body)
 
 
 class ArtgenDetail(Gtk.Box):
@@ -95,7 +201,7 @@ class ArtgenDetail(Gtk.Box):
         svg_scroll.set_child(self._svg_pic)
         self._art_stack.add_named(svg_scroll, "svg")
 
-        # Text / ANSI
+        # ANSI / monospace fallback (for .ans files only)
         text_scroll = Gtk.ScrolledWindow()
         text_scroll.set_hexpand(True)
         text_scroll.set_vexpand(True)
@@ -109,6 +215,15 @@ class ArtgenDetail(Gtk.Box):
         self._text_view.set_margin_bottom(16)
         text_scroll.set_child(self._text_view)
         self._art_stack.add_named(text_scroll, "text")
+
+        # Markdown reading view — rich, cozy rendering for verse / palette / freeform
+        self._webview = WebKit.WebView()
+        settings = self._webview.get_settings()
+        settings.set_enable_javascript(False)
+        settings.set_enable_hyperlink_auditing(False)
+        self._webview.set_hexpand(True)
+        self._webview.set_vexpand(True)
+        self._art_stack.add_named(self._webview, "reading")
 
         art_box.append(self._art_stack)
         body.append(art_box)
@@ -209,13 +324,20 @@ class ArtgenDetail(Gtk.Box):
 
         # Artifact
         fp = Path(rec.file_path)
-        if fp.suffix.lower() == ".svg" and fp.exists():
+        ext = fp.suffix.lower()
+        if ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
-        else:
+        elif ext == ".ans":
+            # ANSI art: monospace only — escape codes corrupt in HTML
             text = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
             self._text_view.get_buffer().set_text(text)
             self._art_stack.set_visible_child_name("text")
+        else:
+            # Everything else (verse .txt, palette .json, freeform) — render as markdown
+            raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
+            self._webview.load_html(_md_to_html(raw), None)
+            self._art_stack.set_visible_child_name("reading")
 
     # ── Handlers ──────────────────────────────────────────────────────────────
 
