@@ -31,45 +31,60 @@ from media_store import media_store as _ms, MediaRecord
 
 _READING_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { background: #1A3C47; }
+html, body { background: #1A3C47; min-height: 100%; }
 body {
-    max-width: 680px;
-    margin: 0 auto;
-    padding: 48px 36px 64px;
+    padding: 48px 9% 72px;
     font-family: system-ui, 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
-    font-size: 17px;
-    line-height: 1.75;
+    font-size: 18px;
+    line-height: 1.78;
     color: #E8F0F2;
     -webkit-font-smoothing: antialiased;
 }
 h1 {
-    font-size: 1.55em; font-weight: 700; color: #4FD1C5;
+    font-size: 1.65em; font-weight: 700; color: #4FD1C5;
+    letter-spacing: -0.01em;
     border-bottom: 1px solid rgba(79,209,197,0.25);
-    padding-bottom: 10px; margin-bottom: 20px; margin-top: 0;
+    padding-bottom: 12px; margin-bottom: 24px; margin-top: 0;
 }
-h2 { font-size: 1.2em; font-weight: 600; color: #81E6D9; margin-top: 32px; margin-bottom: 10px; }
-h3 { font-size: 1.05em; font-weight: 600; color: #B0C4DE; margin-top: 24px; margin-bottom: 8px; }
-p { margin-bottom: 16px; }
+h2 { font-size: 1.25em; font-weight: 600; color: #81E6D9; margin-top: 36px; margin-bottom: 12px; }
+h3 { font-size: 1.08em; font-weight: 600; color: #B0C4DE; margin-top: 28px; margin-bottom: 8px; }
+h4 { font-size: 0.95em; font-weight: 600; color: #8EACC0; text-transform: uppercase;
+     letter-spacing: 0.06em; margin-top: 24px; margin-bottom: 6px; }
+p { margin-bottom: 18px; }
 strong { font-weight: 700; color: #F0F7FA; }
 em { font-style: italic; color: #EC96B8; }
+a { color: #4FD1C5; text-decoration: underline; text-decoration-thickness: 1px; }
 code {
     font-family: 'JetBrains Mono', 'Fira Code', 'Liberation Mono', monospace;
-    font-size: 0.88em; background: #0F2A35; color: #4FD1C5;
+    font-size: 0.86em; background: #0F2A35; color: #4FD1C5;
     padding: 2px 7px; border-radius: 4px;
 }
 pre {
     background: #0F2A35; border-left: 3px solid #4FD1C5;
-    padding: 16px 20px; border-radius: 0 6px 6px 0;
-    overflow-x: auto; margin-bottom: 20px;
+    padding: 18px 22px; border-radius: 0 6px 6px 0;
+    overflow-x: auto; margin-bottom: 22px;
 }
-pre code { background: none; padding: 0; color: #E8F0F2; font-size: 0.92em; line-height: 1.55; }
+pre code { background: none; padding: 0; color: #E8F0F2; font-size: 0.90em; line-height: 1.6; }
 blockquote {
-    border-left: 3px solid #4FD1C5; margin: 20px 0;
-    padding: 4px 0 4px 20px; color: #B0C4DE; font-style: italic;
+    border-left: 3px solid #4FD1C5; margin: 24px 0;
+    padding: 6px 0 6px 24px; color: #B0C4DE; font-style: italic;
+    font-size: 1.05em;
 }
-hr { border: none; border-top: 1px solid rgba(79,209,197,0.2); margin: 32px 0; }
-ul, ol { padding-left: 24px; margin-bottom: 16px; }
-li { margin-bottom: 6px; }
+hr { border: none; border-top: 1px solid rgba(79,209,197,0.2); margin: 36px 0; }
+ul, ol { padding-left: 28px; margin-bottom: 18px; }
+li { margin-bottom: 7px; }
+li > p { margin-bottom: 8px; }
+table {
+    width: 100%; border-collapse: collapse; margin-bottom: 22px;
+    font-size: 0.93em;
+}
+th {
+    background: #0F2A35; color: #4FD1C5; font-weight: 600;
+    padding: 10px 14px; text-align: left; letter-spacing: 0.03em;
+    border-bottom: 2px solid rgba(79,209,197,0.4);
+}
+td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.07); color: #D8E8EC; }
+tr:hover td { background: rgba(79,209,197,0.05); }
 """
 
 _PALETTE_CSS = """
@@ -164,11 +179,24 @@ def _palette_to_html(data: dict) -> str:
     return _HTML_TEMPLATE.format(css=_PALETTE_CSS, body=body)
 
 
+_MD_EXTENSIONS = ["fenced_code", "nl2br", "tables", "sane_lists", "smarty", "attr_list"]
+
+
 def _md_to_html(text: str) -> str:
     """Convert markdown text to a themed HTML document for the reading view."""
     try:
         import markdown as _markdown
-        body = _markdown.markdown(text, extensions=["fenced_code", "nl2br"])
+        # Try full extension set; fall back gracefully if any aren't installed
+        exts = _MD_EXTENSIONS[:]
+        while exts:
+            try:
+                body = _markdown.markdown(text, extensions=exts)
+                break
+            except Exception:
+                exts.pop()
+        else:
+            import html as _html
+            body = f"<pre>{_html.escape(text)}</pre>"
     except Exception:
         import html as _html
         body = f"<pre>{_html.escape(text)}</pre>"

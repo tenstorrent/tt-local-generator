@@ -1227,8 +1227,9 @@ popover.picker-popover > contents {
 .artgen-card { border-radius: 4px; background: @tt_bg_panel; }
 .artgen-card-new { border: 2px solid @tt_accent; }
 .artgen-card-placeholder { font-size: 20px; }
-.artgen-text-preview { padding: 5px 7px; }
-.artgen-preview-title { font-size: 10px; font-weight: bold; color: @tt_text; }
+.artgen-text-preview { padding: 6px 8px; }
+.artgen-preview-title { font-size: 12px; font-weight: bold; color: @tt_accent; letter-spacing: 0.01em; }
+.artgen-preview-rule { min-height: 1px; background: alpha(@tt_accent, 0.3); margin: 1px 0 2px; }
 .artgen-preview-body { font-size: 9px; color: @tt_muted; }
 .artgen-palette-name { font-size: 9px; color: @tt_muted; padding: 2px 5px; }
 .artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }

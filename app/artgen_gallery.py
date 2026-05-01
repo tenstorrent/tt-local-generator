@@ -150,7 +150,7 @@ def _text_preview_parts(text: str) -> tuple[str, str]:
 
 def _text_preview_widget(text: str) -> Gtk.Box:
     title, body = _text_preview_parts(text)
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     box.set_hexpand(True)
     box.set_vexpand(True)
     box.add_css_class("artgen-text-preview")
@@ -159,17 +159,22 @@ def _text_preview_widget(text: str) -> Gtk.Box:
         t = Gtk.Label(label=title)
         t.set_xalign(0)
         t.set_wrap(True)
-        t.set_max_width_chars(22)
+        t.set_max_width_chars(20)
         t.set_lines(2)
         t.set_ellipsize(3)   # PANGO_ELLIPSIZE_END
         t.add_css_class("artgen-preview-title")
         box.append(t)
 
+        # Thin teal rule under the title
+        rule = Gtk.Box()
+        rule.add_css_class("artgen-preview-rule")
+        box.append(rule)
+
     if body:
         b = Gtk.Label(label=body)
         b.set_xalign(0)
         b.set_wrap(True)
-        b.set_max_width_chars(22)
+        b.set_max_width_chars(20)
         b.set_lines(3)
         b.set_ellipsize(3)
         b.add_css_class("artgen-preview-body")
