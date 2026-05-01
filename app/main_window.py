@@ -1230,6 +1230,7 @@ popover.picker-popover > contents {
 .artgen-text-preview { padding: 5px 7px; }
 .artgen-preview-title { font-size: 10px; font-weight: bold; color: @tt_text; }
 .artgen-preview-body { font-size: 9px; color: @tt_muted; }
+.artgen-palette-name { font-size: 9px; color: @tt_muted; padding: 2px 5px; }
 .artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }
 .artgen-type-badge { font-size: 8px; background: alpha(@tt_bg_dark,0.8); color: @tt_accent; padding: 1px 4px; border-radius: 2px; }
 .artgen-watch-bg { background: #000; }

@@ -40,26 +40,80 @@ def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 
-def _palette_strip_widget(colors: list[str]) -> Gtk.DrawingArea:
-    """DrawingArea that paints vertical color bands, one per palette color."""
+def _rounded_rect(cr, x: float, y: float, w: float, h: float, r: float) -> None:
+    """Trace a rounded rectangle path on the given Cairo context."""
+    cr.new_sub_path()
+    cr.arc(x + r,     y + r,     r, 3.14159, 2.70 * 3.14159 / 2)
+    cr.arc(x + w - r, y + r,     r, -0.5 * 3.14159, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, 0.5 * 3.14159)
+    cr.arc(x + r,     y + h - r, r, 0.5 * 3.14159, 3.14159)
+    cr.close_path()
+
+
+def _palette_card_widget(data: dict) -> Gtk.Box:
+    """
+    Card content for a palette JSON: a grid of rounded color swatches
+    with the palette name overlaid at the bottom.
+    """
+    colors = [c.get("hex", "#888888") for c in data.get("colors", [])]
+    name = data.get("name", "")
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    box.set_hexpand(True)
+    box.set_vexpand(True)
+
+    # Swatch grid — Cairo DrawingArea
     area = Gtk.DrawingArea()
     area.set_hexpand(True)
     area.set_vexpand(True)
 
     def draw(_widget, cr, w, h):
-        n = len(colors)
-        if not n:
-            cr.set_source_rgb(0.06, 0.16, 0.2)
-            cr.paint()
+        # Dark background
+        cr.set_source_rgb(0.06, 0.16, 0.20)
+        cr.paint()
+        if not colors:
             return
-        seg = w / n
+        n = len(colors)
+        # Lay out in at most 2 rows; prefer more columns than rows
+        cols = max(1, (n + 1) // 2) if n > 3 else n
+        rows = (n + cols - 1) // cols
+
+        pad = 5.0
+        gap = 3.0
+        avail_w = w - 2 * pad
+        avail_h = h - 2 * pad
+        sw = (avail_w - gap * (cols - 1)) / cols
+        sh = (avail_h - gap * (rows - 1)) / rows
+        size = min(sw, sh)
+
+        # Center the swatch grid
+        total_w = cols * size + gap * (cols - 1)
+        total_h = rows * size + gap * (rows - 1)
+        ox = (w - total_w) / 2
+        oy = (h - total_h) / 2
+
+        radius = max(2.0, size * 0.12)
         for i, hx in enumerate(colors):
+            row_i = i // cols
+            col_i = i % cols
+            x = ox + col_i * (size + gap)
+            y = oy + row_i * (size + gap)
             cr.set_source_rgb(*_hex_to_rgb01(hx))
-            cr.rectangle(i * seg, 0, seg + 1, h)   # +1 avoids hairline gaps
+            _rounded_rect(cr, x, y, size, size, radius)
             cr.fill()
 
     area.set_draw_func(draw)
-    return area
+    box.append(area)
+
+    # Palette name strip at the bottom of the content area
+    if name:
+        lbl = Gtk.Label(label=name)
+        lbl.add_css_class("artgen-palette-name")
+        lbl.set_ellipsize(3)   # PANGO_ELLIPSIZE_END
+        lbl.set_max_width_chars(18)
+        box.append(lbl)
+
+    return box
 
 
 # ── Text snippet ──────────────────────────────────────────────────────────────
@@ -285,9 +339,8 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
     if ext == ".json" and raw:
         try:
             data = json.loads(raw)
-            colors = [c.get("hex", "#888888") for c in data.get("colors", [])]
-            if colors:
-                return _palette_strip_widget(colors)
+            if data.get("colors"):
+                return _palette_card_widget(data)
         except Exception:
             pass
 
