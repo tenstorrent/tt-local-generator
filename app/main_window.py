@@ -42,6 +42,7 @@ from api_client import APIClient
 from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
+from artgen_panel import ArtgenPanel
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
 import attractor
@@ -1155,6 +1156,86 @@ popover.picker-popover > contents {
     min-height: 0;
 }
 .picker-cancel-btn label { padding: 0; margin: 0; }
+
+/* -- Artgen panel ----------------------------------------------------------- */
+.artgen-ctrl-pane {
+    background-color: @tt_bg_panel;
+    border-right: 1px solid @tt_border;
+}
+.artgen-preview-pane {
+    background-color: @tt_bg_darkest;
+}
+.artgen-generate-btn {
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 10px;
+    border: none;
+    border-radius: 4px;
+}
+.artgen-generate-btn:hover {
+    background-color: @tt_accent_light;
+}
+.artgen-generate-btn:disabled {
+    background-color: @tt_border;
+    color: @tt_text_muted;
+}
+.artgen-status {
+    color: @tt_text_muted;
+    font-size: 11px;
+}
+.artgen-empty-hint {
+    color: @tt_border;
+    font-size: 20px;
+    margin-bottom: 6px;
+}
+.artgen-empty-sub {
+    color: @tt_text_hint;
+    font-size: 12px;
+}
+.freeform-entry {
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+}
+.artgen-health-ok    { color: #27AE60; font-size: 15px; }
+.artgen-health-bad   { color: #FF6B6B; font-size: 15px; }
+.artgen-health-unknown { color: #607D8B; font-size: 15px; }
+.artgen-srv-start-btn {
+    background: @tt_accent;
+    color: @tt_bg_darkest;
+    padding: 2px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: none;
+}
+.artgen-srv-start-btn:hover { background: @tt_accent_hover; }
+.artgen-srv-stop-btn {
+    background: @tt_bg_medium;
+    color: @tt_text_primary;
+    padding: 2px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid @tt_border;
+}
+.artgen-srv-stop-btn:hover { background: @tt_bg_panel; }
+.artgen-subnav { background: shade(@tt_bg_dark, 0.85); }
+.artgen-subnav-btn { border-radius: 0; padding: 6px 16px; font-size: 12px; }
+.artgen-subnav-btn:checked { color: @tt_accent; border-bottom: 2px solid @tt_accent; }
+.artgen-filter-chip { border-radius: 12px; padding: 2px 10px; font-size: 11px; }
+.artgen-filter-chip:checked { background: @tt_accent; color: @tt_bg_dark; }
+.artgen-card { border-radius: 4px; background: @tt_bg_panel; }
+.artgen-card-new { border: 2px solid @tt_accent; }
+.artgen-card-placeholder { font-size: 20px; }
+.artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }
+.artgen-type-badge { font-size: 8px; background: alpha(@tt_bg_dark,0.8); color: @tt_accent; padding: 1px 4px; border-radius: 2px; }
+.artgen-watch-bg { background: #000; }
+.artgen-watch-btn { color: rgba(255,255,255,0.8); background: transparent; border: none; }
+.artgen-watch-nav-btn { font-size: 22px; background: rgba(0,0,0,0.5); border-radius: 50%; color: white; padding: 4px 10px; }
+.artgen-watch-pos { color: rgba(255,255,255,0.7); font-size: 12px; }
+.artgen-watch-meta { color: rgba(255,255,255,0.6); font-size: 11px; }
+.artgen-detail-title { font-size: 12px; color: @tt_muted; }
+.artgen-inspire-btn { background: @tt_accent; color: @tt_bg_dark; border-radius: 3px; padding: 3px 8px; }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -2974,23 +3055,33 @@ class ControlPanel(Gtk.Box):
             "Wan2.2-Animate-14B  ·  Character animation  ·  Video-to-video\n"
             "Requires a motion video + character image"
         )
-        self._src_image_btn = Gtk.ToggleButton(label="🖼 Image")
+        self._src_image_btn = Gtk.ToggleButton(label="🖼️ Image")
         self._src_image_btn.add_css_class("source-btn")
-        self._src_image_btn.add_css_class("source-btn-right")
+        self._src_image_btn.add_css_class("source-btn-mid")
         self._src_image_btn.set_tooltip_text(
             "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
+        self._src_art_btn = Gtk.ToggleButton(label="🎨 Art")
+        self._src_art_btn.add_css_class("source-btn")
+        self._src_art_btn.add_css_class("source-btn-right")
+        self._src_art_btn.set_tooltip_text(
+            "Generative art via LLM  ·  SVG / ANSI / verse / palette\n"
+            "Requires a chat model on port 8002 (not the diffusion server)"
+        )
         self._src_animate_btn.set_group(self._src_video_btn)
         self._src_image_btn.set_group(self._src_video_btn)
+        self._src_art_btn.set_group(self._src_video_btn)
         self._src_video_btn.connect("toggled", lambda b: b.get_active() and self._set_source("video"))
         self._src_animate_btn.connect("toggled", lambda b: b.get_active() and self._set_source("animate"))
         self._src_image_btn.connect("toggled", lambda b: b.get_active() and self._set_source("image"))
+        self._src_art_btn.connect("toggled", lambda b: b.get_active() and self._set_source("artgen"))
         self._src_video_btn.set_active(True)
         src_row.append(self._src_video_btn)
         src_row.append(self._src_animate_btn)
         self._src_animate_btn.set_visible(True)
         src_row.append(self._src_image_btn)
+        src_row.append(self._src_art_btn)
         self._toolbar_box.append(src_row)
 
         # Spacer (MainWindow appends attractor + other buttons after this)
@@ -4271,16 +4362,24 @@ class ControlPanel(Gtk.Box):
     # ── Source toggle ──────────────────────────────────────────────────────────
 
     def _set_source(self, source: str) -> None:
-        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), and 'image' (FLUX)."""
+        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), 'image' (FLUX), 'artgen' (LLM art)."""
         if source == self._model_source:
             return
         self._model_source = source
         is_image = source == "image"
         is_animate = source == "animate"
         is_video = source == "video"
+        is_artgen = source == "artgen"
 
         # Active state is handled automatically by the ToggleButton group (:checked CSS).
-        if is_image:
+        if is_artgen:
+            self._title_lbl.set_label("TT Artgen")
+            self._source_desc_lbl.set_label(
+                "generative art via LLM  ·  SVG / ANSI / verse / palette  ·  port 8002"
+            )
+            self._on_source_change(source)
+            return
+        elif is_image:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
                 "synchronous  ·  FLUX.1-dev  ·  ~15–90 s  ·  1024×1024 JPEG"
@@ -6224,11 +6323,11 @@ class MainWindow(Gtk.ApplicationWindow):
         ctrl_scroll.set_vexpand(True)
         ctrl_scroll.set_child(self._controls)
 
-        ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        ctrl_wrapper.append(ctrl_scroll)
-        ctrl_wrapper.append(self._controls.footer_box)
+        self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._ctrl_wrapper.append(ctrl_scroll)
+        self._ctrl_wrapper.append(self._controls.footer_box)
 
-        outer_paned.set_start_child(ctrl_wrapper)
+        outer_paned.set_start_child(self._ctrl_wrapper)
         outer_paned.set_shrink_start_child(False)
         outer_paned.set_resize_start_child(False)
 
@@ -6255,9 +6354,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
+        self._artgen_panel    = ArtgenPanel()
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
+        self._gallery_stack.add_named(self._artgen_panel, "artgen")
         self._gallery_stack.set_visible_child_name("video")
 
         gallery_wrap.append(self._gallery_stack)
@@ -6325,12 +6426,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_margin_end(6)
         self._queue_box.set_margin_bottom(6)
 
-        detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        detail_wrap.append(self._detail)
-        detail_wrap.append(self._queue_section_lbl)
-        detail_wrap.append(self._queue_box)
+        self._detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._detail_wrap.append(self._detail)
+        self._detail_wrap.append(self._queue_section_lbl)
+        self._detail_wrap.append(self._queue_box)
 
-        inner_paned.set_end_child(detail_wrap)
+        inner_paned.set_end_child(self._detail_wrap)
         inner_paned.set_shrink_end_child(False)
 
         outer_paned.set_end_child(inner_paned)
@@ -6673,8 +6774,13 @@ class MainWindow(Gtk.ApplicationWindow):
         return self._video_gallery
 
     def _on_source_change(self, source: str) -> None:
-        """Switch the gallery stack when the user toggles between video and image mode."""
+        """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
         self._gallery_stack.set_visible_child_name(source)
+        is_artgen = source == "artgen"
+        # Hide the left ControlPanel and right DetailPanel in artgen mode so
+        # the ArtgenPanel can use the full window width for its own layout.
+        self._ctrl_wrapper.set_visible(not is_artgen)
+        self._detail_wrap.set_visible(not is_artgen)
 
     # ── Card selection ─────────────────────────────────────────────────────────
 

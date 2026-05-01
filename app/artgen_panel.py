@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import json
 import random
-import subprocess
-import tempfile
 import threading
 import time
 import types
@@ -29,7 +27,7 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gio, GLib, Gtk, Pango
+from gi.repository import GLib, Gtk, Pango
 
 import artgen
 from media_store import media_store as _media_store, MediaRecord, make_artgen_path, make_thumbnail
@@ -101,7 +99,7 @@ class ArtgenPanel(Gtk.Box):
     """
 
     def __init__(self) -> None:
-        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._generating: bool = False
         self._last_out_path: Path | None = None
         self._tmp_svg: Path | None = None
@@ -121,119 +119,137 @@ class ArtgenPanel(Gtk.Box):
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        # ── Left: scrollable controls pane ────────────────────────────────────
+        from artgen_gallery import ArtgenGallery
+        from artgen_detail import ArtgenDetail
+        from artgen_watch import ArtgenWatch
+
+        # ── Sub-navigation header ─────────────────────────────────────────────
+        nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        nav.add_css_class("artgen-subnav")
+
+        self._create_tab_btn = Gtk.ToggleButton(label="✦ Create")
+        self._create_tab_btn.set_active(True)
+        self._create_tab_btn.add_css_class("artgen-subnav-btn")
+        self._create_tab_btn.connect("toggled", self._on_tab_toggled, "create")
+
+        self._gallery_tab_btn = Gtk.ToggleButton(label="▦ Gallery")
+        self._gallery_tab_btn.add_css_class("artgen-subnav-btn")
+        self._gallery_tab_btn.connect("toggled", self._on_tab_toggled, "gallery")
+        self._gallery_tab_btn.set_group(self._create_tab_btn)
+
+        self._watch_tab_btn = Gtk.ToggleButton(label="▶ Watch")
+        self._watch_tab_btn.add_css_class("artgen-subnav-btn")
+        self._watch_tab_btn.connect("toggled", self._on_tab_toggled, "watch")
+        self._watch_tab_btn.set_group(self._create_tab_btn)
+
+        nav.append(self._create_tab_btn)
+        nav.append(self._gallery_tab_btn)
+        nav.append(self._watch_tab_btn)
+        self.append(nav)
+        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # ── Sub-tab stack ─────────────────────────────────────────────────────
+        self._sub_stack = Gtk.Stack()
+        self._sub_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._sub_stack.set_transition_duration(120)
+        self._sub_stack.set_hexpand(True)
+        self._sub_stack.set_vexpand(True)
+
+        create_pane = self._build_create_pane()
+        self._sub_stack.add_named(create_pane, "create")
+
+        self._gallery = ArtgenGallery()
+        self._gallery.on_card_activated = self._on_gallery_card_activated
+        self._gallery.on_watch_requested = self._on_watch_requested
+        self._sub_stack.add_named(self._gallery, "gallery")
+
+        # Detail view navigated to from gallery (not a top-level tab button)
+        self._detail = ArtgenDetail()
+        self._detail.on_back = self._on_detail_back
+        self._detail.on_deleted = self._on_detail_deleted
+        self._sub_stack.add_named(self._detail, "detail")
+
+        self._watch = ArtgenWatch()
+        self._watch.on_exit = self._on_watch_exit
+        self._sub_stack.add_named(self._watch, "watch")
+
+        self._sub_stack.set_visible_child_name("create")
+        self.append(self._sub_stack)
+
+    def _build_create_pane(self) -> Gtk.Box:
+        """Two-column Create tab: controls (left 240px) + latest-generations mini-grid (right)."""
+        pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        pane.set_hexpand(True)
+        pane.set_vexpand(True)
+
+        # ── Left: controls ────────────────────────────────────────────────────
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         left_box.set_size_request(240, -1)
         left_box.add_css_class("artgen-ctrl-pane")
 
-        # Type selector
         type_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        type_bar.set_margin_start(12)
-        type_bar.set_margin_end(12)
-        type_bar.set_margin_top(10)
-        type_bar.set_margin_bottom(6)
-
+        type_bar.set_margin_start(12); type_bar.set_margin_end(12)
+        type_bar.set_margin_top(10); type_bar.set_margin_bottom(6)
         type_lbl = _section_lbl("type")
         type_lbl.set_size_request(44, -1)
         type_bar.append(type_lbl)
-
         gen_names = artgen.all_names()
         self._type_dd = _dd(gen_names, "landscape")
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
         type_bar.append(self._type_dd)
         left_box.append(type_bar)
-
         left_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        # Per-type controls in a stack (one page per generator)
         self._controls_stack = Gtk.Stack()
         self._controls_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._controls_stack.set_transition_duration(80)
-        self._controls_stack.set_margin_start(12)
-        self._controls_stack.set_margin_end(12)
-        self._controls_stack.set_margin_top(10)
-        self._controls_stack.set_margin_bottom(6)
+        self._controls_stack.set_margin_start(12); self._controls_stack.set_margin_end(12)
+        self._controls_stack.set_margin_top(10); self._controls_stack.set_margin_bottom(6)
         for name in gen_names:
             self._controls_stack.add_named(self._build_controls_page(name), name)
         self._controls_stack.set_visible_child_name("landscape")
-
         ctrl_scroll = Gtk.ScrolledWindow()
         ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ctrl_scroll.set_vexpand(True)
         ctrl_scroll.set_child(self._controls_stack)
         left_box.append(ctrl_scroll)
-
-        left_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-
-        # Output path row
-        out_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        out_bar.set_margin_start(12)
-        out_bar.set_margin_end(12)
-        out_bar.set_margin_top(8)
-        out_bar.set_margin_bottom(0)
-        out_lbl = Gtk.Label(label="Output")
-        out_lbl.set_xalign(0)
-        out_lbl.set_size_request(44, -1)
-        out_bar.append(out_lbl)
-        self._output_entry = Gtk.Entry()
-        self._output_entry.set_hexpand(True)
-        self._output_entry.set_placeholder_text("auto (landscape.svg)")
-        out_bar.append(self._output_entry)
-        left_box.append(out_bar)
-
-        # Server start/stop section
         left_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         srv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        srv_box.set_margin_start(12)
-        srv_box.set_margin_end(12)
-        srv_box.set_margin_top(8)
-        srv_box.set_margin_bottom(4)
-
+        srv_box.set_margin_start(12); srv_box.set_margin_end(12)
+        srv_box.set_margin_top(8); srv_box.set_margin_bottom(4)
         srv_box.append(_section_lbl("server"))
-
         self._srv_model_dd = _dd(_ARTGEN_MODELS, "Qwen3-8B")
         srv_box.append(_row("Model", self._srv_model_dd, label_width=46))
-
         srv_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-
         self._srv_start_btn = Gtk.Button(label="Start")
         self._srv_start_btn.add_css_class("artgen-srv-start-btn")
         self._srv_start_btn.connect("clicked", self._on_srv_start)
         srv_btn_row.append(self._srv_start_btn)
-
         self._srv_stop_btn = Gtk.Button(label="Stop")
         self._srv_stop_btn.add_css_class("artgen-srv-stop-btn")
         self._srv_stop_btn.connect("clicked", self._on_srv_stop)
         srv_btn_row.append(self._srv_stop_btn)
-
         self._health_dot = Gtk.Label(label="●")
         self._health_dot.set_margin_start(4)
         self._health_dot.add_css_class("artgen-health-unknown")
         srv_btn_row.append(self._health_dot)
-
         self._srv_status_lbl = Gtk.Label(label="unknown")
         self._srv_status_lbl.set_xalign(0)
         self._srv_status_lbl.add_css_class("artgen-status")
         self._srv_status_lbl.set_hexpand(True)
         srv_btn_row.append(self._srv_status_lbl)
-
         srv_box.append(srv_btn_row)
         left_box.append(srv_box)
 
-        # Generate button + status label (pinned footer)
         footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        footer.set_margin_start(12)
-        footer.set_margin_end(12)
-        footer.set_margin_top(10)
-        footer.set_margin_bottom(12)
-
+        footer.set_margin_start(12); footer.set_margin_end(12)
+        footer.set_margin_top(10); footer.set_margin_bottom(12)
         self._gen_btn = Gtk.Button(label="✦ Generate")
         self._gen_btn.add_css_class("artgen-generate-btn")
         self._gen_btn.connect("clicked", self._on_generate_clicked)
         footer.append(self._gen_btn)
-
         self._status_lbl = Gtk.Label(label="Ready — choose a type and click Generate")
         self._status_lbl.set_xalign(0)
         self._status_lbl.add_css_class("artgen-status")
@@ -242,84 +258,43 @@ class ArtgenPanel(Gtk.Box):
         footer.append(self._status_lbl)
         left_box.append(footer)
 
-        # Auto-generate collapsible section (pinned below the generate button)
+        # Auto-generate collapsible section
         self._build_auto_section(left_box)
 
-        # ── Right: preview pane ────────────────────────────────────────────────
-        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        pane.append(left_box)
+        pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+
+        # ── Right: latest-generations mini-grid ───────────────────────────────
+        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         right_box.set_hexpand(True)
         right_box.set_vexpand(True)
-        right_box.add_css_class("artgen-preview-pane")
+        right_box.set_margin_start(12); right_box.set_margin_end(12)
+        right_box.set_margin_top(10); right_box.set_margin_bottom(10)
 
-        self._preview_stack = Gtk.Stack()
-        self._preview_stack.set_hexpand(True)
-        self._preview_stack.set_vexpand(True)
+        mini_hdr = Gtk.Label(label="LATEST GENERATIONS — click any to go to Gallery")
+        mini_hdr.set_xalign(0)
+        mini_hdr.add_css_class("section-label")
+        right_box.append(mini_hdr)
 
-        # Empty state hint
-        empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        empty_box.set_halign(Gtk.Align.CENTER)
-        empty_box.set_valign(Gtk.Align.CENTER)
-        empty_hint = Gtk.Label(label="✦  Generate something")
-        empty_hint.add_css_class("artgen-empty-hint")
-        empty_sub = Gtk.Label(label="Pick a type, set options, click Generate")
-        empty_sub.add_css_class("artgen-empty-sub")
-        empty_box.append(empty_hint)
-        empty_box.append(empty_sub)
-        self._preview_stack.add_named(empty_box, "empty")
+        self._mini_flow = Gtk.FlowBox()
+        self._mini_flow.set_max_children_per_line(4)
+        self._mini_flow.set_min_children_per_line(2)
+        self._mini_flow.set_homogeneous(True)
+        self._mini_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._mini_flow.set_row_spacing(6)
+        self._mini_flow.set_column_spacing(6)
+        self._mini_flow.set_vexpand(True)
+        self._mini_flow.connect("child-activated", self._on_mini_card_activated)
+        right_box.append(self._mini_flow)
 
-        # SVG picture (librsvg required for rendering)
-        svg_scroll = Gtk.ScrolledWindow()
-        svg_scroll.set_hexpand(True)
-        svg_scroll.set_vexpand(True)
-        self._svg_picture = Gtk.Picture()
-        self._svg_picture.set_hexpand(True)
-        self._svg_picture.set_vexpand(True)
-        self._svg_picture.set_content_fit(Gtk.ContentFit.CONTAIN)
-        svg_scroll.set_child(self._svg_picture)
-        self._preview_stack.add_named(svg_scroll, "svg")
+        self._view_all_btn = Gtk.Button(label="→ View all in Gallery")
+        self._view_all_btn.add_css_class("flat")
+        self._view_all_btn.connect("clicked", lambda _: self._switch_tab("gallery"))
+        right_box.append(self._view_all_btn)
 
-        # Text view (verse, palette JSON, ANSI source, freeform text)
-        text_scroll = Gtk.ScrolledWindow()
-        text_scroll.set_hexpand(True)
-        text_scroll.set_vexpand(True)
-        self._text_view = Gtk.TextView()
-        self._text_view.set_editable(False)
-        self._text_view.set_cursor_visible(False)
-        self._text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self._text_view.set_monospace(True)
-        self._text_view.set_margin_start(20)
-        self._text_view.set_margin_end(20)
-        self._text_view.set_margin_top(16)
-        self._text_view.set_margin_bottom(16)
-        text_scroll.set_child(self._text_view)
-        self._preview_stack.add_named(text_scroll, "text")
-
-        self._preview_stack.set_visible_child_name("empty")
-        right_box.append(self._preview_stack)
-
-        # Bottom bar: open file + path label
-        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        bottom_bar.set_margin_start(12)
-        bottom_bar.set_margin_end(12)
-        bottom_bar.set_margin_top(6)
-        bottom_bar.set_margin_bottom(8)
-
-        self._open_btn = Gtk.Button(label="Open File")
-        self._open_btn.set_sensitive(False)
-        self._open_btn.connect("clicked", self._on_open_file)
-        bottom_bar.append(self._open_btn)
-
-        self._saved_path_lbl = Gtk.Label(label="")
-        self._saved_path_lbl.set_xalign(0)
-        self._saved_path_lbl.add_css_class("muted")
-        self._saved_path_lbl.set_hexpand(True)
-        self._saved_path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
-        bottom_bar.append(self._saved_path_lbl)
-        right_box.append(bottom_bar)
-
-        self.append(left_box)
-        self.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-        self.append(right_box)
+        pane.append(right_box)
+        self._refresh_mini_grid()
+        return pane
 
     # ── Per-type controls pages ───────────────────────────────────────────────
 
@@ -474,9 +449,6 @@ class ArtgenPanel(Gtk.Box):
             return
         name = item.get_string()
         self._controls_stack.set_visible_child_name(name)
-        # Update output placeholder to show the default filename for this type
-        gen = artgen.get(name)
-        self._output_entry.set_placeholder_text(f"auto ({gen.default_output()})")
 
     def _on_generate_clicked(self, _btn) -> None:
         if self._generating:
@@ -497,10 +469,6 @@ class ArtgenPanel(Gtk.Box):
             args=(gen_name, args),
             daemon=True,
         ).start()
-
-    def _on_open_file(self, _btn) -> None:
-        if self._last_out_path and self._last_out_path.exists():
-            subprocess.Popen(["xdg-open", str(self._last_out_path)])
 
     def _on_inspire(self, gen_name: str, entry: Gtk.Entry) -> None:
         """Call prompt server in background; update entry on main thread."""
@@ -693,8 +661,7 @@ class ArtgenPanel(Gtk.Box):
     def _build_args(self, gen_name: str) -> types.SimpleNamespace:
         """Build an argparse-Namespace-compatible object from the current UI state."""
         args = types.SimpleNamespace()
-        out_str = self._output_entry.get_text().strip() or None
-        args.output = out_str
+        args.output = None
         args.max_tokens = 4096
         args.temperature = 0.7
 
@@ -784,10 +751,7 @@ class ArtgenPanel(Gtk.Box):
         self._last_out_path = Path(out_path_str)
         suffix = f"  ({elapsed}s)" if elapsed is not None else ""
         self._set_status(f"Saved → {out_path_str}{suffix}")
-        self._open_btn.set_sensitive(True)
-        self._saved_path_lbl.set_label(out_path_str)
-        ext = Path(out_path_str).suffix.lower()
-        self._show_output(artifact, ext)
+        self._refresh_mini_grid()
         if self._auto_gen:
             self._auto_gen_error_streak = 0
             self._auto_maybe_schedule()
@@ -797,10 +761,7 @@ class ArtgenPanel(Gtk.Box):
         self._generating = False
         self._gen_btn.set_sensitive(True)
         self._gen_btn.set_label("✦ Generate")
-        self._set_status("Error — see preview pane")
-        buf = self._text_view.get_buffer()
-        buf.set_text(msg)
-        self._preview_stack.set_visible_child_name("text")
+        self._set_status(f"Error: {msg[:80]}")
         if self._auto_gen:
             self._auto_gen_error_streak += 1
             if self._auto_gen_error_streak >= 3:
@@ -819,31 +780,94 @@ class ArtgenPanel(Gtk.Box):
     def _set_status(self, text: str) -> None:
         self._status_lbl.set_label(text)
 
-    def _show_output(self, artifact: str, ext: str) -> None:
-        if ext == ".svg":
-            # Write to temp file; Gtk.Picture uses GdkTexture via librsvg
-            if self._tmp_svg is not None:
-                try:
-                    self._tmp_svg.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            try:
-                with tempfile.NamedTemporaryFile(
-                    suffix=".svg", delete=False, mode="w", encoding="utf-8"
-                ) as f:
-                    f.write(artifact)
-                    tmp_path = f.name
-                self._tmp_svg = Path(tmp_path)
-                gio_file = Gio.File.new_for_path(tmp_path)
-                self._svg_picture.set_file(gio_file)
-                self._preview_stack.set_visible_child_name("svg")
-                return
-            except Exception:
-                pass  # fall through to text view
-        # Text / ANSI / JSON / error fallback
-        buf = self._text_view.get_buffer()
-        buf.set_text(artifact)
-        self._preview_stack.set_visible_child_name("text")
+
+    # ── Sub-tab wiring ────────────────────────────────────────────────────────
+
+    def _on_tab_toggled(self, btn: Gtk.ToggleButton, tab: str) -> None:
+        if not btn.get_active():
+            return
+        if tab == "gallery":
+            self._gallery.refresh()
+        self._sub_stack.set_visible_child_name(tab)
+
+    def _switch_tab(self, tab: str) -> None:
+        if tab == "gallery":
+            self._create_tab_btn.set_active(False)
+            self._gallery_tab_btn.set_active(True)
+            self._gallery.refresh()
+        self._sub_stack.set_visible_child_name(tab)
+
+    def _on_gallery_card_activated(self, media_id: str) -> None:
+        records = _media_store.query(
+            media_type="artgen",
+            generator_type=self._gallery._active_filter,
+        )
+        self._detail.show_record(media_id, records)
+        self._sub_stack.set_visible_child_name("detail")
+
+    def _on_detail_back(self) -> None:
+        self._sub_stack.set_visible_child_name("gallery")
+
+    def _on_detail_deleted(self, media_id: str) -> None:
+        self._gallery.refresh()
+        self._refresh_mini_grid()
+
+    def _on_watch_requested(self, generator_type: str | None) -> None:
+        records = _media_store.query(media_type="artgen", generator_type=generator_type)
+        if not records:
+            return
+        self._watch.start(records)
+        self._watch_tab_btn.set_active(True)
+        self._sub_stack.set_visible_child_name("watch")
+
+    def _on_watch_exit(self) -> None:
+        self._watch.stop()
+        self._gallery_tab_btn.set_active(True)
+        self._sub_stack.set_visible_child_name("gallery")
+
+    def _on_mini_card_activated(self, _flow, _child) -> None:
+        self._switch_tab("gallery")
+
+    def _refresh_mini_grid(self) -> None:
+        while child := self._mini_flow.get_first_child():
+            self._mini_flow.remove(child)
+        recent = _media_store.query(media_type="artgen", limit=4)
+        if not recent:
+            placeholder = Gtk.Label(label="✦\nYour generations\nwill appear here")
+            placeholder.set_xalign(0.5)
+            placeholder.add_css_class("artgen-empty-hint")
+            self._mini_flow.append(placeholder)
+            self._view_all_btn.set_label("→ View all in Gallery")
+            return
+        total = len(_media_store.query(media_type="artgen"))
+        self._view_all_btn.set_label(f"→ View all {total} in Gallery")
+        for i, rec in enumerate(recent):
+            card = self._make_mini_card(rec, highlight=(i == 0))
+            self._mini_flow.append(card)
+
+    def _make_mini_card(self, rec: "MediaRecord", highlight: bool = False) -> Gtk.Box:
+        from artgen_gallery import ArtgenGallery
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_size_request(100, 80)
+        box.add_css_class("artgen-card")
+        if highlight:
+            box.add_css_class("artgen-card-new")
+        if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
+            img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
+            img.set_content_fit(Gtk.ContentFit.COVER)
+        elif rec.file_path.endswith(".svg") and Path(rec.file_path).exists():
+            img = Gtk.Picture.new_for_filename(rec.file_path)
+            img.set_content_fit(Gtk.ContentFit.COVER)
+        else:
+            img = Gtk.Label(label=ArtgenGallery._type_emoji(rec.generator_type))
+            img.add_css_class("artgen-card-placeholder")
+        img.set_hexpand(True)
+        img.set_vexpand(True)
+        box.append(img)
+        lbl = Gtk.Label(label=f"{rec.generator_type or '?'} · {rec.created_at[5:10]}")
+        lbl.add_css_class("artgen-card-bottom")
+        box.append(lbl)
+        return box
 
     # ── Auto-generate section UI builder ─────────────────────────────────────
 
