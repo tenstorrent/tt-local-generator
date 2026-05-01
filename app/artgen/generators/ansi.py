@@ -18,6 +18,8 @@ _SUBJECT_EXAMPLES = (
     "a coffee cup steaming, a retro computer, a black hole, a cat"
 )
 
+_COLOR_MODES = {"256": "xterm 256-color", "16": "ANSI 16-color"}
+
 _STYLE_HINTS = {
     "landscape": "Wide panoramic. Sky gradient top half, terrain / water bottom half.",
     "portrait":  "Centred subject with strong silhouette. Symmetric or near-symmetric.",
