@@ -110,39 +110,63 @@ def all_generators() -> list[ArtGenerator]:
 
 def detect_model(base_url: str) -> str | None:
     """Return the model ID currently loaded on the server, or None."""
-    try:
-        url = f"{base_url.rstrip('/')}/models"
-        with urllib.request.urlopen(url, timeout=5) as r:
-            return json.loads(r.read())["data"][0]["id"]
-    except Exception:
-        return None
+    base = base_url.rstrip("/")
+    # Try OpenAI-style /v1/models first; fall back to bare /models.
+    for url in (f"{base}/v1/models", f"{base}/models"):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                return json.loads(r.read())["data"][0]["id"]
+        except Exception:
+            continue
+    return None
 
 
 def call_llm(
     prompt: str,
     model: str,
     base_url: str,
-    max_tokens: int = 4096,
+    max_tokens: int = 2048,
     temperature: float = 0.7,
+    on_token=None,  # unused — kept for API compatibility
+    system: str | None = None,
 ) -> str:
     """
-    Send *prompt* to an OpenAI-compatible endpoint and return the response text.
-    Works with vLLM, Ollama, the CPU prompt server, or any compatible API.
-    """
-    try:
-        from openai import OpenAI
-    except ImportError:
-        print("ERROR: openai not installed. Run: pip install openai", file=sys.stderr)
-        sys.exit(1)
+    Send *prompt* to an OpenAI-compatible chat endpoint and return the response.
 
-    client = OpenAI(base_url=base_url, api_key="none")
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=temperature,
+    Uses urllib.request (stdlib only) so it is safe to call from GTK background
+    threads — the openai/httpx client interacts poorly with GLib's event loop.
+
+    Qwen3 models default to extended thinking which silently consumes thousands
+    of tokens before any real output.  chat_template_kwargs disables it so the
+    full token budget goes to the artifact.
+    """
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload: dict = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if "qwen3" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+    base = base_url.rstrip("/")
+    # Accept both http://host:port and http://host:port/v1 as base_url.
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    url = f"{base}/chat/completions"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer none"},
     )
-    return resp.choices[0].message.content or ""
+    with urllib.request.urlopen(req, timeout=300) as r:
+        body = json.loads(r.read())
+    return body["choices"][0]["message"]["content"] or ""
 
 
 # ── Lazy generator import ─────────────────────────────────────────────────────
