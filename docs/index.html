@@ -1037,31 +1037,191 @@
       produced by the three-tier prompt engine. No model loading, no GPU — instant output
       you can save, share, or use as a seed image for I2V.
     </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.5rem;margin-top:2rem;">
+
+    <!-- SVG gallery: 3 top + 2 bottom -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-top:2rem;">
       <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
-        <img src="assets/artgen/city-night-indigo.svg"
-             alt="Generated SVG — City Night, Indigo palette"
-             style="width:100%;display:block;">
-        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
-          City Night · Indigo
-        </figcaption>
+        <img src="assets/artgen/mountain-crimson.svg" alt="Mountain landscape — deep purple to crimson to orange gradient with layered polygon ridges" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Mountain Ridgeline · Crimson</figcaption>
       </figure>
       <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
-        <img src="assets/artgen/city-sunset-crimson.svg"
-             alt="Generated SVG — City Sunset, Crimson palette"
-             style="width:100%;display:block;">
-        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
-          City Sunset · Crimson
-        </figcaption>
+        <img src="assets/artgen/city-night-indigo.svg" alt="City Night — deep indigo sky, gold-windowed towers" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">City Night · Indigo</figcaption>
       </figure>
       <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
-        <img src="assets/artgen/city-day-teal.svg"
-             alt="Generated SVG — City Day, Teal palette"
-             style="width:100%;display:block;">
-        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
-          City Day · Teal
-        </figcaption>
+        <img src="assets/artgen/city-sunset-crimson.svg" alt="City Sunset — crimson to purple gradient sky, orange-lit towers" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">City Sunset · Crimson</figcaption>
       </figure>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-top:1.25rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen/starfield-navy.svg" alt="Deep navy starfield — scattered white stars on midnight blue" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Starfield · Navy</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen/city-day-teal.svg" alt="City Day — pale blue sky, teal-accented towers" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">City Day · Teal</figcaption>
+      </figure>
+    </div>
+
+    <!-- Palette swatches — imitates the in-app palette detail view -->
+    <div style="margin-top:3.5rem;">
+      <div class="section-label" style="margin-bottom:1rem;">Named color palettes</div>
+      <p style="font-size:.95rem;color:var(--text2);max-width:640px;margin-bottom:2rem;">
+        The palette generator produces named color sets with evocative prose lore —
+        each one a mood, a texture, a smell. Rendered in the app exactly as shown below.
+      </p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.75rem;">
+
+        <!-- Palette: Flicker Veil -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#1A002C;"></div>
+            <div style="flex:1;background:#2E1A3D;"></div>
+            <div style="flex:1;background:#5A3F6B;"></div>
+            <div style="flex:1;background:#8C5E9A;"></div>
+            <div style="flex:1;background:#C2A5D3;"></div>
+            <div style="flex:1;background:#F5E6F5;"></div>
+            <div style="flex:1;background:#D4C4D4;"></div>
+            <div style="flex:1;background:#B8A1B8;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Flicker Veil</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of bruised lavender and fevered pearl, like the inside of a broken bulb — warm and trembling, with a metallic shimmer that won't quite fade.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#1A002C;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#1A002C</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#5A3F6B;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#5A3F6B</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#C2A5D3;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#C2A5D3</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">highlight</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#F5E6F5;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#F5E6F5</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Palette: Trench Whispers -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#0a0e18;"></div>
+            <div style="flex:1;background:#1a202e;"></div>
+            <div style="flex:1;background:#2b3a4e;"></div>
+            <div style="flex:1;background:#3c5e7a;"></div>
+            <div style="flex:1;background:#5a82a4;"></div>
+            <div style="flex:1;background:#7d9aa4;"></div>
+            <div style="flex:1;background:#a3c4d4;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Trench Whispers</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of deep, damp stone and cold, glimmering water. The air smells of brine and mineral deposits, with a faint bioluminescent glow at the edges.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#0a0e18;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#0a0e18</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#2b3a4e;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#2b3a4e</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">midtone</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#3c5e7a;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#3c5e7a</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#a3c4d4;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#a3c4d4</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Palette: Cathedral Dust -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#2A1B2A;"></div>
+            <div style="flex:1;background:#4D3C52;"></div>
+            <div style="flex:1;background:#7D6B87;"></div>
+            <div style="flex:1;background:#A99BAF;"></div>
+            <div style="flex:1;background:#D4C6D7;"></div>
+            <div style="flex:1;background:#F5E6F2;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Cathedral Dust</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of aged stone and soft light, like the hush of a cathedral after a storm. Dust motes cling to the walls, and the air holds the particular stillness of a room that has witnessed centuries.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#2A1B2A;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#2A1B2A</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#7D6B87;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#7D6B87</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#D4C6D7;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#D4C6D7</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#F5E6F2;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#F5E6F2</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">shine</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
   </div>
 </section>
@@ -1152,6 +1312,7 @@
       <button class="prompt-tab" data-tab="skyreels">SkyReels</button>
       <button class="prompt-tab" data-tab="image">Image (FLUX)</button>
       <button class="prompt-tab" data-tab="animate">Animate</button>
+      <button class="prompt-tab" data-tab="artgen">Artgen</button>
     </div>
 
     <div class="prompt-panel active" id="tab-video">
@@ -1346,6 +1507,69 @@
           </div>
           <div class="prompt-ex-input">animate: monk in orange robes, bows slowly</div>
           <div class="prompt-ex-output">A monk in deep orange robes brings his palms together and bows from the waist with deliberate slowness, moss-covered temple courtyard, dappled morning light through leaves above, reverent and unhurried</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-artgen">
+      <p style="color:var(--muted);font-size:.9rem;margin:0 0 1.2rem;line-height:1.6">
+        Artgen uses the same three-tier engine — algorithmic → Markov → Qwen3 polish — but outputs
+        <strong>SVG art</strong> instead of video prompts. Four generation types feed the engine:
+        <strong>landscape</strong> (scenery with depth layers),
+        <strong>palette</strong> (named color collections with lore),
+        <strong>geometry</strong> (abstract shapes and impossible forms), and
+        <strong>verse</strong> (text fragments woven into the composition).
+        The ✨ Inspire button draws from all four types in sequence; individual type buttons
+        let you lock the register.
+      </p>
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">landscape · mountain dusk</span>
+          </div>
+          <div class="prompt-ex-input">landscape: mountain ridgeline at dusk, crimson and deep purple gradient, layered silhouettes</div>
+          <div class="prompt-ex-output">A layered mountain silhouette SVG — foreground peaks in near-black against a gradient sky bleeding from deep violet at the zenith through magenta to burnt crimson at the horizon, a stylized sun touching the ridge, long vertical composition, hand-cut paper aesthetic</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">palette · named color system</span>
+          </div>
+          <div class="prompt-ex-input">palette: Trench Whispers — deep sea tones, bioluminescent accent, cold mist</div>
+          <div class="prompt-ex-output">Name: Trench Whispers. Colors: #0D1B2A Abyssal Dark, #1C3A4A Pressure Blue, #2E6B6E Thermal Vent, #4FD1C5 Bioluminescent. Lore: named for the thermal vents that glow in the deepest silence.</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">geometry · impossible form</span>
+          </div>
+          <div class="prompt-ex-input">geometry: Penrose triangle, tessellating shadow, lithograph style</div>
+          <div class="prompt-ex-output">A precise SVG Penrose triangle with impossible corner joins, hatched shadow bands suggesting depth that cannot exist, the interior tessellated with interlocking shadow triangles shrinking toward the center, rendered as a flat 3-color lithograph</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">verse · urban night</span>
+          </div>
+          <div class="prompt-ex-input">verse: city at 3am, no one left, the signs still lit</div>
+          <div class="prompt-ex-output">Fragment woven into a night skyline composition: "3am and the signs / still remember / what the street forgot" — set in wide-tracked monospace over a flat indigo cityscape, the text ghosted into the upper third, neon-teal glow on the baseline</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">landscape · starfield</span>
+          </div>
+          <div class="prompt-ex-input">landscape: deep space field, scattered stars, navy to black gradient</div>
+          <div class="prompt-ex-output">A field of scattered white circles at varying radii against a gradient from deep navy (#0A1628) to pure black, brighter clusters near the center giving the illusion of a galaxy arm, a few foreground silhouette structures at the base to anchor the composition</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Type</span>
+            <span class="prompt-ex-source">geometry · grid collapse</span>
+          </div>
+          <div class="prompt-ex-input">geometry: perspective grid dissolving at edges, teal lines, dark field</div>
+          <div class="prompt-ex-output">A one-point-perspective grid in teal (#4FD1C5) on a near-black background, the lines converging to a vanishing point offset from center, the outer squares progressively fragmented and dissolved into noise, the center sharp and precise — a map of something losing its edges</div>
         </div>
       </div>
     </div>
