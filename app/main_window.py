@@ -583,10 +583,22 @@ scrollbar slider:hover {
     min-width: 36px;
     min-height: 36px;
 }
-/* Solid teal border when a seed image is loaded */
+/* Amber border + pulse when model requires an image but none is loaded */
+.seed-thumb-well.required {
+    border-style: solid;
+    border-color: #F4C471;
+    animation: seed-pulse 1.8s ease-in-out infinite;
+}
+@keyframes seed-pulse {
+    0%   { border-color: #F4C471; }
+    50%  { border-color: alpha(#F4C471, 0.35); }
+    100% { border-color: #F4C471; }
+}
+/* Solid teal border when a seed image is loaded (overrides required amber) */
 .seed-thumb-well.has-seed {
     border-style: solid;
     border-color: @accent_color;
+    animation: none;
 }
 
 /* -- Advanced accordion ---------------------------------------------------- */
@@ -4615,7 +4627,7 @@ class ControlPanel(Gtk.Box):
         elif is_animate:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
-                "async job  ·  Animate-14B  ·  motion video + character"
+                "async job  ·  Animate-14B  ·  motion video + character  ·  requires starting image"
             )
         else:
             self._title_lbl.set_label("TT Local Generator")
@@ -4669,6 +4681,7 @@ class ControlPanel(Gtk.Box):
         # Notify the main window so it can switch the gallery stack to show
         # only the cards that match the newly selected generation mode.
         self._on_source_change(source)
+        self._update_seed_well_state()
 
     def _set_model(self, model: str) -> None:
         """
@@ -4715,6 +4728,7 @@ class ControlPanel(Gtk.Box):
         # durations shown reflect the newly selected model (wan2 vs skyreels fps/frames).
         if hasattr(self, "_clip_btns"):
             self._refresh_clip_labels()
+        self._update_seed_well_state()
 
     def get_model_source(self) -> str:
         return self._model_source
@@ -4960,29 +4974,72 @@ class ControlPanel(Gtk.Box):
                     img.set_can_shrink(False)
                     img.set_vexpand(True)
                     self._seed_thumb_box.append(img)
-                    self._seed_thumb_box.add_css_class("has-seed")
                 else:
                     # Pixbuf load failed — show a question-mark placeholder
                     lbl = Gtk.Label(label="?")
                     lbl.set_vexpand(True)
                     lbl.set_valign(Gtk.Align.CENTER)
                     self._seed_thumb_box.append(lbl)
-                    self._seed_thumb_box.remove_css_class("has-seed")
             else:
                 # No seed — restore the picture-frame placeholder icon
                 lbl = Gtk.Label(label="\U0001f5bc")
                 lbl.set_vexpand(True)
                 lbl.set_valign(Gtk.Align.CENTER)
                 self._seed_thumb_box.append(lbl)
-                self._seed_thumb_box.remove_css_class("has-seed")
+            self._update_seed_well_state()
+        # If a seed image was just added and the prompt-error banner is showing
+        # the seed-required message, clear it now.
+        if path and hasattr(self, "_prompt_scroll"):
+            if self._prompt_scroll.has_css_class("prompt-error"):
+                self._prompt_scroll.remove_css_class("prompt-error")
+                self._prompt_error_lbl.set_visible(False)
+                self._prompt_error_lbl.set_label("Prompt cannot be empty.")
 
     def _clear_seed_image(self) -> None:
-        """Clear the seed image and reset the inline thumbnail well.
-
-        Delegates to _set_seed_image("") which handles the well reset.
-        The accordion seed display was removed in Task 9.
-        """
+        """Clear the seed image and reset the inline thumbnail well."""
         self._set_seed_image("")
+
+    def _seed_image_required(self) -> bool:
+        """Return True when the active source/model requires a conditioning image."""
+        if self._model_source == "animate":
+            return True
+        if self._model_source == "video" and self._video_model == "skyreels":
+            return True
+        return False
+
+    def _update_seed_well_state(self) -> None:
+        """Sync the seed well's required/has-seed CSS classes and tooltip."""
+        if not hasattr(self, "_seed_thumb_box"):
+            return
+        required = self._seed_image_required()
+        has_seed = bool(self._seed_image_path)
+
+        if required and not has_seed:
+            self._seed_thumb_box.add_css_class("required")
+        else:
+            self._seed_thumb_box.remove_css_class("required")
+
+        if has_seed:
+            self._seed_thumb_box.add_css_class("has-seed")
+        else:
+            self._seed_thumb_box.remove_css_class("has-seed")
+
+        if required:
+            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
+            if has_seed:
+                self._seed_thumb_box.set_tooltip_text(
+                    f"Starting image for {tip_model} — right-click to clear"
+                )
+            else:
+                self._seed_thumb_box.set_tooltip_text(
+                    f"Required: {tip_model} needs a starting image\n"
+                    "Click to browse · drop an image or gallery frame here"
+                )
+        else:
+            self._seed_thumb_box.set_tooltip_text(
+                "Optional seed image — click to browse, right-click to clear\n"
+                "Drop a gallery frame here to use as seed image"
+            )
 
     def _open_seed_picker(self) -> None:
         """Open the PickerPopover (Gallery + Disk tabs) anchored to the seed image well.
@@ -5106,6 +5163,7 @@ class ControlPanel(Gtk.Box):
         if self._prompt_scroll.has_css_class("prompt-error"):
             self._prompt_scroll.remove_css_class("prompt-error")
             self._prompt_error_lbl.set_visible(False)
+            self._prompt_error_lbl.set_label("Prompt cannot be empty.")
 
     def set_prompt_gen_state(self, ready: bool) -> None:
         """
@@ -5383,6 +5441,14 @@ class ControlPanel(Gtk.Box):
                 self._prompt_scroll.add_css_class("prompt-error")
                 self._prompt_error_lbl.set_visible(True)
                 return
+        if self._seed_image_required() and not self._seed_image_path:
+            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
+            self._prompt_scroll.add_css_class("prompt-error")
+            self._prompt_error_lbl.set_label(
+                f"{tip_model} requires a starting image — drop one in the image well above."
+            )
+            self._prompt_error_lbl.set_visible(True)
+            return
         # Determine the specific model within the active category
         if self._model_source == "video":
             current_model_id = self._video_model

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tt-local-generator — AI video & image generation on Tenstorrent hardware</title>
-  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation. Create, curate, watch.">
+  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation, built-in SVG art generator. Create, curate, watch.">
   <meta property="og:title" content="tt-local-generator">
   <meta property="og:description" content="AI video, image, and animation generation on Tenstorrent hardware. Create → Curate → Watch.">
   <meta property="og:image" content="assets/tt-local-generator-main.png">
@@ -810,6 +810,7 @@
     <ul class="nav-links">
       <li><a href="#flow">How it works</a></li>
       <li><a href="#models">Models</a></li>
+      <li><a href="#artgen">Artgen</a></li>
       <li><a href="#prompts">Prompts</a></li>
       <li><a href="#poses">Pose Library</a></li>
       <li><a href="#install">Install</a></li>
@@ -998,6 +999,45 @@
         <p class="model-desc">Video-to-video character animation. Give any character a motion — or replace a person in a clip.</p>
         <div class="model-hw"><span class="model-hw-dot"></span> CPU · CUDA (TT HW pending)</div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Artgen Gallery ─────────────────────────────────────────────────── -->
+<section id="artgen">
+  <div class="wrap">
+    <div class="section-label">Built-in art generator</div>
+    <h2 class="section-title">Artgen — SVG art, entirely on-device.</h2>
+    <p class="section-sub">
+      A second creative mode alongside video: generative SVG landscapes and gradients
+      produced by the three-tier prompt engine. No model loading, no GPU — instant output
+      you can save, share, or use as a seed image for I2V.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.5rem;margin-top:2rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen/city-night-indigo.svg"
+             alt="Generated SVG — City Night, Indigo palette"
+             style="width:100%;display:block;">
+        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
+          City Night · Indigo
+        </figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen/city-sunset-crimson.svg"
+             alt="Generated SVG — City Sunset, Crimson palette"
+             style="width:100%;display:block;">
+        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
+          City Sunset · Crimson
+        </figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen/city-day-teal.svg"
+             alt="Generated SVG — City Day, Teal palette"
+             style="width:100%;display:block;">
+        <figcaption style="padding:.6rem 1rem;font-size:.8rem;color:var(--muted);background:var(--card);">
+          City Day · Teal
+        </figcaption>
+      </figure>
     </div>
   </div>
 </section>

@@ -237,8 +237,25 @@ class TTSkyReelsI2VRunner(BaseMetalDeviceRunner):
         # that become more likely when CLIP cross-attention is not active.
         negative_prompt = request.negative_prompt or self.DEFAULT_NEGATIVE_PROMPT
 
-        # Decode the conditioning image
-        image = _decode_image(getattr(request, "image", None), self.logger)
+        # Decode the conditioning image.
+        # The I2V endpoint populates image_prompts[0].image (not request.image),
+        # so check both fields and prefer image_prompts when present.
+        raw_image = getattr(request, "image", None)
+        if not raw_image:
+            image_prompts = getattr(request, "image_prompts", None)
+            if image_prompts:
+                raw_image = image_prompts[0].image
+        image = _decode_image(raw_image, self.logger)
+        if image is not None:
+            self.logger.info(
+                f"Device {self.device_id}: I2V conditioning image decoded — "
+                f"{image.size[0]}x{image.size[1]} px"
+            )
+        else:
+            self.logger.warning(
+                f"Device {self.device_id}: No conditioning image available — "
+                f"using black frame (warmup or decode failure)"
+            )
 
         frames = self.pipeline(
             image=image,

@@ -64,6 +64,10 @@ AVAILABLE_RUNNERS = {
     ModelRunners.TT_SKYREELS_V2: lambda wid: __import__(
         "tt_model_runners.skyreels_runner", fromlist=["TTSkyReelsRunner"]
     ).TTSkyReelsRunner(wid),
+    # SkyReels-V2-I2V-14B-540P — image-to-video runner
+    ModelRunners.TT_SKYREELS_V2_I2V: lambda wid: __import__(
+        "tt_model_runners.skyreels_i2v_runner", fromlist=["TTSkyReelsI2VRunner"]
+    ).TTSkyReelsI2VRunner(wid),
     ModelRunners.TT_WHISPER: lambda wid: __import__(
         "tt_model_runners.whisper_runner", fromlist=["TTWhisperRunner"]
     ).TTWhisperRunner(wid),

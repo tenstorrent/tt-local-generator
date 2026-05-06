@@ -1,3 +1,19 @@
+tt-local-generator (0.2.3) noble; urgency=medium
+
+  * SkyReels-V2-I2V-14B-540P: wire I2V endpoint, fix constants.py patch,
+    add TTSkyReelsI2VRunner to runner_fabric. api_client branches on image
+    presence to use /v1/videos/generations/i2v with image_prompts[] format.
+  * model_ready() probes both T2V and I2V endpoints so health check works
+    regardless of which model is running.
+  * Required-image UI treatment: amber pulsing border on seed well when
+    SkyReels I2V or Animate is selected without a conditioning image.
+    Generate button shows inline error if user tries to submit without one.
+    Source description label updated to say "requires starting image".
+  * Seed well CSS state (_update_seed_well_state) wired into _set_source,
+    _set_model, and _set_seed_image so required/has-seed CSS stays in sync.
+
+ -- Tenstorrent <software@tenstorrent.com>  Tue, 06 May 2026 00:00:00 +0000
+
 tt-local-generator (0.2.2) noble; urgency=medium
 
   * Massively expand prompt word banks: 10 new literary subject registers

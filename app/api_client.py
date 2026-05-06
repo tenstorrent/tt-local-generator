@@ -156,36 +156,46 @@ class APIClient:
         """
         Check if the video model worker is ready to accept jobs.
 
-        Submits a minimal probe — if the server returns 405 (model not ready),
-        returns False. Returns True on 202 (accepted) and cancels the probe job.
-        Returns None-safe False on any network error.
+        Tries both the T2V and I2V probe endpoints so this works regardless of
+        which model (Wan2.2, Mochi, SkyReels I2V, etc.) is loaded.  Returns True
+        as soon as any probe gets a 202; returns False on 405 from all probes.
         """
-        try:
-            # A minimal request just to probe readiness
-            resp = requests.post(
-                f"{self.base_url}/v1/videos/generations",
-                json={"prompt": "_probe_", "num_inference_steps": 12},
-                headers=self._headers(),
-                timeout=5,
-            )
-            if resp.status_code == 405:
-                return False  # Model not ready
-            if resp.status_code == 202:
-                # Cancel the probe job so we don't waste device time
-                try:
-                    job_id = resp.json().get("id")
-                    if job_id:
-                        requests.post(
-                            f"{self.base_url}/v1/videos/generations/{job_id}/cancel",
-                            headers=self._headers(),
-                            timeout=5,
-                        )
-                except Exception:
-                    pass
-                return True
-            return False
-        except requests.RequestException:
-            return False
+        probes = [
+            # T2V / Mochi / Wan2.2 endpoint
+            (f"{self.base_url}/v1/videos/generations",
+             {"prompt": "_probe_", "num_inference_steps": 12}),
+            # SkyReels I2V endpoint
+            (f"{self.base_url}/v1/videos/generations/i2v",
+             {"prompt": "_probe_",
+              "num_inference_steps": 12,
+              "image_prompts": [{"image": "aQ==", "frame_pos": 0}]}),
+        ]
+        for url, body in probes:
+            try:
+                resp = requests.post(url, json=body, headers=self._headers(), timeout=5)
+                if resp.status_code == 202:
+                    # Cancel probe job so we don't waste device time
+                    try:
+                        job_id = resp.json().get("id")
+                        if job_id:
+                            requests.post(
+                                f"{self.base_url}/v1/videos/generations/{job_id}/cancel",
+                                headers=self._headers(),
+                                timeout=5,
+                            )
+                    except Exception:
+                        pass
+                    return True
+            except requests.RequestException:
+                pass
+        return False
+
+    @staticmethod
+    def _strip_data_uri(image: str) -> str:
+        """Strip 'data:<mime>;base64,' prefix if present, returning raw base64."""
+        if image and "," in image and image.startswith("data:"):
+            return image.split(",", 1)[1]
+        return image
 
     def submit(
         self,
@@ -199,18 +209,21 @@ class APIClient:
         """
         Submit a video generation job.
 
+        When ``image`` is provided the job is sent to the SkyReels I2V endpoint
+        (POST /v1/videos/generations/i2v) with the image wrapped in the required
+        ``image_prompts`` array.  Without an image it uses the standard T2V
+        endpoint (POST /v1/videos/generations).
+
         Args:
             prompt: Text description of the video to generate.
             negative_prompt: Optional text describing what to avoid.
             num_inference_steps: Denoising steps, 12-50 (server default: 20).
             seed: Random seed for reproducibility. None means random.
-            num_frames: Number of output frames. None means the runner uses its
-                        default.  Valid SkyReels counts: (N-1) % 4 == 0
+            num_frames: Number of output frames. None means the runner default.
+                        Valid SkyReels counts: (N-1) % 4 == 0
                         (9, 13, 17, 21, 25, 29, 33, 65, 97, …).
-            image: Base64-encoded conditioning image (data-URI format,
-                   e.g. "data:image/jpeg;base64,...") or a URL.
-                   Used by SkyReels I2V and similar image-to-video runners.
-                   None means the runner uses its default (black frame for warmup).
+            image: Base64 conditioning image — data-URI (``data:image/png;base64,…``)
+                   or raw base64.  Triggers I2V endpoint when present.
 
         Returns:
             The job ID string (UUID).
@@ -229,14 +242,21 @@ class APIClient:
             payload["seed"] = seed
         if num_frames is not None and num_frames > 0:
             payload["num_frames"] = num_frames
+
         if image:
-            payload["image"] = image
+            # I2V path: wrap the conditioning frame in image_prompts[]
+            raw_b64 = self._strip_data_uri(image)
+            payload["image_prompts"] = [{"image": raw_b64, "frame_pos": 0}]
+            url = f"{self.base_url}/v1/videos/generations/i2v"
+        else:
+            # T2V / Mochi / Wan2.2 path
+            url = f"{self.base_url}/v1/videos/generations"
 
         resp = requests.post(
-            f"{self.base_url}/v1/videos/generations",
+            url,
             json=payload,
             headers=self._headers(),
-            timeout=30,
+            timeout=60,  # I2V payload can be several MB
         )
         resp.raise_for_status()
 

@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 from enum import Enum
+from typing import NamedTuple, Tuple
 
 
 class SupportedModels(Enum):
@@ -180,7 +181,7 @@ MODEL_SERVICE_RUNNER_MAP = {
 }
 
 
-MODEL_RUNNER_TO_MODEL_NAMES_MAP = {
+INFERENCE_MODEL_RUNNER_TO_MODEL_NAMES_MAP = MODEL_RUNNER_TO_MODEL_NAMES_MAP = {
     ModelRunners.TT_SDXL_EDIT: {ModelNames.STABLE_DIFFUSION_XL_INPAINTING},
     ModelRunners.TT_SDXL_IMAGE_TO_IMAGE: {ModelNames.STABLE_DIFFUSION_XL_IMG2IMG},
     ModelRunners.TT_SDXL_TRACE: {ModelNames.STABLE_DIFFUSION_XL_BASE},
@@ -291,6 +292,35 @@ class AudioResponseFormat(Enum):
 
 SDXL_VALID_IMAGE_RESOLUTIONS = frozenset({(1024, 1024), (512, 512)})
 AUDIO_RESPONSE_FORMATS = frozenset(e.value for e in AudioResponseFormat)
+
+
+class Resolution(NamedTuple):
+    """Image / video frame resolution, in pixels."""
+
+    height: int
+    width: int
+
+
+# Galaxy-class meshes (e.g. WH GLX (4,8)=32 chips) treated as "large"
+LARGE_MESH_SIZE_THRESHOLD = 32
+
+
+def is_large_mesh(mesh_shape: Tuple[int, int]) -> bool:
+    return (mesh_shape[0] * mesh_shape[1]) >= LARGE_MESH_SIZE_THRESHOLD
+
+
+WAN22_NUM_FRAMES = 81
+WAN22_RESOLUTION_LARGE_MESH = Resolution(height=720, width=1280)
+WAN22_RESOLUTION_SMALL_MESH = Resolution(height=480, width=832)
+
+
+def wan22_target_resolution(mesh_shape: Tuple[int, int]) -> Resolution:
+    if is_large_mesh(mesh_shape):
+        return WAN22_RESOLUTION_LARGE_MESH
+    return WAN22_RESOLUTION_SMALL_MESH
+
+
+TRAINING_STORE_ADAPTERS_DIR = "model_store/"
 
 # TTS formats that require ffmpeg for encoding (WAV does not)
 FFMPEG_REQUIRED_FORMATS = frozenset(
@@ -1103,6 +1133,9 @@ _DEFAULT_SAMPLING_PARAMS = {
     "guided_decoding": None,
     "extra_args": None,
 }
+
+# Per-model overrides applied after device config (keyed by ModelNames enum value)
+MODEL_NAME_OVERRIDES = {}
 
 # Sentinel object for worker shutdown signaling
 SHUTDOWN_SIGNAL = {"__shutdown__": True}
