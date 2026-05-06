@@ -50,6 +50,7 @@ class GenerationRecord:
     guidance_scale: float = 0.0        # Guidance scale used (image gen only)
     model: str = ""                    # Model identifier, e.g. "wan2.2-t2v", "mochi-1-preview", "flux.1-dev"
     extra_meta: dict = field(default_factory=dict)  # Free-form server response metadata
+    starred: int = 0                     # 0 | 1 — mirrors media_store.MediaRecord.starred
 
     @classmethod
     def new(
@@ -232,6 +233,11 @@ class HistoryStore:
         rows = _ms.query()
         return [self._to_gen(r) for r in rows if r.media_type != "artgen"]
 
+    def star(self, record_id: str, starred: bool) -> None:
+        """Toggle the starred flag for a video/image/animate record."""
+        from media_store import media_store as _ms
+        _ms.star(record_id, starred)
+
     def delete(self, record_id: str) -> Optional[GenerationRecord]:
         """
         Remove the record with the given ID from media_store and return it.
@@ -299,6 +305,7 @@ class HistoryStore:
             guidance_scale=p.get("guidance_scale", 0.0),
             model=r.model_id,
             extra_meta=p.get("extra_meta", {}),
+            starred=r.starred,
         )
 
 

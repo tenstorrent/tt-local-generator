@@ -388,6 +388,7 @@ class ArtgenDetail(Gtk.Box):
         self.on_back: Optional[Callable[[], None]] = None
         self.on_deleted: Optional[Callable[[str], None]] = None
         self.on_starred: Optional[Callable[[str, bool], None]] = None
+        self.on_use_as_seed: Optional[Callable[["MediaRecord"], None]] = None
         self._records: list[MediaRecord] = []
         self._idx: int = 0
         self._build()
@@ -510,6 +511,12 @@ class ArtgenDetail(Gtk.Box):
         open_btn.connect("clicked", self._on_open_file)
         sidebar.append(open_btn)
 
+        # Use as seed for video/animate
+        self._seed_btn = Gtk.Button(label="🎬  Use as Seed")
+        self._seed_btn.set_tooltip_text("Set as seed image for video/animate generation")
+        self._seed_btn.connect("clicked", self._on_use_as_seed_clicked)
+        sidebar.append(self._seed_btn)
+
         # Delete
         self._del_btn = Gtk.Button(label="🗑 Delete")
         self._del_btn.add_css_class("destructive-action")
@@ -622,6 +629,11 @@ class ArtgenDetail(Gtk.Box):
         rec = self._records[self._idx]
         if Path(rec.file_path).exists():
             subprocess.Popen(["xdg-open", rec.file_path])
+
+    def _on_use_as_seed_clicked(self, _btn) -> None:
+        if not self._records or self.on_use_as_seed is None:
+            return
+        self.on_use_as_seed(self._records[self._idx])
 
     def _on_delete(self, _btn) -> None:
         if not self._records:

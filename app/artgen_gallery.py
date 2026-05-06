@@ -394,6 +394,7 @@ class ArtgenGallery(Gtk.Box):
         self.on_card_activated: Optional[Callable[[str], None]] = None
         self.on_watch_requested: Optional[Callable[[Optional[str]], None]] = None
         self.on_card_deleted: Optional[Callable[[str], None]] = None
+        self.on_use_as_seed: Optional[Callable[["MediaRecord"], None]] = None
         self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
         self._build()
@@ -589,6 +590,18 @@ class ArtgenGallery(Gtk.Box):
 
         del_btn.connect("clicked", _on_delete)
         actions.append(del_btn)
+
+        seed_btn = Gtk.Button(label="🎬")
+        seed_btn.add_css_class("artgen-card-action-btn")
+        seed_btn.set_tooltip_text("Use as seed for video/animate")
+
+        def _on_seed(_b, _rec=rec):
+            if self.on_use_as_seed:
+                self.on_use_as_seed(_rec)
+
+        seed_btn.connect("clicked", _on_seed)
+        actions.append(seed_btn)
+
         hover_rev.set_child(actions)
         overlay.add_overlay(hover_rev)
 

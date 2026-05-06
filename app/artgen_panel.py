@@ -21,6 +21,7 @@ import threading
 import time
 import types
 import uuid
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -109,7 +110,11 @@ class ArtgenPanel(Gtk.Box):
 
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.on_use_as_seed: "Optional[Callable[['MediaRecord'], None]]" = None
         self._generating: bool = False
+        self._gen_queue: deque = deque()  # (gen_name, args) tuples pending manual generation
+        self._mosaic_timer_id: int | None = None
+        self._mosaic_paths: list[str] = []
         self._last_out_path: Path | None = None
         self._tmp_svg: Path | None = None
         self._llm_timer_id: int | None = None
@@ -172,12 +177,14 @@ class ArtgenPanel(Gtk.Box):
         self._gallery.on_card_activated = self._on_gallery_card_activated
         self._gallery.on_watch_requested = self._on_watch_requested
         self._gallery.on_card_deleted = self._on_gallery_card_deleted
+        self._gallery.on_use_as_seed = self._on_use_as_seed
         self._sub_stack.add_named(self._gallery, "gallery")
 
         # Detail view navigated to from gallery (not a top-level tab button)
         self._detail = ArtgenDetail()
         self._detail.on_back = self._on_detail_back
         self._detail.on_deleted = self._on_detail_deleted
+        self._detail.on_use_as_seed = self._on_use_as_seed
         self._sub_stack.add_named(self._detail, "detail")
 
         self._watch = ArtgenWatch()
@@ -210,6 +217,9 @@ class ArtgenPanel(Gtk.Box):
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
         type_bar.append(self._type_dd)
+        # Presets button — opens grouped preset popover
+        preset_menu_btn = self._build_preset_menu_btn()
+        type_bar.append(preset_menu_btn)
         left_box.append(type_bar)
         left_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
@@ -322,17 +332,48 @@ class ArtgenPanel(Gtk.Box):
         empty_box.append(empty_sub)
         self._preview_stack.add_named(empty_box, "empty")
 
-        # Generating state — spinner + live status
-        gen_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        gen_box.set_halign(Gtk.Align.CENTER)
-        gen_box.set_valign(Gtk.Align.CENTER)
-        self._preview_spinner = Gtk.Spinner()
-        self._preview_spinner.set_size_request(48, 48)
-        gen_box.append(self._preview_spinner)
+        # Generating state — mosaic shuffle of library thumbnails
+        mosaic_overlay = Gtk.Overlay()
+        mosaic_overlay.set_hexpand(True)
+        mosaic_overlay.set_vexpand(True)
+
+        # 4×4 grid of Picture tiles
+        self._mosaic_grid = Gtk.Grid()
+        self._mosaic_grid.set_hexpand(True)
+        self._mosaic_grid.set_vexpand(True)
+        self._mosaic_grid.set_row_homogeneous(True)
+        self._mosaic_grid.set_column_homogeneous(True)
+        self._mosaic_grid.add_css_class("mosaic-grid")
+
+        _COLS, _ROWS = 4, 4
+        self._mosaic_pics: list[Gtk.Picture] = []
+        for row in range(_ROWS):
+            for col in range(_COLS):
+                pic = Gtk.Picture()
+                pic.set_hexpand(True)
+                pic.set_vexpand(True)
+                pic.set_content_fit(Gtk.ContentFit.COVER)
+                pic.add_css_class("mosaic-tile")
+                self._mosaic_grid.attach(pic, col, row, 1, 1)
+                self._mosaic_pics.append(pic)
+
+        mosaic_overlay.set_child(self._mosaic_grid)
+
+        # Status strip — floats at the bottom of the mosaic
+        status_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        status_strip.add_css_class("mosaic-status-strip")
+        status_strip.set_valign(Gtk.Align.END)
+        status_strip.set_hexpand(True)
+        status_strip.set_margin_start(0)
+        status_strip.set_margin_end(0)
         self._preview_gen_lbl = Gtk.Label(label="Generating…")
-        self._preview_gen_lbl.add_css_class("artgen-status")
-        gen_box.append(self._preview_gen_lbl)
-        self._preview_stack.add_named(gen_box, "generating")
+        self._preview_gen_lbl.add_css_class("mosaic-status-lbl")
+        self._preview_gen_lbl.set_hexpand(True)
+        self._preview_gen_lbl.set_xalign(0.5)
+        status_strip.append(self._preview_gen_lbl)
+        mosaic_overlay.add_overlay(status_strip)
+
+        self._preview_stack.add_named(mosaic_overlay, "generating")
 
         # SVG preview
         svg_scroll = Gtk.ScrolledWindow()
@@ -525,6 +566,172 @@ class ArtgenPanel(Gtk.Box):
         row.append(inspire_btn)
         return row, entry
 
+    # ── Preset popover ───────────────────────────────────────────────────────
+
+    def _load_presets(self) -> list[dict]:
+        """Load artgen_presets.json from the same directory as this module."""
+        try:
+            p = Path(__file__).parent / "artgen_presets.json"
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+    def _build_preset_menu_btn(self) -> Gtk.MenuButton:
+        """Build the ⚡ MenuButton that opens the grouped preset popover."""
+        presets = self._load_presets()
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(280, 360)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.set_margin_start(8); outer.set_margin_end(8)
+        outer.set_margin_top(8); outer.set_margin_bottom(8)
+
+        # Group presets by generator
+        groups: dict[str, list[dict]] = {}
+        for p in presets:
+            groups.setdefault(p["generator"], []).append(p)
+
+        popover = Gtk.Popover()
+        popover.set_position(Gtk.PositionType.BOTTOM)
+
+        for gen_name, group in groups.items():
+            hdr = Gtk.Label(label=gen_name.upper())
+            hdr.set_xalign(0)
+            hdr.add_css_class("artgen-preset-section")
+            outer.append(hdr)
+
+            for preset in group:
+                btn = Gtk.Button()
+                btn.add_css_class("artgen-preset-btn")
+                btn.set_hexpand(True)
+
+                btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+                name_lbl = Gtk.Label(label=preset["name"])
+                name_lbl.set_xalign(0)
+                name_lbl.add_css_class("artgen-preset-name")
+                desc_lbl = Gtk.Label(label=preset["description"])
+                desc_lbl.set_xalign(0)
+                desc_lbl.set_wrap(True)
+                desc_lbl.set_max_width_chars(36)
+                desc_lbl.add_css_class("artgen-preset-desc")
+                btn_box.append(name_lbl)
+                btn_box.append(desc_lbl)
+                btn.set_child(btn_box)
+
+                # Capture preset and popover by value in the closure
+                btn.connect(
+                    "clicked",
+                    lambda _b, pr=preset, pop=popover: self._on_preset_clicked(pr, pop),
+                )
+                outer.append(btn)
+
+            sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            sep.set_margin_top(4); sep.set_margin_bottom(4)
+            outer.append(sep)
+
+        scroll.set_child(outer)
+        popover.set_child(scroll)
+
+        mb = Gtk.MenuButton()
+        mb.set_label("⚡")
+        mb.set_tooltip_text("Presets — one-click parameter recipes")
+        mb.add_css_class("flat")
+        mb.add_css_class("artgen-preset-menu-btn")
+        mb.set_popover(popover)
+        return mb
+
+    def _on_preset_clicked(self, preset: dict, popover: Gtk.Popover) -> None:
+        """Switch generator type and apply all preset params, then close popover."""
+        popover.popdown()
+        gen_name = preset["generator"]
+        gen_names = artgen.all_names()
+        if gen_name in gen_names:
+            self._type_dd.set_selected(gen_names.index(gen_name))
+            self._controls_stack.set_visible_child_name(gen_name)
+        self._apply_preset_params(gen_name, preset.get("params", {}))
+
+    def _apply_preset_params(self, gen_name: str, params: dict) -> None:
+        """Write preset param values into the matching GTK widgets."""
+        if gen_name == "landscape":
+            if "palette" in params:
+                self._set_dd(self._land_palette, params["palette"])
+            if "mountains" in params:
+                self._land_mountains.set_active(bool(params["mountains"]))
+            if "clouds" in params:
+                self._land_clouds.set_active(bool(params["clouds"]))
+            if "stars" in params:
+                self._land_stars.set_active(bool(params["stars"]))
+            if "glitch" in params:
+                self._land_glitch.set_active(bool(params["glitch"]))
+
+        elif gen_name == "skyline":
+            if "era" in params:
+                self._set_dd(self._sky_era, params["era"])
+            if "density" in params:
+                self._set_dd(self._sky_density, params["density"])
+            if "sky" in params:
+                self._set_dd(self._sky_sky, params["sky"])
+
+        elif gen_name == "constellation":
+            if "culture" in params:
+                self._set_dd(self._con_culture, params["culture"])
+            if "stars" in params:
+                self._con_stars.set_value(int(params["stars"]))
+            if "lore" in params:
+                self._con_lore.set_active(bool(params["lore"]))
+
+        elif gen_name == "geometric":
+            if "style" in params:
+                self._set_dd(self._geo_style, params["style"])
+            if "geo_palette" in params:
+                self._set_dd(self._geo_palette, params["geo_palette"])
+            if "complexity" in params:
+                self._set_dd(self._geo_complexity, params["complexity"])
+
+        elif gen_name == "circuit":
+            if "inputs" in params:
+                self._cir_inputs.set_text(params["inputs"])
+            if "depth" in params:
+                self._cir_depth.set_value(int(params["depth"]))
+            if "circuit_style" in params:
+                self._set_dd(self._cir_style, params["circuit_style"])
+            if "gates" in params:
+                gate_set = set(params["gates"])
+                for gate, cb in self._gate_checks.items():
+                    cb.set_active(gate in gate_set)
+
+        elif gen_name == "verse":
+            if "form" in params:
+                self._set_dd(self._verse_form, params["form"])
+            if "theme" in params:
+                self._verse_theme.set_text(params["theme"])
+            if "count" in params:
+                self._verse_count.set_value(int(params["count"]))
+
+        elif gen_name == "palette":
+            if "mood" in params:
+                self._pal_mood.set_text(params["mood"])
+            if "count" in params:
+                self._pal_count.set_value(int(params["count"]))
+            if "export_css" in params:
+                self._pal_css.set_active(bool(params["export_css"]))
+
+        elif gen_name == "ansi":
+            if "subject" in params:
+                self._ansi_subject.set_text(params["subject"])
+            if "width" in params:
+                self._ansi_width.set_value(int(params["width"]))
+            if "colors" in params:
+                self._set_dd(self._ansi_colors, params["colors"])
+            if "ansi_style" in params:
+                self._set_dd(self._ansi_style, params["ansi_style"])
+
+        elif gen_name == "freeform":
+            if "freeform" in params:
+                self._free_tv.get_buffer().set_text(params["freeform"])
+
     # ── Preview pane helpers ──────────────────────────────────────────────────
 
     def _show_preview_latest(self) -> None:
@@ -596,21 +803,31 @@ class ArtgenPanel(Gtk.Box):
         self._controls_stack.set_visible_child_name(name)
 
     def _on_generate_clicked(self, _btn) -> None:
-        if self._generating:
-            return
         item = self._type_dd.get_selected_item()
         if item is None:
             return
         gen_name = item.get_string()
-        # Gather all widget state HERE on the main thread — GTK widgets must
+        # Snapshot all widget state NOW on the main thread — GTK widgets must
         # never be accessed from a background thread (silent deadlock in GTK4).
         args = self._build_args(gen_name)
+        self._gen_queue.append((gen_name, args))
+        self._drain_queue()
+
+    def _drain_queue(self) -> None:
+        """Start the next queued generation if none is running; update button label."""
+        if self._generating:
+            n = len(self._gen_queue)
+            self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
+            return
+        if not self._gen_queue:
+            self._gen_btn.set_label("✦ Generate")
+            return
+        gen_name, args = self._gen_queue.popleft()
+        n = len(self._gen_queue)
         self._generating = True
-        self._gen_btn.set_sensitive(False)
-        self._gen_btn.set_label("Generating…")
+        self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
         self._set_status("Detecting model on port 8002…")
-        # Show generating state in the preview pane
-        self._preview_spinner.start()
+        self._mosaic_start()
         self._preview_gen_lbl.set_label("Generating…")
         self._preview_stack.set_visible_child_name("generating")
         threading.Thread(
@@ -884,6 +1101,55 @@ class ArtgenPanel(Gtk.Box):
 
     # ── LLM elapsed-time ticker (main-thread only) ────────────────────────────
 
+    # ── Mosaic shuffle — "generating" waiting screen ──────────────────────────
+
+    def _mosaic_start(self) -> None:
+        """Populate the tile grid from the library and begin the shuffle timer."""
+        # Gather all thumbnail paths across the entire library (artgen + video + image).
+        recs = _media_store.query()
+        paths = [r.thumbnail_path for r in recs
+                 if r.thumbnail_path and Path(r.thumbnail_path).exists()]
+        # Also accept SVG file_paths directly (artgen landscape/skyline/etc.)
+        for r in recs:
+            if r.file_path and r.file_path.endswith(".svg") and Path(r.file_path).exists():
+                paths.append(r.file_path)
+        self._mosaic_paths = paths
+
+        # Fill every cell with a random thumbnail immediately.
+        self._mosaic_fill_all()
+
+        # Shuffle 2 tiles every 700 ms for an ambient "things are happening" feel.
+        if self._mosaic_timer_id is None:
+            self._mosaic_timer_id = GLib.timeout_add(700, self._mosaic_tick)
+
+    def _mosaic_stop(self) -> None:
+        """Halt the shuffle timer and clear all tiles."""
+        if self._mosaic_timer_id is not None:
+            GLib.source_remove(self._mosaic_timer_id)
+            self._mosaic_timer_id = None
+
+    def _mosaic_fill_all(self) -> None:
+        if not self._mosaic_paths:
+            return
+        for pic in self._mosaic_pics:
+            self._mosaic_set_pic(pic, random.choice(self._mosaic_paths))
+
+    def _mosaic_tick(self) -> bool:
+        """Swap two random cells to new random thumbnails."""
+        if not self._mosaic_paths or not self._mosaic_pics:
+            return GLib.SOURCE_CONTINUE
+        for _ in range(2):
+            pic = random.choice(self._mosaic_pics)
+            self._mosaic_set_pic(pic, random.choice(self._mosaic_paths))
+        return GLib.SOURCE_CONTINUE
+
+    @staticmethod
+    def _mosaic_set_pic(pic: Gtk.Picture, path: str) -> None:
+        try:
+            pic.set_file(Gio.File.new_for_path(path))
+        except Exception:
+            pic.set_file(None)
+
     def _begin_llm_timer(self, t0: float) -> None:
         self._llm_t0 = t0
         self._set_status("Calling LLM… 0s")
@@ -908,8 +1174,6 @@ class ArtgenPanel(Gtk.Box):
     def _finish_success(self, artifact: str, out_path_str: str, rec: "MediaRecord | None" = None) -> None:
         elapsed = self._cancel_llm_timer()
         self._generating = False
-        self._gen_btn.set_sensitive(True)
-        self._gen_btn.set_label("✦ Generate")
         self._last_out_path = Path(out_path_str)
         suffix = f"  ({elapsed}s)" if elapsed is not None else ""
         self._set_status(f"Done  ({elapsed}s)" if elapsed is not None else "Done")
@@ -920,30 +1184,33 @@ class ArtgenPanel(Gtk.Box):
             if self._watch._records:
                 self._watch._records.insert(0, rec)
             # Show the new artifact in the preview pane
-            self._preview_spinner.stop()
+            self._mosaic_stop()
             self._show_preview(rec)
         else:
             self._gallery.refresh()
-            self._preview_spinner.stop()
+            self._mosaic_stop()
             self._show_preview_latest()
 
+        # Drain any manually queued generations before auto-scheduling the next one.
+        self._drain_queue()
         if self._auto_gen:
             self._auto_gen_error_streak = 0
-            self._auto_maybe_schedule()
+            if not self._generating:  # don't schedule auto if a manual item just started
+                self._auto_maybe_schedule()
 
     def _finish_error(self, msg: str) -> None:
         self._cancel_llm_timer()
         self._generating = False
-        self._gen_btn.set_sensitive(True)
-        self._gen_btn.set_label("✦ Generate")
         self._set_status(f"Error: {msg[:80]}")
         # Return preview to whatever was showing before (or empty state)
-        self._preview_spinner.stop()
+        self._mosaic_stop()
         if self._preview_rec is not None:
             self._show_preview(self._preview_rec)
         else:
             self._preview_stack.set_visible_child_name("empty")
-        if self._auto_gen:
+        # Drain any manually queued generations first.
+        self._drain_queue()
+        if self._auto_gen and not self._generating:
             self._auto_gen_error_streak += 1
             if self._auto_gen_error_streak >= 3:
                 self._auto_stop("3 errors in a row — auto-generate paused")
@@ -1020,6 +1287,11 @@ class ArtgenPanel(Gtk.Box):
         # Remove from watch queue so the slideshow doesn't try to display it
         if self._watch._records:
             self._watch._records = [r for r in self._watch._records if r.id != media_id]
+
+    def _on_use_as_seed(self, rec: "MediaRecord") -> None:
+        """Forward the seed request to the MainWindow callback if wired."""
+        if self.on_use_as_seed:
+            self.on_use_as_seed(rec)
 
     def _on_watch_requested(self, generator_type: str | None) -> None:
         records = _media_store.query(media_type="artgen", generator_type=generator_type)
@@ -1275,10 +1547,12 @@ class ArtgenPanel(Gtk.Box):
         # Collect widget state before handing off to the background thread
         args = self._build_args(gen_name)
         self._generating = True
-        self._gen_btn.set_sensitive(False)
         self._gen_btn.set_label("Generating…")
         if gen_name not in _TEXT_TYPES:
             self._set_status("Detecting model on port 8002…")
+        self._mosaic_start()
+        self._preview_gen_lbl.set_label("Generating…")
+        self._preview_stack.set_visible_child_name("generating")
         threading.Thread(
             target=self._run_generation,
             args=(gen_name, args),
