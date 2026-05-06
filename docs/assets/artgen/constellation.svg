@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500">
+  <rect width='800' height='500' fill='#000B1E'/>
+  <circle cx='123' cy='145' r='0.8' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='214' cy='67' r='1.1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='456' cy='278' r='0.9' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='567' cy='189' r='1.2' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='278' cy='345' r='0.7' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='389' cy='123' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='145' cy='278' r='0.6' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='236' cy='456' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='567' cy='123' r='0.9' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='389' cy='278' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='145' cy='189' r='0.8' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='278' cy='67' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='214' cy='345' r='0.9' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='456' cy='123' r='1.2' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='567' cy='278' r='0.7' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='389' cy='189' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='145' cy='456' r='0.6' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='236' cy='278' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='567' cy='67' r='0.9' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='389' cy='456' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='145' cy='123' r='0.8' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='278' cy='189' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='214' cy='278' r='0.9' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='456' cy='456' r='1.2' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='567' cy='345' r='0.7' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='389' cy='67' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='145' cy='278' r='0.6' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='236' cy='123' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='567' cy='189' r='0.9' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='389' cy='278' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='145' cy='67' r='0.8' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='278' cy='456' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='214' cy='189' r='0.9' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='456' cy='278' r='1.2' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='123' cy='123' r='0.5' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='456' cy='123' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='278' cy='278' r='0.8' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='567' cy='456' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='145' cy='345' r='0.9' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='389' cy='189' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='214' cy='67' r='0.7' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='236' cy='278' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='567' cy='123' r='0.9' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='389' cy='456' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='145' cy='189' r='0.8' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='278' cy='67' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='123' cy='278' r='0.6' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='456' cy='456' r='1.2' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='567' cy='345' r='0.7' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='389' cy='123' r='1' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='145' cy='278' r='0.6' fill='#FFFFFF' opacity='0.2'/>
+  <circle cx='236' cy='189' r='1' fill='#FFFFFF' opacity='0.3'/>
+  <circle cx='567' cy='67' r='0.9' fill='#FFFFFF' opacity='0.4'/>
+  <circle cx='389' cy='278' r='1.1' fill='#FFFFFF' opacity='0.5'/>
+  <circle cx='123' cy='145' r='4' fill='#E8F0F2'/>
+  <text x='130' y='155' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Arktouros Minor</text>
+  <circle cx='300' cy='100' r='3' fill='#81E6D9'/>
+  <text x='310' y='110' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Selene's Veil</text>
+  <circle cx='420' cy='250' r='2' fill='#4FD1C5'/>
+  <text x='430' y='260' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Kairos</text>
+  <circle cx='500' cy='320' r='3' fill='#B0C4DE'/>
+  <text x='510' y='330' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Eridanos</text>
+  <circle cx='220' cy='380' r='2' fill='#4FD1C5'/>
+  <text x='230' y='390' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Titan's Tear</text>
+  <circle cx='380' cy='150' r='3' fill='#E8F0F2'/>
+  <text x='390' y='160' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Helios' Chariot</text>
+  <circle cx='480' cy='200' r='2' fill='#B0C4DE'/>
+  <text x='490' y='210' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Nyx's Whisper</text>
+  <circle cx='200' cy='250' r='3' fill='#81E6D9'/>
+  <text x='210' y='260' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Gaia's Embrace</text>
+  <circle cx='350' cy='300' r='2' fill='#4FD1C5'/>
+  <text x='360' y='310' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Aeolus' Breath</text>
+  <circle cx='450' cy='350' r='3' fill='#E8F0F2'/>
+  <text x='460' y='360' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Hephaestus' Forge</text>
+  <circle cx='550' cy='400' r='2' fill='#B0C4DE'/>
+  <text x='560' y='410' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Poseidon's Trident</text>
+  <circle cx='250' cy='420' r='3' fill='#81E6D9'/>
+  <text x='260' y='430' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Demeter's Harvest</text>
+  <circle cx='400' cy='450' r='2' fill='#4FD1C5'/>
+  <text x='410' y='460' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Athena's Owl</text>
+  <circle cx='500' cy='480' r='3' fill='#E8F0F2'/>
+  <text x='510' y='490' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Apollo's Lyre</text>
+  <circle cx='600' cy='420' r='2' fill='#B0C4DE'/>
+  <text x='610' y='430' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Artemis' Bow</text>
+  <circle cx='300' cy='480' r='3' fill='#81E6D9'/>
+  <text x='310' y='490' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Dionysus' Thyrsus</text>
+  <circle cx='420' cy='380' r='2' fill='#4FD1C5'/>
+  <text x='430' y='390' font-family='monospace' font-size='8' fill='#4FD1C5' opacity='0.85'>Hermes' Wing</text>
+  <line x1='123' y1='145' x2='300' y2='100' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='300' y1='100' x2='420' y2='250' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='420' y1='250' x2='500' y2='320' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='500' y1='320' x2='220' y2='380' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='220' y1='380' x2='380' y2='150' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='380' y1='150' x2='480' y2='200' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='480' y1='200' x2='200' y2='250' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='200' y1='250' x2='350' y2='300' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='350' y1='300' x2='450' y2='350' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='450' y1='350' x2='550' y2='400' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='550' y1='400' x2='250' y2='420' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='250' y1='420' x2='400' y2='450' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='400' y1='450' x2='500' y2='480' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='500' y1='480' x2='600' y2='420' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <line x1='600' y1='420' x2='300' y2='480' stroke='#4FD1C5' stroke-width='0.8' opacity='0.4'/>
+  <text x='400' y='490' font-family='monospace' font-size='11' fill='#607D8B' text-anchor='middle'>✦ The Great Celestial Dragon ✦</text>
+</svg>
+<!-- LORE: The Great Celestial Dragon is a revered constellation in ancient mythology, symbolizing the balance between chaos and order. According to legend, the dragon's celestial form is said to protect the heavens from the forces of darkness, while its earthly counterpart is believed to bring fertility and prosperity to the land. The dragon's twisting shape is thought to represent the cycles of nature and the eternal struggle between light and darkness. In ancient times, the appearance of the Great Celestial Dragon in the night sky was considered a harbinger of great change and transformation. -->

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">
+  <rect width='600' height='600' fill='#1A0000'/>
+  <g>
+    <rect x="0" y="0" width="300" height="300" fill="#FF6B35" fill-opacity="0.1"/>
+    <rect x="300" y="0" width="300" height="300" fill="#CC2200" fill-opacity="0.15"/>
+    <rect x="0" y="300" width="300" height="300" fill="#FF8800" fill-opacity="0.1"/>
+    <rect x="300" y="300" width="300" height="300" fill="#FFD700" fill-opacity="0.15"/>
+    <line x1="300" y1="0" x2="300" y2="600" stroke="#300000" stroke-opacity="0.5" stroke-width="2"/>
+    <line x1="0" y1="300" x2="600" y2="300" stroke="#300000" stroke-opacity="0.5" stroke-width="2"/>
+  </g>
+  <g>
+    <rect x="50" y="50" width="100" height="100" fill="#FF6B35" fill-opacity="0.2"/>
+    <rect x="250" y="50" width="100" height="100" fill="#CC2200" fill-opacity="0.2"/>
+    <rect x="50" y="250" width="100" height="100" fill="#FF8800" fill-opacity="0.2"/>
+    <rect x="250" y="250" width="100" height="100" fill="#FFD700" fill-opacity="0.2"/>
+    <rect x="450" y="50" width="100" height="100" fill="#FF6B35" fill-opacity="0.1"/>
+    <rect x="50" y="450" width="100" height="100" fill="#CC2200" fill-opacity="0.1"/>
+    <rect x="450" y="250" width="100" height="100" fill="#FF8800" fill-opacity="0.1"/>
+    <rect x="250" y="450" width="100" height="100" fill="#FFD700" fill-opacity="0.1"/>
+    <line x1="150" y1="0" x2="150" y2="600" stroke="#300000" stroke-opacity="0.3" stroke-width="1"/>
+    <line x1="0" y1="150" x2="600" y2="150" stroke="#300000" stroke-opacity="0.3" stroke-width="1"/>
+    <line x1="450" y1="0" x2="450" y2="600" stroke="#300000" stroke-opacity="0.3" stroke-width="1"/>
+    <line x1="0" y1="450" x2="600" y2="450" stroke="#300000" stroke-opacity="0.3" stroke-width="1"/>
+  </g>
+  <g>
+    <circle cx="100" cy="100" r="3" fill="#FF6B35" fill-opacity="0.5"/>
+    <circle cx="300" cy="100" r="3" fill="#CC2200" fill-opacity="0.5"/>
+    <circle cx="100" cy="300" r="3" fill="#FF8800" fill-opacity="0.5"/>
+    <circle cx="300" cy="300" r="3" fill="#FFD700" fill-opacity="0.5"/>
+    <circle cx="500" cy="100" r="3" fill="#FF6B35" fill-opacity="0.5"/>
+    <circle cx="100" cy="500" r="3" fill="#CC2200" fill-opacity="0.5"/>
+    <circle cx="500" cy="300" r="3" fill="#FF8800" fill-opacity="0.5"/>
+    <circle cx="300" cy="500" r="3" fill="#FFD700" fill-opacity="0.5"/>
+  </g>
+  <g>
+    <polygon points="200,200 250,200 225,250" fill="#FF6B35" fill-opacity="0.1"/>
+    <polygon points="350,200 400,200 375,250" fill="#CC2200" fill-opacity="0.1"/>
+    <polygon points="200,350 250,350 225,400" fill="#FF8800" fill-opacity="0.1"/>
+    <polygon points="350,350 400,350 375,400" fill="#FFD700" fill-opacity="0.1"/>
+    <polygon points="200,200 200,250 225,225" fill="#FF6B35" fill-opacity="0.2"/>
+    <polygon points="350,200 350,250 375,225" fill="#CC2200" fill-opacity="0.2"/>
+    <polygon points="200,350 200,400 225,375" fill="#FF8800" fill-opacity="0.2"/>
+    <polygon points="350,350 350,400 375,375" fill="#FFD700" fill-opacity="0.2"/>
+  </g>
+</svg>

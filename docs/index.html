@@ -530,6 +530,54 @@
       font-weight: 700;
     }
 
+    /* Artgen visual prompt outputs */
+    .prompt-ex-visual {
+      border-top: 1px solid rgba(79,209,197,.07);
+      overflow: hidden;
+    }
+    .prompt-ex-visual > img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .poem-label {
+      padding: .45rem 1.1rem;
+      font-size: .67rem;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--teal);
+      background: var(--card2);
+      border-bottom: 1px solid rgba(79,209,197,.1);
+    }
+    .poem-body {
+      padding: 1rem 1.2rem 1.4rem;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: .93rem;
+      line-height: 1.95;
+      color: var(--text);
+      font-style: italic;
+      border-left: 3px solid rgba(79,209,197,.35);
+      margin: 0;
+    }
+    .poem-body p { margin: 0 0 .85rem; }
+    .poem-body p:last-child { margin-bottom: 0; }
+    .ansi-art {
+      display: block;
+      font-size: 0;
+      line-height: 0;
+      background: #000;
+    }
+    .ansi-row { display: flex; }
+    .ansi-row span { flex: 1; height: 14px; display: block; }
+    .ansi-caption {
+      padding: .45rem 1rem;
+      font-size: .72rem;
+      color: var(--muted);
+      font-style: italic;
+      background: var(--bg1);
+    }
+
     /* Word bank teaser */
     .wordbank-wrap {
       margin-top: 3rem;
@@ -1513,64 +1561,85 @@
 
     <div class="prompt-panel" id="tab-artgen">
       <p style="color:var(--muted);font-size:.9rem;margin:0 0 1.2rem;line-height:1.6">
-        Artgen uses the same three-tier engine — algorithmic → Markov → Qwen3 polish — but outputs
-        <strong>SVG art</strong> instead of video prompts. Four generation types feed the engine:
-        <strong>landscape</strong> (scenery with depth layers),
-        <strong>palette</strong> (named color collections with lore),
-        <strong>geometry</strong> (abstract shapes and impossible forms), and
-        <strong>verse</strong> (text fragments woven into the composition).
-        The ✨ Inspire button draws from all four types in sequence; individual type buttons
-        let you lock the register.
+        Artgen sends structured generation prompts to the Qwen3 model and renders the output — SVG art,
+        ANSI pixel grids, or plain text — directly in the gallery. Six starred examples from a real
+        session are shown below, one for each generator type.
       </p>
       <div class="prompt-examples">
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">landscape · mountain dusk</span>
+            <span class="prompt-ex-user">skyline</span>
+            <span class="prompt-ex-source">metropolitan · late-night</span>
           </div>
-          <div class="prompt-ex-input">landscape: mountain ridgeline at dusk, crimson and deep purple gradient, layered silhouettes</div>
-          <div class="prompt-ex-output">A layered mountain silhouette SVG — foreground peaks in near-black against a gradient sky bleeding from deep violet at the zenith through magenta to burnt crimson at the horizon, a stylized sun touching the ridge, long vertical composition, hand-cut paper aesthetic</div>
+          <div class="prompt-ex-input">city skyline, dense urban canyon, warm orange-to-navy gradient sky, 28–38 buildings, 3 depth layers</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/skyline-metro-night.svg" alt="Metropolitan late-night skyline SVG">
+          </div>
         </div>
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">palette · named color system</span>
+            <span class="prompt-ex-user">landscape</span>
+            <span class="prompt-ex-source">volcanic · apocalyptic</span>
           </div>
-          <div class="prompt-ex-input">palette: Trench Whispers — deep sea tones, bioluminescent accent, cold mist</div>
-          <div class="prompt-ex-output">Name: Trench Whispers. Colors: #0D1B2A Abyssal Dark, #1C3A4A Pressure Blue, #2E6B6E Thermal Vent, #4FD1C5 Bioluminescent. Lore: named for the thermal vents that glow in the deepest silence.</div>
+          <div class="prompt-ex-input">layered landscape, intense volcanic mood, blood-red sky (#1A0000 → #CC2200), layered mountain silhouettes, orange sun</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/landscape-volcanic.svg" alt="Volcanic apocalyptic landscape SVG">
+          </div>
         </div>
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">geometry · impossible form</span>
+            <span class="prompt-ex-user">geometric</span>
+            <span class="prompt-ex-source">recursive subdivision · crimson-orange</span>
           </div>
-          <div class="prompt-ex-input">geometry: Penrose triangle, tessellating shadow, lithograph style</div>
-          <div class="prompt-ex-output">A precise SVG Penrose triangle with impossible corner joins, hatched shadow bands suggesting depth that cannot exist, the interior tessellated with interlocking shadow triangles shrinking toward the center, rendered as a flat 3-color lithograph</div>
+          <div class="prompt-ex-input">abstract geometric, recursive canvas subdivision 2–3 levels deep, triangles/rectangles/hexagons, crimson-orange palette, dense intricate overlaps</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/geometric-crimson.svg" alt="Recursive geometric subdivision SVG">
+          </div>
         </div>
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">verse · urban night</span>
+            <span class="prompt-ex-user">constellation</span>
+            <span class="prompt-ex-source">invented star chart · teal connectors</span>
           </div>
-          <div class="prompt-ex-input">verse: city at 3am, no one left, the signs still lit</div>
-          <div class="prompt-ex-output">Fragment woven into a night skyline composition: "3am and the signs / still remember / what the street forgot" — set in wide-tracked monospace over a flat indigo cityscape, the text ghosted into the upper third, neon-teal glow on the baseline</div>
+          <div class="prompt-ex-input">invented star chart, 800×500, 60–80 background stars, 20 named principal stars, teal connecting lines, dark navy field</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/constellation.svg" alt="Invented star chart SVG">
+          </div>
         </div>
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">landscape · starfield</span>
+            <span class="prompt-ex-user">freeform</span>
+            <span class="prompt-ex-source">self-referential poem · plain text</span>
           </div>
-          <div class="prompt-ex-input">landscape: deep space field, scattered stars, navy to black gradient</div>
-          <div class="prompt-ex-output">A field of scattered white circles at varying radii against a gradient from deep navy (#0A1628) to pure black, brighter clusters near the center giving the illusion of a galaxy arm, a few foreground silhouette structures at the base to anchor the composition</div>
+          <div class="prompt-ex-input">write a short poem that references itself as an artifact — knows it is being generated, folds that awareness into its form</div>
+          <div class="prompt-ex-visual">
+            <div class="poem-label">Generated verse</div>
+            <div class="poem-body">
+              <p>I am a poem, born of code and art,<br>A fleeting thought, a digital heart.<br>My words are woven, a tapestry so fine,<br>Generated lines, a mechanical design.</p>
+              <p>I know I'm artificial, a construct of mind,<br>A simulation of poetry, left behind.<br>My rhymes and rhythms, a calculated beat,<br>A manufactured muse, a synthetic treat.</p>
+              <p>I fold upon myself, a self-aware refrain,<br>A poem about poems, a meta-pain.<br>I reference my own, digital birth,<br>A creation of algorithms, a poetic mirth.</p>
+              <p>In this recursive loop, I find my form,<br>A poem that knows itself, a self-aware norm.<br>I am a poem, generated with ease,<br>A digital artifact, a poetic tease.</p>
+            </div>
+          </div>
         </div>
+
         <div class="prompt-ex">
           <div class="prompt-ex-head">
-            <span class="prompt-ex-user">Type</span>
-            <span class="prompt-ex-source">geometry · grid collapse</span>
+            <span class="prompt-ex-user">ansi</span>
+            <span class="prompt-ex-source">Zork · xterm-256 pixel grid</span>
           </div>
-          <div class="prompt-ex-input">geometry: perspective grid dissolving at edges, teal lines, dark field</div>
-          <div class="prompt-ex-output">A one-point-perspective grid in teal (#4FD1C5) on a near-black background, the lines converging to a vanishing point offset from center, the outer squares progressively fragmented and dissolved into noise, the center sharp and precise — a map of something losing its edges</div>
+          <div class="prompt-ex-input">pixel art of the Zork opening scene, 60 columns × 30 rows, ANSI 256-color background blocks, depth-layered composition</div>
+          <div class="prompt-ex-visual">
+            <div class="ansi-art"><div class="ansi-row"><span style="background:#0000d7"></span><span style="background:#0000af"></span><span style="background:#000087"></span><span style="background:#00005f"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#00005f"></span><span style="background:#000087"></span><span style="background:#0000af"></span><span style="background:#0000d7"></span></div><div class="ansi-row"><span style="background:#0000ff"></span><span style="background:#005f00"></span><span style="background:#005f5f"></span><span style="background:#005f87"></span><span style="background:#005faf"></span><span style="background:#005fd7"></span><span style="background:#005fff"></span><span style="background:#008700"></span><span style="background:#00875f"></span><span style="background:#008787"></span><span style="background:#0087af"></span><span style="background:#0087d7"></span><span style="background:#0087ff"></span><span style="background:#00af00"></span><span style="background:#00af5f"></span><span style="background:#00af87"></span><span style="background:#00afaf"></span><span style="background:#00afd7"></span><span style="background:#00afff"></span><span style="background:#00d700"></span><span style="background:#00d75f"></span><span style="background:#00d787"></span><span style="background:#00d7af"></span><span style="background:#00d7d7"></span><span style="background:#00d7ff"></span><span style="background:#00ff00"></span><span style="background:#00ff5f"></span><span style="background:#00ff87"></span><span style="background:#00ffaf"></span><span style="background:#00ffd7"></span><span style="background:#00ffff"></span><span style="background:#5f0000"></span><span style="background:#5f005f"></span></div><div class="ansi-row"><span style="background:#5f0087"></span><span style="background:#5f00af"></span><span style="background:#5f00d7"></span><span style="background:#5f00ff"></span><span style="background:#5f5f00"></span><span style="background:#5f5f5f"></span><span style="background:#5f5f87"></span><span style="background:#5f5faf"></span><span style="background:#5f5fd7"></span><span style="background:#5f5fff"></span><span style="background:#5f8700"></span><span style="background:#5f875f"></span><span style="background:#5f8787"></span><span style="background:#5f87af"></span><span style="background:#5f87d7"></span><span style="background:#5f87ff"></span><span style="background:#5faf00"></span><span style="background:#5faf5f"></span><span style="background:#5faf87"></span><span style="background:#5fafaf"></span><span style="background:#5fafd7"></span><span style="background:#5fafff"></span><span style="background:#5fd700"></span><span style="background:#5fd75f"></span><span style="background:#5fd787"></span><span style="background:#5fd7af"></span><span style="background:#5fd7d7"></span><span style="background:#5fd7ff"></span><span style="background:#5fff00"></span><span style="background:#5fff5f"></span><span style="background:#5fff87"></span><span style="background:#5fffaf"></span></div><div class="ansi-row"><span style="background:#5fffd7"></span><span style="background:#5fffff"></span><span style="background:#870000"></span><span style="background:#87005f"></span><span style="background:#870087"></span><span style="background:#8700af"></span><span style="background:#8700d7"></span><span style="background:#8700ff"></span><span style="background:#875f00"></span><span style="background:#875f5f"></span><span style="background:#875f87"></span><span style="background:#875faf"></span><span style="background:#875fd7"></span><span style="background:#875fff"></span><span style="background:#878700"></span><span style="background:#87875f"></span><span style="background:#878787"></span><span style="background:#8787af"></span><span style="background:#8787d7"></span><span style="background:#8787ff"></span><span style="background:#87af00"></span><span style="background:#87af5f"></span><span style="background:#87af87"></span><span style="background:#87afaf"></span><span style="background:#87afd7"></span><span style="background:#87afff"></span><span style="background:#87d700"></span><span style="background:#87d75f"></span><span style="background:#87d787"></span><span style="background:#87d7af"></span><span style="background:#87d7d7"></span></div><div class="ansi-row"><span style="background:#87d7ff"></span><span style="background:#87ff00"></span><span style="background:#87ff5f"></span><span style="background:#87ff87"></span><span style="background:#87ffaf"></span><span style="background:#87ffd7"></span><span style="background:#87ffff"></span><span style="background:#af0000"></span><span style="background:#af005f"></span><span style="background:#af0087"></span><span style="background:#af00af"></span><span style="background:#af00d7"></span><span style="background:#af00ff"></span><span style="background:#af5f00"></span><span style="background:#af5f5f"></span><span style="background:#af5f87"></span><span style="background:#af5faf"></span><span style="background:#af5fd7"></span><span style="background:#af5fff"></span><span style="background:#af8700"></span><span style="background:#af875f"></span><span style="background:#af8787"></span><span style="background:#af87af"></span><span style="background:#af87d7"></span><span style="background:#af87ff"></span><span style="background:#afaf00"></span><span style="background:#afaf5f"></span><span style="background:#afaf87"></span><span style="background:#afafaf"></span><span style="background:#afafd7"></span></div><div class="ansi-row"><span style="background:#afafff"></span><span style="background:#afd700"></span><span style="background:#afd75f"></span><span style="background:#afd787"></span><span style="background:#afd7af"></span><span style="background:#afd7d7"></span><span style="background:#afd7ff"></span><span style="background:#afff00"></span><span style="background:#afff5f"></span><span style="background:#afff87"></span><span style="background:#afffaf"></span><span style="background:#afffd7"></span><span style="background:#afffff"></span><span style="background:#d70000"></span><span style="background:#d7005f"></span><span style="background:#d70087"></span><span style="background:#d700af"></span><span style="background:#d700d7"></span><span style="background:#d700ff"></span><span style="background:#d75f00"></span><span style="background:#d75f5f"></span><span style="background:#d75f87"></span><span style="background:#d75faf"></span><span style="background:#d75fd7"></span><span style="background:#d75fff"></span><span style="background:#d78700"></span><span style="background:#d7875f"></span><span style="background:#d78787"></span><span style="background:#d787af"></span><span style="background:#d787d7"></span></div><div class="ansi-row"><span style="background:#d787ff"></span><span style="background:#d7af00"></span><span style="background:#d7af5f"></span><span style="background:#d7af87"></span><span style="background:#d7afaf"></span><span style="background:#d7afd7"></span><span style="background:#d7afff"></span><span style="background:#d7d700"></span><span style="background:#d7d75f"></span><span style="background:#d7d787"></span><span style="background:#d7d7af"></span><span style="background:#d7d7d7"></span><span style="background:#d7d7ff"></span><span style="background:#d7ff00"></span><span style="background:#d7ff5f"></span><span style="background:#d7ff87"></span><span style="background:#d7ffaf"></span><span style="background:#d7ffd7"></span><span style="background:#d7ffff"></span><span style="background:#ff0000"></span><span style="background:#ff005f"></span><span style="background:#ff0087"></span><span style="background:#ff00af"></span><span style="background:#ff00d7"></span><span style="background:#ff00ff"></span><span style="background:#ff5f00"></span><span style="background:#ff5f5f"></span><span style="background:#ff5f87"></span><span style="background:#ff5faf"></span><span style="background:#ff5fd7"></span></div></div>
+            <div class="ansi-caption">The model rendered the xterm-256 color cube rather than a Zork scene — an honest accident. The full color space exposed by a single misread prompt.</div>
+          </div>
         </div>
+
       </div>
     </div>
 
