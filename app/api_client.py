@@ -164,11 +164,11 @@ class APIClient:
             # T2V / Mochi / Wan2.2 endpoint
             (f"{self.base_url}/v1/videos/generations",
              {"prompt": "_probe_", "num_inference_steps": 12}),
-            # SkyReels I2V endpoint
+            # SkyReels I2V endpoint — 1×1 white PNG so _decode_image() succeeds
             (f"{self.base_url}/v1/videos/generations/i2v",
              {"prompt": "_probe_",
               "num_inference_steps": 12,
-              "image_prompts": [{"image": "aQ==", "frame_pos": 0}]}),
+              "image_prompts": [{"image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==", "frame_pos": 0}]}),
         ]
         for url, body in probes:
             try:

@@ -90,6 +90,7 @@ class ArtgenWatch(Gtk.Overlay):
 
         if _WEBKIT_OK:
             self._ansi_web = _WebKit.WebView()
+            self._ansi_web.get_settings().set_enable_javascript(False)
             self._ansi_web.set_hexpand(True)
             self._ansi_web.set_vexpand(True)
             self._art_stack.add_named(self._ansi_web, "ansi")
@@ -100,10 +101,10 @@ class ArtgenWatch(Gtk.Overlay):
         self.set_child(self._bg)
 
         # Overlay: controls
-        overlay_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        overlay_box.set_hexpand(True)
-        overlay_box.set_vexpand(True)
-        overlay_box.add_css_class("artgen-watch-overlay")
+        self._overlay_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._overlay_box.set_hexpand(True)
+        self._overlay_box.set_vexpand(True)
+        self._overlay_box.add_css_class("artgen-watch-overlay")
 
         # Top bar
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -129,12 +130,12 @@ class ArtgenWatch(Gtk.Overlay):
         close_btn.add_css_class("artgen-watch-btn")
         close_btn.connect("clicked", lambda _: self._exit())
         top.append(close_btn)
-        overlay_box.append(top)
+        self._overlay_box.append(top)
 
         # Spacer (fills middle)
         spacer = Gtk.Box()
         spacer.set_vexpand(True)
-        overlay_box.append(spacer)
+        self._overlay_box.append(spacer)
 
         # Bottom bar
         bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -171,25 +172,25 @@ class ArtgenWatch(Gtk.Overlay):
         self._star_btn.connect("clicked", lambda _: self._toggle_star())
         bottom.append(self._star_btn)
 
-        overlay_box.append(bottom)
-        self.add_overlay(overlay_box)
+        self._overlay_box.append(bottom)
+        self.add_overlay(self._overlay_box)
 
         # Left / right nav buttons (centered vertically)
-        left_btn = Gtk.Button(label="‹")
-        left_btn.add_css_class("artgen-watch-nav-btn")
-        left_btn.set_valign(Gtk.Align.CENTER)
-        left_btn.set_halign(Gtk.Align.START)
-        left_btn.set_margin_start(12)
-        left_btn.connect("clicked", lambda _: self._step(-1))
-        self.add_overlay(left_btn)
+        self._left_btn = Gtk.Button(label="‹")
+        self._left_btn.add_css_class("artgen-watch-nav-btn")
+        self._left_btn.set_valign(Gtk.Align.CENTER)
+        self._left_btn.set_halign(Gtk.Align.START)
+        self._left_btn.set_margin_start(12)
+        self._left_btn.connect("clicked", lambda _: self._step(-1))
+        self.add_overlay(self._left_btn)
 
-        right_btn = Gtk.Button(label="›")
-        right_btn.add_css_class("artgen-watch-nav-btn")
-        right_btn.set_valign(Gtk.Align.CENTER)
-        right_btn.set_halign(Gtk.Align.END)
-        right_btn.set_margin_end(12)
-        right_btn.connect("clicked", lambda _: self._step(1))
-        self.add_overlay(right_btn)
+        self._right_btn = Gtk.Button(label="›")
+        self._right_btn.add_css_class("artgen-watch-nav-btn")
+        self._right_btn.set_valign(Gtk.Align.CENTER)
+        self._right_btn.set_halign(Gtk.Align.END)
+        self._right_btn.set_margin_end(12)
+        self._right_btn.connect("clicked", lambda _: self._step(1))
+        self.add_overlay(self._right_btn)
 
         # Mouse motion → show overlay
         motion = Gtk.EventControllerMotion()
@@ -224,13 +225,12 @@ class ArtgenWatch(Gtk.Overlay):
         self._pos_lbl.set_label(f"{self._idx+1} / {n}")
 
         p = rec.params_dict
-        self._meta_lbl.set_label(
-            f"{rec.generator_type or '?'} · "
-            + " · ".join(str(v) for k, v in p.items()
-                         if k in ("palette", "theme", "form", "style", "subject", "era")
-                         and isinstance(v, str))
-            + f" · {rec.created_at[:10]}"
-        )
+        parts = [rec.generator_type or "?"]
+        parts += [str(v) for k, v in p.items()
+                  if k in ("palette", "theme", "form", "style", "subject", "era")
+                  and isinstance(v, str) and v]
+        parts.append(rec.created_at[:10])
+        self._meta_lbl.set_label(" · ".join(parts))
 
         self._star_btn.set_label("★" if rec.starred else "☆")
         self._star_btn.set_tooltip_text("Unstar  [S]" if rec.starred else "Star this artifact  [S]")
@@ -296,6 +296,9 @@ class ArtgenWatch(Gtk.Overlay):
 
     def _show_overlay(self) -> None:
         self._overlay_visible = True
+        self._overlay_box.set_opacity(1.0)
+        self._left_btn.set_opacity(1.0)
+        self._right_btn.set_opacity(1.0)
         if self._hide_timer is not None:
             GLib.source_remove(self._hide_timer)
         self._hide_timer = GLib.timeout_add_seconds(3, self._hide_overlay)
@@ -303,6 +306,9 @@ class ArtgenWatch(Gtk.Overlay):
     def _hide_overlay(self) -> bool:
         self._overlay_visible = False
         self._hide_timer = None
+        self._overlay_box.set_opacity(0.0)
+        self._left_btn.set_opacity(0.0)
+        self._right_btn.set_opacity(0.0)
         return GLib.SOURCE_REMOVE
 
     # ── Event handlers ────────────────────────────────────────────────────────

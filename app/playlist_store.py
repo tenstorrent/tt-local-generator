@@ -67,7 +67,9 @@ class PlaylistStore:
         from media_store import media_store as _ms
         pl_id = _ms.create_playlist(name.strip(), filter_expr=None, auto_gen=False)
         log.info("playlist created: %r (%s)", name.strip(), pl_id)
-        return self.get(pl_id)
+        pl = self.get(pl_id)
+        assert pl is not None, f"playlist {pl_id!r} missing immediately after creation"
+        return pl
 
     def rename(self, playlist_id: str, new_name: str) -> bool:
         """Rename a playlist. Returns True if found and renamed, False otherwise."""

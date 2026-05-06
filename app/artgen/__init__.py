@@ -167,7 +167,7 @@ def call_llm(
         url, data=data,
         headers={"Content-Type": "application/json", "Authorization": "Bearer none"},
     )
-    with urllib.request.urlopen(req, timeout=None) as r:
+    with urllib.request.urlopen(req, timeout=30) as r:
         body = json.loads(r.read())
     text = body["choices"][0]["message"]["content"] or ""
     usage = body.get("usage", {})
