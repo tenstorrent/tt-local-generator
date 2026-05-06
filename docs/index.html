@@ -490,6 +490,8 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
     .prompt-ex-head {
       display: flex;
@@ -534,11 +536,15 @@
     .prompt-ex-visual {
       border-top: 1px solid rgba(79,209,197,.07);
       overflow: hidden;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
     }
     .prompt-ex-visual > img {
       display: block;
       width: 100%;
       height: auto;
+      flex-shrink: 0;
     }
     .poem-label {
       padding: .45rem 1.1rem;
@@ -567,6 +573,7 @@
       font-size: 0;
       line-height: 0;
       background: #000;
+      flex: 1;
     }
     .ansi-row { display: flex; }
     .ansi-row span { flex: 1; height: 14px; display: block; }
@@ -617,65 +624,6 @@
       line-height: 1.5;
     }
 
-    /* ── Pose Library ───────────────────────────────────────────────── */
-    #poses { padding: 5rem 0; }
-    .pose-cat-label {
-      font-size: .75rem;
-      font-weight: 700;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin: 2rem 0 .75rem;
-    }
-    .pose-cat-label:first-child { margin-top: 0; }
-    .pose-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 1rem;
-    }
-    .pose-card {
-      position: relative;
-      border-radius: var(--radius);
-      overflow: hidden;
-      border: 1px solid var(--border);
-      background: var(--bg2);
-      cursor: pointer;
-      transition: border-color .2s, box-shadow .2s;
-      aspect-ratio: 9/16;
-    }
-    .pose-card:hover {
-      border-color: var(--teal);
-      box-shadow: 0 0 24px var(--teal-glow);
-    }
-    .pose-card img,
-    .pose-card video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      position: absolute;
-      inset: 0;
-    }
-    .pose-card .pose-vid {
-      opacity: 0;
-      transition: opacity .25s;
-    }
-    .pose-card:hover .pose-vid { opacity: 1; }
-    .pose-label {
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      padding: .6rem .75rem .75rem;
-      background: linear-gradient(transparent, rgba(8,15,20,.9));
-      font-size: .8rem;
-      font-weight: 600;
-      color: var(--text);
-      z-index: 2;
-    }
-    .pose-model-tag {
-      font-size: .68rem;
-      color: var(--teal);
-      display: block;
-      margin-top: .15rem;
-    }
 
     /* ── Prompt architecture visual ─────────────────────────────────── */
     .arch-row {
@@ -819,7 +767,6 @@
     @media (max-width: 640px) {
       .nav-links { display: none; }
       h1 { font-size: 2.25rem; }
-      .pose-grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
     <script>
@@ -861,7 +808,6 @@
       <li><a href="#models">Models</a></li>
       <li><a href="#artgen">Artgen</a></li>
       <li><a href="#prompts">Prompts</a></li>
-      <li><a href="#poses">Pose Library</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
     </ul>
@@ -1699,85 +1645,6 @@
   </div>
 </section>
 
-<!-- ── Pose Library ─────────────────────────────────────────────────────── -->
-<section id="poses">
-  <div class="wrap">
-    <div class="section-label">Animate mode</div>
-    <h2 class="section-title">A pose library for character animation.</h2>
-    <p class="section-sub">
-      Drive any character with a reference motion — a wave, a nod, a shaka, a Vulcan salute.
-      Hover any clip to see it play. Generated with Wan2.2-T2V as animation reference clips.
-    </p>
-
-    <div class="pose-cat-label">Gestures</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Thumbs up">
-        <img src="motion_clips/gestures/thumbs_up.jpg" alt="Thumbs up reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/thumbs_up.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Thumbs Up
-          <span class="pose-model-tag">Wan2.2-T2V · approval gesture</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Peace sign">
-        <img src="motion_clips/gestures/peace_sign.jpg" alt="Peace sign reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/peace_sign.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Peace Sign
-          <span class="pose-model-tag">Wan2.2-T2V · V gesture</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Hang in there — grip and dangle">
-        <img src="motion_clips/gestures/hang_in_there.jpg" alt="Hang in there reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/hang_in_there.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Hang In There
-          <span class="pose-model-tag">Wan2.2-T2V · hanging grip</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="pose-cat-label">Locomotion</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Walk forward — toward camera">
-        <img src="motion_clips/locomotion/walk_forward.jpg" alt="Walk forward reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/locomotion/walk_forward.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Walk Forward
-          <span class="pose-model-tag">Wan2.2-T2V · steady stride</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Wave hello — open hand">
-        <img src="motion_clips/locomotion/wave_hello.jpg" alt="Wave hello reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/locomotion/wave_hello.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Wave Hello
-          <span class="pose-model-tag">Wan2.2-T2V · greeting wave</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="pose-cat-label">Reactions</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Nod yes — affirming nod">
-        <img src="motion_clips/reactions/nod_yes.jpg" alt="Nod yes reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/reactions/nod_yes.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Nod Yes
-          <span class="pose-model-tag">Wan2.2-T2V · affirmation</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Shake no — refusal">
-        <img src="motion_clips/reactions/shake_no.jpg" alt="Shake no reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/reactions/shake_no.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Shake No
-          <span class="pose-model-tag">Wan2.2-T2V · refusal</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <!-- ── Install ──────────────────────────────────────────────────────────── -->
 <section id="install">
@@ -1910,22 +1777,6 @@
   initTabs('.prompt-tab',  '.prompt-panel',  'tab-',  'tab');
   initTabs('.install-tab', '.install-panel', 'itab-', 'itab');
 
-  /* ── Pose card hover: play video, pause on leave ─────────────────── */
-  document.querySelectorAll('.pose-card').forEach(card => {
-    const vid = card.querySelector('.pose-vid');
-    if (!vid) return;
-
-    const play = () => {
-      if (vid.readyState === 0) vid.load();
-      vid.play().catch(() => {});
-    };
-    const pause = () => { vid.pause(); vid.currentTime = 0; };
-
-    card.addEventListener('mouseenter', play);
-    card.addEventListener('mouseleave', pause);
-    card.addEventListener('focus', play);
-    card.addEventListener('blur', pause);
-  });
 
   /* ── PostHog (matches docs.tenstorrent.com) ──────────────────────── */
   !function(t,e){var o,n,p,r;if(!e.__SV){window.posthog=e;e._i=[];e.init=function(i,s,a){function g(t,e){var o=e.split(".");if(o.length===2){t=t[o[0]];e=o[1];}t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)));};}p=t.createElement("script");p.type="text/javascript";p.crossOrigin="anonymous";p.async=!0;p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";r=t.getElementsByTagName("script")[0];r.parentNode.insertBefore(p,r);var u=e;if(a!==void 0){u=e[a]=[];}else{a="posthog";}u.people=u.people||[];u.toString=function(t){var e="posthog";if(a!=="posthog"){e+="."+a;}if(!t){e+=" (stub)";}return e;};u.people.toString=function(){return u.toString(1)+".people (stub)";};e._i.push([i,s,a]);};e.__SV=1;}}(document,window.posthog||[]);
