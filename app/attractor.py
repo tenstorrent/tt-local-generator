@@ -1129,6 +1129,7 @@ class AttractorWindow(Gtk.Window):
         Load a GenerationRecord into a media slot widget.
 
         Images:  Always shown via Gtk.Picture (thumbnail still).
+        Artgen:  Shown via Gtk.Picture (SVG or thumbnail PNG); dwell-timed.
         Videos on Linux:  A fresh Gtk.Video widget is created each time.
                           The old widget lands in _video_graveyard for deferred
                           teardown 3 s later (prevents EMFILE from PLAYING→NULL races).
@@ -1138,7 +1139,21 @@ class AttractorWindow(Gtk.Window):
                           EOS fires the _on_gst_eos callback, which triggers advance.
         """
         media_type = getattr(record, "media_type", "video")
-        if media_type == "image":
+        if media_type == "artgen":
+            # Show the artgen artifact as a still.  SVGs render directly via
+            # Gtk.Picture; for text/ans types the thumbnail PNG is used instead.
+            slot._video.set_visible(False)
+            if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
+                slot._gst_player.close()
+                slot._gst_player.widget.set_visible(False)
+            path = getattr(record, "thumbnail_path", None)
+            file_path = getattr(record, "file_path", None) or ""
+            if not path and file_path.lower().endswith(".svg"):
+                path = file_path
+            if path:
+                slot._picture.set_filename(path)
+            slot._picture.set_visible(True)
+        elif media_type == "image":
             # Still image: show Gtk.Picture thumbnail, hide all video widgets.
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
@@ -1220,8 +1235,8 @@ class AttractorWindow(Gtk.Window):
         self._watched_stream = None
         self._stream_handler_id = None
 
-        if getattr(record, "media_type", "video") == "image":
-            # Still images always use a fixed dwell timer.
+        if getattr(record, "media_type", "video") in ("image", "artgen"):
+            # Still images and artgen artifacts always use a fixed dwell timer.
             image_dwell_ms = int(_settings.get("tttv_image_dwell_s") * 1000)
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
@@ -1341,6 +1356,15 @@ class AttractorWindow(Gtk.Window):
                     break
                 continue
 
+            # Don't attempt generation when the server is known to be offline —
+            # show a single clean status line instead of raw connection errors.
+            server_ready, _ = self._get_server_status()
+            if not server_ready:
+                GLib.idle_add(self._set_gen_status, "⏸  server offline")
+                if self._gen_stop.wait(30.0):
+                    break
+                continue
+
             try:
                 GLib.idle_add(self._set_gen_status, "✦  writing prompt…")
                 prompt = prompt_client.generate_prompt(
@@ -1353,7 +1377,7 @@ class AttractorWindow(Gtk.Window):
                 GLib.idle_add(self._enqueue_generation, prompt)
             except Exception as exc:
                 _log.error("prompt generation failed: %s", exc)
-                GLib.idle_add(self._set_gen_status, f"⚠  {exc}")
+                GLib.idle_add(self._set_gen_status, "⏸  server offline")
                 if self._gen_stop.wait(15.0):
                     break
                 continue
