@@ -1,3 +1,14 @@
+tt-local-generator (0.2.5) noble; urgency=medium
+
+  * Timestamps: store all created_at fields in UTC (ISO 8601 with +00:00
+    offset); display in the user's local timezone using 12-hour format
+    (e.g. "May 7  8:33 AM").  New time_utils module provides utc_now_iso(),
+    fmt_local_12h(), fmt_local_date(), fmt_local_time() — all callers updated.
+    Legacy naive timestamps (no timezone suffix) treated as UTC for backward
+    compatibility with existing records.
+
+ -- Taylor Singletary <taylorsingletary@tenstorrent.com>  Wed, 07 May 2026 15:35:00 +0000
+
 tt-local-generator (0.2.4) noble; urgency=medium
 
   * Vendor: update tt-inference-server to v0.13.0

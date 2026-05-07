@@ -2221,13 +2221,9 @@ class DetailPanel(Gtk.ScrolledWindow):
         info_grid.set_column_spacing(12)
         info_grid.set_row_spacing(3)
 
-        # Format date
-        try:
-            from datetime import datetime as _dt
-            dt = _dt.fromisoformat(record.created_at)
-            date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
-        except Exception:
-            date_str = record.created_at or "—"
+        # Format date — UTC stored, display in local 12-hour time
+        from time_utils import fmt_local_12h
+        date_str = fmt_local_12h(record.created_at) if record.created_at else "—"
 
         # File size
         size_str = "—"

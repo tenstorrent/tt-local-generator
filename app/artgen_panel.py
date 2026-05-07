@@ -22,7 +22,7 @@ import time
 import types
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import gi
@@ -753,8 +753,9 @@ class ArtgenPanel(Gtk.Box):
 
         p = rec.params_dict
         gen_s = p.get("generation_seconds", "")
+        from time_utils import fmt_local_date
         self._preview_meta_lbl.set_label(
-            f"{rec.generator_type}  ·  {rec.created_at[:10]}"
+            f"{rec.generator_type}  ·  {fmt_local_date(rec.created_at)}"
             + (f"  ·  {gen_s}s" if gen_s else "")
         )
 
@@ -1017,7 +1018,7 @@ class ArtgenPanel(Gtk.Box):
             rec = MediaRecord(
                 id=str(uuid.uuid4()),
                 media_type="artgen",
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
                 file_path=str(out_path),
                 thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
                 prompt=prompt[:500],

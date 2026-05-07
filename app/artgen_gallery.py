@@ -568,7 +568,8 @@ class ArtgenGallery(Gtk.Box):
         def _on_delete(_b, _rec=rec, _ov=overlay):
             dialog = Gtk.AlertDialog()
             dialog.set_message("Delete this artifact?")
-            dialog.set_detail(f"{_rec.generator_type} — {_rec.created_at[:10]}")
+            from time_utils import fmt_local_date
+            dialog.set_detail(f"{_rec.generator_type} — {fmt_local_date(_rec.created_at)}")
             dialog.set_buttons(["Cancel", "Delete"])
             dialog.set_cancel_button(0)
             dialog.set_default_button(0)

@@ -18,7 +18,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -65,7 +65,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new video record with pre-computed storage paths."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
 
         video_path = str(VIDEOS_DIR / f"{ts_str}_{job_id[:8]}.mp4")
@@ -99,7 +99,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new image record with pre-computed storage paths (FLUX)."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
 
         image_path = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}.jpg")
@@ -134,7 +134,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new animation record with media_type='animate'."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
         return cls(
             id=job_id,
@@ -153,12 +153,9 @@ class GenerationRecord:
 
     @property
     def display_time(self) -> str:
-        """Human-readable creation time, e.g. '14:32'."""
-        try:
-            dt = datetime.fromisoformat(self.created_at)
-            return dt.strftime("%H:%M")
-        except (ValueError, TypeError):
-            return ""
+        """Human-readable creation time in local 12-hour format, e.g. '3:42 PM'."""
+        from time_utils import fmt_local_time
+        return fmt_local_time(self.created_at)
 
     @property
     def video_exists(self) -> bool:

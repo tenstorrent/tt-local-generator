@@ -555,8 +555,9 @@ class ArtgenDetail(Gtk.Box):
         rec = self._records[self._idx]
         n = len(self._records)
 
+        from time_utils import fmt_local_date, fmt_local_12h
         self._title_lbl.set_label(
-            f"{rec.generator_type or 'artgen'} — {rec.created_at[:10]}  ({self._idx+1}/{n})"
+            f"{rec.generator_type or 'artgen'} — {fmt_local_date(rec.created_at)}  ({self._idx+1}/{n})"
         )
         self._prev_btn.set_sensitive(n > 1)
         self._next_btn.set_sensitive(n > 1)
@@ -566,7 +567,7 @@ class ArtgenDetail(Gtk.Box):
         gen_s = p.get("generation_seconds", "")
         gen_str = f"  ({gen_s}s)" if gen_s else ""
         self._meta_lbl.set_label(
-            f"{rec.created_at[:19].replace('T',' ')}{gen_str}\n"
+            f"{fmt_local_12h(rec.created_at)}{gen_str}\n"
             f"model: {rec.model_id or '—'}"
         )
         param_lines = "\n".join(
@@ -641,7 +642,7 @@ class ArtgenDetail(Gtk.Box):
         rec = self._records[self._idx]
         dialog = Gtk.AlertDialog()
         dialog.set_message("Delete this artifact?")
-        dialog.set_detail(f"{rec.generator_type} — {rec.created_at[:10]}")
+        dialog.set_detail(f"{rec.generator_type} — {fmt_local_date(rec.created_at)}")
         dialog.set_buttons(["Cancel", "Delete"])
         dialog.set_cancel_button(0)
         dialog.set_default_button(0)

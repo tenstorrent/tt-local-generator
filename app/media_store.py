@@ -451,7 +451,7 @@ def make_artgen_path(short_id: str, ext: str, base_dir: Path | None = None) -> P
     if base_dir is None:
         base_dir = ARTGEN_DIR
     base_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return base_dir / f"{ts}_{short_id[:8]}{ext}"
 
 

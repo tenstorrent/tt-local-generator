@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import artgen
@@ -185,7 +185,7 @@ def cmd_artgen(args) -> None:
             rec = MediaRecord(
                 id=str(uuid.uuid4()),
                 media_type="artgen",
-                created_at=datetime.now().isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
                 file_path=str(out_path),
                 thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
                 prompt=prompt[:500],

@@ -229,7 +229,8 @@ class ArtgenWatch(Gtk.Overlay):
         parts += [str(v) for k, v in p.items()
                   if k in ("palette", "theme", "form", "style", "subject", "era")
                   and isinstance(v, str) and v]
-        parts.append(rec.created_at[:10])
+        from time_utils import fmt_local_date
+        parts.append(fmt_local_date(rec.created_at))
         self._meta_lbl.set_label(" · ".join(parts))
 
         self._star_btn.set_label("★" if rec.starred else "☆")
