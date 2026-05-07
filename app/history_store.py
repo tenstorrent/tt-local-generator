@@ -2,21 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 """
-Persistent generation history.
+Persistent generation history — thin wrapper around media_store.
 
-Stores metadata and file paths for every completed generation in:
+All video/image/animate records are stored in media.db via MediaStore.
+The JSON history.json is migrated on first launch by MediaStore.__init__.
+
+Storage layout (managed by media_store.py):
     ~/.local/share/tt-video-gen/
-        history.json     — list of GenerationRecord dicts, newest-last
+        media.db         — SQLite store (WAL mode)
         videos/          — downloaded MP4 files
         images/          — generated JPEG images (FLUX)
         thumbnails/      — first-frame JPEG thumbnails / image thumbnails
 """
 import json
 import os
-import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -48,6 +50,7 @@ class GenerationRecord:
     guidance_scale: float = 0.0        # Guidance scale used (image gen only)
     model: str = ""                    # Model identifier, e.g. "wan2.2-t2v", "mochi-1-preview", "flux.1-dev"
     extra_meta: dict = field(default_factory=dict)  # Free-form server response metadata
+    starred: int = 0                     # 0 | 1 — mirrors media_store.MediaRecord.starred
 
     @classmethod
     def new(
@@ -62,7 +65,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new video record with pre-computed storage paths."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
 
         video_path = str(VIDEOS_DIR / f"{ts_str}_{job_id[:8]}.mp4")
@@ -96,7 +99,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new image record with pre-computed storage paths (FLUX)."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
 
         image_path = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}.jpg")
@@ -131,7 +134,7 @@ class GenerationRecord:
         model: str = "",
     ) -> "GenerationRecord":
         """Create a new animation record with media_type='animate'."""
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
         return cls(
             id=job_id,
@@ -150,12 +153,9 @@ class GenerationRecord:
 
     @property
     def display_time(self) -> str:
-        """Human-readable creation time, e.g. '14:32'."""
-        try:
-            dt = datetime.fromisoformat(self.created_at)
-            return dt.strftime("%H:%M")
-        except (ValueError, TypeError):
-            return ""
+        """Human-readable creation time in local 12-hour format, e.g. '3:42 PM'."""
+        from time_utils import fmt_local_time
+        return fmt_local_time(self.created_at)
 
     @property
     def video_exists(self) -> bool:
@@ -182,90 +182,85 @@ class GenerationRecord:
 
 class HistoryStore:
     """
-    Loads and persists the list of GenerationRecord objects.
+    Thin wrapper around media_store for backward compatibility.
 
-    Thread-safety: not designed for concurrent writes; all writes happen
-    from the Qt main thread after the worker emits finished().
+    All video/image/animate records are stored in media.db via MediaStore.
+    The JSON history.json is migrated on first launch by MediaStore.__init__.
     """
 
-    def __init__(self):
-        # Ensure storage directories exist
+    def __init__(self) -> None:
+        # Ensure storage directories still exist (other code expects them)
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
 
-        self._records: List[GenerationRecord] = []
-        self._load()
-
-    def _load(self) -> None:
-        """Load history from disk. Silently ignores missing or corrupt files."""
-        if not HISTORY_FILE.exists():
-            return
-        try:
-            raw = json.loads(HISTORY_FILE.read_text())
-            # Tolerate older records missing newer fields (seed_image_path, media_type, etc.).
-            # Deduplicate by id in case the file was ever corrupted with repeated entries.
-            seen_ids: set = set()
-            records = []
-            for r in raw:
-                rec = GenerationRecord(**{
-                    **r,
-                    "seed_image_path": r.get("seed_image_path", ""),
-                    "media_type": r.get("media_type", "video"),
-                    "image_path": r.get("image_path", ""),
-                    "guidance_scale": r.get("guidance_scale", 0.0),
-                    "model": r.get("model", ""),
-                    "extra_meta": r.get("extra_meta", {}),
-                })
-                if rec.id not in seen_ids:
-                    seen_ids.add(rec.id)
-                    records.append(rec)
-            self._records = records
-        except Exception:
-            # Corrupt history — back it up then start fresh
-            bak = HISTORY_FILE.with_suffix(".json.bak")
-            try:
-                shutil.copy2(HISTORY_FILE, bak)
-            except OSError:
-                pass
-            self._records = []
-
-    def _save(self) -> None:
-        """Persist history to disk atomically (write tmp, then rename)."""
-        tmp = HISTORY_FILE.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps([asdict(r) for r in self._records], indent=2)
-        )
-        os.replace(tmp, HISTORY_FILE)
+    # ── Public API (unchanged signatures) ─────────────────────────────────────
 
     def append(self, record: GenerationRecord) -> None:
-        """Add a new record and persist immediately. Silently drops duplicates."""
-        if any(r.id == record.id for r in self._records):
-            return  # already in history (e.g. recovery re-run after restart)
-        self._records.append(record)
-        self._save()
+        """Add a new record to media_store. Silently drops duplicates."""
+        from media_store import media_store as _ms, MediaRecord
+        if _ms.get(record.id) is not None:
+            return  # deduplicate
+        _ms.add(MediaRecord(
+            id=record.id,
+            media_type=record.media_type,
+            created_at=record.created_at,
+            file_path=record.video_path or record.image_path or "",
+            thumbnail_path=record.thumbnail_path,
+            prompt=record.prompt,
+            model_id=record.model,
+            generator_type=None,
+            params=json.dumps({
+                "negative_prompt":     record.negative_prompt,
+                "num_inference_steps": record.num_inference_steps,
+                "seed":                record.seed,
+                "duration_s":          record.duration_s,
+                "seed_image_path":     record.seed_image_path,
+                "guidance_scale":      record.guidance_scale,
+                "extra_meta":          record.extra_meta,
+                "video_path":          record.video_path,
+                "image_path":          record.image_path,
+            }),
+            starred=record.starred,
+        ))
 
-    def all_records(self) -> List[GenerationRecord]:
-        """Return all records, newest first."""
-        return list(reversed(self._records))
+    def all_records(self) -> list[GenerationRecord]:
+        """Return all non-artgen records, newest first (media_store orders by created_at DESC)."""
+        from media_store import media_store as _ms
+        rows = _ms.query()
+        return [self._to_gen(r) for r in rows if r.media_type != "artgen"]
+
+    def artgen_records(self) -> list:
+        """Return all artgen MediaRecord objects, newest first, for TT-TV artgen channels."""
+        from media_store import media_store as _ms
+        return [r for r in _ms.query() if r.media_type == "artgen"]
+
+    def star(self, record_id: str, starred: bool) -> None:
+        """Toggle the starred flag for a video/image/animate record."""
+        from media_store import media_store as _ms
+        _ms.star(record_id, starred)
 
     def delete(self, record_id: str) -> Optional[GenerationRecord]:
         """
-        Remove the record with the given ID, persist the change, and return
-        the removed record so the caller can also delete its files on disk.
-        Returns None if no matching record was found.
+        Remove the record with the given ID from media_store and return it.
+        Returns None if no matching record was found (or if it is an artgen record).
         """
-        removed = next((r for r in self._records if r.id == record_id), None)
-        if removed is None:
+        from media_store import media_store as _ms
+        rec = _ms.get(record_id)
+        if rec is None or rec.media_type == "artgen":
             return None
-        self._records = [r for r in self._records if r.id != record_id]
-        self._save()
-        return removed
+        gen = self._to_gen(rec)
+        _ms.delete(record_id)
+        return gen
 
     def __len__(self) -> int:
-        return len(self._records)
+        from media_store import media_store as _ms
+        # COUNT(*) for each non-artgen type — avoids materialising all records.
+        total = _ms.count()
+        artgen = _ms.count(media_type="artgen")
+        return total - artgen
 
-    # ── Queue persistence ──────────────────────────────────────────────────────
+    # ── Queue persistence (unchanged — kept in JSON) ───────────────────────────
 
     _QUEUE_FILE = STORAGE_DIR / "queue.json"
 
@@ -292,3 +287,32 @@ class HistoryStore:
             return json.loads(self._QUEUE_FILE.read_text())
         except Exception:
             return []
+
+    # ── Internal ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _to_gen(r) -> GenerationRecord:
+        """Convert a MediaRecord back to a GenerationRecord for API compatibility."""
+        p = r.params_dict
+        return GenerationRecord(
+            id=r.id,
+            prompt=r.prompt,
+            negative_prompt=p.get("negative_prompt", ""),
+            num_inference_steps=p.get("num_inference_steps", 0),
+            seed=p.get("seed", -1),
+            video_path=p.get("video_path", ""),
+            thumbnail_path=r.thumbnail_path,
+            created_at=r.created_at,
+            duration_s=p.get("duration_s", 0.0),
+            seed_image_path=p.get("seed_image_path", ""),
+            media_type=r.media_type,
+            image_path=p.get("image_path", ""),
+            guidance_scale=p.get("guidance_scale", 0.0),
+            model=r.model_id,
+            extra_meta=p.get("extra_meta", {}),
+            starred=r.starred,
+        )
+
+
+# Module-level singleton for backward-compatible imports
+history_store = HistoryStore()

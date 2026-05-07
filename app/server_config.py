@@ -81,6 +81,35 @@ DEFAULTS: dict[str, dict] = {
         "port":  8001,
         "token": "",          # prompt server has no auth
     },
+    "artgen": {
+        "host":  "localhost",
+        "port":  8002,        # dedicated chat-model port — separate from diffusion server (8000)
+        "token": "",
+    },
+    # Per-model artgen keys — all share port 8002 but only one runs at a time.
+    "artgen-qwen3-8b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-llama-3.1-8b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-qwen2.5-7b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen-llama-3.3-70b": {
+        "host":  "localhost",
+        "port":  8002,
+        "token": "",
+    },
+    "artgen_auto": {
+        "delay": 3,
+    },
 }
 
 
@@ -155,7 +184,9 @@ class ServerConfig:
             host = "localhost"
         changed = False
         for svc in self._data.values():
-            if svc.get("host") != host:
+            if "host" not in svc:
+                continue  # non-network entry (e.g. artgen_auto) — leave untouched
+            if svc["host"] != host:
                 svc["host"] = host
                 changed = True
         if changed:

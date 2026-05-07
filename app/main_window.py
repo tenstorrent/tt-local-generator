@@ -42,6 +42,7 @@ from api_client import APIClient
 from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
+from artgen_panel import ArtgenPanel
 from history_store import GenerationRecord, HistoryStore
 from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
 import attractor
@@ -507,6 +508,7 @@ scrollbar slider:hover {
 }
 .servers-popover-btn:hover { background: rgba(79,209,197,0.1); border-color: @tt_accent; }
 .servers-popover-btn-stop:hover { background: rgba(255,107,107,0.1); border-color: #FF6B6B; color: #FF6B6B; }
+.servers-popover-last-star { color: @tt_accent; font-size: .8rem; margin-left: .2rem; }
 
 /* -- Named control rows (QUALITY, CLIP LENGTH) ------------------------------ */
 .named-ctrl-row {
@@ -581,10 +583,22 @@ scrollbar slider:hover {
     min-width: 36px;
     min-height: 36px;
 }
-/* Solid teal border when a seed image is loaded */
+/* Amber border + pulse when model requires an image but none is loaded */
+.seed-thumb-well.required {
+    border-style: solid;
+    border-color: #F4C471;
+    animation: seed-pulse 1.8s ease-in-out infinite;
+}
+@keyframes seed-pulse {
+    0%   { border-color: #F4C471; }
+    50%  { border-color: alpha(#F4C471, 0.35); }
+    100% { border-color: #F4C471; }
+}
+/* Solid teal border when a seed image is loaded (overrides required amber) */
 .seed-thumb-well.has-seed {
     border-style: solid;
     border-color: @accent_color;
+    animation: none;
 }
 
 /* -- Advanced accordion ---------------------------------------------------- */
@@ -1155,6 +1169,121 @@ popover.picker-popover > contents {
     min-height: 0;
 }
 .picker-cancel-btn label { padding: 0; margin: 0; }
+
+/* -- Artgen panel ----------------------------------------------------------- */
+.artgen-ctrl-pane {
+    background-color: @tt_bg_panel;
+    border-right: 1px solid @tt_border;
+}
+.artgen-preview-pane {
+    background-color: @tt_bg_darkest;
+}
+.artgen-generate-btn {
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 10px;
+    border: none;
+    border-radius: 4px;
+}
+.artgen-generate-btn:hover {
+    background-color: @tt_accent_light;
+}
+.artgen-generate-btn:disabled {
+    background-color: @tt_border;
+    color: @tt_text_muted;
+}
+.artgen-status {
+    color: @tt_text_muted;
+    font-size: 11px;
+}
+.artgen-empty-hint {
+    color: @tt_border;
+    font-size: 20px;
+    margin-bottom: 6px;
+}
+.artgen-empty-sub {
+    color: @tt_text_hint;
+    font-size: 12px;
+}
+.freeform-entry {
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+}
+.artgen-health-ok    { color: #27AE60; font-size: 15px; }
+.artgen-health-bad   { color: #FF6B6B; font-size: 15px; }
+.artgen-health-unknown { color: #607D8B; font-size: 15px; }
+.artgen-srv-start-btn {
+    background: @tt_accent;
+    color: @tt_bg_darkest;
+    padding: 2px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: none;
+}
+.artgen-srv-start-btn:hover { background: @tt_accent_hover; }
+.artgen-srv-stop-btn {
+    background: @tt_bg_medium;
+    color: @tt_text_primary;
+    padding: 2px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid @tt_border;
+}
+.artgen-srv-stop-btn:hover { background: @tt_bg_panel; }
+.artgen-subnav { background: shade(@tt_bg_dark, 0.85); }
+.artgen-subnav-btn { border-radius: 0; padding: 6px 16px; font-size: 12px; }
+.artgen-subnav-btn:checked { color: @tt_accent; border-bottom: 2px solid @tt_accent; }
+.artgen-filter-chip { border-radius: 12px; padding: 2px 10px; font-size: 11px; }
+.artgen-filter-chip:checked { background: @tt_accent; color: @tt_bg_dark; }
+.artgen-card { border-radius: 4px; background: @tt_bg_panel; }
+.artgen-card-new { border: 2px solid @tt_accent; }
+.artgen-card-placeholder { font-size: 20px; }
+.artgen-text-preview { padding: 6px 8px; }
+.artgen-preview-title { font-size: 12px; font-weight: bold; color: @tt_accent; letter-spacing: 0.01em; }
+.artgen-preview-rule { min-height: 1px; background: alpha(@tt_accent, 0.3); margin: 1px 0 2px; }
+.artgen-preview-body { font-size: 9px; color: @tt_muted; }
+.artgen-palette-name { font-size: 9px; color: @tt_muted; padding: 2px 5px; }
+.artgen-card-bottom { font-size: 9px; padding: 3px 5px; color: @tt_muted; }
+.artgen-type-badge { font-size: 8px; background: alpha(@tt_bg_dark,0.8); color: @tt_accent; padding: 1px 4px; border-radius: 2px; }
+.artgen-card-hover-actions { background: alpha(@tt_bg_dark, 0.72); border-radius: 0 4px 0 4px; }
+.artgen-card-action-btn { min-width: 22px; min-height: 22px; padding: 1px 3px; font-size: 11px; border-radius: 3px; background: transparent; border: none; color: @tt_text; }
+.artgen-card-action-btn:hover { background: alpha(@tt_accent, 0.25); color: @tt_accent; }
+.artgen-starred-chip { color: @tt_accent; }
+.artgen-watch-btn-bar { padding: 2px 10px; font-size: 12px; }
+.artgen-watch-bg { background: #000; }
+.artgen-watch-btn { color: rgba(255,255,255,0.8); background: transparent; border: none; }
+.artgen-watch-nav-btn { font-size: 22px; background: rgba(0,0,0,0.5); border-radius: 50%; color: white; padding: 4px 10px; }
+.artgen-watch-pos { color: rgba(255,255,255,0.7); font-size: 12px; }
+.artgen-watch-meta { color: rgba(255,255,255,0.6); font-size: 11px; }
+.artgen-detail-title { font-size: 12px; color: @tt_muted; }
+.artgen-inspire-btn { background: @tt_accent; color: @tt_bg_dark; border-radius: 3px; padding: 3px 8px; }
+.artgen-preset-menu-btn { font-size: 14px; padding: 2px 4px; }
+.artgen-preset-section { font-size: 9px; color: @tt_muted; margin-top: 6px; margin-bottom: 2px; }
+.artgen-preset-btn { background: transparent; border: none; border-radius: 4px; padding: 4px 6px; }
+.artgen-preset-btn:hover { background: alpha(@tt_accent, 0.12); }
+.artgen-preset-name { font-size: 12px; font-weight: bold; color: @tt_text; }
+.artgen-preset-desc { font-size: 10px; color: @tt_muted; }
+
+/* Star toggle - used on GenerationCard hover bar and DetailPanel action row */
+.gen-star-btn { color: @tt_accent; }
+.gen-star-btn:hover { background: alpha(@tt_accent, 0.12); }
+
+/* Prev/Next nav buttons in DetailPanel */
+.detail-nav-btn { min-width: 28px; padding: 2px 6px; }
+
+/* Mosaic waiting screen (artgen panel) */
+.mosaic-grid { background: #0A1F28; }
+.mosaic-tile { min-width: 1px; min-height: 1px; }
+.mosaic-status-strip {
+  background: rgba(10, 31, 40, 0.75);
+  padding: 6px 12px;
+}
+.mosaic-status-lbl {
+  color: #E8F0F2;
+  font-size: 12px;
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -1349,18 +1478,21 @@ class GenerationCard(Gtk.Frame):
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
     Buttons: 💾 Save, ↺ Iterate, 🗑 Delete.
+    Hover reveals: 💃 Animate (if animate_cb), ☆/★ star toggle.
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
+    star_cb(record, starred: bool) is called when the star is toggled.
     """
 
     def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
-                 animate_cb=None):
+                 animate_cb=None, star_cb=None):
         super().__init__()
         self._record = record
         self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
         self._animate_cb = animate_cb   # callable(record) or None
+        self._star_cb = star_cb         # callable(record, starred: bool) or None
         self.add_css_class("card")
         # Minimum card width; FlowBox homogeneous layout makes all cells equal width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1373,14 +1505,12 @@ class GenerationCard(Gtk.Frame):
         gesture.connect("pressed", lambda *_: self._select_cb(self))
         self.add_controller(gesture)
 
-        # Hover controller: plays video on hover (video cards) OR shows action bar.
-        # Image cards without action callbacks don't need hover tracking at all.
-        has_hover = record.video_exists or animate_cb is not None
-        if has_hover:
-            motion = Gtk.EventControllerMotion()
-            motion.connect("enter", self._on_hover_enter)
-            motion.connect("leave", self._on_hover_leave)
-            self.add_controller(motion)
+        # Hover controller: reveals action bar (star, animate) on all card types;
+        # also starts video preview on video/animate cards.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", self._on_hover_enter)
+        motion.connect("leave", self._on_hover_leave)
+        self.add_controller(motion)
 
     def set_selected(self, selected: bool) -> None:
         # Image cards use a pink selection border; video cards use teal.
@@ -1454,9 +1584,17 @@ class GenerationCard(Gtk.Frame):
             )
             action_bar.append(animate_btn)
 
+        # Star toggle — always present so every card type can be starred.
+        self._star_btn = Gtk.Button(label="★" if self._record.starred else "☆")
+        self._star_btn.add_css_class("hover-action-btn")
+        self._star_btn.add_css_class("gen-star-btn")
+        self._star_btn.set_can_focus(False)
+        self._star_btn.set_tooltip_text("Unstar" if self._record.starred else "Star")
+        self._star_btn.connect("clicked", self._on_star_clicked)
+        action_bar.append(self._star_btn)
+
         self._action_revealer.set_child(action_bar)
-        if self._animate_cb is not None:
-            overlay.add_overlay(self._action_revealer)
+        overlay.add_overlay(self._action_revealer)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
         # The stack expands horizontally so the thumbnail fills the FlowBox cell width.
@@ -1612,9 +1750,18 @@ class GenerationCard(Gtk.Frame):
         self._hover_pipeline_open = False
         self._loop_connected = False
 
+    def _on_star_clicked(self, _btn) -> None:
+        """Toggle the starred state and fire star_cb if provided."""
+        new_starred = not bool(self._record.starred)
+        self._record.starred = int(new_starred)
+        self._star_btn.set_label("★" if new_starred else "☆")
+        self._star_btn.set_tooltip_text("Unstar" if new_starred else "Star")
+        if self._star_cb:
+            self._star_cb(self._record, new_starred)
+
     def _on_hover_enter(self, _ctrl, _x, _y) -> None:
         """Start looping the video silently when the mouse enters the card.
-        Also reveals the hover action bar (if action callbacks were provided)."""
+        Also reveals the hover action bar."""
         self._action_revealer.set_reveal_child(True)
         if _USE_SYSTEM_PLAYER:
             # macOS: load and play via GstPlayer (gtk4paintablesink → Gtk.Picture)
@@ -1735,6 +1882,30 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
+def _artgen_vibe(rec) -> str:
+    """Return a short mood phrase from an artgen MediaRecord's params JSON blob."""
+    try:
+        import json as _json
+        p = _json.loads(rec.params or "{}")
+    except Exception:
+        return ""
+    for key in ("theme", "mood", "subject"):
+        if p.get(key):
+            return str(p[key])
+    gt = rec.generator_type or ""
+    if gt == "landscape":
+        return f"{p.get('palette', '')} landscape".strip()
+    if gt == "skyline":
+        return f"{p.get('era', '')} skyline at {p.get('sky', 'night')}".strip()
+    if gt == "constellation":
+        return f"{p.get('culture', 'invented')} constellation"
+    if gt == "geometric":
+        return f"{p.get('style', '')} geometry in {p.get('geo_palette', '')}".strip()
+    if gt == "circuit":
+        return f"{p.get('circuit_style', '')} circuit diagram".strip()
+    return ""
+
+
 # ── Detail panel ───────────────────────────────────────────────────────────────
 
 class DetailPanel(Gtk.ScrolledWindow):
@@ -1743,7 +1914,7 @@ class DetailPanel(Gtk.ScrolledWindow):
     generation metadata. Populated by show_record(); shows a placeholder when empty.
     """
 
-    def __init__(self, download_cb=None, on_localized_cb=None):
+    def __init__(self, download_cb=None, on_localized_cb=None, star_cb=None):
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.set_vexpand(True)
@@ -1755,6 +1926,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
         self._play_btn: Optional[Gtk.Button] = None
+        self._detail_star_btn: Optional[Gtk.Button] = None
+        self._nav_records: list = []   # GenerationRecords in current filter order
+        self._nav_idx: int = 0
+        self._nav_prev_btn: Optional[Gtk.Button] = None
+        self._nav_next_btn: Optional[Gtk.Button] = None
         # Callable(record_id: str, dest_path: Path) → None — injected by MainWindow.
         # When provided, a "Download from server" button appears for missing videos.
         self._download_cb = download_cb
@@ -1762,6 +1938,8 @@ class DetailPanel(Gtk.ScrolledWindow):
         # Called (on main thread via GLib.idle_add) after a remote video is downloaded
         # to local storage, so MainWindow can add it to HistoryStore and refresh gallery.
         self._on_localized_cb = on_localized_cb
+        # Callable(record: GenerationRecord, starred: bool) → None
+        self._star_cb = star_cb
         self._show_empty()
 
     def _show_empty(self) -> None:
@@ -1823,6 +2001,37 @@ class DetailPanel(Gtk.ScrolledWindow):
         content.set_margin_bottom(12)
         content.set_margin_start(12)
         content.set_margin_end(12)
+
+        # ── Prev / Next navigation ─────────────────────────────────────────────
+        nav_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        nav_row.set_margin_bottom(4)
+
+        self._nav_prev_btn = Gtk.Button(label="‹")
+        self._nav_prev_btn.add_css_class("flat")
+        self._nav_prev_btn.add_css_class("detail-nav-btn")
+        self._nav_prev_btn.set_tooltip_text("Previous  [←]")
+        self._nav_prev_btn.connect("clicked", lambda _: self._step(-1))
+        nav_row.append(self._nav_prev_btn)
+
+        self._nav_next_btn = Gtk.Button(label="›")
+        self._nav_next_btn.add_css_class("flat")
+        self._nav_next_btn.add_css_class("detail-nav-btn")
+        self._nav_next_btn.set_tooltip_text("Next  [→]")
+        self._nav_next_btn.connect("clicked", lambda _: self._step(1))
+        nav_row.append(self._nav_next_btn)
+
+        n = len(self._nav_records)
+        if n > 1:
+            pos_lbl = Gtk.Label(label=f"{self._nav_idx + 1} / {n}")
+            pos_lbl.add_css_class("muted")
+            pos_lbl.set_margin_start(4)
+            nav_row.append(pos_lbl)
+
+        # Hide nav when there is only one item in the context.
+        nav_row.set_visible(n > 1)
+        self._nav_prev_btn.set_sensitive(n > 1)
+        self._nav_next_btn.set_sensitive(n > 1)
+        content.append(nav_row)
 
         # ── Media area: video player or image viewer ──────────────────────────
         if record.media_type == "image":
@@ -2012,13 +2221,9 @@ class DetailPanel(Gtk.ScrolledWindow):
         info_grid.set_column_spacing(12)
         info_grid.set_row_spacing(3)
 
-        # Format date
-        try:
-            from datetime import datetime as _dt
-            dt = _dt.fromisoformat(record.created_at)
-            date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
-        except Exception:
-            date_str = record.created_at or "—"
+        # Format date — UTC stored, display in local 12-hour time
+        from time_utils import fmt_local_12h
+        date_str = fmt_local_12h(record.created_at) if record.created_at else "—"
 
         # File size
         size_str = "—"
@@ -2124,6 +2329,17 @@ class DetailPanel(Gtk.ScrolledWindow):
             export_btn.set_sensitive(False)
         action_row.append(export_btn)
 
+        # Star toggle button
+        self._detail_star_btn = Gtk.Button(
+            label="★ Starred" if record.starred else "☆ Star"
+        )
+        self._detail_star_btn.add_css_class("gen-star-btn")
+        self._detail_star_btn.set_tooltip_text(
+            "Remove from starred" if record.starred else "Add to starred"
+        )
+        self._detail_star_btn.connect("clicked", self._on_detail_star_clicked)
+        action_row.append(self._detail_star_btn)
+
         iter_btn = Gtk.Button(label="↺ Iterate")
         iter_btn.set_tooltip_text("Pre-fill the control panel with this prompt")
         iter_btn.connect("clicked", self._iterate)
@@ -2139,6 +2355,33 @@ class DetailPanel(Gtk.ScrolledWindow):
         lbl.set_xalign(0)
         lbl.add_css_class("detail-section")
         return lbl
+
+    def set_context(self, records: list, idx: int) -> None:
+        """Set the ordered record list for prev/next navigation."""
+        self._nav_records = list(records)
+        self._nav_idx = max(0, min(idx, len(records) - 1))
+
+    def _step(self, delta: int) -> None:
+        """Navigate to an adjacent record in the current filter context."""
+        if not self._nav_records:
+            return
+        self._nav_idx = (self._nav_idx + delta) % len(self._nav_records)
+        rec = self._nav_records[self._nav_idx]
+        self.show_record(rec, self._iterate_cb)
+
+    def _on_detail_star_clicked(self, _btn) -> None:
+        """Toggle the starred state for the currently displayed record."""
+        if self._record is None:
+            return
+        new_starred = not bool(self._record.starred)
+        self._record.starred = int(new_starred)
+        if self._detail_star_btn is not None:
+            self._detail_star_btn.set_label("★ Starred" if new_starred else "☆ Star")
+            self._detail_star_btn.set_tooltip_text(
+                "Remove from starred" if new_starred else "Add to starred"
+            )
+        if self._star_cb:
+            self._star_cb(self._record, new_starred)
 
     def _toggle_play(self, _btn) -> None:
         import sys as _sys
@@ -2617,7 +2860,7 @@ class GalleryWidget(Gtk.Box):
     """
 
     def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video",
-                 animate_action_cb=None):
+                 animate_action_cb=None, star_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
@@ -2625,6 +2868,32 @@ class GalleryWidget(Gtk.Box):
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
         self._animate_action_cb = animate_action_cb  # callable(record) or None — opens Animate dialog
+        self._star_cb = star_cb            # callable(record, starred: bool) or None
+        self._media_type = media_type
+        self._active_filter: str = "all"   # "all" | "starred"
+
+        # ── Filter bar ────────────────────────────────────────────────────────
+        filter_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        filter_bar.set_margin_start(12)
+        filter_bar.set_margin_end(12)
+        filter_bar.set_margin_top(6)
+        filter_bar.set_margin_bottom(4)
+
+        self._filter_all_btn = Gtk.ToggleButton(label="All")
+        self._filter_all_btn.add_css_class("artgen-filter-chip")
+        self._filter_all_btn.set_active(True)
+        self._filter_all_btn.connect("toggled", self._on_filter_chip, "all")
+        filter_bar.append(self._filter_all_btn)
+
+        self._filter_star_btn = Gtk.ToggleButton(label="★ Starred")
+        self._filter_star_btn.add_css_class("artgen-filter-chip")
+        self._filter_star_btn.add_css_class("artgen-starred-chip")
+        self._filter_star_btn.set_active(False)
+        self._filter_star_btn.connect("toggled", self._on_filter_chip, "starred")
+        filter_bar.append(self._filter_star_btn)
+
+        self.append(filter_bar)
+        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # ── Scrolled flow box ──────────────────────────────────────────────────
         # FlowBox automatically computes the number of columns that fit in the
@@ -2749,6 +3018,7 @@ class GalleryWidget(Gtk.Box):
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
             animate_cb=self._animate_action_cb,
+            star_cb=self._star_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -2798,20 +3068,41 @@ class GalleryWidget(Gtk.Box):
             if isinstance(card, GenerationCard) and card.is_checked()
         ]
 
+    def _on_filter_chip(self, btn: Gtk.ToggleButton, filt: str) -> None:
+        if not btn.get_active():
+            return
+        self._active_filter = filt
+        # Deactivate the other chip (manual radio group).
+        other = self._filter_star_btn if filt == "all" else self._filter_all_btn
+        other.set_active(False)
+        self._relayout()
+
+    def visible_cards(self) -> list:
+        """Return the currently visible (filtered) GenerationCards in display order."""
+        if self._active_filter == "starred":
+            return [c for c in self._cards
+                    if isinstance(c, GenerationCard) and c._record.starred]
+        return [c for c in self._cards if isinstance(c, GenerationCard)]
+
     def _relayout(self) -> None:
-        """Re-populate the FlowBox from self._cards (newest first)."""
+        """Re-populate the FlowBox from self._cards, applying the active filter."""
+        visible = self._cards if self._active_filter == "all" else (
+            [c for c in self._cards
+             if isinstance(c, PendingCard) or
+             (isinstance(c, GenerationCard) and c._record.starred)]
+        )
         # Remove all FlowBoxChild wrappers; our card widgets remain alive in self._cards.
         child = self._flow.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self._flow.remove(child)
             child = nxt
-        # Re-add every card; FlowBox automatically wraps each in a FlowBoxChild.
-        for card in self._cards:
+        # Re-add filtered cards; FlowBox automatically wraps each in a FlowBoxChild.
+        for card in visible:
             self._flow.append(card)
         # Re-apply selection mode checkboxes to any newly added cards.
         if self._selection_mode and self._active_playlist_id:
-            for card in self._cards:
+            for card in visible:
                 if isinstance(card, GenerationCard) and not card.is_checked():
                     card.set_selection_visible(True)
 
@@ -2848,6 +3139,24 @@ _MODEL_DISPLAY_SERVER: dict = {
     "Skywork/SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "wan2.2-animate-14b":    "Animate-14B online",
     "flux.1-dev":            "FLUX online",
+}
+# Maps server model ID (from /tt-liveness) → server_manager key ("wan2.2", "flux", …)
+_MODEL_TO_SERVER_KEY: dict = {
+    "wan2.2-t2v":                        "wan2.2",
+    "mochi-1-preview":                   "mochi",
+    "skyreels-v2-i2v-14b-540p":          "skyreels",
+    "SkyReels-V2-I2V-14B-540P":          "skyreels",
+    "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
+    "wan2.2-animate-14b":                "animate",
+    "flux.1-dev":                        "flux",
+}
+# Maps server key → (source_tab, video_model_key) for startup pre-selection
+_SERVER_KEY_TO_SOURCE_MODEL: dict = {
+    "wan2.2":   ("video",   "wan2"),
+    "mochi":    ("video",   "mochi"),
+    "skyreels": ("video",   "skyreels"),
+    "flux":     ("image",   ""),
+    "animate":  ("animate", ""),
 }
 
 class ControlPanel(Gtk.Box):
@@ -2974,23 +3283,33 @@ class ControlPanel(Gtk.Box):
             "Wan2.2-Animate-14B  ·  Character animation  ·  Video-to-video\n"
             "Requires a motion video + character image"
         )
-        self._src_image_btn = Gtk.ToggleButton(label="🖼 Image")
+        self._src_image_btn = Gtk.ToggleButton(label="🖼️ Image")
         self._src_image_btn.add_css_class("source-btn")
-        self._src_image_btn.add_css_class("source-btn-right")
+        self._src_image_btn.add_css_class("source-btn-mid")
         self._src_image_btn.set_tooltip_text(
             "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
+        self._src_art_btn = Gtk.ToggleButton(label="🎨 Art")
+        self._src_art_btn.add_css_class("source-btn")
+        self._src_art_btn.add_css_class("source-btn-right")
+        self._src_art_btn.set_tooltip_text(
+            "Generative art via LLM  ·  SVG / ANSI / verse / palette\n"
+            "Requires a chat model on port 8002 (not the diffusion server)"
+        )
         self._src_animate_btn.set_group(self._src_video_btn)
         self._src_image_btn.set_group(self._src_video_btn)
+        self._src_art_btn.set_group(self._src_video_btn)
         self._src_video_btn.connect("toggled", lambda b: b.get_active() and self._set_source("video"))
         self._src_animate_btn.connect("toggled", lambda b: b.get_active() and self._set_source("animate"))
         self._src_image_btn.connect("toggled", lambda b: b.get_active() and self._set_source("image"))
+        self._src_art_btn.connect("toggled", lambda b: b.get_active() and self._set_source("artgen"))
         self._src_video_btn.set_active(True)
         src_row.append(self._src_video_btn)
         src_row.append(self._src_animate_btn)
         self._src_animate_btn.set_visible(True)
         src_row.append(self._src_image_btn)
+        src_row.append(self._src_art_btn)
         self._toolbar_box.append(src_row)
 
         # Spacer (MainWindow appends attractor + other buttons after this)
@@ -3897,6 +4216,14 @@ class ControlPanel(Gtk.Box):
             self._servers_popover_restart_btns[key] = restart_btn
             row.append(restart_btn)
 
+            # Star badge for the last successfully deployed server
+            last_dep = _settings.get("last_successful_deployment") or ""
+            if key == last_dep:
+                star = Gtk.Label(label="★")
+                star.add_css_class("servers-popover-last-star")
+                star.set_tooltip_text("Last successfully deployed")
+                row.append(star)
+
             outer.append(row)
 
         popover.set_child(outer)
@@ -4271,16 +4598,24 @@ class ControlPanel(Gtk.Box):
     # ── Source toggle ──────────────────────────────────────────────────────────
 
     def _set_source(self, source: str) -> None:
-        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), and 'image' (FLUX)."""
+        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), 'image' (FLUX), 'artgen' (LLM art)."""
         if source == self._model_source:
             return
         self._model_source = source
         is_image = source == "image"
         is_animate = source == "animate"
         is_video = source == "video"
+        is_artgen = source == "artgen"
 
         # Active state is handled automatically by the ToggleButton group (:checked CSS).
-        if is_image:
+        if is_artgen:
+            self._title_lbl.set_label("TT Local Generator")
+            self._source_desc_lbl.set_label(
+                "generative art via LLM  ·  SVG / ANSI / verse / palette  ·  port 8002"
+            )
+            self._on_source_change(source)
+            return
+        elif is_image:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
                 "synchronous  ·  FLUX.1-dev  ·  ~15–90 s  ·  1024×1024 JPEG"
@@ -4288,7 +4623,7 @@ class ControlPanel(Gtk.Box):
         elif is_animate:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
-                "async job  ·  Animate-14B  ·  motion video + character"
+                "async job  ·  Animate-14B  ·  motion video + character  ·  requires starting image"
             )
         else:
             self._title_lbl.set_label("TT Local Generator")
@@ -4342,6 +4677,7 @@ class ControlPanel(Gtk.Box):
         # Notify the main window so it can switch the gallery stack to show
         # only the cards that match the newly selected generation mode.
         self._on_source_change(source)
+        self._update_seed_well_state()
 
     def _set_model(self, model: str) -> None:
         """
@@ -4388,6 +4724,7 @@ class ControlPanel(Gtk.Box):
         # durations shown reflect the newly selected model (wan2 vs skyreels fps/frames).
         if hasattr(self, "_clip_btns"):
             self._refresh_clip_labels()
+        self._update_seed_well_state()
 
     def get_model_source(self) -> str:
         return self._model_source
@@ -4633,29 +4970,72 @@ class ControlPanel(Gtk.Box):
                     img.set_can_shrink(False)
                     img.set_vexpand(True)
                     self._seed_thumb_box.append(img)
-                    self._seed_thumb_box.add_css_class("has-seed")
                 else:
                     # Pixbuf load failed — show a question-mark placeholder
                     lbl = Gtk.Label(label="?")
                     lbl.set_vexpand(True)
                     lbl.set_valign(Gtk.Align.CENTER)
                     self._seed_thumb_box.append(lbl)
-                    self._seed_thumb_box.remove_css_class("has-seed")
             else:
                 # No seed — restore the picture-frame placeholder icon
                 lbl = Gtk.Label(label="\U0001f5bc")
                 lbl.set_vexpand(True)
                 lbl.set_valign(Gtk.Align.CENTER)
                 self._seed_thumb_box.append(lbl)
-                self._seed_thumb_box.remove_css_class("has-seed")
+            self._update_seed_well_state()
+        # If a seed image was just added and the prompt-error banner is showing
+        # the seed-required message, clear it now.
+        if path and hasattr(self, "_prompt_scroll"):
+            if self._prompt_scroll.has_css_class("prompt-error"):
+                self._prompt_scroll.remove_css_class("prompt-error")
+                self._prompt_error_lbl.set_visible(False)
+                self._prompt_error_lbl.set_label("Prompt cannot be empty.")
 
     def _clear_seed_image(self) -> None:
-        """Clear the seed image and reset the inline thumbnail well.
-
-        Delegates to _set_seed_image("") which handles the well reset.
-        The accordion seed display was removed in Task 9.
-        """
+        """Clear the seed image and reset the inline thumbnail well."""
         self._set_seed_image("")
+
+    def _seed_image_required(self) -> bool:
+        """Return True when the active source/model requires a conditioning image."""
+        if self._model_source == "animate":
+            return True
+        if self._model_source == "video" and self._video_model == "skyreels":
+            return True
+        return False
+
+    def _update_seed_well_state(self) -> None:
+        """Sync the seed well's required/has-seed CSS classes and tooltip."""
+        if not hasattr(self, "_seed_thumb_box"):
+            return
+        required = self._seed_image_required()
+        has_seed = bool(self._seed_image_path)
+
+        if required and not has_seed:
+            self._seed_thumb_box.add_css_class("required")
+        else:
+            self._seed_thumb_box.remove_css_class("required")
+
+        if has_seed:
+            self._seed_thumb_box.add_css_class("has-seed")
+        else:
+            self._seed_thumb_box.remove_css_class("has-seed")
+
+        if required:
+            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
+            if has_seed:
+                self._seed_thumb_box.set_tooltip_text(
+                    f"Starting image for {tip_model} — right-click to clear"
+                )
+            else:
+                self._seed_thumb_box.set_tooltip_text(
+                    f"Required: {tip_model} needs a starting image\n"
+                    "Click to browse · drop an image or gallery frame here"
+                )
+        else:
+            self._seed_thumb_box.set_tooltip_text(
+                "Optional seed image — click to browse, right-click to clear\n"
+                "Drop a gallery frame here to use as seed image"
+            )
 
     def _open_seed_picker(self) -> None:
         """Open the PickerPopover (Gallery + Disk tabs) anchored to the seed image well.
@@ -4779,6 +5159,7 @@ class ControlPanel(Gtk.Box):
         if self._prompt_scroll.has_css_class("prompt-error"):
             self._prompt_scroll.remove_css_class("prompt-error")
             self._prompt_error_lbl.set_visible(False)
+            self._prompt_error_lbl.set_label("Prompt cannot be empty.")
 
     def set_prompt_gen_state(self, ready: bool) -> None:
         """
@@ -5056,6 +5437,14 @@ class ControlPanel(Gtk.Box):
                 self._prompt_scroll.add_css_class("prompt-error")
                 self._prompt_error_lbl.set_visible(True)
                 return
+        if self._seed_image_required() and not self._seed_image_path:
+            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
+            self._prompt_scroll.add_css_class("prompt-error")
+            self._prompt_error_lbl.set_label(
+                f"{tip_model} requires a starting image — drop one in the image well above."
+            )
+            self._prompt_error_lbl.set_visible(True)
+            return
         # Determine the specific model within the active category
         if self._model_source == "video":
             current_model_id = self._video_model
@@ -6150,12 +6539,22 @@ class MainWindow(Gtk.ApplicationWindow):
         self._restore_queue()
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
+        self._start_artgen_health_worker()
         if self._inventory_url:
             self._start_inventory_fetch()
 
         # Apply persisted quality preference — drives self._steps and QUALITY buttons.
         saved_steps = int(_settings.get("quality_steps"))
         self._controls.sync_quality_btn_to_steps(saved_steps)
+
+        # Pre-select the source tab and model from the last successful deployment.
+        last = _settings.get("last_successful_deployment")
+        if last:
+            src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(last, (None, None))
+            if src:
+                self._controls.switch_to_source(src)
+                if mdl:
+                    self._controls._set_model(mdl)
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -6224,11 +6623,11 @@ class MainWindow(Gtk.ApplicationWindow):
         ctrl_scroll.set_vexpand(True)
         ctrl_scroll.set_child(self._controls)
 
-        ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        ctrl_wrapper.append(ctrl_scroll)
-        ctrl_wrapper.append(self._controls.footer_box)
+        self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._ctrl_wrapper.append(ctrl_scroll)
+        self._ctrl_wrapper.append(self._controls.footer_box)
 
-        outer_paned.set_start_child(ctrl_wrapper)
+        outer_paned.set_start_child(self._ctrl_wrapper)
         outer_paned.set_shrink_start_child(False)
         outer_paned.set_resize_start_child(False)
 
@@ -6251,13 +6650,17 @@ class MainWindow(Gtk.ApplicationWindow):
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
             animate_action_cb=self._on_animate_card_action,
+            star_cb=self._on_star,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
+        self._artgen_panel    = ArtgenPanel()
+        self._artgen_panel.on_use_as_seed = self._on_artgen_use_as_seed
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
+        self._gallery_stack.add_named(self._artgen_panel, "artgen")
         self._gallery_stack.set_visible_child_name("video")
 
         gallery_wrap.append(self._gallery_stack)
@@ -6309,6 +6712,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._detail = DetailPanel(
             download_cb=lambda rec_id, dest: self._client.download(rec_id, Path(dest)),
             on_localized_cb=self._on_remote_record_localized,
+            star_cb=self._on_star,
         )
 
         # Queue display lives below the detail/preview panel on the right side.
@@ -6325,12 +6729,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_margin_end(6)
         self._queue_box.set_margin_bottom(6)
 
-        detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        detail_wrap.append(self._detail)
-        detail_wrap.append(self._queue_section_lbl)
-        detail_wrap.append(self._queue_box)
+        self._detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._detail_wrap.append(self._detail)
+        self._detail_wrap.append(self._queue_section_lbl)
+        self._detail_wrap.append(self._queue_box)
 
-        inner_paned.set_end_child(detail_wrap)
+        inner_paned.set_end_child(self._detail_wrap)
         inner_paned.set_shrink_end_child(False)
 
         outer_paned.set_end_child(inner_paned)
@@ -6673,13 +7077,22 @@ class MainWindow(Gtk.ApplicationWindow):
         return self._video_gallery
 
     def _on_source_change(self, source: str) -> None:
-        """Switch the gallery stack when the user toggles between video and image mode."""
+        """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
         self._gallery_stack.set_visible_child_name(source)
+        is_artgen = source == "artgen"
+        # Hide the left ControlPanel and right DetailPanel in artgen mode so
+        # the ArtgenPanel can use the full window width for its own layout.
+        self._ctrl_wrapper.set_visible(not is_artgen)
+        self._detail_wrap.set_visible(not is_artgen)
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
     def _on_card_selected(self, record: GenerationRecord) -> None:
         """Called when the user clicks a gallery card. Populates the detail panel."""
+        gallery = self._gallery_for_type(record.media_type)
+        visible = gallery.visible_cards()
+        idx = next((i for i, c in enumerate(visible) if c._record.id == record.id), 0)
+        self._detail.set_context([c._record for c in visible], idx)
         self._detail.show_record(record, self._controls.populate_prompts)
 
     def _on_delete_card(self, record: GenerationRecord) -> None:
@@ -6709,6 +7122,43 @@ class MainWindow(Gtk.ApplicationWindow):
         _ps.purge_deleted_records(valid_ids)
         short = record.prompt[:50] + ("…" if len(record.prompt) > 50 else "")
         self._set_status(f'Deleted: "{short}"')
+
+    def _on_star(self, record: GenerationRecord, starred: bool) -> None:
+        """Persist the starred state and refresh gallery filter if needed."""
+        self._store.star(record.id, starred)
+        record.starred = int(starred)
+        # If the starred filter is active, relayout so the card appears/disappears.
+        gallery = self._gallery_for_type(record.media_type)
+        if gallery._active_filter == "starred":
+            gallery._relayout()
+
+    def _on_artgen_use_as_seed(self, rec) -> None:
+        """Switch to video mode and set the artgen artifact as a seed image."""
+        # Prefer PNG thumbnail (rendered from SVG); fall back to file_path (SVG works via librsvg).
+        thumb = getattr(rec, "thumbnail_path", "") or ""
+        file_path = getattr(rec, "file_path", "") or ""
+        if thumb and Path(thumb).suffix.lower() == ".png" and Path(thumb).exists():
+            seed_path = thumb
+        elif file_path and Path(file_path).exists():
+            seed_path = file_path
+        else:
+            return
+
+        # Switch source tab to video (activating the button triggers _set_source → _on_source_change).
+        if self._controls._model_source != "video":
+            self._controls._src_video_btn.set_active(True)
+
+        # Set seed image in controls.
+        self._controls._set_seed_image(seed_path)
+
+        # Inject vibe phrase into prompt (append if prompt already has text).
+        vibe = _artgen_vibe(rec)
+        if vibe:
+            buf = self._controls._prompt_view.get_buffer()
+            existing = buf.get_text(
+                buf.get_start_iter(), buf.get_end_iter(), False
+            ).strip()
+            buf.set_text(f"{existing}, {vibe}" if existing else vibe)
 
     def _load_history(self) -> None:
         local_records = self._store.all_records()
@@ -6813,8 +7263,10 @@ class MainWindow(Gtk.ApplicationWindow):
             # Skip while a launch/stop script is in flight — the status bar
             # stays in its "starting…" state (timer ticking) until the
             # operation finishes, then health results flow through normally.
+            # Also skip when artgen is the active source: the artgen health
+            # loop owns the status bar in that mode (it polls port 8002).
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
-            if not self._controls._server_launching:
+            if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
                 self._hw_statusbar.update_server(ready, display_model or None)
 
             if ready:
@@ -6824,6 +7276,11 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._log_tail_stop = None
                 if not (self._worker_gen and self._worker_gen._running()):
                     self._set_status("Server ready — enter a prompt and click Generate")
+                # Persist the server key so the next session can pre-select it.
+                if running_model:
+                    skey = _MODEL_TO_SERVER_KEY.get(running_model)
+                    if skey:
+                        _settings.set("last_successful_deployment", skey)
 
             # ── Update SHOT panel model badge ─────────────────────────────────
             # Derive the internal video model key from the server-reported model
@@ -6907,6 +7364,60 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         self._controls.set_prompt_gen_state(ready)
         return False  # one-shot idle callback
+
+    # ── Artgen server health worker (port 8002) ────────────────────────────────
+
+    def _start_artgen_health_worker(self) -> None:
+        """Start background polling for the artgen LLM server on port 8002."""
+        self._artgen_health_stop = threading.Event()
+        threading.Thread(target=self._artgen_health_loop, daemon=True).start()
+
+    def _artgen_health_loop(self) -> None:
+        """Polls port 8002 every 10 s; posts result to main thread via idle_add.
+
+        All artgen-* server definitions share the same health URL
+        (http://localhost:8002/v1/models), so checking any one of them is
+        sufficient.  We also call detect_model() when healthy to show the
+        loaded model name in the status bar.
+        """
+        import artgen as _artgen
+        import server_manager as _sm
+        from server_config import server_config as _sc
+        consecutive_failures = 0
+
+        while not self._artgen_health_stop.is_set():
+            try:
+                ready = _sm.is_healthy("artgen-qwen3-8b", timeout=2.0)
+            except Exception:
+                ready = False
+
+            if ready:
+                consecutive_failures = 0
+                try:
+                    base_url = _sc.base_url("artgen")
+                    model_name = _artgen.detect_model(base_url) or "artgen"
+                except Exception:
+                    model_name = "artgen"
+            else:
+                consecutive_failures += 1
+                model_name = None
+                if consecutive_failures < 2:
+                    self._artgen_health_stop.wait(10.0)
+                    continue
+
+            GLib.idle_add(self._on_artgen_health_result, ready, model_name)
+            self._artgen_health_stop.wait(10.0)
+
+    def _on_artgen_health_result(self, ready: bool, model: "str | None") -> bool:
+        """Runs on main thread. Updates the toolbar status bar when artgen is active."""
+        if not self._alive:
+            return False
+        if self._controls.get_model_source() != "artgen":
+            return False
+        if not self._controls._server_launching:
+            label = model if (ready and model) else "offline"
+            self._hw_statusbar.update_server(ready, label)
+        return False
 
     # ── Remote record localization ──────────────────────────────────────────────
 
@@ -7352,7 +7863,8 @@ class MainWindow(Gtk.ApplicationWindow):
             gallery.stop_all_playback()
 
         # Filter records to the chosen playlist / model, or use all records.
-        all_records = self._store.all_records()
+        # Include artgen MediaRecord objects so artgen channels (Palettes, etc.) work.
+        all_records = self._store.all_records() + self._store.artgen_records()
         if model_filter is not None:
             records = [r for r in all_records
                        if getattr(r, "model", "") == model_filter]
@@ -7401,7 +7913,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 get_playlists=lambda: (
                     __import__("playlist_store").playlist_store.all()
                 ),
-                get_all_records=lambda: self._store.all_records(),
+                get_all_records=lambda: self._store.all_records() + self._store.artgen_records(),
                 get_animate_inputs=(
                     self._get_animate_inputs if current_source == "animate" else None
                 ),

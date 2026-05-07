@@ -38,6 +38,13 @@ if _platform.system() == "Linux":
         "vajpegdec:NONE,vacompositor:NONE,vadeinterlace:NONE,"
         "vah264enc:NONE,vah265enc:NONE",
     )
+    # Disable the WebKitGTK process sandbox.  The artgen reading view loads
+    # only our own generated HTML — no network, no JavaScript, no untrusted
+    # content — so the sandbox provides no security benefit.  Without this,
+    # xdg-dbus-proxy fails to start its D-Bus namespace on systems that
+    # restrict unprivileged user namespaces, crashing the web process with
+    # "Failed to fully launch dbus-proxy: Child process exited with code 1".
+    os.environ.setdefault("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1")
 elif _platform.system() == "Darwin":
     # On macOS the GTK4 GStreamer media backend requires the Homebrew GStreamer
     # plugins to be discoverable.  `brew install gstreamer` places them in

@@ -32,6 +32,13 @@ Usage:
                                     so a remote GUI (--server http://this:8000)
                                     can browse and download it.
                                     Flags: --port 8002  --host 0.0.0.0
+    tt-ctl artgen                   Generate art artifacts via LLM — SVG landscapes,
+                                    city skylines, constellations, geometric patterns,
+                                    ANSI art, color palettes, verse, circuit diagrams.
+                                    Flags: --type TYPE  --output PATH  --model ID
+                                           --simulate  --freeform "describe anything"
+                                    Types: landscape skyline constellation geometric
+                                           ansi palette verse circuit freeform
 
 All commands accept --server URL to override the default http://localhost:8000.
 """
@@ -65,6 +72,7 @@ from worker import (                                                    # noqa: 
 )
 import generate_prompt as gp                                            # noqa: E402
 import server_manager as sm              # noqa: E402
+from artgen.cli import cmd_artgen, _build_artgen_parser                 # noqa: E402
 
 
 # ── Colour helpers (plain text when stdout is not a tty) ──────────────────────
@@ -985,6 +993,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # recover
     sub.add_parser("recover", help="List server jobs not in local history")
 
+    # artgen
+    _build_artgen_parser(sub)
+
     # serve-inventory
     inv = sub.add_parser(
         "serve-inventory",
@@ -1069,6 +1080,7 @@ def main():
         "run":              cmd_run,
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,
+        "artgen":           cmd_artgen,
     }
     dispatch[args.cmd](args)
 

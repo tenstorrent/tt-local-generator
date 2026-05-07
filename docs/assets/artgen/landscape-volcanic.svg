@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450">
+  <defs>
+    <linearGradient id="sky" gradientUnits="objectBoundingBox" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#1A0000" offset="0"/>
+      <stop stop-color="#6B0000" offset="0.5"/>
+      <stop stop-color="#CC2200" offset="1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop stop-color="#FF4400" offset="0"/>
+      <stop stop-color="#FF4400" offset="1"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="800" height="450" fill="url(#sky)"/>
+  <circle cx="123" cy="56" r="1" fill="#FF8800" opacity="0.7"/>
+  <circle cx="234" cy="78" r="2" fill="#FF8800" opacity="0.5"/>
+  <circle cx="145" cy="123" r="1.5" fill="#FF8800" opacity="0.8"/>
+  <circle cx="312" cy="45" r="1" fill="#FF8800" opacity="0.6"/>
+  <circle cx="421" cy="67" r="2" fill="#FF8800" opacity="0.7"/>
+  <circle cx="189" cy="101" r="1.2" fill="#FF8800" opacity="0.9"/>
+  <circle cx="654" cy="89" r="1.8" fill="#FF8800" opacity="0.5"/>
+  <circle cx="567" cy="39" r="1" fill="#FF8800" opacity="0.8"/>
+  <circle cx="278" cy="118" r="1.5" fill="#FF8800" opacity="0.6"/>
+  <circle cx="395" cy="59" r="2" fill="#FF8800" opacity="0.7"/>
+  <circle cx="492" cy="82" r="1.2" fill="#FF8800" opacity="0.9"/>
+  <circle cx="623" cy="49" r="1.8" fill="#FF8800" opacity="0.5"/>
+  <circle cx="756" cy="69" r="1" fill="#FF8800" opacity="0.8"/>
+  <circle cx="829" cy="29" r="1.5" fill="#FF8800" opacity="0.6"/>
+  <circle cx="982" cy="99" r="2" fill="#FF8800" opacity="0.7"/>
+  <circle cx="109" cy="139" r="1.2" fill="#FF8800" opacity="0.9"/>
+  <circle cx="216" cy="169" r="1.8" fill="#FF8800" opacity="0.5"/>
+  <circle cx="329" cy="199" r="1" fill="#FF8800" opacity="0.8"/>
+  <circle cx="438" cy="129" r="1.5" fill="#FF8800" opacity="0.6"/>
+  <circle cx="541" cy="159" r="2" fill="#FF8800" opacity="0.7"/>
+  <circle cx="648" cy="189" r="1.2" fill="#FF8800" opacity="0.9"/>
+  <ellipse cx="400" cy="225" rx="300" ry="50" fill="#FF4400" opacity="0.2"/>
+  <circle cx="400" cy="120" r="35" fill="#FF8800"/>
+  <polygon points="0,450 100,380 150,420 200,350 250,410 300,390 350,360 400,430 450,400 500,370 550,420 600,390 650,360 700,410 750,380 800,450" fill="#4A0A00"/>
+  <polygon points="0,450 120,260 180,300 220,280 280,320 320,290 370,310 420,270 470,330 520,300 570,280 620,340 670,310 720,290 770,320 800,450" fill="#2A0500"/>
+  <polygon points="0,450 80,280 140,320 200,260 240,300 300,290 340,310 400,270 440,330 500,300 540,280 580,340 620,310 680,290 720,320 760,280 800,450" fill="#150200"/>
+  <rect x="0" y="342" width="800" height="108" fill="#0A0100"/>
+</svg>

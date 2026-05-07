@@ -1,32 +1,45 @@
 """
-Tests for HistoryStore hardening:
-- Atomic writes (tmp + rename) prevent corruption on crash
-- Corrupt history.json is backed up before resetting
-- Backward-compatible loading (missing optional fields)
+Tests for the thin HistoryStore wrapper that delegates to media_store (SQLite).
+
+JSON-specific tests (atomic writes, corrupt-file backup, backward-compat loading)
+have been removed because storage is now in media.db, not history.json.
+
+Tests kept:
+  - test_append_and_reload  : appending a record makes it visible to a new instance
+  - test_delete_persists    : deleting a record removes it from storage permanently
 """
-import json
 import sys
 from pathlib import Path
 
 # repo root on path
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
-import pytest
 import history_store as hs
 from history_store import GenerationRecord, HistoryStore
 
 
 def _patch_store(monkeypatch, tmp_path):
-    """Redirect all HistoryStore paths to tmp_path."""
-    monkeypatch.setattr(hs, "STORAGE_DIR", tmp_path)
-    monkeypatch.setattr(hs, "VIDEOS_DIR", tmp_path)
-    monkeypatch.setattr(hs, "IMAGES_DIR", tmp_path)
+    """
+    Redirect all storage to tmp_path — covers both history_store and media_store.
+
+    Each test gets a fresh MediaStore backed by tmp_path/media.db so tests
+    are fully isolated and never touch ~/.local/share/tt-video-gen/media.db.
+    """
+    import media_store as ms_mod
+    from media_store import MediaStore
+
+    # Give each test a fresh MediaStore backed by tmp_path
+    fresh_ms = MediaStore(tmp_path / "media.db")
+    monkeypatch.setattr(ms_mod, "_media_store_singleton", fresh_ms)
+
+    # Patch history_store's own dir constants (for mkdir and _QUEUE_FILE)
+    monkeypatch.setattr(hs, "STORAGE_DIR",    tmp_path)
+    monkeypatch.setattr(hs, "VIDEOS_DIR",     tmp_path)
+    monkeypatch.setattr(hs, "IMAGES_DIR",     tmp_path)
     monkeypatch.setattr(hs, "THUMBNAILS_DIR", tmp_path)
-    hist = tmp_path / "history.json"
-    monkeypatch.setattr(hs, "HISTORY_FILE", hist)
-    # Also patch the class-level _QUEUE_FILE reference
     monkeypatch.setattr(hs.HistoryStore, "_QUEUE_FILE", tmp_path / "queue.json")
-    return hist
+
+    return tmp_path / "history.json"   # kept for call-site compatibility
 
 
 def _sample_record():
@@ -40,100 +53,16 @@ def _sample_record():
     )
 
 
-def test_save_writes_tmp_then_renames(monkeypatch, tmp_path):
-    """_save() uses atomic rename: history.json.tmp must not exist after save."""
-    hist = _patch_store(monkeypatch, tmp_path)
-
-    store = HistoryStore()
-    store.append(_sample_record())
-
-    assert hist.exists(), "history.json should exist after append"
-    assert not (tmp_path / "history.json.tmp").exists(), (
-        "history.json.tmp should be removed by os.replace()"
-    )
-
-
-def test_atomic_write_leaves_good_file_on_partial_failure(monkeypatch, tmp_path):
-    """If the tmp write fails, the original history.json is untouched."""
-    import os
-    hist = _patch_store(monkeypatch, tmp_path)
-
-    # Write an initial good history
-    good_data = [{"id": "good001", "prompt": "initial"}]
-    hist.write_text(json.dumps(good_data))
-
-    store = HistoryStore()
-    # Force os.replace to fail, simulating a disk-full scenario
-    original_replace = os.replace
-
-    def fail_replace(src, dst):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(os, "replace", fail_replace)
-
-    with pytest.raises(OSError):
-        store._save()
-
-    monkeypatch.setattr(os, "replace", original_replace)
-
-    # history.json should still contain the original good data
-    content = json.loads(hist.read_text())
-    assert content == good_data, "history.json should be untouched after failed write"
-
-
-def test_corrupt_history_backed_up(monkeypatch, tmp_path):
-    """A corrupt history.json is copied to history.json.bak before resetting."""
-    hist = _patch_store(monkeypatch, tmp_path)
-    bak = tmp_path / "history.json.bak"
-
-    hist.write_text("not valid json {{{")
-
-    store = HistoryStore()
-
-    assert store.all_records() == [], "Store should start empty after corrupt load"
-    assert bak.exists(), "history.json.bak should have been created"
-    assert bak.read_text() == "not valid json {{{", (
-        "Backup should contain the original corrupt content"
-    )
-
-
-def test_missing_fields_backward_compat(monkeypatch, tmp_path):
-    """Records without newer optional fields load without error."""
-    hist = _patch_store(monkeypatch, tmp_path)
-    legacy = [
-        {
-            "id": "legacy001",
-            "prompt": "old video",
-            "negative_prompt": "",
-            "num_inference_steps": 20,
-            "seed": -1,
-            "video_path": "",
-            "thumbnail_path": "",
-            "created_at": "2025-01-01T12:00:00",
-            "duration_s": 120.0,
-            # no model, extra_meta, media_type, image_path, guidance_scale, seed_image_path
-        }
-    ]
-    hist.write_text(json.dumps(legacy))
-
-    store = HistoryStore()
-    records = store.all_records()
-
-    assert len(records) == 1
-    assert records[0].model == ""
-    assert records[0].extra_meta == {}
-    assert records[0].media_type == "video"
-    assert records[0].seed_image_path == ""
-
-
 def test_append_and_reload(monkeypatch, tmp_path):
     """Records written by one store instance are loaded correctly by a second."""
-    hist = _patch_store(monkeypatch, tmp_path)
+    _patch_store(monkeypatch, tmp_path)
 
     store1 = HistoryStore()
     rec = _sample_record()
     store1.append(rec)
 
+    # A second instance shares the same patched media_store singleton, so it
+    # sees the same SQLite DB without needing to re-read any file.
     store2 = HistoryStore()
     records = store2.all_records()
     assert len(records) == 1
@@ -142,7 +71,7 @@ def test_append_and_reload(monkeypatch, tmp_path):
 
 
 def test_delete_persists(monkeypatch, tmp_path):
-    """Deleting a record removes it from disk."""
+    """Deleting a record removes it from the underlying media_store permanently."""
     _patch_store(monkeypatch, tmp_path)
 
     store = HistoryStore()
@@ -152,3 +81,35 @@ def test_delete_persists(monkeypatch, tmp_path):
 
     store2 = HistoryStore()
     assert store2.all_records() == []
+
+
+def test_len_excludes_artgen(monkeypatch, tmp_path):
+    """len(store) must count only non-artgen records."""
+    import media_store as ms_mod
+
+    _patch_store(monkeypatch, tmp_path)
+
+    store = HistoryStore()
+
+    # Insert a normal video record via append()
+    rec = _sample_record()
+    store.append(rec)
+
+    # Insert an artgen record directly into the patched MediaStore singleton
+    from media_store import MediaRecord
+    artgen_rec = MediaRecord(
+        id="artgen-001",
+        media_type="artgen",
+        created_at="2025-01-01T00:00:00",
+        file_path="",
+        thumbnail_path="",
+        prompt="some art prompt",
+        model_id="sdxl",
+        generator_type="sdxl",
+        params="{}",
+        starred=0,
+    )
+    ms_mod._media_store_singleton.add(artgen_rec)
+
+    # len() must only count the video record, not the artgen one
+    assert len(store) == 1

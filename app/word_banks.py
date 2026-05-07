@@ -1775,3 +1775,128 @@ def skyreels_camera() -> str:
 def skyreels_style() -> str:
     """Return a random style tag suited to SkyReels generation."""
     return pick(SKYREELS_STYLE)
+
+
+# ── Artgen theme seeds ─────────────────────────────────────────────────────────
+# Short evocative phrases for artgen's Inspire button and auto-generate.
+# Used as: verse themes, palette moods, ANSI subjects, and visual generator seeds.
+# Aim: 3-8 words, specific image or feeling — no camera directions or full sentences.
+
+ARTGEN_THEMES_NATURE = [
+    "volcanic winter twilight",
+    "the hour before a desert storm",
+    "amber coastline at low tide",
+    "bioluminescent tidal flat at 3am",
+    "pine forest at the permanent snowline",
+    "a glacial valley after the ice",
+    "the geometry of sand dunes at first light",
+    "coral reef under a solar eclipse",
+    "river delta seen from altitude",
+    "fog on the sound at 5am",
+    "lichen on granite at high altitude",
+    "mangrove roots at dusk",
+    "salt flat at midsummer noon",
+    "the last hour of autumn light",
+    "aurora over a frozen inland sea",
+    "the tide that didn't come back",
+    "basalt columns and cold rain",
+    "obsidian cliffs at low water",
+]
+
+ARTGEN_THEMES_URBAN = [
+    "neon monastery",
+    "brutalist cathedral at 4am",
+    "circuit cathedral",
+    "a drowned downtown at golden hour",
+    "orbital debris field",
+    "the switchboard of a dead city",
+    "retro future under twin moons",
+    "the archaeology of a flooded suburb",
+    "radio tower in a wheat field at dusk",
+    "Soviet brutalist spa in winter",
+    "a night market in ruins",
+    "the geometry of rail yards at night",
+    "copper pipes in an abandoned bathhouse",
+    "a lighthouse no one staffs anymore",
+    "telegraph poles in a snowstorm",
+    "a rooftop garden in a city that forgot it",
+    "the underside of an elevated train",
+    "loading docks at 3am in November",
+]
+
+ARTGEN_THEMES_EMOTIONAL = [
+    "the weight of forgotten names",
+    "the geometry of grief",
+    "accumulated rust and longing",
+    "migration and the weight of salt",
+    "what silence accumulates over decades",
+    "the patience of waiting rooms",
+    "the color of old letters",
+    "things that outlast the people who made them",
+    "the moment before departure",
+    "nostalgia with no fixed object",
+    "something lost before it was named",
+    "the weight of unsent correspondence",
+    "ordinary grief in an extraordinary landscape",
+    "the specific sadness of Sunday afternoons",
+    "tenderness at the edge of collapse",
+    "the inventory of an empty house",
+    "the sound of a language going extinct",
+    "what the last person who remembered knew",
+]
+
+ARTGEN_THEMES_MYTHIC = [
+    "drowned archive",
+    "the last herald of an unmapped province",
+    "star cartography of invented cultures",
+    "ruins of a civilization that ran on light",
+    "the monastery that predates the religion",
+    "the language spoken before the divergence",
+    "a god made of weather patterns",
+    "kingdoms mapped under the sea",
+    "the oracle's last uncollected message",
+    "the city that grew inside a glacier",
+    "the machine that dreamed it was organic",
+    "the library of books that couldn't be written",
+    "the map of a country that chose to dissolve",
+    "the signal from a probe nobody launched",
+    "the ceremony for an eclipse that didn't happen",
+    "an empire that built only in materials that decay",
+    "the scripture of a religion with no followers",
+    "the myth that explains the wrong thing",
+]
+
+ARTGEN_THEMES_MATERIAL = [
+    "copper and verdigris",
+    "volcanic glass and bone",
+    "amber and salt crystal",
+    "oxidized silver and indigo",
+    "rust and bioluminescence",
+    "obsidian and gold leaf",
+    "lichen and weathered marble",
+    "deep ocean black and thermal white",
+    "tidal green and storm grey",
+    "ember orange and void black",
+    "phosphor green and cathode glow",
+    "neon violet and concrete grey",
+    "patinated brass and midnight blue",
+    "bone white and iron oxide red",
+    "malachite and shadow",
+    "fog white and carbon black",
+    "pale jade and rust",
+    "sulfur yellow and deep navy",
+]
+
+ARTGEN_THEMES = (
+    ARTGEN_THEMES_NATURE + ARTGEN_THEMES_URBAN +
+    ARTGEN_THEMES_EMOTIONAL + ARTGEN_THEMES_MYTHIC +
+    ARTGEN_THEMES_MATERIAL
+)
+
+# Alias used by artgen_panel.py's fallback import path.
+THEMES = ARTGEN_THEMES
+
+
+def artgen_theme() -> str:
+    """Return a random artgen theme seed phrase."""
+    return pick(ARTGEN_THEMES)

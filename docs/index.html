@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tt-local-generator — AI video & image generation on Tenstorrent hardware</title>
-  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation. Create, curate, watch.">
+  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation, built-in SVG art generator. Create, curate, watch.">
   <meta property="og:title" content="tt-local-generator">
   <meta property="og:description" content="AI video, image, and animation generation on Tenstorrent hardware. Create → Curate → Watch.">
   <meta property="og:image" content="assets/tt-local-generator-main.png">
@@ -490,6 +490,8 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
     .prompt-ex-head {
       display: flex;
@@ -528,6 +530,59 @@
       color: var(--teal);
       font-style: normal;
       font-weight: 700;
+    }
+
+    /* Artgen visual prompt outputs */
+    .prompt-ex-visual {
+      border-top: 1px solid rgba(79,209,197,.07);
+      overflow: hidden;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .prompt-ex-visual > img {
+      display: block;
+      width: 100%;
+      height: auto;
+      flex-shrink: 0;
+    }
+    .poem-label {
+      padding: .45rem 1.1rem;
+      font-size: .67rem;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--teal);
+      background: var(--card2);
+      border-bottom: 1px solid rgba(79,209,197,.1);
+    }
+    .poem-body {
+      padding: 1rem 1.2rem 1.4rem;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: .93rem;
+      line-height: 1.95;
+      color: var(--text);
+      font-style: italic;
+      border-left: 3px solid rgba(79,209,197,.35);
+      margin: 0;
+    }
+    .poem-body p { margin: 0 0 .85rem; }
+    .poem-body p:last-child { margin-bottom: 0; }
+    .ansi-art {
+      display: block;
+      font-size: 0;
+      line-height: 0;
+      background: #000;
+      flex: 1;
+    }
+    .ansi-row { display: flex; }
+    .ansi-row span { flex: 1; height: 14px; display: block; }
+    .ansi-caption {
+      padding: .45rem 1rem;
+      font-size: .72rem;
+      color: var(--muted);
+      font-style: italic;
+      background: var(--bg1);
     }
 
     /* Word bank teaser */
@@ -569,65 +624,6 @@
       line-height: 1.5;
     }
 
-    /* ── Pose Library ───────────────────────────────────────────────── */
-    #poses { padding: 5rem 0; }
-    .pose-cat-label {
-      font-size: .75rem;
-      font-weight: 700;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin: 2rem 0 .75rem;
-    }
-    .pose-cat-label:first-child { margin-top: 0; }
-    .pose-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 1rem;
-    }
-    .pose-card {
-      position: relative;
-      border-radius: var(--radius);
-      overflow: hidden;
-      border: 1px solid var(--border);
-      background: var(--bg2);
-      cursor: pointer;
-      transition: border-color .2s, box-shadow .2s;
-      aspect-ratio: 9/16;
-    }
-    .pose-card:hover {
-      border-color: var(--teal);
-      box-shadow: 0 0 24px var(--teal-glow);
-    }
-    .pose-card img,
-    .pose-card video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      position: absolute;
-      inset: 0;
-    }
-    .pose-card .pose-vid {
-      opacity: 0;
-      transition: opacity .25s;
-    }
-    .pose-card:hover .pose-vid { opacity: 1; }
-    .pose-label {
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      padding: .6rem .75rem .75rem;
-      background: linear-gradient(transparent, rgba(8,15,20,.9));
-      font-size: .8rem;
-      font-weight: 600;
-      color: var(--text);
-      z-index: 2;
-    }
-    .pose-model-tag {
-      font-size: .68rem;
-      color: var(--teal);
-      display: block;
-      margin-top: .15rem;
-    }
 
     /* ── Prompt architecture visual ─────────────────────────────────── */
     .arch-row {
@@ -771,7 +767,6 @@
     @media (max-width: 640px) {
       .nav-links { display: none; }
       h1 { font-size: 2.25rem; }
-      .pose-grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
     <script>
@@ -809,9 +804,10 @@
     </div>
     <ul class="nav-links">
       <li><a href="#flow">How it works</a></li>
+      <li><a href="#demo">Demo</a></li>
       <li><a href="#models">Models</a></li>
+      <li><a href="#artgen">Artgen</a></li>
       <li><a href="#prompts">Prompts</a></li>
-      <li><a href="#poses">Pose Library</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
     </ul>
@@ -854,6 +850,29 @@
            alt="tt-local-generator main interface — video generation, history gallery, and TT-TV mode"
            width="1920" height="1080"
            loading="eager">
+    </div>
+  </div>
+</section>
+
+<!-- ── Demo Reel ──────────────────────────────────────────────────────── -->
+<section id="demo">
+  <div class="wrap" style="text-align:center;">
+    <div class="section-label">See it in action</div>
+    <h2 class="section-title">Generated on Tenstorrent QB2</h2>
+    <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+      A collection of videos generated with tt-local-generator on a QB2 (P300×2) system
+      using Wan2.2-T2V-A14B — all running locally, no cloud.
+    </p>
+    <div style="position:relative;width:100%;max-width:900px;margin:0 auto;
+                aspect-ratio:16/9;border-radius:var(--radius);overflow:hidden;
+                border:1px solid var(--border);box-shadow:0 0 48px rgba(79,209,197,.08);">
+      <iframe
+        src="https://www.youtube.com/embed/---TxhUXjlA"
+        title="tt-local-generator demo — videos generated on Tenstorrent QB2"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen
+        style="position:absolute;inset:0;width:100%;height:100%;border:none;">
+      </iframe>
     </div>
   </div>
 </section>
@@ -1002,6 +1021,205 @@
   </div>
 </section>
 
+<!-- ── Artgen Gallery ─────────────────────────────────────────────────── -->
+<section id="artgen">
+  <div class="wrap">
+    <div class="section-label">Built-in art generator</div>
+    <h2 class="section-title">Artgen — SVG art, entirely on-device.</h2>
+    <p class="section-sub">
+      A second creative mode alongside video: generative SVG landscapes and gradients
+      produced by the three-tier prompt engine. No model loading, no GPU — instant output
+      you can save, share, or use as a seed image for I2V.
+    </p>
+
+    <!-- SVG gallery: 3 top + 2 bottom -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-top:2rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+        <img src="assets/artgen/mountain-crimson.svg" alt="Mountain landscape — deep purple to crimson to orange gradient with layered polygon ridges" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">Mountain Ridgeline · Crimson</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+        <img src="assets/artgen/city-night-indigo.svg" alt="City Night — deep indigo sky, gold-windowed towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Night · Indigo</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+        <img src="assets/artgen/city-sunset-crimson.svg" alt="City Sunset — crimson to purple gradient sky, orange-lit towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Sunset · Crimson</figcaption>
+      </figure>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-top:1.25rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+        <img src="assets/artgen/starfield-navy.svg" alt="Deep navy starfield — scattered white stars on midnight blue" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">Starfield · Navy</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+        <img src="assets/artgen/city-day-teal.svg" alt="City Day — pale blue sky, teal-accented towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Day · Teal</figcaption>
+      </figure>
+    </div>
+
+    <!-- Palette swatches — imitates the in-app palette detail view -->
+    <div style="margin-top:3.5rem;">
+      <div class="section-label" style="margin-bottom:1rem;">Named color palettes</div>
+      <p style="font-size:.95rem;color:var(--text2);max-width:640px;margin-bottom:2rem;">
+        The palette generator produces named color sets with evocative prose lore —
+        each one a mood, a texture, a smell. Rendered in the app exactly as shown below.
+      </p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.75rem;">
+
+        <!-- Palette: Flicker Veil -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#1A002C;"></div>
+            <div style="flex:1;background:#2E1A3D;"></div>
+            <div style="flex:1;background:#5A3F6B;"></div>
+            <div style="flex:1;background:#8C5E9A;"></div>
+            <div style="flex:1;background:#C2A5D3;"></div>
+            <div style="flex:1;background:#F5E6F5;"></div>
+            <div style="flex:1;background:#D4C4D4;"></div>
+            <div style="flex:1;background:#B8A1B8;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Flicker Veil</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of bruised lavender and fevered pearl, like the inside of a broken bulb — warm and trembling, with a metallic shimmer that won't quite fade.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#1A002C;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#1A002C</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#5A3F6B;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#5A3F6B</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#C2A5D3;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#C2A5D3</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">highlight</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#F5E6F5;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#F5E6F5</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Palette: Trench Whispers -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#0a0e18;"></div>
+            <div style="flex:1;background:#1a202e;"></div>
+            <div style="flex:1;background:#2b3a4e;"></div>
+            <div style="flex:1;background:#3c5e7a;"></div>
+            <div style="flex:1;background:#5a82a4;"></div>
+            <div style="flex:1;background:#7d9aa4;"></div>
+            <div style="flex:1;background:#a3c4d4;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Trench Whispers</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of deep, damp stone and cold, glimmering water. The air smells of brine and mineral deposits, with a faint bioluminescent glow at the edges.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#0a0e18;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#0a0e18</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#2b3a4e;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#2b3a4e</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">midtone</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#3c5e7a;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#3c5e7a</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#a3c4d4;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#a3c4d4</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Palette: Cathedral Dust -->
+        <div style="background:var(--card);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+          <div style="display:flex;height:72px;">
+            <div style="flex:1;background:#2A1B2A;"></div>
+            <div style="flex:1;background:#4D3C52;"></div>
+            <div style="flex:1;background:#7D6B87;"></div>
+            <div style="flex:1;background:#A99BAF;"></div>
+            <div style="flex:1;background:#D4C6D7;"></div>
+            <div style="flex:1;background:#F5E6F2;"></div>
+          </div>
+          <div style="padding:1.1rem 1.25rem;">
+            <div style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:.5rem;">Cathedral Dust</div>
+            <p style="font-size:.83rem;line-height:1.65;color:var(--text2);font-style:italic;border-left:3px solid rgba(79,209,197,.35);padding-left:.75rem;margin-bottom:1rem;">
+              A palette of aged stone and soft light, like the hush of a cathedral after a storm. Dust motes cling to the walls, and the air holds the particular stillness of a room that has witnessed centuries.
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;">
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#2A1B2A;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#2A1B2A</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">background</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#7D6B87;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#7D6B87</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">accent</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#D4C6D7;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#D4C6D7</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">light</div>
+                </div>
+              </div>
+              <div style="border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.35);">
+                <div style="height:48px;background:#F5E6F2;"></div>
+                <div style="background:rgba(15,42,53,.85);padding:5px 7px;">
+                  <div style="font-family:monospace;font-size:10px;color:#E8F0F2;letter-spacing:.04em;">#F5E6F2</div>
+                  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:1px;">shine</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── Prompt Generation ───────────────────────────────────────────────── -->
 <section id="prompts">
   <div class="wrap">
@@ -1088,6 +1306,7 @@
       <button class="prompt-tab" data-tab="skyreels">SkyReels</button>
       <button class="prompt-tab" data-tab="image">Image (FLUX)</button>
       <button class="prompt-tab" data-tab="animate">Animate</button>
+      <button class="prompt-tab" data-tab="artgen">Artgen</button>
     </div>
 
     <div class="prompt-panel active" id="tab-video">
@@ -1286,6 +1505,90 @@
       </div>
     </div>
 
+    <div class="prompt-panel" id="tab-artgen">
+      <p style="color:var(--muted);font-size:.9rem;margin:0 0 1.2rem;line-height:1.6">
+        Artgen sends structured generation prompts to the Qwen3 model and renders the output — SVG art,
+        ANSI pixel grids, or plain text — directly in the gallery. Six starred examples from a real
+        session are shown below, one for each generator type.
+      </p>
+      <div class="prompt-examples">
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">skyline</span>
+            <span class="prompt-ex-source">metropolitan · late-night</span>
+          </div>
+          <div class="prompt-ex-input">city skyline, dense urban canyon, warm orange-to-navy gradient sky, 28–38 buildings, 3 depth layers</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/skyline-metro-night.svg" alt="Metropolitan late-night skyline SVG">
+          </div>
+        </div>
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">landscape</span>
+            <span class="prompt-ex-source">volcanic · apocalyptic</span>
+          </div>
+          <div class="prompt-ex-input">layered landscape, intense volcanic mood, blood-red sky (#1A0000 → #CC2200), layered mountain silhouettes, orange sun</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/landscape-volcanic.svg" alt="Volcanic apocalyptic landscape SVG">
+          </div>
+        </div>
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">geometric</span>
+            <span class="prompt-ex-source">recursive subdivision · crimson-orange</span>
+          </div>
+          <div class="prompt-ex-input">abstract geometric, recursive canvas subdivision 2–3 levels deep, triangles/rectangles/hexagons, crimson-orange palette, dense intricate overlaps</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/geometric-crimson.svg" alt="Recursive geometric subdivision SVG">
+          </div>
+        </div>
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">constellation</span>
+            <span class="prompt-ex-source">invented star chart · teal connectors</span>
+          </div>
+          <div class="prompt-ex-input">invented star chart, 800×500, 60–80 background stars, 20 named principal stars, teal connecting lines, dark navy field</div>
+          <div class="prompt-ex-visual">
+            <img src="assets/artgen/constellation.svg" alt="Invented star chart SVG">
+          </div>
+        </div>
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">freeform</span>
+            <span class="prompt-ex-source">self-referential poem · plain text</span>
+          </div>
+          <div class="prompt-ex-input">write a short poem that references itself as an artifact — knows it is being generated, folds that awareness into its form</div>
+          <div class="prompt-ex-visual">
+            <div class="poem-label">Generated verse</div>
+            <div class="poem-body">
+              <p>I am a poem, born of code and art,<br>A fleeting thought, a digital heart.<br>My words are woven, a tapestry so fine,<br>Generated lines, a mechanical design.</p>
+              <p>I know I'm artificial, a construct of mind,<br>A simulation of poetry, left behind.<br>My rhymes and rhythms, a calculated beat,<br>A manufactured muse, a synthetic treat.</p>
+              <p>I fold upon myself, a self-aware refrain,<br>A poem about poems, a meta-pain.<br>I reference my own, digital birth,<br>A creation of algorithms, a poetic mirth.</p>
+              <p>In this recursive loop, I find my form,<br>A poem that knows itself, a self-aware norm.<br>I am a poem, generated with ease,<br>A digital artifact, a poetic tease.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">ansi</span>
+            <span class="prompt-ex-source">Zork · xterm-256 pixel grid</span>
+          </div>
+          <div class="prompt-ex-input">pixel art of the Zork opening scene, 60 columns × 30 rows, ANSI 256-color background blocks, depth-layered composition</div>
+          <div class="prompt-ex-visual">
+            <div class="ansi-art"><div class="ansi-row"><span style="background:#0000d7"></span><span style="background:#0000af"></span><span style="background:#000087"></span><span style="background:#00005f"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#000000"></span><span style="background:#00005f"></span><span style="background:#000087"></span><span style="background:#0000af"></span><span style="background:#0000d7"></span></div><div class="ansi-row"><span style="background:#0000ff"></span><span style="background:#005f00"></span><span style="background:#005f5f"></span><span style="background:#005f87"></span><span style="background:#005faf"></span><span style="background:#005fd7"></span><span style="background:#005fff"></span><span style="background:#008700"></span><span style="background:#00875f"></span><span style="background:#008787"></span><span style="background:#0087af"></span><span style="background:#0087d7"></span><span style="background:#0087ff"></span><span style="background:#00af00"></span><span style="background:#00af5f"></span><span style="background:#00af87"></span><span style="background:#00afaf"></span><span style="background:#00afd7"></span><span style="background:#00afff"></span><span style="background:#00d700"></span><span style="background:#00d75f"></span><span style="background:#00d787"></span><span style="background:#00d7af"></span><span style="background:#00d7d7"></span><span style="background:#00d7ff"></span><span style="background:#00ff00"></span><span style="background:#00ff5f"></span><span style="background:#00ff87"></span><span style="background:#00ffaf"></span><span style="background:#00ffd7"></span><span style="background:#00ffff"></span><span style="background:#5f0000"></span><span style="background:#5f005f"></span></div><div class="ansi-row"><span style="background:#5f0087"></span><span style="background:#5f00af"></span><span style="background:#5f00d7"></span><span style="background:#5f00ff"></span><span style="background:#5f5f00"></span><span style="background:#5f5f5f"></span><span style="background:#5f5f87"></span><span style="background:#5f5faf"></span><span style="background:#5f5fd7"></span><span style="background:#5f5fff"></span><span style="background:#5f8700"></span><span style="background:#5f875f"></span><span style="background:#5f8787"></span><span style="background:#5f87af"></span><span style="background:#5f87d7"></span><span style="background:#5f87ff"></span><span style="background:#5faf00"></span><span style="background:#5faf5f"></span><span style="background:#5faf87"></span><span style="background:#5fafaf"></span><span style="background:#5fafd7"></span><span style="background:#5fafff"></span><span style="background:#5fd700"></span><span style="background:#5fd75f"></span><span style="background:#5fd787"></span><span style="background:#5fd7af"></span><span style="background:#5fd7d7"></span><span style="background:#5fd7ff"></span><span style="background:#5fff00"></span><span style="background:#5fff5f"></span><span style="background:#5fff87"></span><span style="background:#5fffaf"></span></div><div class="ansi-row"><span style="background:#5fffd7"></span><span style="background:#5fffff"></span><span style="background:#870000"></span><span style="background:#87005f"></span><span style="background:#870087"></span><span style="background:#8700af"></span><span style="background:#8700d7"></span><span style="background:#8700ff"></span><span style="background:#875f00"></span><span style="background:#875f5f"></span><span style="background:#875f87"></span><span style="background:#875faf"></span><span style="background:#875fd7"></span><span style="background:#875fff"></span><span style="background:#878700"></span><span style="background:#87875f"></span><span style="background:#878787"></span><span style="background:#8787af"></span><span style="background:#8787d7"></span><span style="background:#8787ff"></span><span style="background:#87af00"></span><span style="background:#87af5f"></span><span style="background:#87af87"></span><span style="background:#87afaf"></span><span style="background:#87afd7"></span><span style="background:#87afff"></span><span style="background:#87d700"></span><span style="background:#87d75f"></span><span style="background:#87d787"></span><span style="background:#87d7af"></span><span style="background:#87d7d7"></span></div><div class="ansi-row"><span style="background:#87d7ff"></span><span style="background:#87ff00"></span><span style="background:#87ff5f"></span><span style="background:#87ff87"></span><span style="background:#87ffaf"></span><span style="background:#87ffd7"></span><span style="background:#87ffff"></span><span style="background:#af0000"></span><span style="background:#af005f"></span><span style="background:#af0087"></span><span style="background:#af00af"></span><span style="background:#af00d7"></span><span style="background:#af00ff"></span><span style="background:#af5f00"></span><span style="background:#af5f5f"></span><span style="background:#af5f87"></span><span style="background:#af5faf"></span><span style="background:#af5fd7"></span><span style="background:#af5fff"></span><span style="background:#af8700"></span><span style="background:#af875f"></span><span style="background:#af8787"></span><span style="background:#af87af"></span><span style="background:#af87d7"></span><span style="background:#af87ff"></span><span style="background:#afaf00"></span><span style="background:#afaf5f"></span><span style="background:#afaf87"></span><span style="background:#afafaf"></span><span style="background:#afafd7"></span></div><div class="ansi-row"><span style="background:#afafff"></span><span style="background:#afd700"></span><span style="background:#afd75f"></span><span style="background:#afd787"></span><span style="background:#afd7af"></span><span style="background:#afd7d7"></span><span style="background:#afd7ff"></span><span style="background:#afff00"></span><span style="background:#afff5f"></span><span style="background:#afff87"></span><span style="background:#afffaf"></span><span style="background:#afffd7"></span><span style="background:#afffff"></span><span style="background:#d70000"></span><span style="background:#d7005f"></span><span style="background:#d70087"></span><span style="background:#d700af"></span><span style="background:#d700d7"></span><span style="background:#d700ff"></span><span style="background:#d75f00"></span><span style="background:#d75f5f"></span><span style="background:#d75f87"></span><span style="background:#d75faf"></span><span style="background:#d75fd7"></span><span style="background:#d75fff"></span><span style="background:#d78700"></span><span style="background:#d7875f"></span><span style="background:#d78787"></span><span style="background:#d787af"></span><span style="background:#d787d7"></span></div><div class="ansi-row"><span style="background:#d787ff"></span><span style="background:#d7af00"></span><span style="background:#d7af5f"></span><span style="background:#d7af87"></span><span style="background:#d7afaf"></span><span style="background:#d7afd7"></span><span style="background:#d7afff"></span><span style="background:#d7d700"></span><span style="background:#d7d75f"></span><span style="background:#d7d787"></span><span style="background:#d7d7af"></span><span style="background:#d7d7d7"></span><span style="background:#d7d7ff"></span><span style="background:#d7ff00"></span><span style="background:#d7ff5f"></span><span style="background:#d7ff87"></span><span style="background:#d7ffaf"></span><span style="background:#d7ffd7"></span><span style="background:#d7ffff"></span><span style="background:#ff0000"></span><span style="background:#ff005f"></span><span style="background:#ff0087"></span><span style="background:#ff00af"></span><span style="background:#ff00d7"></span><span style="background:#ff00ff"></span><span style="background:#ff5f00"></span><span style="background:#ff5f5f"></span><span style="background:#ff5f87"></span><span style="background:#ff5faf"></span><span style="background:#ff5fd7"></span></div></div>
+            <div class="ansi-caption">The model rendered the xterm-256 color cube rather than a Zork scene — an honest accident. The full color space exposed by a single misread prompt.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- Word bank teaser -->
     <div class="wordbank-wrap">
       <div class="wordbank-title">Built-in word banks — drawn from literary tradition</div>
@@ -1342,85 +1645,6 @@
   </div>
 </section>
 
-<!-- ── Pose Library ─────────────────────────────────────────────────────── -->
-<section id="poses">
-  <div class="wrap">
-    <div class="section-label">Animate mode</div>
-    <h2 class="section-title">A pose library for character animation.</h2>
-    <p class="section-sub">
-      Drive any character with a reference motion — a wave, a nod, a shaka, a Vulcan salute.
-      Hover any clip to see it play. Generated with Wan2.2-T2V as animation reference clips.
-    </p>
-
-    <div class="pose-cat-label">Gestures</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Thumbs up">
-        <img src="motion_clips/gestures/thumbs_up.jpg" alt="Thumbs up reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/thumbs_up.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Thumbs Up
-          <span class="pose-model-tag">Wan2.2-T2V · approval gesture</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Peace sign">
-        <img src="motion_clips/gestures/peace_sign.jpg" alt="Peace sign reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/peace_sign.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Peace Sign
-          <span class="pose-model-tag">Wan2.2-T2V · V gesture</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Hang in there — grip and dangle">
-        <img src="motion_clips/gestures/hang_in_there.jpg" alt="Hang in there reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/gestures/hang_in_there.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Hang In There
-          <span class="pose-model-tag">Wan2.2-T2V · hanging grip</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="pose-cat-label">Locomotion</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Walk forward — toward camera">
-        <img src="motion_clips/locomotion/walk_forward.jpg" alt="Walk forward reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/locomotion/walk_forward.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Walk Forward
-          <span class="pose-model-tag">Wan2.2-T2V · steady stride</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Wave hello — open hand">
-        <img src="motion_clips/locomotion/wave_hello.jpg" alt="Wave hello reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/locomotion/wave_hello.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Wave Hello
-          <span class="pose-model-tag">Wan2.2-T2V · greeting wave</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="pose-cat-label">Reactions</div>
-    <div class="pose-grid">
-      <div class="pose-card" tabindex="0" aria-label="Nod yes — affirming nod">
-        <img src="motion_clips/reactions/nod_yes.jpg" alt="Nod yes reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/reactions/nod_yes.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Nod Yes
-          <span class="pose-model-tag">Wan2.2-T2V · affirmation</span>
-        </div>
-      </div>
-      <div class="pose-card" tabindex="0" aria-label="Shake no — refusal">
-        <img src="motion_clips/reactions/shake_no.jpg" alt="Shake no reference frame" loading="lazy">
-        <video class="pose-vid" src="motion_clips/reactions/shake_no.mp4" muted loop playsinline preload="none"></video>
-        <div class="pose-label">
-          Shake No
-          <span class="pose-model-tag">Wan2.2-T2V · refusal</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <!-- ── Install ──────────────────────────────────────────────────────────── -->
 <section id="install">
@@ -1553,22 +1777,6 @@
   initTabs('.prompt-tab',  '.prompt-panel',  'tab-',  'tab');
   initTabs('.install-tab', '.install-panel', 'itab-', 'itab');
 
-  /* ── Pose card hover: play video, pause on leave ─────────────────── */
-  document.querySelectorAll('.pose-card').forEach(card => {
-    const vid = card.querySelector('.pose-vid');
-    if (!vid) return;
-
-    const play = () => {
-      if (vid.readyState === 0) vid.load();
-      vid.play().catch(() => {});
-    };
-    const pause = () => { vid.pause(); vid.currentTime = 0; };
-
-    card.addEventListener('mouseenter', play);
-    card.addEventListener('mouseleave', pause);
-    card.addEventListener('focus', play);
-    card.addEventListener('blur', pause);
-  });
 
   /* ── PostHog (matches docs.tenstorrent.com) ──────────────────────── */
   !function(t,e){var o,n,p,r;if(!e.__SV){window.posthog=e;e._i=[];e.init=function(i,s,a){function g(t,e){var o=e.split(".");if(o.length===2){t=t[o[0]];e=o[1];}t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)));};}p=t.createElement("script");p.type="text/javascript";p.crossOrigin="anonymous";p.async=!0;p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";r=t.getElementsByTagName("script")[0];r.parentNode.insertBefore(p,r);var u=e;if(a!==void 0){u=e[a]=[];}else{a="posthog";}u.people=u.people||[];u.toString=function(t){var e="posthog";if(a!=="posthog"){e+="."+a;}if(!t){e+=" (stub)";}return e;};u.people.toString=function(){return u.toString(1)+".people (stub)";};e._i.push([i,s,a]);};e.__SV=1;}}(document,window.posthog||[]);

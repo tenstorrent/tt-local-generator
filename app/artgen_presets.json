@@ -1,0 +1,430 @@
+[
+  {
+    "name": "Atari Sunset",
+    "generator": "landscape",
+    "description": "Red sky, mountains, stars — glitched like a cartridge pulled too soon",
+    "params": {
+      "palette": "red",
+      "mountains": true,
+      "clouds": false,
+      "stars": true,
+      "glitch": true
+    }
+  },
+  {
+    "name": "Phosphor Horizon",
+    "generator": "landscape",
+    "description": "Purple phosphor glow across distant mountains — the monitor at 2am",
+    "params": {
+      "palette": "purple",
+      "mountains": true,
+      "clouds": false,
+      "stars": true,
+      "glitch": true
+    }
+  },
+  {
+    "name": "Commodore Dawn",
+    "generator": "landscape",
+    "description": "Blue ocean light, clouds on the horizon — a new load begins",
+    "params": {
+      "palette": "blue",
+      "mountains": true,
+      "clouds": true,
+      "stars": false,
+      "glitch": false
+    }
+  },
+  {
+    "name": "Ember & Ash",
+    "generator": "landscape",
+    "description": "Orange afterburn, clouded sky — the world after the render completes",
+    "params": {
+      "palette": "orange",
+      "mountains": true,
+      "clouds": true,
+      "stars": false,
+      "glitch": false
+    }
+  },
+  {
+    "name": "Perfect Sunset",
+    "generator": "landscape",
+    "description": "Warm sunset palette with mountains and soft clouds — no glitches here",
+    "params": {
+      "palette": "sunset",
+      "mountains": true,
+      "clouds": true,
+      "stars": false,
+      "glitch": false
+    }
+  },
+
+  {
+    "name": "Expo '67 Twilight",
+    "generator": "skyline",
+    "description": "Retro World's Fair skyline at golden dusk — pavilions against a bruised sky",
+    "params": {
+      "era": "retro",
+      "density": "medium",
+      "sky": "dusk"
+    }
+  },
+  {
+    "name": "World of Tomorrow",
+    "generator": "skyline",
+    "description": "Futurist city at dusk — the 1939 World's Fair imagined from the year 2099",
+    "params": {
+      "era": "futuristic",
+      "density": "medium",
+      "sky": "dusk"
+    }
+  },
+  {
+    "name": "Text Adventure City",
+    "generator": "skyline",
+    "description": "Retro night city, dense as a dungeon level — lit windows suggest treasure",
+    "params": {
+      "era": "retro",
+      "density": "high",
+      "sky": "night"
+    }
+  },
+  {
+    "name": "Neon Dystopia",
+    "generator": "skyline",
+    "description": "Futuristic high-density skyline at night — rain on the sensor array",
+    "params": {
+      "era": "futuristic",
+      "density": "high",
+      "sky": "night"
+    }
+  },
+
+  {
+    "name": "Commodore Zodiac",
+    "generator": "constellation",
+    "description": "12 invented stars with ancient-sounding machine lore — Sector 64 mythology",
+    "params": {
+      "culture": "invented",
+      "stars": 12,
+      "lore": true
+    }
+  },
+  {
+    "name": "Fair Grounds Sky",
+    "generator": "constellation",
+    "description": "8 stars named for World's Fair pavilions — with the myth of their founding",
+    "params": {
+      "culture": "invented",
+      "stars": 8,
+      "lore": true
+    }
+  },
+  {
+    "name": "Norse Runes",
+    "generator": "constellation",
+    "description": "9 Norse stars — the number of worlds, mapped overhead",
+    "params": {
+      "culture": "norse",
+      "stars": 9,
+      "lore": true
+    }
+  },
+  {
+    "name": "Algorithm's Heaven",
+    "generator": "constellation",
+    "description": "16 invented stars with no lore — just the diagram of a forgotten proof",
+    "params": {
+      "culture": "invented",
+      "stars": 16,
+      "lore": false
+    }
+  },
+
+  {
+    "name": "Colors in Conflict",
+    "generator": "geometric",
+    "description": "Mondrian grid at maximum complexity — primary colors refusing to share space",
+    "params": {
+      "style": "mondrian",
+      "geo_palette": "ember",
+      "complexity": "high"
+    }
+  },
+  {
+    "name": "Sierpinski Weekend",
+    "generator": "geometric",
+    "description": "Recursive monochrome — the triangle inside the triangle inside the triangle",
+    "params": {
+      "style": "recursive",
+      "geo_palette": "mono",
+      "complexity": "high"
+    }
+  },
+  {
+    "name": "Sea Glass Harmony",
+    "generator": "geometric",
+    "description": "Woven teal forms at low complexity — colors that agree with each other",
+    "params": {
+      "style": "weave",
+      "geo_palette": "teal",
+      "complexity": "low"
+    }
+  },
+  {
+    "name": "Circuit Mind",
+    "generator": "geometric",
+    "description": "Circuit-trace geometry in monochrome — the board as abstract painting",
+    "params": {
+      "style": "circuit",
+      "geo_palette": "mono",
+      "complexity": "high"
+    }
+  },
+  {
+    "name": "Forest Weave",
+    "generator": "geometric",
+    "description": "Interlocking forest-palette forms — generative art that grew from a seed",
+    "params": {
+      "style": "weave",
+      "geo_palette": "forest",
+      "complexity": "low"
+    }
+  },
+
+  {
+    "name": "Neon Logic",
+    "generator": "circuit",
+    "description": "Three inputs, XOR/NOR/AND gates, neon style — the circuit dreams in light",
+    "params": {
+      "inputs": "A,B,C",
+      "depth": 2,
+      "circuit_style": "neon",
+      "gates": ["xor", "nor", "and"]
+    }
+  },
+  {
+    "name": "Blueprint Classic",
+    "generator": "circuit",
+    "description": "Three inputs on paper — AND and OR on a blueprint from the file cabinet",
+    "params": {
+      "inputs": "A,B,C",
+      "depth": 2,
+      "circuit_style": "paper",
+      "gates": ["and", "or"]
+    }
+  },
+  {
+    "name": "Binary Confusion",
+    "generator": "circuit",
+    "description": "Four inputs, three levels deep, NAND/NOR/XOR — the logic of forgetting",
+    "params": {
+      "inputs": "A,B,C,D",
+      "depth": 3,
+      "circuit_style": "neon",
+      "gates": ["nand", "nor", "xor"]
+    }
+  },
+
+  {
+    "name": "Time Out of Joint",
+    "generator": "verse",
+    "description": "Three haiku about the moment before the next moment arrives",
+    "params": {
+      "form": "haiku",
+      "theme": "the moment between seconds, time folded back on itself",
+      "count": 3
+    }
+  },
+  {
+    "name": "Last Save",
+    "generator": "verse",
+    "description": "Three epitaphs for things that ran out of memory",
+    "params": {
+      "form": "epitaph",
+      "theme": "the final cartridge, the last checkpoint, the save that did not take",
+      "count": 3
+    }
+  },
+  {
+    "name": "BASIC Meditation",
+    "generator": "verse",
+    "description": "Two lore fragments from the manual of a machine that never shipped",
+    "params": {
+      "form": "lore",
+      "theme": "the machine dreams in phosphor, BASIC programs that loop forever",
+      "count": 2
+    }
+  },
+  {
+    "name": "Wordplay: Homophones",
+    "generator": "verse",
+    "description": "Four couplets built from words that sound alike but mean otherwise",
+    "params": {
+      "form": "couplet",
+      "theme": "words that sound like other words, meaning folded inside meaning",
+      "count": 4
+    }
+  },
+  {
+    "name": "World's Fair Elegy",
+    "generator": "verse",
+    "description": "Three lore fragments from pavilions that no longer exist",
+    "params": {
+      "form": "lore",
+      "theme": "the 1964 world's fair, the city built to be torn down, utopia on a deadline",
+      "count": 3
+    }
+  },
+
+  {
+    "name": "Phosphor Green",
+    "generator": "palette",
+    "description": "5 shades of monitor glow — the dark basement, the lit screen",
+    "params": {
+      "mood": "phosphor green monitor glow, CRT screen in darkness",
+      "count": 5,
+      "export_css": false
+    }
+  },
+  {
+    "name": "World's Fair Ivory",
+    "generator": "palette",
+    "description": "6 tones of 1964 optimism — bone, gold, aluminum, sky",
+    "params": {
+      "mood": "1964 world's fair pavilion colors, ivory and gold and futurist aluminum",
+      "count": 6,
+      "export_css": false
+    }
+  },
+  {
+    "name": "Primary Conflict",
+    "generator": "palette",
+    "description": "4 colors that refuse to coexist — primary war on white",
+    "params": {
+      "mood": "primary colors in direct conflict, high contrast, Mondrian energy",
+      "count": 4,
+      "export_css": false
+    }
+  },
+  {
+    "name": "Sea Glass Harmony",
+    "generator": "palette",
+    "description": "6 colors that came from the same ocean — a CSS export for the web",
+    "params": {
+      "mood": "sea glass and seafoam, colors worn smooth by water",
+      "count": 6,
+      "export_css": true
+    }
+  },
+  {
+    "name": "C64 Colors",
+    "generator": "palette",
+    "description": "8 shades from the Commodore 64's fixed palette — 1982 calling",
+    "params": {
+      "mood": "Commodore 64 system palette, 8-bit era computer colors",
+      "count": 8,
+      "export_css": false
+    }
+  },
+  {
+    "name": "Fractal Spectrum",
+    "generator": "palette",
+    "description": "8 iteration colors from the edge of the Mandelbrot set",
+    "params": {
+      "mood": "Mandelbrot set iteration escape colors, fractal boundary spectrum",
+      "count": 8,
+      "export_css": false
+    }
+  },
+
+  {
+    "name": "Phosphor Terminal",
+    "generator": "ansi",
+    "description": "A VT100 in a dim basement — portrait mode, full 256-color phosphor glow",
+    "params": {
+      "subject": "a VT100 terminal in a dimly lit basement, phosphor screen glowing",
+      "width": 80,
+      "colors": "256",
+      "ansi_style": "portrait"
+    }
+  },
+  {
+    "name": "8-Bit Arcade",
+    "generator": "ansi",
+    "description": "Classic arcade cabinet — 16 colors like the real hardware had",
+    "params": {
+      "subject": "a classic arcade machine with joystick and marquee, coins on the glass",
+      "width": 80,
+      "colors": "16",
+      "ansi_style": "scene"
+    }
+  },
+  {
+    "name": "Mandelbrot Coast",
+    "generator": "ansi",
+    "description": "The boundary of the set as logo art — 256 colors, infinitely zoomed",
+    "params": {
+      "subject": "the Mandelbrot set at the edge of infinity, fractal coastline in color",
+      "width": 80,
+      "colors": "256",
+      "ansi_style": "logo"
+    }
+  },
+  {
+    "name": "Dungeon Level 1",
+    "generator": "ansi",
+    "description": "Top-down dungeon, stone corridors, torches — 16 colors like Zork imagined",
+    "params": {
+      "subject": "a top-down dungeon with stone corridors, torches, and a locked door to the east",
+      "width": 60,
+      "colors": "16",
+      "ansi_style": "scene"
+    }
+  },
+  {
+    "name": "It Is Pitch Black",
+    "generator": "ansi",
+    "description": "The dark room from Zork — you are likely to be eaten by a grue",
+    "params": {
+      "subject": "it is pitch black, you are in a maze of twisty passages all alike, a grue lurks",
+      "width": 80,
+      "colors": "16",
+      "ansi_style": "scene"
+    }
+  },
+
+  {
+    "name": "Mandelbrot SVG",
+    "generator": "freeform",
+    "description": "An SVG visualization of the Mandelbrot set with escape-time coloring",
+    "params": {
+      "freeform": "Generate an SVG visualization of the Mandelbrot set. Use escape-time coloring with a fractal boundary. Output a complete SVG with viewBox=\"0 0 800 600\"."
+    }
+  },
+  {
+    "name": "Time Capsule 1964",
+    "generator": "freeform",
+    "description": "A time capsule artifact from the 1964 World's Fair — as SVG",
+    "params": {
+      "freeform": "Generate an SVG of a time capsule document from the 1964 New York World's Fair. Include a decorative border, a message to the future, and futurist typography. Output a complete SVG with viewBox=\"0 0 600 800\"."
+    }
+  },
+  {
+    "name": "Recursive Poem",
+    "generator": "freeform",
+    "description": "A poem that contains itself — or tries to",
+    "params": {
+      "freeform": "Write a short poem that references itself as an artifact — a poem that knows it is a poem being generated, and folds that awareness into its form. Plain text output."
+    }
+  },
+  {
+    "name": "BASIC Koan",
+    "generator": "freeform",
+    "description": "A Zen koan written in BASIC — 10 PRINT is the teacher",
+    "params": {
+      "freeform": "Write a Zen koan in the style of a BASIC program listing. Line numbers, PRINT statements, GOTO loops. The koan should be about the nature of iteration, memory, or forgetting. Plain text output."
+    }
+  }
+]

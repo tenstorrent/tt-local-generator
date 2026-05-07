@@ -1,3 +1,58 @@
+tt-local-generator (0.2.6) noble; urgency=medium
+
+  * TT-TV artgen channels: fix empty pool — artgen MediaRecord objects are now
+    included in the attractor record set so named playlists containing artgen
+    items (Palettes, Landscapes, etc.) actually populate and play.
+  * TT-TV expert rendering: artgen artifacts are now rendered by content type.
+    SVG files → Gtk.Picture (full vector quality).  Palette JSON → full-screen
+    color swatch strip (_ColorSwatchArea, cairo) with the palette name and lore
+    text.  Verse/freeform/ANSI text → large centered italic text on dark canvas.
+    Unknown types fall back to thumbnail PNG.
+  * TT-TV channel switch: named-playlist and "All Videos" channels now fetch a
+    fresh record set from the store on every switch, so records added after
+    TT-TV opened (and artgen records not in the initial pool) are included.
+  * playlist_store: _to_pl now materialises record_ids for live/filter playlists
+    (artgen auto-playlists such as Landscapes, Palettes, etc.) so TT-TV channel
+    switching can match records by ID regardless of playlist type.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 16:30:00 +0000
+
+tt-local-generator (0.2.5) noble; urgency=medium
+
+  * Timestamps: store all created_at fields in UTC (ISO 8601 with +00:00
+    offset); display in the user's local timezone using 12-hour format
+    (e.g. "May 7  8:33 AM").  New time_utils module provides utc_now_iso(),
+    fmt_local_12h(), fmt_local_date(), fmt_local_time() — all callers updated.
+    Legacy naive timestamps (no timezone suffix) treated as UTC for backward
+    compatibility with existing records.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 15:35:00 +0000
+
+tt-local-generator (0.2.4) noble; urgency=medium
+
+  * Vendor: update tt-inference-server to v0.13.0
+    (b5589534ca831de1852781a3b9902c212a24e329).  All 7 patch steps apply
+    cleanly — tt_dit hotpatches, media_server_config overrides, and HF_HOME
+    bind-mount all verified via --print-docker-cmd dry-run.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 06 May 2026 17:10:00 +0000
+
+tt-local-generator (0.2.3) noble; urgency=medium
+
+  * SkyReels-V2-I2V-14B-540P: wire I2V endpoint, fix constants.py patch,
+    add TTSkyReelsI2VRunner to runner_fabric. api_client branches on image
+    presence to use /v1/videos/generations/i2v with image_prompts[] format.
+  * model_ready() probes both T2V and I2V endpoints so health check works
+    regardless of which model is running.
+  * Required-image UI treatment: amber pulsing border on seed well when
+    SkyReels I2V or Animate is selected without a conditioning image.
+    Generate button shows inline error if user tries to submit without one.
+    Source description label updated to say "requires starting image".
+  * Seed well CSS state (_update_seed_well_state) wired into _set_source,
+    _set_model, and _set_seed_image so required/has-seed CSS stays in sync.
+
+ -- Tenstorrent <software@tenstorrent.com>  Tue, 06 May 2026 00:00:00 +0000
+
 tt-local-generator (0.2.2) noble; urgency=medium
 
   * Massively expand prompt word banks: 10 new literary subject registers

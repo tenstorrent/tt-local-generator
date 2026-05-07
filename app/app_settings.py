@@ -51,6 +51,7 @@ DEFAULTS: dict = {
     # Create zone — named control state
     "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
     "preferred_video_model": "",          # "wan2"|"mochi"|"skyreels"|"" (auto)
+    "last_successful_deployment": "",     # server key of the last health-confirmed server
     "seed_mode":             "random",    # "random"|"repeat"|"keep"
     "pinned_seed":           -1,          # used when seed_mode == "keep"
     # Recovery

@@ -711,3 +711,72 @@ animate|A woman sitting in a laundromat chair at 4am slowly realizes she has bee
 animate|A hitchhiker with an impossible thumb turns to face a truck that is not yet visible, Nevada rest stop, first light, absurdist and patient.
 animate|A man in a diving suit slowly removes his helmet in a parking lot, looks up at the sky, sodium vapor orange, matter-of-fact and strange.
 animate|A dancer in silk slowly brings her arms down and opens her eyes, a breath, the end of something, stage footlights from below, triumphant and still.
+
+# ── Artgen theme seeds ─────────────────────────────────────────────────────────
+# Short evocative phrases — used by Inspire button for all artgen generator types.
+# Markov recombines these into novel seeds; LLM polishes the result into a clean phrase.
+
+artgen|volcanic winter twilight
+artgen|the hour before a desert storm
+artgen|amber coastline at low tide
+artgen|bioluminescent tidal flat at 3am
+artgen|pine forest at the permanent snowline
+artgen|a glacial valley after the ice
+artgen|coral reef under a solar eclipse
+artgen|fog on the sound before dawn
+artgen|lichen on granite at high altitude
+artgen|basalt columns and cold rain
+artgen|the tide that didn't come back
+artgen|obsidian cliffs at low water
+artgen|aurora over a frozen inland sea
+artgen|salt flat at midsummer noon
+artgen|neon monastery
+artgen|brutalist cathedral at 4am
+artgen|a drowned downtown at golden hour
+artgen|orbital debris field
+artgen|the switchboard of a dead city
+artgen|radio tower in a wheat field at dusk
+artgen|Soviet brutalist spa in winter
+artgen|a night market in ruins
+artgen|telegraph poles in a snowstorm
+artgen|a lighthouse no one staffs anymore
+artgen|loading docks at 3am in November
+artgen|the underside of an elevated train
+artgen|the weight of forgotten names
+artgen|the geometry of grief
+artgen|accumulated rust and longing
+artgen|migration and the weight of salt
+artgen|what silence accumulates over decades
+artgen|the patience of waiting rooms
+artgen|the color of old letters
+artgen|the moment before departure
+artgen|nostalgia with no fixed object
+artgen|the inventory of an empty house
+artgen|the sound of a language going extinct
+artgen|ordinary grief in an extraordinary landscape
+artgen|tenderness at the edge of collapse
+artgen|drowned archive
+artgen|the last herald of an unmapped province
+artgen|star cartography of invented cultures
+artgen|ruins of a civilization that ran on light
+artgen|the monastery that predates the religion
+artgen|a god made of weather patterns
+artgen|kingdoms mapped under the sea
+artgen|the city that grew inside a glacier
+artgen|the machine that dreamed it was organic
+artgen|the map of a country that chose to dissolve
+artgen|the ceremony for an eclipse that didn't happen
+artgen|copper and verdigris
+artgen|volcanic glass and bone
+artgen|amber and salt crystal
+artgen|oxidized silver and indigo
+artgen|rust and bioluminescence
+artgen|obsidian and gold leaf
+artgen|lichen and weathered marble
+artgen|deep ocean black and thermal white
+artgen|ember orange and void black
+artgen|phosphor green and cathode glow
+artgen|patinated brass and midnight blue
+artgen|malachite and shadow
+artgen|fog white and carbon black
+artgen|sulfur yellow and deep navy
