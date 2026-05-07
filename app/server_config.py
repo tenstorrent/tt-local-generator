@@ -184,7 +184,9 @@ class ServerConfig:
             host = "localhost"
         changed = False
         for svc in self._data.values():
-            if svc.get("host") != host:
+            if "host" not in svc:
+                continue  # non-network entry (e.g. artgen_auto) — leave untouched
+            if svc["host"] != host:
                 svc["host"] = host
                 changed = True
         if changed:

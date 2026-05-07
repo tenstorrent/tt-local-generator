@@ -115,10 +115,19 @@ class PlaylistStore:
         return len(new_ids)
 
     def remove_record(self, playlist_id: str, record_id: str) -> bool:
-        """Remove a single record ID from a playlist. Returns True if removed."""
+        """Remove a single record ID from a playlist. Returns True if removed.
+
+        Live/filter playlists cannot be mutated — rejects with a warning like add_records().
+        """
         from media_store import media_store as _ms
-        pl = self.get(playlist_id)
-        if pl is None or record_id not in pl.record_ids:
+        rows = [r for r in _ms.list_playlists() if r["id"] == playlist_id]
+        if not rows:
+            return False
+        if rows[0].get("filter_expr"):
+            log.warning("remove_record: playlist %s is a live/filter playlist — mutations not supported", playlist_id)
+            return False
+        pl = self._to_pl(rows[0])
+        if record_id not in pl.record_ids:
             return False
         _ms.remove_from_playlist(playlist_id, record_id)
         return True
