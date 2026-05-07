@@ -7,7 +7,7 @@ tt-local-generator (0.2.5) noble; urgency=medium
     Legacy naive timestamps (no timezone suffix) treated as UTC for backward
     compatibility with existing records.
 
- -- Taylor Singletary <taylorsingletary@tenstorrent.com>  Wed, 07 May 2026 15:35:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 15:35:00 +0000
 
 tt-local-generator (0.2.4) noble; urgency=medium
 
@@ -16,7 +16,7 @@ tt-local-generator (0.2.4) noble; urgency=medium
     cleanly — tt_dit hotpatches, media_server_config overrides, and HF_HOME
     bind-mount all verified via --print-docker-cmd dry-run.
 
- -- Taylor Singletary <taylorsingletary@tenstorrent.com>  Tue, 06 May 2026 17:10:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 06 May 2026 17:10:00 +0000
 
 tt-local-generator (0.2.3) noble; urgency=medium
 
