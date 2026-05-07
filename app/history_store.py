@@ -221,7 +221,7 @@ class HistoryStore:
                 "video_path":          record.video_path,
                 "image_path":          record.image_path,
             }),
-            starred=0,
+            starred=record.starred,
         ))
 
     def all_records(self) -> list[GenerationRecord]:

@@ -158,7 +158,8 @@ class APIClient:
 
         Tries both the T2V and I2V probe endpoints so this works regardless of
         which model (Wan2.2, Mochi, SkyReels I2V, etc.) is loaded.  Returns True
-        as soon as any probe gets a 202; returns False on 405 from all probes.
+        as soon as any probe gets a 202; returns False if no probe gets a 202
+        (any other status code or network error counts as not-ready).
         """
         probes = [
             # T2V / Mochi / Wan2.2 endpoint

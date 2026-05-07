@@ -39,7 +39,7 @@ class ArtGenerator(ABC):
     Protocol every artifact generator must implement.
 
     Subclass this, decorate with @register, and the generator is automatically
-    available as --type <name> in tt-ctl artgen.
+    available as a subcommand in tt-ctl artgen (e.g. `tt-ctl artgen landscape`).
     """
 
     #: Short CLI name: "landscape", "skyline", "verse", …
@@ -110,7 +110,10 @@ def all_generators() -> list[ArtGenerator]:
 
 def detect_model(base_url: str) -> str | None:
     """Return the model ID currently loaded on the server, or None."""
+    # Normalize: accept both http://host:port and http://host:port/v1 as base_url.
     base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
     # Try OpenAI-style /v1/models first; fall back to bare /models.
     for url in (f"{base}/v1/models", f"{base}/models"):
         try:

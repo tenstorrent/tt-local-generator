@@ -68,7 +68,8 @@ class PlaylistStore:
         pl_id = _ms.create_playlist(name.strip(), filter_expr=None, auto_gen=False)
         log.info("playlist created: %r (%s)", name.strip(), pl_id)
         pl = self.get(pl_id)
-        assert pl is not None, f"playlist {pl_id!r} missing immediately after creation"
+        if pl is None:
+            raise RuntimeError(f"playlist {pl_id!r} missing immediately after creation")
         return pl
 
     def rename(self, playlist_id: str, new_name: str) -> bool:

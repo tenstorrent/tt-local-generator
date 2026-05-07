@@ -177,9 +177,16 @@ def cmd_artgen(args) -> None:
             except Exception:
                 thumb_path = Path("")
 
+            _PARAMS_SKIP = {
+                "output", "max_tokens", "temperature",
+                # internal argparse / generator scaffolding — not meaningful to store
+                "artgen_type", "func", "base_url", "model", "simulate",
+                "no_save", "raw", "enhance",
+            }
             params = {k: v for k, v in vars(args).items()
                       if isinstance(v, (str, int, float, bool, type(None)))
-                      and k not in ("output", "max_tokens", "temperature")}
+                      and k not in _PARAMS_SKIP
+                      and not k.startswith("_")}
 
             from media_store import MediaRecord
             rec = MediaRecord(
