@@ -7863,7 +7863,8 @@ class MainWindow(Gtk.ApplicationWindow):
             gallery.stop_all_playback()
 
         # Filter records to the chosen playlist / model, or use all records.
-        all_records = self._store.all_records()
+        # Include artgen MediaRecord objects so artgen channels (Palettes, etc.) work.
+        all_records = self._store.all_records() + self._store.artgen_records()
         if model_filter is not None:
             records = [r for r in all_records
                        if getattr(r, "model", "") == model_filter]
@@ -7912,7 +7913,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 get_playlists=lambda: (
                     __import__("playlist_store").playlist_store.all()
                 ),
-                get_all_records=lambda: self._store.all_records(),
+                get_all_records=lambda: self._store.all_records() + self._store.artgen_records(),
                 get_animate_inputs=(
                     self._get_animate_inputs if current_source == "animate" else None
                 ),

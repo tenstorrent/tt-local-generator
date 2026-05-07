@@ -1,3 +1,22 @@
+tt-local-generator (0.2.6) noble; urgency=medium
+
+  * TT-TV artgen channels: fix empty pool — artgen MediaRecord objects are now
+    included in the attractor record set so named playlists containing artgen
+    items (Palettes, Landscapes, etc.) actually populate and play.
+  * TT-TV expert rendering: artgen artifacts are now rendered by content type.
+    SVG files → Gtk.Picture (full vector quality).  Palette JSON → full-screen
+    color swatch strip (_ColorSwatchArea, cairo) with the palette name and lore
+    text.  Verse/freeform/ANSI text → large centered italic text on dark canvas.
+    Unknown types fall back to thumbnail PNG.
+  * TT-TV channel switch: named-playlist and "All Videos" channels now fetch a
+    fresh record set from the store on every switch, so records added after
+    TT-TV opened (and artgen records not in the initial pool) are included.
+  * playlist_store: _to_pl now materialises record_ids for live/filter playlists
+    (artgen auto-playlists such as Landscapes, Palettes, etc.) so TT-TV channel
+    switching can match records by ID regardless of playlist type.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 16:30:00 +0000
+
 tt-local-generator (0.2.5) noble; urgency=medium
 
   * Timestamps: store all created_at fields in UTC (ISO 8601 with +00:00

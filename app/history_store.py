@@ -230,6 +230,11 @@ class HistoryStore:
         rows = _ms.query()
         return [self._to_gen(r) for r in rows if r.media_type != "artgen"]
 
+    def artgen_records(self) -> list:
+        """Return all artgen MediaRecord objects, newest first, for TT-TV artgen channels."""
+        from media_store import media_store as _ms
+        return [r for r in _ms.query() if r.media_type == "artgen"]
+
     def star(self, record_id: str, starred: bool) -> None:
         """Toggle the starred flag for a video/image/animate record."""
         from media_store import media_store as _ms

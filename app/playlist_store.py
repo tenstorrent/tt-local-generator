@@ -138,12 +138,10 @@ class PlaylistStore:
     def _to_pl(r: dict) -> "Playlist":
         """Convert a media_store playlist dict into a Playlist dataclass."""
         from media_store import media_store as _ms
-        if r["filter_expr"] is None:
-            # Hand-curated playlist: materialise record_ids from playlist_items.
-            record_ids = [m.id for m in _ms.playlist_records(r["id"])]
-        else:
-            # Live/filter playlist: record_ids is not meaningful; return empty.
-            record_ids = []
+        # Materialise record_ids for both hand-curated and live/filter playlists
+        # so callers (including TT-TV channel switch) can always look up records
+        # by ID without needing to know the playlist's internal filter expression.
+        record_ids = [m.id for m in _ms.playlist_records(r["id"])]
         return Playlist(
             id=r["id"],
             name=r["name"],

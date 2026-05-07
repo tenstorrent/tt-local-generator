@@ -326,6 +326,33 @@ _CSS = b"""
 .attractor-stop-btn:hover {
     background-color: @tt_border;
 }
+/* Artgen text/palette rendering slot */
+.artgen-text-slot {
+    background-color: @tt_bg_darkest;
+    padding: 32px 40px;
+}
+.artgen-palette-title {
+    color: @tt_text;
+    font-size: 38px;
+    font-weight: bold;
+    font-style: italic;
+    letter-spacing: 1px;
+    margin-bottom: 14px;
+}
+.artgen-palette-lore {
+    color: @tt_text;
+    font-size: 15px;
+    font-style: italic;
+    opacity: 0.85;
+    margin-top: 12px;
+}
+.artgen-text-display {
+    color: @tt_text;
+    font-size: 22px;
+    font-style: italic;
+    line-height: 1.7;
+}
+
 /* User prompt entry at bottom of sidebar */
 .attractor-user-entry {
     background-color: @tt_bg_dark;
@@ -410,6 +437,271 @@ def _unload_slot_video(slot: Gtk.Box) -> None:
         except Exception:
             pass
     slot._video.set_file(None)
+
+
+# ---------------------------------------------------------------------------
+# Artgen text / palette rendering helpers
+# ---------------------------------------------------------------------------
+
+def _clear_box(box: Gtk.Box) -> None:
+    """Remove all child widgets from a Gtk.Box."""
+    child = box.get_first_child()
+    while child is not None:
+        nxt = child.get_next_sibling()
+        box.remove(child)
+        child = nxt
+
+
+def _parse_hex_color(hex_color: str) -> tuple:
+    """Parse #RRGGBB or #RGB → (r, g, b) ints 0-255. Returns grey on error."""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0] * 2 + h[1] * 2 + h[2] * 2
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:
+        return 128, 128, 128
+
+
+def _md_inline(text: str) -> str:
+    """Apply inline markdown → Pango markup on an already XML-escaped string.
+
+    Patterns are matched per-line (no DOTALL) to avoid misfire on identifiers
+    like __dunder__ or file paths with underscores.
+    """
+    import re as _re
+    text = _re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", text)
+    text = _re.sub(r"___(.+?)___",        r"<b><i>\1</i></b>", text)
+    text = _re.sub(r"\*\*(.+?)\*\*",      r"<b>\1</b>",        text)
+    text = _re.sub(r"__(.+?)__",          r"<b>\1</b>",        text)
+    text = _re.sub(r"\*(.+?)\*",          r"<i>\1</i>",        text)
+    text = _re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>",      text)
+    text = _re.sub(r"`(.+?)`",            r"<tt>\1</tt>",      text)
+    return text
+
+
+def _md_to_pango(text: str) -> str:
+    """Convert a subset of Markdown to Pango markup for Gtk.Label.set_markup().
+
+    Supported: **bold**, *italic*, __bold__, _italic_, ***bold-italic***,
+    # / ## / ### headings, `inline code`.  XML special characters are escaped
+    before markup is injected so the output is always valid Pango markup.
+    """
+    import re as _re
+    out = []
+    for line in text.splitlines():
+        line = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        m = _re.match(r"^(#{1,3})\s+(.*)", line)
+        if m:
+            level, content = len(m.group(1)), _md_inline(m.group(2))
+            if level == 1:
+                line = f'<span size="x-large"><b>{content}</b></span>'
+            elif level == 2:
+                line = f'<big><b>{content}</b></big>'
+            else:
+                line = f'<b>{content}</b>'
+        else:
+            line = _md_inline(line)
+        out.append(line)
+    return "\n".join(out)
+
+
+def _load_artgen_text(box: Gtk.Box, file_path: str) -> None:
+    """Render a verse or freeform text artifact into *box* with Markdown support."""
+    _clear_box(box)
+    try:
+        text = Path(file_path).read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        text = "(could not read file)"
+
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_hexpand(True)
+    scroll.set_vexpand(True)
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+    lbl = Gtk.Label()
+    lbl.set_markup(_md_to_pango(text))
+    lbl.add_css_class("artgen-text-display")
+    lbl.set_wrap(True)
+    lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    lbl.set_halign(Gtk.Align.CENTER)
+    lbl.set_valign(Gtk.Align.CENTER)
+    scroll.set_child(lbl)
+    box.append(scroll)
+
+
+class _ColorSwatchArea(Gtk.DrawingArea):
+    """Full-width color swatch strip — used for palette artgen display in TT-TV."""
+
+    def __init__(self, colors: list) -> None:
+        super().__init__()
+        self._colors = [c for c in colors if isinstance(c, str) and c.startswith("#")]
+        self.set_draw_func(self._draw)
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+
+    def _draw(self, _area, cr, w: int, h: int) -> None:
+        if not self._colors:
+            return
+        n = len(self._colors)
+        sw = w / n
+        for i, hx in enumerate(self._colors):
+            r, g, b = _parse_hex_color(hx)
+            cr.set_source_rgb(r / 255.0, g / 255.0, b / 255.0)
+            cr.rectangle(i * sw, 0, sw, h)
+            cr.fill()
+        # Hex labels with a dark pill behind each for contrast.
+        font_size = max(10, min(16, sw * 0.18))
+        cr.select_font_face("monospace", 0, 0)
+        cr.set_font_size(font_size)
+        for i, hx in enumerate(self._colors):
+            lbl = hx.upper()
+            te = cr.text_extents(lbl)
+            x = i * sw + (sw - te.width) / 2
+            y = h - font_size * 0.6
+            pad = 4
+            cr.set_source_rgba(0, 0, 0, 0.5)
+            cr.rectangle(x - pad, y - font_size - pad * 0.5, te.width + pad * 2, font_size + pad)
+            cr.fill()
+            cr.set_source_rgba(1, 1, 1, 0.9)
+            cr.move_to(x, y)
+            cr.show_text(lbl)
+
+
+def _load_artgen_palette(box: Gtk.Box, file_path: str) -> None:
+    """Parse a palette JSON artifact and populate *box* with swatches + lore."""
+    import json as _json
+    _clear_box(box)
+    try:
+        data = _json.loads(Path(file_path).read_text(encoding="utf-8"))
+    except Exception:
+        _load_artgen_text(box, file_path)
+        return
+
+    name = str(data.get("name", "Palette"))
+    lore = str(data.get("lore", "")).strip()
+
+    # Colors may be plain hex strings or {"hex": "#RRGGBB", "role": "..."} dicts.
+    raw = data.get("colors", [])
+    if raw and isinstance(raw[0], dict):
+        hex_colors = [c.get("hex", "") for c in raw if isinstance(c, dict)]
+    else:
+        hex_colors = [str(c) for c in raw]
+
+    title = Gtk.Label(label=name)
+    title.add_css_class("artgen-palette-title")
+    title.set_halign(Gtk.Align.CENTER)
+    box.append(title)
+
+    if hex_colors:
+        swatch = _ColorSwatchArea(hex_colors)
+        box.append(swatch)
+
+    if lore:
+        lore_lbl = Gtk.Label(label=lore)
+        lore_lbl.add_css_class("artgen-palette-lore")
+        lore_lbl.set_wrap(True)
+        lore_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        lore_lbl.set_halign(Gtk.Align.CENTER)
+        lore_lbl.set_xalign(0.5)
+        lore_lbl.set_vexpand(False)
+        lore_lbl.set_max_width_chars(90)
+        box.append(lore_lbl)
+
+
+# xterm-256 standard colors (indices 0-15)
+_XTERM_STANDARD: list = [
+    (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
+    (0, 0, 128), (128, 0, 128), (0, 128, 128), (192, 192, 192),
+    (128, 128, 128), (255, 0, 0), (0, 255, 0), (255, 255, 0),
+    (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+]
+_XTERM_CUBE_STEPS: list = [0, 95, 135, 175, 215, 255]
+
+
+def _xterm256_to_rgb(n: int) -> tuple:
+    """Convert an xterm-256 color index to (r, g, b) ints 0-255."""
+    if n < 16:
+        return _XTERM_STANDARD[n]
+    if n < 232:
+        n -= 16
+        r = n // 36
+        g = (n // 6) % 6
+        b = n % 6
+        return (_XTERM_CUBE_STEPS[r], _XTERM_CUBE_STEPS[g], _XTERM_CUBE_STEPS[b])
+    v = 8 + (n - 232) * 10
+    return (v, v, v)
+
+
+def _parse_ansi_grid(text: str) -> list:
+    """Parse ANSI xterm-256 background-color pixel art into a 2-D list of
+    (r, g, b) tuples.  Handles both ESC[48;5;Nm (256-color) and ESC[4Xm
+    (16-color) background codes.
+
+    Some generators write the octal escape as bare ASCII digits "033[" (no
+    actual ESC byte, no backslash).  Normalise those to a real ESC byte before
+    pattern matching so both variants are accepted.
+    """
+    import re as _re
+    # Normalise bare octal "033[" → ESC byte (some LLM/generator output)
+    text = _re.sub(r"(?<!\x1b)033\[", "\x1b[", text)
+    rows: list = []
+    for line in text.splitlines():
+        pixels: list = []
+        # Match ESC[48;5;Nm (256-color background) followed by one space pixel
+        for m in _re.finditer(r"\x1b\[48;5;(\d+)m ", line):
+            pixels.append(_xterm256_to_rgb(int(m.group(1))))
+        # Fall back to ESC[4Xm 16-color backgrounds if no 256-color found
+        if not pixels:
+            for m in _re.finditer(r"\x1b\[4(\d)m ", line):
+                idx = int(m.group(1))
+                pixels.append(_xterm256_to_rgb(idx))
+        if pixels:
+            rows.append(pixels)
+    return rows
+
+
+class _AnsiCanvas(Gtk.DrawingArea):
+    """Renders an ANSI xterm-256 pixel-art grid as a scaled image using cairo.
+    Each cell is a colored rectangle; the grid is stretched to fill the widget.
+    """
+
+    def __init__(self, rows: list) -> None:
+        super().__init__()
+        self._rows = rows
+        self.set_draw_func(self._draw)
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+
+    def _draw(self, _area, cr, w: int, h: int) -> None:
+        if not self._rows:
+            return
+        n_rows = len(self._rows)
+        max_cols = max((len(r) for r in self._rows), default=1)
+        cw = w / max_cols
+        ch = h / n_rows
+        for y, row in enumerate(self._rows):
+            for x, (r, g, b) in enumerate(row):
+                cr.set_source_rgb(r / 255.0, g / 255.0, b / 255.0)
+                # +1 pixel overlap prevents sub-pixel gaps between cells.
+                cr.rectangle(x * cw, y * ch, cw + 1, ch + 1)
+                cr.fill()
+
+
+def _load_artgen_ansi(box: Gtk.Box, file_path: str) -> None:
+    """Render an ANSI pixel-art artifact into *box* using a cairo DrawingArea."""
+    _clear_box(box)
+    try:
+        text = Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        text = ""
+    rows = _parse_ansi_grid(text)
+    if rows:
+        canvas = _AnsiCanvas(rows)
+        box.append(canvas)
+    else:
+        # No parseable ANSI — fall back to raw text so something shows.
+        _load_artgen_text(box, file_path)
 
 
 class AttractorWindow(Gtk.Window):
@@ -816,10 +1108,9 @@ class AttractorWindow(Gtk.Window):
 
         player_overlay.set_child(self._stack)
 
-        # HUD broadcast lower-third: dark checker card pinned to the bottom.
+        # HUD broadcast strip: sits below the player area, never overlaps content.
         hud = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         hud.add_css_class("attractor-hud")
-        hud.set_valign(Gtk.Align.END)
         hud.set_hexpand(True)
 
         # Top row: station tag (left) + pool count (right)
@@ -838,16 +1129,16 @@ class AttractorWindow(Gtk.Window):
 
         hud.append(tag_row)
 
-        # Full prompt — wraps to as many lines as needed, no truncation.
+        # Prompt — capped at 3 lines to keep the HUD strip compact.
         self._hud_prompt_lbl = Gtk.Label(label="")
         self._hud_prompt_lbl.add_css_class("attractor-hud-prompt")
         self._hud_prompt_lbl.set_hexpand(True)
         self._hud_prompt_lbl.set_xalign(0)
         self._hud_prompt_lbl.set_wrap(True)
         self._hud_prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self._hud_prompt_lbl.set_lines(3)
+        self._hud_prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         hud.append(self._hud_prompt_lbl)
-
-        player_overlay.add_overlay(hud)
 
         # Channel-change flash overlay — full-screen, non-interactive.
         # Normally transparent (opacity: 0). CSS class "flash-active" triggers
@@ -859,7 +1150,15 @@ class AttractorWindow(Gtk.Window):
         self._channel_flash.add_css_class("channel-flash")
         player_overlay.add_overlay(self._channel_flash)
 
-        outer.set_end_child(player_overlay)
+        # Wrap player + HUD in a vertical box so the HUD strip sits BELOW the
+        # media area and never overlaps artgen content.
+        media_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        media_area.set_hexpand(True)
+        media_area.set_vexpand(True)
+        media_area.append(player_overlay)
+        media_area.append(hud)
+
+        outer.set_end_child(media_area)
         root_vbox.append(outer)
         root_vbox.append(self._build_att_status_bar())
 
@@ -904,6 +1203,15 @@ class AttractorWindow(Gtk.Window):
         pic.set_visible(False)
         box._picture = pic
         box.append(pic)
+
+        # Text/palette rendering canvas for artgen artifacts (.json, .txt, .ans).
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        text_box.set_hexpand(True)
+        text_box.set_vexpand(True)
+        text_box.add_css_class("artgen-text-slot")
+        text_box.set_visible(False)
+        box._text_box = text_box
+        box.append(text_box)
 
         return box
 
@@ -1067,7 +1375,7 @@ class AttractorWindow(Gtk.Window):
 
         # Update HUD — full prompt, no truncation
         prompt_text = (getattr(record, "prompt", "") or "")
-        self._hud_prompt_lbl.set_label(prompt_text)
+        self._hud_prompt_lbl.set_markup(_md_to_pango(prompt_text))
         self._hud_pool_lbl.set_label(f"pool: {self._pool.size}")
 
         # Refresh "Next on TT-TV" thumbnail for the upcoming item
@@ -1140,25 +1448,48 @@ class AttractorWindow(Gtk.Window):
         """
         media_type = getattr(record, "media_type", "video")
         if media_type == "artgen":
-            # Show the artgen artifact as a still.  SVGs render directly via
-            # Gtk.Picture; for text/ans types the thumbnail PNG is used instead.
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
                 slot._gst_player.close()
                 slot._gst_player.widget.set_visible(False)
-            path = getattr(record, "thumbnail_path", None)
             file_path = getattr(record, "file_path", None) or ""
-            if not path and file_path.lower().endswith(".svg"):
-                path = file_path
-            if path:
-                slot._picture.set_filename(path)
-            slot._picture.set_visible(True)
+            thumb_path = getattr(record, "thumbnail_path", None) or ""
+            ext = Path(file_path).suffix.lower() if file_path else ""
+            if ext == ".svg":
+                # SVG renders natively at full vector quality via Gtk.Picture.
+                slot._picture.set_filename(file_path)
+                slot._picture.set_visible(True)
+                slot._text_box.set_visible(False)
+            elif ext == ".json":
+                # Palette artifact: colored swatch strip + lore text.
+                _load_artgen_palette(slot._text_box, file_path)
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(True)
+            elif ext == ".ans":
+                # ANSI pixel art: parse ESC sequences → cairo color grid.
+                _load_artgen_ansi(slot._text_box, file_path)
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(True)
+            elif ext == ".txt":
+                # Verse / freeform: large centered text on dark canvas.
+                _load_artgen_text(slot._text_box, file_path)
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(True)
+            elif thumb_path and Path(thumb_path).exists():
+                # Unknown extension but has a rendered thumbnail — show it.
+                slot._picture.set_filename(thumb_path)
+                slot._picture.set_visible(True)
+                slot._text_box.set_visible(False)
+            else:
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(False)
         elif media_type == "image":
             # Still image: show Gtk.Picture thumbnail, hide all video widgets.
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
                 slot._gst_player.close()
                 slot._gst_player.widget.set_visible(False)
+            slot._text_box.set_visible(False)
             path = (getattr(record, "thumbnail_path", None)
                     or getattr(record, "image_path", None))
             if path:
@@ -1169,6 +1500,7 @@ class AttractorWindow(Gtk.Window):
             # Gtk.Video has no backend on the Homebrew GTK4 bottle.
             slot._video.set_visible(False)
             slot._picture.set_visible(False)
+            slot._text_box.set_visible(False)
             path = getattr(record, "video_path", None)
             gst = slot._gst_player
             if gst is not None and path:
@@ -1186,6 +1518,7 @@ class AttractorWindow(Gtk.Window):
                     slot._picture.set_visible(True)
         else:
             slot._picture.set_visible(False)
+            slot._text_box.set_visible(False)
             path = getattr(record, "video_path", None)
             if path:
                 # Retire the old Gtk.Video widget instead of reusing it.
@@ -1726,12 +2059,14 @@ class AttractorWindow(Gtk.Window):
         elif new_playlist_id is not None:
             pl = _ps.get(new_playlist_id)
             playlist_record_ids = set(pl.record_ids) if pl else set()
-            filtered = [r for r in self._all_records
+            # Fetch fresh full record set (includes artgen MediaRecord objects).
+            all_fresh = self._get_all_records()
+            filtered = [r for r in all_fresh
                         if getattr(r, "id", None) in playlist_record_ids
                         and getattr(r, "media_type", "video") != "image"]
             new_auto_gen = pl.auto_gen if pl else True
         else:
-            filtered = [r for r in self._all_records
+            filtered = [r for r in self._get_all_records()
                         if getattr(r, "media_type", "video") != "image"]
             new_auto_gen = True
 
