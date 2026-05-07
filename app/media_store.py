@@ -258,6 +258,16 @@ class MediaStore:
         rows = self._conn.execute(sql, params).fetchall()
         return [MediaRecord(*r) for r in rows]
 
+    def count(self, media_type: Optional[str] = None) -> int:
+        """Return a COUNT(*) for records matching media_type (None = all types)."""
+        if media_type is not None:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM media WHERE media_type=?", (media_type,)
+            ).fetchone()
+        else:
+            row = self._conn.execute("SELECT COUNT(*) FROM media").fetchone()
+        return row[0] if row else 0
+
     # ------------------------------------------------------------------
     # Playlist API
     # ------------------------------------------------------------------

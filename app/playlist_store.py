@@ -92,12 +92,20 @@ class PlaylistStore:
         """
         Append record IDs to a playlist, deduplicating against existing entries.
         Returns the number of newly added IDs.
+
+        Live/filter playlists (auto-generated from a SQL expression) cannot be
+        mutated via playlist_items — their membership is computed at query time.
+        Calls on such playlists are rejected and logged.
         """
         from media_store import media_store as _ms
-        pl = self.get(playlist_id)
-        if pl is None:
+        rows = [r for r in _ms.list_playlists() if r["id"] == playlist_id]
+        if not rows:
             log.warning("add_records: playlist not found: %s", playlist_id)
             return 0
+        if rows[0].get("filter_expr"):
+            log.warning("add_records: playlist %s is a live/filter playlist — mutations not supported", playlist_id)
+            return 0
+        pl = self._to_pl(rows[0])
         existing = {m.id for m in _ms.playlist_records(playlist_id)}
         new_ids = [rid for rid in record_ids if rid not in existing]
         for rid in new_ids:

@@ -126,7 +126,11 @@ def cmd_artgen(args) -> None:
         except ImportError:
             print("ERROR: openai not installed. Run: pip install openai", file=sys.stderr)
             sys.exit(1)
-        client = OpenAI(base_url=base_url, api_key="none")
+        # OpenAI client requires a /v1 base URL; server_config returns http://host:port.
+        oai_url = base_url.rstrip("/")
+        if not oai_url.endswith("/v1"):
+            oai_url += "/v1"
+        client = OpenAI(base_url=oai_url, api_key="none")
         resp = client.chat.completions.create(
             model=model_id,
             messages=[
@@ -175,7 +179,7 @@ def cmd_artgen(args) -> None:
             try:
                 make_thumbnail(out_path, thumb_path)
             except Exception:
-                thumb_path = Path("")
+                thumb_path = None
 
             _PARAMS_SKIP = {
                 "output", "max_tokens", "temperature",
@@ -194,7 +198,7 @@ def cmd_artgen(args) -> None:
                 media_type="artgen",
                 created_at=datetime.now(timezone.utc).isoformat(),
                 file_path=str(out_path),
-                thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+                thumbnail_path=str(thumb_path) if thumb_path is not None and thumb_path.exists() else "",
                 prompt=prompt[:500],
                 model_id=model_id,
                 generator_type=gen_name,
