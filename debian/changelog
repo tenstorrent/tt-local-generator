@@ -1,3 +1,12 @@
+tt-local-generator (0.2.4) noble; urgency=medium
+
+  * Vendor: update tt-inference-server to v0.13.0
+    (b5589534ca831de1852781a3b9902c212a24e329).  All 7 patch steps apply
+    cleanly — tt_dit hotpatches, media_server_config overrides, and HF_HOME
+    bind-mount all verified via --print-docker-cmd dry-run.
+
+ -- Taylor Singletary <taylorsingletary@tenstorrent.com>  Tue, 06 May 2026 17:10:00 +0000
+
 tt-local-generator (0.2.3) noble; urgency=medium
 
   * SkyReels-V2-I2V-14B-540P: wire I2V endpoint, fix constants.py patch,
