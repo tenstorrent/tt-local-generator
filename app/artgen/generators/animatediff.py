@@ -6,11 +6,14 @@ AnimateDiff generator — Blackhole-accelerated GIF generation.
 
 Registered as generator name "animatediff". Unlike LLM-based generators,
 this one skips the build_prompt/call_llm pipeline entirely; artgen_panel.py
-routes "animatediff" to _run_animatediff() which runs generate_blackhole.py
+routes "animatediff" to _run_animatediff() which runs generate_blackhole_v2.py
 as a subprocess on the tt-metal Python env.
 
+generate_blackhole_v2.py uses cross-frame self-attention at each denoising
+step for genuine temporal coherence (not just shared-noise initialization).
+
 Hardware requirement: Blackhole device (P100/P300c). No CPU fallback.
-Script location: ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole.py
+Script location: ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 @register
 class AnimateDiffGenerator(ArtGenerator):
     name = "animatediff"
-    description = "Blackhole-accelerated animated GIF via TTNN UNet (Phase 2)"
+    description = "Blackhole-accelerated animated GIF via TTNN UNet with cross-frame temporal attention"
     output_ext = ".gif"
 
     def build_prompt(self, args) -> str:
@@ -84,7 +87,7 @@ def run_subprocess(
 
     Returns (success, error_message). error_message is "" on success.
     """
-    script = _SCRIPT_DIR / "examples" / "generate_blackhole.py"
+    script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"
     if not script.exists():
         return False, (
             f"AnimateDiff script not found: {script}\n"
@@ -126,14 +129,14 @@ def run_subprocess(
         )
         for line in proc.stdout:
             line = line.rstrip()
-            if on_progress and ("Frame" in line or "Generating" in line or "Loading" in line):
+            if on_progress and ("Frame" in line or "Step" in line or "Generating" in line or "Loading" in line):
                 on_progress(line.strip())
         proc.wait()
     except Exception as e:
         return False, f"Subprocess error: {e}"
 
     if proc.returncode != 0:
-        return False, f"generate_blackhole.py exited with rc={proc.returncode}"
+        return False, f"generate_blackhole_v2.py exited with rc={proc.returncode}"
 
     if not out_path.exists():
         return False, "Script exited 0 but no output file was produced"
