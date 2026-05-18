@@ -396,6 +396,84 @@
   },
 
   {
+    "name": "Phosphor Horizon",
+    "generator": "animatediff",
+    "description": "Purple phosphor glow across distant mountains — the monitor at 2am",
+    "params": {
+      "prompt": "purple phosphor glow across distant mountains at 2am, retro CRT haze, cyan mist, cinematic",
+      "frames": 8,
+      "steps": 25,
+      "seed": 17
+    }
+  },
+  {
+    "name": "World of Tomorrow",
+    "generator": "animatediff",
+    "description": "Futurist city at dusk — the 1939 World's Fair imagined from the year 2099",
+    "params": {
+      "prompt": "1939 World's Fair imagined from the year 2099, art deco spires at golden dusk, retro-futurist optimism, cinematic 4K",
+      "frames": 8,
+      "steps": 25,
+      "seed": 23
+    }
+  },
+  {
+    "name": "Atari Starfield",
+    "generator": "animatediff",
+    "description": "Stars drifting through a scan-line sky — 1979 hardware dream",
+    "params": {
+      "prompt": "star field scrolling through deep space, CRT scan lines, Atari 2600 color palette, phosphor glow, gentle drift",
+      "frames": 8,
+      "steps": 25,
+      "seed": 7
+    }
+  },
+  {
+    "name": "Copper Circuit Dawn",
+    "generator": "animatediff",
+    "description": "PCB traces lit by sunrise — the board as landscape",
+    "params": {
+      "prompt": "circuit board traces as aerial landscape at golden dawn, copper pathways, green substrate, warm sunrise light, macro photography",
+      "frames": 8,
+      "steps": 25,
+      "seed": 88
+    }
+  },
+  {
+    "name": "Sea Glass Tide",
+    "generator": "animatediff",
+    "description": "Teal ocean light cycling through coastal calm",
+    "params": {
+      "prompt": "sea glass and seafoam coastline at dusk, teal ocean light, gentle waves, worn smooth, impressionist, soft focus",
+      "frames": 8,
+      "steps": 25,
+      "seed": 55
+    }
+  },
+  {
+    "name": "Fractal Edge",
+    "generator": "animatediff",
+    "description": "Zooming into the Mandelbrot boundary — infinity in 8 frames",
+    "params": {
+      "prompt": "zooming into the Mandelbrot set fractal boundary, escape-time color spectrum, infinite detail, mathematical beauty, 4K render",
+      "frames": 8,
+      "steps": 25,
+      "seed": 314
+    }
+  },
+  {
+    "name": "Tungsten Foundry",
+    "generator": "animatediff",
+    "description": "Molten metal pouring in slow motion — industrial sublime",
+    "params": {
+      "prompt": "molten tungsten pouring in slow motion, deep orange glow, sparks, industrial foundry, cinematic close-up, dramatic lighting",
+      "frames": 8,
+      "steps": 25,
+      "seed": 61
+    }
+  },
+
+  {
     "name": "Mandelbrot SVG",
     "generator": "freeform",
     "description": "An SVG visualization of the Mandelbrot set with escape-time coloring",

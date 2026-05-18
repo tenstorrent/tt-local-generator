@@ -546,6 +546,36 @@ class ArtgenPanel(Gtk.Box):
             box.append(hint)
             box.append(free_scroll)
 
+        elif name == "animatediff":
+            # Prompt row with inline inspire button
+            prompt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            self._ad_prompt = Gtk.Entry()
+            self._ad_prompt.set_hexpand(True)
+            self._ad_prompt.set_placeholder_text("describe the animation…")
+            self._ad_prompt.set_text(
+                "purple phosphor glow across distant mountains at 2am, retro CRT haze, cyan mist, cinematic"
+            )
+            inspire_btn = Gtk.Button(label="✦")
+            inspire_btn.add_css_class("artgen-inspire-btn")
+            inspire_btn.connect("clicked", lambda _: self._on_inspire("animatediff", self._ad_prompt))
+            prompt_row.append(self._ad_prompt)
+            prompt_row.append(inspire_btn)
+            self._ad_frames = _dd(["8", "16"], "8")
+            self._ad_steps = _spin(4, 50, 1, 25)
+            self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
+            box.append(_section_lbl("Prompt"))
+            box.append(prompt_row)
+            box.append(_row("Frames", self._ad_frames))
+            box.append(_row("Steps", self._ad_steps))
+            box.append(_row("Seed", self._ad_seed))
+            hint = Gtk.Label(label="Requires Blackhole hardware.\n~2 min on P300C (8 frames, 25 steps).")
+            hint.set_xalign(0)
+            hint.set_wrap(True)
+            hint.add_css_class("hint")
+            box.append(hint)
+            # No separate Theme Inspiration section — inspire is inline with prompt
+            return box
+
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         box.append(_section_lbl("Theme Inspiration"))
         inspire_row, theme_entry = self._build_inspire_row(name)
@@ -732,6 +762,16 @@ class ArtgenPanel(Gtk.Box):
             if "freeform" in params:
                 self._free_tv.get_buffer().set_text(params["freeform"])
 
+        elif gen_name == "animatediff":
+            if "prompt" in params:
+                self._ad_prompt.set_text(params["prompt"])
+            if "frames" in params:
+                self._set_dd(self._ad_frames, str(params["frames"]))
+            if "steps" in params:
+                self._ad_steps.set_value(int(params["steps"]))
+            if "seed" in params:
+                self._ad_seed.set_value(int(params["seed"]))
+
     # ── Preview pane helpers ──────────────────────────────────────────────────
 
     def _show_preview_latest(self) -> None:
@@ -762,7 +802,7 @@ class ArtgenPanel(Gtk.Box):
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
 
-        if ext == ".svg" and fp.exists():
+        if ext in (".svg", ".gif", ".png", ".jpg", ".jpeg") and fp.exists():
             self._preview_svg.set_file(Gio.File.new_for_path(str(fp)))
             self._preview_stack.set_visible_child_name("svg")
         elif _WEBKIT_OK:
@@ -938,7 +978,12 @@ class ArtgenPanel(Gtk.Box):
 
         *args* must be pre-built on the main thread via _build_args() — GTK
         widgets cannot be accessed safely from a background thread.
+        AnimateDiff bypasses the LLM pipeline entirely and is handled separately.
         """
+        if gen_name == "animatediff":
+            self._run_animatediff(args)
+            return
+
         try:
             gen = artgen.get(gen_name)
             base_url = server_config.base_url("artgen")
@@ -1036,6 +1081,78 @@ class ArtgenPanel(Gtk.Box):
         except Exception as e:
             GLib.idle_add(self._finish_error, f"Unexpected error: {e}")
 
+    def _run_animatediff(self, args) -> None:
+        """Background thread: run generate_blackhole.py subprocess → GIF → MediaRecord."""
+        import os
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
+
+        GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
+
+        ok, hw_msg = check_hardware()
+        if not ok:
+            GLib.idle_add(self._finish_error,
+                f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
+            return
+
+        short_id = str(_uuid.uuid4())[:8]
+        out_path = make_artgen_path(short_id, ".gif")
+
+        GLib.idle_add(self._set_status, f"Starting AnimateDiff on Blackhole ({hw_msg})…")
+        GLib.idle_add(self._preview_gen_lbl.set_label, "Loading TTNN UNet (~2-3 min first run)…")
+
+        t0 = time.monotonic()
+
+        def _on_progress(line: str) -> None:
+            GLib.idle_add(self._set_status, line[:80])
+            if "Frame" in line:
+                GLib.idle_add(self._preview_gen_lbl.set_label, line.strip())
+
+        success, err = run_subprocess(
+            prompt=args.ad_prompt,
+            out_path=out_path,
+            frames=args.ad_frames,
+            steps=args.ad_steps,
+            seed=args.ad_seed,
+            on_progress=_on_progress,
+        )
+
+        if not success:
+            GLib.idle_add(self._finish_error, err)
+            return
+
+        elapsed_s = int(time.monotonic() - t0)
+
+        # Thumbnail: first frame of the GIF as PNG
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        make_gif_thumbnail(out_path, thumb_path)
+
+        params_d = {
+            "prompt": args.ad_prompt,
+            "frames": args.ad_frames,
+            "steps": args.ad_steps,
+            "seed": args.ad_seed,
+            "generation_seconds": elapsed_s,
+        }
+        rec = MediaRecord(
+            id=str(_uuid.uuid4()),
+            media_type="artgen",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            file_path=str(out_path),
+            thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+            prompt=args.ad_prompt[:500],
+            model_id="animatediff-blackhole",
+            generator_type="animatediff",
+            params=json.dumps(params_d),
+            starred=0,
+        )
+        _media_store.add(rec)
+        _media_store.ensure_auto_playlists()
+
+        GLib.idle_add(self._finish_success, "", str(out_path), rec)
+
     def _build_args(self, gen_name: str) -> types.SimpleNamespace:
         """Build an argparse-Namespace-compatible object from the current UI state."""
         args = types.SimpleNamespace()
@@ -1097,6 +1214,12 @@ class ArtgenPanel(Gtk.Box):
             args.freeform = buf.get_text(
                 buf.get_start_iter(), buf.get_end_iter(), False
             )
+
+        elif gen_name == "animatediff":
+            args.ad_prompt = self._ad_prompt.get_text() or "purple phosphor glow across distant mountains at 2am"
+            args.ad_frames = int(_dd_val(self._ad_frames) or "8")
+            args.ad_steps = int(self._ad_steps.get_value())
+            args.ad_seed = int(self._ad_seed.get_value())
 
         return args
 
@@ -1532,7 +1655,7 @@ class ArtgenPanel(Gtk.Box):
             return
 
         # Types that accept free-form text from Inspire
-        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform"}
+        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff"}
         if gen_name == "verse":
             self._verse_theme.set_text(theme)
         elif gen_name == "palette":
@@ -1541,6 +1664,8 @@ class ArtgenPanel(Gtk.Box):
             self._ansi_subject.set_text(theme)
         elif gen_name == "freeform":
             self._free_tv.get_buffer().set_text(theme)
+        elif gen_name == "animatediff":
+            self._ad_prompt.set_text(theme)
         else:
             # Visual types: show the inspiration in the status bar
             self._set_status(f"Inspired: {theme[:60]}")
@@ -1662,5 +1787,11 @@ class ArtgenPanel(Gtk.Box):
         elif gen_name == "palette":
             self._pal_count.set_value(random.randint(4, 6))
             # mood written by _auto_fire_with_theme after Inspire
+
+        elif gen_name == "animatediff":
+            self._set_dd(self._ad_frames, "8")
+            self._ad_steps.set_value(25)
+            self._ad_seed.set_value(random.randint(0, 9999))
+            # prompt written by _auto_fire_with_theme after Inspire
 
         # freeform: text written entirely by _auto_fire_with_theme after Inspire

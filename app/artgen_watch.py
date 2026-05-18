@@ -238,7 +238,7 @@ class ArtgenWatch(Gtk.Overlay):
 
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
-        if ext == ".svg" and fp.exists():
+        if ext in (".svg", ".gif", ".png", ".jpg", ".jpeg") and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans" and fp.exists() and self._ansi_web is not None:

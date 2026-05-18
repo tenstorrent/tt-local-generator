@@ -225,7 +225,7 @@ def repair_svg(raw: str) -> str:
 def _load_generators() -> None:
     from artgen.generators import (  # noqa: F401
         landscape, skyline, constellation, geometric,
-        ansi, palette, verse, circuit, freeform,
+        ansi, palette, verse, circuit, freeform, animatediff,
     )
 
 
