@@ -945,15 +945,31 @@ class ArtgenPanel(Gtk.Box):
             daemon=True,
         ).start()
 
+    # Map artgen generator names to prompt_client source types so the prompt
+    # engine pulls from the right word banks and LLM polishing style.
+    _INSPIRE_SOURCE = {
+        "animatediff": "animate",
+        "landscape":   "video",
+        "skyline":     "video",
+        "constellation": "video",
+        "verse":       "video",
+        "palette":     "video",
+        "ansi":        "image",
+        "circuit":     "image",
+        "geometric":   "image",
+        "freeform":    "video",
+    }
+
     def _on_inspire(self, gen_name: str, entry: Gtk.Entry) -> None:
         """Call prompt server in background; update entry on main thread."""
         seed = entry.get_text().strip()
         entry.set_sensitive(False)
+        source = self._INSPIRE_SOURCE.get(gen_name, "video")
 
         def _bg():
             try:
                 import prompt_client
-                result = prompt_client.generate_prompt(source="artgen", seed_text=seed)
+                result = prompt_client.generate_prompt(source=source, seed_text=seed)
             except Exception:
                 try:
                     from word_banks import THEMES
