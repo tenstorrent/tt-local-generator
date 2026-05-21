@@ -515,6 +515,25 @@ class ArtgenDetail(Gtk.Box):
         self._params_lbl.set_selectable(True)
         sidebar.append(self._params_lbl)
 
+        # Prompt display — shown when rec.prompt is non-empty
+        self._prompt_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._prompt_sep.set_margin_top(4)
+        self._prompt_sep.set_margin_bottom(4)
+        sidebar.append(self._prompt_sep)
+
+        prompt_hdr = Gtk.Label(label="Prompt")
+        prompt_hdr.set_xalign(0)
+        prompt_hdr.add_css_class("caption-heading")
+        sidebar.append(prompt_hdr)
+        self._prompt_hdr = prompt_hdr
+
+        self._prompt_lbl = Gtk.Label(label="")
+        self._prompt_lbl.set_xalign(0)
+        self._prompt_lbl.set_wrap(True)
+        self._prompt_lbl.set_selectable(True)
+        self._prompt_lbl.add_css_class("muted")
+        sidebar.append(self._prompt_lbl)
+
         # Star toggle
         self._star_btn = Gtk.ToggleButton(label="☆  Star")
         self._star_btn.connect("toggled", self._on_star_toggled)
@@ -587,11 +606,21 @@ class ArtgenDetail(Gtk.Box):
             f"{fmt_local_12h(rec.created_at)}{gen_str}\n"
             f"model: {rec.model_id or '—'}"
         )
+        _PARAMS_SKIP = {"generation_seconds", "prompt"}
         param_lines = "\n".join(
             f"{k}: {v}" for k, v in p.items()
-            if k not in ("generation_seconds",) and isinstance(v, (str, int, float, bool))
+            if k not in _PARAMS_SKIP and isinstance(v, (str, int, float, bool))
         )
         self._params_lbl.set_label(param_lines)
+
+        # Prompt — prefer rec.prompt; fall back to params["prompt"] for older records
+        prompt_text = rec.prompt or p.get("prompt", "")
+        has_prompt = bool(prompt_text and prompt_text.strip())
+        self._prompt_sep.set_visible(has_prompt)
+        self._prompt_hdr.set_visible(has_prompt)
+        self._prompt_lbl.set_visible(has_prompt)
+        if has_prompt:
+            self._prompt_lbl.set_label(prompt_text.strip())
 
         self._star_btn.handler_block_by_func(self._on_star_toggled)
         self._star_btn.set_active(bool(rec.starred))

@@ -11,6 +11,7 @@ A GTK4 desktop UI for generating videos and images with Tenstorrent hardware.
 | Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | Blackhole (P300X2) — image-to-video |
 | Image | [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 4× p300c |
 | Animate | [Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-14B-720P-Diffusers) | CPU/CUDA (Phase 1) |
+| Artgen | [AnimateDiff (TTNN)](app/animatediff/) | Blackhole P300c · QB2 — animated GIF, no Docker |
 
 All inference runs via a local [tt-inference-server](https://github.com/tenstorrent/tt-inference-server) Docker container on port 8000.
 
@@ -208,6 +209,9 @@ cd ~/code/tt-local-generator
 - **Text-to-image with FLUX.1-dev** — high-quality still images on the same hardware.
 - **Animate** — bring any character image to life: supply a motion video and a character PNG,
   and Wan2.2-Animate-14B drives the character through the motion pattern.
+- **AnimateDiff (Artgen)** — animated GIFs generated directly on Blackhole via a TTNN UNet
+  with cross-frame temporal attention. No Docker, no server warmup — the prompt engine drives
+  every generation. Run from the Artgen panel or via `tt-ctl artgen animatediff --count 5`.
 - **Seed image** — attach a reference photo or frame to guide color palette, composition, and
   style continuity between clips.
 - **Prompt queue** — write the next prompt while a generation runs; the queue drains

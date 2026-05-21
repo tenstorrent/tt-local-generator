@@ -388,6 +388,7 @@
     .model-type.video { color: var(--teal); background: rgba(79,209,197,.12); }
     .model-type.image { color: var(--pink); background: rgba(236,150,184,.12); }
     .model-type.animate { color: var(--gold); background: rgba(244,196,113,.12); }
+    .model-type.artgen { color: var(--green); background: rgba(39,174,96,.12); }
     .model-name {
       font-size: 1.05rem;
       font-weight: 700;
@@ -1013,6 +1014,12 @@
         <p class="model-desc">Video-to-video character animation. Give any character a motion — or replace a person in a clip.</p>
         <div class="model-hw"><span class="model-hw-dot"></span> CPU · CUDA (TT HW pending)</div>
       </div>
+      <div class="model-card">
+        <div class="model-type artgen">Artgen · Animated GIF</div>
+        <div class="model-name">AnimateDiff</div>
+        <p class="model-desc">TTNN UNet with cross-frame temporal attention. Generates animated GIFs directly on Blackhole — no Docker, no server warmup. Every generation driven by the prompt engine.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> Blackhole P300c · QB2</div>
+      </div>
     </div>
   </div>
 </section>
@@ -1021,11 +1028,12 @@
 <section id="artgen">
   <div class="wrap">
     <div class="section-label">Built-in art generator</div>
-    <h2 class="section-title">Artgen — SVG art, entirely on-device.</h2>
+    <h2 class="section-title">Artgen — generative art, entirely on-device.</h2>
     <p class="section-sub">
-      A second creative mode alongside video: generative SVG landscapes and gradients
-      produced by the three-tier prompt engine. No model loading, no GPU — instant output
-      you can save, share, or use as a seed image for I2V.
+      A second creative mode alongside video: SVG landscapes, color palettes, verse, ANSI
+      art, and — on Blackhole hardware — animated GIFs via the AnimateDiff TTNN pipeline.
+      Everything driven by the same three-tier prompt engine: algorithmic word banks →
+      Markov chain → Qwen3-0.6B polish.
     </p>
 
     <!-- SVG gallery: 3 top + 2 bottom -->
@@ -1302,6 +1310,7 @@
       <button class="prompt-tab" data-tab="skyreels">SkyReels</button>
       <button class="prompt-tab" data-tab="image">Image (FLUX)</button>
       <button class="prompt-tab" data-tab="animate">Animate</button>
+      <button class="prompt-tab" data-tab="animatediff">AnimateDiff</button>
       <button class="prompt-tab" data-tab="artgen">Artgen</button>
     </div>
 
@@ -1497,6 +1506,49 @@
           </div>
           <div class="prompt-ex-input">animate: monk in orange robes, bows slowly</div>
           <div class="prompt-ex-output">A monk in deep orange robes brings his palms together and bows from the waist with deliberate slowness, moss-covered temple courtyard, dappled morning light through leaves above, reverent and unhurried</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-animatediff">
+      <p style="color:var(--muted);font-size:.9rem;margin:0 0 1.2rem;line-height:1.6">
+        AnimateDiff runs a TTNN UNet with cross-frame temporal attention directly on Blackhole — no
+        Docker container, no server warmup. The prompt engine (algo → Markov → Qwen3 polish) drives
+        every generation; SD 1.4 reads the visual scene. Literary register shapes the mood; the
+        architecture handles temporal coherence across frames.
+      </p>
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Dostoevsky · counting house</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: ledger room, gaslight, complicit smile</div>
+          <div class="prompt-ex-output">a moneylender in spectacles tapping a ledger with one finger, smiling with his mouth only, descending stairs in a Saint Petersburg counting house at night, gaslight throwing long shadows, tallow candles, winter seeping through the glass, deep chiaroscuro, morally complicated</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Chekhov · provincial idyll</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: old man, pigeons, Tuesday, nothing to do</div>
+          <div class="prompt-ex-output">an old man feeding pigeons in a provincial square on a Tuesday with nothing else to do, moves through a crowded space without touching anyone, a Dutch merchant's warehouse seen through the window, cool blue of pre-dawn, half-awake in a good way</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Chekhov · evening garden</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: man who missed his whole life, garden, dusk</div>
+          <div class="prompt-ex-output">a man who has missed his whole life sitting in a garden in the evening light, stirs a cup of coffee until it is cold, a summer internment camp in the California desert seen in memory, amber from a kerosene lamp, very still and very full</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Kafka · impossible office</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: door opens with no one touching it, letter falling from sky</div>
+          <div class="prompt-ex-output">a door swings slowly open with no one touching it into a corridor that extends far beyond any building could contain, a giant letter falling from the sky into a quiet neighborhood, the pale blue of a phone screen in total darkness, feverishly alive for no reason</div>
         </div>
       </div>
     </div>
