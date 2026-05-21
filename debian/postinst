@@ -235,12 +235,15 @@ else
     # default string and unique per installation.
     JWT_SEC="$(openssl rand -hex 32 2>/dev/null)" \
         || JWT_SEC="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')"
+    API_SEC="$(openssl rand -hex 32 2>/dev/null)" \
+        || API_SEC="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')"
 
     cat > "$ENV_FILE" <<ENVEOF
 # tt-local-generator — inference server secrets
 # Created by postinst on $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# Edit this file to update JWT_SECRET or HF_TOKEN at any time.
+# Edit this file to update JWT_SECRET, API_KEY, or HF_TOKEN at any time.
 JWT_SECRET=${JWT_SEC}
+API_KEY=${API_SEC}
 HF_TOKEN=${HF_TOK}
 ENVEOF
 

@@ -7335,8 +7335,9 @@ class MainWindow(Gtk.ApplicationWindow):
             # operation finishes, then health results flow through normally.
             # Also skip when artgen is the active source: the artgen health
             # loop owns the status bar in that mode (it polls port 8002).
+            _source = self._controls.get_model_source()
             cap = _MODEL_TO_CAP.get(running_model or "") \
-                  or _SOURCE_TO_CAP.get(self._controls.get_model_source(), "video")
+                  or (_SOURCE_TO_CAP.get(_source, "video") if _source != "artgen" else "video")
             cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
             dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")

@@ -888,7 +888,7 @@ class ArtgenPanel(Gtk.Box):
             if delay < 0:
                 self._gif_timer_id = None
                 return GLib.SOURCE_REMOVE
-            self._gif_timer_id = GLib.timeout_add(delay, tick)
+            self._gif_timer_id = GLib.timeout_add(max(delay, 10), tick)
             return GLib.SOURCE_REMOVE
 
         delay = max(it.get_delay_time(), 10)
