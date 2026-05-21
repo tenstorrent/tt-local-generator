@@ -31,8 +31,18 @@ from typing import Callable
 from artgen import ArtGenerator, register
 
 _TT_METAL = Path.home() / "tt-metal"
-_SCRIPT_DIR = Path.home() / "tt-scratchpad" / "tt-animatediff"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
+
+# Prefer the copy bundled inside this repo (app/animatediff/).  Fall back to
+# the developer scratchpad path so local dev machines that have built
+# tt-animatediff from source still work without change.
+_BUNDLED_DIR = Path(__file__).resolve().parent.parent.parent / "animatediff"
+_SCRATCHPAD_DIR = Path.home() / "tt-scratchpad" / "tt-animatediff"
+_SCRIPT_DIR = (
+    _BUNDLED_DIR
+    if (_BUNDLED_DIR / "examples" / "generate_blackhole_v2.py").exists()
+    else _SCRATCHPAD_DIR
+)
 
 
 @register
@@ -44,6 +54,23 @@ class AnimateDiffGenerator(ArtGenerator):
     def build_prompt(self, args) -> str:
         # Not used — animatediff bypasses the LLM pipeline entirely.
         raise RuntimeError("AnimateDiff does not use build_prompt; route to _run_animatediff()")
+
+    def add_args(self, p) -> None:
+        p.add_argument("--prompt", default=None,
+                       help="Prompt text (auto-generated via prompt engine if omitted)")
+        p.add_argument("--negative-prompt", default="blurry, low quality",
+                       dest="negative_prompt", metavar="TEXT")
+        p.add_argument("--frames", type=int, default=8,
+                       help="Frames to generate (default: 8)")
+        p.add_argument("--steps", type=int, default=25,
+                       help="Denoising steps (default: 25)")
+        p.add_argument("--seed", type=int, default=42,
+                       help="Random seed (default: 42; incremented per --count)")
+        p.add_argument("--temporal-alpha", type=float, default=0.35,
+                       dest="temporal_alpha",
+                       help="Cross-frame attention blend 0–1 (default: 0.35)")
+        p.add_argument("--count", type=int, default=1,
+                       help="Number of GIFs to generate in sequence (default: 1)")
 
     def default_output(self) -> Path:
         return Path("animatediff.gif")

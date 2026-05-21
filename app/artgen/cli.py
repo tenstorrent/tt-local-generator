@@ -71,6 +71,110 @@ def _build_artgen_parser(sub):
     return art
 
 
+def _generate_animate_prompt() -> str:
+    """Generate a prompt for AnimateDiff via the prompt engine (with Qwen polish)."""
+    import subprocess as _sp
+    import json as _json
+    _app = Path(__file__).resolve().parent.parent
+    gen_script = _app / "generate_prompt.py"
+    try:
+        r = _sp.run(
+            [sys.executable, str(gen_script), "--type", "animate"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode == 0:
+            data = _json.loads(r.stdout)
+            src = data.get("source", "algo")
+            print(f"[prompt source: {src}]", flush=True)
+            return data["prompt"]
+    except Exception as e:
+        print(f"  [prompt engine unavailable: {e} — using fallback]")
+    return "a person walking through a moonlit forest, cinematic, atmospheric"
+
+
+def _cmd_animatediff(args) -> None:
+    """Route for 'tt-ctl artgen animatediff' — uses prompt engine, not LLM artgen."""
+    from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
+
+    ok, hw_msg = check_hardware()
+    if not ok:
+        print(f"ERROR: {hw_msg}", file=sys.stderr)
+        sys.exit(1)
+    print(f"[hardware: {hw_msg}]", flush=True)
+
+    count = getattr(args, "count", 1)
+
+    for i in range(count):
+        iteration = f"{i + 1}/{count}"
+
+        # Prompt: explicit flag wins; otherwise auto-generate via prompt engine
+        prompt = getattr(args, "prompt", None) or None
+        if not prompt:
+            print(f"\n── [{iteration}] Generating prompt …", flush=True)
+            prompt = _generate_animate_prompt()
+        print(f"[{iteration}] Prompt: {prompt[:100]}", flush=True)
+
+        # Output path
+        explicit_out = getattr(args, "output", None)
+        if explicit_out and count == 1:
+            out_path = Path(explicit_out)
+        else:
+            try:
+                from media_store import make_artgen_path
+                out_path = make_artgen_path(str(uuid.uuid4())[:8], ".gif")
+            except Exception:
+                out_path = Path(f"animatediff_{i:02d}.gif")
+
+        seed = getattr(args, "seed", 42) + i
+
+        ok, err = run_subprocess(
+            prompt=prompt,
+            out_path=out_path,
+            frames=getattr(args, "frames", 8),
+            steps=getattr(args, "steps", 25),
+            seed=seed,
+            negative_prompt=getattr(args, "negative_prompt", "blurry, low quality"),
+            temporal_alpha=getattr(args, "temporal_alpha", 0.35),
+            on_progress=lambda msg: print(f"  {msg}", flush=True),
+        )
+
+        if not ok:
+            print(f"  ERROR: {err}", file=sys.stderr)
+            continue
+
+        # Thumbnail
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        make_gif_thumbnail(out_path, thumb_path)
+
+        # Register in media store so GUI picks it up immediately
+        try:
+            from media_store import media_store as _ms, MediaRecord
+            import json as _json
+            rec = MediaRecord(
+                id=str(uuid.uuid4()),
+                media_type="artgen",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                file_path=str(out_path),
+                thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+                prompt=prompt[:500],
+                model_id="animatediff-blackhole",
+                generator_type="animatediff",
+                params=_json.dumps({
+                    "frames": getattr(args, "frames", 8),
+                    "steps": getattr(args, "steps", 25),
+                    "seed": seed,
+                    "temporal_alpha": getattr(args, "temporal_alpha", 0.35),
+                }),
+                starred=0,
+            )
+            _ms.add(rec)
+            _ms.ensure_auto_playlists()
+        except Exception as _e:
+            print(f"  [media-store: {_e}]")
+
+        print(f"[saved → {out_path}]", flush=True)
+
+
 def cmd_artgen(args) -> None:
     """Handler for 'tt-ctl artgen TYPE ...'."""
     gen_name = getattr(args, "artgen_type", None)
@@ -78,6 +182,11 @@ def cmd_artgen(args) -> None:
         # No type given — print help by re-invoking with --help
         import subprocess
         subprocess.run([sys.argv[0], "artgen", "--help"])
+        return
+
+    # AnimateDiff bypasses the LLM artgen pipeline — uses prompt engine + direct subprocess
+    if gen_name == "animatediff":
+        _cmd_animatediff(args)
         return
 
     # Resolve LLM endpoint
