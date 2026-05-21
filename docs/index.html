@@ -836,10 +836,6 @@
           Read the docs
         </a>
       </div>
-      <div class="hero-cli">
-        <span class="prompt-char">$</span>
-        git clone https://github.com/tenstorrent/tt-local-generator &amp;&amp; ./tt-gen
-      </div>
     </div>
   </div>
 
@@ -1710,8 +1706,10 @@
 
       <div class="install-note-box">
         <strong>Model weights are not bundled.</strong>
-        Download Wan2.2 (~118 GB) separately after install:<br>
-        <code>tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers</code>
+        Download models separately after install (no <code>apply_patches.sh</code> needed — the package handles that automatically):<br><br>
+        <code>tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers</code> &nbsp;(~118 GB)<br>
+        <code>tt-local-gen-download-model --repo Qwen/Qwen3-0.6B</code> &nbsp;(~1.2 GB — prompt server)<br><br>
+        Or use the model packages: <code>sudo apt install tt-model-wan2-t2v tt-model-qwen3</code>
       </div>
     </div>
 
@@ -1720,26 +1718,50 @@
       <div class="install-step">
         <div class="install-step-num">1</div>
         <div class="install-step-body">
-          <div class="install-step-label">Clone and install dependencies</div>
+          <div class="install-step-label">Clone and install system dependencies</div>
           <div class="cli-block" style="margin-top:.5rem;">
             <div class="cli-line"><span class="cli-cmd">git clone</span> <span class="cli-arg">https://github.com/tenstorrent/tt-local-generator.git</span> <span class="cli-arg">~/code/tt-local-generator</span></div>
             <div class="cli-line"><span class="cli-cmd">cd ~/code/tt-local-generator</span></div>
             <div class="cli-line"><span class="cli-cmd">./bin/setup_ubuntu.sh</span> &nbsp;<span class="cli-comment"># Ubuntu — installs GTK4, GStreamer, Docker</span></div>
-            <div class="cli-line"><span class="cli-cmd">./bin/setup_macos.sh</span> &nbsp;&nbsp;<span class="cli-comment"># macOS  — installs via Homebrew</span></div>
+            <div class="cli-line"><span class="cli-cmd">./bin/setup_macos.sh</span> &nbsp;&nbsp;<span class="cli-comment"># macOS  — installs via Homebrew (remote-client mode)</span></div>
           </div>
+          <p class="install-step-note">Clone destination <code>~/code/tt-local-generator</code> is expected by all scripts. macOS connects as a remote client to a Tenstorrent machine over the network.</p>
         </div>
       </div>
 
       <div class="install-step">
         <div class="install-step-num">2</div>
         <div class="install-step-body">
-          <div class="install-step-label">Start the inference server and launch the UI</div>
+          <div class="install-step-label">Set up the vendored inference server</div>
           <div class="cli-block" style="margin-top:.5rem;">
-            <div class="cli-line"><span class="cli-cmd">./bin/start_wan_qb2.sh</span> &nbsp;<span class="cli-comment"># start Wan2.2 — wait ~5 min for "startup complete"</span></div>
+            <div class="cli-line"><span class="cli-cmd">./bin/setup_vendor.sh</span> &nbsp;<span class="cli-comment"># shallow-clone tt-inference-server at the pinned SHA</span></div>
+          </div>
+          <p class="install-step-note">This creates <code>vendor/tt-inference-server/</code> — the server tree that all <code>start_*.sh</code> scripts use. Takes ~30 s on a fast connection.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <div class="install-step-num">3</div>
+        <div class="install-step-body">
+          <div class="install-step-label">Apply patches to the vendored server</div>
+          <div class="cli-block" style="margin-top:.5rem;">
+            <div class="cli-line"><span class="cli-cmd">./bin/apply_patches.sh</span> &nbsp;<span class="cli-comment"># HF_HOME mount, SkyReels model specs, device config</span></div>
+          </div>
+          <p class="install-step-note">Required once after every <code>setup_vendor.sh</code>. The <code>start_*.sh</code> scripts check for this and print an error if skipped.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <div class="install-step-num">4</div>
+        <div class="install-step-body">
+          <div class="install-step-label">Launch the app</div>
+          <div class="cli-block" style="margin-top:.5rem;">
             <div class="cli-line"><span class="cli-cmd">./tt-gen</span></div>
           </div>
           <p class="install-step-note">
-            Or point at a remote server: <code>./tt-gen --server http://your-tt-machine:8000</code>
+            Use <strong>Servers ▸ Start</strong> in the app to start an inference backend, or launch one directly:
+            <code>./bin/start_wan_qb2.sh</code>.
+            Remote clients: <code>./tt-gen --server http://your-tt-machine:8000</code>
           </p>
         </div>
       </div>

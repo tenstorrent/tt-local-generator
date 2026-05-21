@@ -1,3 +1,21 @@
+tt-local-generator (0.2.7) noble; urgency=medium
+
+  * Packaging: add tt-model-animate (Wan2.2-Animate-14B, ~30 GB),
+    tt-model-skyreels-t2v (SkyReels-V2-DF-1.3B, ~12 GB), and
+    tt-model-skyreels-i2v (SkyReels-V2-I2V-14B, ~58 GB) model packages.
+    tt-model-skyreels-i2v declares Depends: tt-model-wan2-t2v because it
+    needs the Wan2.2 A14B diffusers checkpoint for VAE and T5 text encoder.
+  * Packaging: add tt-local-generator-models-all meta-package that depends
+    on all seven model packages for single-command complete installation.
+  * Website: remove incorrect hero CLI snippet (git clone && ./tt-gen skipped
+    all required setup steps). Git-clone install tab now lists all five steps
+    including setup_vendor.sh and apply_patches.sh with explanatory notes.
+  * INSTALL_deb.md: rewrite to cover both deb and clone paths clearly, with
+    full step-by-step instructions for each, model package list, and retry
+    helpers.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 21 May 2026 12:00:00 +0000
+
 tt-local-generator (0.2.6) noble; urgency=medium
 
   * TT-TV artgen channels: fix empty pool — artgen MediaRecord objects are now
