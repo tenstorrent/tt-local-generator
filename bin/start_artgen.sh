@@ -108,8 +108,12 @@ case "$MODEL" in
         DOCKER_IMAGE="$_QB2_IMAGE"
         DEFAULT_DEVICE="p300x2"
         DEFAULT_DEVICE_IDS=""
-        # Model lives in ~/models/ (HF hub cache layout), not ~/.cache/huggingface
-        HF_CACHE="$HOME/models"
+        # Prefer ~/.cache/huggingface/hub if that is where the weights landed; fall back to ~/models
+        if [[ -d "$HOME/.cache/huggingface/hub/models--meta-llama--Llama-3.3-70B-Instruct/blobs" ]]; then
+            HF_CACHE="$HOME/.cache/huggingface"
+        else
+            HF_CACHE="$HOME/models"
+        fi
         ;;
     Qwen2.5-7B-Instruct)
         DOCKER_IMAGE="$_GHCR:0.12.0-5b5db8a-e771fff"

@@ -72,6 +72,15 @@ CLASSIC BBS SPLASH SCREEN LAYOUT (25 rows total):
   Rows 21-23:  Ground shadow. Dark reflection or base, grounding the main image.
   Rows 24-25:  Footer strip. Near-black with faint scanline texture."""
 
+# Mini BBS example: 10-wide slice showing void→halo→neon core→halo→void (a glowing point).
+# Used as a concrete few-shot example so small models understand the aesthetic.
+_BBS_EXAMPLE = """\
+\033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;234m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[0m
+\033[48;5;232m \033[48;5;232m \033[48;5;17m \033[48;5;24m \033[48;5;51m \033[48;5;87m \033[48;5;51m \033[48;5;24m \033[48;5;17m \033[48;5;232m \033[0m
+\033[48;5;232m \033[48;5;24m \033[48;5;51m \033[48;5;87m \033[48;5;255m \033[48;5;255m \033[48;5;255m \033[48;5;87m \033[48;5;51m \033[48;5;24m \033[0m
+\033[48;5;232m \033[48;5;232m \033[48;5;17m \033[48;5;24m \033[48;5;51m \033[48;5;87m \033[48;5;51m \033[48;5;24m \033[48;5;17m \033[48;5;232m \033[0m
+\033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;234m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[48;5;232m \033[0m"""
+
 
 def _build_prompt(subject: str, width: int, style: str) -> str:
     # Keep aspect ratio ~2:1 (terminal cells are taller than wide)
@@ -141,9 +150,13 @@ OUTPUT FORMAT — follow exactly:
 
 {_BBS_PALETTE}
 
+EXAMPLE (10-wide slice — void→halo→neon core→halo→void):
+{_BBS_EXAMPLE}
+
 RULES:
   - Darkness is the canvas. Neon is the signal. Most pixels are near-black.
   - The main subject (rows 4-20) should glow — hard bright edges on dark.
+  - CRITICAL: vary the color index — never repeat the same N for an entire row.
   - No gradual pastel transitions. Punch. Contrast. Neon-on-void.
   - No markdown fences, no explanation — only the {height} ANSI escape rows.
 """

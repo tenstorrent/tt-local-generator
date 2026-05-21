@@ -826,6 +826,11 @@ class ArtgenPanel(Gtk.Box):
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
 
+        # Stop any GIF timer from a previous record before switching to non-GIF content.
+        if ext != ".gif" and self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+
         if ext == ".gif" and fp.exists():
             self._animate_gif(self._preview_gif_pic, str(fp))
             self._preview_stack.set_visible_child_name("gif")

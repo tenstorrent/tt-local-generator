@@ -11,7 +11,7 @@ tt-local-generator (0.3.1) noble; urgency=medium
     that was too short for large models on CPU.
   * docs: emphasise QB2/Blackhole hardware specificity throughout README and
     website; note Wormhole is not supported.
-  * docs/website: AnimateDiff GIF gallery — five starred real-session outputs
+  * docs/website: AnimateDiff GIF gallery — nine starred real-session outputs
     embedded in both the artgen section and the prompt examples tab.
   * fix: improve delete button error diagnostics in artgen gallery and detail
     views (better exception logging when choose_finish fails).
