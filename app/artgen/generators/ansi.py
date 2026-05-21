@@ -5,6 +5,10 @@ The LLM produces a W×H grid where each cell is a single SPACE character
 preceded by \033[48;5;Nm (background color) and each row ends with \033[0m\n.
 This is the most reliable format for LLMs: they only need to pick one color
 index per cell, and the result renders as a pixelated image in any terminal.
+
+The "bbs" style generates splash screens in the tradition of 80s/90s dial-up
+BBS art: dark background, neon highlights, bold central iconography, 80×25
+canvas matching the standard BBS terminal dimensions.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ _STYLE_HINTS = {
     "portrait":  "Centred subject with strong silhouette. Symmetric or near-symmetric.",
     "logo":      "Bold shape or icon. Simple high-contrast geometric treatment.",
     "scene":     "Foreground / midground / background layers. Suggest depth and lighting.",
+    "bbs":       "BBS splash screen. Dark void background, neon-on-black central icon, 80×25.",
 }
 
 # Concrete 4×4 example the LLM can mirror:
@@ -33,6 +38,39 @@ _EXAMPLE = """\
 \033[48;5;22m \033[48;5;28m \033[48;5;34m \033[48;5;76m \033[0m
 \033[48;5;58m \033[48;5;94m \033[48;5;130m \033[48;5;172m \033[0m
 \033[48;5;0m \033[48;5;236m \033[48;5;240m \033[48;5;244m \033[0m"""
+
+# BBS-specific palette and composition guidance:
+_BBS_PALETTE = """\
+BBS COLOR PALETTE — void darkness with neon puncture:
+  BACKGROUND (fill 65%+ of canvas with these):
+    232-234 : near-black (the essential darkness — use liberally)
+    17-19   : deep navy void
+    52-53   : deep crimson shadow
+
+  NEON HIGHLIGHTS (the glowing subject and hot edges only):
+    51, 87  : electric cyan / ice blue
+    46, 82  : toxic green / hacker glow
+    201,199 : hot magenta / neon pink
+    226,220 : bright gold / warning yellow
+    255,231 : pure white (maximum intensity, use sparingly)
+    196,160 : blood red / alarm
+
+  MIDTONE HALOS (glow bleeding outward from bright elements):
+    23-26   : dim teal aura
+    55-57   : dim violet
+    88-90   : dark magenta bloom
+    238-242 : structural gray (outlines, chassis, bones)"""
+
+_BBS_COMPOSITION = """\
+CLASSIC BBS SPLASH SCREEN LAYOUT (25 rows total):
+  Rows 1-3:    Deep void. Near-black with 2-3 scattered bright pinpoints (stars/static).
+  Rows 4-20:   MAIN IMAGE — the board's icon/sigil, large and centered.
+               Hard neon edges. Radiance bleeding into surrounding darkness.
+               Think: glowing skull, coiled dragon, cracked circuit board,
+               rearing demon, lone hacker silhouette, exploding nova, eye of god.
+               Be bold. This is the first thing callers see when they dial in.
+  Rows 21-23:  Ground shadow. Dark reflection or base, grounding the main image.
+  Rows 24-25:  Footer strip. Near-black with faint scanline texture."""
 
 
 def _build_prompt(subject: str, width: int, style: str) -> str:
@@ -74,6 +112,43 @@ RULES:
 """
 
 
+def _build_bbs_prompt(subject: str, board_name: str, tagline: str, width: int = 80) -> str:
+    height = 25  # standard 80×25 BBS terminal
+
+    board_ctx = ""
+    if board_name:
+        board_ctx = f"""\
+BOARD IDENTITY:
+  Name    : {board_name}
+  Tagline : {tagline or "connecting minds across the void"}
+
+  The art IS this board's identity. The central image is its sigil.
+  Let the name drive the visual theme — every pixel serves the board's soul.
+
+"""
+
+    return f"""\
+Create a BBS splash screen for: {subject}
+
+{board_ctx}CANVAS: {width} columns × {height} rows
+
+{_BBS_COMPOSITION}
+
+OUTPUT FORMAT — follow exactly:
+  • Each pixel = one SPACE with background color: \\033[48;5;Nm
+  • Row: \\033[48;5;N1m \\033[48;5;N2m ... \\033[48;5;N{width}m \\033[0m
+  • Exactly {height} rows × {width} pixels each
+
+{_BBS_PALETTE}
+
+RULES:
+  - Darkness is the canvas. Neon is the signal. Most pixels are near-black.
+  - The main subject (rows 4-20) should glow — hard bright edges on dark.
+  - No gradual pastel transitions. Punch. Contrast. Neon-on-void.
+  - No markdown fences, no explanation — only the {height} ANSI escape rows.
+"""
+
+
 @register
 class AnsiGenerator(ArtGenerator):
     name = "ansi"
@@ -87,7 +162,7 @@ class AnsiGenerator(ArtGenerator):
         )
         parser.add_argument(
             "--width", type=int, default=40, metavar="COLS",
-            help="Width in pixels/columns (default: 40)",
+            help="Width in pixels/columns (default: 40; bbs style defaults to 80)",
         )
         parser.add_argument(
             "--colors", choices=["256", "16"], default="256",
@@ -96,14 +171,32 @@ class AnsiGenerator(ArtGenerator):
         parser.add_argument(
             "--ansi-style", choices=list(_STYLE_HINTS), default="scene",
             dest="ansi_style",
-            help="Composition style (default: scene)",
+            help="Composition style: scene, landscape, portrait, logo, bbs (default: scene)",
+        )
+        parser.add_argument(
+            "--board-name", default="", metavar="NAME",
+            dest="board_name",
+            help="BBS board name — gives the art its identity (bbs style only)",
+        )
+        parser.add_argument(
+            "--tagline", default="", metavar="TEXT",
+            help="BBS board tagline shown below the name (bbs style only)",
         )
 
     def build_prompt(self, args) -> str:
+        style = getattr(args, "ansi_style", "scene")
+        if style == "bbs":
+            width = getattr(args, "width", None) or 80
+            return _build_bbs_prompt(
+                subject=getattr(args, "subject", "glowing skull on dark void"),
+                board_name=getattr(args, "board_name", ""),
+                tagline=getattr(args, "tagline", ""),
+                width=width,
+            )
         return _build_prompt(
             getattr(args, "subject", "a mountain at sunset"),
             getattr(args, "width", 40),
-            getattr(args, "ansi_style", "scene"),
+            style,
         )
 
     def parse_output(self, raw: str, args) -> str:

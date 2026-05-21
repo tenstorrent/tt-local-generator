@@ -31,6 +31,8 @@ _COMMON_ARGS = [
                           help="Max tokens for LLM response (default: 4096)")),
     ("--temperature", dict(type=float, default=0.7, metavar="T",
                            help="LLM temperature 0.0-1.0 (default: 0.7)")),
+    ("--timeout", dict(type=int, default=300, metavar="S",
+                       help="HTTP read timeout in seconds (default: 300; raise for slow/large models)")),
     ("--simulate", dict(action="store_true",
                         help="Print the prompt without calling the LLM")),
 ]
@@ -189,9 +191,6 @@ def cmd_artgen(args) -> None:
         _cmd_animatediff(args)
         return
 
-    # Resolve LLM endpoint
-    base_url = getattr(args, "base_url", None) or server_config.base_url("artgen")
-
     gen = artgen.get(gen_name)
 
     # Build prompt
@@ -208,22 +207,25 @@ def cmd_artgen(args) -> None:
         print(prompt)
         return
 
-    # Resolve model
+    # Resolve LLM endpoint — explicit --base-url wins; otherwise pick the best
+    # available: artgen server (8002) first, then prompt-gen (8001, Qwen3-0.6B).
+    explicit_url = getattr(args, "base_url", None)
     model_id = getattr(args, "model", None)
     if model_id is None:
-        model_id = artgen.detect_model(base_url)
+        base_url, model_id = artgen.detect_artgen_endpoint(preferred_url=explicit_url)
         if model_id:
-            print(f"[auto-detected model: {model_id}]")
+            print(f"[auto-detected model: {model_id} @ {base_url}]")
         else:
             print(
-                f"ERROR: no chat model detected at {base_url}\n"
-                "  artgen needs a chat/text model on port 8002 (not the diffusion server on 8000).\n"
-                "  Start one: python3 app/prompt_server.py --port 8002\n"
-                "       or:  vllm serve <model> --port 8002\n"
-                "  Override: tt-ctl artgen <type> --base-url http://localhost:8000/v1",
+                "ERROR: no LLM detected (tried port 8002 and port 8001).\n"
+                "  Start an artgen server:  tt-ctl start artgen-qwen3-8b\n"
+                "  Or the prompt server:    tt-ctl start prompt-server\n"
+                "  Override endpoint:       tt-ctl artgen <type> --base-url http://localhost:8002",
                 file=sys.stderr,
             )
             sys.exit(1)
+    else:
+        base_url = explicit_url or server_config.base_url("artgen")
 
     print(f"[artgen: {gen.name} via {model_id} @ {base_url}]", flush=True)
 
@@ -255,6 +257,7 @@ def cmd_artgen(args) -> None:
             prompt, model_id, base_url,
             max_tokens=getattr(args, "max_tokens", 4096),
             temperature=getattr(args, "temperature", 0.7),
+            timeout=getattr(args, "timeout", 300),
         )
 
     # Parse
@@ -291,7 +294,7 @@ def cmd_artgen(args) -> None:
                 thumb_path = None
 
             _PARAMS_SKIP = {
-                "output", "max_tokens", "temperature",
+                "output", "max_tokens", "temperature", "timeout",
                 # internal argparse / generator scaffolding — not meaningful to store
                 "artgen_type", "func", "base_url", "model", "simulate",
                 "no_save", "raw", "enhance",

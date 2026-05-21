@@ -114,7 +114,7 @@ def detect_model(base_url: str) -> str | None:
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3]
-    # Try OpenAI-style /v1/models first; fall back to bare /models.
+    # Try OpenAI-compatible /v1/models first; fall back to bare /models.
     for url in (f"{base}/v1/models", f"{base}/models"):
         try:
             with urllib.request.urlopen(url, timeout=5) as r:
@@ -122,6 +122,40 @@ def detect_model(base_url: str) -> str | None:
         except Exception:
             continue
     return None
+
+
+def detect_artgen_endpoint(
+    preferred_url: str | None = None,
+) -> "tuple[str, str] | tuple[None, None]":
+    """Return (base_url, model_id) for the best available artgen LLM.
+
+    Resolution order:
+      1. preferred_url  — explicit CLI/UI override
+      2. port 8002      — dedicated artgen LLM (Qwen3-8B, Llama, etc.)
+      3. port 8001      — prompt-gen server (Qwen3-0.6B; limited but functional)
+
+    Returning port 8001 as fallback means the tool has day-one value even before
+    a full artgen server is configured, and automatically upgrades to the best
+    model once one is started — no configuration required.
+
+    Returns (None, None) if nothing responds.
+    """
+    from server_config import server_config as _sc
+    seen: set = set()
+    candidates: list = []
+    for url in filter(None, [
+        preferred_url,
+        _sc.base_url("artgen"),         # http://localhost:8002
+        _sc.base_url("prompt-server"),  # http://localhost:8001
+    ]):
+        if url not in seen:
+            seen.add(url)
+            candidates.append(url)
+    for url in candidates:
+        m = detect_model(url)
+        if m:
+            return url, m
+    return None, None
 
 
 def call_llm(
@@ -132,6 +166,7 @@ def call_llm(
     temperature: float = 0.7,
     on_token=None,  # unused — kept for API compatibility
     system: str | None = None,
+    timeout: int = 300,
 ) -> tuple[str, dict]:
     """
     Send *prompt* to an OpenAI-compatible chat endpoint.
@@ -170,7 +205,7 @@ def call_llm(
         url, data=data,
         headers={"Content-Type": "application/json", "Authorization": "Bearer none"},
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         body = json.loads(r.read())
     text = body["choices"][0]["message"]["content"] or ""
     usage = body.get("usage", {})

@@ -1,3 +1,23 @@
+tt-local-generator (0.3.1) noble; urgency=medium
+
+  * artgen: BBS ANSI style — new --ansi-style bbs mode with 80×25 canvas,
+    near-black void + neon palette, board identity (--board-name, --tagline),
+    and dedicated composition guidance. Includes generate_bbs_batch.sh with
+    18 invented BBS board splash screens.
+  * artgen: auto-detect best available LLM endpoint — tries port 8002 (artgen
+    LLM) first, falls back to port 8001 (Qwen3-0.6B prompt server). No config
+    needed; start a bigger model and every subsequent generation upgrades.
+  * artgen CLI: add --timeout flag (default 300s) — replaces the 30s hard limit
+    that was too short for large models on CPU.
+  * docs: emphasise QB2/Blackhole hardware specificity throughout README and
+    website; note Wormhole is not supported.
+  * docs/website: AnimateDiff GIF gallery — five starred real-session outputs
+    embedded in both the artgen section and the prompt examples tab.
+  * fix: improve delete button error diagnostics in artgen gallery and detail
+    views (better exception logging when choose_finish fails).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 15:03:00 -0700
+
 tt-local-generator (0.3.0) noble; urgency=medium
 
   * artgen: add AnimateDiff Blackhole generator — direct TTNN UNet runner via

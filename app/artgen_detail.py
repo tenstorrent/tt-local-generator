@@ -722,6 +722,7 @@ class ArtgenDetail(Gtk.Box):
     def _on_delete(self, _btn) -> None:
         if not self._records:
             return
+        from time_utils import fmt_local_date
         rec = self._records[self._idx]
         dialog = Gtk.AlertDialog()
         dialog.set_message("Delete this artifact?")

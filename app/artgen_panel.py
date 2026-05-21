@@ -935,7 +935,7 @@ class ArtgenPanel(Gtk.Box):
         n = len(self._gen_queue)
         self._generating = True
         self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
-        self._set_status("Detecting model on port 8002…")
+        self._set_status("Detecting model…")
         self._mosaic_start()
         self._preview_gen_lbl.set_label("Generating…")
         self._preview_stack.set_visible_child_name("generating")
@@ -969,6 +969,11 @@ class ArtgenPanel(Gtk.Box):
         def _bg():
             try:
                 import prompt_client
+                # Use the best available LLM — artgen server (8002) if running,
+                # otherwise prompt-gen server (8001, Qwen3-0.6B).
+                best_url, _ = artgen.detect_artgen_endpoint()
+                if best_url:
+                    prompt_client.configure_llm_url(best_url)
                 result = prompt_client.generate_prompt(source=source, seed_text=seed)
             except Exception:
                 try:
@@ -1073,17 +1078,18 @@ class ArtgenPanel(Gtk.Box):
 
         try:
             gen = artgen.get(gen_name)
-            base_url = server_config.base_url("artgen")
 
-            model_id = artgen.detect_model(base_url + "/v1")
+            # Prefer the dedicated artgen LLM (port 8002); fall back to the
+            # prompt-gen server (port 8001, Qwen3-0.6B) so the tool works from
+            # day one and automatically upgrades once a bigger model is started.
+            base_url, model_id = artgen.detect_artgen_endpoint()
             if model_id is None:
                 GLib.idle_add(self._finish_error,
-                    f"No chat model detected at {base_url}/v1/models\n\n"
-                    "artgen needs a chat/text LLM on port 8002.\n"
-                    "Start one:\n"
-                    "  python3 app/prompt_server.py --port 8002\n"
-                    "  vllm serve <model> --port 8002\n\n"
-                    "Or override the port in Server Settings."
+                    "No LLM available for artgen generation.\n\n"
+                    "Start an artgen server (for best results):\n"
+                    "  tt-ctl start artgen-qwen3-8b\n\n"
+                    "Or start the prompt server for basic generation:\n"
+                    "  tt-ctl start prompt-server"
                 )
                 return
 
@@ -1431,7 +1437,7 @@ class ArtgenPanel(Gtk.Box):
                 try:
                     dlg = Gtk.AlertDialog.new(
                         "Auto-generate stopped after 3 consecutive failures.\n"
-                        "Check that the artgen server is running on port 8002."
+                        "Check that a language model is running (tt-ctl start artgen-qwen3-8b or tt-ctl start prompt-server)."
                     )
                     dlg.show(self.get_root())
                 except AttributeError:
@@ -1723,7 +1729,12 @@ class ArtgenPanel(Gtk.Box):
         """Background thread: call prompt_client; fall back to word bank."""
         theme = ""
         try:
-            from prompt_client import generate_prompt
+            from prompt_client import generate_prompt, configure_llm_url
+            # Use the best available LLM for richer inspiration; artgen server
+            # (8002) if running, otherwise prompt-gen server (8001, Qwen3-0.6B).
+            best_url, _ = artgen.detect_artgen_endpoint()
+            if best_url:
+                configure_llm_url(best_url)
             seed = mood_seed if mood_seed else ""
             theme = generate_prompt("artgen", seed_text=seed) or ""
         except Exception:
@@ -1767,7 +1778,7 @@ class ArtgenPanel(Gtk.Box):
         self._generating = True
         self._gen_btn.set_label("Generating…")
         if gen_name not in _TEXT_TYPES:
-            self._set_status("Detecting model on port 8002…")
+            self._set_status("Detecting model…")
         self._mosaic_start()
         self._preview_gen_lbl.set_label("Generating…")
         self._preview_stack.set_visible_child_name("generating")
