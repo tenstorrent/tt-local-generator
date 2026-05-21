@@ -509,6 +509,15 @@ scrollbar slider:hover {
 .servers-popover-btn:hover { background: rgba(79,209,197,0.1); border-color: @tt_accent; }
 .servers-popover-btn-stop:hover { background: rgba(255,107,107,0.1); border-color: #FF6B6B; color: #FF6B6B; }
 .servers-popover-last-star { color: @tt_accent; font-size: .8rem; margin-left: .2rem; }
+.servers-cap-header {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+    color: @tt_text_muted; text-transform: uppercase;
+    margin-top: 10px; margin-bottom: 2px;
+}
+/* -- Capability dashboard rows in the status bar popover -------------------- */
+.cap-row-ready   { color: @tt_success; font-size: 12px; }
+.cap-row-offline { color: @tt_text_muted; font-size: 12px; }
+.cap-row-label   { font-size: 12px; color: @tt_text_secondary; min-width: 160px; }
 
 /* -- Named control rows (QUALITY, CLIP LENGTH) ------------------------------ */
 .named-ctrl-row {
@@ -3158,6 +3167,23 @@ _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "flux":     ("image",   ""),
     "animate":  ("animate", ""),
 }
+# Maps server model ID → capability key (for capability-centric status labels)
+_MODEL_TO_CAP: dict = {
+    "wan2.2-t2v":                       "video",
+    "mochi-1-preview":                  "video",
+    "skyreels-v2-i2v-14b-540p":         "video",
+    "SkyReels-V2-I2V-14B-540P":         "video",
+    "Skywork/SkyReels-V2-I2V-14B-540P": "video",
+    "wan2.2-animate-14b":               "animate",
+    "flux.1-dev":                       "image",
+}
+# Maps source tab key → capability key
+_SOURCE_TO_CAP: dict = {
+    "video":   "video",
+    "animate": "animate",
+    "image":   "image",
+    "artgen":  "artgen",
+}
 
 class ControlPanel(Gtk.Box):
     """
@@ -4122,7 +4148,7 @@ class ControlPanel(Gtk.Box):
     # ── Servers popover ────────────────────────────────────────────────────────
 
     def _build_servers_popover(self) -> Gtk.Popover:
-        """Build the Servers ▾ popover with one row per managed service."""
+        """Build the Servers ▾ popover grouped by capability."""
         popover = Gtk.Popover()
         popover.set_has_arrow(False)
         # Keep the popover open after button clicks so the ◌ busy state and
@@ -4155,14 +4181,23 @@ class ControlPanel(Gtk.Box):
         sep.set_margin_bottom(4)
         outer.append(sep)
 
-        # One row per server.  Store widget refs so refresh and action feedback can update them.
+        # Store widget refs so refresh and action feedback can update them.
         self._servers_popover_dots: dict[str, Gtk.Label]  = {}
         self._servers_popover_states: dict[str, Gtk.Label] = {}
         self._servers_popover_start_btns: dict[str, Gtk.Button] = {}
         self._servers_popover_stop_btns: dict[str, Gtk.Button] = {}
         self._servers_popover_restart_btns: dict[str, Gtk.Button] = {}
 
+        # Group servers by capability; preserve CAPABILITY_LABELS order.
+        by_cap: dict[str, list] = {cap: [] for cap in _sm.CAPABILITY_LABELS}
+        last_dep = _settings.get("last_successful_deployment") or ""
+
         for key, sdef in _sm.SERVERS.items():
+            for cap in (sdef.capabilities or ()):
+                if cap in by_cap:
+                    by_cap[cap].append((key, sdef))
+
+        def _add_server_row(key: str, sdef) -> None:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             row.add_css_class("servers-popover-row")
 
@@ -4174,52 +4209,34 @@ class ControlPanel(Gtk.Box):
 
             text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             text_col.set_hexpand(True)
-            key_lbl = Gtk.Label(label=key)
-            key_lbl.add_css_class("servers-popover-key")
-            key_lbl.set_xalign(0)
-            text_col.append(key_lbl)
-            sub_lbl = Gtk.Label(label=sdef.label)
-            sub_lbl.add_css_class("servers-popover-label")
-            sub_lbl.set_xalign(0)
-            text_col.append(sub_lbl)
+            name_lbl = Gtk.Label(label=sdef.label)
+            name_lbl.add_css_class("servers-popover-key")
+            name_lbl.set_xalign(0)
+            text_col.append(name_lbl)
             row.append(text_col)
 
-            # Start button
             start_btn = Gtk.Button(label="▶ Start")
             start_btn.add_css_class("servers-popover-btn")
             start_btn.set_tooltip_text(f"Start {sdef.label}")
-            start_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "start"),
-            )
+            start_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "start"))
             self._servers_popover_start_btns[key] = start_btn
             row.append(start_btn)
 
-            # Stop button
             stop_btn = Gtk.Button(label="■ Stop")
             stop_btn.add_css_class("servers-popover-btn")
             stop_btn.add_css_class("servers-popover-btn-stop")
             stop_btn.set_tooltip_text(f"Stop {sdef.label}")
-            stop_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "stop"),
-            )
+            stop_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "stop"))
             self._servers_popover_stop_btns[key] = stop_btn
             row.append(stop_btn)
 
-            # Restart button
             restart_btn = Gtk.Button(label="↺")
             restart_btn.add_css_class("servers-popover-btn")
             restart_btn.set_tooltip_text(f"Restart {sdef.label}")
-            restart_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "restart"),
-            )
+            restart_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "restart"))
             self._servers_popover_restart_btns[key] = restart_btn
             row.append(restart_btn)
 
-            # Star badge for the last successfully deployed server
-            last_dep = _settings.get("last_successful_deployment") or ""
             if key == last_dep:
                 star = Gtk.Label(label="★")
                 star.add_css_class("servers-popover-last-star")
@@ -4227,6 +4244,17 @@ class ControlPanel(Gtk.Box):
                 row.append(star)
 
             outer.append(row)
+
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            servers_in_cap = by_cap.get(cap, [])
+            if not servers_in_cap:
+                continue  # skip AnimateDiff (hardware-only, no server entry)
+            cap_hdr = Gtk.Label(label=cap_label)
+            cap_hdr.add_css_class("servers-cap-header")
+            cap_hdr.set_xalign(0)
+            outer.append(cap_hdr)
+            for key, sdef in servers_in_cap:
+                _add_server_row(key, sdef)
 
         popover.set_child(outer)
         return popover
@@ -4757,11 +4785,15 @@ class ControlPanel(Gtk.Box):
             # the indicator to "offline" while the start script is in progress.
             return
 
+        # Derive a capability label for this tab so status strings are user-centric.
+        cap = _SOURCE_TO_CAP.get(self._model_source, "video")
+        cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
+
         if not ready:
             # Offline
             self._apply_server_row_style("offline")
-            self._server_model_lbl.set_label("No server")
-            self._server_sub_lbl.set_label("localhost:8000 unreachable")
+            self._server_model_lbl.set_label(f"{cap_label} not ready")
+            self._server_sub_lbl.set_label("Start a server to generate")
             self._server_start_btn.set_sensitive(True)
             self._server_stop_btn.set_sensitive(False)
             self._server_switch_btn.set_visible(False)
@@ -4776,17 +4808,15 @@ class ControlPanel(Gtk.Box):
                 and source_for_model != current_source
             )
             display = (
-                _MODEL_DISPLAY_SERVER.get(running_model, "Server online")
+                _MODEL_DISPLAY_SERVER.get(running_model, f"{cap_label} ready")
                 if running_model
-                else "Server online"
+                else f"{cap_label} ready"
             )
 
             if mismatch:
                 self._apply_server_row_style("mismatch")
                 self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label(
-                    f"{current_source.capitalize()} tab needs a different server"
-                )
+                self._server_sub_lbl.set_label("Wrong model running — switch tabs")
                 self._server_ready = False
                 self._server_switch_btn.set_visible(True)
                 self._server_start_btn.set_sensitive(False)
@@ -4794,7 +4824,7 @@ class ControlPanel(Gtk.Box):
             else:
                 self._apply_server_row_style("match")
                 self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label("localhost:8000")
+                self._server_sub_lbl.set_label("")
                 self._server_ready = True
                 self._server_switch_btn.set_visible(False)
                 self._server_start_btn.set_sensitive(False)
@@ -5636,8 +5666,7 @@ class _StatusBar(Gtk.Box):
             lbl.add_css_class("tt-statusbar-sep")
             return lbl
 
-        # ── Server segment: MenuButton (dot + model) → popover with controls ──
-        # Clicking the server segment opens a slim popover with Start / Stop.
+        # ── Server segment: MenuButton (dot + label) → capability dashboard popover ──
         self._srv_dot = Gtk.Label(label="⬤")
         self._srv_dot.add_css_class("tt-statusbar-dot")
         self._srv_dot.add_css_class("tt-statusbar-dot-offline")
@@ -5653,17 +5682,14 @@ class _StatusBar(Gtk.Box):
         self._srv_menu_btn.add_css_class("tt-statusbar-srv-btn")
         self._srv_menu_btn.set_child(srv_btn_content)
 
-        # Build the server-control popover
-        self._pop_status_lbl = Gtk.Label(label="Server offline")
-        self._pop_status_lbl.set_xalign(0)
-        self._pop_status_lbl.add_css_class("tt-statusbar-seg")
-
+        # ── Capability dashboard popover ──────────────────────────────────────
+        # Shows readiness for every capability (one row each).
+        # Start/Stop buttons at the bottom operate on the port-8000 server
+        # (video/animate/image).  Prompt AI and Artgen are managed via Servers ▾.
         self._pop_start = Gtk.Button(label="▶  Start server")
         self._pop_start.add_css_class("generate-btn")
         self._pop_stop  = Gtk.Button(label="■  Stop server")
         self._pop_stop.add_css_class("cancel-btn")
-        pop_start = self._pop_start
-        pop_stop  = self._pop_stop
 
         _popover = Gtk.Popover()
         _popover.set_position(Gtk.PositionType.TOP)
@@ -5676,17 +5702,41 @@ class _StatusBar(Gtk.Box):
             _popover.popdown()
             stop_cb()
 
-        pop_start.connect("clicked", _start_and_close)
-        pop_stop.connect("clicked", _stop_and_close)
+        self._pop_start.connect("clicked", _start_and_close)
+        self._pop_stop.connect("clicked", _stop_and_close)
 
-        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         pop_box.set_margin_top(10)
         pop_box.set_margin_bottom(10)
         pop_box.set_margin_start(14)
         pop_box.set_margin_end(14)
-        pop_box.append(self._pop_status_lbl)
-        pop_box.append(pop_start)
-        pop_box.append(pop_stop)
+
+        # One row per capability: left = capability label, right = status dot + detail
+        self._cap_rows: dict = {}  # cap_key → Gtk.Label (status)
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            name_lbl = Gtk.Label(label=cap_label)
+            name_lbl.add_css_class("cap-row-label")
+            name_lbl.set_xalign(0)
+            name_lbl.set_hexpand(True)
+            row.append(name_lbl)
+            status_lbl = Gtk.Label(label="○ checking…")
+            status_lbl.add_css_class("cap-row-offline")
+            status_lbl.set_xalign(1)
+            row.append(status_lbl)
+            self._cap_rows[cap] = status_lbl
+            pop_box.append(row)
+
+        _sep_line = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        _sep_line.set_margin_top(4)
+        _sep_line.set_margin_bottom(4)
+        pop_box.append(_sep_line)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_row.append(self._pop_start)
+        btn_row.append(self._pop_stop)
+        pop_box.append(btn_row)
+
         _popover.set_child(pop_box)
         self._srv_menu_btn.set_popover(_popover)
 
@@ -5732,7 +5782,7 @@ class _StatusBar(Gtk.Box):
 
     # ── Public update methods (main-thread only) ───────────────────────────────
 
-    def _set_srv_dot(self, css_state: str, model_text: str, pop_text: str) -> None:
+    def _set_srv_dot(self, css_state: str, model_text: str, _unused: str = "") -> None:
         for cls in ("tt-statusbar-dot-ready", "tt-statusbar-dot-offline",
                     "tt-statusbar-dot-starting", "tt-statusbar-dot-error"):
             self._srv_dot.remove_css_class(cls)
@@ -5744,7 +5794,23 @@ class _StatusBar(Gtk.Box):
         self._srv_lbl.add_css_class(
             "tt-statusbar-seg-error" if css_state == "error" else "tt-statusbar-seg"
         )
-        self._pop_status_lbl.set_label(pop_text)
+
+    def update_capability(self, cap: str, ready: bool, detail: str = "") -> None:
+        """Update one capability row in the dashboard popover.
+
+        cap    — capability key ("video", "prompt", "artgen", "animatediff", …)
+        ready  — True = green dot, False = grey dot
+        detail — short model or status string shown next to the dot
+        """
+        lbl = self._cap_rows.get(cap)
+        if lbl is None:
+            return
+        dot = "●" if ready else "○"
+        text = f"{dot} {detail}" if detail else ("● ready" if ready else "○ offline")
+        lbl.set_label(text)
+        lbl.remove_css_class("cap-row-ready")
+        lbl.remove_css_class("cap-row-offline")
+        lbl.add_css_class("cap-row-ready" if ready else "cap-row-offline")
 
     def update_server(self, ready: bool, model: "str | None") -> None:
         """Reflect server health in the status dot and model label.
@@ -5757,9 +5823,9 @@ class _StatusBar(Gtk.Box):
         self._in_error = False
         self._stop_timer()
         if ready:
-            self._set_srv_dot("ready", model or "ready", f"● {model or 'Server'} ready")
+            self._set_srv_dot("ready", model or "ready", "")
         else:
-            self._set_srv_dot("offline", "offline", "Server offline")
+            self._set_srv_dot("offline", model or "offline", "")
         # Re-enable popover controls once the launch/stop operation has settled.
         self._pop_start.set_sensitive(True)
         self._pop_stop.set_sensitive(True)
@@ -7269,9 +7335,15 @@ class MainWindow(Gtk.ApplicationWindow):
             # operation finishes, then health results flow through normally.
             # Also skip when artgen is the active source: the artgen health
             # loop owns the status bar in that mode (it polls port 8002).
+            cap = _MODEL_TO_CAP.get(running_model or "") \
+                  or _SOURCE_TO_CAP.get(self._controls.get_model_source(), "video")
+            cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
+            dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
             if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
-                self._hw_statusbar.update_server(ready, display_model or None)
+                self._hw_statusbar.update_server(ready, dot_text)
+            # Always update the capability dashboard row regardless of tab
+            self._hw_statusbar.update_capability(cap, ready, display_model or "")
 
             if ready:
                 # Stop tailing the Docker log — server is confirmed up
@@ -7367,6 +7439,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if not self._alive:
             return False
         self._controls.set_prompt_gen_state(ready)
+        self._hw_statusbar.update_capability(
+            "prompt", ready, "Qwen3-0.6B" if ready else "")
         return False  # one-shot idle callback
 
     # ── Artgen server health worker (port 8002) ────────────────────────────────
@@ -7375,6 +7449,16 @@ class MainWindow(Gtk.ApplicationWindow):
         """Start background polling for the artgen LLM server on port 8002."""
         self._artgen_health_stop = threading.Event()
         threading.Thread(target=self._artgen_health_loop, daemon=True).start()
+        # AnimateDiff capability is hardware-based (no server).  Check once at startup.
+        def _check_animatediff():
+            try:
+                from artgen.generators.animatediff import check_hardware
+                ok, msg = check_hardware()
+            except Exception:
+                ok, msg = False, "unavailable"
+            GLib.idle_add(self._hw_statusbar.update_capability,
+                          "animatediff", ok, msg if ok else "hardware not detected")
+        threading.Thread(target=_check_animatediff, daemon=True).start()
 
     def _artgen_health_loop(self) -> None:
         """Polls port 8002 every 10 s; posts result to main thread via idle_add.
@@ -7416,11 +7500,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """Runs on main thread. Updates the toolbar status bar when artgen is active."""
         if not self._alive:
             return False
-        if self._controls.get_model_source() != "artgen":
-            return False
-        if not self._controls._server_launching:
-            label = model if (ready and model) else "offline"
-            self._hw_statusbar.update_server(ready, label)
+        cap_label = _sm.CAPABILITY_LABELS.get("artgen", "Generative art")
+        dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
+        if self._controls.get_model_source() == "artgen":
+            if not self._controls._server_launching:
+                self._hw_statusbar.update_server(ready, dot_text)
+        self._hw_statusbar.update_capability("artgen", ready, model or "")
         return False
 
     # ── Remote record localization ──────────────────────────────────────────────

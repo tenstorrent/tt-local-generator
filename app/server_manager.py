@@ -46,14 +46,18 @@ _BIN = _REPO_ROOT / "bin"
 class ServerDef:
     """Describes one managed service.
 
-    runner_key  — optional: the value of `runner_in_use` returned by /tt-liveness
-                  when this specific model is loaded.  Only set for port-8000
-                  services.  When present, is_healthy() confirms both that the
-                  server is up AND that the correct model is loaded.  Services
-                  without runner_key (e.g. prompt-server, artgen) are checked by
-                  HTTP 2xx alone.
-    extra_args  — additional CLI args appended to every start/stop invocation of
-                  the script (e.g. ["--model", "Qwen3-8B"] for artgen services).
+    runner_key   — optional: the value of `runner_in_use` returned by /tt-liveness
+                   when this specific model is loaded.  Only set for port-8000
+                   services.  When present, is_healthy() confirms both that the
+                   server is up AND that the correct model is loaded.  Services
+                   without runner_key (e.g. prompt-server, artgen) are checked by
+                   HTTP 2xx alone.
+    extra_args   — additional CLI args appended to every start/stop invocation of
+                   the script (e.g. ["--model", "Qwen3-8B"] for artgen services).
+    capabilities — user-facing capability strings this server provides.  Used to
+                   group servers in the UI and label status indicators in
+                   capability terms ("Video generation") rather than server terms
+                   ("localhost:8000").
     """
     key: str          # short CLI name: "wan2.2", "prompt-server"
     label: str        # human-readable display label
@@ -62,6 +66,20 @@ class ServerDef:
     stop_flag: str = "--stop"  # flag the script accepts to stop the service
     runner_key: Optional[str] = None  # expected runner_in_use value (port-8000 only)
     extra_args: tuple = field(default_factory=tuple)  # model-specific args for start/stop
+    capabilities: tuple = field(default_factory=tuple)  # e.g. ("video",), ("artgen",)
+
+
+# Human-readable labels for each capability key.
+# "animatediff" is hardware-only (no server) — included here so the UI can
+# use one dict for all capability labels.
+CAPABILITY_LABELS: dict = {
+    "video":       "Video generation",
+    "animate":     "Character animation",
+    "image":       "Image generation",
+    "artgen":      "Generative art",
+    "prompt":      "Prompt AI",
+    "animatediff": "AnimateDiff  (Blackhole)",
+}
 
 
 # Ordered: "all" starts these in sequence.
@@ -76,6 +94,7 @@ SERVERS: dict[str, ServerDef] = {
             script="start_wan_qb2.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2",
+            capabilities=("video",),
         ),
         ServerDef(
             key="mochi",
@@ -83,13 +102,15 @@ SERVERS: dict[str, ServerDef] = {
             script="start_mochi.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-mochi-1",
+            capabilities=("video",),
         ),
         ServerDef(
             key="flux",
-            label="FLUX Image",
+            label="FLUX.1-dev",
             script="start_flux.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-flux.1-dev",
+            capabilities=("image",),
         ),
         ServerDef(
             key="animate",
@@ -97,6 +118,7 @@ SERVERS: dict[str, ServerDef] = {
             script="start_animate.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2-animate",
+            capabilities=("animate",),
         ),
         ServerDef(
             key="skyreels",
@@ -104,47 +126,57 @@ SERVERS: dict[str, ServerDef] = {
             script="start_skyreels_i2v.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-skyreels-v2-i2v",
+            capabilities=("video",),
         ),
         ServerDef(
             key="prompt-server",
             label="Prompt Generator  (Qwen3-0.6B)",
             script="start_prompt_gen.sh",
             health_url="http://localhost:8001/health",
-            # No runner_key — health is checked by HTTP 2xx alone.
+            capabilities=("prompt",),
         ),
         # Artgen chat/text LLMs — all share port 8002.  Only one runs at a time.
         # Health checked via the OpenAI-compatible /v1/models endpoint (any 2xx = up).
         # The start script's --model flag selects which weights to load.
         ServerDef(
             key="artgen-qwen3-8b",
-            label="Artgen  Qwen3-8B",
+            label="Qwen3-8B",
             script="start_artgen.sh",
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen3-8B"),
+            capabilities=("artgen",),
         ),
         ServerDef(
             key="artgen-llama-3.1-8b",
-            label="Artgen  Llama-3.1-8B-Instruct",
+            label="Llama-3.1-8B-Instruct",
             script="start_artgen.sh",
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.1-8B-Instruct"),
+            capabilities=("artgen",),
         ),
         ServerDef(
             key="artgen-qwen2.5-7b",
-            label="Artgen  Qwen2.5-7B-Instruct",
+            label="Qwen2.5-7B-Instruct",
             script="start_artgen.sh",
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen2.5-7B-Instruct"),
+            capabilities=("artgen",),
         ),
         ServerDef(
             key="artgen-llama-3.3-70b",
-            label="Artgen  Llama-3.3-70B-Instruct",
+            label="Llama-3.3-70B-Instruct",
             script="start_artgen.sh",
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.3-70B-Instruct"),
+            capabilities=("artgen",),
         ),
     ]
 }
+
+
+def servers_for_capability(cap: str) -> "list[ServerDef]":
+    """Return all ServerDef entries that provide the given capability."""
+    return [s for s in SERVERS.values() if cap in s.capabilities]
 
 # "all" = the recommended everyday set.
 ALL_KEY = "all"
