@@ -241,7 +241,8 @@ def cmd_artgen(args) -> None:
         oai_url = base_url.rstrip("/")
         if not oai_url.endswith("/v1"):
             oai_url += "/v1"
-        client = OpenAI(base_url=oai_url, api_key="none")
+        client = OpenAI(base_url=oai_url, api_key="none",
+                        timeout=getattr(args, "timeout", 300))
         resp = client.chat.completions.create(
             model=model_id,
             messages=[

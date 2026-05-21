@@ -244,7 +244,8 @@ JWT_SECRET=${JWT_SEC}
 HF_TOKEN=${HF_TOK}
 ENVEOF
 
-    chown root:root "$ENV_FILE"
+    # docker group membership lets start_*.sh scripts (run as the normal user) read JWT_SECRET
+    chown root:docker "$ENV_FILE" 2>/dev/null || chown root:root "$ENV_FILE"
     chmod 640 "$ENV_FILE"
 
     echo "Created $ENV_FILE (JWT_SECRET auto-generated)"

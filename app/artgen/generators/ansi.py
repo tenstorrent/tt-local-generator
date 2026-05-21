@@ -161,8 +161,8 @@ class AnsiGenerator(ArtGenerator):
             help=f"What to draw. Examples: {_SUBJECT_EXAMPLES}",
         )
         parser.add_argument(
-            "--width", type=int, default=40, metavar="COLS",
-            help="Width in pixels/columns (default: 40; bbs style defaults to 80)",
+            "--width", type=int, default=None, metavar="COLS",
+            help="Width in pixels/columns (default: 40 for scene/glitch/minimal; 80 for bbs)",
         )
         parser.add_argument(
             "--colors", choices=["256", "16"], default="256",
@@ -195,7 +195,7 @@ class AnsiGenerator(ArtGenerator):
             )
         return _build_prompt(
             getattr(args, "subject", "a mountain at sunset"),
-            getattr(args, "width", 40),
+            getattr(args, "width", None) or 40,
             style,
         )
 

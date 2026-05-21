@@ -5,7 +5,13 @@
 # Usage:  ./generate_bbs_batch.sh [--base-url URL]
 set -euo pipefail
 
-BASE_URL="${1:---base-url http://localhost:8002}"
+BASE_URL="http://localhost:8002"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --base-url) BASE_URL="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
 ECTL="./tt-ctl"
 LOG="/tmp/bbs_batch.log"
 
@@ -17,7 +23,7 @@ run() {
         --board-name "$board" \
         --tagline "$tagline" \
         --subject "$subject" \
-        $BASE_URL \
+        --base-url "$BASE_URL" \
         --max-tokens 4096 \
         >> "$LOG" 2>&1
 }
