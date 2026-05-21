@@ -3338,7 +3338,9 @@ class ControlPanel(Gtk.Box):
         self._playlists_btn.set_tooltip_text("Manage playlists / TT-TV channels")
         self._playlists_popover = self._build_playlists_popover()
         self._playlists_btn.set_popover(self._playlists_popover)
-        self._playlists_popover.connect("show", self._on_playlists_popover_show)
+        # GTK4.14: MenuButton uses gtk_popover_popup(), not gtk_widget_show(),
+        # so the deprecated "show" signal never fires.  Use notify::visible instead.
+        self._playlists_popover.connect("notify::visible", self._on_playlists_popover_visible)
         self._toolbar_box.append(self._playlists_btn)
 
         # _source_desc_lbl is kept for internal _update_source_desc() calls
@@ -4381,8 +4383,10 @@ class ControlPanel(Gtk.Box):
         popover.set_child(self._playlists_outer)
         return popover
 
-    def _on_playlists_popover_show(self, _popover) -> None:
-        """Rebuild the dynamic playlist rows each time the popover opens."""
+    def _on_playlists_popover_visible(self, popover, _pspec) -> None:
+        """Rebuild the dynamic playlist rows each time the popover becomes visible."""
+        if not popover.get_visible():
+            return
         self._rebuild_model_rows()
         self._rebuild_playlist_rows()
 

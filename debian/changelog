@@ -1,3 +1,33 @@
+tt-local-generator (0.3.0) noble; urgency=medium
+
+  * artgen: add AnimateDiff Blackhole generator — direct TTNN UNet runner via
+    generate_blackhole_v2.py, requires ~/tt-metal python_env and
+    ~/tt-scratchpad/tt-animatediff (developer scratchpad path, not packaged).
+    Gracefully degrades with an informative error when prerequisites are absent.
+  * Watch mode: animated GIFs now loop correctly — GIF frames are decoded via
+    GdkPixbuf.PixbufAnimation and driven by per-frame delay timers.  The GIF
+    timer lifecycle is separated from slideshow timers so it survives
+    _start_timers() / _stop_timers() restarts without being killed.
+  * Watch mode: rich rendering for palette, verse, and ANSI text artgen records.
+    Palette JSON renders as full-screen color swatch strip with name and lore;
+    verse/freeform text renders as large centered italic text on dark canvas;
+    ANSI art renders via existing HTML pipeline.  Plain Gtk.TextBuffer fallback
+    is now only for unknown types.
+  * Fix Playlist toolbar button on GTK 4.14: Gtk.MenuButton uses
+    gtk_popover_popup() internally (not gtk_widget_show()), so the deprecated
+    GtkWidget::show signal never fires.  Switched to notify::visible with a
+    get_visible() guard — popover now populates reliably on every GTK 4.x.
+  * setup_vendor.sh: auto-configure vendor/tt-inference-server/.env on fresh
+    clone — detects HF_TOKEN from environment variables and credential files,
+    prompts interactively when stdin is a terminal, generates a cryptographically
+    random JWT_SECRET via openssl rand.  No-ops if .env already present.
+  * postinst: generate vendor .env secrets automatically — JWT_SECRET is now
+    randomised with openssl rand instead of defaulting to a static string;
+    HF_TOKEN is sourced from the installing user's huggingface credential files
+    when available.  Removes the manual "edit .env" step from the checklist.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 22 May 2026 12:00:00 +0000
+
 tt-local-generator (0.2.7) noble; urgency=medium
 
   * Packaging: add tt-model-animate (Wan2.2-Animate-14B, ~30 GB),

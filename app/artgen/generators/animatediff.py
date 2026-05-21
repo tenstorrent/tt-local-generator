@@ -9,10 +9,14 @@ this one skips the build_prompt/call_llm pipeline entirely; artgen_panel.py
 routes "animatediff" to _run_animatediff() which runs generate_blackhole_v2.py
 as a subprocess on the tt-metal Python env.
 
-generate_blackhole_v2.py uses cross-frame self-attention at each denoising
-step for genuine temporal coherence (not just shared-noise initialization).
+Phase 2.5 architecture (generate_blackhole_v2.py):
+  - TTNN UNet denoising on Blackhole (SD 1.4 spatial denoising, ~15 s/frame P300C)
+  - Cross-frame self-attention applied to stacked noise predictions at each step
+    (gives genuine temporal coherence without the MotionAdapter TemporalTransformer)
+  - temporal_alpha blends pure shared-noise (0.0) towards full cross-frame attention (1.0)
+  - VAE decode on CPU (TTNN VAE conv_out OOMs on Blackhole due to L1 grid mismatch)
 
-Hardware requirement: Blackhole device (P100/P300c). No CPU fallback.
+Hardware requirement: Blackhole device (P100/P150/P300c/QB2). No CPU fallback.
 Script location: ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py
 """
 
@@ -45,6 +49,22 @@ class AnimateDiffGenerator(ArtGenerator):
         return Path("animatediff.gif")
 
 
+_TT_SMI_SEARCH = [
+    Path.home() / ".tenstorrent-venv" / "bin" / "tt-smi",
+    Path("/usr/local/bin/tt-smi"),
+    Path("/usr/bin/tt-smi"),
+]
+
+
+def _find_tt_smi() -> str | None:
+    """Return the absolute path to tt-smi, checking known venv locations first."""
+    import shutil
+    for candidate in _TT_SMI_SEARCH:
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("tt-smi")
+
+
 def check_hardware() -> tuple[bool, str]:
     """Check whether a Blackhole device is available.
 
@@ -52,9 +72,12 @@ def check_hardware() -> tuple[bool, str]:
     Uses tt-smi -s (snapshot mode) to avoid launching the TUI.
     """
     import json
+    tt_smi = _find_tt_smi()
+    if tt_smi is None:
+        return False, "tt-smi not found (expected at ~/.tenstorrent-venv/bin/tt-smi)"
     try:
         result = subprocess.run(
-            ["tt-smi", "-s"], capture_output=True, text=True, timeout=10
+            [tt_smi, "-s"], capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
         devices = data.get("device_info", [])
@@ -63,7 +86,6 @@ def check_hardware() -> tuple[bool, str]:
             if "blackhole" in arch or "p100" in arch or "p300" in arch or "p150" in arch:
                 return True, arch
         if devices:
-            # Hardware present but not Blackhole
             arch = devices[0].get("board_info", {}).get("board_type", "unknown")
             return False, f"No Blackhole device found (detected: {arch})"
         return False, "No TT hardware detected"
@@ -78,12 +100,17 @@ def run_subprocess(
     steps: int = 25,
     seed: int = 42,
     negative_prompt: str = "blurry, low quality",
+    temporal_alpha: float = 0.35,
     on_progress: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
-    """Run generate_blackhole.py as a subprocess.
+    """Run generate_blackhole_v2.py as a subprocess.
 
     Streams stdout line-by-line, calling on_progress(line) for each line that
-    contains "Frame" (e.g. "  Frame 3/8 done").
+    contains "Frame", "Step", "Generating", or "Loading".
+
+    generate_blackhole_v2.py emits step progress with \\r (carriage return) and
+    frame-decode progress with \\n. PYTHONUNBUFFERED=1 ensures both come through
+    in real-time; Python's universal-newlines mode (text=True) normalises \\r → \\n.
 
     Returns (success, error_message). error_message is "" on success.
     """
@@ -104,6 +131,8 @@ def run_subprocess(
     env = os.environ.copy()
     env["TT_METAL_ARCH_NAME"] = "blackhole"
     env["TT_METAL_HOME"] = str(_TT_METAL)
+    # Disable Python output buffering so \r-terminated step lines stream immediately
+    env["PYTHONUNBUFFERED"] = "1"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -115,6 +144,7 @@ def run_subprocess(
         "--frames", str(frames),
         "--steps", str(steps),
         "--seed", str(seed),
+        "--temporal-alpha", str(temporal_alpha),
         "--output", str(out_path),
     ]
 
@@ -137,6 +167,7 @@ def run_subprocess(
 
     if proc.returncode != 0:
         return False, f"generate_blackhole_v2.py exited with rc={proc.returncode}"
+
 
     if not out_path.exists():
         return False, "Script exited 0 but no output file was produced"

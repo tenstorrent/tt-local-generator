@@ -28,7 +28,8 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gio, GLib, Gtk, Pango
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 _WEBKIT_OK = False
 try:
@@ -375,7 +376,7 @@ class ArtgenPanel(Gtk.Box):
 
         self._preview_stack.add_named(mosaic_overlay, "generating")
 
-        # SVG preview
+        # SVG / static image preview
         svg_scroll = Gtk.ScrolledWindow()
         svg_scroll.set_hexpand(True)
         svg_scroll.set_vexpand(True)
@@ -385,6 +386,19 @@ class ArtgenPanel(Gtk.Box):
         self._preview_svg.set_content_fit(Gtk.ContentFit.CONTAIN)
         svg_scroll.set_child(self._preview_svg)
         self._preview_stack.add_named(svg_scroll, "svg")
+
+        # Animated GIF preview — driven by GdkPixbufAnimationIter + GLib.timeout_add
+        # (Gtk.Image.set_from_animation does not exist in GTK 4.14)
+        gif_scroll = Gtk.ScrolledWindow()
+        gif_scroll.set_hexpand(True)
+        gif_scroll.set_vexpand(True)
+        self._preview_gif_pic = Gtk.Picture()
+        self._preview_gif_pic.set_hexpand(True)
+        self._preview_gif_pic.set_vexpand(True)
+        self._preview_gif_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
+        gif_scroll.set_child(self._preview_gif_pic)
+        self._preview_stack.add_named(gif_scroll, "gif")
+        self._gif_timer_id: int | None = None
 
         # Reading preview (WebKit) — ANSI, text, palette
         if _WEBKIT_OK:
@@ -563,12 +577,20 @@ class ArtgenPanel(Gtk.Box):
             self._ad_frames = _dd(["8", "16"], "8")
             self._ad_steps = _spin(4, 50, 1, 25)
             self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
+            self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
+            self._ad_temporal_alpha.set_digits(2)
             box.append(_section_lbl("Prompt"))
             box.append(prompt_row)
             box.append(_row("Frames", self._ad_frames))
             box.append(_row("Steps", self._ad_steps))
             box.append(_row("Seed", self._ad_seed))
-            hint = Gtk.Label(label="Requires Blackhole hardware.\n~2 min on P300C (8 frames, 25 steps).")
+            box.append(_row("Temporal α", self._ad_temporal_alpha))
+            hint = Gtk.Label(
+                label=(
+                    "Requires Blackhole hardware. ~2 min on P300C (8 frames × 25 steps).\n"
+                    "Temporal α: cross-frame coherence blend (0 = shared-noise only, 1 = full attention)."
+                )
+            )
             hint.set_xalign(0)
             hint.set_wrap(True)
             hint.add_css_class("hint")
@@ -771,6 +793,8 @@ class ArtgenPanel(Gtk.Box):
                 self._ad_steps.set_value(int(params["steps"]))
             if "seed" in params:
                 self._ad_seed.set_value(int(params["seed"]))
+            if "temporal_alpha" in params:
+                self._ad_temporal_alpha.set_value(float(params["temporal_alpha"]))
 
     # ── Preview pane helpers ──────────────────────────────────────────────────
 
@@ -802,7 +826,10 @@ class ArtgenPanel(Gtk.Box):
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
 
-        if ext in (".svg", ".gif", ".png", ".jpg", ".jpeg") and fp.exists():
+        if ext == ".gif" and fp.exists():
+            self._animate_gif(self._preview_gif_pic, str(fp))
+            self._preview_stack.set_visible_child_name("gif")
+        elif ext in (".svg", ".png", ".jpg", ".jpeg") and fp.exists():
             self._preview_svg.set_file(Gio.File.new_for_path(str(fp)))
             self._preview_stack.set_visible_child_name("svg")
         elif _WEBKIT_OK:
@@ -823,6 +850,47 @@ class ArtgenPanel(Gtk.Box):
             self._preview_stack.set_visible_child_name("reading")
         else:
             self._preview_stack.set_visible_child_name("empty")
+
+    def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
+        """Drive an animated GIF on a Gtk.Picture using GdkPixbufAnimationIter.
+
+        GTK 4.14 removed Gtk.Image.set_from_animation, so we advance frames
+        manually: each tick reads the current frame, converts to Gdk.Texture,
+        and schedules the next tick at the delay the GIF encodes per frame.
+        Cancels any in-progress animation on the same picture before starting.
+        """
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+        except Exception:
+            return
+
+        if anim.is_static_image():
+            tex = Gdk.Texture.new_for_pixbuf(anim.get_static_image())
+            pic.set_paintable(tex)
+            return
+
+        it = anim.get_iter(None)
+
+        def tick() -> bool:
+            it.advance(None)
+            tex = Gdk.Texture.new_for_pixbuf(it.get_pixbuf())
+            pic.set_paintable(tex)
+            delay = it.get_delay_time()
+            if delay < 0:
+                self._gif_timer_id = None
+                return GLib.SOURCE_REMOVE
+            self._gif_timer_id = GLib.timeout_add(delay, tick)
+            return GLib.SOURCE_REMOVE
+
+        delay = max(it.get_delay_time(), 10)
+        self._gif_timer_id = GLib.timeout_add(delay, tick)
+        # Show frame 0 immediately
+        tex = Gdk.Texture.new_for_pixbuf(it.get_pixbuf())
+        pic.set_paintable(tex)
 
     def _on_preview_open(self, _btn) -> None:
         """Open the current preview record in the full detail view."""
@@ -981,7 +1049,10 @@ class ArtgenPanel(Gtk.Box):
         AnimateDiff bypasses the LLM pipeline entirely and is handled separately.
         """
         if gen_name == "animatediff":
-            self._run_animatediff(args)
+            try:
+                self._run_animatediff(args)
+            except Exception as e:
+                GLib.idle_add(self._finish_error, f"AnimateDiff error: {e}")
             return
 
         try:
@@ -1116,6 +1187,7 @@ class ArtgenPanel(Gtk.Box):
             frames=args.ad_frames,
             steps=args.ad_steps,
             seed=args.ad_seed,
+            temporal_alpha=args.ad_temporal_alpha,
             on_progress=_on_progress,
         )
 
@@ -1134,6 +1206,7 @@ class ArtgenPanel(Gtk.Box):
             "frames": args.ad_frames,
             "steps": args.ad_steps,
             "seed": args.ad_seed,
+            "temporal_alpha": args.ad_temporal_alpha,
             "generation_seconds": elapsed_s,
         }
         rec = MediaRecord(
@@ -1220,6 +1293,7 @@ class ArtgenPanel(Gtk.Box):
             args.ad_frames = int(_dd_val(self._ad_frames) or "8")
             args.ad_steps = int(self._ad_steps.get_value())
             args.ad_seed = int(self._ad_seed.get_value())
+            args.ad_temporal_alpha = round(self._ad_temporal_alpha.get_value(), 2)
 
         return args
 
@@ -1473,10 +1547,12 @@ class ArtgenPanel(Gtk.Box):
         type_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         type_flow.set_column_spacing(4)
         type_flow.set_row_spacing(2)
+        # animatediff takes 2+ min per run — exclude from auto pool by default
+        _AUTO_OFF_BY_DEFAULT = {"animatediff"}
         self._auto_type_checks: dict[str, Gtk.CheckButton] = {}
         for gname in artgen.all_names():
             cb = Gtk.CheckButton.new_with_label(gname)
-            cb.set_active(True)
+            cb.set_active(gname not in _AUTO_OFF_BY_DEFAULT)
             cb.connect("toggled", self._on_auto_type_toggled)
             self._auto_type_checks[gname] = cb
             type_flow.append(cb)

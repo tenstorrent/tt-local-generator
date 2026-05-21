@@ -23,7 +23,8 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("WebKit", "6.0")
-from gi.repository import Gio, GLib, Gtk, Pango, WebKit
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -439,7 +440,7 @@ class ArtgenDetail(Gtk.Box):
         self._art_stack.set_hexpand(True)
         self._art_stack.set_vexpand(True)
 
-        # SVG
+        # SVG / static image
         svg_scroll = Gtk.ScrolledWindow()
         svg_scroll.set_hexpand(True)
         svg_scroll.set_vexpand(True)
@@ -449,6 +450,19 @@ class ArtgenDetail(Gtk.Box):
         self._svg_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
         svg_scroll.set_child(self._svg_pic)
         self._art_stack.add_named(svg_scroll, "svg")
+
+        # Animated GIF — GdkPixbufAnimationIter drives frames; Gtk.Image.set_from_animation
+        # does not exist in GTK 4.14
+        gif_scroll = Gtk.ScrolledWindow()
+        gif_scroll.set_hexpand(True)
+        gif_scroll.set_vexpand(True)
+        self._gif_pic = Gtk.Picture()
+        self._gif_pic.set_hexpand(True)
+        self._gif_pic.set_vexpand(True)
+        self._gif_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
+        gif_scroll.set_child(self._gif_pic)
+        self._art_stack.add_named(gif_scroll, "gif")
+        self._gif_timer_id: int | None = None
 
         # Plain text fallback (kept for any edge cases)
         text_scroll = Gtk.ScrolledWindow()
@@ -550,6 +564,9 @@ class ArtgenDetail(Gtk.Box):
     # ── Rendering ─────────────────────────────────────────────────────────────
 
     def _render(self) -> None:
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
         if not self._records:
             return
         rec = self._records[self._idx]
@@ -590,7 +607,10 @@ class ArtgenDetail(Gtk.Box):
         doc_title = _derive_title(gen_type, p)
         verse_mode = gen_type == "verse"
 
-        if ext == ".svg" and fp.exists():
+        if ext == ".gif" and fp.exists():
+            self._animate_gif(self._gif_pic, str(fp))
+            self._art_stack.set_visible_child_name("gif")
+        elif ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
@@ -610,6 +630,40 @@ class ArtgenDetail(Gtk.Box):
             html = _md_to_html(raw, title=doc_title, verse_mode=verse_mode)
             self._webview.load_html(html, "about:blank")
             self._art_stack.set_visible_child_name("reading")
+
+    def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
+        """Drive an animated GIF on a Gtk.Picture via GdkPixbufAnimationIter.
+
+        Cancels any running animation before starting the new one.
+        """
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+        except Exception:
+            return
+
+        if anim.is_static_image():
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            return
+
+        it = anim.get_iter(None)
+
+        def tick() -> bool:
+            it.advance(None)
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+            delay = it.get_delay_time()
+            if delay < 0:
+                self._gif_timer_id = None
+                return GLib.SOURCE_REMOVE
+            self._gif_timer_id = GLib.timeout_add(delay, tick)
+            return GLib.SOURCE_REMOVE
+
+        pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+        delay = max(it.get_delay_time(), 10)
+        self._gif_timer_id = GLib.timeout_add(delay, tick)
 
     # ── Handlers ──────────────────────────────────────────────────────────────
 
