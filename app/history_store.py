@@ -151,6 +151,34 @@ class GenerationRecord:
             model=model,
         )
 
+    @classmethod
+    def new_animatediff(
+        cls,
+        job_id: str,
+        prompt: str,
+        negative_prompt: str,
+        num_inference_steps: int,
+        seed: int,
+        duration_s: float = 0.0,
+        model: str = "",
+    ) -> "GenerationRecord":
+        """Create a new AnimateDiff record with media_type='animatediff' and .gif extension."""
+        ts = datetime.now(timezone.utc)
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        return cls(
+            id=job_id,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            video_path=str(VIDEOS_DIR / f"{ts_str}_{job_id[:8]}.gif"),
+            thumbnail_path=str(THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"),
+            created_at=ts.isoformat(),
+            duration_s=duration_s,
+            media_type="animatediff",
+            model=model,
+        )
+
     @property
     def display_time(self) -> str:
         """Human-readable creation time in local 12-hour format, e.g. '3:42 PM'."""

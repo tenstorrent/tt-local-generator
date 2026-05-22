@@ -109,6 +109,13 @@ class ArtgenPanel(Gtk.Box):
     Drop into a Gtk.Stack as the named child "artgen".
     """
 
+    # Generators hidden from the artgen picker.  AnimateDiff is excluded here
+    # because it prompts and plays back like a video (not generative art) and
+    # now lives in the Video tab as a first-class generation mode.  Historical
+    # artgen MediaRecords with generator_type="animatediff" still display in the
+    # gallery; only the picker entry is removed.
+    _HIDDEN_GENERATORS: frozenset = frozenset({"animatediff"})
+
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_use_as_seed: "Optional[Callable[['MediaRecord'], None]]" = None
@@ -205,7 +212,7 @@ class ArtgenPanel(Gtk.Box):
         type_lbl = _section_lbl("type")
         type_lbl.set_size_request(44, -1)
         type_bar.append(type_lbl)
-        gen_names = artgen.all_names()
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
         self._type_dd = _dd(gen_names, "landscape")
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
@@ -1261,10 +1268,12 @@ class ArtgenPanel(Gtk.Box):
         type_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         type_flow.set_column_spacing(4)
         type_flow.set_row_spacing(2)
-        # animatediff takes 2+ min per run — exclude from auto pool by default
-        _AUTO_OFF_BY_DEFAULT = {"animatediff"}
+        # animatediff is now in the Video tab — exclude entirely from auto pool
+        _AUTO_OFF_BY_DEFAULT: set = set()
         self._auto_type_checks: dict[str, Gtk.CheckButton] = {}
         for gname in artgen.all_names():
+            if gname in self._HIDDEN_GENERATORS:
+                continue
             cb = Gtk.CheckButton.new_with_label(gname)
             cb.set_active(gname not in _AUTO_OFF_BY_DEFAULT)
             cb.connect("toggled", self._on_auto_type_toggled)

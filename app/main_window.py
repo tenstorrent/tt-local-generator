@@ -44,7 +44,12 @@ from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_panel import ArtgenPanel
 from history_store import GenerationRecord, HistoryStore
-from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
+from worker import (
+    AnimateDiffGenerationWorker,
+    AnimateGenerationWorker,
+    GenerationWorker,
+    ImageGenerationWorker,
+)
 import attractor
 import prompt_client
 import server_manager as _sm
@@ -1369,9 +1374,10 @@ _SERVER_SCRIPTS: dict = {
 
 # Maps short model keys to canonical model ID strings used in GenerationRecord.
 _VIDEO_MODEL_IDS: dict = {
-    "wan2":      "wan2.2-t2v",
-    "mochi":     "mochi-1-preview",
-    "skyreels":  "skyreels-v2-i2v-14b-540p",
+    "wan2":         "wan2.2-t2v",
+    "mochi":        "mochi-1-preview",
+    "skyreels":     "skyreels-v2-i2v-14b-540p",
+    "animatediff":  "animatediff-blackhole",
 }
 _IMAGE_MODEL_IDS: dict = {
     "flux": "flux.1-dev",
@@ -1705,16 +1711,37 @@ class GenerationCard(Gtk.Frame):
         # Buttons: Save, Iterate, and Trash (play/fullscreen are in the detail panel).
         # Trash is right-aligned to keep it visually separated from the safe actions.
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        export_btn = Gtk.Button(label="💾 Save")
+        is_gif = self._record.media_type == "animatediff" or (
+            self._record.video_path.endswith(".gif")
+        )
+        export_label = "💾 Save GIF" if is_gif else (
+            "💾 Save" if self._record.media_type == "image" else "💾 Save"
+        )
+        export_btn = Gtk.Button(label=export_label)
         tip = "Export image to a chosen location" if self._record.media_type == "image" else "Export video to a chosen location"
         export_btn.set_tooltip_text(tip)
         export_btn.connect("clicked", self._export)
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
-        iter_btn.connect("clicked", self._iterate)
         if not self._record.media_exists:
             export_btn.set_sensitive(False)
         btn_row.append(export_btn)
+
+        # GIF↔MP4 conversion button — only for video/animatediff records.
+        if self._record.media_type not in ("image", "artgen"):
+            if is_gif:
+                conv_btn = Gtk.Button(label="→ MP4")
+                conv_btn.set_tooltip_text("Convert this GIF to an MP4 video file")
+                conv_btn.connect("clicked", self._convert_to_mp4)
+            else:
+                conv_btn = Gtk.Button(label="→ GIF")
+                conv_btn.set_tooltip_text("Convert this video to an animated GIF")
+                conv_btn.connect("clicked", self._convert_to_gif)
+            if not self._record.media_exists:
+                conv_btn.set_sensitive(False)
+            btn_row.append(conv_btn)
+
+        iter_btn = Gtk.Button(label="↺ Iterate")
+        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
+        iter_btn.connect("clicked", self._iterate)
         btn_row.append(iter_btn)
 
         btn_spacer = Gtk.Box()
@@ -1866,6 +1893,64 @@ class GenerationCard(Gtk.Frame):
             src_txt = Path(src).with_suffix(".txt")
             if src_txt.exists():
                 shutil.copy2(src_txt, Path(dest).with_suffix(".txt"))
+
+    def _convert_to_mp4(self, _btn) -> None:
+        """Convert the current GIF record to an MP4 via ffmpeg in a background thread."""
+        if not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        tmp = tempfile.mktemp(suffix=".mp4")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".mp4")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _convert_to_gif(self, _btn) -> None:
+        """Convert the current video to an animated GIF via two-pass ffmpeg."""
+        if not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        palette = tempfile.mktemp(suffix=".png")
+        tmp = tempfile.mktemp(suffix=".gif")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,palettegen", palette],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
+            )
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-i", palette,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,paletteuse", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".gif")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _offer_converted_save(self, tmp_path: str, suffix: str) -> None:
+        """Open a save dialog for the converted file after ffmpeg completes."""
+        if not Path(tmp_path).exists():
+            return
+        dlg = Gtk.FileDialog()
+        stem = Path(self._record.media_file_path).stem
+        dlg.set_initial_name(stem + suffix)
+        dlg.save(self.get_root(), None,
+                 lambda d, r, p=tmp_path: self._save_converted(d, r, p))
+
+    def _save_converted(self, dlg, result, tmp_path: str) -> None:
+        """Move the converted temp file to the user-chosen destination."""
+        try:
+            dest = dlg.save_finish(result).get_path()
+        except Exception:
+            return
+        if dest:
+            shutil.move(tmp_path, dest)
 
     def _iterate(self, _btn) -> None:
         self._iterate_cb(
@@ -2330,13 +2415,33 @@ class DetailPanel(Gtk.ScrolledWindow):
         content.append(sep)
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        export_btn = Gtk.Button(label="💾 Export")
+        is_gif_detail = record.media_type == "animatediff" or (
+            record.video_path.endswith(".gif")
+        )
+        export_label = "💾 Export GIF" if is_gif_detail else (
+            "💾 Export" if record.media_type == "image" else "💾 Export"
+        )
+        export_btn = Gtk.Button(label=export_label)
         tip = "Save a copy of this image" if record.media_type == "image" else "Save a copy of this video"
         export_btn.set_tooltip_text(tip)
         export_btn.connect("clicked", self._export)
         if not record.media_exists:
             export_btn.set_sensitive(False)
         action_row.append(export_btn)
+
+        # GIF↔MP4 conversion button — only for video/animatediff records.
+        if record.media_type not in ("image", "artgen"):
+            if is_gif_detail:
+                conv_btn = Gtk.Button(label="→ MP4")
+                conv_btn.set_tooltip_text("Convert this GIF to an MP4 video file")
+                conv_btn.connect("clicked", self._convert_to_mp4)
+            else:
+                conv_btn = Gtk.Button(label="→ GIF")
+                conv_btn.set_tooltip_text("Convert this video to an animated GIF")
+                conv_btn.connect("clicked", self._convert_to_gif)
+            if not record.media_exists:
+                conv_btn.set_sensitive(False)
+            action_row.append(conv_btn)
 
         # Star toggle button
         self._detail_star_btn = Gtk.Button(
@@ -2587,6 +2692,64 @@ class DetailPanel(Gtk.ScrolledWindow):
             src_txt = Path(src).with_suffix(".txt")
             if src_txt.exists():
                 shutil.copy2(src_txt, Path(dest).with_suffix(".txt"))
+
+    def _convert_to_mp4(self, _btn) -> None:
+        """Convert the current GIF record to an MP4 via ffmpeg in a background thread."""
+        if not self._record or not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        tmp = tempfile.mktemp(suffix=".mp4")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".mp4")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _convert_to_gif(self, _btn) -> None:
+        """Convert the current video to an animated GIF via two-pass ffmpeg."""
+        if not self._record or not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        palette = tempfile.mktemp(suffix=".png")
+        tmp = tempfile.mktemp(suffix=".gif")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,palettegen", palette],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
+            )
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-i", palette,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,paletteuse", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".gif")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _offer_converted_save(self, tmp_path: str, suffix: str) -> None:
+        """Open a save dialog for the converted file after ffmpeg completes."""
+        if not Path(tmp_path).exists():
+            return
+        dlg = Gtk.FileDialog()
+        stem = Path(self._record.media_file_path).stem if self._record else "converted"
+        dlg.set_initial_name(stem + suffix)
+        dlg.save(self.get_root(), None,
+                 lambda d, r, p=tmp_path: self._save_converted(d, r, p))
+
+    def _save_converted(self, dlg, result, tmp_path: str) -> None:
+        """Move the converted temp file to the user-chosen destination."""
+        try:
+            dest = dlg.save_finish(result).get_path()
+        except Exception:
+            return
+        if dest:
+            shutil.move(tmp_path, dest)
 
     def _iterate(self, _btn) -> None:
         if self._record and self._iterate_cb:
@@ -3527,9 +3690,15 @@ class ControlPanel(Gtk.Box):
         _create_sep.set_margin_bottom(2)
         self.append(_create_sep)
 
+        # ── VIDEO MODEL row ───────────────────────────────────────────────────
+        # Wan2.2 / Mochi-1 / SkyReels I2V / AnimateDiff picker.
+        # Visible only in video source; hidden for animate/image/artgen.
+        self._video_model_row_widget = self._build_video_model_row()
+        self.append(self._video_model_row_widget)
+
         # ── CLIP LENGTH row ───────────────────────────────────────────────────
         # Placed after the prompt-zone separator, before QUALITY, so the layout
-        # order is: chips → [divider] → CLIP LENGTH → QUALITY → Advanced accordion.
+        # order is: chips → [divider] → MODEL → CLIP LENGTH → QUALITY → Advanced accordion.
         self._clip_length_row_widget = self._build_clip_length_row()
         self.append(self._clip_length_row_widget)
 
@@ -3707,6 +3876,73 @@ class ControlPanel(Gtk.Box):
         return self._toolbar_box
 
     # ── QUALITY named button row ───────────────────────────────────────────────
+
+    def _build_video_model_row(self) -> Gtk.Box:
+        """VIDEO MODEL row: Wan2.2 / Mochi-1 / SkyReels I2V / AnimateDiff picker.
+
+        Four ToggleButtons in a named-ctrl-row. The active one sets _video_model
+        and persists preferred_video_model. Calls _set_model() so all dependent
+        UI (description label, clip-length visibility, server buttons) updates.
+        """
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        lbl = Gtk.Label(label="MODEL  —  video generation engine")
+        lbl.add_css_class("create-zone-label")
+        lbl.set_xalign(0)
+        outer.append(lbl)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("named-ctrl-row")
+
+        _MODELS = [
+            ("wan2",        "Wan2.2",       "720p · server"),
+            ("mochi",       "Mochi-1",      "480×848 · server"),
+            ("skyreels",    "SkyReels I2V", "960×544 · Blackhole · server"),
+            ("animatediff", "AnimateDiff",  "animated GIF · local Blackhole"),
+        ]
+
+        self._video_model_btns: list = []
+        first_btn = None
+        pref = str(_settings.get("preferred_video_model") or "wan2")
+
+        for key, name, sub in _MODELS:
+            btn = Gtk.ToggleButton()
+            btn.model_key = key
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            inner.set_halign(Gtk.Align.CENTER)
+            name_lbl = Gtk.Label(label=name)
+            sub_lbl = Gtk.Label(label=sub)
+            sub_lbl.add_css_class("named-ctrl-sub")
+            inner.append(name_lbl)
+            inner.append(sub_lbl)
+            btn.set_child(inner)
+            btn.add_css_class("named-ctrl-btn")
+            btn.set_hexpand(True)
+            if first_btn is None:
+                first_btn = btn
+            else:
+                btn.set_group(first_btn)
+            if key == pref:
+                btn.set_active(True)
+            btn.connect("toggled", self._on_video_model_btn_toggled)
+            row.append(btn)
+            self._video_model_btns.append(btn)
+
+        # Ensure wan2 is active if the stored pref didn't match any button
+        if not any(b.get_active() for b in self._video_model_btns):
+            self._video_model_btns[0].set_active(True)
+
+        outer.append(row)
+        return outer
+
+    def _on_video_model_btn_toggled(self, btn: Gtk.ToggleButton) -> None:
+        """Handle VIDEO MODEL button toggle."""
+        if not btn.get_active():
+            return
+        key = btn.model_key
+        self._set_model(key)
+        _settings.set("preferred_video_model", key)
+        self.update_shot_panel()
 
     def _build_quality_row(self) -> Gtk.Box:
         """QUALITY row: Fast / Standard / Cinematic named toggle buttons.
@@ -4399,10 +4635,18 @@ class ControlPanel(Gtk.Box):
         # Animate inputs: visible only in animate mode
         self._animate_box.set_visible(is_animate)
 
-        # CLIP LENGTH row: hidden for image source (frame count is not a meaningful
-        # concept for still image generation). Shown for video and animate sources.
+        # VIDEO MODEL row: only shown in video source (animate/image/artgen pick
+        # their model elsewhere).
+        if hasattr(self, "_video_model_row_widget"):
+            self._video_model_row_widget.set_visible(is_video)
+
+        # CLIP LENGTH row: hidden for image source and animatediff (which has no
+        # frame-count picker). Shown for video (wan2/mochi/skyreels) and animate.
+        is_animatediff = is_video and self._video_model == "animatediff"
         if hasattr(self, "_clip_length_row_widget"):
-            self._clip_length_row_widget.set_visible(is_video or is_animate)
+            self._clip_length_row_widget.set_visible(
+                (is_video or is_animate) and not is_animatediff
+            )
 
         # QUALITY row: only shown for video/animate sources where step count is meaningful.
         # Image (FLUX) uses its own separate step range and the row would be misleading.
@@ -4427,7 +4671,9 @@ class ControlPanel(Gtk.Box):
         # _source_desc_lbl and _server_start_btn are constructed after the model
         # selector buttons; set_active(True) on those buttons fires this callback
         # mid-_build() before those widgets exist. Skip silently in that case.
-        if not hasattr(self, "_source_desc_lbl"):
+        # MainWindow calls _set_model(pref) after _build() completes so the full
+        # update runs once all widgets are ready.
+        if not hasattr(self, "_source_desc_lbl") or not hasattr(self, "_server_start_btn"):
             return
         if self._model_source == "video":
             self._video_model = model
@@ -4440,6 +4686,8 @@ class ControlPanel(Gtk.Box):
                     "Start the Mochi-1 inference server.\n"
                     "Video (Mochi-1) → start_mochi.sh"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
             elif model == "skyreels":
                 self._source_desc_lbl.set_label(
                     "async job  ·  SkyReels-V2-I2V-14B  ·  ~10–30 min  ·  960×544 97-frame  ·  Blackhole  ·  image-to-video"
@@ -4448,6 +4696,15 @@ class ControlPanel(Gtk.Box):
                     "Start the SkyReels-V2-I2V-14B inference server.\n"
                     "Video (SkyReels I2V) → start_skyreels_i2v.sh  (P300X2 Blackhole)"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
+            elif model == "animatediff":
+                self._source_desc_lbl.set_label(
+                    "local TTNN  ·  AnimateDiff  ·  ~5 min/frame  ·  animated GIF  ·  no server needed"
+                )
+                # AnimateDiff runs locally on Blackhole — no server to start/stop.
+                self._server_start_btn.set_sensitive(False)
+                self._server_stop_btn.set_sensitive(False)
             else:
                 self._source_desc_lbl.set_label(
                     "async job  ·  Wan2.2-T2V  ·  ~3–10 min  ·  720p MP4"
@@ -4456,6 +4713,11 @@ class ControlPanel(Gtk.Box):
                     "Start the inference server using the local launch script.\n"
                     "Video (Wan2.2) → start_wan_qb2.sh  ·  Image → start_flux.sh"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
+            # Hide CLIP LENGTH row for animatediff (no frame count picker).
+            if hasattr(self, "_clip_length_row_widget"):
+                self._clip_length_row_widget.set_visible(model != "animatediff")
         elif self._model_source == "image":
             self._image_model = model
 
@@ -8034,42 +8296,56 @@ class MainWindow(Gtk.ApplicationWindow):
                 model="wan2.2-animate-14b",
             )
         else:
-            model_name = _VIDEO_MODEL_IDS.get(
-                model_id or self._controls.get_video_model(), "wan2.2-t2v"
-            )
-            self._set_status(f"Submitting {model_name} video generation job…")
-            # Resolve num_frames from the CLIP LENGTH slot setting.
-            # Models in MODELS_WITH_FIXED_FRAMES hard-code their frame count in the
-            # runner and ignore num_frames — pass None so the worker uses its default.
-            from generation_config import clip_frames, MODELS_WITH_FIXED_FRAMES
-            num_frames_arg: "int | None" = None
-            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels"
-            slot = str(_settings.get("clip_length_slot") or "standard")
-            if video_model_key not in MODELS_WITH_FIXED_FRAMES:
-                num_frames_arg = clip_frames(video_model_key, slot)
+            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
-            # For I2V models (skyreels), base64-encode the seed image and send
-            # it to the server as the conditioning frame.
-            image_b64: "str | None" = None
-            if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
-                with open(seed_image_path, "rb") as _f:
-                    _raw = _f.read()
-                _ext = Path(seed_image_path).suffix.lower().lstrip(".")
-                _mime = "image/jpeg" if _ext in ("jpg", "jpeg") else f"image/{_ext}"
-                image_b64 = f"data:{_mime};base64," + base64.b64encode(_raw).decode()
+            if video_model_key == "animatediff":
+                self._set_status("Starting AnimateDiff generation on Blackhole…")
+                gen = AnimateDiffGenerationWorker(
+                    store=self._store,
+                    prompt=prompt,
+                    negative_prompt=neg or "blurry, low quality",
+                    steps=steps,
+                    seed=seed if seed >= 0 else 42,
+                    frames=8,
+                    temporal_alpha=0.35,
+                    model="animatediff-blackhole",
+                )
+            else:
+                model_name = _VIDEO_MODEL_IDS.get(
+                    model_id or video_model_key, "wan2.2-t2v"
+                )
+                self._set_status(f"Submitting {model_name} video generation job…")
+                # Resolve num_frames from the CLIP LENGTH slot setting.
+                # Models in MODELS_WITH_FIXED_FRAMES hard-code their frame count in the
+                # runner and ignore num_frames — pass None so the worker uses its default.
+                from generation_config import clip_frames, MODELS_WITH_FIXED_FRAMES
+                num_frames_arg: "int | None" = None
+                slot = str(_settings.get("clip_length_slot") or "standard")
+                if video_model_key not in MODELS_WITH_FIXED_FRAMES:
+                    num_frames_arg = clip_frames(video_model_key, slot)
 
-            gen = GenerationWorker(
-                client=self._client,
-                store=self._store,
-                prompt=prompt,
-                negative_prompt=neg,
-                num_inference_steps=steps,
-                seed=seed,
-                seed_image_path=seed_image_path,
-                model=model_name,
-                num_frames=num_frames_arg,
-                image=image_b64,
-            )
+                # For I2V models (skyreels), base64-encode the seed image and send
+                # it to the server as the conditioning frame.
+                image_b64: "str | None" = None
+                if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
+                    with open(seed_image_path, "rb") as _f:
+                        _raw = _f.read()
+                    _ext = Path(seed_image_path).suffix.lower().lstrip(".")
+                    _mime = "image/jpeg" if _ext in ("jpg", "jpeg") else f"image/{_ext}"
+                    image_b64 = f"data:{_mime};base64," + base64.b64encode(_raw).decode()
+
+                gen = GenerationWorker(
+                    client=self._client,
+                    store=self._store,
+                    prompt=prompt,
+                    negative_prompt=neg,
+                    num_inference_steps=steps,
+                    seed=seed,
+                    seed_image_path=seed_image_path,
+                    model=model_name,
+                    num_frames=num_frames_arg,
+                    image=image_b64,
+                )
         self._worker_gen = gen
 
         def run():
