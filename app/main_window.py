@@ -3878,7 +3878,9 @@ class ControlPanel(Gtk.Box):
     # ── QUALITY named button row ───────────────────────────────────────────────
 
     # Ordered list of (key, display_label) for the video model dropdown.
+    # Index 0 is the placeholder shown when no model is running/available.
     _VIDEO_MODEL_ENTRIES = [
+        ("",            "— not running —"),
         ("wan2",        "Wan2.2  —  720p video"),
         ("mochi",       "Mochi-1  —  480×848 video"),
         ("skyreels",    "SkyReels I2V  —  960×544 Blackhole"),
@@ -3888,10 +3890,10 @@ class ControlPanel(Gtk.Box):
     def _build_video_model_row(self) -> Gtk.Box:
         """VIDEO MODEL row: compact dropdown for Wan2.2 / Mochi-1 / SkyReels / AnimateDiff.
 
-        A single Gtk.DropDown replaces four ToggleButtons to keep the panel width
-        manageable. The selected entry sets _video_model and persists
-        preferred_video_model. Calls _set_model() so description label,
-        clip-length visibility, and server button sensitivity all update.
+        Starts at index 0 ("— not running —").  update_shot_panel() / _sync_video_model_dd()
+        auto-selects the matching entry when a server comes online, and reverts to
+        the placeholder when the server goes offline (unless animatediff is selected,
+        which runs locally and is always available when Blackhole hardware is present).
         """
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.set_margin_top(4)
@@ -3904,25 +3906,46 @@ class ControlPanel(Gtk.Box):
         row.append(lbl)
 
         string_list = Gtk.StringList()
-        pref = str(_settings.get("preferred_video_model") or "wan2")
-        selected_idx = 0
-        for i, (key, display) in enumerate(self._VIDEO_MODEL_ENTRIES):
+        for _, display in self._VIDEO_MODEL_ENTRIES:
             string_list.append(display)
-            if key == pref:
-                selected_idx = i
 
         self._video_model_dd = Gtk.DropDown(model=string_list)
         self._video_model_dd.set_hexpand(True)
-        self._video_model_dd.set_selected(selected_idx)
+        self._video_model_dd.set_selected(0)  # placeholder until health check fires
+        self._video_model_dd_syncing = False
         self._video_model_dd.connect("notify::selected", self._on_video_model_dd_changed)
         row.append(self._video_model_dd)
         return row
 
+    def _sync_video_model_dd(self, key: "str | None") -> None:
+        """Programmatically update the MODEL dropdown without triggering the handler.
+
+        Pass a model key ("wan2", "mochi", "skyreels", "animatediff") to select
+        the matching entry.  Pass None to select the placeholder (index 0).
+        """
+        if not hasattr(self, "_video_model_dd"):
+            return
+        if key is None:
+            idx = 0
+        else:
+            idx = next(
+                (i for i, (k, _) in enumerate(self._VIDEO_MODEL_ENTRIES) if k == key),
+                0,
+            )
+        self._video_model_dd_syncing = True
+        self._video_model_dd.set_selected(idx)
+        self._video_model_dd_syncing = False
+
     def _on_video_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
-        """Handle VIDEO MODEL dropdown change."""
+        """Handle user-initiated VIDEO MODEL dropdown change."""
+        if getattr(self, "_video_model_dd_syncing", False):
+            return
         idx = dd.get_selected()
         if 0 <= idx < len(self._VIDEO_MODEL_ENTRIES):
             key = self._VIDEO_MODEL_ENTRIES[idx][0]
+            if not key:
+                # Placeholder selected — keep existing _video_model, nothing to do.
+                return
             self._set_model(key)
             _settings.set("preferred_video_model", key)
             self.update_shot_panel()
@@ -4337,12 +4360,20 @@ class ControlPanel(Gtk.Box):
             self._shot_model_lbl.set_label(_OFFLINE)
             self._shot_model_sub.set_label("")
             self._shot_switcher_btn.set_visible(False)
+            # Revert dropdown to placeholder, except for animatediff which is
+            # local-only and always available when Blackhole hardware is present.
+            if self._video_model == "animatediff":
+                self._sync_video_model_dd("animatediff")
+            else:
+                self._sync_video_model_dd(None)
             return
 
         model_key = self._video_model
         name, res = _DISPLAY.get(model_key, (f"\u25cf {model_key}", ""))
         self._shot_model_lbl.set_label(name)
         self._shot_model_sub.set_label(res)
+        # Keep dropdown in sync with the confirmed-running model.
+        self._sync_video_model_dd(model_key)
 
         alt_key = self._shot_alt_model_key
         if alt_key:
