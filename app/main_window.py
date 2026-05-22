@@ -3877,72 +3877,55 @@ class ControlPanel(Gtk.Box):
 
     # ── QUALITY named button row ───────────────────────────────────────────────
 
+    # Ordered list of (key, display_label) for the video model dropdown.
+    _VIDEO_MODEL_ENTRIES = [
+        ("wan2",        "Wan2.2  —  720p video"),
+        ("mochi",       "Mochi-1  —  480×848 video"),
+        ("skyreels",    "SkyReels I2V  —  960×544 Blackhole"),
+        ("animatediff", "AnimateDiff  —  GIF, local Blackhole"),
+    ]
+
     def _build_video_model_row(self) -> Gtk.Box:
-        """VIDEO MODEL row: Wan2.2 / Mochi-1 / SkyReels I2V / AnimateDiff picker.
+        """VIDEO MODEL row: compact dropdown for Wan2.2 / Mochi-1 / SkyReels / AnimateDiff.
 
-        Four ToggleButtons in a named-ctrl-row. The active one sets _video_model
-        and persists preferred_video_model. Calls _set_model() so all dependent
-        UI (description label, clip-length visibility, server buttons) updates.
+        A single Gtk.DropDown replaces four ToggleButtons to keep the panel width
+        manageable. The selected entry sets _video_model and persists
+        preferred_video_model. Calls _set_model() so description label,
+        clip-length visibility, and server button sensitivity all update.
         """
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_margin_top(4)
+        row.set_margin_bottom(2)
 
-        lbl = Gtk.Label(label="MODEL  —  video generation engine")
+        lbl = Gtk.Label(label="MODEL")
         lbl.add_css_class("create-zone-label")
         lbl.set_xalign(0)
-        outer.append(lbl)
+        lbl.set_valign(Gtk.Align.CENTER)
+        row.append(lbl)
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        row.add_css_class("named-ctrl-row")
-
-        _MODELS = [
-            ("wan2",        "Wan2.2",       "720p · server"),
-            ("mochi",       "Mochi-1",      "480×848 · server"),
-            ("skyreels",    "SkyReels I2V", "960×544 · Blackhole · server"),
-            ("animatediff", "AnimateDiff",  "animated GIF · local Blackhole"),
-        ]
-
-        self._video_model_btns: list = []
-        first_btn = None
+        string_list = Gtk.StringList()
         pref = str(_settings.get("preferred_video_model") or "wan2")
-
-        for key, name, sub in _MODELS:
-            btn = Gtk.ToggleButton()
-            btn.model_key = key
-            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            inner.set_halign(Gtk.Align.CENTER)
-            name_lbl = Gtk.Label(label=name)
-            sub_lbl = Gtk.Label(label=sub)
-            sub_lbl.add_css_class("named-ctrl-sub")
-            inner.append(name_lbl)
-            inner.append(sub_lbl)
-            btn.set_child(inner)
-            btn.add_css_class("named-ctrl-btn")
-            btn.set_hexpand(True)
-            if first_btn is None:
-                first_btn = btn
-            else:
-                btn.set_group(first_btn)
+        selected_idx = 0
+        for i, (key, display) in enumerate(self._VIDEO_MODEL_ENTRIES):
+            string_list.append(display)
             if key == pref:
-                btn.set_active(True)
-            btn.connect("toggled", self._on_video_model_btn_toggled)
-            row.append(btn)
-            self._video_model_btns.append(btn)
+                selected_idx = i
 
-        # Ensure wan2 is active if the stored pref didn't match any button
-        if not any(b.get_active() for b in self._video_model_btns):
-            self._video_model_btns[0].set_active(True)
+        self._video_model_dd = Gtk.DropDown(model=string_list)
+        self._video_model_dd.set_hexpand(True)
+        self._video_model_dd.set_selected(selected_idx)
+        self._video_model_dd.connect("notify::selected", self._on_video_model_dd_changed)
+        row.append(self._video_model_dd)
+        return row
 
-        outer.append(row)
-        return outer
-
-    def _on_video_model_btn_toggled(self, btn: Gtk.ToggleButton) -> None:
-        """Handle VIDEO MODEL button toggle."""
-        if not btn.get_active():
-            return
-        key = btn.model_key
-        self._set_model(key)
-        _settings.set("preferred_video_model", key)
-        self.update_shot_panel()
+    def _on_video_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
+        """Handle VIDEO MODEL dropdown change."""
+        idx = dd.get_selected()
+        if 0 <= idx < len(self._VIDEO_MODEL_ENTRIES):
+            key = self._VIDEO_MODEL_ENTRIES[idx][0]
+            self._set_model(key)
+            _settings.set("preferred_video_model", key)
+            self.update_shot_panel()
 
     def _build_quality_row(self) -> Gtk.Box:
         """QUALITY row: Fast / Standard / Cinematic named toggle buttons.
