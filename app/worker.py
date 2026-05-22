@@ -25,6 +25,7 @@ Communication back to the UI is via plain callbacks. The caller (GTK main window
 wraps each callback in GLib.idle_add() so UI updates always happen on the main
 thread. Never import or touch GTK widgets from here.
 """
+import logging
 import shutil
 import subprocess
 import threading
@@ -252,8 +253,8 @@ class GenerationWorker:
             lines.append(f"seed_image: {record.seed_image_path}")
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
 
     def _extract_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         """
@@ -463,8 +464,8 @@ class AnimateGenerationWorker:
         ]
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
 
     def _extract_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         Path(thumbnail_path).parent.mkdir(parents=True, exist_ok=True)
@@ -688,5 +689,5 @@ class ImageGenerationWorker:
         ]
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)

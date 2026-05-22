@@ -286,10 +286,16 @@ _ANSI_PAL = _build_ansi_pal()
 def _ansi_to_html(text: str) -> str:
     """
     Convert ANSI escape sequences to a full-viewport CSS-grid HTML document.
-    Each pixel cell becomes a <div> coloured by its background colour; the
-    grid fills 100vw × 100vh so the art always fills the entire detail view.
-    Handles: SGR 0 (reset), 40-47/100-107 (8-colour bg), 48;5;N (256-colour),
-    48;2;R;G;B (truecolour).
+    Each pixel cell becomes a <div> coloured by its pixel colour; the grid
+    fills 100vw × 100vh so the art always fills the entire detail view.
+
+    Handles both pixel formats:
+      • Foreground+block: \\033[38;5;Nm█  (current format — uses fg colour)
+      • Background+space: \\033[48;5;Nm   (legacy format — uses bg colour)
+
+    SGR codes handled: 0 (reset), 30-37/90-97 (8-colour fg),
+    38;5;N/38;2;R;G;B (256/truecolour fg), 40-47/100-107 (8-colour bg),
+    48;5;N/48;2;R;G;B (256/truecolour bg).
     """
     import re
 
@@ -300,6 +306,7 @@ def _ansi_to_html(text: str) -> str:
 
     DEFAULT = "#000000"
     bg = DEFAULT
+    fg = DEFAULT
     grid: list[list[str]] = [[]]
 
     i = 0
@@ -325,6 +332,22 @@ def _ansi_to_html(text: str) -> str:
                     v = nums[k]
                     if v == 0:
                         bg = DEFAULT
+                        fg = DEFAULT
+                    elif 30 <= v <= 37:
+                        fg = _ANSI_PAL[v - 30]
+                    elif 90 <= v <= 97:
+                        fg = _ANSI_PAL[v - 90 + 8]
+                    elif v == 38:
+                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
+                            fg = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
+                            k += 2
+                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
+                            fg = "#{:02x}{:02x}{:02x}".format(
+                                max(0, min(255, nums[k + 2])),
+                                max(0, min(255, nums[k + 3])),
+                                max(0, min(255, nums[k + 4])),
+                            )
+                            k += 4
                     elif 40 <= v <= 47:
                         bg = _ANSI_PAL[v - 40]
                     elif 100 <= v <= 107:
@@ -345,11 +368,18 @@ def _ansi_to_html(text: str) -> str:
         elif ch == "\n":
             grid.append([])
             bg = DEFAULT
+            fg = DEFAULT
             i += 1
         elif ch == "\r":
             i += 1
         else:
-            grid[-1].append(bg)
+            # █ (U+2588): foreground+block format — use fg as the pixel colour.
+            # Space: background-only format — use bg.
+            # Other printable chars: treat as block, use fg.
+            if ch == " ":
+                grid[-1].append(bg)
+            else:
+                grid[-1].append(fg)
             i += 1
 
     # Drop empty trailing rows

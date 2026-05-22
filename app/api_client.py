@@ -98,7 +98,8 @@ class APIClient:
                 timeout=10,
             )
             if resp.status_code == 200:
-                return resp.json() or []
+                result = resp.json()
+                return result if isinstance(result, list) else []
         except requests.RequestException:
             pass
         return []

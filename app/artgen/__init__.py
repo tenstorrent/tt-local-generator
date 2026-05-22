@@ -72,6 +72,19 @@ class ArtGenerator(ABC):
         """
         return artifact
 
+    def generate_artifact(self, args: "argparse.Namespace", call_fn) -> str:
+        """
+        Run the full generation pipeline and return the artifact string.
+
+        call_fn(prompt, system=None, max_tokens=None) -> raw LLM text.
+
+        Default is single-pass: build_prompt → call → parse_output → post_process.
+        Override to implement multi-pass pipelines (see AnsiGenerator for an example
+        of the structure → refinement → colorization pattern).
+        """
+        raw = call_fn(self.build_prompt(args))
+        return self.post_process(self.parse_output(raw, args), args)
+
     def default_output(self) -> Path:
         """Default output path when --output is not specified."""
         return Path(f"{self.name}{self.output_ext}")

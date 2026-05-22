@@ -177,6 +177,53 @@ def _cmd_animatediff(args) -> None:
         print(f"[saved → {out_path}]", flush=True)
 
 
+def _make_call_fn(model_id: str, base_url: str, args):
+    """
+    Return a call_fn(prompt, system=None, max_tokens=None) -> str closure.
+
+    Verse generators attach a system prompt via args._verse_system and need the
+    openai client; all other generators use the stdlib artgen.call_llm path.
+    The max_tokens override lets multi-pass generators tune each pass budget
+    independently (e.g. 1024 for ASCII structure, 8192 for colorisation).
+    """
+    system_msg = getattr(args, "_verse_system", None)
+    if system_msg:
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print("ERROR: openai not installed. Run: pip install openai", file=sys.stderr)
+            sys.exit(1)
+        oai_url = base_url.rstrip("/")
+        if not oai_url.endswith("/v1"):
+            oai_url += "/v1"
+        client = OpenAI(base_url=oai_url, api_key="none",
+                        timeout=getattr(args, "timeout", 300))
+
+        def _call_fn(prompt, system=None, max_tokens=None):
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
+                temperature=getattr(args, "temperature", 0.7),
+            )
+            return resp.choices[0].message.content or ""
+    else:
+        def _call_fn(prompt, system=None, max_tokens=None):
+            raw, _ = artgen.call_llm(
+                prompt, model_id, base_url,
+                max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
+                temperature=getattr(args, "temperature", 0.7),
+                timeout=getattr(args, "timeout", 300),
+                system=system,
+            )
+            return raw
+
+    return _call_fn
+
+
 def cmd_artgen(args) -> None:
     """Handler for 'tt-ctl artgen TYPE ...'."""
     gen_name = getattr(args, "artgen_type", None)
@@ -193,16 +240,16 @@ def cmd_artgen(args) -> None:
 
     gen = artgen.get(gen_name)
 
-    # Build prompt
-    try:
-        prompt = gen.build_prompt(args)
-    except ValueError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
-
     if getattr(args, "simulate", False):
+        # For multi-pass generators (e.g. ANSI), build_prompt returns pass-1
+        # which is the most instructive thing to show for a dry run.
+        try:
+            prompt = gen.build_prompt(args)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
         print(f"[--simulate: LLM call skipped — generator: {gen.name}]\n")
-        print("PROMPT:")
+        print("PROMPT (pass 1):")
         print("─" * 60)
         print(prompt)
         return
@@ -229,50 +276,20 @@ def cmd_artgen(args) -> None:
 
     print(f"[artgen: {gen.name} via {model_id} @ {base_url}]", flush=True)
 
-    # Call LLM — verse stashes a system prompt on args via build_prompt()
-    system_msg = getattr(args, "_verse_system", None)
-    if system_msg:
-        try:
-            from openai import OpenAI
-        except ImportError:
-            print("ERROR: openai not installed. Run: pip install openai", file=sys.stderr)
-            sys.exit(1)
-        # OpenAI client requires a /v1 base URL; server_config returns http://host:port.
-        oai_url = base_url.rstrip("/")
-        if not oai_url.endswith("/v1"):
-            oai_url += "/v1"
-        client = OpenAI(base_url=oai_url, api_key="none",
-                        timeout=getattr(args, "timeout", 300))
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=getattr(args, "max_tokens", 4096),
-            temperature=getattr(args, "temperature", 0.7),
-        )
-        raw = resp.choices[0].message.content or ""
-    else:
-        raw, _usage = artgen.call_llm(
-            prompt, model_id, base_url,
-            max_tokens=getattr(args, "max_tokens", 4096),
-            temperature=getattr(args, "temperature", 0.7),
-            timeout=getattr(args, "timeout", 300),
-        )
-
-    # Parse
+    # Capture a prompt summary for MediaRecord storage before running the pipeline.
+    # For multi-pass generators build_prompt() returns pass-1 (the structural prompt).
     try:
-        artifact = gen.parse_output(raw, args)
-    except ValueError as e:
-        raw_path = Path(getattr(args, "output", None) or gen.default_output()).with_suffix(".raw.txt")
-        raw_path.write_text(raw)
-        print(f"ERROR: {e}", file=sys.stderr)
-        print(f"  Raw LLM output saved → {raw_path}", file=sys.stderr)
-        sys.exit(1)
+        prompt_summary = gen.build_prompt(args)
+    except Exception:
+        prompt_summary = ""
 
-    # Post-process (glitch for landscape, CSS export for palette, etc.)
-    artifact = gen.post_process(artifact, args)
+    # Run the generator's pipeline (single-pass default; multi-pass for ANSI etc.)
+    call_fn = _make_call_fn(model_id, base_url, args)
+    try:
+        artifact = gen.generate_artifact(args, call_fn)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Save — use media store path when no explicit --output so the GUI picks it up
     explicit_out = getattr(args, "output", None)
@@ -312,7 +329,7 @@ def cmd_artgen(args) -> None:
                 created_at=datetime.now(timezone.utc).isoformat(),
                 file_path=str(out_path),
                 thumbnail_path=str(thumb_path) if thumb_path is not None and thumb_path.exists() else "",
-                prompt=prompt[:500],
+                prompt=prompt_summary[:500],
                 model_id=model_id,
                 generator_type=gen_name,
                 params=json.dumps(params),

@@ -1,3 +1,24 @@
+tt-local-generator (0.3.2) noble; urgency=medium
+
+  * artgen: ANSI generation rewritten as a 3-pass pipeline — ASCII structure
+    (spatial composition, plain chars, 1024 tokens) → block refinement (Unicode
+    block chars ░▒▓█▀▄▌▐, 1024 tokens) → colorization (xterm-256 foreground
+    \033[38;5;Nm█ per cell, 8192 tokens). Separating composition from character
+    selection from color assignment gives coherent imagery instead of palette strips.
+  * artgen: switch ANSI format from background+space (\033[48;5;Nm ) to
+    foreground+block (\033[38;5;Nm█) — brighter, more vibrant output in all terminals.
+  * artgen: ArtGenerator base class gains generate_artifact(args, call_fn) hook for
+    multi-pass pipelines; AnsiGenerator overrides it; all other generators use the
+    single-pass default. First prototype of the remix-mode multi-pass pattern.
+  * artgen cli: _make_call_fn() closure supports per-call max_tokens override so each
+    pipeline pass can tune its own token budget independently.
+  * artgen panel: updated to call generate_artifact() instead of inline pipeline;
+    accumulates usage across all passes in a single MediaRecord.
+  * docs: README and website explain the 3-pass ANSI pipeline; CLAUDE.md documents
+    the generate_artifact hook and multi-pass architecture.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 17:00:00 -0700
+
 tt-local-generator (0.3.1) noble; urgency=medium
 
   * artgen: BBS ANSI style — new --ansi-style bbs mode with 80×25 canvas,

@@ -1076,8 +1076,8 @@
         <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Night · Indigo</figcaption>
       </figure>
       <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
-        <img src="assets/artgen/city-sunset-crimson.svg" alt="City Sunset — crimson to purple gradient sky, orange-lit towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
-        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Sunset · Crimson</figcaption>
+        <img src="assets/artgen/landscape-glitch.svg" alt="Glitch landscape — acid green horizon, magenta and cyan distortion bands" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">Glitch Landscape · Acid</figcaption>
       </figure>
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-top:1.25rem;">
@@ -1137,6 +1137,49 @@
           <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">garden of forking paths · Borges</figcaption>
         </figure>
       </div>
+    </div>
+
+    <!-- ANSI 3-pass pipeline explainer -->
+    <div style="margin-top:3.5rem;">
+      <div class="section-label" style="margin-bottom:.75rem;">ANSI art · 3-pass pipeline</div>
+      <p style="font-size:.95rem;color:var(--text2);max-width:680px;margin-bottom:1.25rem;">
+        Generating coherent ANSI pixel art in a single LLM pass fails at any canvas larger
+        than a few dozen cells — the model can't simultaneously plan spatial composition,
+        choose the right characters, and assign 256 colors to hundreds of cells at once.
+        The solution is a three-pass pipeline that separates each concern into a task the
+        model handles well:
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;max-width:800px;margin-bottom:1.5rem;">
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 1 — Structure</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            Draw the subject using plain ASCII characters. No color, no block chars — just spatial
+            composition. <code style="font-size:.8em;background:rgba(255,255,255,.06);padding:.1em .3em;border-radius:3px;">X # . | /</code> placed where
+            the model's layout judgment is strongest.
+          </p>
+        </div>
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 2 — Refinement</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            The ASCII sketch is redrawn with Unicode block characters
+            (<code style="font-size:.8em;background:rgba(255,255,255,.06);padding:.1em .3em;border-radius:3px;">█ ▀ ▄ ▌ ▐ ░ ▒ ▓</code>)
+            for richer geometry. Layout is fixed — only visual quality improves.
+          </p>
+        </div>
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 3 — Colorization</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            Given the fixed character map, the LLM wraps every cell with one xterm-256
+            foreground color. Deciding a single color for an already-placed character is
+            far simpler than planning position + color together.
+          </p>
+        </div>
+      </div>
+      <p style="font-size:.88rem;color:var(--text2);max-width:680px;">
+        BBS style applies neon-on-void rules with zone constraints (void rows top and bottom,
+        neon subject in the center) and derives a board-identity color theme from the board name.
+        Try it: <code style="font-size:.82em;background:rgba(255,255,255,.06);padding:.15em .4em;border-radius:3px;">tt-ctl artgen ansi --ansi-style bbs --board-name "NEON VOID" --subject "glowing skull"</code>
+      </p>
     </div>
 
     <!-- Palette swatches — imitates the in-app palette detail view -->
@@ -1687,33 +1730,33 @@
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">skyline</span>
-            <span class="prompt-ex-source">metropolitan · late-night</span>
+            <span class="prompt-ex-source">noir · midnight teal</span>
           </div>
-          <div class="prompt-ex-input">city skyline, dense urban canyon, warm orange-to-navy gradient sky, 28–38 buildings, 3 depth layers</div>
+          <div class="prompt-ex-input">city skyline, noir silhouette, near-black teal sky (#0A2A25 → #001810), angular towers, no color in the buildings — just shape and negative space</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/skyline-metro-night.svg" alt="Metropolitan late-night skyline SVG">
+            <img src="assets/artgen/skyline-noir.svg" alt="Midnight noir skyline — angular towers against a near-black teal sky">
           </div>
         </div>
 
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">landscape</span>
-            <span class="prompt-ex-source">volcanic · apocalyptic</span>
+            <span class="prompt-ex-source">violet · deep space</span>
           </div>
-          <div class="prompt-ex-input">layered landscape, intense volcanic mood, blood-red sky (#1A0000 → #CC2200), layered mountain silhouettes, orange sun</div>
+          <div class="prompt-ex-input">layered landscape, deep violet cosmic mood, gradient sky (#120020 → #3B1060 → #7B2D8B), receding terrain silhouettes, purple atmosphere</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/landscape-volcanic.svg" alt="Volcanic apocalyptic landscape SVG">
+            <img src="assets/artgen/landscape-violet.svg" alt="Deep violet landscape — cosmic purple hills under an amethyst sky">
           </div>
         </div>
 
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">geometric</span>
-            <span class="prompt-ex-source">recursive subdivision · crimson-orange</span>
+            <span class="prompt-ex-source">teal grid · deep field</span>
           </div>
-          <div class="prompt-ex-input">abstract geometric, recursive canvas subdivision 2–3 levels deep, triangles/rectangles/hexagons, crimson-orange palette, dense intricate overlaps</div>
+          <div class="prompt-ex-input">abstract geometric, diagonal line grid across a deep blue-gray field (#0F2A35 background), teal strokes (#1A3C47), minimal — structure without colour noise</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/geometric-crimson.svg" alt="Recursive geometric subdivision SVG">
+            <img src="assets/artgen/geometric-teal.svg" alt="Geometric teal line grid — diagonal strokes on deep blue-gray field">
           </div>
         </div>
 

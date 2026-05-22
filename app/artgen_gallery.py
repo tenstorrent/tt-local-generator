@@ -219,19 +219,21 @@ def _parse_ansi_cells(
     max_rows: int = 50,
 ) -> list[tuple[int, int, tuple[float,float,float]]]:
     """
-    Walk ANSI escape sequences and return (row, col, bg_rgb) for every
-    character cell that has a non-default background color set.
-    Handles: SGR 0 (reset), 30-37/90-97 fg, 40-47/100-107 bg,
-             38;5;N / 48;5;N (256-color), 38;2;R;G;B / 48;2;R;G;B (truecolor).
+    Walk ANSI escape sequences and return (row, col, display_rgb) for every
+    character cell.  Handles both old format (\033[48;5;Nm SPACE, bg+space) and
+    new format (\033[38;5;Nm BLOCK, fg+block) — whichever color is non-default
+    wins, with bg taking priority when both are set.
+    Handles: SGR 0 (reset), 30-37/90-97 fg, 38;5;N / 38;2;R;G;B fg-256/truecolor,
+             40-47/100-107 bg, 48;5;N / 48;2;R;G;B bg-256/truecolor.
     """
-    DEFAULT_BG: tuple[float,float,float] = (0.0, 0.0, 0.0)
-    bg: tuple[float,float,float] = DEFAULT_BG
+    DEFAULT: tuple[float,float,float] = (0.0, 0.0, 0.0)
+    fg: tuple[float,float,float] = DEFAULT
+    bg: tuple[float,float,float] = DEFAULT
     row = col = 0
     cells: list[tuple[int,int,tuple[float,float,float]]] = []
     i = 0
 
     # Normalise escape variants to actual ESC byte (handles files saved before fix).
-    # Must happen before n = len(text) — normalisation shrinks the string.
     if "\x1b" not in text:
         import re as _re
         text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b").replace("^[", "\x1b")
@@ -242,7 +244,6 @@ def _parse_ansi_cells(
         ch = text[i]
 
         if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
-            # Find end of CSI sequence
             j = i + 2
             while j < n and text[j] not in "ABCDEFGHJKSTfm":
                 j += 1
@@ -254,12 +255,23 @@ def _parse_ansi_cells(
                         nums.append(int(p))
                     except ValueError:
                         nums.append(0)
-                # Process SGR parameters
                 k = 0
                 while k < len(nums):
                     v = nums[k]
                     if v == 0:
-                        bg = DEFAULT_BG
+                        fg = DEFAULT
+                        bg = DEFAULT
+                    elif 30 <= v <= 37:
+                        fg = _xterm_rgb01(v - 30)
+                    elif 90 <= v <= 97:
+                        fg = _xterm_rgb01(v - 90 + 8)
+                    elif v == 38:
+                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
+                            fg = _xterm_rgb01(nums[k + 2])
+                            k += 2
+                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
+                            fg = (nums[k+2]/255, nums[k+3]/255, nums[k+4]/255)
+                            k += 4
                     elif 40 <= v <= 47:
                         bg = _xterm_rgb01(v - 40)
                     elif 100 <= v <= 107:
@@ -283,7 +295,9 @@ def _parse_ansi_cells(
             i += 1
         else:
             if row < max_rows and col < max_cols:
-                cells.append((row, col, bg))
+                # Use bg when set (old format); fall back to fg (new \033[38;5;Nm█ format).
+                color = bg if bg != DEFAULT else fg
+                cells.append((row, col, color))
             col += 1
             i += 1
 
@@ -434,7 +448,6 @@ class ArtgenGallery(Gtk.Box):
         self._flow.set_max_children_per_line(8)
         self._flow.set_min_children_per_line(3)
         self._flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._flow.set_homogeneous(True)
         self._flow.set_row_spacing(6)
         self._flow.set_column_spacing(6)
         self._flow.set_margin_start(12)
@@ -443,9 +456,16 @@ class ArtgenGallery(Gtk.Box):
         self._flow.set_margin_bottom(8)
         self._flow.connect("child-activated", self._on_card_activated)
         scroll.set_child(self._flow)
+        self._scroll = scroll
         self.append(scroll)
 
     # ── Public ────────────────────────────────────────────────────────────────
+
+    def scroll_to_top(self) -> None:
+        """Scroll the grid back to the top (call after prepending a new card)."""
+        adj = self._scroll.get_vadjustment()
+        if adj:
+            adj.set_value(0)
 
     def refresh(self) -> None:
         """Reload records from the store and rebuild chips + grid."""

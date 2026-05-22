@@ -255,10 +255,8 @@ class HistoryStore:
 
     def __len__(self) -> int:
         from media_store import media_store as _ms
-        # COUNT(*) for each non-artgen type — avoids materialising all records.
-        total = _ms.count()
-        artgen = _ms.count(media_type="artgen")
-        return total - artgen
+        # Single atomic query — avoids the race between two separate COUNTs.
+        return _ms.count_non_artgen()
 
     # ── Queue persistence (unchanged — kept in JSON) ───────────────────────────
 

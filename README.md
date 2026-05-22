@@ -228,8 +228,25 @@ cd ~/code/tt-local-generator
   tt-ctl artgen verse --form haiku --theme "silicon at dawn"
   tt-ctl artgen palette --mood "deep ocean bioluminescence"
   tt-ctl artgen landscape --palette sunset --glitch
+  tt-ctl artgen ansi --ansi-style bbs --board-name "NEON VOID" --subject "glowing skull"
   tt-ctl artgen animatediff --count 5   # Blackhole only
   ```
+
+  **ANSI art uses a 3-pass pipeline** — the key insight being that an LLM can't plan
+  spatial composition and color simultaneously for hundreds of cells. The three passes
+  separate concerns so each one is a task the model handles well:
+
+  1. **ASCII structure** — the LLM draws the subject using plain characters (`X`, `#`,
+     `.`, `|`). No color decisions. The model's spatial composition is at its best here.
+  2. **Block refinement** — the ASCII sketch is redrawn using Unicode block characters
+     (`█ ▀ ▄ ▌ ▐ ░ ▒ ▓`) for richer geometry. Layout is preserved; only visual quality
+     improves.
+  3. **Colorization** — given the exact, fixed character map, the LLM wraps every cell
+     with one xterm-256 foreground color (`\033[38;5;Nm█`). Deciding a single color for
+     an already-placed character is far simpler than planning position + color at once.
+
+  BBS style (`--ansi-style bbs`) applies neon-on-void color rules (electric cyan, toxic
+  green, hot magenta, gold) with board identity baked into the palette theme.
 - **Seed image** — attach a reference photo or frame to guide color palette, composition, and
   style continuity between clips.
 - **Prompt queue** — write the next prompt while a generation runs; the queue drains
