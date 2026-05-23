@@ -2022,3 +2022,51 @@ def animatediff_subject() -> str:
 def animatediff_modifier() -> str:
     """Return a random style modifier for AnimateDiff prompts."""
     return pick(ANIMATEDIFF_MODIFIERS)
+
+
+# ── Unexpected juxtapositions ──────────────────────────────────────────────────
+#
+# These are appended to video/skyreels slugs with low probability (12%) as a
+# sixth comma slot.  They work because they can't be smoothed away without
+# the LLM ignoring the instruction "keep every element".  The result is a
+# prompt the model genuinely has to think about — which is the point.
+#
+# Good entries: era/scale mismatches, sensory-mode violations, wrong-material
+# objects, temporal displacement, perspective cheats.  Avoid punchlines.
+
+UNEXPECTED_JUXTAPOSITIONS = [
+    # wrong era / wrong object
+    "but everything is the wrong scale",
+    "shot on film that expired in 1994",
+    "but the shadows fall the wrong direction",
+    "but the colors belong to a different decade",
+    "in the style of a genre that has no name yet",
+    "as if remembered incorrectly twenty years later",
+    "but the season is wrong for the latitude",
+    # material / texture displacement
+    "but one object is made of something it shouldn't be",
+    "everything appears ceramic except what should be",
+    "as if the whole scene is made of folded paper",
+    "but the textures are all from the wrong surfaces",
+    # temporal / causal displacement
+    "except it is somehow a Wednesday in 1987",
+    "the action completed before it began",
+    "twenty years later than the scene implies",
+    "as if this is the third time this exact thing has happened",
+    # perspective and sensory cheats
+    "as if seen through someone else's prescription",
+    "as if the sound would be wrong",
+    "as if this is a memory of something that never happened",
+    "from the point of view of the thing being looked at",
+    "but the viewer is also in the scene",
+    # register collision
+    "in a room that shouldn't exist in that building",
+    "as if the director forgot which century this was",
+    "but the lighting is from a different film entirely",
+    "as if the scene is a footnote in someone else's dream",
+]
+
+
+def unexpected_juxtaposition() -> str:
+    """Return a random unexpected juxtaposition for use as a sixth prompt slot."""
+    return pick(UNEXPECTED_JUXTAPOSITIONS)
