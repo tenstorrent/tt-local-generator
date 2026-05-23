@@ -4740,6 +4740,8 @@ class ControlPanel(Gtk.Box):
         if hasattr(self, "_clip_btns"):
             self._refresh_clip_labels()
         self._update_seed_well_state()
+        # Re-evaluate Generate button — animatediff is always ready (no server needed).
+        self._update_btns()
 
     def get_model_source(self) -> str:
         return self._model_source
@@ -4942,13 +4944,19 @@ class ControlPanel(Gtk.Box):
     def _update_btns(self) -> None:
         # When idle: "Generate" (disabled until server ready).
         # When busy: "+ Add to Queue" (always enabled so user can queue the next prompt).
+        # AnimateDiff runs locally — no server needed — so it is always "ready".
+        local_only = (
+            self._model_source == "video"
+            and getattr(self, "_video_model", "") == "animatediff"
+        )
+        can_generate = self._server_ready or local_only
         if self._busy:
             self._gen_btn.set_label("+ Add to Queue")
-            self._gen_btn.set_sensitive(self._server_ready)
+            self._gen_btn.set_sensitive(can_generate)
             self._gen_btn.set_tooltip_text("Queue this prompt — runs automatically after current generation")
         else:
             self._gen_btn.set_label("Generate")
-            self._gen_btn.set_sensitive(self._server_ready)
+            self._gen_btn.set_sensitive(can_generate)
             self._gen_btn.set_tooltip_text("")
         pass  # recover button removed — sensitivity managed via win.recover-jobs action
 
@@ -7830,11 +7838,13 @@ class MainWindow(Gtk.ApplicationWindow):
         system_prompt = self._prompt_gen_system_prompt
 
         # Refine generic "video" source to model-specific type when the active
-        # video model has its own prompt vocabulary (SkyReels, etc.).
+        # video model has its own prompt vocabulary (SkyReels, AnimateDiff, etc.).
         if source == "video":
             active_video_model = self._controls.get_video_model()
             if active_video_model == "skyreels":
                 source = "skyreels"
+            elif active_video_model == "animatediff":
+                source = "animatediff"
 
         def run():
             try:

@@ -235,6 +235,21 @@ def _algo_commercial() -> tuple[str, dict]:
     return slug, meta
 
 
+def _algo_animatediff() -> tuple[str, dict]:
+    """
+    Build one algorithmic AnimateDiff GIF-loop prompt slug.
+
+    AnimateDiff generates 8-frame looping GIFs. Best results come from subjects
+    with natural cyclical or oscillating motion — fire, water, wind, breath.
+    No camera moves; keep composition simple: one subject + one modifier.
+    """
+    subj = wb.animatediff_subject()
+    mod = wb.animatediff_modifier()
+    slug = f"{subj}, {mod}"
+    meta = {"subject": subj, "modifier": mod}
+    return slug, meta
+
+
 _ALGO_FN = {
     "video": _algo_video,
     "image": _algo_image,
@@ -242,6 +257,7 @@ _ALGO_FN = {
     "commercial": _algo_commercial,
     "skyreels": _algo_skyreels,
     "artgen": _algo_artgen,
+    "animatediff": _algo_animatediff,
 }
 
 # ── LLM polish ─────────────────────────────────────────────────────────────────
@@ -283,6 +299,11 @@ _TYPE_HINT = {
         "poetic image. Examples: 'volcanic winter twilight', 'the weight of forgotten names', "
         "'copper and verdigris', 'neon monastery at 4am'. "
         "No sentences, no camera directions, no explanation. Just the phrase."
+    ),
+    "animatediff": (
+        "AnimateDiff GIF loop (8 frames). One subject with natural cyclical motion — "
+        "fire, water, wind, breath, fabric, foliage. No camera moves. "
+        "Describe what loops, not what happens once. Under 18 words."
     ),
 }
 
