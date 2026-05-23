@@ -203,7 +203,7 @@ def run_subprocess(
 
 
 def make_gif_thumbnail(gif_path: Path, thumb_path: Path) -> bool:
-    """Extract first frame of a GIF as a PNG thumbnail. Returns True on success."""
+    """Extract first frame of a GIF as a JPEG thumbnail. Returns True on success."""
     try:
         from PIL import Image
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,7 +211,7 @@ def make_gif_thumbnail(gif_path: Path, thumb_path: Path) -> bool:
             img.seek(0)
             frame = img.convert("RGB")
             frame.thumbnail((320, 240))
-            frame.save(str(thumb_path), "PNG")
+            frame.save(str(thumb_path), "JPEG", quality=85)
         return True
     except Exception:
         return False

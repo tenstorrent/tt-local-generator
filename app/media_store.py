@@ -379,18 +379,23 @@ class MediaStore:
             return []
         filter_expr = row[0]
         if filter_expr is not None:
-            # Whitelist-validate before interpolating into SQL.  filter_expr is
-            # always set by create_playlist() internally, but reading it back from
-            # the DB means a tampered DB could inject arbitrary SQL.
-            if not _FILTER_EXPR_RE.match(filter_expr):
+            # Whitelist-validate before building SQL.  filter_expr is always set
+            # by create_playlist() internally, but reading it back from the DB
+            # means a tampered DB could inject arbitrary SQL.
+            m = _FILTER_EXPR_RE.match(filter_expr)
+            if not m:
                 logging.warning("playlist_records: rejected unsafe filter_expr %r", filter_expr)
                 return []
+            # Extract column and value; use ? binding for the value so only the
+            # column name (already validated by the regex whitelist) is interpolated.
+            col_name = re.match(r"^(\w+)=", filter_expr).group(1)
+            col_value = re.search(r"='([^']+)'$", filter_expr).group(1)
             sql = (
                 "SELECT id,media_type,created_at,file_path,thumbnail_path,prompt,"
                 "       model_id,generator_type,params,starred FROM media "
-                f"WHERE {filter_expr} ORDER BY created_at DESC"
+                f"WHERE {col_name}=? ORDER BY created_at DESC"
             )
-            rows = self._conn.execute(sql).fetchall()
+            rows = self._conn.execute(sql, (col_value,)).fetchall()
         else:
             # Hand-curated playlist: join through playlist_items in position order.
             rows = self._conn.execute(

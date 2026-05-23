@@ -18,7 +18,9 @@ Functions:
     check_health(base_url) -> bool
     generate_prompt(source, seed_text, system_prompt, base_url, max_tokens) -> str
 """
-import requests
+import json as _json
+import urllib.request
+import urllib.error
 
 _DEFAULT_URL = "http://127.0.0.1:8001"
 
@@ -49,11 +51,9 @@ def check_health(base_url: str = _DEFAULT_URL) -> bool:
     any network error, non-200 status, or missing/false model_ready field.
     """
     try:
-        resp = requests.get(f"{base_url}/health", timeout=3)
-        if resp.status_code == 200:
-            return bool(resp.json().get("model_ready"))
-        return False
-    except (requests.RequestException, ValueError):
+        with urllib.request.urlopen(f"{base_url}/health", timeout=3) as r:
+            return bool(_json.loads(r.read()).get("model_ready"))
+    except Exception:
         return False
 
 

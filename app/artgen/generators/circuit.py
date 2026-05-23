@@ -7,6 +7,8 @@ wires, and a labelled output node. No real simulation — pure visual logic art.
 
 from __future__ import annotations
 
+import random as _random
+
 from artgen import ArtGenerator, register
 
 SVG_W = 700
@@ -95,16 +97,19 @@ class CircuitGenerator(ArtGenerator):
             help="Number of gate levels deep (default: 2)",
         )
         parser.add_argument(
-            "--circuit-style", choices=list(_DIAGRAM_STYLES), default="clean",
+            "--circuit-style", default="random",
             dest="circuit_style",
-            help="Visual style (default: clean)",
+            help=f"Visual style: {', '.join(_DIAGRAM_STYLES)}, random (default: random)",
         )
 
     def build_prompt(self, args) -> str:
         inputs = [s.strip().upper() for s in getattr(args, "inputs", "A,B,C").split(",")]
         raw_gates = [g.strip().lower() for g in getattr(args, "gates", "and,or").split(",")]
         gates = [g for g in raw_gates if g in self._valid_gates] or ["and", "or"]
-        return _build_prompt(inputs, gates, getattr(args, "depth", 2), getattr(args, "circuit_style", "clean"))
+        style = getattr(args, "circuit_style", "random")
+        if style == "random" or style not in _DIAGRAM_STYLES:
+            style = _random.choice(list(_DIAGRAM_STYLES))
+        return _build_prompt(inputs, gates, getattr(args, "depth", 2), style)
 
     def parse_output(self, raw: str, args) -> str:
         import re

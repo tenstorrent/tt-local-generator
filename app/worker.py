@@ -4,9 +4,9 @@
 """
 Background workers for media generation.
 
-Two worker classes, both with identical run_with_callbacks() interfaces:
+Four worker classes, all with identical run_with_callbacks() interfaces:
 
-  GenerationWorker — Wan2.2 video (async/job-based):
+  GenerationWorker — Wan2.2 / Mochi / SkyReels video (async/job-based):
     1. Submit job to server (or re-attach via _job_id_override)
     2. Poll status every 3 seconds until complete or failed
     3. Download the MP4 to local storage
@@ -20,6 +20,16 @@ Two worker classes, both with identical run_with_callbacks() interfaces:
     3. Create a scaled thumbnail via ffmpeg (falls back to copy)
     4. Write prompt sidecar .txt
     5. Persist to history
+
+  AnimateGenerationWorker — Wan2.2-Animate character animation (async/job-based):
+    Same poll-download cycle as GenerationWorker; accepts reference_video_path
+    and reference_image_path for motion+character conditioning.
+
+  AnimateDiffGenerationWorker — TTNN AnimateDiff GIF (local Blackhole, no server):
+    1. check_hardware() — fail fast if no Blackhole device
+    2. run_subprocess() — generate_blackhole_v2.py via tt-metal Python env
+    3. make_gif_thumbnail() — extract first frame as JPEG
+    4. Persist to history as media_type="animatediff"
 
 Communication back to the UI is via plain callbacks. The caller (GTK main window)
 wraps each callback in GLib.idle_add() so UI updates always happen on the main

@@ -81,7 +81,7 @@ def _generate_animate_prompt() -> str:
     gen_script = _app / "generate_prompt.py"
     try:
         r = _sp.run(
-            [sys.executable, str(gen_script), "--type", "animate"],
+            [sys.executable, str(gen_script), "--type", "animatediff"],
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode == 0:
@@ -181,45 +181,21 @@ def _make_call_fn(model_id: str, base_url: str, args):
     """
     Return a call_fn(prompt, system=None, max_tokens=None) -> str closure.
 
-    Verse generators attach a system prompt via args._verse_system and need the
-    openai client; all other generators use the stdlib artgen.call_llm path.
+    Uses artgen.call_llm (stdlib urllib — safe from GTK background threads).
+    The system= kwarg lets generators like VerseGenerator pass their own system
+    prompt per call without mutating the args namespace.
     The max_tokens override lets multi-pass generators tune each pass budget
     independently (e.g. 1024 for ASCII structure, 8192 for colorisation).
     """
-    system_msg = getattr(args, "_verse_system", None)
-    if system_msg:
-        try:
-            from openai import OpenAI
-        except ImportError:
-            print("ERROR: openai not installed. Run: pip install openai", file=sys.stderr)
-            sys.exit(1)
-        oai_url = base_url.rstrip("/")
-        if not oai_url.endswith("/v1"):
-            oai_url += "/v1"
-        client = OpenAI(base_url=oai_url, api_key="none",
-                        timeout=getattr(args, "timeout", 300))
-
-        def _call_fn(prompt, system=None, max_tokens=None):
-            resp = client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
-                temperature=getattr(args, "temperature", 0.7),
-            )
-            return resp.choices[0].message.content or ""
-    else:
-        def _call_fn(prompt, system=None, max_tokens=None):
-            raw, _ = artgen.call_llm(
-                prompt, model_id, base_url,
-                max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
-                temperature=getattr(args, "temperature", 0.7),
-                timeout=getattr(args, "timeout", 300),
-                system=system,
-            )
-            return raw
+    def _call_fn(prompt, system=None, max_tokens=None):
+        raw, _ = artgen.call_llm(
+            prompt, model_id, base_url,
+            max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
+            temperature=getattr(args, "temperature", 0.7),
+            timeout=getattr(args, "timeout", 300),
+            system=system,
+        )
+        return raw
 
     return _call_fn
 

@@ -103,8 +103,9 @@ def _normalize_grid(raw: str, width: int, height: int) -> str:
             continue
         art.append(stripped)
 
-    # Drop trailing blanks
-    while art and not art[-1]:
+    # Drop trailing blanks only when we have surplus rows — blank rows within
+    # the target height are intentional void zones (e.g. BBS top/bottom strips).
+    while len(art) > height and art and not art[-1]:
         art.pop()
 
     # Trim to height

@@ -6307,6 +6307,23 @@ class PreferencesDialog(Gtk.Window):
         # Note: quality preset and clip length are now controlled by the QUALITY
         # and CLIP LENGTH button rows in the main panel.
 
+        # AnimateDiff frame count
+        anim_frames_spin = Gtk.SpinButton()
+        anim_frames_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("animatediff_frames"),
+            lower=1, upper=64, step_increment=1, page_increment=4,
+        ))
+        anim_frames_spin.set_digits(0)
+        anim_frames_spin.connect("value-changed", lambda w: _settings.set(
+            "animatediff_frames", int(w.get_value())
+        ))
+        box.append(self._row(
+            "AnimateDiff frames:", anim_frames_spin,
+            "Number of frames to generate per AnimateDiff GIF. "
+            "More frames = longer GIF, ~5 min/frame on Blackhole. "
+            "Default: 8 (~40 min total)."
+        ))
+
         # Sleep after N completions
         sleep_spin = Gtk.SpinButton()
         sleep_spin.set_adjustment(Gtk.Adjustment(
@@ -8330,7 +8347,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     negative_prompt=neg or "blurry, low quality",
                     steps=steps,
                     seed=seed if seed >= 0 else 42,
-                    frames=8,
+                    frames=int(_settings.get("animatediff_frames") or 8),
                     temporal_alpha=0.35,
                     model="animatediff-blackhole",
                 )
