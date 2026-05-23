@@ -256,10 +256,14 @@ cd ~/code/tt-local-generator
 ### Writing prompts
 
 - **✨ Inspire me** — one click to a polished, varied prompt every time. Three-tier system:
-  algorithmic word-bank sampling → Markov chain → LLM polish. The app automatically uses
-  the best available model: artgen LLM (port 8002) if running, otherwise Qwen3-0.6B prompt
-  server (port 8001), otherwise fully offline algo/Markov. Seed it with your own rough idea
-  and the LLM transforms it; leave it blank for fully random generation.
+  algorithmic word-bank sampling (six structural templates; 12 % chance of an unexpected
+  juxtaposition element) → Markov chain recombination (state size 1, maximising wild
+  collisions over repetition) → LLM polish (temperature and candidate count scaled to
+  model size; small models run three candidates and the most specific one wins). An
+  anti-repetition window discards slugs too similar to the last 20 generated. The app
+  uses the best available model automatically: artgen LLM (port 8002), then Qwen3-0.6B
+  prompt server (port 8001), then fully offline algo/Markov. Seed it with your own rough
+  idea and the LLM transforms it; leave blank for fully random generation.
 - **Style chips** — one-click modifiers for camera moves, lighting, mood, and quality,
   appended to your prompt without retyping anything.
 

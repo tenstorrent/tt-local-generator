@@ -1362,7 +1362,9 @@
         <p class="tier-desc">
           Samples from deep, curated word banks — subjects, settings, lighting,
           camera moves, mood, style — and assembles them into a structured slug.
-          Fast, deterministic, always available. No model required.
+          Six structural templates rotate the syntactic shape of each result;
+          a 12 % chance injects an unexpected juxtaposition element the LLM
+          cannot neutralise. Fast, always available. No model required.
         </p>
         <span class="tier-badge always">Always available</span>
       </div>
@@ -1371,9 +1373,9 @@
         <div class="tier-name">Markov</div>
         <p class="tier-desc">
           Trains on a seed corpus of tagged prompts and generates novel
-          recombinations at the sentence level. Produces unexpected register
-          collisions — a 1970s Betamax in an Escher staircase, a Muppet at
-          a Manhattan diner at 2am.
+          recombinations at the sentence level using state size 1 — maximising
+          wild collisions over near-verbatim repetition. A 1970s Betamax in
+          an Escher staircase. A Muppet at a Manhattan diner at 2am.
         </p>
         <span class="tier-badge always">Always available</span>
       </div>
@@ -1383,7 +1385,8 @@
         <p class="tier-desc">
           Qwen3-0.6B on CPU (port 8001) takes the raw slug and makes it flow
           naturally — without re-selecting or hallucinating new elements.
-          Adds rhythm and precision without creative drift.
+          Temperature and token budget scale to model size; small models (&lt;3 B)
+          run three candidates and the most specific one wins.
         </p>
         <span class="tier-badge enhanced">Qwen3-0.6B on CPU</span>
       </div>

@@ -1,3 +1,34 @@
+tt-local-generator (0.3.3) noble; urgency=medium
+
+  * prompt engine: six structural slug templates rotate the syntactic shape
+    of every algorithmically-generated video/SkyReels prompt so the LLM
+    receives different sentence patterns on each call.
+  * prompt engine: UNEXPECTED_JUXTAPOSITIONS word bank (24 entries) injected
+    at 12 % probability as a sixth slot — surreal modifiers the LLM cannot
+    remove without violating its "keep every element" instruction.
+  * prompt engine: adaptive LLM sampling — temperature, top_p, and max_tokens
+    scale to model size (0.6 B → temp 1.05; 7-8 B → 0.85; 13-14 B → 0.75;
+    30 B+ → 0.65); small models (<3 B) run n=3 candidates and the one with
+    the highest content-word specificity score is selected.
+  * prompt engine: anti-repetition sliding window (last 20 slugs); slugs with
+    Jaccard similarity ≥ 0.35 against any recent slug are retried up to 5 times
+    before accepting the least-similar candidate.
+  * prompt engine: Markov state_size lowered 2 → 1 on the 498-line corpus,
+    producing genuinely wild sentence-level recombinations instead of near-
+    verbatim replay.
+  * artgen: circuit generator now defaults --circuit-style to random, cycling
+    through all diagram styles on each generation.
+  * artgen/ansi: _normalize_grid no longer strips trailing blank rows that fall
+    within the target canvas height — BBS void zones (rows 1-2, 18-20) are
+    intentional and must be preserved.
+  * settings: animatediff_frames preference added (default 8); Preferences
+    dialog exposes it with a SpinButton; replaces the hardcoded frames=8.
+  * tests: AnimateDiffGenerationWorker covered (hardware failure, subprocess
+    failure, happy path, cancellation); test_prompt_client updated to use
+    urllib.request mocking throughout.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 23 May 2026 10:00:00 -0700
+
 tt-local-generator (0.3.2) noble; urgency=medium
 
   * artgen: ANSI generation rewritten as a 3-pass pipeline — ASCII structure
