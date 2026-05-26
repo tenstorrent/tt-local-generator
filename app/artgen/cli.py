@@ -145,7 +145,7 @@ def _cmd_animatediff(args) -> None:
             continue
 
         # Thumbnail
-        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".jpg")
         make_gif_thumbnail(out_path, thumb_path)
 
         # Register in media store so GUI picks it up immediately

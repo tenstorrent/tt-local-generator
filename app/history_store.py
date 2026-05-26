@@ -159,20 +159,25 @@ class GenerationRecord:
         negative_prompt: str,
         num_inference_steps: int,
         seed: int,
+        video_path: str = "",
+        thumbnail_path: str = "",
         duration_s: float = 0.0,
         model: str = "",
     ) -> "GenerationRecord":
-        """Create a new AnimateDiff record with media_type='animatediff' and .gif extension."""
+        """Create a new AnimateDiff record with media_type='animatediff' and .gif extension.
+
+        video_path and thumbnail_path must be the paths already used by the caller so
+        the record stays consistent with the files on disk.
+        """
         ts = datetime.now(timezone.utc)
-        ts_str = ts.strftime("%Y%m%d_%H%M%S")
         return cls(
             id=job_id,
             prompt=prompt,
             negative_prompt=negative_prompt,
             num_inference_steps=num_inference_steps,
             seed=seed,
-            video_path=str(VIDEOS_DIR / f"{ts_str}_{job_id[:8]}.gif"),
-            thumbnail_path=str(THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"),
+            video_path=video_path,
+            thumbnail_path=thumbnail_path,
             created_at=ts.isoformat(),
             duration_s=duration_s,
             media_type="animatediff",

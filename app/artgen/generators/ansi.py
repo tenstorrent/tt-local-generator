@@ -36,7 +36,7 @@ _STYLE_HINTS = {
     "portrait":  "Centred subject with strong silhouette.  Symmetric or near-symmetric.",
     "logo":      "Bold shape or icon.  Simple high-contrast geometric treatment.",
     "scene":     "Foreground / midground / background layers.  Suggest depth and lighting.",
-    "bbs":       "BBS splash screen.  Dark void background, neon-on-black central icon, 40×20.",
+    "bbs":       "BBS splash screen.  Dark void background, neon-on-black central icon, 80×20.",
 }
 
 # ── Color guidance paragraphs (pass 3) ───────────────────────────────────────
@@ -259,7 +259,7 @@ class AnsiGenerator(ArtGenerator):
         )
         parser.add_argument(
             "--width", type=int, default=None, metavar="COLS",
-            help="Width in columns (default: 40)",
+            help="Width in columns (default: 80 for bbs style, 40 for all others)",
         )
         parser.add_argument(
             "--colors", choices=["256", "16"], default="256",
@@ -283,7 +283,7 @@ class AnsiGenerator(ArtGenerator):
     def build_prompt(self, args) -> str:
         """Return the pass-1 ASCII structure prompt (used by --simulate)."""
         style = getattr(args, "ansi_style", "scene")
-        width = getattr(args, "width", None) or 40
+        width = getattr(args, "width", None) or (80 if style == "bbs" else 40)
         height = 20 if style == "bbs" else max(12, width // 2)
         return _build_ascii_prompt(
             subject=getattr(args, "subject", "a mountain at sunset"),
@@ -300,7 +300,7 @@ class AnsiGenerator(ArtGenerator):
         subject    = getattr(args, "subject", "a mountain at sunset")
         board_name = getattr(args, "board_name", "")
         tagline    = getattr(args, "tagline", "")
-        width      = getattr(args, "width", None) or 40
+        width      = getattr(args, "width", None) or (80 if style == "bbs" else 40)
         height     = 20 if style == "bbs" else max(12, width // 2)
 
         # Pass 1 — ASCII composition

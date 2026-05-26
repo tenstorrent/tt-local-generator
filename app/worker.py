@@ -839,6 +839,8 @@ class AnimateDiffGenerationWorker:
             negative_prompt=self._negative_prompt,
             num_inference_steps=self._steps,
             seed=self._seed,
+            video_path=str(out_path),
+            thumbnail_path=str(thumb_path),
             duration_s=round(duration, 1),
             model=self._model,
         )

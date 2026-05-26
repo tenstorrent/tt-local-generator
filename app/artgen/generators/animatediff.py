@@ -17,7 +17,9 @@ Phase 2.5 architecture (generate_blackhole_v2.py):
   - VAE decode on CPU (TTNN VAE conv_out OOMs on Blackhole due to L1 grid mismatch)
 
 Hardware requirement: Blackhole device (P100/P150/P300c/QB2). No CPU fallback.
-Script location: ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py
+Script resolution order:
+  1. app/animatediff/examples/generate_blackhole_v2.py  (bundled in this repo)
+  2. ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py  (dev fallback)
 """
 
 from __future__ import annotations

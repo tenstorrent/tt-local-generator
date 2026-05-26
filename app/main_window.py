@@ -7496,8 +7496,10 @@ class MainWindow(Gtk.ApplicationWindow):
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
             if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
                 self._hw_statusbar.update_server(ready, dot_text)
-            # Always update the capability dashboard row regardless of tab
-            self._hw_statusbar.update_capability(cap, ready, display_model or "")
+            # Update the capability dashboard row, but never let port-8000 results
+            # overwrite the artgen row — that row is owned by _on_artgen_health_result.
+            if cap != "artgen":
+                self._hw_statusbar.update_capability(cap, ready, display_model or "")
 
             if ready:
                 # Stop tailing the Docker log — server is confirmed up
