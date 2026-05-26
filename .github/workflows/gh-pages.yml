@@ -28,6 +28,8 @@ jobs:
           cp docs/index.html _site/
           cp -r assets _site/assets
           cp app/assets/tenstorrent.png _site/assets/tenstorrent.png
+          # Merge docs/assets/ into _site/assets/ (SVGs, GIFs, artgen showcase images)
+          cp -r docs/assets/. _site/assets/
           mkdir -p _site/motion_clips
           cp -r app/assets/motion_clips/gestures   _site/motion_clips/
           cp -r app/assets/motion_clips/locomotion _site/motion_clips/
