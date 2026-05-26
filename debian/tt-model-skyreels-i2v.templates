@@ -1,0 +1,16 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for SkyReels-V2-I2V-14B)
+ The SkyReels-V2-I2V-14B-540P model (~58 GB) is publicly available on
+ HuggingFace without a license gate.
+ .
+ Note: this model uses the Wan2.2-T2V-A14B-Diffusers checkpoint for its
+ VAE and T5 text encoder. The tt-model-wan2-t2v package must also be
+ installed (it is a declared dependency and will be installed automatically).
+ .
+ A HuggingFace token can be provided to avoid API rate limits during
+ download. Leave blank to download anonymously.
+ .
+ Your token is used once and immediately discarded — it is not stored by
+ this package. To skip providing a token, just press Enter.

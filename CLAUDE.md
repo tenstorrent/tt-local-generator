@@ -1,5 +1,44 @@
 # tt-local-generator — developer notes
 
+## ANSI art — 3-pass pipeline
+
+`AnsiGenerator` in `app/artgen/generators/ansi.py` overrides `generate_artifact`
+to run three sequential LLM calls instead of one. This is the first implementation
+of the multi-pass remix pattern that will be generalised in remix-mode.
+
+**Why three passes:** A single 40×20 canvas already asks the model to manage 800
+decisions. Planning spatial composition and color simultaneously causes models to
+output palette strips instead of imagery — horizontal bands of one color per zone.
+Separating concerns gives each pass a task the model handles reliably.
+
+**Pass flow:**
+
+1. `_build_ascii_prompt()` → `call_fn(..., max_tokens=1024)` → `_normalize_grid()`
+   - Plain ASCII chars only; no color, no block chars
+   - Style-specific spatial hints (BBS: void rows top/bottom, neon subject center;
+     landscape: sky top / terrain bottom; scene: foreground/midground/background)
+
+2. `_build_refine_prompt(ascii_art)` → `call_fn(..., max_tokens=1024)` → `_normalize_grid()`
+   - Replaces dense chars with `█ ▀ ▄ ▌ ▐ ░ ▒ ▓`; exact layout preserved
+   - `_normalize_grid` strips think-blocks, fences, pads/truncates to exact width×height
+
+3. `_build_colorize_prompt(block_art)` → `call_fn(..., max_tokens=8192)`
+   - Wraps every character as `\033[38;5;Nm█` (foreground + block char)
+   - BBS color guide: neon-on-void (`_COLOR_GUIDE_BBS`); scene/landscape: `_COLOR_GUIDE_SCENE`
+   - Space chars use `\033[38;5;232m\033[0m` (near-black foreground, remain invisible)
+
+**`generate_artifact` hook:** `ArtGenerator` base class defines a single-pass default
+(`build_prompt` → `call_fn` → `parse_output` → `post_process`). Override `generate_artifact`
+to implement multi-pass. The `call_fn` closure is built by `_make_call_fn` in `cli.py`
+and by the artgen panel; it accepts `max_tokens=` per-call so each pass can have its own
+token budget.
+
+**`--simulate`:** `build_prompt()` returns the pass-1 ASCII prompt, so dry-run still works.
+
+**`--ansi-style bbs`:** BBS canvas is fixed at 40×20. Color guide specifies electric cyan
+(51, 87), toxic green (46, 82), hot magenta (201, 199), gold (226, 220). Zone rules
+constrain rows 1-2 and 18-20 to near-black void (232–234), rows 3-17 to the neon subject.
+
 ## Version discipline
 
 **Always increment the version when landing changes.** The version in `VERSION`

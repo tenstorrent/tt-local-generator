@@ -23,7 +23,8 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("WebKit", "6.0")
-from gi.repository import Gio, GLib, Gtk, Pango, WebKit
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -285,10 +286,16 @@ _ANSI_PAL = _build_ansi_pal()
 def _ansi_to_html(text: str) -> str:
     """
     Convert ANSI escape sequences to a full-viewport CSS-grid HTML document.
-    Each pixel cell becomes a <div> coloured by its background colour; the
-    grid fills 100vw × 100vh so the art always fills the entire detail view.
-    Handles: SGR 0 (reset), 40-47/100-107 (8-colour bg), 48;5;N (256-colour),
-    48;2;R;G;B (truecolour).
+    Each pixel cell becomes a <div> coloured by its pixel colour; the grid
+    fills 100vw × 100vh so the art always fills the entire detail view.
+
+    Handles both pixel formats:
+      • Foreground+block: \\033[38;5;Nm█  (current format — uses fg colour)
+      • Background+space: \\033[48;5;Nm   (legacy format — uses bg colour)
+
+    SGR codes handled: 0 (reset), 30-37/90-97 (8-colour fg),
+    38;5;N/38;2;R;G;B (256/truecolour fg), 40-47/100-107 (8-colour bg),
+    48;5;N/48;2;R;G;B (256/truecolour bg).
     """
     import re
 
@@ -299,6 +306,7 @@ def _ansi_to_html(text: str) -> str:
 
     DEFAULT = "#000000"
     bg = DEFAULT
+    fg = DEFAULT
     grid: list[list[str]] = [[]]
 
     i = 0
@@ -324,6 +332,22 @@ def _ansi_to_html(text: str) -> str:
                     v = nums[k]
                     if v == 0:
                         bg = DEFAULT
+                        fg = DEFAULT
+                    elif 30 <= v <= 37:
+                        fg = _ANSI_PAL[v - 30]
+                    elif 90 <= v <= 97:
+                        fg = _ANSI_PAL[v - 90 + 8]
+                    elif v == 38:
+                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
+                            fg = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
+                            k += 2
+                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
+                            fg = "#{:02x}{:02x}{:02x}".format(
+                                max(0, min(255, nums[k + 2])),
+                                max(0, min(255, nums[k + 3])),
+                                max(0, min(255, nums[k + 4])),
+                            )
+                            k += 4
                     elif 40 <= v <= 47:
                         bg = _ANSI_PAL[v - 40]
                     elif 100 <= v <= 107:
@@ -344,11 +368,18 @@ def _ansi_to_html(text: str) -> str:
         elif ch == "\n":
             grid.append([])
             bg = DEFAULT
+            fg = DEFAULT
             i += 1
         elif ch == "\r":
             i += 1
         else:
-            grid[-1].append(bg)
+            # █ (U+2588): foreground+block format — use fg as the pixel colour.
+            # Space: background-only format — use bg.
+            # Other printable chars: treat as block, use fg.
+            if ch == " ":
+                grid[-1].append(bg)
+            else:
+                grid[-1].append(fg)
             i += 1
 
     # Drop empty trailing rows
@@ -439,7 +470,7 @@ class ArtgenDetail(Gtk.Box):
         self._art_stack.set_hexpand(True)
         self._art_stack.set_vexpand(True)
 
-        # SVG
+        # SVG / static image
         svg_scroll = Gtk.ScrolledWindow()
         svg_scroll.set_hexpand(True)
         svg_scroll.set_vexpand(True)
@@ -449,6 +480,19 @@ class ArtgenDetail(Gtk.Box):
         self._svg_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
         svg_scroll.set_child(self._svg_pic)
         self._art_stack.add_named(svg_scroll, "svg")
+
+        # Animated GIF — GdkPixbufAnimationIter drives frames; Gtk.Image.set_from_animation
+        # does not exist in GTK 4.14
+        gif_scroll = Gtk.ScrolledWindow()
+        gif_scroll.set_hexpand(True)
+        gif_scroll.set_vexpand(True)
+        self._gif_pic = Gtk.Picture()
+        self._gif_pic.set_hexpand(True)
+        self._gif_pic.set_vexpand(True)
+        self._gif_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
+        gif_scroll.set_child(self._gif_pic)
+        self._art_stack.add_named(gif_scroll, "gif")
+        self._gif_timer_id: int | None = None
 
         # Plain text fallback (kept for any edge cases)
         text_scroll = Gtk.ScrolledWindow()
@@ -501,6 +545,25 @@ class ArtgenDetail(Gtk.Box):
         self._params_lbl.set_selectable(True)
         sidebar.append(self._params_lbl)
 
+        # Prompt display — shown when rec.prompt is non-empty
+        self._prompt_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._prompt_sep.set_margin_top(4)
+        self._prompt_sep.set_margin_bottom(4)
+        sidebar.append(self._prompt_sep)
+
+        prompt_hdr = Gtk.Label(label="Prompt")
+        prompt_hdr.set_xalign(0)
+        prompt_hdr.add_css_class("caption-heading")
+        sidebar.append(prompt_hdr)
+        self._prompt_hdr = prompt_hdr
+
+        self._prompt_lbl = Gtk.Label(label="")
+        self._prompt_lbl.set_xalign(0)
+        self._prompt_lbl.set_wrap(True)
+        self._prompt_lbl.set_selectable(True)
+        self._prompt_lbl.add_css_class("muted")
+        sidebar.append(self._prompt_lbl)
+
         # Star toggle
         self._star_btn = Gtk.ToggleButton(label="☆  Star")
         self._star_btn.connect("toggled", self._on_star_toggled)
@@ -550,6 +613,9 @@ class ArtgenDetail(Gtk.Box):
     # ── Rendering ─────────────────────────────────────────────────────────────
 
     def _render(self) -> None:
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
         if not self._records:
             return
         rec = self._records[self._idx]
@@ -570,11 +636,21 @@ class ArtgenDetail(Gtk.Box):
             f"{fmt_local_12h(rec.created_at)}{gen_str}\n"
             f"model: {rec.model_id or '—'}"
         )
+        _PARAMS_SKIP = {"generation_seconds", "prompt"}
         param_lines = "\n".join(
             f"{k}: {v}" for k, v in p.items()
-            if k not in ("generation_seconds",) and isinstance(v, (str, int, float, bool))
+            if k not in _PARAMS_SKIP and isinstance(v, (str, int, float, bool))
         )
         self._params_lbl.set_label(param_lines)
+
+        # Prompt — prefer rec.prompt; fall back to params["prompt"] for older records
+        prompt_text = rec.prompt or p.get("prompt", "")
+        has_prompt = bool(prompt_text and prompt_text.strip())
+        self._prompt_sep.set_visible(has_prompt)
+        self._prompt_hdr.set_visible(has_prompt)
+        self._prompt_lbl.set_visible(has_prompt)
+        if has_prompt:
+            self._prompt_lbl.set_label(prompt_text.strip())
 
         self._star_btn.handler_block_by_func(self._on_star_toggled)
         self._star_btn.set_active(bool(rec.starred))
@@ -590,7 +666,10 @@ class ArtgenDetail(Gtk.Box):
         doc_title = _derive_title(gen_type, p)
         verse_mode = gen_type == "verse"
 
-        if ext == ".svg" and fp.exists():
+        if ext == ".gif" and fp.exists():
+            self._animate_gif(self._gif_pic, str(fp))
+            self._art_stack.set_visible_child_name("gif")
+        elif ext == ".svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
         elif ext == ".ans":
@@ -610,6 +689,40 @@ class ArtgenDetail(Gtk.Box):
             html = _md_to_html(raw, title=doc_title, verse_mode=verse_mode)
             self._webview.load_html(html, "about:blank")
             self._art_stack.set_visible_child_name("reading")
+
+    def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
+        """Drive an animated GIF on a Gtk.Picture via GdkPixbufAnimationIter.
+
+        Cancels any running animation before starting the new one.
+        """
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+        except Exception:
+            return
+
+        if anim.is_static_image():
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            return
+
+        it = anim.get_iter(None)
+
+        def tick() -> bool:
+            it.advance(None)
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+            delay = it.get_delay_time()
+            if delay < 0:
+                self._gif_timer_id = None
+                return GLib.SOURCE_REMOVE
+            self._gif_timer_id = GLib.timeout_add(max(delay, 10), tick)
+            return GLib.SOURCE_REMOVE
+
+        pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+        delay = max(it.get_delay_time(), 10)
+        self._gif_timer_id = GLib.timeout_add(delay, tick)
 
     # ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -639,6 +752,7 @@ class ArtgenDetail(Gtk.Box):
     def _on_delete(self, _btn) -> None:
         if not self._records:
             return
+        from time_utils import fmt_local_date
         rec = self._records[self._idx]
         dialog = Gtk.AlertDialog()
         dialog.set_message("Delete this artifact?")

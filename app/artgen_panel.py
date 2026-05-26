@@ -28,7 +28,8 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gio, GLib, Gtk, Pango
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 _WEBKIT_OK = False
 try:
@@ -108,13 +109,18 @@ class ArtgenPanel(Gtk.Box):
     Drop into a Gtk.Stack as the named child "artgen".
     """
 
+    # Generators hidden from the artgen picker.  AnimateDiff is excluded here
+    # because it prompts and plays back like a video (not generative art) and
+    # now lives in the Video tab as a first-class generation mode.  Historical
+    # artgen MediaRecords with generator_type="animatediff" still display in the
+    # gallery; only the picker entry is removed.
+    _HIDDEN_GENERATORS: frozenset = frozenset({"animatediff"})
+
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_use_as_seed: "Optional[Callable[['MediaRecord'], None]]" = None
         self._generating: bool = False
         self._gen_queue: deque = deque()  # (gen_name, args) tuples pending manual generation
-        self._mosaic_timer_id: int | None = None
-        self._mosaic_paths: list[str] = []
         self._last_out_path: Path | None = None
         self._tmp_svg: Path | None = None
         self._llm_timer_id: int | None = None
@@ -124,7 +130,6 @@ class ArtgenPanel(Gtk.Box):
         self._auto_gen_timer_id: int | None = None
         self._auto_gen_countdown: float = 0.0
         self._auto_gen_error_streak: int = 0
-        self._preview_rec: "MediaRecord | None" = None
         self._build()
         # Start background health polling every 5 seconds.
         GLib.timeout_add_seconds(5, self._poll_health)
@@ -142,36 +147,35 @@ class ArtgenPanel(Gtk.Box):
         nav = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         nav.add_css_class("artgen-subnav")
 
-        self._create_tab_btn = Gtk.ToggleButton(label="✦ Create")
-        self._create_tab_btn.set_active(True)
-        self._create_tab_btn.add_css_class("artgen-subnav-btn")
-        self._create_tab_btn.connect("toggled", self._on_tab_toggled, "create")
-
         self._gallery_tab_btn = Gtk.ToggleButton(label="▦ Gallery")
+        self._gallery_tab_btn.set_active(True)
         self._gallery_tab_btn.add_css_class("artgen-subnav-btn")
         self._gallery_tab_btn.connect("toggled", self._on_tab_toggled, "gallery")
-        self._gallery_tab_btn.set_group(self._create_tab_btn)
 
         self._watch_tab_btn = Gtk.ToggleButton(label="▶ Watch")
         self._watch_tab_btn.add_css_class("artgen-subnav-btn")
         self._watch_tab_btn.connect("toggled", self._on_tab_toggled, "watch")
-        self._watch_tab_btn.set_group(self._create_tab_btn)
+        self._watch_tab_btn.set_group(self._gallery_tab_btn)
 
-        nav.append(self._create_tab_btn)
         nav.append(self._gallery_tab_btn)
         nav.append(self._watch_tab_btn)
         self.append(nav)
         self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        # ── Sub-tab stack ─────────────────────────────────────────────────────
+        # ── Body: permanent create sidebar (left) + content stack (right) ─────
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        body.set_hexpand(True)
+        body.set_vexpand(True)
+
+        sidebar = self._build_create_sidebar()
+        body.append(sidebar)
+        body.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+
         self._sub_stack = Gtk.Stack()
         self._sub_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._sub_stack.set_transition_duration(120)
         self._sub_stack.set_hexpand(True)
         self._sub_stack.set_vexpand(True)
-
-        create_pane = self._build_create_pane()
-        self._sub_stack.add_named(create_pane, "create")
 
         self._gallery = ArtgenGallery()
         self._gallery.on_card_activated = self._on_gallery_card_activated
@@ -180,7 +184,6 @@ class ArtgenPanel(Gtk.Box):
         self._gallery.on_use_as_seed = self._on_use_as_seed
         self._sub_stack.add_named(self._gallery, "gallery")
 
-        # Detail view navigated to from gallery (not a top-level tab button)
         self._detail = ArtgenDetail()
         self._detail.on_back = self._on_detail_back
         self._detail.on_deleted = self._on_detail_deleted
@@ -191,16 +194,13 @@ class ArtgenPanel(Gtk.Box):
         self._watch.on_exit = self._on_watch_exit
         self._sub_stack.add_named(self._watch, "watch")
 
-        self._sub_stack.set_visible_child_name("create")
-        self.append(self._sub_stack)
+        self._sub_stack.set_visible_child_name("gallery")
+        self._gallery.refresh()
+        body.append(self._sub_stack)
+        self.append(body)
 
-    def _build_create_pane(self) -> Gtk.Box:
-        """Two-column Create tab: controls (left 240px) + live artifact preview (right)."""
-        pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        pane.set_hexpand(True)
-        pane.set_vexpand(True)
-
-        # ── Left: controls ────────────────────────────────────────────────────
+    def _build_create_sidebar(self) -> Gtk.Box:
+        """Permanent create controls sidebar (left column, always visible)."""
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         left_box.set_size_request(240, -1)
         left_box.set_hexpand(False)
@@ -212,7 +212,7 @@ class ArtgenPanel(Gtk.Box):
         type_lbl = _section_lbl("type")
         type_lbl.set_size_request(44, -1)
         type_bar.append(type_lbl)
-        gen_names = artgen.all_names()
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
         self._type_dd = _dd(gen_names, "landscape")
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
@@ -306,120 +306,7 @@ class ArtgenPanel(Gtk.Box):
         # Auto-generate collapsible section
         self._build_auto_section(left_box)
 
-        pane.append(left_box)
-        pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-
-        # ── Right: live artifact preview ───────────────────────────────────────
-        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        right_box.set_hexpand(True)
-        right_box.set_vexpand(True)
-
-        self._preview_stack = Gtk.Stack()
-        self._preview_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self._preview_stack.set_transition_duration(220)
-        self._preview_stack.set_hexpand(True)
-        self._preview_stack.set_vexpand(True)
-
-        # Empty state
-        empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        empty_box.set_halign(Gtk.Align.CENTER)
-        empty_box.set_valign(Gtk.Align.CENTER)
-        empty_hint = Gtk.Label(label="✦")
-        empty_hint.add_css_class("artgen-empty-hint")
-        empty_sub = Gtk.Label(label="Your generations will appear here")
-        empty_sub.add_css_class("artgen-empty-sub")
-        empty_box.append(empty_hint)
-        empty_box.append(empty_sub)
-        self._preview_stack.add_named(empty_box, "empty")
-
-        # Generating state — mosaic shuffle of library thumbnails
-        mosaic_overlay = Gtk.Overlay()
-        mosaic_overlay.set_hexpand(True)
-        mosaic_overlay.set_vexpand(True)
-
-        # 4×4 grid of Picture tiles
-        self._mosaic_grid = Gtk.Grid()
-        self._mosaic_grid.set_hexpand(True)
-        self._mosaic_grid.set_vexpand(True)
-        self._mosaic_grid.set_row_homogeneous(True)
-        self._mosaic_grid.set_column_homogeneous(True)
-        self._mosaic_grid.add_css_class("mosaic-grid")
-
-        _COLS, _ROWS = 4, 4
-        self._mosaic_pics: list[Gtk.Picture] = []
-        for row in range(_ROWS):
-            for col in range(_COLS):
-                pic = Gtk.Picture()
-                pic.set_hexpand(True)
-                pic.set_vexpand(True)
-                pic.set_content_fit(Gtk.ContentFit.COVER)
-                pic.add_css_class("mosaic-tile")
-                self._mosaic_grid.attach(pic, col, row, 1, 1)
-                self._mosaic_pics.append(pic)
-
-        mosaic_overlay.set_child(self._mosaic_grid)
-
-        # Status strip — floats at the bottom of the mosaic
-        status_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        status_strip.add_css_class("mosaic-status-strip")
-        status_strip.set_valign(Gtk.Align.END)
-        status_strip.set_hexpand(True)
-        status_strip.set_margin_start(0)
-        status_strip.set_margin_end(0)
-        self._preview_gen_lbl = Gtk.Label(label="Generating…")
-        self._preview_gen_lbl.add_css_class("mosaic-status-lbl")
-        self._preview_gen_lbl.set_hexpand(True)
-        self._preview_gen_lbl.set_xalign(0.5)
-        status_strip.append(self._preview_gen_lbl)
-        mosaic_overlay.add_overlay(status_strip)
-
-        self._preview_stack.add_named(mosaic_overlay, "generating")
-
-        # SVG preview
-        svg_scroll = Gtk.ScrolledWindow()
-        svg_scroll.set_hexpand(True)
-        svg_scroll.set_vexpand(True)
-        self._preview_svg = Gtk.Picture()
-        self._preview_svg.set_hexpand(True)
-        self._preview_svg.set_vexpand(True)
-        self._preview_svg.set_content_fit(Gtk.ContentFit.CONTAIN)
-        svg_scroll.set_child(self._preview_svg)
-        self._preview_stack.add_named(svg_scroll, "svg")
-
-        # Reading preview (WebKit) — ANSI, text, palette
-        if _WEBKIT_OK:
-            self._preview_web = _WebKit.WebView()
-            self._preview_web.get_settings().set_enable_javascript(False)
-            self._preview_web.set_hexpand(True)
-            self._preview_web.set_vexpand(True)
-            self._preview_stack.add_named(self._preview_web, "reading")
-
-        right_box.append(self._preview_stack)
-        right_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-
-        # Action bar below preview
-        action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        action_bar.set_margin_start(12); action_bar.set_margin_end(12)
-        action_bar.set_margin_top(8); action_bar.set_margin_bottom(8)
-        self._preview_meta_lbl = Gtk.Label(label="")
-        self._preview_meta_lbl.set_hexpand(True)
-        self._preview_meta_lbl.set_xalign(0)
-        self._preview_meta_lbl.add_css_class("muted")
-        action_bar.append(self._preview_meta_lbl)
-        self._preview_again_btn = Gtk.Button(label="✦ Again")
-        self._preview_again_btn.add_css_class("artgen-inspire-btn")
-        self._preview_again_btn.set_sensitive(False)
-        self._preview_again_btn.connect("clicked", lambda _: self._on_generate_clicked(None))
-        action_bar.append(self._preview_again_btn)
-        self._preview_open_btn = Gtk.Button(label="→ Open")
-        self._preview_open_btn.set_sensitive(False)
-        self._preview_open_btn.connect("clicked", self._on_preview_open)
-        action_bar.append(self._preview_open_btn)
-        right_box.append(action_bar)
-
-        pane.append(right_box)
-        self._show_preview_latest()
-        return pane
+        return left_box
 
     # ── Per-type controls pages ───────────────────────────────────────────────
 
@@ -545,6 +432,44 @@ class ArtgenPanel(Gtk.Box):
             free_scroll.add_css_class("freeform-entry")
             box.append(hint)
             box.append(free_scroll)
+
+        elif name == "animatediff":
+            # Prompt row with inline inspire button
+            prompt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            self._ad_prompt = Gtk.Entry()
+            self._ad_prompt.set_hexpand(True)
+            self._ad_prompt.set_placeholder_text("describe the animation…")
+            self._ad_prompt.set_text(
+                "purple phosphor glow across distant mountains at 2am, retro CRT haze, cyan mist, cinematic"
+            )
+            inspire_btn = Gtk.Button(label="✦")
+            inspire_btn.add_css_class("artgen-inspire-btn")
+            inspire_btn.connect("clicked", lambda _: self._on_inspire("animatediff", self._ad_prompt))
+            prompt_row.append(self._ad_prompt)
+            prompt_row.append(inspire_btn)
+            self._ad_frames = _dd(["8", "16"], "8")
+            self._ad_steps = _spin(4, 50, 1, 25)
+            self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
+            self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
+            self._ad_temporal_alpha.set_digits(2)
+            box.append(_section_lbl("Prompt"))
+            box.append(prompt_row)
+            box.append(_row("Frames", self._ad_frames))
+            box.append(_row("Steps", self._ad_steps))
+            box.append(_row("Seed", self._ad_seed))
+            box.append(_row("Temporal α", self._ad_temporal_alpha))
+            hint = Gtk.Label(
+                label=(
+                    "Requires Blackhole hardware. ~2 min on P300C (8 frames × 25 steps).\n"
+                    "Temporal α: cross-frame coherence blend (0 = shared-noise only, 1 = full attention)."
+                )
+            )
+            hint.set_xalign(0)
+            hint.set_wrap(True)
+            hint.add_css_class("hint")
+            box.append(hint)
+            # No separate Theme Inspiration section — inspire is inline with prompt
+            return box
 
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         box.append(_section_lbl("Theme Inspiration"))
@@ -732,67 +657,17 @@ class ArtgenPanel(Gtk.Box):
             if "freeform" in params:
                 self._free_tv.get_buffer().set_text(params["freeform"])
 
-    # ── Preview pane helpers ──────────────────────────────────────────────────
-
-    def _show_preview_latest(self) -> None:
-        """Populate the preview pane with the most recent artgen record, if any."""
-        records = _media_store.query(media_type="artgen")
-        if records:
-            self._show_preview(records[0])
-        else:
-            self._preview_stack.set_visible_child_name("empty")
-
-    def _show_preview(self, rec: "MediaRecord") -> None:
-        """Render *rec* in the Create-pane preview and update the action bar."""
-        from artgen_detail import _md_to_html, _ansi_to_html, _palette_to_html, _derive_title
-        import json as _json
-
-        self._preview_rec = rec
-        self._preview_again_btn.set_sensitive(True)
-        self._preview_open_btn.set_sensitive(True)
-
-        p = rec.params_dict
-        gen_s = p.get("generation_seconds", "")
-        from time_utils import fmt_local_date
-        self._preview_meta_lbl.set_label(
-            f"{rec.generator_type}  ·  {fmt_local_date(rec.created_at)}"
-            + (f"  ·  {gen_s}s" if gen_s else "")
-        )
-
-        fp = Path(rec.file_path)
-        ext = fp.suffix.lower()
-
-        if ext == ".svg" and fp.exists():
-            self._preview_svg.set_file(Gio.File.new_for_path(str(fp)))
-            self._preview_stack.set_visible_child_name("svg")
-        elif _WEBKIT_OK:
-            raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
-            if ext == ".ans":
-                self._preview_web.load_html(_ansi_to_html(raw), "about:blank")
-            elif ext == ".json":
-                try:
-                    data = _json.loads(raw)
-                    html = _palette_to_html(data) if "colors" in data else _md_to_html(raw)
-                except Exception:
-                    html = _md_to_html(raw)
-                self._preview_web.load_html(html, "about:blank")
-            else:
-                title = _derive_title(rec.generator_type or "", p)
-                html = _md_to_html(raw, title=title, verse_mode=(rec.generator_type == "verse"))
-                self._preview_web.load_html(html, "about:blank")
-            self._preview_stack.set_visible_child_name("reading")
-        else:
-            self._preview_stack.set_visible_child_name("empty")
-
-    def _on_preview_open(self, _btn) -> None:
-        """Open the current preview record in the full detail view."""
-        if self._preview_rec is None:
-            return
-        records = _media_store.query(media_type="artgen")
-        self._detail_source = "create"
-        self._detail.set_back_label("← Create")
-        self._detail.show_record(self._preview_rec.id, records)
-        self._sub_stack.set_visible_child_name("detail")
+        elif gen_name == "animatediff":
+            if "prompt" in params:
+                self._ad_prompt.set_text(params["prompt"])
+            if "frames" in params:
+                self._set_dd(self._ad_frames, str(params["frames"]))
+            if "steps" in params:
+                self._ad_steps.set_value(int(params["steps"]))
+            if "seed" in params:
+                self._ad_seed.set_value(int(params["seed"]))
+            if "temporal_alpha" in params:
+                self._ad_temporal_alpha.set_value(float(params["temporal_alpha"]))
 
     # ── Signal handlers ───────────────────────────────────────────────────────
 
@@ -827,25 +702,43 @@ class ArtgenPanel(Gtk.Box):
         n = len(self._gen_queue)
         self._generating = True
         self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
-        self._set_status("Detecting model on port 8002…")
-        self._mosaic_start()
-        self._preview_gen_lbl.set_label("Generating…")
-        self._preview_stack.set_visible_child_name("generating")
+        self._set_status("Detecting model…")
         threading.Thread(
             target=self._run_generation,
             args=(gen_name, args),
             daemon=True,
         ).start()
 
+    # Map artgen generator names to prompt_client source types so the prompt
+    # engine pulls from the right word banks and LLM polishing style.
+    _INSPIRE_SOURCE = {
+        "animatediff": "animate",
+        "landscape":   "video",
+        "skyline":     "video",
+        "constellation": "video",
+        "verse":       "video",
+        "palette":     "video",
+        "ansi":        "image",
+        "circuit":     "image",
+        "geometric":   "image",
+        "freeform":    "video",
+    }
+
     def _on_inspire(self, gen_name: str, entry: Gtk.Entry) -> None:
         """Call prompt server in background; update entry on main thread."""
         seed = entry.get_text().strip()
         entry.set_sensitive(False)
+        source = self._INSPIRE_SOURCE.get(gen_name, "video")
 
         def _bg():
             try:
                 import prompt_client
-                result = prompt_client.generate_prompt(source="artgen", seed_text=seed)
+                # Use the best available LLM — artgen server (8002) if running,
+                # otherwise prompt-gen server (8001, Qwen3-0.6B).
+                best_url, _ = artgen.detect_artgen_endpoint()
+                if best_url:
+                    prompt_client.configure_llm_url(best_url)
+                result = prompt_client.generate_prompt(source=source, seed_text=seed)
             except Exception:
                 try:
                     from word_banks import THEMES
@@ -938,57 +831,73 @@ class ArtgenPanel(Gtk.Box):
 
         *args* must be pre-built on the main thread via _build_args() — GTK
         widgets cannot be accessed safely from a background thread.
+        AnimateDiff bypasses the LLM pipeline entirely and is handled separately.
         """
+        if gen_name == "animatediff":
+            try:
+                self._run_animatediff(args)
+            except Exception as e:
+                GLib.idle_add(self._finish_error, f"AnimateDiff error: {e}")
+            return
+
         try:
             gen = artgen.get(gen_name)
-            base_url = server_config.base_url("artgen")
 
-            model_id = artgen.detect_model(base_url + "/v1")
+            # Prefer the dedicated artgen LLM (port 8002); fall back to the
+            # prompt-gen server (port 8001, Qwen3-0.6B) so the tool works from
+            # day one and automatically upgrades once a bigger model is started.
+            base_url, model_id = artgen.detect_artgen_endpoint()
             if model_id is None:
                 GLib.idle_add(self._finish_error,
-                    f"No chat model detected at {base_url}/v1/models\n\n"
-                    "artgen needs a chat/text LLM on port 8002.\n"
-                    "Start one:\n"
-                    "  python3 app/prompt_server.py --port 8002\n"
-                    "  vllm serve <model> --port 8002\n\n"
-                    "Or override the port in Server Settings."
+                    "No LLM available for artgen generation.\n\n"
+                    "Start an artgen server (for best results):\n"
+                    "  tt-ctl start artgen-qwen3-8b\n\n"
+                    "Or start the prompt server for basic generation:\n"
+                    "  tt-ctl start prompt-server"
                 )
                 return
 
-            GLib.idle_add(self._set_status, f"[{model_id}] building prompt…")
+            GLib.idle_add(self._set_status, f"[{model_id}] generating…")
 
+            # prompt_summary is stored in the MediaRecord for display purposes.
+            # For multi-pass generators build_prompt() returns the first pass.
             try:
-                prompt = gen.build_prompt(args)
+                prompt_summary = gen.build_prompt(args)
             except ValueError as e:
                 GLib.idle_add(self._finish_error, f"Prompt error: {e}")
                 return
+
             t0 = time.monotonic()
             GLib.idle_add(self._begin_llm_timer, t0)
 
-            # Verse generator stashes a system prompt on args._verse_system
+            # Accumulate token usage across all LLM calls (multi-pass generators
+            # call call_fn more than once; single-pass generators call it once).
+            total_usage: dict = {"prompt_tokens": 0, "completion_tokens": 0}
+            call_index = [0]
+
+            # Verse generators stash a system prompt on args._verse_system.
             system_msg = getattr(args, "_verse_system", None)
-            try:
-                raw, usage = artgen.call_llm(
+
+            def call_fn(prompt, system=None, max_tokens=None):
+                call_index[0] += 1
+                raw_resp, usage = artgen.call_llm(
                     prompt, model_id, base_url + "/v1",
-                    max_tokens=getattr(args, "max_tokens", 4096),
-                    system=system_msg,
+                    max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
+                    system=system or system_msg,
                 )
+                for k in total_usage:
+                    total_usage[k] += usage.get(k, 0)
+                return raw_resp
+
+            try:
+                artifact = gen.generate_artifact(args, call_fn)
             except Exception as e:
                 GLib.idle_add(self._finish_error, f"LLM error: {e}")
                 return
 
             elapsed = time.monotonic() - t0
-            GLib.idle_add(self._set_status, "Parsing output…")
-
-            try:
-                artifact = gen.parse_output(raw, args)
-            except ValueError as e:
-                GLib.idle_add(self._finish_error,
-                    f"Parse error: {e}\n\nRaw output preview:\n{raw[:600]}"
-                )
-                return
-
-            artifact = gen.post_process(artifact, args)
+            usage = total_usage
+            prompt = prompt_summary
 
             # Save to artgen/ dir and record in MediaStore
             short_id = str(uuid.uuid4())[:8]
@@ -1035,6 +944,77 @@ class ArtgenPanel(Gtk.Box):
 
         except Exception as e:
             GLib.idle_add(self._finish_error, f"Unexpected error: {e}")
+
+    def _run_animatediff(self, args) -> None:
+        """Background thread: run generate_blackhole.py subprocess → GIF → MediaRecord."""
+        import os
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
+
+        GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
+
+        ok, hw_msg = check_hardware()
+        if not ok:
+            GLib.idle_add(self._finish_error,
+                f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
+            return
+
+        short_id = str(_uuid.uuid4())[:8]
+        out_path = make_artgen_path(short_id, ".gif")
+
+        GLib.idle_add(self._set_status, f"Starting AnimateDiff on Blackhole ({hw_msg})…")
+
+        t0 = time.monotonic()
+
+        def _on_progress(line: str) -> None:
+            GLib.idle_add(self._set_status, line[:80])
+
+        success, err = run_subprocess(
+            prompt=args.ad_prompt,
+            out_path=out_path,
+            frames=args.ad_frames,
+            steps=args.ad_steps,
+            seed=args.ad_seed,
+            temporal_alpha=args.ad_temporal_alpha,
+            on_progress=_on_progress,
+        )
+
+        if not success:
+            GLib.idle_add(self._finish_error, err)
+            return
+
+        elapsed_s = int(time.monotonic() - t0)
+
+        # Thumbnail: first frame of the GIF as PNG
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        make_gif_thumbnail(out_path, thumb_path)
+
+        params_d = {
+            "prompt": args.ad_prompt,
+            "frames": args.ad_frames,
+            "steps": args.ad_steps,
+            "seed": args.ad_seed,
+            "temporal_alpha": args.ad_temporal_alpha,
+            "generation_seconds": elapsed_s,
+        }
+        rec = MediaRecord(
+            id=str(_uuid.uuid4()),
+            media_type="artgen",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            file_path=str(out_path),
+            thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+            prompt=args.ad_prompt[:500],
+            model_id="animatediff-blackhole",
+            generator_type="animatediff",
+            params=json.dumps(params_d),
+            starred=0,
+        )
+        _media_store.add(rec)
+        _media_store.ensure_auto_playlists()
+
+        GLib.idle_add(self._finish_success, "", str(out_path), rec)
 
     def _build_args(self, gen_name: str) -> types.SimpleNamespace:
         """Build an argparse-Namespace-compatible object from the current UI state."""
@@ -1098,58 +1078,16 @@ class ArtgenPanel(Gtk.Box):
                 buf.get_start_iter(), buf.get_end_iter(), False
             )
 
+        elif gen_name == "animatediff":
+            args.ad_prompt = self._ad_prompt.get_text() or "purple phosphor glow across distant mountains at 2am"
+            args.ad_frames = int(_dd_val(self._ad_frames) or "8")
+            args.ad_steps = int(self._ad_steps.get_value())
+            args.ad_seed = int(self._ad_seed.get_value())
+            args.ad_temporal_alpha = round(self._ad_temporal_alpha.get_value(), 2)
+
         return args
 
     # ── LLM elapsed-time ticker (main-thread only) ────────────────────────────
-
-    # ── Mosaic shuffle — "generating" waiting screen ──────────────────────────
-
-    def _mosaic_start(self) -> None:
-        """Populate the tile grid from the library and begin the shuffle timer."""
-        # Gather all thumbnail paths across the entire library (artgen + video + image).
-        recs = _media_store.query()
-        paths = [r.thumbnail_path for r in recs
-                 if r.thumbnail_path and Path(r.thumbnail_path).exists()]
-        # Also accept SVG file_paths directly (artgen landscape/skyline/etc.)
-        for r in recs:
-            if r.file_path and r.file_path.endswith(".svg") and Path(r.file_path).exists():
-                paths.append(r.file_path)
-        self._mosaic_paths = paths
-
-        # Fill every cell with a random thumbnail immediately.
-        self._mosaic_fill_all()
-
-        # Shuffle 2 tiles every 700 ms for an ambient "things are happening" feel.
-        if self._mosaic_timer_id is None:
-            self._mosaic_timer_id = GLib.timeout_add(700, self._mosaic_tick)
-
-    def _mosaic_stop(self) -> None:
-        """Halt the shuffle timer and clear all tiles."""
-        if self._mosaic_timer_id is not None:
-            GLib.source_remove(self._mosaic_timer_id)
-            self._mosaic_timer_id = None
-
-    def _mosaic_fill_all(self) -> None:
-        if not self._mosaic_paths:
-            return
-        for pic in self._mosaic_pics:
-            self._mosaic_set_pic(pic, random.choice(self._mosaic_paths))
-
-    def _mosaic_tick(self) -> bool:
-        """Swap two random cells to new random thumbnails."""
-        if not self._mosaic_paths or not self._mosaic_pics:
-            return GLib.SOURCE_CONTINUE
-        for _ in range(2):
-            pic = random.choice(self._mosaic_pics)
-            self._mosaic_set_pic(pic, random.choice(self._mosaic_paths))
-        return GLib.SOURCE_CONTINUE
-
-    @staticmethod
-    def _mosaic_set_pic(pic: Gtk.Picture, path: str) -> None:
-        try:
-            pic.set_file(Gio.File.new_for_path(path))
-        except Exception:
-            pic.set_file(None)
 
     def _begin_llm_timer(self, t0: float) -> None:
         self._llm_t0 = t0
@@ -1184,13 +1122,12 @@ class ArtgenPanel(Gtk.Box):
             self._gallery.prepend_record(rec)
             if self._watch._records:
                 self._watch._records.insert(0, rec)
-            # Show the new artifact in the preview pane
-            self._mosaic_stop()
-            self._show_preview(rec)
         else:
             self._gallery.refresh()
-            self._mosaic_stop()
-            self._show_preview_latest()
+        # Switch to Gallery so the new item is immediately visible at the top.
+        self._gallery_tab_btn.set_active(True)
+        self._sub_stack.set_visible_child_name("gallery")
+        self._gallery.scroll_to_top()
 
         # Drain any manually queued generations before auto-scheduling the next one.
         self._drain_queue()
@@ -1203,12 +1140,6 @@ class ArtgenPanel(Gtk.Box):
         self._cancel_llm_timer()
         self._generating = False
         self._set_status(f"Error: {msg[:80]}")
-        # Return preview to whatever was showing before (or empty state)
-        self._mosaic_stop()
-        if self._preview_rec is not None:
-            self._show_preview(self._preview_rec)
-        else:
-            self._preview_stack.set_visible_child_name("empty")
         # Drain any manually queued generations first.
         self._drain_queue()
         if self._auto_gen and not self._generating:
@@ -1218,7 +1149,7 @@ class ArtgenPanel(Gtk.Box):
                 try:
                     dlg = Gtk.AlertDialog.new(
                         "Auto-generate stopped after 3 consecutive failures.\n"
-                        "Check that the artgen server is running on port 8002."
+                        "Check that a language model is running (tt-ctl start artgen-qwen3-8b or tt-ctl start prompt-server)."
                     )
                     dlg.show(self.get_root())
                 except AttributeError:
@@ -1247,7 +1178,6 @@ class ArtgenPanel(Gtk.Box):
 
     def _switch_tab(self, tab: str) -> None:
         if tab == "gallery":
-            self._create_tab_btn.set_active(False)
             self._gallery_tab_btn.set_active(True)
             self._gallery.refresh()
         self._sub_stack.set_visible_child_name(tab)
@@ -1263,28 +1193,16 @@ class ArtgenPanel(Gtk.Box):
         self._sub_stack.set_visible_child_name("detail")
 
     def _on_detail_back(self) -> None:
-        source = getattr(self, "_detail_source", "gallery")
-        if source == "create":
-            self._create_tab_btn.set_active(True)
-            self._sub_stack.set_visible_child_name("create")
-        else:
-            self._gallery_tab_btn.set_active(True)
-            self._sub_stack.set_visible_child_name("gallery")
+        self._gallery_tab_btn.set_active(True)
+        self._sub_stack.set_visible_child_name("gallery")
 
     def _on_gallery_card_deleted(self, media_id: str) -> None:
         """Called when a card is deleted via the gallery hover button."""
-        if self._preview_rec and self._preview_rec.id == media_id:
-            self._preview_rec = None
-            self._show_preview_latest()
         if self._watch._records:
             self._watch._records = [r for r in self._watch._records if r.id != media_id]
 
     def _on_detail_deleted(self, media_id: str) -> None:
         self._gallery.refresh()
-        # If the deleted record was in the preview, advance to the next one
-        if self._preview_rec and self._preview_rec.id == media_id:
-            self._preview_rec = None
-            self._show_preview_latest()
         # Remove from watch queue so the slideshow doesn't try to display it
         if self._watch._records:
             self._watch._records = [r for r in self._watch._records if r.id != media_id]
@@ -1350,10 +1268,14 @@ class ArtgenPanel(Gtk.Box):
         type_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         type_flow.set_column_spacing(4)
         type_flow.set_row_spacing(2)
+        # animatediff is now in the Video tab — exclude entirely from auto pool
+        _AUTO_OFF_BY_DEFAULT: set = set()
         self._auto_type_checks: dict[str, Gtk.CheckButton] = {}
         for gname in artgen.all_names():
+            if gname in self._HIDDEN_GENERATORS:
+                continue
             cb = Gtk.CheckButton.new_with_label(gname)
-            cb.set_active(True)
+            cb.set_active(gname not in _AUTO_OFF_BY_DEFAULT)
             cb.connect("toggled", self._on_auto_type_toggled)
             self._auto_type_checks[gname] = cb
             type_flow.append(cb)
@@ -1508,7 +1430,12 @@ class ArtgenPanel(Gtk.Box):
         """Background thread: call prompt_client; fall back to word bank."""
         theme = ""
         try:
-            from prompt_client import generate_prompt
+            from prompt_client import generate_prompt, configure_llm_url
+            # Use the best available LLM for richer inspiration; artgen server
+            # (8002) if running, otherwise prompt-gen server (8001, Qwen3-0.6B).
+            best_url, _ = artgen.detect_artgen_endpoint()
+            if best_url:
+                configure_llm_url(best_url)
             seed = mood_seed if mood_seed else ""
             theme = generate_prompt("artgen", seed_text=seed) or ""
         except Exception:
@@ -1532,7 +1459,7 @@ class ArtgenPanel(Gtk.Box):
             return
 
         # Types that accept free-form text from Inspire
-        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform"}
+        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff"}
         if gen_name == "verse":
             self._verse_theme.set_text(theme)
         elif gen_name == "palette":
@@ -1541,6 +1468,8 @@ class ArtgenPanel(Gtk.Box):
             self._ansi_subject.set_text(theme)
         elif gen_name == "freeform":
             self._free_tv.get_buffer().set_text(theme)
+        elif gen_name == "animatediff":
+            self._ad_prompt.set_text(theme)
         else:
             # Visual types: show the inspiration in the status bar
             self._set_status(f"Inspired: {theme[:60]}")
@@ -1550,10 +1479,7 @@ class ArtgenPanel(Gtk.Box):
         self._generating = True
         self._gen_btn.set_label("Generating…")
         if gen_name not in _TEXT_TYPES:
-            self._set_status("Detecting model on port 8002…")
-        self._mosaic_start()
-        self._preview_gen_lbl.set_label("Generating…")
-        self._preview_stack.set_visible_child_name("generating")
+            self._set_status("Detecting model…")
         threading.Thread(
             target=self._run_generation,
             args=(gen_name, args),
@@ -1662,5 +1588,11 @@ class ArtgenPanel(Gtk.Box):
         elif gen_name == "palette":
             self._pal_count.set_value(random.randint(4, 6))
             # mood written by _auto_fire_with_theme after Inspire
+
+        elif gen_name == "animatediff":
+            self._set_dd(self._ad_frames, "8")
+            self._ad_steps.set_value(25)
+            self._ad_seed.set_value(random.randint(0, 9999))
+            # prompt written by _auto_fire_with_theme after Inspire
 
         # freeform: text written entirely by _auto_fire_with_theme after Inspire

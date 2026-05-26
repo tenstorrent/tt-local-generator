@@ -151,6 +151,39 @@ class GenerationRecord:
             model=model,
         )
 
+    @classmethod
+    def new_animatediff(
+        cls,
+        job_id: str,
+        prompt: str,
+        negative_prompt: str,
+        num_inference_steps: int,
+        seed: int,
+        video_path: str = "",
+        thumbnail_path: str = "",
+        duration_s: float = 0.0,
+        model: str = "",
+    ) -> "GenerationRecord":
+        """Create a new AnimateDiff record with media_type='animatediff' and .gif extension.
+
+        video_path and thumbnail_path must be the paths already used by the caller so
+        the record stays consistent with the files on disk.
+        """
+        ts = datetime.now(timezone.utc)
+        return cls(
+            id=job_id,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            video_path=video_path,
+            thumbnail_path=thumbnail_path,
+            created_at=ts.isoformat(),
+            duration_s=duration_s,
+            media_type="animatediff",
+            model=model,
+        )
+
     @property
     def display_time(self) -> str:
         """Human-readable creation time in local 12-hour format, e.g. '3:42 PM'."""
@@ -255,10 +288,8 @@ class HistoryStore:
 
     def __len__(self) -> int:
         from media_store import media_store as _ms
-        # COUNT(*) for each non-artgen type — avoids materialising all records.
-        total = _ms.count()
-        artgen = _ms.count(media_type="artgen")
-        return total - artgen
+        # Single atomic query — avoids the race between two separate COUNTs.
+        return _ms.count_non_artgen()
 
     # ── Queue persistence (unchanged — kept in JSON) ───────────────────────────
 

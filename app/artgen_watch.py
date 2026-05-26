@@ -24,9 +24,9 @@ try:
     _WEBKIT_OK = True
 except Exception:
     _WEBKIT_OK = False
-from gi.repository import Gdk, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
-from artgen_detail import _ansi_to_html
+from artgen_detail import _ansi_to_html, _palette_to_html, _md_to_html, _derive_title
 from media_store import media_store as _ms, MediaRecord
 
 _DWELL_DEFAULT = 10   # seconds between auto-advances
@@ -46,6 +46,7 @@ class ArtgenWatch(Gtk.Overlay):
         self._countdown: int = _DWELL_DEFAULT
         self._advance_timer: int | None = None
         self._countdown_timer: int | None = None
+        self._gif_timer_id: int | None = None
         self._overlay_visible: bool = True
         self._hide_timer: int | None = None
         self._build()
@@ -214,6 +215,7 @@ class ArtgenWatch(Gtk.Overlay):
 
     def stop(self) -> None:
         self._stop_timers()
+        self._stop_gif_timer()
 
     # ── Render ────────────────────────────────────────────────────────────────
 
@@ -238,18 +240,70 @@ class ArtgenWatch(Gtk.Overlay):
 
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
-        if ext == ".svg" and fp.exists():
+        self._stop_gif_timer()
+        if ext == ".gif" and fp.exists():
+            self._animate_gif(self._svg_pic, str(fp))
+            self._art_stack.set_visible_child_name("svg")
+        elif ext in (".svg", ".png", ".jpg", ".jpeg") and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
-        elif ext == ".ans" and fp.exists() and self._ansi_web is not None:
+        elif self._ansi_web is not None and fp.exists():
+            # All text-based types rendered via WebKit for rich display.
             raw = fp.read_text(encoding="utf-8", errors="replace")
-            html = _ansi_to_html(raw)
-            self._ansi_web.load_html(html, "file:///")
+            if ext == ".ans":
+                html = _ansi_to_html(raw)
+            elif ext == ".json":
+                import json as _json
+                try:
+                    data = _json.loads(raw)
+                    html = _palette_to_html(data) if "colors" in data else _md_to_html(raw)
+                except Exception:
+                    html = _md_to_html(raw)
+            else:
+                # .txt — verse, freeform, landscape lore, etc.
+                verse_mode = (rec.generator_type == "verse")
+                title = _derive_title(rec.generator_type or "", p)
+                html = _md_to_html(raw, title=title, verse_mode=verse_mode)
+            self._ansi_web.load_html(html, "about:blank")
             self._art_stack.set_visible_child_name("ansi")
         else:
+            # WebKit unavailable — plain text fallback.
             text = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
             self._text_view.get_buffer().set_text(text)
             self._art_stack.set_visible_child_name("text")
+
+    def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
+        """Drive an animated GIF on a Gtk.Picture using GdkPixbufAnimationIter.
+
+        Cancels any in-progress timer before starting a new loop so switching
+        records doesn't leave orphaned timers running.
+        """
+        self._stop_gif_timer()
+
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+        except Exception:
+            return
+
+        if anim.is_static_image():
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            return
+
+        it = anim.get_iter(None)
+
+        def tick() -> bool:
+            it.advance(None)
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+            delay = it.get_delay_time()
+            if delay < 0:
+                self._gif_timer_id = None
+                return GLib.SOURCE_REMOVE
+            self._gif_timer_id = GLib.timeout_add(max(delay, 10), tick)
+            return GLib.SOURCE_REMOVE
+
+        delay = max(it.get_delay_time(), 10)
+        self._gif_timer_id = GLib.timeout_add(delay, tick)
+        pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
 
     # ── Timers ────────────────────────────────────────────────────────────────
 
@@ -261,11 +315,18 @@ class ArtgenWatch(Gtk.Overlay):
             self._countdown_timer = GLib.timeout_add(1000, self._tick_countdown)
 
     def _stop_timers(self) -> None:
+        # _gif_timer_id is NOT stopped here — it survives slideshow timer restarts.
+        # It is stopped only in _render() (record switch) and stop() (full exit).
         for attr in ("_advance_timer", "_countdown_timer", "_hide_timer"):
             tid = getattr(self, attr, None)
             if tid is not None:
                 GLib.source_remove(tid)
                 setattr(self, attr, None)
+
+    def _stop_gif_timer(self) -> None:
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
 
     def _auto_advance(self) -> bool:
         self._step(1)

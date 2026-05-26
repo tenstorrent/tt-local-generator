@@ -4,10 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tt-local-generator — AI video & image generation on Tenstorrent hardware</title>
-  <meta name="description" content="Run Wan2.2, Mochi, SkyReels, FLUX, and AnimateDiff locally on Tenstorrent hardware. Three-tier prompt generation, built-in SVG art generator. Create, curate, watch.">
-  <meta property="og:title" content="tt-local-generator">
-  <meta property="og:description" content="AI video, image, and animation generation on Tenstorrent hardware. Create → Curate → Watch.">
-  <meta property="og:image" content="assets/tt-local-generator-main.png">
+  <meta name="description" content="Run Wan2.2, SkyReels, FLUX, Mochi, and AnimateDiff on your own Tenstorrent Quietbox 2. Local AI generation — no cloud, no API key. Video, images, animation, and generative art.">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="tt-local-generator">
+  <meta property="og:url" content="https://docs.tenstorrent.com/tt-local-generator/">
+  <meta property="og:title" content="Local AI video &amp; image generation on Tenstorrent hardware">
+  <meta property="og:description" content="Run Wan2.2, SkyReels, FLUX, and AnimateDiff on your own QB2 — no cloud costs, no API key. On-device prompt AI, SVG art, ANSI art, and animated GIFs included.">
+  <meta property="og:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/tt-local-generator-main.png">
+  <meta property="og:image:width" content="1920">
+  <meta property="og:image:height" content="1080">
+  <meta property="og:image:alt" content="tt-local-generator gallery and artgen panel running on Tenstorrent QB2">
+
+  <!-- Twitter / X card — animated GIF autoplays in feed -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Local AI video &amp; image generation on Tenstorrent hardware">
+  <meta name="twitter:description" content="Run Wan2.2, SkyReels, FLUX, and AnimateDiff locally on your QB2 — no cloud costs, no API key. Generate videos, images, animations, and generative art on-device.">
+  <meta name="twitter:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/artgen/animatediff-132-years.gif">
+  <meta name="twitter:image:alt" content="AnimateDiff output — misty harbour scene generated on Tenstorrent Blackhole hardware">
+
   <style>
     /* ── Design tokens ─────────────────────────────────────────────── */
     :root {
@@ -388,6 +404,7 @@
     .model-type.video { color: var(--teal); background: rgba(79,209,197,.12); }
     .model-type.image { color: var(--pink); background: rgba(236,150,184,.12); }
     .model-type.animate { color: var(--gold); background: rgba(244,196,113,.12); }
+    .model-type.artgen { color: var(--green); background: rgba(39,174,96,.12); }
     .model-name {
       font-size: 1.05rem;
       font-weight: 700;
@@ -820,7 +837,7 @@
     <div class="hero-text">
       <div class="hero-badge">
         <svg width="8" height="8"><circle cx="4" cy="4" r="4" fill="#27ae60"/></svg>
-        Runs on Tenstorrent Hardware
+        Built for Tenstorrent QB2 · Blackhole
       </div>
       <h1>Local AI<br><span class="accent">video generation</span><br>for builders.</h1>
       <p class="hero-lead">
@@ -835,10 +852,6 @@
         <a href="https://github.com/tenstorrent/tt-local-generator#readme" class="btn-outline">
           Read the docs
         </a>
-      </div>
-      <div class="hero-cli">
-        <span class="prompt-char">$</span>
-        git clone https://github.com/tenstorrent/tt-local-generator &amp;&amp; ./tt-gen
       </div>
     </div>
   </div>
@@ -979,11 +992,17 @@
 <section id="models">
   <div class="wrap">
     <div class="section-label">Supported models</div>
-    <h2 class="section-title">One app. Five models.</h2>
+    <h2 class="section-title">One app. Six models.</h2>
     <p class="section-sub">
-      Switch between text-to-video, image generation, image-to-video, and
-      character animation from a single interface. Each model has a
-      dedicated server managed by the app.
+      Switch between text-to-video, image generation, image-to-video, character animation,
+      and generative art from a single interface. Each model has a dedicated server managed
+      by the app.
+    </p>
+    <p class="section-sub" style="margin-top:.6rem;font-size:.9rem;">
+      <strong>Hardware note:</strong> All video and image inference requires
+      <strong>Blackhole hardware (QB2 — dual P300X2)</strong>. This is the primary
+      development and test target. Wormhole (N150/N300) is not currently supported for
+      inference. The artgen text and SVG generators run on any machine via CPU.
     </p>
 
     <div class="model-grid">
@@ -991,31 +1010,37 @@
         <div class="model-type video">Text-to-Video</div>
         <div class="model-name">Wan2.2 T2V</div>
         <p class="model-desc">14B parameter cinematic video model. The flagship experience for long, detailed prompts.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> Wormhole · QB2 · Blackhole</div>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
       </div>
       <div class="model-card">
         <div class="model-type video">Text-to-Video</div>
         <div class="model-name">Mochi-1</div>
         <p class="model-desc">High-motion, expressive video generation. Great for character and action-heavy prompts.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> QB2</div>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
       </div>
       <div class="model-card">
         <div class="model-type video">Image-to-Video</div>
         <div class="model-name">SkyReels V2</div>
         <p class="model-desc">Fast diffusion transformer at 540P. Animates still images with physics-respecting motion.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> Blackhole P150X4 · P300X2</div>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
       </div>
       <div class="model-card">
         <div class="model-type image">Image</div>
         <div class="model-name">FLUX.1-dev</div>
         <p class="model-desc">State-of-the-art text-to-image. Rich detail, accurate text rendering, photorealistic output.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> Wormhole · QB2</div>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (4× P300c) — Blackhole</div>
       </div>
       <div class="model-card">
         <div class="model-type animate">Character Animate</div>
         <div class="model-name">Wan2.2 Animate</div>
         <p class="model-desc">Video-to-video character animation. Give any character a motion — or replace a person in a clip.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> CPU · CUDA (TT HW pending)</div>
+        <div class="model-hw"><span class="model-hw-dot"></span> CPU / CUDA — TT hardware support pending</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type artgen">Artgen · Animated GIF</div>
+        <div class="model-name">AnimateDiff</div>
+        <p class="model-desc">TTNN UNet with cross-frame temporal attention. Generates animated GIFs directly on Blackhole — no Docker, no server warmup. Every generation driven by the prompt engine.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 / Blackhole P300c — no server needed</div>
       </div>
     </div>
   </div>
@@ -1025,11 +1050,19 @@
 <section id="artgen">
   <div class="wrap">
     <div class="section-label">Built-in art generator</div>
-    <h2 class="section-title">Artgen — SVG art, entirely on-device.</h2>
+    <h2 class="section-title">Artgen — generative art, entirely on-device.</h2>
     <p class="section-sub">
-      A second creative mode alongside video: generative SVG landscapes and gradients
-      produced by the three-tier prompt engine. No model loading, no GPU — instant output
-      you can save, share, or use as a seed image for I2V.
+      A second creative mode alongside video: SVG landscapes, color palettes, verse, ANSI
+      art, and — on Blackhole hardware — animated GIFs via the AnimateDiff TTNN pipeline.
+      Everything driven by the same three-tier prompt engine: algorithmic word banks →
+      Markov chain → LLM polish.
+    </p>
+    <p class="section-sub" style="margin-top:.75rem;">
+      <strong>Works from day one.</strong> Artgen automatically uses the best LLM available —
+      a dedicated artgen model when you have one running, or the lightweight Qwen3-0.6B
+      prompt server otherwise. Verse and palette generate well at any model size. SVG generators
+      shine with a larger model. No configuration needed: start a bigger LLM and every
+      subsequent generation upgrades automatically.
     </p>
 
     <!-- SVG gallery: 3 top + 2 bottom -->
@@ -1043,8 +1076,8 @@
         <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Night · Indigo</figcaption>
       </figure>
       <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
-        <img src="assets/artgen/city-sunset-crimson.svg" alt="City Sunset — crimson to purple gradient sky, orange-lit towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
-        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Sunset · Crimson</figcaption>
+        <img src="assets/artgen/landscape-glitch.svg" alt="Glitch landscape — acid green horizon, magenta and cyan distortion bands" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">Glitch Landscape · Acid</figcaption>
       </figure>
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-top:1.25rem;">
@@ -1056,6 +1089,97 @@
         <img src="assets/artgen/city-day-teal.svg" alt="City Day — pale blue sky, teal-accented towers" style="width:100%;flex:1;min-height:0;object-fit:cover;display:block;">
         <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);flex-shrink:0;">City Day · Teal</figcaption>
       </figure>
+    </div>
+
+    <!-- AnimateDiff GIF gallery — starred real-session outputs -->
+    <div style="margin-top:3.5rem;">
+      <div class="section-label" style="margin-bottom:.75rem;">AnimateDiff · Blackhole P300c</div>
+      <p style="font-size:.95rem;color:var(--text2);max-width:680px;margin-bottom:1.75rem;">
+        Animated GIFs generated directly on Blackhole — no Docker container, no server warmup.
+        Nine starred outputs from a single session, all driven by the literary prompt engine.
+        The model is SD 1.4 with a TTNN UNet and cross-frame temporal attention.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;">
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-phosphor-mountains.gif" alt="Purple phosphor glow across distant mountains at 2am" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">purple phosphor glow · 2am mountains</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-aleph-cellar.gif" alt="An aleph in a cellar — a point containing all other points" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">aleph in a cellar · Borges</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-cherry-theremin.gif" alt="A cherry orchard, a Theremin, a hand approaching but not touching" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">cherry orchard · Theremin · Chekhov</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-same-sentence.gif" alt="A man writes the same sentence in his sleep every night" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">same sentence every night · milonga</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-feathers-bedsit.gif" alt="A man growing feathers in a Salford bedsit with no explanation" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">growing feathers · Salford bedsit</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-132-years.gif" alt="A man who lived to 132, clocks in a house stop at different times" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">man who lived to 132 · Thames at dawn</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-petitioner.gif" alt="A petitioner who has filled out the same form for six years" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">petitioner · six years · Tamil Nadu</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-kipple.gif" alt="Kipple spreading across a kitchen table — old batteries, receipts, nothing useful" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">kipple · Escher staircase · Dick</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);display:flex;flex-direction:column;">
+          <img src="assets/artgen/animatediff-forking-paths.gif" alt="A garden of forking paths where every choice happens simultaneously" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.5rem .75rem;font-size:.74rem;color:var(--muted);background:var(--card);flex-shrink:0;">garden of forking paths · Borges</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <!-- ANSI 3-pass pipeline explainer -->
+    <div style="margin-top:3.5rem;">
+      <div class="section-label" style="margin-bottom:.75rem;">ANSI art · 3-pass pipeline</div>
+      <p style="font-size:.95rem;color:var(--text2);max-width:680px;margin-bottom:1.25rem;">
+        Generating coherent ANSI pixel art in a single LLM pass fails at any canvas larger
+        than a few dozen cells — the model can't simultaneously plan spatial composition,
+        choose the right characters, and assign 256 colors to hundreds of cells at once.
+        The solution is a three-pass pipeline that separates each concern into a task the
+        model handles well:
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;max-width:800px;margin-bottom:1.5rem;">
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 1 — Structure</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            Draw the subject using plain ASCII characters. No color, no block chars — just spatial
+            composition. <code style="font-size:.8em;background:rgba(255,255,255,.06);padding:.1em .3em;border-radius:3px;">X # . | /</code> placed where
+            the model's layout judgment is strongest.
+          </p>
+        </div>
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 2 — Refinement</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            The ASCII sketch is redrawn with Unicode block characters
+            (<code style="font-size:.8em;background:rgba(255,255,255,.06);padding:.1em .3em;border-radius:3px;">█ ▀ ▄ ▌ ▐ ░ ▒ ▓</code>)
+            for richer geometry. Layout is fixed — only visual quality improves.
+          </p>
+        </div>
+        <div style="background:var(--card);border-radius:var(--radius);border:1px solid var(--border);padding:1.1rem 1.25rem;">
+          <div style="font-size:.72rem;font-weight:700;letter-spacing:.06em;color:var(--teal);text-transform:uppercase;margin-bottom:.5rem;">Pass 3 — Colorization</div>
+          <p style="font-size:.83rem;line-height:1.6;color:var(--text2);margin:0;">
+            Given the fixed character map, the LLM wraps every cell with one xterm-256
+            foreground color. Deciding a single color for an already-placed character is
+            far simpler than planning position + color together.
+          </p>
+        </div>
+      </div>
+      <p style="font-size:.88rem;color:var(--text2);max-width:680px;">
+        BBS style applies neon-on-void rules with zone constraints (void rows top and bottom,
+        neon subject in the center) and derives a board-identity color theme from the board name.
+        Try it: <code style="font-size:.82em;background:rgba(255,255,255,.06);padding:.15em .4em;border-radius:3px;">tt-ctl artgen ansi --ansi-style bbs --board-name "NEON VOID" --subject "glowing skull"</code>
+      </p>
     </div>
 
     <!-- Palette swatches — imitates the in-app palette detail view -->
@@ -1238,7 +1362,9 @@
         <p class="tier-desc">
           Samples from deep, curated word banks — subjects, settings, lighting,
           camera moves, mood, style — and assembles them into a structured slug.
-          Fast, deterministic, always available. No model required.
+          Six structural templates rotate the syntactic shape of each result;
+          a 12 % chance injects an unexpected juxtaposition element the LLM
+          cannot neutralise. Fast, always available. No model required.
         </p>
         <span class="tier-badge always">Always available</span>
       </div>
@@ -1247,9 +1373,9 @@
         <div class="tier-name">Markov</div>
         <p class="tier-desc">
           Trains on a seed corpus of tagged prompts and generates novel
-          recombinations at the sentence level. Produces unexpected register
-          collisions — a 1970s Betamax in an Escher staircase, a Muppet at
-          a Manhattan diner at 2am.
+          recombinations at the sentence level using state size 1 — maximising
+          wild collisions over near-verbatim repetition. A 1970s Betamax in
+          an Escher staircase. A Muppet at a Manhattan diner at 2am.
         </p>
         <span class="tier-badge always">Always available</span>
       </div>
@@ -1259,7 +1385,8 @@
         <p class="tier-desc">
           Qwen3-0.6B on CPU (port 8001) takes the raw slug and makes it flow
           naturally — without re-selecting or hallucinating new elements.
-          Adds rhythm and precision without creative drift.
+          Temperature and token budget scale to model size; small models (&lt;3 B)
+          run three candidates and the most specific one wins.
         </p>
         <span class="tier-badge enhanced">Qwen3-0.6B on CPU</span>
       </div>
@@ -1306,6 +1433,7 @@
       <button class="prompt-tab" data-tab="skyreels">SkyReels</button>
       <button class="prompt-tab" data-tab="image">Image (FLUX)</button>
       <button class="prompt-tab" data-tab="animate">Animate</button>
+      <button class="prompt-tab" data-tab="animatediff">AnimateDiff</button>
       <button class="prompt-tab" data-tab="artgen">Artgen</button>
     </div>
 
@@ -1505,44 +1633,133 @@
       </div>
     </div>
 
-    <div class="prompt-panel" id="tab-artgen">
+    <div class="prompt-panel" id="tab-animatediff">
       <p style="color:var(--muted);font-size:.9rem;margin:0 0 1.2rem;line-height:1.6">
-        Artgen sends structured generation prompts to the Qwen3 model and renders the output — SVG art,
+        AnimateDiff runs a TTNN UNet with cross-frame temporal attention directly on Blackhole — no
+        Docker container, no server warmup. The prompt engine (algo → Markov → Qwen3 polish) drives
+        every generation; SD 1.4 reads the visual scene. Literary register shapes the mood; the
+        architecture handles temporal coherence across frames.
+      </p>
+      <div class="prompt-examples">
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Dostoevsky · counting house</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: ledger room, gaslight, complicit smile</div>
+          <div class="prompt-ex-output">a moneylender in spectacles tapping a ledger with one finger, smiling with his mouth only, descending stairs in a Saint Petersburg counting house at night, gaslight throwing long shadows, tallow candles, winter seeping through the glass, deep chiaroscuro, morally complicated</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Chekhov · provincial idyll</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: old man, pigeons, Tuesday, nothing to do</div>
+          <div class="prompt-ex-output">an old man feeding pigeons in a provincial square on a Tuesday with nothing else to do, moves through a crowded space without touching anyone, a Dutch merchant's warehouse seen through the window, cool blue of pre-dawn, half-awake in a good way</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Chekhov · evening garden</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: man who missed his whole life, garden, dusk</div>
+          <div class="prompt-ex-output">a man who has missed his whole life sitting in a garden in the evening light, stirs a cup of coffee until it is cold, a summer internment camp in the California desert seen in memory, amber from a kerosene lamp, very still and very full</div>
+        </div>
+        <div class="prompt-ex">
+          <div class="prompt-ex-head">
+            <span class="prompt-ex-user">Input</span>
+            <span class="prompt-ex-source">Kafka · impossible office</span>
+          </div>
+          <div class="prompt-ex-input">animatediff: door opens with no one touching it, letter falling from sky</div>
+          <div class="prompt-ex-output">a door swings slowly open with no one touching it into a corridor that extends far beyond any building could contain, a giant letter falling from the sky into a quiet neighborhood, the pale blue of a phone screen in total darkness, feverishly alive for no reason</div>
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:.82rem;margin:1.5rem 0 .9rem;line-height:1.5">
+        Real outputs — nine starred GIFs from a live QB2 session, each generated in under two minutes.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;">
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-phosphor-mountains.gif" alt="purple phosphor glow across distant mountains at 2am" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">purple phosphor glow · 2am</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-aleph-cellar.gif" alt="an aleph in a cellar — a point containing all other points" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">aleph in a cellar · Borges</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-cherry-theremin.gif" alt="a cherry orchard, a Theremin, a hand approaching but not touching" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">cherry orchard · Theremin</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-same-sentence.gif" alt="A man writes the same sentence in his sleep every night" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">same sentence every night</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-feathers-bedsit.gif" alt="a man growing feathers in a Salford bedsit with no explanation" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">growing feathers · Salford</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-132-years.gif" alt="A man who lived to 132, clocks stop at different times" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">man who lived to 132</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-petitioner.gif" alt="a petitioner who has filled out the same form for six years" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">petitioner · six years · Tamil Nadu</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-kipple.gif" alt="kipple spreading across a kitchen table — Escher staircase" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">kipple · Escher staircase · Dick</figcaption>
+        </figure>
+        <figure style="margin:0;border-radius:8px;overflow:hidden;border:1px solid var(--border);">
+          <img src="assets/artgen/animatediff-forking-paths.gif" alt="a garden of forking paths where every choice happens simultaneously" style="width:100%;aspect-ratio:1/1;object-fit:cover;display:block;">
+          <figcaption style="padding:.4rem .6rem;font-size:.72rem;color:var(--muted);background:var(--card);">garden of forking paths</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="prompt-panel" id="tab-artgen">
+      <p style="color:var(--muted);font-size:.9rem;margin:0 0 .6rem;line-height:1.6">
+        Artgen sends structured generation prompts to an LLM and renders the output — SVG art,
         ANSI pixel grids, or plain text — directly in the gallery. Six starred examples from a real
         session are shown below, one for each generator type.
+      </p>
+      <p style="color:var(--muted);font-size:.85rem;margin:0 0 1.2rem;line-height:1.6">
+        The LLM is chosen automatically: dedicated artgen server first (Qwen3-8B, Llama-3.1-8B, etc.),
+        then the always-on Qwen3-0.6B prompt server as a fallback. Verse and palette work well
+        at either size. SVG generators give richer results with a larger model but function at 0.6B too.
       </p>
       <div class="prompt-examples">
 
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">skyline</span>
-            <span class="prompt-ex-source">metropolitan · late-night</span>
+            <span class="prompt-ex-source">noir · midnight teal</span>
           </div>
-          <div class="prompt-ex-input">city skyline, dense urban canyon, warm orange-to-navy gradient sky, 28–38 buildings, 3 depth layers</div>
+          <div class="prompt-ex-input">city skyline, noir silhouette, near-black teal sky (#0A2A25 → #001810), angular towers, no color in the buildings — just shape and negative space</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/skyline-metro-night.svg" alt="Metropolitan late-night skyline SVG">
+            <img src="assets/artgen/skyline-noir.svg" alt="Midnight noir skyline — angular towers against a near-black teal sky">
           </div>
         </div>
 
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">landscape</span>
-            <span class="prompt-ex-source">volcanic · apocalyptic</span>
+            <span class="prompt-ex-source">violet · deep space</span>
           </div>
-          <div class="prompt-ex-input">layered landscape, intense volcanic mood, blood-red sky (#1A0000 → #CC2200), layered mountain silhouettes, orange sun</div>
+          <div class="prompt-ex-input">layered landscape, deep violet cosmic mood, gradient sky (#120020 → #3B1060 → #7B2D8B), receding terrain silhouettes, purple atmosphere</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/landscape-volcanic.svg" alt="Volcanic apocalyptic landscape SVG">
+            <img src="assets/artgen/landscape-violet.svg" alt="Deep violet landscape — cosmic purple hills under an amethyst sky">
           </div>
         </div>
 
         <div class="prompt-ex">
           <div class="prompt-ex-head">
             <span class="prompt-ex-user">geometric</span>
-            <span class="prompt-ex-source">recursive subdivision · crimson-orange</span>
+            <span class="prompt-ex-source">teal grid · deep field</span>
           </div>
-          <div class="prompt-ex-input">abstract geometric, recursive canvas subdivision 2–3 levels deep, triangles/rectangles/hexagons, crimson-orange palette, dense intricate overlaps</div>
+          <div class="prompt-ex-input">abstract geometric, diagonal line grid across a deep blue-gray field (#0F2A35 background), teal strokes (#1A3C47), minimal — structure without colour noise</div>
           <div class="prompt-ex-visual">
-            <img src="assets/artgen/geometric-crimson.svg" alt="Recursive geometric subdivision SVG">
+            <img src="assets/artgen/geometric-teal.svg" alt="Geometric teal line grid — diagonal strokes on deep blue-gray field">
           </div>
         </div>
 
@@ -1639,8 +1856,11 @@
       <div class="cli-line"><span class="cli-comment"># Five prompts, raw text output</span></div>
       <div class="cli-line"><span class="cli-cmd">python3 app/generate_prompt.py</span> <span class="cli-flag">--count</span> <span class="cli-arg">5</span> <span class="cli-flag">--raw</span></div>
       <div class="cli-line">&nbsp;</div>
-      <div class="cli-line"><span class="cli-comment"># Start the local Qwen3-0.6B polish server (CPU, port 8001)</span></div>
-      <div class="cli-line"><span class="cli-cmd">./bin/start_prompt_gen.sh</span></div>
+      <div class="cli-line"><span class="cli-comment"># Artgen works as soon as the prompt server is running (port 8001)</span></div>
+      <div class="cli-line"><span class="cli-cmd">./tt-ctl start prompt-server</span></div>
+      <div class="cli-line">&nbsp;</div>
+      <div class="cli-line"><span class="cli-comment"># Upgrade to a larger artgen LLM for better SVG quality (port 8002)</span></div>
+      <div class="cli-line"><span class="cli-cmd">./tt-ctl start artgen-qwen3-8b</span></div>
     </div>
   </div>
 </section>
@@ -1710,8 +1930,10 @@
 
       <div class="install-note-box">
         <strong>Model weights are not bundled.</strong>
-        Download Wan2.2 (~118 GB) separately after install:<br>
-        <code>tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers</code>
+        Download models separately after install (no <code>apply_patches.sh</code> needed — the package handles that automatically):<br><br>
+        <code>tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers</code> &nbsp;(~118 GB)<br>
+        <code>tt-local-gen-download-model --repo Qwen/Qwen3-0.6B</code> &nbsp;(~1.2 GB — prompt server)<br><br>
+        Or use the model packages: <code>sudo apt install tt-model-wan2-t2v tt-model-qwen3</code>
       </div>
     </div>
 
@@ -1720,26 +1942,50 @@
       <div class="install-step">
         <div class="install-step-num">1</div>
         <div class="install-step-body">
-          <div class="install-step-label">Clone and install dependencies</div>
+          <div class="install-step-label">Clone and install system dependencies</div>
           <div class="cli-block" style="margin-top:.5rem;">
             <div class="cli-line"><span class="cli-cmd">git clone</span> <span class="cli-arg">https://github.com/tenstorrent/tt-local-generator.git</span> <span class="cli-arg">~/code/tt-local-generator</span></div>
             <div class="cli-line"><span class="cli-cmd">cd ~/code/tt-local-generator</span></div>
             <div class="cli-line"><span class="cli-cmd">./bin/setup_ubuntu.sh</span> &nbsp;<span class="cli-comment"># Ubuntu — installs GTK4, GStreamer, Docker</span></div>
-            <div class="cli-line"><span class="cli-cmd">./bin/setup_macos.sh</span> &nbsp;&nbsp;<span class="cli-comment"># macOS  — installs via Homebrew</span></div>
+            <div class="cli-line"><span class="cli-cmd">./bin/setup_macos.sh</span> &nbsp;&nbsp;<span class="cli-comment"># macOS  — installs via Homebrew (remote-client mode)</span></div>
           </div>
+          <p class="install-step-note">Clone destination <code>~/code/tt-local-generator</code> is expected by all scripts. macOS connects as a remote client to a Tenstorrent machine over the network.</p>
         </div>
       </div>
 
       <div class="install-step">
         <div class="install-step-num">2</div>
         <div class="install-step-body">
-          <div class="install-step-label">Start the inference server and launch the UI</div>
+          <div class="install-step-label">Set up the vendored inference server</div>
           <div class="cli-block" style="margin-top:.5rem;">
-            <div class="cli-line"><span class="cli-cmd">./bin/start_wan_qb2.sh</span> &nbsp;<span class="cli-comment"># start Wan2.2 — wait ~5 min for "startup complete"</span></div>
+            <div class="cli-line"><span class="cli-cmd">./bin/setup_vendor.sh</span> &nbsp;<span class="cli-comment"># shallow-clone tt-inference-server at the pinned SHA</span></div>
+          </div>
+          <p class="install-step-note">This creates <code>vendor/tt-inference-server/</code> — the server tree that all <code>start_*.sh</code> scripts use. Takes ~30 s on a fast connection.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <div class="install-step-num">3</div>
+        <div class="install-step-body">
+          <div class="install-step-label">Apply patches to the vendored server</div>
+          <div class="cli-block" style="margin-top:.5rem;">
+            <div class="cli-line"><span class="cli-cmd">./bin/apply_patches.sh</span> &nbsp;<span class="cli-comment"># HF_HOME mount, SkyReels model specs, device config</span></div>
+          </div>
+          <p class="install-step-note">Required once after every <code>setup_vendor.sh</code>. The <code>start_*.sh</code> scripts check for this and print an error if skipped.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <div class="install-step-num">4</div>
+        <div class="install-step-body">
+          <div class="install-step-label">Launch the app</div>
+          <div class="cli-block" style="margin-top:.5rem;">
             <div class="cli-line"><span class="cli-cmd">./tt-gen</span></div>
           </div>
           <p class="install-step-note">
-            Or point at a remote server: <code>./tt-gen --server http://your-tt-machine:8000</code>
+            Use <strong>Servers ▸ Start</strong> in the app to start an inference backend, or launch one directly:
+            <code>./bin/start_wan_qb2.sh</code>.
+            Remote clients: <code>./tt-gen --server http://your-tt-machine:8000</code>
           </p>
         </div>
       </div>

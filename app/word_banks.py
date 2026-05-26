@@ -1900,3 +1900,173 @@ THEMES = ARTGEN_THEMES
 def artgen_theme() -> str:
     """Return a random artgen theme seed phrase."""
     return pick(ARTGEN_THEMES)
+
+
+# ── AnimateDiff GIF loop seeds ─────────────────────────────────────────────────
+# AnimateDiff generates 8-frame looping GIFs. Best results come from subjects
+# with natural cyclical or oscillating motion — not one-shot events or camera
+# moves. Keep prompts compact: one subject + one looping motion is enough.
+
+ANIMATEDIFF_SUBJECTS = [
+    # elemental / natural phenomena
+    "candle flame",
+    "campfire",
+    "bonfire",
+    "lava lamp",
+    "burning embers",
+    "ocean waves",
+    "waterfall",
+    "rain on a window",
+    "raindrops on a puddle",
+    "river current",
+    "gentle stream",
+    "storm clouds",
+    "fog drifting",
+    "smoke rising",
+    "aurora borealis",
+    "northern lights",
+    "lightning in storm clouds",
+    "falling snow",
+    "falling leaves",
+    "cherry blossom petals falling",
+    "dust motes in sunlight",
+    "dandelion seeds drifting",
+    "sunlight through leaves",
+    "light shimmering on water",
+    "crystals refracting light",
+    "soap bubble",
+    # flora
+    "sunflower field swaying",
+    "tall grass in wind",
+    "wheat field rippling",
+    "ferns swaying",
+    "willow branches swaying",
+    "cherry blossoms in wind",
+    "tropical leaves in breeze",
+    "underwater seaweed",
+    "coral reef gently swaying",
+    "lotus blossom opening",
+    "time-lapse flower blooming",
+    # water / liquid
+    "slow pouring honey",
+    "ink dropping into water",
+    "watercolor bleeding across paper",
+    "lava flowing",
+    "oil and water mixing",
+    "mercury droplets",
+    "hourglass sand falling",
+    # fauna
+    "jellyfish pulsing",
+    "butterfly wings opening and closing",
+    "hummingbird hovering",
+    "fireflies blinking at dusk",
+    "fish swimming in an aquarium",
+    "koi pond rippling",
+    "cat breathing while sleeping",
+    # portrait / human
+    "portrait of a woman, hair blowing in wind",
+    "portrait of a man, eyes slowly closing",
+    "close-up of a face, gentle breath visible",
+    "figure in long coat, fabric billowing",
+    "dancer mid-spin, fabric trailing",
+    # cosmic / surreal
+    "galaxy rotating slowly",
+    "nebula pulsing with light",
+    "stars twinkling in night sky",
+    "moon behind drifting clouds",
+    "kaleidoscope turning",
+    "glowing orb pulsing",
+    "fractal zooming slowly",
+    "neon sign flickering",
+    "holographic pattern shifting",
+    # texture / abstract
+    "cloth rippling in wind",
+    "silk fabric billowing",
+    "curtain swaying in breeze",
+    "flag waving",
+    "paper crumpling in slow motion",
+    "sand mandala shifting",
+    "glass prism rotating",
+]
+
+ANIMATEDIFF_MODIFIERS = [
+    # style / rendering
+    "cinematic color grade",
+    "soft bokeh background",
+    "shallow depth of field",
+    "warm golden light",
+    "cool blue moonlight",
+    "dramatic side lighting",
+    "soft diffused light",
+    "high detail, 4K",
+    "macro photography",
+    "long exposure look",
+    "painted in oils",
+    "watercolor style",
+    "photorealistic",
+    "dreamy soft focus",
+    "high contrast",
+    "muted pastel palette",
+    "vivid saturated colors",
+    "dark and moody",
+    "ethereal glow",
+    "film grain",
+]
+
+
+def animatediff_subject() -> str:
+    """Return a random subject suited to AnimateDiff looping GIF generation."""
+    return pick(ANIMATEDIFF_SUBJECTS)
+
+
+def animatediff_modifier() -> str:
+    """Return a random style modifier for AnimateDiff prompts."""
+    return pick(ANIMATEDIFF_MODIFIERS)
+
+
+# ── Unexpected juxtapositions ──────────────────────────────────────────────────
+#
+# These are appended to video/skyreels slugs with low probability (12%) as a
+# sixth comma slot.  They work because they can't be smoothed away without
+# the LLM ignoring the instruction "keep every element".  The result is a
+# prompt the model genuinely has to think about — which is the point.
+#
+# Good entries: era/scale mismatches, sensory-mode violations, wrong-material
+# objects, temporal displacement, perspective cheats.  Avoid punchlines.
+
+UNEXPECTED_JUXTAPOSITIONS = [
+    # wrong era / wrong object
+    "but everything is the wrong scale",
+    "shot on film that expired in 1994",
+    "but the shadows fall the wrong direction",
+    "but the colors belong to a different decade",
+    "in the style of a genre that has no name yet",
+    "as if remembered incorrectly twenty years later",
+    "but the season is wrong for the latitude",
+    # material / texture displacement
+    "but one object is made of something it shouldn't be",
+    "everything appears ceramic except what should be",
+    "as if the whole scene is made of folded paper",
+    "but the textures are all from the wrong surfaces",
+    # temporal / causal displacement
+    "except it is somehow a Wednesday in 1987",
+    "the action completed before it began",
+    "twenty years later than the scene implies",
+    "as if this is the third time this exact thing has happened",
+    # perspective and sensory cheats
+    "as if seen through someone else's prescription",
+    "as if the sound would be wrong",
+    "as if this is a memory of something that never happened",
+    "from the point of view of the thing being looked at",
+    "but the viewer is also in the scene",
+    # register collision
+    "in a room that shouldn't exist in that building",
+    "as if the director forgot which century this was",
+    "but the lighting is from a different film entirely",
+    "as if the scene is a footnote in someone else's dream",
+]
+
+
+def unexpected_juxtaposition() -> str:
+    """Return a random unexpected juxtaposition for use as a sixth prompt slot."""
+    return pick(UNEXPECTED_JUXTAPOSITIONS)

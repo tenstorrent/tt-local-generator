@@ -92,13 +92,21 @@ class VerseGenerator(ArtGenerator):
         )
 
     def build_prompt(self, args) -> str:
+        """Return the user message (used by --simulate). System prompt is handled in generate_artifact."""
         form = getattr(args, "form", "haiku")
         theme = getattr(args, "theme", "the passage of time")
         count = getattr(args, "count", 3)
-        # Verse uses a system prompt — stash it on args so call_llm can use it
-        system, user = _build_messages(form, theme, count)
-        args._verse_system = system
+        _, user = _build_messages(form, theme, count)
         return user
+
+    def generate_artifact(self, args, call_fn) -> str:
+        """Pass system prompt directly to call_fn — no args mutation needed."""
+        form = getattr(args, "form", "haiku")
+        theme = getattr(args, "theme", "the passage of time")
+        count = getattr(args, "count", 3)
+        system, user = _build_messages(form, theme, count)
+        raw = call_fn(user, system=system)
+        return self.post_process(self.parse_output(raw, args), args)
 
     def parse_output(self, raw: str, args) -> str:
         import re

@@ -17,9 +17,17 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# Allowed pattern for live-playlist filter expressions.
+# Must be exactly: column='value' where column is a known safe identifier
+# and value contains only word chars / hyphens / dots.  Anything else is rejected.
+_FILTER_EXPR_RE = re.compile(
+    r"^(generator_type|media_type|model_id)='[A-Za-z0-9_.\-]+'$"
+)
 
 
 STORAGE_DIR     = Path.home() / ".local" / "share" / "tt-video-gen"
@@ -268,6 +276,13 @@ class MediaStore:
             row = self._conn.execute("SELECT COUNT(*) FROM media").fetchone()
         return row[0] if row else 0
 
+    def count_non_artgen(self) -> int:
+        """Return a COUNT(*) for all non-artgen records in a single atomic query."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM media WHERE media_type != 'artgen'"
+        ).fetchone()
+        return row[0] if row else 0
+
     # ------------------------------------------------------------------
     # Playlist API
     # ------------------------------------------------------------------
@@ -364,15 +379,23 @@ class MediaStore:
             return []
         filter_expr = row[0]
         if filter_expr is not None:
-            # Live playlist: evaluate the filter expression against the media table.
-            # filter_expr is always set by create_playlist() within this application
-            # (never from raw user input), so direct interpolation is intentional.
+            # Whitelist-validate before building SQL.  filter_expr is always set
+            # by create_playlist() internally, but reading it back from the DB
+            # means a tampered DB could inject arbitrary SQL.
+            m = _FILTER_EXPR_RE.match(filter_expr)
+            if not m:
+                logging.warning("playlist_records: rejected unsafe filter_expr %r", filter_expr)
+                return []
+            # Extract column and value; use ? binding for the value so only the
+            # column name (already validated by the regex whitelist) is interpolated.
+            col_name = re.match(r"^(\w+)=", filter_expr).group(1)
+            col_value = re.search(r"='([^']+)'$", filter_expr).group(1)
             sql = (
                 "SELECT id,media_type,created_at,file_path,thumbnail_path,prompt,"
                 "       model_id,generator_type,params,starred FROM media "
-                f"WHERE {filter_expr} ORDER BY created_at DESC"
+                f"WHERE {col_name}=? ORDER BY created_at DESC"
             )
-            rows = self._conn.execute(sql).fetchall()
+            rows = self._conn.execute(sql, (col_value,)).fetchall()
         else:
             # Hand-curated playlist: join through playlist_items in position order.
             rows = self._conn.execute(
@@ -453,88 +476,15 @@ class MediaStore:
 
 
 # ---------------------------------------------------------------------------
-# Module-level artgen storage helpers
+# Artgen thumbnail helpers — defined in artgen_thumb.py; re-exported here for
+# backward compatibility so existing callers (artgen/cli.py, artgen_panel.py,
+# tests) don't need to change their imports.
 # ---------------------------------------------------------------------------
-
-def make_artgen_path(short_id: str, ext: str, base_dir: Path | None = None) -> Path:
-    """Return a timestamped unique path for an artgen artifact."""
-    if base_dir is None:
-        base_dir = ARTGEN_DIR
-    base_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return base_dir / f"{ts}_{short_id[:8]}{ext}"
-
-
-def make_thumbnail(src: Path, dst: Path) -> Path:
-    """
-    Render a thumbnail for an artgen artifact.
-
-    SVG  → tries gi.repository.Rsvg at 320×240, falls back to copying the SVG
-           as <dst>.with_suffix('.svg').
-    .txt/.ans → tries PIL monospace render, falls back to a 1×1 grey PNG.
-
-    Returns the actual path written.
-    """
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    ext = src.suffix.lower()
-
-    if ext == ".svg":
-        try:
-            import gi
-            gi.require_version("Rsvg", "2.0")
-            gi.require_version("cairo", "1.0")
-            from gi.repository import Rsvg
-            import cairo
-            handle = Rsvg.Handle.new_from_file(str(src))
-            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 320, 240)
-            ctx = cairo.Context(surface)
-            vp = Rsvg.Rectangle()
-            vp.x, vp.y, vp.width, vp.height = 0, 0, 320, 240
-            handle.render_document(ctx, vp)
-            surface.write_to_png(str(dst))
-            return dst
-        except Exception as exc:
-            logging.debug("make_thumbnail: Rsvg failed for %s: %s", src, exc)
-        import shutil
-        fallback = dst.with_suffix(".svg")
-        shutil.copy2(src, fallback)
-        return fallback
-
-    # Text / ANSI
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        img = Image.new("RGB", (320, 120), color=(13, 37, 48))
-        draw = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 11)
-        except Exception:
-            font = ImageFont.load_default()
-        text = src.read_text(encoding="utf-8", errors="replace")[:500]
-        draw.text((6, 6), text, fill=(232, 240, 242), font=font)
-        img.save(str(dst))
-        return dst
-    except Exception as exc:
-        logging.debug("make_thumbnail: PIL failed for %s: %s", src, exc)
-
-    _write_placeholder_png(dst)
-    return dst
-
-
-def _write_placeholder_png(path: Path) -> None:
-    """Write a minimal valid 1×1 grey PNG without requiring Pillow."""
-    import struct
-    import zlib
-
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        c = struct.pack(">I", len(data)) + tag + data
-        return c + struct.pack(">I", zlib.crc32(c[4:]) & 0xFFFFFFFF)
-
-    sig  = b"\x89PNG\r\n\x1a\n"
-    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    raw  = b"\x00\x80\x80\x80"  # filter byte + 1 RGB pixel (R=G=B=128, visually grey)
-    idat = _chunk(b"IDAT", zlib.compress(raw))
-    iend = _chunk(b"IEND", b"")
-    path.write_bytes(sig + ihdr + idat + iend)
+from artgen_thumb import (  # noqa: E402, F401
+    make_artgen_path,
+    make_thumbnail,
+    _write_placeholder_png,
+)
 
 
 _media_store_singleton: "MediaStore | None" = None

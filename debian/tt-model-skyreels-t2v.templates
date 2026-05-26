@@ -1,0 +1,12 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for SkyReels-V2-DF-1.3B)
+ The SkyReels-V2-DF-1.3B-540P-Diffusers model (~12 GB) is publicly
+ available on HuggingFace without a license gate.
+ .
+ A HuggingFace token can be provided to avoid API rate limits during
+ download. Leave blank to download anonymously.
+ .
+ Your token is used once and immediately discarded — it is not stored by
+ this package. To skip providing a token, just press Enter.

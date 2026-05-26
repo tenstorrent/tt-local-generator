@@ -44,7 +44,12 @@ from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_panel import ArtgenPanel
 from history_store import GenerationRecord, HistoryStore
-from worker import AnimateGenerationWorker, GenerationWorker, ImageGenerationWorker
+from worker import (
+    AnimateDiffGenerationWorker,
+    AnimateGenerationWorker,
+    GenerationWorker,
+    ImageGenerationWorker,
+)
 import attractor
 import prompt_client
 import server_manager as _sm
@@ -509,6 +514,15 @@ scrollbar slider:hover {
 .servers-popover-btn:hover { background: rgba(79,209,197,0.1); border-color: @tt_accent; }
 .servers-popover-btn-stop:hover { background: rgba(255,107,107,0.1); border-color: #FF6B6B; color: #FF6B6B; }
 .servers-popover-last-star { color: @tt_accent; font-size: .8rem; margin-left: .2rem; }
+.servers-cap-header {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+    color: @tt_text_muted; text-transform: uppercase;
+    margin-top: 10px; margin-bottom: 2px;
+}
+/* -- Capability dashboard rows in the status bar popover -------------------- */
+.cap-row-ready   { color: @tt_success; font-size: 12px; }
+.cap-row-offline { color: @tt_text_muted; font-size: 12px; }
+.cap-row-label   { font-size: 12px; color: @tt_text_secondary; min-width: 160px; }
 
 /* -- Named control rows (QUALITY, CLIP LENGTH) ------------------------------ */
 .named-ctrl-row {
@@ -1303,8 +1317,8 @@ _ANIMATE_CHIPS = _load_chips_safe("animate")
 
 _THUMB_W = 200
 _THUMB_H = 112   # 16:9
-_DETAIL_VIDEO_W = 480
-_DETAIL_VIDEO_H = 270
+_DETAIL_VIDEO_W = 400
+_DETAIL_VIDEO_H = 225
 
 # Maps internal model ID strings to short display names shown on gallery badges.
 # Empty string → no badge (legacy records without model attribution).
@@ -1360,9 +1374,10 @@ _SERVER_SCRIPTS: dict = {
 
 # Maps short model keys to canonical model ID strings used in GenerationRecord.
 _VIDEO_MODEL_IDS: dict = {
-    "wan2":      "wan2.2-t2v",
-    "mochi":     "mochi-1-preview",
-    "skyreels":  "skyreels-v2-i2v-14b-540p",
+    "wan2":         "wan2.2-t2v",
+    "mochi":        "mochi-1-preview",
+    "skyreels":     "skyreels-v2-i2v-14b-540p",
+    "animatediff":  "animatediff-blackhole",
 }
 _IMAGE_MODEL_IDS: dict = {
     "flux": "flux.1-dev",
@@ -1494,7 +1509,7 @@ class GenerationCard(Gtk.Frame):
         self._animate_cb = animate_cb   # callable(record) or None
         self._star_cb = star_cb         # callable(record, starred: bool) or None
         self.add_css_class("card")
-        # Minimum card width; FlowBox homogeneous layout makes all cells equal width
+        # Minimum card width; FlowBox packs cards at this natural width
         # and expands them to fill the row, so actual width adapts to the pane size.
         self.set_size_request(_THUMB_W + 20, -1)
         self.set_hexpand(True)
@@ -1696,16 +1711,37 @@ class GenerationCard(Gtk.Frame):
         # Buttons: Save, Iterate, and Trash (play/fullscreen are in the detail panel).
         # Trash is right-aligned to keep it visually separated from the safe actions.
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        export_btn = Gtk.Button(label="💾 Save")
+        is_gif = self._record.media_type == "animatediff" or (
+            self._record.video_path.endswith(".gif")
+        )
+        export_label = "💾 Save GIF" if is_gif else (
+            "💾 Save" if self._record.media_type == "image" else "💾 Save"
+        )
+        export_btn = Gtk.Button(label=export_label)
         tip = "Export image to a chosen location" if self._record.media_type == "image" else "Export video to a chosen location"
         export_btn.set_tooltip_text(tip)
         export_btn.connect("clicked", self._export)
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
-        iter_btn.connect("clicked", self._iterate)
         if not self._record.media_exists:
             export_btn.set_sensitive(False)
         btn_row.append(export_btn)
+
+        # GIF↔MP4 conversion button — only for video/animatediff records.
+        if self._record.media_type not in ("image", "artgen"):
+            if is_gif:
+                conv_btn = Gtk.Button(label="→ MP4")
+                conv_btn.set_tooltip_text("Convert this GIF to an MP4 video file")
+                conv_btn.connect("clicked", self._convert_to_mp4)
+            else:
+                conv_btn = Gtk.Button(label="→ GIF")
+                conv_btn.set_tooltip_text("Convert this video to an animated GIF")
+                conv_btn.connect("clicked", self._convert_to_gif)
+            if not self._record.media_exists:
+                conv_btn.set_sensitive(False)
+            btn_row.append(conv_btn)
+
+        iter_btn = Gtk.Button(label="↺ Iterate")
+        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
+        iter_btn.connect("clicked", self._iterate)
         btn_row.append(iter_btn)
 
         btn_spacer = Gtk.Box()
@@ -1857,6 +1893,64 @@ class GenerationCard(Gtk.Frame):
             src_txt = Path(src).with_suffix(".txt")
             if src_txt.exists():
                 shutil.copy2(src_txt, Path(dest).with_suffix(".txt"))
+
+    def _convert_to_mp4(self, _btn) -> None:
+        """Convert the current GIF record to an MP4 via ffmpeg in a background thread."""
+        if not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        tmp = tempfile.mktemp(suffix=".mp4")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".mp4")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _convert_to_gif(self, _btn) -> None:
+        """Convert the current video to an animated GIF via two-pass ffmpeg."""
+        if not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        palette = tempfile.mktemp(suffix=".png")
+        tmp = tempfile.mktemp(suffix=".gif")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,palettegen", palette],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
+            )
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-i", palette,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,paletteuse", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".gif")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _offer_converted_save(self, tmp_path: str, suffix: str) -> None:
+        """Open a save dialog for the converted file after ffmpeg completes."""
+        if not Path(tmp_path).exists():
+            return
+        dlg = Gtk.FileDialog()
+        stem = Path(self._record.media_file_path).stem
+        dlg.set_initial_name(stem + suffix)
+        dlg.save(self.get_root(), None,
+                 lambda d, r, p=tmp_path: self._save_converted(d, r, p))
+
+    def _save_converted(self, dlg, result, tmp_path: str) -> None:
+        """Move the converted temp file to the user-chosen destination."""
+        try:
+            dest = dlg.save_finish(result).get_path()
+        except Exception:
+            return
+        if dest:
+            shutil.move(tmp_path, dest)
 
     def _iterate(self, _btn) -> None:
         self._iterate_cb(
@@ -2261,7 +2355,7 @@ class DetailPanel(Gtk.ScrolledWindow):
 
         # Append any extra metadata returned by the server, skipping fields
         # already shown above or too large/noisy to display.
-        for k, v in record.extra_meta.items():
+        for k, v in (record.extra_meta or {}).items():
             if k in _SKIP_META_KEYS or v is None or not str(v).strip():
                 continue
             rows.append((k.replace("_", " ").title(), str(v)))
@@ -2321,13 +2415,33 @@ class DetailPanel(Gtk.ScrolledWindow):
         content.append(sep)
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        export_btn = Gtk.Button(label="💾 Export")
+        is_gif_detail = record.media_type == "animatediff" or (
+            record.video_path.endswith(".gif")
+        )
+        export_label = "💾 Export GIF" if is_gif_detail else (
+            "💾 Export" if record.media_type == "image" else "💾 Export"
+        )
+        export_btn = Gtk.Button(label=export_label)
         tip = "Save a copy of this image" if record.media_type == "image" else "Save a copy of this video"
         export_btn.set_tooltip_text(tip)
         export_btn.connect("clicked", self._export)
         if not record.media_exists:
             export_btn.set_sensitive(False)
         action_row.append(export_btn)
+
+        # GIF↔MP4 conversion button — only for video/animatediff records.
+        if record.media_type not in ("image", "artgen"):
+            if is_gif_detail:
+                conv_btn = Gtk.Button(label="→ MP4")
+                conv_btn.set_tooltip_text("Convert this GIF to an MP4 video file")
+                conv_btn.connect("clicked", self._convert_to_mp4)
+            else:
+                conv_btn = Gtk.Button(label="→ GIF")
+                conv_btn.set_tooltip_text("Convert this video to an animated GIF")
+                conv_btn.connect("clicked", self._convert_to_gif)
+            if not record.media_exists:
+                conv_btn.set_sensitive(False)
+            action_row.append(conv_btn)
 
         # Star toggle button
         self._detail_star_btn = Gtk.Button(
@@ -2578,6 +2692,64 @@ class DetailPanel(Gtk.ScrolledWindow):
             src_txt = Path(src).with_suffix(".txt")
             if src_txt.exists():
                 shutil.copy2(src_txt, Path(dest).with_suffix(".txt"))
+
+    def _convert_to_mp4(self, _btn) -> None:
+        """Convert the current GIF record to an MP4 via ffmpeg in a background thread."""
+        if not self._record or not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        tmp = tempfile.mktemp(suffix=".mp4")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".mp4")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _convert_to_gif(self, _btn) -> None:
+        """Convert the current video to an animated GIF via two-pass ffmpeg."""
+        if not self._record or not self._record.media_exists:
+            return
+        src = self._record.media_file_path
+        import tempfile
+        palette = tempfile.mktemp(suffix=".png")
+        tmp = tempfile.mktemp(suffix=".gif")
+        def _worker():
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,palettegen", palette],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
+            )
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", src, "-i", palette,
+                 "-vf", "fps=12,scale=480:-1:flags=lanczos,paletteuse", tmp],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+            )
+            GLib.idle_add(self._offer_converted_save, tmp, ".gif")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _offer_converted_save(self, tmp_path: str, suffix: str) -> None:
+        """Open a save dialog for the converted file after ffmpeg completes."""
+        if not Path(tmp_path).exists():
+            return
+        dlg = Gtk.FileDialog()
+        stem = Path(self._record.media_file_path).stem if self._record else "converted"
+        dlg.set_initial_name(stem + suffix)
+        dlg.save(self.get_root(), None,
+                 lambda d, r, p=tmp_path: self._save_converted(d, r, p))
+
+    def _save_converted(self, dlg, result, tmp_path: str) -> None:
+        """Move the converted temp file to the user-chosen destination."""
+        try:
+            dest = dlg.save_finish(result).get_path()
+        except Exception:
+            return
+        if dest:
+            shutil.move(tmp_path, dest)
 
     def _iterate(self, _btn) -> None:
         if self._record and self._iterate_cb:
@@ -2910,7 +3082,7 @@ class GalleryWidget(Gtk.Box):
         self._flow.set_margin_bottom(12)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
-        self._flow.set_homogeneous(True)    # all cells same width → cards fill the row
+        self._flow.set_homogeneous(False)   # cards pack at natural width; extra space adds columns
         self._flow.set_selection_mode(Gtk.SelectionMode.NONE)  # selection handled manually
         self._flow.set_min_children_per_line(2)
         self._flow.set_max_children_per_line(8)
@@ -3158,6 +3330,23 @@ _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "flux":     ("image",   ""),
     "animate":  ("animate", ""),
 }
+# Maps server model ID → capability key (for capability-centric status labels)
+_MODEL_TO_CAP: dict = {
+    "wan2.2-t2v":                       "video",
+    "mochi-1-preview":                  "video",
+    "skyreels-v2-i2v-14b-540p":         "video",
+    "SkyReels-V2-I2V-14B-540P":         "video",
+    "Skywork/SkyReels-V2-I2V-14B-540P": "video",
+    "wan2.2-animate-14b":               "animate",
+    "flux.1-dev":                       "image",
+}
+# Maps source tab key → capability key
+_SOURCE_TO_CAP: dict = {
+    "video":   "video",
+    "animate": "animate",
+    "image":   "image",
+    "artgen":  "artgen",
+}
 
 class ControlPanel(Gtk.Box):
     """
@@ -3331,16 +3520,6 @@ class ControlPanel(Gtk.Box):
         self._servers_popover.connect("show", self._on_servers_popover_show)
         self._toolbar_box.append(self._servers_btn)
 
-        # ── Playlists menu button ─────────────────────────────────────────────
-        self._playlists_btn = Gtk.MenuButton(label="Playlists")
-        self._playlists_btn.add_css_class("servers-menu-btn")
-        self._playlists_btn.set_hexpand(False)
-        self._playlists_btn.set_tooltip_text("Manage playlists / TT-TV channels")
-        self._playlists_popover = self._build_playlists_popover()
-        self._playlists_btn.set_popover(self._playlists_popover)
-        self._playlists_popover.connect("show", self._on_playlists_popover_show)
-        self._toolbar_box.append(self._playlists_btn)
-
         # _source_desc_lbl is kept for internal _update_source_desc() calls
         # but no longer shown in the panel — the status bar shows model info.
         self._source_desc_lbl = Gtk.Label(label="")
@@ -3511,9 +3690,15 @@ class ControlPanel(Gtk.Box):
         _create_sep.set_margin_bottom(2)
         self.append(_create_sep)
 
+        # ── VIDEO MODEL row ───────────────────────────────────────────────────
+        # Wan2.2 / Mochi-1 / SkyReels I2V / AnimateDiff picker.
+        # Visible only in video source; hidden for animate/image/artgen.
+        self._video_model_row_widget = self._build_video_model_row()
+        self.append(self._video_model_row_widget)
+
         # ── CLIP LENGTH row ───────────────────────────────────────────────────
         # Placed after the prompt-zone separator, before QUALITY, so the layout
-        # order is: chips → [divider] → CLIP LENGTH → QUALITY → Advanced accordion.
+        # order is: chips → [divider] → MODEL → CLIP LENGTH → QUALITY → Advanced accordion.
         self._clip_length_row_widget = self._build_clip_length_row()
         self.append(self._clip_length_row_widget)
 
@@ -3691,6 +3876,79 @@ class ControlPanel(Gtk.Box):
         return self._toolbar_box
 
     # ── QUALITY named button row ───────────────────────────────────────────────
+
+    # Ordered list of (key, display_label) for the video model dropdown.
+    # Index 0 is the placeholder shown when no model is running/available.
+    _VIDEO_MODEL_ENTRIES = [
+        ("",            "— not running —"),
+        ("wan2",        "Wan2.2  —  720p video"),
+        ("mochi",       "Mochi-1  —  480×848 video"),
+        ("skyreels",    "SkyReels I2V  —  960×544 Blackhole"),
+        ("animatediff", "AnimateDiff  —  GIF, local Blackhole"),
+    ]
+
+    def _build_video_model_row(self) -> Gtk.Box:
+        """VIDEO MODEL row: compact dropdown for Wan2.2 / Mochi-1 / SkyReels / AnimateDiff.
+
+        Starts at index 0 ("— not running —").  update_shot_panel() / _sync_video_model_dd()
+        auto-selects the matching entry when a server comes online, and reverts to
+        the placeholder when the server goes offline (unless animatediff is selected,
+        which runs locally and is always available when Blackhole hardware is present).
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_margin_top(4)
+        row.set_margin_bottom(2)
+
+        lbl = Gtk.Label(label="MODEL")
+        lbl.add_css_class("create-zone-label")
+        lbl.set_xalign(0)
+        lbl.set_valign(Gtk.Align.CENTER)
+        row.append(lbl)
+
+        string_list = Gtk.StringList()
+        for _, display in self._VIDEO_MODEL_ENTRIES:
+            string_list.append(display)
+
+        self._video_model_dd = Gtk.DropDown(model=string_list)
+        self._video_model_dd.set_hexpand(True)
+        self._video_model_dd.set_selected(0)  # placeholder until health check fires
+        self._video_model_dd_syncing = False
+        self._video_model_dd.connect("notify::selected", self._on_video_model_dd_changed)
+        row.append(self._video_model_dd)
+        return row
+
+    def _sync_video_model_dd(self, key: "str | None") -> None:
+        """Programmatically update the MODEL dropdown without triggering the handler.
+
+        Pass a model key ("wan2", "mochi", "skyreels", "animatediff") to select
+        the matching entry.  Pass None to select the placeholder (index 0).
+        """
+        if not hasattr(self, "_video_model_dd"):
+            return
+        if key is None:
+            idx = 0
+        else:
+            idx = next(
+                (i for i, (k, _) in enumerate(self._VIDEO_MODEL_ENTRIES) if k == key),
+                0,
+            )
+        self._video_model_dd_syncing = True
+        self._video_model_dd.set_selected(idx)
+        self._video_model_dd_syncing = False
+
+    def _on_video_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
+        """Handle user-initiated VIDEO MODEL dropdown change."""
+        if getattr(self, "_video_model_dd_syncing", False):
+            return
+        idx = dd.get_selected()
+        if 0 <= idx < len(self._VIDEO_MODEL_ENTRIES):
+            key = self._VIDEO_MODEL_ENTRIES[idx][0]
+            if not key:
+                # Placeholder selected — keep existing _video_model, nothing to do.
+                return
+            self._set_model(key)
+            _settings.set("preferred_video_model", key)
+            self.update_shot_panel()
 
     def _build_quality_row(self) -> Gtk.Box:
         """QUALITY row: Fast / Standard / Cinematic named toggle buttons.
@@ -4102,12 +4360,20 @@ class ControlPanel(Gtk.Box):
             self._shot_model_lbl.set_label(_OFFLINE)
             self._shot_model_sub.set_label("")
             self._shot_switcher_btn.set_visible(False)
+            # Revert dropdown to placeholder, except for animatediff which is
+            # local-only and always available when Blackhole hardware is present.
+            if self._video_model == "animatediff":
+                self._sync_video_model_dd("animatediff")
+            else:
+                self._sync_video_model_dd(None)
             return
 
         model_key = self._video_model
         name, res = _DISPLAY.get(model_key, (f"\u25cf {model_key}", ""))
         self._shot_model_lbl.set_label(name)
         self._shot_model_sub.set_label(res)
+        # Keep dropdown in sync with the confirmed-running model.
+        self._sync_video_model_dd(model_key)
 
         alt_key = self._shot_alt_model_key
         if alt_key:
@@ -4120,7 +4386,7 @@ class ControlPanel(Gtk.Box):
     # ── Servers popover ────────────────────────────────────────────────────────
 
     def _build_servers_popover(self) -> Gtk.Popover:
-        """Build the Servers ▾ popover with one row per managed service."""
+        """Build the Servers ▾ popover grouped by capability."""
         popover = Gtk.Popover()
         popover.set_has_arrow(False)
         # Keep the popover open after button clicks so the ◌ busy state and
@@ -4153,14 +4419,23 @@ class ControlPanel(Gtk.Box):
         sep.set_margin_bottom(4)
         outer.append(sep)
 
-        # One row per server.  Store widget refs so refresh and action feedback can update them.
+        # Store widget refs so refresh and action feedback can update them.
         self._servers_popover_dots: dict[str, Gtk.Label]  = {}
         self._servers_popover_states: dict[str, Gtk.Label] = {}
         self._servers_popover_start_btns: dict[str, Gtk.Button] = {}
         self._servers_popover_stop_btns: dict[str, Gtk.Button] = {}
         self._servers_popover_restart_btns: dict[str, Gtk.Button] = {}
 
+        # Group servers by capability; preserve CAPABILITY_LABELS order.
+        by_cap: dict[str, list] = {cap: [] for cap in _sm.CAPABILITY_LABELS}
+        last_dep = _settings.get("last_successful_deployment") or ""
+
         for key, sdef in _sm.SERVERS.items():
+            for cap in (sdef.capabilities or ()):
+                if cap in by_cap:
+                    by_cap[cap].append((key, sdef))
+
+        def _add_server_row(key: str, sdef) -> None:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             row.add_css_class("servers-popover-row")
 
@@ -4172,52 +4447,34 @@ class ControlPanel(Gtk.Box):
 
             text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             text_col.set_hexpand(True)
-            key_lbl = Gtk.Label(label=key)
-            key_lbl.add_css_class("servers-popover-key")
-            key_lbl.set_xalign(0)
-            text_col.append(key_lbl)
-            sub_lbl = Gtk.Label(label=sdef.label)
-            sub_lbl.add_css_class("servers-popover-label")
-            sub_lbl.set_xalign(0)
-            text_col.append(sub_lbl)
+            name_lbl = Gtk.Label(label=sdef.label)
+            name_lbl.add_css_class("servers-popover-key")
+            name_lbl.set_xalign(0)
+            text_col.append(name_lbl)
             row.append(text_col)
 
-            # Start button
             start_btn = Gtk.Button(label="▶ Start")
             start_btn.add_css_class("servers-popover-btn")
             start_btn.set_tooltip_text(f"Start {sdef.label}")
-            start_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "start"),
-            )
+            start_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "start"))
             self._servers_popover_start_btns[key] = start_btn
             row.append(start_btn)
 
-            # Stop button
             stop_btn = Gtk.Button(label="■ Stop")
             stop_btn.add_css_class("servers-popover-btn")
             stop_btn.add_css_class("servers-popover-btn-stop")
             stop_btn.set_tooltip_text(f"Stop {sdef.label}")
-            stop_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "stop"),
-            )
+            stop_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "stop"))
             self._servers_popover_stop_btns[key] = stop_btn
             row.append(stop_btn)
 
-            # Restart button
             restart_btn = Gtk.Button(label="↺")
             restart_btn.add_css_class("servers-popover-btn")
             restart_btn.set_tooltip_text(f"Restart {sdef.label}")
-            restart_btn.connect(
-                "clicked",
-                lambda _b, k=key: self._on_servers_action(k, "restart"),
-            )
+            restart_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "restart"))
             self._servers_popover_restart_btns[key] = restart_btn
             row.append(restart_btn)
 
-            # Star badge for the last successfully deployed server
-            last_dep = _settings.get("last_successful_deployment") or ""
             if key == last_dep:
                 star = Gtk.Label(label="★")
                 star.add_css_class("servers-popover-last-star")
@@ -4225,6 +4482,17 @@ class ControlPanel(Gtk.Box):
                 row.append(star)
 
             outer.append(row)
+
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            servers_in_cap = by_cap.get(cap, [])
+            if not servers_in_cap:
+                continue  # skip AnimateDiff (hardware-only, no server entry)
+            cap_hdr = Gtk.Label(label=cap_label)
+            cap_hdr.add_css_class("servers-cap-header")
+            cap_hdr.set_xalign(0)
+            outer.append(cap_hdr)
+            for key, sdef in servers_in_cap:
+                _add_server_row(key, sdef)
 
         popover.set_child(outer)
         return popover
@@ -4300,285 +4568,6 @@ class ControlPanel(Gtk.Box):
             GLib.idle_add(self._set_server_row_busy, key, False)
 
         threading.Thread(target=_worker, daemon=True).start()
-
-    # ── Playlists popover ──────────────────────────────────────────────────────
-
-    def _build_playlists_popover(self) -> Gtk.Popover:
-        """Build the Playlists ▾ popover with header, All Videos row, and per-playlist rows."""
-        popover = Gtk.Popover()
-        popover.set_has_arrow(False)
-        popover.set_autohide(True)
-
-        self._playlists_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._playlists_outer.set_margin_top(8)
-        self._playlists_outer.set_margin_bottom(8)
-        self._playlists_outer.set_margin_start(10)
-        self._playlists_outer.set_margin_end(10)
-
-        # Header: "Playlists" label + "+ New" button
-        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        hdr_lbl = Gtk.Label(label="Playlists")
-        hdr_lbl.add_css_class("servers-popover-key")
-        hdr_lbl.set_hexpand(True)
-        hdr_lbl.set_xalign(0)
-        hdr.append(hdr_lbl)
-        new_btn = Gtk.Button(label="+ New")
-        new_btn.add_css_class("playlists-new-btn")
-        new_btn.set_tooltip_text("Create a new playlist")
-        new_btn.connect("clicked", self._on_playlist_new_clicked)
-        hdr.append(new_btn)
-        self._playlists_outer.append(hdr)
-
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        sep.set_margin_top(4)
-        sep.set_margin_bottom(4)
-        self._playlists_outer.append(sep)
-
-        # "All Videos" fixed row
-        all_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        all_row.add_css_class("playlists-popover-row")
-        all_name = Gtk.Label(label="All Videos")
-        all_name.add_css_class("playlists-popover-name")
-        all_name.set_hexpand(True)
-        all_name.set_xalign(0)
-        all_row.append(all_name)
-        all_play_btn = Gtk.Button(label="▶")
-        all_play_btn.add_css_class("servers-popover-btn")
-        all_play_btn.set_tooltip_text("Watch TT-TV with all videos")
-        all_play_btn.connect("clicked", lambda _: (
-            self._playlists_btn.get_popover().popdown(),
-            self._on_open_playlist(None),
-        ))
-        all_row.append(all_play_btn)
-        self._playlists_outer.append(all_row)
-
-        # Dynamic "By Model" rows — rebuilt each time the popover opens.
-        sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        sep2.set_margin_top(6)
-        sep2.set_margin_bottom(2)
-        self._playlists_outer.append(sep2)
-        model_hdr = Gtk.Label(label="By Model")
-        model_hdr.add_css_class("servers-popover-label")
-        model_hdr.set_xalign(0)
-        model_hdr.set_margin_bottom(2)
-        self._playlists_outer.append(model_hdr)
-        self._model_rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._playlists_outer.append(self._model_rows_box)
-
-        # Dynamic per-playlist rows are appended/rebuilt in _rebuild_playlist_rows()
-        sep3 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        sep3.set_margin_top(6)
-        sep3.set_margin_bottom(2)
-        self._playlists_outer.append(sep3)
-        playlist_hdr = Gtk.Label(label="Your Playlists")
-        playlist_hdr.add_css_class("servers-popover-label")
-        playlist_hdr.set_xalign(0)
-        playlist_hdr.set_margin_bottom(2)
-        self._playlists_outer.append(playlist_hdr)
-        self._playlists_rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._playlists_outer.append(self._playlists_rows_box)
-
-        popover.set_child(self._playlists_outer)
-        return popover
-
-    def _on_playlists_popover_show(self, _popover) -> None:
-        """Rebuild the dynamic playlist rows each time the popover opens."""
-        self._rebuild_model_rows()
-        self._rebuild_playlist_rows()
-
-    def _rebuild_model_rows(self) -> None:
-        """Rebuild the By Model rows from the current history."""
-        child = self._model_rows_box.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self._model_rows_box.remove(child)
-            child = nxt
-
-        # Count videos per model ID from history.
-        records = self._store.all_records()
-        counts: dict[str, int] = {}
-        for r in records:
-            mid = getattr(r, "model", "") or ""
-            if mid and getattr(r, "media_type", "video") != "image":
-                counts[mid] = counts.get(mid, 0) + 1
-
-        if not counts:
-            lbl = Gtk.Label(label="No videos yet")
-            lbl.add_css_class("playlists-popover-count")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(4)
-            self._model_rows_box.append(lbl)
-            return
-
-        for model_id, count in sorted(counts.items(), key=lambda x: -x[1]):
-            display = _MODEL_DISPLAY.get(model_id, model_id)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            row.add_css_class("playlists-popover-row")
-            text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            text_col.set_hexpand(True)
-            name_lbl = Gtk.Label(label=display)
-            name_lbl.add_css_class("playlists-popover-name")
-            name_lbl.set_xalign(0)
-            text_col.append(name_lbl)
-            count_lbl = Gtk.Label(label=f"{count} video{'s' if count != 1 else ''}")
-            count_lbl.add_css_class("playlists-popover-count")
-            count_lbl.set_xalign(0)
-            text_col.append(count_lbl)
-            row.append(text_col)
-            play_btn = Gtk.Button(label="▶")
-            play_btn.add_css_class("servers-popover-btn")
-            play_btn.set_tooltip_text(f"Watch all {display} videos in TT-TV")
-            play_btn.connect("clicked", lambda _b, mid=model_id: (
-                self._playlists_btn.get_popover().popdown(),
-                self._on_open_model_playlist(mid),
-            ))
-            row.append(play_btn)
-            self._model_rows_box.append(row)
-
-    def _rebuild_playlist_rows(self) -> None:
-        """Clear and rebuild the per-playlist rows from the current store."""
-        from playlist_store import playlist_store as _ps
-
-        # Remove all existing rows
-        child = self._playlists_rows_box.get_first_child()
-        while child:
-            nxt = child.get_next_sibling()
-            self._playlists_rows_box.remove(child)
-            child = nxt
-
-        playlists = _ps.all()
-        if not playlists:
-            empty_lbl = Gtk.Label(label="No playlists yet — click + New to create one")
-            empty_lbl.add_css_class("servers-popover-label")
-            empty_lbl.set_margin_top(6)
-            empty_lbl.set_xalign(0)
-            self._playlists_rows_box.append(empty_lbl)
-            return
-
-        for pl in playlists:
-            sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            sep.set_margin_top(2)
-            sep.set_margin_bottom(2)
-            self._playlists_rows_box.append(sep)
-
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            row.add_css_class("playlists-popover-row")
-
-            text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            text_col.set_hexpand(True)
-            name_lbl = Gtk.Label(label=pl.name)
-            name_lbl.add_css_class("playlists-popover-name")
-            name_lbl.set_xalign(0)
-            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            name_lbl.set_max_width_chars(20)
-            text_col.append(name_lbl)
-            count = len(pl.record_ids)
-            count_lbl = Gtk.Label(label=f"{count} video{'s' if count != 1 else ''}"
-                                         + ("  •  auto-gen" if pl.auto_gen else ""))
-            count_lbl.add_css_class("playlists-popover-count")
-            count_lbl.set_xalign(0)
-            text_col.append(count_lbl)
-            row.append(text_col)
-
-            # Play button — open TT-TV for this playlist
-            play_btn = Gtk.Button(label="▶")
-            play_btn.add_css_class("servers-popover-btn")
-            play_btn.set_tooltip_text(f"Watch '{pl.name}' in TT-TV")
-            play_btn.connect("clicked", lambda _b, pid=pl.id: (
-                self._playlists_btn.get_popover().popdown(),
-                self._on_open_playlist(pid),
-            ))
-            row.append(play_btn)
-
-            # Edit button — enter selection mode
-            edit_btn = Gtk.Button(label="✎ Edit")
-            edit_btn.add_css_class("servers-popover-btn")
-            edit_btn.set_tooltip_text(f"Add/remove videos in '{pl.name}'")
-            edit_btn.connect(
-                "clicked",
-                lambda _b, pid=pl.id: (
-                    self._playlists_btn.get_popover().popdown(),
-                    self._on_enter_selection_mode(pid),
-                ),
-            )
-            row.append(edit_btn)
-
-            # Delete button
-            del_btn = Gtk.Button(label="🗑")
-            del_btn.add_css_class("playlists-del-btn")
-            del_btn.set_tooltip_text(f"Delete playlist '{pl.name}'")
-            del_btn.connect("clicked", lambda _b, pid=pl.id, pname=pl.name:
-                            self._on_playlist_delete_clicked(pid, pname))
-            row.append(del_btn)
-
-            self._playlists_rows_box.append(row)
-
-    def _on_playlist_new_clicked(self, _btn) -> None:
-        """Show a simple name-entry dialog and create the playlist."""
-        dialog = Gtk.Dialog(title="New Playlist", modal=True)
-        dialog.set_transient_for(self.get_root())
-        dialog.set_default_size(300, -1)
-        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        ok_btn = dialog.add_button("Create", Gtk.ResponseType.OK)
-        ok_btn.add_css_class("suggested-action")
-        ok_btn.set_sensitive(False)
-
-        content = dialog.get_content_area()
-        content.set_spacing(8)
-        content.set_margin_top(12)
-        content.set_margin_bottom(4)
-        content.set_margin_start(12)
-        content.set_margin_end(12)
-
-        lbl = Gtk.Label(label="Playlist name:")
-        lbl.set_xalign(0)
-        content.append(lbl)
-
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("e.g. Space Adventures")
-        entry.set_activates_default(True)
-        content.append(entry)
-
-        def _on_entry_changed(_e):
-            ok_btn.set_sensitive(bool(entry.get_text().strip()))
-
-        entry.connect("changed", _on_entry_changed)
-
-        def _on_response(dlg, resp):
-            name = entry.get_text().strip()
-            dlg.destroy()
-            if resp == Gtk.ResponseType.OK and name:
-                from playlist_store import playlist_store as _ps
-                pl = _ps.create(name)
-                self._playlists_btn.get_popover().popdown()
-                self._on_enter_selection_mode(pl.id)
-
-        dialog.connect("response", _on_response)
-        dialog.present()
-
-    def _on_playlist_delete_clicked(self, playlist_id: str, playlist_name: str) -> None:
-        """Show a confirmation dialog then delete the playlist."""
-        dialog = Gtk.MessageDialog(
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.NONE,
-            text=f"Delete playlist '{playlist_name}'?",
-            secondary_text="The videos themselves are not deleted.",
-        )
-        dialog.set_transient_for(self.get_root())
-        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        del_btn = dialog.add_button("Delete", Gtk.ResponseType.ACCEPT)
-        del_btn.add_css_class("destructive-action")
-
-        def _on_response(dlg, resp):
-            dlg.destroy()
-            if resp == Gtk.ResponseType.ACCEPT:
-                from playlist_store import playlist_store as _ps
-                _ps.delete(playlist_id)
-                self._rebuild_playlist_rows()
-
-        dialog.connect("response", _on_response)
-        dialog.present()
 
     # ── State ──────────────────────────────────────────────────────────────────
 
@@ -4660,10 +4649,18 @@ class ControlPanel(Gtk.Box):
         # Animate inputs: visible only in animate mode
         self._animate_box.set_visible(is_animate)
 
-        # CLIP LENGTH row: hidden for image source (frame count is not a meaningful
-        # concept for still image generation). Shown for video and animate sources.
+        # VIDEO MODEL row: only shown in video source (animate/image/artgen pick
+        # their model elsewhere).
+        if hasattr(self, "_video_model_row_widget"):
+            self._video_model_row_widget.set_visible(is_video)
+
+        # CLIP LENGTH row: hidden for image source and animatediff (which has no
+        # frame-count picker). Shown for video (wan2/mochi/skyreels) and animate.
+        is_animatediff = is_video and self._video_model == "animatediff"
         if hasattr(self, "_clip_length_row_widget"):
-            self._clip_length_row_widget.set_visible(is_video or is_animate)
+            self._clip_length_row_widget.set_visible(
+                (is_video or is_animate) and not is_animatediff
+            )
 
         # QUALITY row: only shown for video/animate sources where step count is meaningful.
         # Image (FLUX) uses its own separate step range and the row would be misleading.
@@ -4688,7 +4685,9 @@ class ControlPanel(Gtk.Box):
         # _source_desc_lbl and _server_start_btn are constructed after the model
         # selector buttons; set_active(True) on those buttons fires this callback
         # mid-_build() before those widgets exist. Skip silently in that case.
-        if not hasattr(self, "_source_desc_lbl"):
+        # MainWindow calls _set_model(pref) after _build() completes so the full
+        # update runs once all widgets are ready.
+        if not hasattr(self, "_source_desc_lbl") or not hasattr(self, "_server_start_btn"):
             return
         if self._model_source == "video":
             self._video_model = model
@@ -4701,6 +4700,8 @@ class ControlPanel(Gtk.Box):
                     "Start the Mochi-1 inference server.\n"
                     "Video (Mochi-1) → start_mochi.sh"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
             elif model == "skyreels":
                 self._source_desc_lbl.set_label(
                     "async job  ·  SkyReels-V2-I2V-14B  ·  ~10–30 min  ·  960×544 97-frame  ·  Blackhole  ·  image-to-video"
@@ -4709,6 +4710,15 @@ class ControlPanel(Gtk.Box):
                     "Start the SkyReels-V2-I2V-14B inference server.\n"
                     "Video (SkyReels I2V) → start_skyreels_i2v.sh  (P300X2 Blackhole)"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
+            elif model == "animatediff":
+                self._source_desc_lbl.set_label(
+                    "local TTNN  ·  AnimateDiff  ·  ~5 min/frame  ·  animated GIF  ·  no server needed"
+                )
+                # AnimateDiff runs locally on Blackhole — no server to start/stop.
+                self._server_start_btn.set_sensitive(False)
+                self._server_stop_btn.set_sensitive(False)
             else:
                 self._source_desc_lbl.set_label(
                     "async job  ·  Wan2.2-T2V  ·  ~3–10 min  ·  720p MP4"
@@ -4717,6 +4727,11 @@ class ControlPanel(Gtk.Box):
                     "Start the inference server using the local launch script.\n"
                     "Video (Wan2.2) → start_wan_qb2.sh  ·  Image → start_flux.sh"
                 )
+                self._server_start_btn.set_sensitive(True)
+                self._server_stop_btn.set_sensitive(True)
+            # Hide CLIP LENGTH row for animatediff (no frame count picker).
+            if hasattr(self, "_clip_length_row_widget"):
+                self._clip_length_row_widget.set_visible(model != "animatediff")
         elif self._model_source == "image":
             self._image_model = model
 
@@ -4725,6 +4740,8 @@ class ControlPanel(Gtk.Box):
         if hasattr(self, "_clip_btns"):
             self._refresh_clip_labels()
         self._update_seed_well_state()
+        # Re-evaluate Generate button — animatediff is always ready (no server needed).
+        self._update_btns()
 
     def get_model_source(self) -> str:
         return self._model_source
@@ -4753,11 +4770,15 @@ class ControlPanel(Gtk.Box):
             # the indicator to "offline" while the start script is in progress.
             return
 
+        # Derive a capability label for this tab so status strings are user-centric.
+        cap = _SOURCE_TO_CAP.get(self._model_source, "video")
+        cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
+
         if not ready:
             # Offline
             self._apply_server_row_style("offline")
-            self._server_model_lbl.set_label("No server")
-            self._server_sub_lbl.set_label("localhost:8000 unreachable")
+            self._server_model_lbl.set_label(f"{cap_label} not ready")
+            self._server_sub_lbl.set_label("Start a server to generate")
             self._server_start_btn.set_sensitive(True)
             self._server_stop_btn.set_sensitive(False)
             self._server_switch_btn.set_visible(False)
@@ -4772,17 +4793,15 @@ class ControlPanel(Gtk.Box):
                 and source_for_model != current_source
             )
             display = (
-                _MODEL_DISPLAY_SERVER.get(running_model, "Server online")
+                _MODEL_DISPLAY_SERVER.get(running_model, f"{cap_label} ready")
                 if running_model
-                else "Server online"
+                else f"{cap_label} ready"
             )
 
             if mismatch:
                 self._apply_server_row_style("mismatch")
                 self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label(
-                    f"{current_source.capitalize()} tab needs a different server"
-                )
+                self._server_sub_lbl.set_label("Wrong model running — switch tabs")
                 self._server_ready = False
                 self._server_switch_btn.set_visible(True)
                 self._server_start_btn.set_sensitive(False)
@@ -4790,7 +4809,7 @@ class ControlPanel(Gtk.Box):
             else:
                 self._apply_server_row_style("match")
                 self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label("localhost:8000")
+                self._server_sub_lbl.set_label("")
                 self._server_ready = True
                 self._server_switch_btn.set_visible(False)
                 self._server_start_btn.set_sensitive(False)
@@ -4925,13 +4944,19 @@ class ControlPanel(Gtk.Box):
     def _update_btns(self) -> None:
         # When idle: "Generate" (disabled until server ready).
         # When busy: "+ Add to Queue" (always enabled so user can queue the next prompt).
+        # AnimateDiff runs locally — no server needed — so it is always "ready".
+        local_only = (
+            self._model_source == "video"
+            and getattr(self, "_video_model", "") == "animatediff"
+        )
+        can_generate = self._server_ready or local_only
         if self._busy:
             self._gen_btn.set_label("+ Add to Queue")
-            self._gen_btn.set_sensitive(self._server_ready)
+            self._gen_btn.set_sensitive(can_generate)
             self._gen_btn.set_tooltip_text("Queue this prompt — runs automatically after current generation")
         else:
             self._gen_btn.set_label("Generate")
-            self._gen_btn.set_sensitive(self._server_ready)
+            self._gen_btn.set_sensitive(can_generate)
             self._gen_btn.set_tooltip_text("")
         pass  # recover button removed — sensitivity managed via win.recover-jobs action
 
@@ -5632,8 +5657,7 @@ class _StatusBar(Gtk.Box):
             lbl.add_css_class("tt-statusbar-sep")
             return lbl
 
-        # ── Server segment: MenuButton (dot + model) → popover with controls ──
-        # Clicking the server segment opens a slim popover with Start / Stop.
+        # ── Server segment: MenuButton (dot + label) → capability dashboard popover ──
         self._srv_dot = Gtk.Label(label="⬤")
         self._srv_dot.add_css_class("tt-statusbar-dot")
         self._srv_dot.add_css_class("tt-statusbar-dot-offline")
@@ -5649,17 +5673,14 @@ class _StatusBar(Gtk.Box):
         self._srv_menu_btn.add_css_class("tt-statusbar-srv-btn")
         self._srv_menu_btn.set_child(srv_btn_content)
 
-        # Build the server-control popover
-        self._pop_status_lbl = Gtk.Label(label="Server offline")
-        self._pop_status_lbl.set_xalign(0)
-        self._pop_status_lbl.add_css_class("tt-statusbar-seg")
-
+        # ── Capability dashboard popover ──────────────────────────────────────
+        # Shows readiness for every capability (one row each).
+        # Start/Stop buttons at the bottom operate on the port-8000 server
+        # (video/animate/image).  Prompt AI and Artgen are managed via Servers ▾.
         self._pop_start = Gtk.Button(label="▶  Start server")
         self._pop_start.add_css_class("generate-btn")
         self._pop_stop  = Gtk.Button(label="■  Stop server")
         self._pop_stop.add_css_class("cancel-btn")
-        pop_start = self._pop_start
-        pop_stop  = self._pop_stop
 
         _popover = Gtk.Popover()
         _popover.set_position(Gtk.PositionType.TOP)
@@ -5672,17 +5693,41 @@ class _StatusBar(Gtk.Box):
             _popover.popdown()
             stop_cb()
 
-        pop_start.connect("clicked", _start_and_close)
-        pop_stop.connect("clicked", _stop_and_close)
+        self._pop_start.connect("clicked", _start_and_close)
+        self._pop_stop.connect("clicked", _stop_and_close)
 
-        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         pop_box.set_margin_top(10)
         pop_box.set_margin_bottom(10)
         pop_box.set_margin_start(14)
         pop_box.set_margin_end(14)
-        pop_box.append(self._pop_status_lbl)
-        pop_box.append(pop_start)
-        pop_box.append(pop_stop)
+
+        # One row per capability: left = capability label, right = status dot + detail
+        self._cap_rows: dict = {}  # cap_key → Gtk.Label (status)
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            name_lbl = Gtk.Label(label=cap_label)
+            name_lbl.add_css_class("cap-row-label")
+            name_lbl.set_xalign(0)
+            name_lbl.set_hexpand(True)
+            row.append(name_lbl)
+            status_lbl = Gtk.Label(label="○ checking…")
+            status_lbl.add_css_class("cap-row-offline")
+            status_lbl.set_xalign(1)
+            row.append(status_lbl)
+            self._cap_rows[cap] = status_lbl
+            pop_box.append(row)
+
+        _sep_line = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        _sep_line.set_margin_top(4)
+        _sep_line.set_margin_bottom(4)
+        pop_box.append(_sep_line)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_row.append(self._pop_start)
+        btn_row.append(self._pop_stop)
+        pop_box.append(btn_row)
+
         _popover.set_child(pop_box)
         self._srv_menu_btn.set_popover(_popover)
 
@@ -5728,7 +5773,7 @@ class _StatusBar(Gtk.Box):
 
     # ── Public update methods (main-thread only) ───────────────────────────────
 
-    def _set_srv_dot(self, css_state: str, model_text: str, pop_text: str) -> None:
+    def _set_srv_dot(self, css_state: str, model_text: str, _unused: str = "") -> None:
         for cls in ("tt-statusbar-dot-ready", "tt-statusbar-dot-offline",
                     "tt-statusbar-dot-starting", "tt-statusbar-dot-error"):
             self._srv_dot.remove_css_class(cls)
@@ -5740,7 +5785,23 @@ class _StatusBar(Gtk.Box):
         self._srv_lbl.add_css_class(
             "tt-statusbar-seg-error" if css_state == "error" else "tt-statusbar-seg"
         )
-        self._pop_status_lbl.set_label(pop_text)
+
+    def update_capability(self, cap: str, ready: bool, detail: str = "") -> None:
+        """Update one capability row in the dashboard popover.
+
+        cap    — capability key ("video", "prompt", "artgen", "animatediff", …)
+        ready  — True = green dot, False = grey dot
+        detail — short model or status string shown next to the dot
+        """
+        lbl = self._cap_rows.get(cap)
+        if lbl is None:
+            return
+        dot = "●" if ready else "○"
+        text = f"{dot} {detail}" if detail else ("● ready" if ready else "○ offline")
+        lbl.set_label(text)
+        lbl.remove_css_class("cap-row-ready")
+        lbl.remove_css_class("cap-row-offline")
+        lbl.add_css_class("cap-row-ready" if ready else "cap-row-offline")
 
     def update_server(self, ready: bool, model: "str | None") -> None:
         """Reflect server health in the status dot and model label.
@@ -5753,9 +5814,9 @@ class _StatusBar(Gtk.Box):
         self._in_error = False
         self._stop_timer()
         if ready:
-            self._set_srv_dot("ready", model or "ready", f"● {model or 'Server'} ready")
+            self._set_srv_dot("ready", model or "ready", "")
         else:
-            self._set_srv_dot("offline", "offline", "Server offline")
+            self._set_srv_dot("offline", model or "offline", "")
         # Re-enable popover controls once the launch/stop operation has settled.
         self._pop_start.set_sensitive(True)
         self._pop_stop.set_sensitive(True)
@@ -6246,6 +6307,23 @@ class PreferencesDialog(Gtk.Window):
         # Note: quality preset and clip length are now controlled by the QUALITY
         # and CLIP LENGTH button rows in the main panel.
 
+        # AnimateDiff frame count
+        anim_frames_spin = Gtk.SpinButton()
+        anim_frames_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("animatediff_frames"),
+            lower=1, upper=64, step_increment=1, page_increment=4,
+        ))
+        anim_frames_spin.set_digits(0)
+        anim_frames_spin.connect("value-changed", lambda w: _settings.set(
+            "animatediff_frames", int(w.get_value())
+        ))
+        box.append(self._row(
+            "AnimateDiff frames:", anim_frames_spin,
+            "Number of frames to generate per AnimateDiff GIF. "
+            "More frames = longer GIF, ~5 min/frame on Blackhole. "
+            "Default: 8 (~40 min total)."
+        ))
+
         # Sleep after N completions
         sleep_spin = Gtk.SpinButton()
         sleep_spin.set_adjustment(Gtk.Adjustment(
@@ -6503,7 +6581,7 @@ class MainWindow(Gtk.ApplicationWindow):
                  prompt_server_url: str = "http://127.0.0.1:8001",
                  inventory_url: str = ""):
         super().__init__(application=app, title="TT Local Generator")
-        self.set_default_size(1400, 800)
+        self.set_default_size(1280, 800)
 
         self._alive: bool = True   # set False in do_close_request; guards idle_add callbacks
         self._flash_restore_id: int = 0   # GLib timer id for pending _flash_status restore
@@ -6536,6 +6614,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._build_ui()
         self._load_history()
+        self._rebuild_playlists_menu()   # populate Playlists menu after history is loaded
         self._restore_queue()
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
@@ -6630,6 +6709,7 @@ class MainWindow(Gtk.ApplicationWindow):
         outer_paned.set_start_child(self._ctrl_wrapper)
         outer_paned.set_shrink_start_child(False)
         outer_paned.set_resize_start_child(False)
+        outer_paned.set_position(310)   # pin controls to their declared minimum width
 
         # Inner paned splits gallery (left) from detail panel (right)
         inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -6644,6 +6724,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.set_transition_duration(150)
         self._gallery_stack.set_hexpand(True)
         self._gallery_stack.set_vexpand(True)
+        # Report only the visible child's minimum width, not the max of all children.
+        # Without this, the stack includes ArtgenPanel's 606px minimum even in video
+        # mode, inflating the window minimum from 1222px to 1352px and forcing it to
+        # open larger than set_default_size(1280, 800).
+        self._gallery_stack.set_hhomogeneous(False)
 
         shared_cbs = dict(
             iterate_cb=self._controls.populate_prompts,
@@ -6878,6 +6963,27 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add_action(toggle_detail)
         self._detail_visible: bool = True
 
+        # ── Playlists ─────────────────────────────────────────────────────────
+        pl_all = Gio.SimpleAction.new("playlist-all", None)
+        pl_all.connect("activate", lambda *_: self._on_open_attractor_for_playlist(None))
+        self.add_action(pl_all)
+
+        pl_play = Gio.SimpleAction.new("playlist-play", GLib.VariantType.new("s"))
+        pl_play.connect("activate", lambda _a, p: self._on_open_attractor_for_playlist(p.get_string()))
+        self.add_action(pl_play)
+
+        pl_model = Gio.SimpleAction.new("playlist-model", GLib.VariantType.new("s"))
+        pl_model.connect("activate", lambda _a, p: self._on_open_attractor_for_model(p.get_string()))
+        self.add_action(pl_model)
+
+        pl_new = Gio.SimpleAction.new("playlist-new", None)
+        pl_new.connect("activate", lambda *_: self._on_playlist_new())
+        self.add_action(pl_new)
+
+        pl_delete = Gio.SimpleAction.new("playlist-delete", GLib.VariantType.new("s"))
+        pl_delete.connect("activate", lambda _a, p: self._on_playlist_delete(p.get_string()))
+        self.add_action(pl_delete)
+
     def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
         """Build and return the Gtk.PopoverMenuBar driven by a Gio.Menu model."""
         menumodel = Gio.Menu()
@@ -6940,12 +7046,129 @@ class MainWindow(Gtk.ApplicationWindow):
         tttv_menu.append("Configure TT-TV…", "win.preferences-tttv")
         menumodel.append_submenu("TT-TV", tttv_menu)
 
+        # ── Playlists ─────────────────────────────────────────────────────────
+        # Keep mutable section references so _rebuild_playlists_menu() can
+        # clear and repopulate them without rebuilding the whole menu model.
+        pl_menu = Gio.Menu()
+        pl_menu.append("Watch All Videos", "win.playlist-all")
+
+        self._playlists_model_section = Gio.Menu()   # one item per model in history
+        pl_menu.append_section("By Model", self._playlists_model_section)
+
+        self._playlists_playlist_section = Gio.Menu()  # one item per named playlist
+        pl_menu.append_section("Your Playlists", self._playlists_playlist_section)
+
+        pl_manage = Gio.Menu()
+        pl_manage.append("New Playlist…", "win.playlist-new")
+        pl_menu.append_section(None, pl_manage)
+
+        menumodel.append_submenu("Playlists", pl_menu)
+
         # ── View ──────────────────────────────────────────────────────────────
         view_menu = Gio.Menu()
         view_menu.append("Toggle Detail Panel", "win.toggle-detail")
         menumodel.append_submenu("View", view_menu)
 
         return Gtk.PopoverMenuBar.new_from_model(menumodel)
+
+    # ── Playlist menu helpers ──────────────────────────────────────────────────
+
+    def _rebuild_playlists_menu(self) -> None:
+        """Repopulate the dynamic By Model and Your Playlists menu sections."""
+        from playlist_store import playlist_store as _ps
+
+        # ── By Model ──────────────────────────────────────────────────────────
+        self._playlists_model_section.remove_all()
+        records = self._store.all_records()
+        counts: dict[str, int] = {}
+        for r in records:
+            mid = getattr(r, "model", "") or ""
+            if mid and getattr(r, "media_type", "video") != "image":
+                counts[mid] = counts.get(mid, 0) + 1
+        for mid, cnt in sorted(counts.items()):
+            short = mid.split("/")[-1]   # strip HF org prefix if present
+            item = Gio.MenuItem.new(f"{short} ({cnt})", "win.playlist-model")
+            item.set_attribute_value("target", GLib.Variant("s", mid))
+            self._playlists_model_section.append_item(item)
+
+        # ── Your Playlists ────────────────────────────────────────────────────
+        self._playlists_playlist_section.remove_all()
+        for pl in _ps.all():
+            cnt = len(pl.record_ids)
+            label = f"{pl.name} ({cnt} video{'s' if cnt != 1 else ''})"
+            # Each playlist gets a submenu: Watch ▶ | Delete…
+            sub = Gio.Menu()
+            watch_item = Gio.MenuItem.new("Watch ▶", "win.playlist-play")
+            watch_item.set_attribute_value("target", GLib.Variant("s", pl.id))
+            sub.append_item(watch_item)
+            del_item = Gio.MenuItem.new("Delete…", "win.playlist-delete")
+            del_item.set_attribute_value("target", GLib.Variant("s", pl.id))
+            sub.append_item(del_item)
+            self._playlists_playlist_section.append_submenu(label, sub)
+
+    def _on_playlist_new(self) -> None:
+        """Show a name-entry dialog and create the playlist, then enter selection mode."""
+        dialog = Gtk.Dialog(title="New Playlist", modal=True)
+        dialog.set_transient_for(self)
+        dialog.set_default_size(300, -1)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        ok_btn = dialog.add_button("Create", Gtk.ResponseType.OK)
+        ok_btn.add_css_class("suggested-action")
+        ok_btn.set_sensitive(False)
+
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_margin_top(12)
+        content.set_margin_bottom(4)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        lbl = Gtk.Label(label="Playlist name:")
+        lbl.set_xalign(0)
+        content.append(lbl)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("e.g. Space Adventures")
+        entry.set_activates_default(True)
+        content.append(entry)
+        entry.connect("changed", lambda _e: ok_btn.set_sensitive(bool(entry.get_text().strip())))
+
+        def _on_response(dlg, resp):
+            name = entry.get_text().strip()
+            dlg.destroy()
+            if resp == Gtk.ResponseType.OK and name:
+                from playlist_store import playlist_store as _ps
+                pl = _ps.create(name)
+                self._rebuild_playlists_menu()
+                self._on_enter_selection_mode(pl.id)
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
+    def _on_playlist_delete(self, playlist_id: str) -> None:
+        """Show a confirmation dialog then delete the playlist."""
+        from playlist_store import playlist_store as _ps
+        pl = _ps.get(playlist_id)
+        if pl is None:
+            return
+        dialog = Gtk.MessageDialog(
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=f"Delete playlist ‘{pl.name}’?",
+            secondary_text="The videos themselves are not deleted.",
+        )
+        dialog.set_transient_for(self)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        del_btn = dialog.add_button("Delete", Gtk.ResponseType.ACCEPT)
+        del_btn.add_css_class("destructive-action")
+
+        def _on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.ACCEPT:
+                _ps.delete(playlist_id)
+                self._rebuild_playlists_menu()
+
+        dialog.connect("response", _on_response)
+        dialog.present()
 
     # ── Menu action handlers ───────────────────────────────────────────────────
 
@@ -7265,9 +7488,18 @@ class MainWindow(Gtk.ApplicationWindow):
             # operation finishes, then health results flow through normally.
             # Also skip when artgen is the active source: the artgen health
             # loop owns the status bar in that mode (it polls port 8002).
+            _source = self._controls.get_model_source()
+            cap = _MODEL_TO_CAP.get(running_model or "") \
+                  or (_SOURCE_TO_CAP.get(_source, "video") if _source != "artgen" else "video")
+            cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
+            dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
             display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
             if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
-                self._hw_statusbar.update_server(ready, display_model or None)
+                self._hw_statusbar.update_server(ready, dot_text)
+            # Update the capability dashboard row, but never let port-8000 results
+            # overwrite the artgen row — that row is owned by _on_artgen_health_result.
+            if cap != "artgen":
+                self._hw_statusbar.update_capability(cap, ready, display_model or "")
 
             if ready:
                 # Stop tailing the Docker log — server is confirmed up
@@ -7363,6 +7595,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if not self._alive:
             return False
         self._controls.set_prompt_gen_state(ready)
+        self._hw_statusbar.update_capability(
+            "prompt", ready, "Qwen3-0.6B" if ready else "")
         return False  # one-shot idle callback
 
     # ── Artgen server health worker (port 8002) ────────────────────────────────
@@ -7371,6 +7605,16 @@ class MainWindow(Gtk.ApplicationWindow):
         """Start background polling for the artgen LLM server on port 8002."""
         self._artgen_health_stop = threading.Event()
         threading.Thread(target=self._artgen_health_loop, daemon=True).start()
+        # AnimateDiff capability is hardware-based (no server).  Check once at startup.
+        def _check_animatediff():
+            try:
+                from artgen.generators.animatediff import check_hardware
+                ok, msg = check_hardware()
+            except Exception:
+                ok, msg = False, "unavailable"
+            GLib.idle_add(self._hw_statusbar.update_capability,
+                          "animatediff", ok, msg if ok else "hardware not detected")
+        threading.Thread(target=_check_animatediff, daemon=True).start()
 
     def _artgen_health_loop(self) -> None:
         """Polls port 8002 every 10 s; posts result to main thread via idle_add.
@@ -7412,11 +7656,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """Runs on main thread. Updates the toolbar status bar when artgen is active."""
         if not self._alive:
             return False
-        if self._controls.get_model_source() != "artgen":
-            return False
-        if not self._controls._server_launching:
-            label = model if (ready and model) else "offline"
-            self._hw_statusbar.update_server(ready, label)
+        cap_label = _sm.CAPABILITY_LABELS.get("artgen", "Generative art")
+        dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
+        if self._controls.get_model_source() == "artgen":
+            if not self._controls._server_launching:
+                self._hw_statusbar.update_server(ready, dot_text)
+        self._hw_statusbar.update_capability("artgen", ready, model or "")
         return False
 
     # ── Remote record localization ──────────────────────────────────────────────
@@ -7612,11 +7857,13 @@ class MainWindow(Gtk.ApplicationWindow):
         system_prompt = self._prompt_gen_system_prompt
 
         # Refine generic "video" source to model-specific type when the active
-        # video model has its own prompt vocabulary (SkyReels, etc.).
+        # video model has its own prompt vocabulary (SkyReels, AnimateDiff, etc.).
         if source == "video":
             active_video_model = self._controls.get_video_model()
             if active_video_model == "skyreels":
                 source = "skyreels"
+            elif active_video_model == "animatediff":
+                source = "animatediff"
 
         def run():
             try:
@@ -7776,7 +8023,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if checked_ids:
             _ps.add_records(playlist_id, checked_ids)
 
-        count = len(_ps.get(playlist_id).record_ids)
+        refreshed = _ps.get(playlist_id)
+        count = len(refreshed.record_ids) if refreshed is not None else 0
         self._set_status(
             f"Playlist \"{pl.name}\" updated — {count} video{'s' if count != 1 else ''}"
         )
@@ -8091,42 +8339,56 @@ class MainWindow(Gtk.ApplicationWindow):
                 model="wan2.2-animate-14b",
             )
         else:
-            model_name = _VIDEO_MODEL_IDS.get(
-                model_id or self._controls.get_video_model(), "wan2.2-t2v"
-            )
-            self._set_status(f"Submitting {model_name} video generation job…")
-            # Resolve num_frames from the CLIP LENGTH slot setting.
-            # Models in MODELS_WITH_FIXED_FRAMES hard-code their frame count in the
-            # runner and ignore num_frames — pass None so the worker uses its default.
-            from generation_config import clip_frames, MODELS_WITH_FIXED_FRAMES
-            num_frames_arg: "int | None" = None
-            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels"
-            slot = str(_settings.get("clip_length_slot") or "standard")
-            if video_model_key not in MODELS_WITH_FIXED_FRAMES:
-                num_frames_arg = clip_frames(video_model_key, slot)
+            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
-            # For I2V models (skyreels), base64-encode the seed image and send
-            # it to the server as the conditioning frame.
-            image_b64: "str | None" = None
-            if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
-                with open(seed_image_path, "rb") as _f:
-                    _raw = _f.read()
-                _ext = Path(seed_image_path).suffix.lower().lstrip(".")
-                _mime = "image/jpeg" if _ext in ("jpg", "jpeg") else f"image/{_ext}"
-                image_b64 = f"data:{_mime};base64," + base64.b64encode(_raw).decode()
+            if video_model_key == "animatediff":
+                self._set_status("Starting AnimateDiff generation on Blackhole…")
+                gen = AnimateDiffGenerationWorker(
+                    store=self._store,
+                    prompt=prompt,
+                    negative_prompt=neg or "blurry, low quality",
+                    steps=steps,
+                    seed=seed if seed >= 0 else 42,
+                    frames=int(_settings.get("animatediff_frames") or 8),
+                    temporal_alpha=0.35,
+                    model="animatediff-blackhole",
+                )
+            else:
+                model_name = _VIDEO_MODEL_IDS.get(
+                    model_id or video_model_key, "wan2.2-t2v"
+                )
+                self._set_status(f"Submitting {model_name} video generation job…")
+                # Resolve num_frames from the CLIP LENGTH slot setting.
+                # Models in MODELS_WITH_FIXED_FRAMES hard-code their frame count in the
+                # runner and ignore num_frames — pass None so the worker uses its default.
+                from generation_config import clip_frames, MODELS_WITH_FIXED_FRAMES
+                num_frames_arg: "int | None" = None
+                slot = str(_settings.get("clip_length_slot") or "standard")
+                if video_model_key not in MODELS_WITH_FIXED_FRAMES:
+                    num_frames_arg = clip_frames(video_model_key, slot)
 
-            gen = GenerationWorker(
-                client=self._client,
-                store=self._store,
-                prompt=prompt,
-                negative_prompt=neg,
-                num_inference_steps=steps,
-                seed=seed,
-                seed_image_path=seed_image_path,
-                model=model_name,
-                num_frames=num_frames_arg,
-                image=image_b64,
-            )
+                # For I2V models (skyreels), base64-encode the seed image and send
+                # it to the server as the conditioning frame.
+                image_b64: "str | None" = None
+                if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
+                    with open(seed_image_path, "rb") as _f:
+                        _raw = _f.read()
+                    _ext = Path(seed_image_path).suffix.lower().lstrip(".")
+                    _mime = "image/jpeg" if _ext in ("jpg", "jpeg") else f"image/{_ext}"
+                    image_b64 = f"data:{_mime};base64," + base64.b64encode(_raw).decode()
+
+                gen = GenerationWorker(
+                    client=self._client,
+                    store=self._store,
+                    prompt=prompt,
+                    negative_prompt=neg,
+                    num_inference_steps=steps,
+                    seed=seed,
+                    seed_image_path=seed_image_path,
+                    model=model_name,
+                    num_frames=num_frames_arg,
+                    image=image_b64,
+                )
         self._worker_gen = gen
 
         def run():
@@ -8773,6 +9035,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._attractor_win is not None:
             GLib.idle_add(self._attractor_win.add_record, record)
         self._update_attractor_btn()
+        self._rebuild_playlists_menu()   # refresh By Model counts after new generation
         # Sleep-after-N: count completions and suspend if the threshold is reached
         self._gen_completed_count += 1
         limit = int(_settings.get("sleep_after_n_gens"))

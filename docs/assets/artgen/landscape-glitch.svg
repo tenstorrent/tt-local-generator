@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450">
+<g transform="scale(1,-1) translate(0,-450)">
+  <defs>
+    <linearGradient id="sky" gradientUnits="objectBoundingBox" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00FF88"/>
+      <stop offset="0.5" stop-color="#FF00FF"/>
+      <stop offset="1" stop-color="#00FFFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="450" fill="url(#sky)"/>
+  <g>
+    <ellipse cx="400" cy="225" rx="300" ry="150" fill="#4682B4" opacity="0.25"/>
+    <circle cx="120" cy="180" r="2.5" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="210" cy="200" r="1.8" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="320" cy="160" r="2.2" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="430" cy="210" r="1.5" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="550" cy="190" r="2.8" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="670" cy="230" r="1.6" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="180" cy="250" r="2.0" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="290" cy="220" r="1.4" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="400" cy="200" r="2.6" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="510" cy="240" r="1.9" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="620" cy="210" r="2.4" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="150" cy="190" r="1.7" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="260" cy="170" r="2.3" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="370" cy="230" r="1.5" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="480" cy="190" r="2.1" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="590" cy="220" r="1.8" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="170" cy="210" r="2.0" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="280" cy="240" r="1.6" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="390" cy="180" r="2.4" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="500" cy="200" r="1.9" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="610" cy="230" r="2.2" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="130" cy="200" r="1.8" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="240" cy="190" r="2.5" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="350" cy="220" r="1.7" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="460" cy="210" r="2.3" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="570" cy="240" r="1.6" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="190" cy="230" r="1.9" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="300" cy="200" r="2.2" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="410" cy="190" r="1.5" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="520" cy="220" r="2.4" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="630" cy="210" r="1.8" fill="#E8F4FF" opacity="0.8"/>
+    <circle cx="160" cy="220" r="2.0" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="270" cy="180" r="1.6" fill="#E8F4FF" opacity="0.9"/>
+    <circle cx="380" cy="230" r="2.3" fill="#E8F4FF" opacity="0.6"/>
+    <circle cx="490" cy="200" r="1.9" fill="#E8F4FF" opacity="0.7"/>
+    <circle cx="600" cy="240" r="2.2" fill="#E8F4FF" opacity="0.8"/>
+  </g>
+  
+  <polygon points="100,450 150,300 200,350 250,320 300,360 350,330 400,370 450,340 500,380 550,350 600,390 650,360 700,400 750,370 800,410 750,450 700,450 650,450 600,450 550,450 500,450 450,450 400,450 350,450 300,450 250,450 200,450 150,450 100,450" fill="#030A10"/>
+  <rect x="0" y="342" width="800" height="108" fill="#030A10"/>
+  <circle cx="400" cy="120" r="32" fill="#E8F4FF"/>
+</g>
+  <text x="494" y="97" font-family="monospace" font-size="9" fill="#FF6600" opacity="0.32">├▀▒▒▓┼▄◆├▄╝│╡▫</text>
+  <text x="503" y="195" font-family="monospace" font-size="11" fill="#FF00FF" opacity="0.34">╡╠█▪╔◆╫│╣□◆</text>
+  <text x="509" y="220" font-family="monospace" font-size="9" fill="#FF0044" opacity="0.66">█╝╬▓╠┬╬┬├</text>
+  <text x="181" y="263" font-family="monospace" font-size="9" fill="#FFFF00" opacity="0.29">┬╠╬▪</text>
+  <text x="158" y="222" font-family="monospace" font-size="13" fill="#FFFF00" opacity="0.66">┼╝╚□█◇▪</text>
+  <text x="498" y="253" font-family="monospace" font-size="13" fill="#FF6600" opacity="0.46">□╔▫┼░◆█╗═╬╣□■│</text>
+  <text x="330" y="418" font-family="monospace" font-size="13" fill="#00FF88" opacity="0.28">▪◆█▀╔□│┼▫╬</text>
+  <text x="229" y="209" font-family="monospace" font-size="16" fill="#00FF88" opacity="0.28">▀┼┼▀◆</text>
+  <text x="22" y="429" font-family="monospace" font-size="13" fill="#00FFFF" opacity="0.4">││╠╪╡╫</text>
+</svg>

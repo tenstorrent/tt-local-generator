@@ -1,51 +1,56 @@
 """Tests for prompt_client — no real server or LLM needed."""
+import io
+import json
 import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 import pytest
-import requests
 
 import prompt_client
+
+
+def _mock_urlopen(body: dict):
+    """Return a context-manager mock that yields a readable response."""
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(body).encode()
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
 
 
 # ── check_health ──────────────────────────────────────────────────────────────
 
 def test_check_health_true_when_model_ready():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"status": "ok", "model_ready": True}
-    with patch("prompt_client.requests.get", return_value=mock_resp):
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen({"model_ready": True})):
         assert prompt_client.check_health() is True
 
 
 def test_check_health_false_when_model_not_ready():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"status": "ok", "model_ready": False}
-    with patch("prompt_client.requests.get", return_value=mock_resp):
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen({"model_ready": False})):
         assert prompt_client.check_health() is False
 
 
 def test_check_health_false_on_network_error():
-    with patch("prompt_client.requests.get", side_effect=requests.ConnectionError()):
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
         assert prompt_client.check_health() is False
 
 
 def test_check_health_false_on_non_200():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 503
-    with patch("prompt_client.requests.get", return_value=mock_resp):
+    with patch("urllib.request.urlopen",
+               side_effect=urllib.error.HTTPError(None, 503, "Service Unavailable", {}, None)):
         assert prompt_client.check_health() is False
 
 
 def test_check_health_false_on_json_decode_error():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.side_effect = ValueError("No JSON object could be decoded")
-    with patch("prompt_client.requests.get", return_value=mock_resp):
+    resp = MagicMock()
+    resp.read.return_value = b"not json at all"
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    with patch("urllib.request.urlopen", return_value=resp):
         assert prompt_client.check_health() is False
 
 

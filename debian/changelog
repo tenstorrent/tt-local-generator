@@ -1,3 +1,123 @@
+tt-local-generator (0.3.3) noble; urgency=medium
+
+  * prompt engine: six structural slug templates rotate the syntactic shape
+    of every algorithmically-generated video/SkyReels prompt so the LLM
+    receives different sentence patterns on each call.
+  * prompt engine: UNEXPECTED_JUXTAPOSITIONS word bank (24 entries) injected
+    at 12 % probability as a sixth slot — surreal modifiers the LLM cannot
+    remove without violating its "keep every element" instruction.
+  * prompt engine: adaptive LLM sampling — temperature, top_p, and max_tokens
+    scale to model size (0.6 B → temp 1.05; 7-8 B → 0.85; 13-14 B → 0.75;
+    30 B+ → 0.65); small models (<3 B) run n=3 candidates and the one with
+    the highest content-word specificity score is selected.
+  * prompt engine: anti-repetition sliding window (last 20 slugs); slugs with
+    Jaccard similarity ≥ 0.35 against any recent slug are retried up to 5 times
+    before accepting the least-similar candidate.
+  * prompt engine: Markov state_size lowered 2 → 1 on the 498-line corpus,
+    producing genuinely wild sentence-level recombinations instead of near-
+    verbatim replay.
+  * artgen: circuit generator now defaults --circuit-style to random, cycling
+    through all diagram styles on each generation.
+  * artgen/ansi: _normalize_grid no longer strips trailing blank rows that fall
+    within the target canvas height — BBS void zones (rows 1-2, 18-20) are
+    intentional and must be preserved.
+  * settings: animatediff_frames preference added (default 8); Preferences
+    dialog exposes it with a SpinButton; replaces the hardcoded frames=8.
+  * tests: AnimateDiffGenerationWorker covered (hardware failure, subprocess
+    failure, happy path, cancellation); test_prompt_client updated to use
+    urllib.request mocking throughout.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 23 May 2026 10:00:00 -0700
+
+tt-local-generator (0.3.2) noble; urgency=medium
+
+  * artgen: ANSI generation rewritten as a 3-pass pipeline — ASCII structure
+    (spatial composition, plain chars, 1024 tokens) → block refinement (Unicode
+    block chars ░▒▓█▀▄▌▐, 1024 tokens) → colorization (xterm-256 foreground
+    \033[38;5;Nm█ per cell, 8192 tokens). Separating composition from character
+    selection from color assignment gives coherent imagery instead of palette strips.
+  * artgen: switch ANSI format from background+space (\033[48;5;Nm ) to
+    foreground+block (\033[38;5;Nm█) — brighter, more vibrant output in all terminals.
+  * artgen: ArtGenerator base class gains generate_artifact(args, call_fn) hook for
+    multi-pass pipelines; AnsiGenerator overrides it; all other generators use the
+    single-pass default. First prototype of the remix-mode multi-pass pattern.
+  * artgen cli: _make_call_fn() closure supports per-call max_tokens override so each
+    pipeline pass can tune its own token budget independently.
+  * artgen panel: updated to call generate_artifact() instead of inline pipeline;
+    accumulates usage across all passes in a single MediaRecord.
+  * docs: README and website explain the 3-pass ANSI pipeline; CLAUDE.md documents
+    the generate_artifact hook and multi-pass architecture.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 17:00:00 -0700
+
+tt-local-generator (0.3.1) noble; urgency=medium
+
+  * artgen: BBS ANSI style — new --ansi-style bbs mode with 80×25 canvas,
+    near-black void + neon palette, board identity (--board-name, --tagline),
+    and dedicated composition guidance. Includes generate_bbs_batch.sh with
+    18 invented BBS board splash screens.
+  * artgen: auto-detect best available LLM endpoint — tries port 8002 (artgen
+    LLM) first, falls back to port 8001 (Qwen3-0.6B prompt server). No config
+    needed; start a bigger model and every subsequent generation upgrades.
+  * artgen CLI: add --timeout flag (default 300s) — replaces the 30s hard limit
+    that was too short for large models on CPU.
+  * docs: emphasise QB2/Blackhole hardware specificity throughout README and
+    website; note Wormhole is not supported.
+  * docs/website: AnimateDiff GIF gallery — nine starred real-session outputs
+    embedded in both the artgen section and the prompt examples tab.
+  * fix: improve delete button error diagnostics in artgen gallery and detail
+    views (better exception logging when choose_finish fails).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 15:03:00 -0700
+
+tt-local-generator (0.3.0) noble; urgency=medium
+
+  * artgen: add AnimateDiff Blackhole generator — direct TTNN UNet runner via
+    generate_blackhole_v2.py, requires ~/tt-metal python_env and
+    ~/tt-scratchpad/tt-animatediff (developer scratchpad path, not packaged).
+    Gracefully degrades with an informative error when prerequisites are absent.
+  * Watch mode: animated GIFs now loop correctly — GIF frames are decoded via
+    GdkPixbuf.PixbufAnimation and driven by per-frame delay timers.  The GIF
+    timer lifecycle is separated from slideshow timers so it survives
+    _start_timers() / _stop_timers() restarts without being killed.
+  * Watch mode: rich rendering for palette, verse, and ANSI text artgen records.
+    Palette JSON renders as full-screen color swatch strip with name and lore;
+    verse/freeform text renders as large centered italic text on dark canvas;
+    ANSI art renders via existing HTML pipeline.  Plain Gtk.TextBuffer fallback
+    is now only for unknown types.
+  * Fix Playlist toolbar button on GTK 4.14: Gtk.MenuButton uses
+    gtk_popover_popup() internally (not gtk_widget_show()), so the deprecated
+    GtkWidget::show signal never fires.  Switched to notify::visible with a
+    get_visible() guard — popover now populates reliably on every GTK 4.x.
+  * setup_vendor.sh: auto-configure vendor/tt-inference-server/.env on fresh
+    clone — detects HF_TOKEN from environment variables and credential files,
+    prompts interactively when stdin is a terminal, generates a cryptographically
+    random JWT_SECRET via openssl rand.  No-ops if .env already present.
+  * postinst: generate vendor .env secrets automatically — JWT_SECRET is now
+    randomised with openssl rand instead of defaulting to a static string;
+    HF_TOKEN is sourced from the installing user's huggingface credential files
+    when available.  Removes the manual "edit .env" step from the checklist.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 22 May 2026 12:00:00 +0000
+
+tt-local-generator (0.2.7) noble; urgency=medium
+
+  * Packaging: add tt-model-animate (Wan2.2-Animate-14B, ~30 GB),
+    tt-model-skyreels-t2v (SkyReels-V2-DF-1.3B, ~12 GB), and
+    tt-model-skyreels-i2v (SkyReels-V2-I2V-14B, ~58 GB) model packages.
+    tt-model-skyreels-i2v declares Depends: tt-model-wan2-t2v because it
+    needs the Wan2.2 A14B diffusers checkpoint for VAE and T5 text encoder.
+  * Packaging: add tt-local-generator-models-all meta-package that depends
+    on all seven model packages for single-command complete installation.
+  * Website: remove incorrect hero CLI snippet (git clone && ./tt-gen skipped
+    all required setup steps). Git-clone install tab now lists all five steps
+    including setup_vendor.sh and apply_patches.sh with explanatory notes.
+  * INSTALL_deb.md: rewrite to cover both deb and clone paths clearly, with
+    full step-by-step instructions for each, model package list, and retry
+    helpers.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 21 May 2026 12:00:00 +0000
+
 tt-local-generator (0.2.6) noble; urgency=medium
 
   * TT-TV artgen channels: fix empty pool — artgen MediaRecord objects are now

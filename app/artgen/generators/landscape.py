@@ -263,8 +263,8 @@ class LandscapeGenerator(ArtGenerator):
 
     def add_args(self, parser) -> None:
         parser.add_argument(
-            "--palette", choices=list(PALETTES), default="sunset",
-            help="Color palette (default: sunset)",
+            "--palette", default="random",
+            help=f"Color palette: {', '.join(PALETTES)}, random (default: random)",
         )
         parser.add_argument(
             "--mountains", dest="mountains", action="store_true", default=True,
@@ -294,8 +294,11 @@ class LandscapeGenerator(ArtGenerator):
         )
 
     def build_prompt(self, args) -> str:
+        key = getattr(args, "palette", "random")
+        if key == "random" or key not in PALETTES:
+            key = _random.choice(list(PALETTES))
         return _build_prompt(
-            PALETTES[args.palette],
+            PALETTES[key],
             getattr(args, "mountains", True),
             getattr(args, "clouds", False),
             getattr(args, "stars", False),

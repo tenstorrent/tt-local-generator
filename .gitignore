@@ -31,3 +31,7 @@ debian/tt-model-wan2-t2v/
 debian/tt-model-flux/
 debian/tt-model-mochi/
 debian/tt-model-qwen3/
+debian/tt-model-animate/
+debian/tt-model-skyreels-t2v/
+debian/tt-model-skyreels-i2v/
+debian/tt-local-generator-models-all/

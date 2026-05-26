@@ -193,25 +193,70 @@ else
 fi
 
 # =============================================================================
-# STEP 5 — Create vendor .env from .env.default (first-install only)
-#   On upgrade, dpkg preserves the user-edited .env via debian/conffiles.
+# STEP 5 — Create vendor .env (first-install only)
+#   Generates JWT_SECRET randomly and detects HF_TOKEN from the installing
+#   user's credential files.  On upgrade, dpkg preserves the user-edited
+#   .env via debian/conffiles, so this block is skipped entirely.
 # =============================================================================
 _section "Configuring vendor .env"
 
 ENV_FILE="$VENDOR_DIR/.env"
-ENV_DEFAULT="$VENDOR_DIR/.env.default"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-    if [[ -f "$ENV_DEFAULT" ]]; then
-        cp "$ENV_DEFAULT" "$ENV_FILE"
-        echo "Created $ENV_FILE from .env.default"
-        echo "ACTION REQUIRED: Edit $ENV_FILE and set JWT_SECRET + AUTHORIZATION_TOKEN"
-    else
-        echo "WARNING: $ENV_DEFAULT not found. You must create $ENV_FILE manually."
-        echo "See GUIDE.md for required variables."
-    fi
-else
+if [[ -f "$ENV_FILE" ]]; then
     echo ".env already exists — preserving existing configuration."
+else
+    # ── HF_TOKEN discovery ────────────────────────────────────────────────
+    HF_TOK=""
+
+    # 1. Standard environment variables (may be forwarded by apt/sudo env_keep)
+    if   [[ -n "${HF_TOKEN:-}" ]];               then HF_TOK="$HF_TOKEN"
+    elif [[ -n "${HUGGING_FACE_HUB_TOKEN:-}" ]]; then HF_TOK="$HUGGING_FACE_HUB_TOKEN"
+    fi
+
+    # 2. Real user's HuggingFace credential files
+    if [[ -z "$HF_TOK" && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+        _REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6 2>/dev/null || true)"
+        if [[ -n "$_REAL_HOME" ]]; then
+            for _f in \
+                "$_REAL_HOME/.cache/huggingface/token" \
+                "$_REAL_HOME/.huggingface/token" \
+                /etc/tt-generator/hf_token; do
+                if [[ -f "$_f" && -s "$_f" ]]; then
+                    HF_TOK="$(tr -d '[:space:]' < "$_f")"
+                    echo "  HF_TOKEN sourced from $_f"
+                    break
+                fi
+            done
+        fi
+    fi
+
+    # ── JWT_SECRET generation ─────────────────────────────────────────────
+    # Generate 32 random bytes (64 hex chars) — far stronger than any static
+    # default string and unique per installation.
+    JWT_SEC="$(openssl rand -hex 32 2>/dev/null)" \
+        || JWT_SEC="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')"
+    API_SEC="$(openssl rand -hex 32 2>/dev/null)" \
+        || API_SEC="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')"
+
+    cat > "$ENV_FILE" <<ENVEOF
+# tt-local-generator — inference server secrets
+# Created by postinst on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Edit this file to update JWT_SECRET, API_KEY, or HF_TOKEN at any time.
+JWT_SECRET=${JWT_SEC}
+API_KEY=${API_SEC}
+HF_TOKEN=${HF_TOK}
+ENVEOF
+
+    # docker group membership lets start_*.sh scripts (run as the normal user) read JWT_SECRET
+    chown root:docker "$ENV_FILE" 2>/dev/null || chown root:root "$ENV_FILE"
+    chmod 640 "$ENV_FILE"
+
+    echo "Created $ENV_FILE (JWT_SECRET auto-generated)"
+    if [[ -n "$HF_TOK" ]]; then
+        echo "  HF_TOKEN: set from credential file"
+    else
+        echo "  HF_TOKEN: empty — edit $ENV_FILE if you need gated models"
+    fi
 fi
 
 # =============================================================================
@@ -340,25 +385,23 @@ cat <<'EOF'
            newgrp docker
            (or log out and back in)
 
- [ ] 2. Edit the inference server config:
-           /usr/lib/tt-local-generator/vendor/tt-inference-server/.env
-        Set at minimum:
-           JWT_SECRET=<any random string>
-           AUTHORIZATION_TOKEN=<same or different random string>
-
- [ ] 3. Download Wan2.2 model weights (~118 GB):
+ [ ] 2. Download Wan2.2 model weights (~118 GB):
            tt-local-gen-download-model --repo Wan-AI/Wan2.2-T2V-A14B-Diffusers
         Models are stored in /opt/tenstorrent/models/hub/
 
+ Optional — if you need gated models (e.g. FLUX.1-dev):
+           Edit /usr/lib/tt-local-generator/vendor/tt-inference-server/.env
+           Set: HF_TOKEN=hf_<your_token>
+
  Optional:
  ─────────
- [ ] 4. Install tt-installer for Qwen3 prompt-server GPU support:
+ [ ] 3. Install tt-installer for Qwen3 prompt-server GPU support:
            https://github.com/tenstorrent/tt-installer
 
- [ ] 5. Launch the app:
+ [ ] 4. Launch the app:
            tt-local-gen
 
- [ ] 6. From the app, click Servers > Start (or tt-local-gen-ctl start wan2.2)
+ [ ] 5. From the app, click Servers > Start (or tt-local-gen-ctl start wan2.2)
         Wait for "Application startup complete" in the log panel.
 
  Docs:  /usr/share/doc/tt-local-generator/GUIDE.md

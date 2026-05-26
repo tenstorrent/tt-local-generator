@@ -62,6 +62,57 @@ LLM_HEALTH_URL = "http://127.0.0.1:8001/health"
 
 _markov_cache: dict[str, "markovify.Text | None"] = {}
 
+# ── Anti-repetition sliding window ────────────────────────────────────────────
+#
+# Tracks content words from the last N accepted slugs in the current process.
+# generate() retries assembly up to _ANTI_REP_RETRIES times if the new slug is
+# too lexically similar to a recent one (Jaccard threshold _ANTI_REP_THRESHOLD).
+#
+# Because generate_prompt.py is imported (not exec'd as a subprocess) by both
+# the GUI and the prompt server, this module-level list persists for the
+# lifetime of the host process — across every Inspire button press in the GUI.
+
+_RECENT_SLUGS: list[set] = []
+_ANTI_REP_MAX = 20          # how many past slugs to remember
+_ANTI_REP_THRESHOLD = 0.35  # Jaccard ≥ this → "too similar, try again"
+_ANTI_REP_RETRIES = 5       # max extra draws before accepting anyway
+
+_STOPWORDS: frozenset = frozenset({
+    "a", "an", "the", "in", "on", "at", "of", "and", "with", "through",
+    "by", "to", "as", "is", "are", "was", "its", "into", "over", "from",
+    "for", "that", "this", "but", "or", "not", "up", "out", "down", "one",
+})
+
+
+def _content_words(text: str) -> set:
+    """Extract lowercase words longer than 3 chars that aren't stopwords."""
+    return {
+        w.lower().strip(".,!?:;—\"'")
+        for w in text.split()
+        if len(w) > 3 and w.lower() not in _STOPWORDS
+    }
+
+
+def _is_too_similar(slug: str) -> bool:
+    """True if slug shares ≥35% content words with any recently accepted slug."""
+    words = _content_words(slug)
+    if not words:
+        return False
+    for recent in _RECENT_SLUGS:
+        if not recent:
+            continue
+        jaccard = len(words & recent) / len(words | recent)
+        if jaccard >= _ANTI_REP_THRESHOLD:
+            return True
+    return False
+
+
+def _record_slug(slug: str) -> None:
+    """Add slug's content words to the sliding window; evict oldest if full."""
+    _RECENT_SLUGS.append(_content_words(slug))
+    if len(_RECENT_SLUGS) > _ANTI_REP_MAX:
+        _RECENT_SLUGS.pop(0)
+
 
 def _build_markov(prompt_type: str) -> "markovify.Text | None":
     """Load corpus for the given type and build a markovify model."""
@@ -86,15 +137,18 @@ def _build_markov(prompt_type: str) -> "markovify.Text | None":
                 # Untagged lines go into every pool
                 lines.append(raw)
 
-    if len(lines) < 8:
-        # Too sparse for state_size=2 to produce novel output reliably
+    if len(lines) < 20:
+        # state_size=1 needs at least 20 lines to produce meaningful transitions.
+        # Below that the model degenerates to near-verbatim training lines.
         return None
 
     corpus = "\n".join(lines)
     try:
         return markovify.Text(
             corpus,
-            state_size=2,
+            state_size=1,       # was 2 — produces wilder recombinations at the
+                                # cost of some grammaticality, which the LLM
+                                # polish pass is designed to fix anyway.
             well_formed=False,  # prompts aren't always grammatical sentences
         )
     except Exception:
@@ -122,6 +176,33 @@ def _markov_sentence(prompt_type: str) -> str | None:
             return sentence
     return None
 
+# ── Slug structural templates ──────────────────────────────────────────────────
+#
+# Every slot ({subj}, {act}, {sett}, {cam}, {style}) is filled identically
+# regardless of template — only the *order* and *punctuation* vary.  This
+# changes the syntactic shape the LLM receives, which drives it to produce
+# different sentence patterns even from semantically identical raw material.
+#
+# Why this matters: a small model trained on web text has strong positional
+# priors.  If it always sees "subject action, setting, camera, style" it
+# produces "X does Y in Z, filmed W, moody" 90% of the time.  Rotating the
+# template forces it to lead with camera, atmosphere, or action instead.
+
+_VIDEO_SLUG_TEMPLATES = [
+    "{subj} {act}, {sett}, {cam}, {style}",           # who-first   (classic)
+    "{cam}: {subj} {act} in {sett}. {style}.",         # camera-first (POV anchor)
+    "{sett}. {subj} {act}. {cam}. {style}.",           # place-first  (environment anchor)
+    "{style} — {subj} {act}, {sett}, {cam}.",          # tone-first   (mood anchor)
+    "{subj}. {sett}. {cam} as {act}. {style}.",        # prose-pause  (staccato rhythm)
+    "{act}: {subj}, {sett}. {cam}. {style}.",          # action-first (motion anchor)
+]
+
+_SKYREELS_SLUG_TEMPLATES = [
+    "{subj}, {cam}, {style}",                          # subject-first (default)
+    "{cam}: {subj}. {style}.",                         # camera-first
+    "{style} — {subj}. {cam}.",                        # tone-first
+]
+
 # ── Algorithmic generators ────────────────────────────────────────────────────
 
 def _algo_video(
@@ -142,23 +223,33 @@ def _algo_video(
     sett = wb.setting()
     cam = wb.camera()
     mo = wb.mood()
+
     # Determine style slot: pinned director > prob-sampled director > generic mood.
     # Time-of-day and lighting are intentionally omitted from the slug — they
     # balloon prompt length without improving short-clip generation quality.
     if director_pin:
         style_slot = director_pin
-        slug = f"{subj} {act}, {sett}, {cam}, {style_slot}"
         meta = {"subject": subj, "action": act, "setting": sett,
                 "camera": cam, "director_style": style_slot}
     elif random.random() < director_prob:
         style_slot = wb.director_style()
-        slug = f"{subj} {act}, {sett}, {cam}, {style_slot}"
         meta = {"subject": subj, "action": act, "setting": sett,
                 "camera": cam, "director_style": style_slot}
     else:
-        slug = f"{subj} {act}, {sett}, {cam}, {mo}"
+        style_slot = mo
         meta = {"subject": subj, "action": act, "setting": sett,
                 "camera": cam, "mood": mo}
+
+    # Pick a random structural shape — same slots, different syntactic order.
+    # Optionally append an unexpected juxtaposition (12% chance) as a 6th element
+    # the LLM can't fully neutralise without ignoring it outright.
+    tmpl = random.choice(_VIDEO_SLUG_TEMPLATES)
+    slug = tmpl.format(subj=subj, act=act, sett=sett, cam=cam, style=style_slot)
+    if random.random() < 0.12:
+        jux = wb.unexpected_juxtaposition()
+        slug = f"{slug.rstrip('.')} — {jux}"
+        meta["juxtaposition"] = jux
+
     return slug, meta
 
 
@@ -213,7 +304,8 @@ def _algo_skyreels() -> tuple[str, dict]:
     subj = wb.skyreels_subject()
     cam = wb.skyreels_camera()
     style = wb.skyreels_style()
-    slug = f"{subj}, {cam}, {style}"
+    tmpl = random.choice(_SKYREELS_SLUG_TEMPLATES)
+    slug = tmpl.format(subj=subj, cam=cam, style=style)
     meta = {"subject": subj, "camera": cam, "style": style}
     return slug, meta
 
@@ -235,6 +327,21 @@ def _algo_commercial() -> tuple[str, dict]:
     return slug, meta
 
 
+def _algo_animatediff() -> tuple[str, dict]:
+    """
+    Build one algorithmic AnimateDiff GIF-loop prompt slug.
+
+    AnimateDiff generates 8-frame looping GIFs. Best results come from subjects
+    with natural cyclical or oscillating motion — fire, water, wind, breath.
+    No camera moves; keep composition simple: one subject + one modifier.
+    """
+    subj = wb.animatediff_subject()
+    mod = wb.animatediff_modifier()
+    slug = f"{subj}, {mod}"
+    meta = {"subject": subj, "modifier": mod}
+    return slug, meta
+
+
 _ALGO_FN = {
     "video": _algo_video,
     "image": _algo_image,
@@ -242,6 +349,7 @@ _ALGO_FN = {
     "commercial": _algo_commercial,
     "skyreels": _algo_skyreels,
     "artgen": _algo_artgen,
+    "animatediff": _algo_animatediff,
 }
 
 # ── LLM polish ─────────────────────────────────────────────────────────────────
@@ -284,6 +392,11 @@ _TYPE_HINT = {
         "'copper and verdigris', 'neon monastery at 4am'. "
         "No sentences, no camera directions, no explanation. Just the phrase."
     ),
+    "animatediff": (
+        "AnimateDiff GIF loop (8 frames). One subject with natural cyclical motion — "
+        "fire, water, wind, breath, fabric, foliage. No camera moves. "
+        "Describe what loops, not what happens once. Under 18 words."
+    ),
 }
 
 
@@ -297,17 +410,69 @@ def _llm_available() -> bool:
         return False
 
 
+def _model_sampling_params(model_id: str = LLM_MODEL) -> dict:
+    """
+    Return temperature, top_p, and max_tokens tuned to the model's parameter count.
+
+    Small models (≤2B) collapse toward boring modes at moderate temperature —
+    they need to be pushed harder off their greedy peak.  Large models have
+    richer vocabularies and benefit from tighter sampling to stay on-topic.
+
+    max_tokens scales up with model capacity: a 0.6B model fits its prompt in
+    80 tokens; a 14B model can elaborate a richer two-clause sentence in 160.
+    """
+    name = model_id.lower()
+    if any(x in name for x in ("0.6b", "0.5b", "1b", "1.5b", "2b", "2.5b")):
+        # Sub-3B: mode is flat and generic — raise temperature significantly.
+        # top_p=0.95 allows the long tail of less-common vocabulary.
+        return {"temperature": 1.05, "top_p": 0.95, "max_tokens": 80}
+    elif any(x in name for x in ("3b", "4b", "6b", "7b", "8b", "9b")):
+        return {"temperature": 0.85, "top_p": 0.92, "max_tokens": 120}
+    elif any(x in name for x in ("12b", "13b", "14b", "15b")):
+        return {"temperature": 0.75, "top_p": 0.90, "max_tokens": 160}
+    else:
+        # 20B+: large vocabulary, richer mode — tighten sampling for precision.
+        return {"temperature": 0.65, "top_p": 0.88, "max_tokens": 180}
+
+
+def _is_small_model(model_id: str = LLM_MODEL) -> bool:
+    """True for models ≤3B where multi-candidate selection gives the most benefit."""
+    name = model_id.lower()
+    return any(x in name for x in ("0.6b", "0.5b", "1b", "1.5b", "2b", "2.5b", "3b"))
+
+
+def _pick_best_candidate(candidates: list[str]) -> str:
+    """
+    Choose the most content-rich candidate from a list of LLM outputs.
+
+    Scores by counting lowercase words longer than 5 characters — a cheap
+    proxy for concrete, specific language vs. generic filler.  When multiple
+    candidates tie, the first is returned (preserving model-native order).
+    """
+    def _specificity(s: str) -> int:
+        return sum(1 for w in s.split() if len(w) > 5 and w[0].islower())
+    return max(candidates, key=_specificity)
+
+
 def _llm_polish(slug: str, prompt_type: str, timeout: int = 45) -> str | None:
-    """Send slug to the prompt server for natural-language polishing."""
+    """
+    Send a slug to the prompt server for natural-language polishing.
+
+    Uses model-adaptive sampling (temperature/top_p/max_tokens from
+    _model_sampling_params).  For small models (≤3B), requests 3 candidates
+    and picks the most content-rich one — compensates for those models'
+    tendency to collapse to the same flat phrasing.
+    """
+    sampling = _model_sampling_params()
+    use_multi = _is_small_model()
     payload = json.dumps({
         "model": LLM_MODEL,
         "messages": [
             {"role": "system", "content": _POLISH_SYSTEM},
             {"role": "user", "content": f"{_TYPE_HINT[prompt_type]}\n\nSlug: {slug}"},
         ],
-        "max_tokens": 80,
-        "temperature": 0.70,
-        "top_p": 0.90,
+        "n": 3 if use_multi else 1,
+        **sampling,
     }).encode()
 
     req = urllib.request.Request(
@@ -319,7 +484,8 @@ def _llm_polish(slug: str, prompt_type: str, timeout: int = 45) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             resp = json.loads(r.read())
-        return resp["choices"][0]["message"]["content"].strip()
+        candidates = [c["message"]["content"].strip() for c in resp["choices"]]
+        return _pick_best_candidate(candidates) if len(candidates) > 1 else candidates[0]
     except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError):
         return None
 
@@ -330,11 +496,13 @@ def _llm_guided(guide: str, prompt_type: str, timeout: int = 45) -> str | None:
 
     Unlike _llm_polish (which rewrites an existing slug), this function gives the
     LLM the user's theme string and asks it to produce a complete cinematic prompt
-    from scratch.  Returns None on any network or parse error.
+    from scratch.  Uses the same model-adaptive sampling as _llm_polish.
+    Returns None on any network or parse error.
     """
     # Guard against unrecognised prompt_type — fall back to video hint rather
     # than raising an uncaught KeyError before the try block below.
     type_hint = _TYPE_HINT.get(prompt_type, _TYPE_HINT["video"])
+    sampling = _model_sampling_params()
     payload = json.dumps({
         "model": LLM_MODEL,
         "messages": [
@@ -352,9 +520,7 @@ def _llm_guided(guide: str, prompt_type: str, timeout: int = 45) -> str | None:
                 "content": f"{type_hint}\n\nTheme: {guide}",
             },
         ],
-        "max_tokens": 80,
-        "temperature": 0.70,
-        "top_p": 0.90,
+        **sampling,
     }).encode()
 
     req = urllib.request.Request(
@@ -445,13 +611,29 @@ def generate(
         if slug:
             source = "markov"
 
-    # Tier 1: Algorithmic (fallback or primary)
+    # Tier 1: Algorithmic (fallback or primary).
+    #
+    # Anti-repetition: retry up to _ANTI_REP_RETRIES times if the new slug is
+    # too lexically similar to recently accepted slugs.  Each retry draws a
+    # completely fresh set of random slots, so the retry cost is negligible
+    # (just Python random.choice calls).  After all retries are exhausted we
+    # accept the last candidate anyway — a slight near-duplicate is better than
+    # an infinite loop.  Markov slugs are not retried (each is already novel).
     if slug is None:
-        if prompt_type == "video":
-            slug, _ = _algo_video(director_prob=director_prob, director_pin=director_pin)
-        else:
-            slug, _ = _ALGO_FN[prompt_type]()
+        for _attempt in range(1 + _ANTI_REP_RETRIES):
+            if prompt_type == "video":
+                candidate, _ = _algo_video(director_prob=director_prob, director_pin=director_pin)
+            else:
+                candidate, _ = _ALGO_FN[prompt_type]()
+            if not _is_too_similar(candidate) or _attempt == _ANTI_REP_RETRIES:
+                slug = candidate
+                break
         source = "algo"
+
+    # Record the accepted slug before polishing so both the slug and the final
+    # prompt contribute to the rolling similarity window if the LLM is down.
+    assert slug is not None
+    _record_slug(slug)
 
     # Tier 3: LLM polish
     prompt = slug

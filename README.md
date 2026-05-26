@@ -1,18 +1,26 @@
 # tt-local-generator
 
-A GTK4 desktop UI for generating videos and images with Tenstorrent hardware.
+A GTK4 desktop UI for generating videos, images, and generative art with Tenstorrent hardware.
+**Primarily developed and tested on QB2 (dual P300X2, Blackhole architecture).**
+Most inference models require a QB2 or equivalent Blackhole system; see the hardware column below.
 
 **Supported models:**
 
 | Mode | Model | Hardware |
 |------|-------|----------|
-| Video | [Wan2.2-T2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | QB2 (P300x2) |
-| Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | QB2 (P300x2) |
-| Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | Blackhole (P300X2) — image-to-video |
-| Image | [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 4× p300c |
-| Animate | [Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-14B-720P-Diffusers) | CPU/CUDA (Phase 1) |
+| Video | [Wan2.2-T2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | **QB2** (P300X2) — also P150x4 via `start_wan.sh` |
+| Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | **QB2** (P300X2) |
+| Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | **QB2** / Blackhole P300X2 — image-to-video |
+| Image | [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | **QB2** (4× P300c) |
+| Animate | [Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-14B-720P-Diffusers) | CPU/CUDA (TT hardware support pending) |
+| Artgen GIF | [AnimateDiff (TTNN)](app/animatediff/) | **QB2** / Blackhole P300c — no Docker |
+| Artgen SVG/text | Built-in LLM generators | Any — runs on CPU via prompt server |
 
-All inference runs via a local [tt-inference-server](https://github.com/tenstorrent/tt-inference-server) Docker container on port 8000.
+> **Note:** Wormhole (N150/N300) is not currently supported. All video and image inference
+> requires Blackhole hardware. The artgen text/SVG generators and prompt engine run on any
+> machine; animated GIF generation (AnimateDiff) requires Blackhole.
+
+All video/image inference runs via a local [tt-inference-server](https://github.com/tenstorrent/tt-inference-server) Docker container on port 8000.
 
 **[Documentation](https://docs.tenstorrent.com/tt-local-generator)** · **[GitHub](https://github.com/tenstorrent/tt-local-generator)**
 
@@ -208,6 +216,37 @@ cd ~/code/tt-local-generator
 - **Text-to-image with FLUX.1-dev** — high-quality still images on the same hardware.
 - **Animate** — bring any character image to life: supply a motion video and a character PNG,
   and Wan2.2-Animate-14B drives the character through the motion pattern.
+- **Generative Art (Artgen)** — SVG landscapes, city skylines, color palettes, verse,
+  ANSI pixel art, constellation charts, and animated GIFs (Blackhole only). No large model
+  required to start: the app automatically uses the best available LLM, falling back from
+  a dedicated artgen server (port 8002) to the lightweight Qwen3-0.6B prompt server
+  (port 8001) that starts with `tt-ctl start prompt-server`. Verse and palette work well
+  at 0.6B; SVG generators benefit from a larger model. Once you start an artgen LLM, all
+  generation upgrades automatically — no configuration needed.
+  Run from the Artgen panel or CLI:
+  ```
+  tt-ctl artgen verse --form haiku --theme "silicon at dawn"
+  tt-ctl artgen palette --mood "deep ocean bioluminescence"
+  tt-ctl artgen landscape --palette sunset --glitch
+  tt-ctl artgen ansi --ansi-style bbs --board-name "NEON VOID" --subject "glowing skull"
+  tt-ctl artgen animatediff --count 5   # Blackhole only
+  ```
+
+  **ANSI art uses a 3-pass pipeline** — the key insight being that an LLM can't plan
+  spatial composition and color simultaneously for hundreds of cells. The three passes
+  separate concerns so each one is a task the model handles well:
+
+  1. **ASCII structure** — the LLM draws the subject using plain characters (`X`, `#`,
+     `.`, `|`). No color decisions. The model's spatial composition is at its best here.
+  2. **Block refinement** — the ASCII sketch is redrawn using Unicode block characters
+     (`█ ▀ ▄ ▌ ▐ ░ ▒ ▓`) for richer geometry. Layout is preserved; only visual quality
+     improves.
+  3. **Colorization** — given the exact, fixed character map, the LLM wraps every cell
+     with one xterm-256 foreground color (`\033[38;5;Nm█`). Deciding a single color for
+     an already-placed character is far simpler than planning position + color at once.
+
+  BBS style (`--ansi-style bbs`) applies neon-on-void color rules (electric cyan, toxic
+  green, hot magenta, gold) with board identity baked into the palette theme.
 - **Seed image** — attach a reference photo or frame to guide color palette, composition, and
   style continuity between clips.
 - **Prompt queue** — write the next prompt while a generation runs; the queue drains
@@ -217,8 +256,14 @@ cd ~/code/tt-local-generator
 ### Writing prompts
 
 - **✨ Inspire me** — one click to a polished, varied prompt every time. Three-tier system:
-  algorithmic word-bank sampling → Markov chain → Qwen3-0.6B LLM polish (when the prompt
-  server is running). Seed it with your own rough idea; works entirely offline in algo mode.
+  algorithmic word-bank sampling (six structural templates; 12 % chance of an unexpected
+  juxtaposition element) → Markov chain recombination (state size 1, maximising wild
+  collisions over repetition) → LLM polish (temperature and candidate count scaled to
+  model size; small models run three candidates and the most specific one wins). An
+  anti-repetition window discards slugs too similar to the last 20 generated. The app
+  uses the best available model automatically: artgen LLM (port 8002), then Qwen3-0.6B
+  prompt server (port 8001), then fully offline algo/Markov. Seed it with your own rough
+  idea and the LLM transforms it; leave blank for fully random generation.
 - **Style chips** — one-click modifiers for camera moves, lighting, mood, and quality,
   appended to your prompt without retyping anything.
 

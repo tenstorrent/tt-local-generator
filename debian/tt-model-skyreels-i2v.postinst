@@ -1,0 +1,82 @@
+#!/bin/bash
+# debian/tt-model-skyreels-i2v.postinst — post-install for tt-model-skyreels-i2v
+#
+# Downloads Skywork/SkyReels-V2-I2V-14B-540P (~58 GB) into the real user's
+# HuggingFace cache.  This model uses the Wan2.2-T2V-A14B-Diffusers checkpoint
+# for its VAE and T5 text encoder, so tt-model-wan2-t2v must also be installed
+# (declared as a Depends in debian/control).
+#
+# Requires Blackhole hardware (P150X4/P300X2) to run.
+
+set -euo pipefail
+
+MODEL_REPO="Skywork/SkyReels-V2-I2V-14B-540P"
+DOWNLOAD_HELPER="/usr/lib/tt-local-generator/bin/download_model.sh"
+
+case "${1:-}" in
+    configure) : ;;
+    abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+    *) exit 0 ;;
+esac
+
+. /usr/share/debconf/confmodule
+
+db_get tt-local-generator/hf-token
+TOKEN="$RET"
+
+db_reset tt-local-generator/hf-token || true
+
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+if [[ -z "$REAL_USER" ]] || [[ "$REAL_USER" == "root" ]]; then
+    echo "WARNING: Cannot determine non-root user. Model will be downloaded to /root/.cache."
+    echo "         Re-run as your regular user: tt-local-gen-download-model --repo $MODEL_REPO"
+fi
+
+echo ""
+echo "====== Downloading SkyReels-V2-I2V-14B-540P (~58 GB) ======"
+echo "Requires Blackhole hardware (P150X4 or P300X2) to run."
+echo "Also requires tt-model-wan2-t2v weights (VAE and T5 text encoder)."
+echo "The package is already installed — you can safely Ctrl-C and re-run later:"
+echo "  tt-local-gen-download-model --repo $MODEL_REPO"
+echo ""
+
+if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
+    if [[ -n "$TOKEN" ]]; then
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        runuser -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
+        || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+else
+    if [[ -n "$TOKEN" ]]; then
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    else
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
+            echo ""
+            echo "ERROR: model download failed."
+            echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"
+            exit 0
+        }
+    fi
+fi
+
+exit 0

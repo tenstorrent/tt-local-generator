@@ -35,6 +35,8 @@ Description: GTK4 frontend for Tenstorrent AI media generation
  Supports multiple inference backends:
   - Wan2.2-T2V-A14B — text-to-video (QB2 / P300x2 or P150x4)
   - Wan2.2-Animate-14B — character animation (video-to-video)
+  - SkyReels-V2-DF-1.3B — fast T2V on Blackhole (P150X4 / P300X2)
+  - SkyReels-V2-I2V-14B — image-to-video on Blackhole
   - Mochi-1 — alternative video backend
   - FLUX.1-dev — text-to-image
  .
@@ -81,3 +83,52 @@ Description: Qwen3-0.6B model weights (~1.2 GB) for tt-local-generator
  Downloads Qwen/Qwen3-0.6B from HuggingFace. Required for the LLM prompt
  polish tier in the prompt-server. The model is fully public; no token
  or license acceptance is required.
+
+Package: tt-model-animate
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: Wan2.2-Animate-14B model weights (~30 GB) for tt-local-generator
+ Downloads Wan-AI/Wan2.2-Animate-14B-Diffusers from HuggingFace. Required
+ for the character animation (video-to-video) mode in the Animate tab.
+ .
+ The model is publicly available; a HuggingFace token is optional (helps
+ avoid API rate limits).
+
+Package: tt-model-skyreels-t2v
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: SkyReels-V2-DF-1.3B-540P model weights (~12 GB) for tt-local-generator
+ Downloads Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers from HuggingFace.
+ Required for the SkyReels T2V mode. Runs on Blackhole hardware only
+ (P150X4 or P300X2). The model is publicly available; no token required.
+
+Package: tt-model-skyreels-i2v
+Architecture: all
+Depends: tt-local-generator, tt-model-wan2-t2v, debconf | debconf-2.0, python3-pip
+Description: SkyReels-V2-I2V-14B-540P model weights (~58 GB) for tt-local-generator
+ Downloads Skywork/SkyReels-V2-I2V-14B-540P from HuggingFace. Required for
+ the SkyReels image-to-video mode. Runs on Blackhole hardware only
+ (P150X4 or P300X2).
+ .
+ This model uses the Wan2.2-T2V-A14B-Diffusers checkpoint for its VAE and
+ T5 text encoder. The tt-model-wan2-t2v package is therefore a hard
+ dependency and will be installed automatically if not already present.
+ .
+ The model is publicly available; a HuggingFace token is optional.
+
+Package: tt-local-generator-models-all
+Architecture: all
+Depends:
+ tt-model-wan2-t2v,
+ tt-model-flux,
+ tt-model-mochi,
+ tt-model-qwen3,
+ tt-model-animate,
+ tt-model-skyreels-t2v,
+ tt-model-skyreels-i2v
+Description: Meta-package: all model weights for tt-local-generator
+ Installs all model weight packages for tt-local-generator in a single
+ command. This is a convenience package with no files of its own.
+ .
+ Total download size: ~333 GB. Only install this if you want every model.
+ For a minimal setup, install tt-model-wan2-t2v and tt-model-qwen3 only.

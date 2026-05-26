@@ -4,9 +4,9 @@
 """
 Background workers for media generation.
 
-Two worker classes, both with identical run_with_callbacks() interfaces:
+Four worker classes, all with identical run_with_callbacks() interfaces:
 
-  GenerationWorker — Wan2.2 video (async/job-based):
+  GenerationWorker — Wan2.2 / Mochi / SkyReels video (async/job-based):
     1. Submit job to server (or re-attach via _job_id_override)
     2. Poll status every 3 seconds until complete or failed
     3. Download the MP4 to local storage
@@ -21,10 +21,21 @@ Two worker classes, both with identical run_with_callbacks() interfaces:
     4. Write prompt sidecar .txt
     5. Persist to history
 
+  AnimateGenerationWorker — Wan2.2-Animate character animation (async/job-based):
+    Same poll-download cycle as GenerationWorker; accepts reference_video_path
+    and reference_image_path for motion+character conditioning.
+
+  AnimateDiffGenerationWorker — TTNN AnimateDiff GIF (local Blackhole, no server):
+    1. check_hardware() — fail fast if no Blackhole device
+    2. run_subprocess() — generate_blackhole_v2.py via tt-metal Python env
+    3. make_gif_thumbnail() — extract first frame as JPEG
+    4. Persist to history as media_type="animatediff"
+
 Communication back to the UI is via plain callbacks. The caller (GTK main window)
 wraps each callback in GLib.idle_add() so UI updates always happen on the main
 thread. Never import or touch GTK widgets from here.
 """
+import logging
 import shutil
 import subprocess
 import threading
@@ -34,7 +45,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from api_client import APIClient
-from history_store import THUMBNAILS_DIR, GenerationRecord, HistoryStore
+from history_store import THUMBNAILS_DIR, VIDEOS_DIR, GenerationRecord, HistoryStore
 
 
 # ── Metadata helpers ───────────────────────────────────────────────────────────
@@ -252,8 +263,8 @@ class GenerationWorker:
             lines.append(f"seed_image: {record.seed_image_path}")
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
 
     def _extract_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         """
@@ -463,8 +474,8 @@ class AnimateGenerationWorker:
         ]
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
 
     def _extract_thumbnail(self, video_path: str, thumbnail_path: str) -> None:
         Path(thumbnail_path).parent.mkdir(parents=True, exist_ok=True)
@@ -688,5 +699,180 @@ class ImageGenerationWorker:
         ]
         try:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
+
+
+# ── AnimateDiff (local Blackhole) generation worker ────────────────────────────
+
+class AnimateDiffGenerationWorker:
+    """
+    Runs a single AnimateDiff generation job locally on Blackhole hardware.
+
+    Unlike the server-based workers, this runs generate_blackhole_v2.py as a
+    subprocess via artgen.generators.animatediff.run_subprocess(). No network
+    required — the TTNN UNet runs directly on the local Blackhole device.
+
+    Produces an animated GIF in VIDEOS_DIR, then creates a thumbnail from the
+    first frame. The result is stored as a GenerationRecord with media_type
+    "animatediff" and surfaces in the video gallery alongside MP4s.
+
+    Usage (GTK):
+        gen = AnimateDiffGenerationWorker(store, prompt, ...)
+        thread = threading.Thread(target=lambda: gen.run_with_callbacks(
+            on_progress=lambda msg: GLib.idle_add(update_status, msg),
+            on_finished=lambda rec: GLib.idle_add(handle_done, rec),
+            on_error=lambda msg: GLib.idle_add(handle_error, msg),
+        ), daemon=True)
+        thread.start()
+    """
+
+    def __init__(
+        self,
+        store: HistoryStore,
+        prompt: str,
+        negative_prompt: str = "blurry, low quality",
+        steps: int = 25,
+        seed: int = 42,
+        frames: int = 8,
+        temporal_alpha: float = 0.35,
+        model: str = "animatediff-blackhole",
+    ):
+        self._store = store
+        self._prompt = prompt
+        self._negative_prompt = negative_prompt
+        self._steps = steps
+        self._seed = seed
+        self._frames = frames
+        self._temporal_alpha = temporal_alpha
+        self._model = model
+        self._cancelled = False
+        self._lock = threading.Lock()
+
+    def cancel(self) -> None:
+        """Request early termination. Thread-safe."""
+        with self._lock:
+            self._cancelled = True
+
+    def _is_cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def _running(self) -> bool:
+        """False once cancel() has been called."""
+        return not self._is_cancelled()
+
+    def run_with_callbacks(
+        self,
+        on_progress: Callable[[str], None],
+        on_finished: Callable[[GenerationRecord], None],
+        on_error: Callable[[str], None],
+    ) -> None:
+        """
+        Execute the full pipeline. Call this from a background thread.
+
+        Callbacks are invoked FROM THIS THREAD — callers must wrap them in
+        GLib.idle_add() to safely update GTK widgets.
+        """
+        from artgen.generators.animatediff import (
+            check_hardware,
+            run_subprocess,
+            make_gif_thumbnail,
+        )
+
+        start_time = time.monotonic()
+        job_id = str(uuid.uuid4())
+
+        # ── 1. Hardware check ─────────────────────────────────────────────────
+        on_progress("Checking hardware…")
+        ok, hw_msg = check_hardware()
+        if not ok:
+            on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
+            return
+
+        if self._is_cancelled():
+            on_error("Cancelled by user")
+            return
+
+        # ── 2. Build output paths ─────────────────────────────────────────────
+        from datetime import datetime, timezone
+        ts_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        out_path = VIDEOS_DIR / f"{ts_str}_{job_id[:8]}.gif"
+        thumb_path = THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"
+        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # ── 3. Run subprocess ─────────────────────────────────────────────────
+        on_progress(f"Loading AnimateDiff model… ({hw_msg})")
+
+        def _progress_fwd(msg: str) -> None:
+            if not self._is_cancelled():
+                elapsed = int(time.monotonic() - start_time)
+                on_progress(f"{msg}  ({elapsed}s)")
+
+        ok, err = run_subprocess(
+            prompt=self._prompt,
+            out_path=out_path,
+            frames=self._frames,
+            steps=self._steps,
+            seed=self._seed,
+            negative_prompt=self._negative_prompt,
+            temporal_alpha=self._temporal_alpha,
+            on_progress=_progress_fwd,
+        )
+
+        if not ok:
+            on_error(f"AnimateDiff failed: {err}")
+            return
+
+        if self._is_cancelled():
+            on_error("Cancelled by user")
+            return
+
+        # ── 4. Thumbnail ──────────────────────────────────────────────────────
+        make_gif_thumbnail(out_path, thumb_path)
+
+        # ── 5. Build record ───────────────────────────────────────────────────
+        duration = time.monotonic() - start_time
+        record = GenerationRecord.new_animatediff(
+            job_id=job_id,
+            prompt=self._prompt,
+            negative_prompt=self._negative_prompt,
+            num_inference_steps=self._steps,
+            seed=self._seed,
+            video_path=str(out_path),
+            thumbnail_path=str(thumb_path),
+            duration_s=round(duration, 1),
+            model=self._model,
+        )
+
+        # ── 6. Sidecar ────────────────────────────────────────────────────────
+        self._write_prompt_sidecar(record)
+
+        # ── 7. Persist and notify ─────────────────────────────────────────────
+        self._store.append(record)
+        on_finished(record)
+
+    def _write_prompt_sidecar(self, record: GenerationRecord) -> None:
+        """Write a .txt metadata file next to the GIF. Silently skips on I/O error."""
+        txt_path = Path(record.video_path).with_suffix(".txt")
+        sec_per_step = (
+            f"{record.duration_s / record.num_inference_steps:.2f}"
+            if record.duration_s and record.num_inference_steps
+            else "—"
+        )
+        lines = [
+            f"mode: animatediff",
+            f"prompt: {record.prompt}",
+            f"negative_prompt: {record.negative_prompt}",
+            f"frames: {self._frames}",
+            f"temporal_alpha: {self._temporal_alpha}",
+            f"steps: {record.num_inference_steps}",
+            f"seed: {record.seed}",
+            f"generated: {record.created_at}",
+            f"duration_s: {record.duration_s}",
+            f"sec_per_step: {sec_per_step}",
+        ]
+        try:
+            txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as _e:
+            logging.warning("sidecar write failed for %s: %s", txt_path, _e)
