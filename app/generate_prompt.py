@@ -33,6 +33,7 @@
 import argparse
 import json
 import random
+import re as _re
 import sys
 import urllib.error
 import urllib.request
@@ -363,6 +364,7 @@ _POLISH_SYSTEM = (
     "Rewrite the slug as one tight, vivid sentence. "
     "Keep every element. Add nothing. Cut all filler ('bathed in', 'as if', 'seems to', adverb stacks). "
     "Hard limit: 25 words. No preamble, no quotes, no explanation. "
+    "Output ONLY the final prompt — never echo format labels, frame counts, or any instruction text. "
     "Never add gore, body horror, graphic violence, or disturbing imagery."
 )
 
@@ -392,12 +394,31 @@ _TYPE_HINT = {
         "'copper and verdigris', 'neon monastery at 4am'. "
         "No sentences, no camera directions, no explanation. Just the phrase."
     ),
+    # Deliberately avoids starting with "AnimateDiff" or "GIF loop" — small models
+    # echo back instruction text that begins the user message when it reads like output.
     "animatediff": (
-        "AnimateDiff GIF loop (8 frames). One subject with natural cyclical motion — "
-        "fire, water, wind, breath, fabric, foliage. No camera moves. "
-        "Describe what loops, not what happens once. Under 18 words."
+        "Looping GIF. One subject with natural cyclical motion: fire, water, wind, breath, "
+        "fabric, foliage. No camera moves. Describe only the looping subject. Under 18 words."
     ),
 }
+
+# Patterns that indicate the LLM echoed instruction metadata rather than generating
+# prompt content. Stripped from output before it reaches the user or the model.
+_INSTRUCTION_LEAK_PATTERNS = [
+    _re.compile(r'^\s*(?:animatediff\s+)?(?:gif\s+)?loop\s*[\(\[]?\s*\d+\s*frames?\s*[\)\]]?\s*[.\-—]\s*', _re.I),
+    _re.compile(r'^\s*looping\s+gif\s*[.\-—]\s*', _re.I),
+    _re.compile(r'^\s*one\s+subject\s+with\s+natural\s+cyclical\s+motion\s*[:\-—]', _re.I),
+    _re.compile(r'\bno\s+camera\s+moves?\b', _re.I),
+    _re.compile(r'\bunder\s+\d+\s+words?\b', _re.I),
+    _re.compile(r'\bdescribe\s+(?:what|only\s+the)\s+loop', _re.I),
+]
+
+
+def _strip_instruction_leak(text: str) -> str:
+    """Remove instruction metadata that leaked into the LLM output."""
+    for pat in _INSTRUCTION_LEAK_PATTERNS:
+        text = pat.sub("", text)
+    return text.strip(". \t\n")
 
 
 def _llm_available() -> bool:
@@ -484,7 +505,7 @@ def _llm_polish(slug: str, prompt_type: str, timeout: int = 45) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             resp = json.loads(r.read())
-        candidates = [c["message"]["content"].strip() for c in resp["choices"]]
+        candidates = [_strip_instruction_leak(c["message"]["content"]) for c in resp["choices"]]
         return _pick_best_candidate(candidates) if len(candidates) > 1 else candidates[0]
     except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError):
         return None
@@ -532,7 +553,7 @@ def _llm_guided(guide: str, prompt_type: str, timeout: int = 45) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             resp = json.loads(r.read())
-        return resp["choices"][0]["message"]["content"].strip()
+        return _strip_instruction_leak(resp["choices"][0]["message"]["content"])
     except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError):
         return None
 

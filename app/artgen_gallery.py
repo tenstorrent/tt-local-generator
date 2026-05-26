@@ -17,7 +17,8 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gio, GLib, Gtk
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -334,6 +335,59 @@ def _ansi_preview_widget(text: str) -> Gtk.DrawingArea:
     return area
 
 
+# ── Animated GIF card ─────────────────────────────────────────────────────────
+
+class _AnimatedGifWidget(Gtk.Picture):
+    """Gtk.Picture that self-drives a GdkPixbufAnimationIter loop.
+
+    Cancels its own timer when unrealized so it doesn't fire after removal.
+    """
+
+    def __init__(self, path: str):
+        super().__init__()
+        self._timer_id: "int | None" = None
+        self._iter: "GdkPixbuf.PixbufAnimationIter | None" = None
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+        self.set_content_fit(Gtk.ContentFit.COVER)
+        self.connect("unrealize", self._on_unrealize)
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+        except Exception:
+            return
+        if anim.is_static_image():
+            self.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            return
+        it = anim.get_iter(None)
+        self._iter = it
+        pb = it.get_pixbuf()
+        if pb:
+            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+        delay = max(it.get_delay_time(), 10)
+        self._timer_id = GLib.timeout_add(delay, self._tick)
+
+    def _tick(self) -> bool:
+        if self._iter is None:
+            self._timer_id = None
+            return GLib.SOURCE_REMOVE
+        self._iter.advance(None)
+        pb = self._iter.get_pixbuf()
+        if pb is not None:
+            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+        delay = self._iter.get_delay_time()
+        if delay < 0:
+            self._timer_id = None
+            return GLib.SOURCE_REMOVE
+        self._timer_id = GLib.timeout_add(max(delay, 10), self._tick)
+        return GLib.SOURCE_REMOVE
+
+    def _on_unrealize(self, _widget) -> None:
+        if self._timer_id is not None:
+            GLib.source_remove(self._timer_id)
+            self._timer_id = None
+        self._iter = None
+
+
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 
 def make_card_content(rec: MediaRecord) -> Gtk.Widget:
@@ -364,6 +418,10 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
                 return _ansi_preview_widget(raw)
         except Exception:
             pass
+
+    # Animated GIF: self-animating widget (no GStreamer needed)
+    if ext == ".gif" and fp.exists():
+        return _AnimatedGifWidget(str(fp))
 
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
         img = Gtk.Picture.new_for_filename(rec.thumbnail_path)

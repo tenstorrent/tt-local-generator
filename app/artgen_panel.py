@@ -230,6 +230,11 @@ class ArtgenPanel(Gtk.Box):
         self._controls_stack.set_margin_top(10); self._controls_stack.set_margin_bottom(6)
         for name in gen_names:
             self._controls_stack.add_named(self._build_controls_page(name), name)
+        # Build control pages for hidden generators too so their widget references
+        # (self._ad_prompt etc.) exist when auto-generate fires them.
+        for name in self._HIDDEN_GENERATORS:
+            if name in artgen.all_names():
+                self._controls_stack.add_named(self._build_controls_page(name), name)
         self._controls_stack.set_visible_child_name("landscape")
         ctrl_scroll = Gtk.ScrolledWindow()
         ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -987,8 +992,8 @@ class ArtgenPanel(Gtk.Box):
 
         elapsed_s = int(time.monotonic() - t0)
 
-        # Thumbnail: first frame of the GIF as PNG
-        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        # Thumbnail: first frame of the GIF as JPEG (make_gif_thumbnail writes JPEG data)
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".jpg")
         make_gif_thumbnail(out_path, thumb_path)
 
         params_d = {
@@ -1268,12 +1273,11 @@ class ArtgenPanel(Gtk.Box):
         type_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         type_flow.set_column_spacing(4)
         type_flow.set_row_spacing(2)
-        # animatediff is now in the Video tab — exclude entirely from auto pool
+        # animatediff is hidden from the manual type picker but kept in the auto pool —
+        # it runs via _run_animatediff() regardless of where the picker sits.
         _AUTO_OFF_BY_DEFAULT: set = set()
         self._auto_type_checks: dict[str, Gtk.CheckButton] = {}
         for gname in artgen.all_names():
-            if gname in self._HIDDEN_GENERATORS:
-                continue
             cb = Gtk.CheckButton.new_with_label(gname)
             cb.set_active(gname not in _AUTO_OFF_BY_DEFAULT)
             cb.connect("toggled", self._on_auto_type_toggled)
@@ -1401,11 +1405,14 @@ class ArtgenPanel(Gtk.Box):
             return
         gen_name = random.choice(checked)
 
-        # Switch the type dropdown to the chosen type so the user can see what's next
-        gen_names = artgen.all_names()
-        if gen_name in gen_names:
-            self._type_dd.set_selected(gen_names.index(gen_name))
-            self._controls_stack.set_visible_child_name(gen_name)
+        # Switch the type dropdown + controls stack — but only for picker-visible types.
+        # Hidden generators (e.g. animatediff) skip the dropdown update so the picker
+        # doesn't jump to an index that doesn't match any visible entry.
+        if gen_name not in self._HIDDEN_GENERATORS:
+            gen_names = artgen.all_names()
+            if gen_name in gen_names:
+                self._type_dd.set_selected(gen_names.index(gen_name))
+                self._controls_stack.set_visible_child_name(gen_name)
 
         # Randomise params for this type (writes to widgets on the main thread)
         self._auto_apply_random_params(gen_name)
