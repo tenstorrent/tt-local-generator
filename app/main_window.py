@@ -36,7 +36,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import GdkPixbuf, GLib, Gio, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, GLib, Gio, Gtk, Pango
 
 from api_client import APIClient
 from app_settings import settings as _settings
@@ -1627,7 +1627,28 @@ class GenerationCard(Gtk.Frame):
         )
         self._media_stack.add_named(thumb, "thumb")
 
-        if self._record.video_exists and not _USE_SYSTEM_PLAYER:
+        # GIFs (AnimateDiff) use GdkPixbufAnimationIter instead of GStreamer —
+        # GStreamer's gifparse plugin does not support reliable seeking so the
+        # notify::ended → seek(0) loop that works for MP4s fails silently for GIFs.
+        _is_gif = (
+            self._record.media_type == "animatediff"
+            or self._record.video_path.endswith(".gif")
+        )
+        self._gif_pic: "Gtk.Picture | None" = None
+        self._gif_iter: "GdkPixbuf.PixbufAnimationIter | None" = None
+        self._gif_timer_id: "int | None" = None
+
+        if _is_gif and self._record.video_exists:
+            # Use a GdkPixbufAnimationIter-driven Gtk.Picture so the GIF loops
+            # correctly without any GStreamer pipeline.
+            self._gif_pic = Gtk.Picture()
+            self._gif_pic.set_hexpand(True)
+            self._gif_pic.set_size_request(_THUMB_W, _THUMB_H)
+            self._gif_pic.set_content_fit(Gtk.ContentFit.COVER)
+            self._media_stack.add_named(self._gif_pic, "video")
+            self._hover_video = None
+            self._hover_gst = None
+        elif self._record.video_exists and not _USE_SYSTEM_PLAYER:
             # Linux: Create Gtk.Video without a file so no GStreamer pipeline is
             # opened at construction time.  With a large history every card would
             # eagerly open a pipeline, holding several file-descriptors each.
@@ -1799,6 +1820,11 @@ class GenerationCard(Gtk.Frame):
         """Start looping the video silently when the mouse enters the card.
         Also reveals the hover action bar."""
         self._action_revealer.set_reveal_child(True)
+        # GIF path: GdkPixbufAnimationIter (no GStreamer needed)
+        if self._gif_pic is not None:
+            self._start_gif_animation()
+            self._media_stack.set_visible_child_name("video")
+            return
         if _USE_SYSTEM_PLAYER:
             # macOS: load and play via GstPlayer (gtk4paintablesink → Gtk.Picture)
             gst = getattr(self, "_hover_gst", None)
@@ -1856,6 +1882,11 @@ class GenerationCard(Gtk.Frame):
         """Stop the video and revert to the thumbnail when the mouse leaves.
         Also hides the hover action bar."""
         self._action_revealer.set_reveal_child(False)
+        # GIF path
+        if self._gif_pic is not None:
+            self._stop_gif_animation()
+            self._media_stack.set_visible_child_name("thumb")
+            return
         if _USE_SYSTEM_PLAYER:
             # macOS: tear down the GstPlayer pipeline to release file-descriptors
             gst = getattr(self, "_hover_gst", None)
@@ -1868,6 +1899,51 @@ class GenerationCard(Gtk.Frame):
             return
         self._close_hover_pipeline()
         self._media_stack.set_visible_child_name("thumb")
+
+    def _start_gif_animation(self) -> None:
+        """Start GdkPixbufAnimationIter loop on self._gif_pic. Idempotent."""
+        if self._gif_pic is None:
+            return
+        self._stop_gif_animation()
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(self._record.video_path)
+        except Exception:
+            return
+        if anim.is_static_image():
+            self._gif_pic.set_paintable(
+                Gdk.Texture.new_for_pixbuf(anim.get_static_image())
+            )
+            return
+        it = anim.get_iter(None)
+        self._gif_iter = it
+
+        def _tick() -> bool:
+            if self._gif_pic is None or self._gif_iter is not it:
+                # Animation was stopped or replaced — don't reschedule.
+                return GLib.SOURCE_REMOVE
+            it.advance(None)
+            pb = it.get_pixbuf()
+            if pb is not None:
+                self._gif_pic.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+            delay = it.get_delay_time()
+            if delay < 0:
+                self._gif_timer_id = None
+                return GLib.SOURCE_REMOVE
+            self._gif_timer_id = GLib.timeout_add(max(delay, 10), _tick)
+            return GLib.SOURCE_REMOVE
+
+        pb = it.get_pixbuf()
+        if pb is not None:
+            self._gif_pic.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+        delay = max(it.get_delay_time(), 10)
+        self._gif_timer_id = GLib.timeout_add(delay, _tick)
+
+    def _stop_gif_animation(self) -> None:
+        """Cancel the GdkPixbufAnimationIter timer for this card."""
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+        self._gif_iter = None
 
     def _export(self, _btn) -> None:
         if not self._record.media_exists:
@@ -2020,6 +2096,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
         self._play_btn: Optional[Gtk.Button] = None
+        # GIF animation state (used when record is an AnimateDiff .gif)
+        self._detail_gif_timer_id: "int | None" = None
+        self._detail_gif_iter: "GdkPixbuf.PixbufAnimationIter | None" = None
+        self._detail_gif_pic: "Gtk.Picture | None" = None
+        self._detail_gif_paused: bool = False
         self._detail_star_btn: Optional[Gtk.Button] = None
         self._nav_records: list = []   # GenerationRecords in current filter order
         self._nav_idx: int = 0
@@ -2067,6 +2148,11 @@ class DetailPanel(Gtk.ScrolledWindow):
             self._gst_player.close()
             self._gst_player = None
         self._play_btn = None
+        if self._detail_gif_timer_id is not None:
+            GLib.source_remove(self._detail_gif_timer_id)
+            self._detail_gif_timer_id = None
+        self._detail_gif_iter = None
+        self._detail_gif_pic = None
         self._show_empty()
 
     def show_record(self, record: GenerationRecord, iterate_cb) -> None:
@@ -2089,6 +2175,13 @@ class DetailPanel(Gtk.ScrolledWindow):
             self._gst_player.close()
             self._gst_player = None
         self._play_btn = None
+        # Cancel any running GIF animation timer
+        if self._detail_gif_timer_id is not None:
+            GLib.source_remove(self._detail_gif_timer_id)
+            self._detail_gif_timer_id = None
+        self._detail_gif_iter = None
+        self._detail_gif_pic = None
+        self._detail_gif_paused = False
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         content.set_margin_top(12)
@@ -2148,7 +2241,78 @@ class DetailPanel(Gtk.ScrolledWindow):
             img_ctrl.append(open_full_btn)
             content.append(img_ctrl)
         elif record.video_exists:
-            if _USE_SYSTEM_PLAYER:
+            _is_gif = (
+                record.media_type == "animatediff"
+                or record.video_path.endswith(".gif")
+            )
+            if _is_gif:
+                # GIF: drive via GdkPixbufAnimationIter (GStreamer seek unreliable)
+                self._detail_gif_pic = Gtk.Picture()
+                self._detail_gif_pic.set_content_fit(Gtk.ContentFit.CONTAIN)
+                self._detail_gif_pic.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
+                self._detail_gif_pic.set_halign(Gtk.Align.START)
+                content.append(self._detail_gif_pic)
+                # Start animation immediately
+                try:
+                    anim = GdkPixbuf.PixbufAnimation.new_from_file(record.video_path)
+                except Exception:
+                    anim = None
+                # Single tick function — self-reschedules; reads self._detail_gif_iter
+                # directly so pause/resume can reuse it without a second closure.
+                def _gif_tick() -> bool:
+                    if self._detail_gif_paused or self._detail_gif_iter is None:
+                        self._detail_gif_timer_id = None
+                        return GLib.SOURCE_REMOVE
+                    self._detail_gif_iter.advance(None)
+                    pb = self._detail_gif_iter.get_pixbuf()
+                    if pb is not None and self._detail_gif_pic is not None:
+                        self._detail_gif_pic.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+                    delay = self._detail_gif_iter.get_delay_time()
+                    if delay < 0:
+                        self._detail_gif_timer_id = None
+                        return GLib.SOURCE_REMOVE
+                    self._detail_gif_timer_id = GLib.timeout_add(max(delay, 10), _gif_tick)
+                    return GLib.SOURCE_REMOVE
+
+                def _start_gif_tick() -> None:
+                    """Schedule _gif_tick if not already running."""
+                    if self._detail_gif_iter is None or self._detail_gif_timer_id is not None:
+                        return
+                    delay = max(self._detail_gif_iter.get_delay_time(), 10)
+                    self._detail_gif_timer_id = GLib.timeout_add(delay, _gif_tick)
+
+                if anim and not anim.is_static_image():
+                    it = anim.get_iter(None)
+                    self._detail_gif_iter = it
+                    pb = it.get_pixbuf()
+                    if pb:
+                        self._detail_gif_pic.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
+                    _start_gif_tick()
+                elif anim:
+                    # Static GIF (single frame)
+                    self._detail_gif_pic.set_paintable(
+                        Gdk.Texture.new_for_pixbuf(anim.get_static_image())
+                    )
+                # Controls: pause/resume + external open
+                ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                self._play_btn = Gtk.Button(label="⏸ Pause")
+
+                def _toggle_gif_anim(_btn):
+                    self._detail_gif_paused = not self._detail_gif_paused
+                    if self._detail_gif_paused:
+                        self._play_btn.set_label("▶ Resume")
+                    else:
+                        self._play_btn.set_label("⏸ Pause")
+                        _start_gif_tick()
+
+                self._play_btn.connect("clicked", _toggle_gif_anim)
+                ctrl_row.append(self._play_btn)
+                ext_btn = Gtk.Button(label="⧉ Open externally")
+                ext_btn.set_tooltip_text("Open the GIF in the system default viewer")
+                ext_btn.connect("clicked", self._open_external)
+                ctrl_row.append(ext_btn)
+                content.append(ctrl_row)
+            elif _USE_SYSTEM_PLAYER:
                 # macOS: GTK4 Homebrew bottle lacks libmedia-gstreamer.dylib so
                 # Gtk.Video shows a blank frame.  Use GstPlayer (gtk4paintablesink
                 # → Gtk.Picture) for true inline video without a GTK4 recompile.
@@ -3527,6 +3691,12 @@ class ControlPanel(Gtk.Box):
 
         # ── Prompt ────────────────────────────────────────────────────────────
         self.append(self._section("Prompt"))
+
+        # VIDEO MODEL row sits just above the prompt text so the user knows which
+        # model they are writing for before composing.  Hidden for non-video sources.
+        self._video_model_row_widget = self._build_video_model_row()
+        self.append(self._video_model_row_widget)
+
         scroll1 = Gtk.ScrolledWindow()
         self._prompt_scroll = scroll1   # kept for inline-validation error styling
         scroll1.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -3690,15 +3860,9 @@ class ControlPanel(Gtk.Box):
         _create_sep.set_margin_bottom(2)
         self.append(_create_sep)
 
-        # ── VIDEO MODEL row ───────────────────────────────────────────────────
-        # Wan2.2 / Mochi-1 / SkyReels I2V / AnimateDiff picker.
-        # Visible only in video source; hidden for animate/image/artgen.
-        self._video_model_row_widget = self._build_video_model_row()
-        self.append(self._video_model_row_widget)
-
         # ── CLIP LENGTH row ───────────────────────────────────────────────────
         # Placed after the prompt-zone separator, before QUALITY, so the layout
-        # order is: chips → [divider] → MODEL → CLIP LENGTH → QUALITY → Advanced accordion.
+        # order is: chips → [divider] → CLIP LENGTH → QUALITY → Advanced accordion.
         self._clip_length_row_widget = self._build_clip_length_row()
         self.append(self._clip_length_row_widget)
 
@@ -4360,12 +4524,13 @@ class ControlPanel(Gtk.Box):
             self._shot_model_lbl.set_label(_OFFLINE)
             self._shot_model_sub.set_label("")
             self._shot_switcher_btn.set_visible(False)
-            # Revert dropdown to placeholder, except for animatediff which is
-            # local-only and always available when Blackhole hardware is present.
-            if self._video_model == "animatediff":
-                self._sync_video_model_dd("animatediff")
+            # No server running — fall back to AnimateDiff so the user always
+            # has a ready generation path without needing to start a server.
+            # When a server comes online, _on_health_result restores the model.
+            if self._video_model != "animatediff":
+                self._set_model("animatediff")
             else:
-                self._sync_video_model_dd(None)
+                self._sync_video_model_dd("animatediff")
             return
 
         model_key = self._video_model
@@ -6788,6 +6953,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # Narrow status label for generation progress messages (above status bar)
         self._status_lbl = Gtk.Label(label="Ready")
         self._status_lbl.set_xalign(0)
+        self._status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self._status_lbl.set_hexpand(True)
         self._status_lbl.add_css_class("status-bar")
         gallery_wrap.append(self._status_lbl)
 
@@ -8148,10 +8315,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 ),
                 get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
                 get_server_status=lambda: (
-                    self._controls._server_ready,
-                    # Map raw model ID → display name for the TT-TV status bar.
-                    # Falls back to the raw ID, or None if server is offline.
-                    _MODEL_DISPLAY_SERVER.get(
+                    # AnimateDiff runs locally — no server needed — treat as ready.
+                    self._controls._server_ready
+                    or self._controls.get_video_model() == "animatediff",
+                    # Display name shown in the TT-TV status bar.
+                    "AnimateDiff (local)"
+                    if self._controls.get_video_model() == "animatediff"
+                    else _MODEL_DISPLAY_SERVER.get(
                         self._controls._running_model or "",
                         self._controls._running_model,
                     ),
