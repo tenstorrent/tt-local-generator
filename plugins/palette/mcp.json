@@ -1,0 +1,29 @@
+{
+  "x-ttlg": {
+    "output_ext": ".json",
+    "media_type": "palette",
+    "accepts_remix_from": [],
+    "can_remix_to": ["image", "video"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "palette",
+    "description": "Named color palette with evocative prose lore — outputs JSON (and optional CSS)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mood": {"type": "string", "default": "volcanic", "description": "Mood/theme seed"},
+        "count": {"type": "integer", "default": 6, "description": "Number of colors"},
+        "export_css": {"type": "boolean", "default": false, "description": "Also write CSS custom properties"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"mood": "drowned empire", "count": 6},
+      {"mood": "iron winter", "count": 5},
+      {"mood": "fever dream", "count": 7}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

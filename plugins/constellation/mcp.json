@@ -1,0 +1,28 @@
+{
+  "x-ttlg": {
+    "output_ext": ".svg",
+    "media_type": "image",
+    "accepts_remix_from": ["verse"],
+    "can_remix_to": [],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "constellation",
+    "description": "Star map SVG: named constellation with connecting lines and optional lore text",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "culture": {"type": "string", "default": "greek", "description": "Mythology tradition"},
+        "stars": {"type": "integer", "default": 7, "description": "Number of stars"},
+        "lore": {"type": "boolean", "default": false, "description": "Add lore text"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"culture": "norse", "stars": 8, "lore": true},
+      {"culture": "greek", "stars": 12}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

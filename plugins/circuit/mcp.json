@@ -1,0 +1,29 @@
+{
+  "x-ttlg": {
+    "output_ext": ".svg",
+    "media_type": "image",
+    "accepts_remix_from": [],
+    "can_remix_to": [],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "circuit",
+    "description": "Logic gate wiring diagram SVG: AND/OR/NOT/XOR gates with labelled inputs and output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "inputs": {"type": "array", "items": {"type": "string"}, "default": ["A", "B", "C"]},
+        "gates": {"type": "array", "items": {"type": "string"}, "default": ["and", "or", "not"]},
+        "depth": {"type": "integer", "default": 2},
+        "style": {"type": "string", "enum": ["clean", "neon", "paper"], "default": "clean"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"inputs": ["A", "B"], "gates": ["and", "not"], "style": "neon"},
+      {"inputs": ["X", "Y", "Z"], "gates": ["xor", "and"], "depth": 3}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

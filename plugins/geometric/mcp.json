@@ -1,0 +1,28 @@
+{
+  "x-ttlg": {
+    "output_ext": ".svg",
+    "media_type": "image",
+    "accepts_remix_from": ["palette"],
+    "can_remix_to": [],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "geometric",
+    "description": "Abstract tiled SVG geometry: Mondrian grids, recursive subdivision, circuit traces, woven lattice",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "style": {"type": "string", "enum": ["mondrian", "circuit", "recursive", "weave"], "default": "mondrian"},
+        "palette": {"type": "string", "enum": ["teal", "mono", "ember", "forest"], "default": "teal"},
+        "complexity": {"type": "string", "enum": ["low", "high"], "default": "low"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"style": "mondrian", "palette": "teal"},
+      {"style": "recursive", "palette": "ember", "complexity": "high"}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

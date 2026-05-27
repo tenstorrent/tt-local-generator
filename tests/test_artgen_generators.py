@@ -15,6 +15,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "plugins" / "freeform"))
 
 _VERSE_PLUGIN = Path(__file__).parent.parent / "plugins" / "verse" / "plugin.py"
 _FREEFORM_PLUGIN = Path(__file__).parent.parent / "plugins" / "freeform" / "plugin.py"
+_PALETTE_PLUGIN = Path(__file__).parent.parent / "plugins" / "palette" / "plugin.py"
+_CONSTELLATION_PLUGIN = Path(__file__).parent.parent / "plugins" / "constellation" / "plugin.py"
+_GEOMETRIC_PLUGIN = Path(__file__).parent.parent / "plugins" / "geometric" / "plugin.py"
+_CIRCUIT_PLUGIN = Path(__file__).parent.parent / "plugins" / "circuit" / "plugin.py"
+_SKYLINE_PLUGIN = Path(__file__).parent.parent / "plugins" / "skyline" / "plugin.py"
 
 
 def _load_plugin(path: Path, module_name: str):
@@ -117,3 +122,119 @@ class TestFreeformGenerator:
         result = self.g.generate_artifact(args, fn)
         fn.assert_called_once()
         assert "some output text" in result
+
+
+class TestPaletteGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_PALETTE_PLUGIN, "palette_plugin")
+        self.g = mod.PaletteGenerator()
+
+    def test_build_prompt_includes_mood(self):
+        args = _args(mood="volcanic", count=6)
+        assert "volcanic" in self.g.build_prompt(args)
+
+    def test_parse_output_returns_valid_json(self):
+        raw = '{"name": "Ember", "colors": [{"hex": "#FF6600", "role": "accent"}], "lore": "Hot."}'
+        result = self.g.parse_output(raw, _args())
+        import json
+        data = json.loads(result)
+        assert data["name"] == "Ember"
+
+    def test_parse_output_raises_on_missing_fields(self):
+        # palette.parse_output raises ValueError when 'name' or 'colors' key is absent
+        raw = '{"colors": []}'
+        with pytest.raises(ValueError, match="missing required fields"):
+            self.g.parse_output(raw, _args())
+
+    def test_generate_artifact_calls_call_fn(self):
+        response = '{"name": "Test", "colors": [{"hex": "#000000", "role": "bg"}], "lore": "Dark."}'
+        fn = _mock_call_fn(response)
+        result = self.g.generate_artifact(_args(mood="test", count=1, export_css=False), fn)
+        fn.assert_called_once()
+        assert "Test" in result
+
+
+class TestConstellationGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_CONSTELLATION_PLUGIN, "constellation_plugin")
+        self.g = mod.ConstellationGenerator()
+
+    def test_build_prompt_returns_string(self):
+        args = _args(culture="greek", stars=7, lore=False)
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_default_output_is_svg(self):
+        assert self.g.default_output().suffix == ".svg"
+
+    def test_generate_artifact_calls_call_fn(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="2"/></svg>'
+        fn = _mock_call_fn(svg)
+        result = self.g.generate_artifact(_args(culture="greek", stars=5, lore=False), fn)
+        fn.assert_called_once()
+
+
+class TestGeometricGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_GEOMETRIC_PLUGIN, "geometric_plugin")
+        self.g = mod.GeometricGenerator()
+
+    def test_build_prompt_returns_string(self):
+        # geometric uses geo_palette (dest="geo_palette"), not palette
+        args = _args(style="mondrian", geo_palette="teal", complexity="low")
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_build_prompt_includes_style(self):
+        args = _args(style="mondrian", geo_palette="teal", complexity="low")
+        result = self.g.build_prompt(args)
+        # The mondrian style description is embedded in the prompt
+        assert "mondrian" in result.lower() or "De Stijl" in result or len(result) > 50
+
+    def test_default_output_is_svg(self):
+        assert self.g.default_output().suffix == ".svg"
+
+
+class TestCircuitGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_CIRCUIT_PLUGIN, "circuit_plugin")
+        self.g = mod.CircuitGenerator()
+
+    def test_build_prompt_returns_string(self):
+        # circuit uses inputs/gates as comma-separated strings, circuit_style not style
+        args = _args(inputs="A,B", gates="and,or", depth=2, circuit_style="clean")
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_build_prompt_includes_inputs(self):
+        args = _args(inputs="X,Y", gates="and", depth=1, circuit_style="clean")
+        result = self.g.build_prompt(args)
+        assert "X" in result and "Y" in result
+
+    def test_default_output_is_svg(self):
+        assert self.g.default_output().suffix == ".svg"
+
+
+class TestSkylineGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_SKYLINE_PLUGIN, "skyline_plugin")
+        self.g = mod.SkylineGenerator()
+
+    def test_build_prompt_returns_string(self):
+        args = _args(era="retro", sky="dusk", density="medium")
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_build_prompt_includes_era(self):
+        args = _args(era="retro", sky="dusk", density="medium")
+        result = self.g.build_prompt(args)
+        # retro era adjective is "neon-lit, 1970s, retrofuturistic"
+        assert "retro" in result.lower() or "1970s" in result or len(result) > 50
+
+    def test_default_output_is_svg(self):
+        assert self.g.default_output().suffix == ".svg"
