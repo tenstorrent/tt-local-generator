@@ -336,14 +336,29 @@ def extract_remix_hint(record: dict) -> str:
 
 
 # ── Lazy generator import ─────────────────────────────────────────────────────
-# Import all generators so their @register decorators fire.  Done lazily here
-# so importing artgen itself doesn't fail if a generator has a missing dep.
+# Delegates to plugin_loader which scans plugins/ and ~/.config/tt-local-gen/plugins/.
+# Falls back to the old import list so the transition is smooth — generators still
+# present in app/artgen/generators/ continue to register via @register even if their
+# plugin dir doesn't exist yet.
+
 
 def _load_generators() -> None:
-    from artgen.generators import (  # noqa: F401
-        landscape, skyline, constellation, geometric,
-        ansi, palette, verse, circuit, freeform, animatediff,
-    )
+    import plugin_loader
+    plugin_loader.load_plugins()
+    # Back-fill the old _GENERATORS registry so existing code using artgen.get()
+    # and artgen.all_names() continues to work during the transition.
+    for name, pdef in plugin_loader._PLUGINS.items():
+        _GENERATORS[name] = pdef.generator
+
+    # Fall-back: also import old-style generators not yet in plugins/.
+    # Each module's @register decorator fires and adds to _GENERATORS.
+    try:
+        from artgen.generators import (  # noqa: F401
+            landscape, skyline, constellation, geometric,
+            ansi, palette, verse, circuit, freeform, animatediff,
+        )
+    except Exception:
+        pass
 
 
 _load_generators()
