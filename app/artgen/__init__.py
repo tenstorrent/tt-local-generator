@@ -266,6 +266,75 @@ def repair_svg(raw: str) -> str:
     return body
 
 
+# ── Remix support ─────────────────────────────────────────────────────────────
+
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class RemixContext:
+    """
+    Carries all context needed to drive a remix operation from one artifact
+    type to another.
+
+    Attributes:
+        source_record : the originating history record dict (may contain id,
+                        prompt, media_type, artifact_path, etc.)
+        source_type   : the media/artifact type of the source (e.g. "verse",
+                        "palette", "landscape")
+        target_type   : the media/artifact type the remix will produce (e.g.
+                        "video", "image")
+        hint          : pre-extracted text hint forwarded to the target generator
+                        as its seed prompt (may be empty string)
+    """
+
+    source_record: dict
+    source_type: str
+    target_type: str
+    hint: str
+
+
+def remix_targets_for(source_type: str) -> list:
+    """
+    Return a list of PluginDef objects for all loaded plugins that accept
+    *source_type* as a remix input.
+
+    Delegates to plugin_loader.all_plugins() so the result always reflects the
+    current plugin registry — no caching.  Returns an empty list when no plugins
+    accept the given source type or when the plugin registry is empty.
+
+    Args:
+        source_type: the artifact/media type produced by the source generator
+                     (e.g. "verse", "palette", "landscape").
+
+    Returns:
+        Sorted (by name) list of PluginDef whose accepts_remix_from tuple
+        contains source_type.
+    """
+    import plugin_loader
+    return [
+        p for p in plugin_loader.all_plugins()
+        if source_type in p.accepts_remix_from
+    ]
+
+
+def extract_remix_hint(record: dict) -> str:
+    """
+    Default remix hint extractor — returns the prompt text from a history record.
+
+    Plugin generators may override this by implementing their own extraction
+    logic, but the default works for any record that stores a plain-text prompt
+    in the "prompt" key (which all built-in generators do).
+
+    Args:
+        record: a history record dict, typically loaded from history_store.
+
+    Returns:
+        The string value of record["prompt"], or "" if the key is absent.
+    """
+    return record.get("prompt", "")
+
+
 # ── Lazy generator import ─────────────────────────────────────────────────────
 # Import all generators so their @register decorators fire.  Done lazily here
 # so importing artgen itself doesn't fail if a generator has a missing dep.
