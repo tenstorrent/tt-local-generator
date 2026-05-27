@@ -32,7 +32,7 @@ Usage:
                                     so a remote GUI (--server http://this:8000)
                                     can browse and download it.
                                     Flags: --port 8002  --host 0.0.0.0
-    tt-ctl artgen                   Generate art artifacts via LLM — SVG landscapes,
+    tt-ctl artgen                   Generate generative art via LLM — SVG landscapes,
                                     city skylines, constellations, geometric patterns,
                                     ANSI art, color palettes, verse, circuit diagrams.
                                     Flags: --type TYPE  --output PATH  --model ID

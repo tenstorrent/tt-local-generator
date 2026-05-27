@@ -3643,7 +3643,7 @@ class ControlPanel(Gtk.Box):
             "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
-        self._src_art_btn = Gtk.ToggleButton(label="🎨 Art")
+        self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
         self._src_art_btn.add_css_class("source-btn")
         self._src_art_btn.add_css_class("source-btn-right")
         self._src_art_btn.set_tooltip_text(

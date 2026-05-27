@@ -823,7 +823,7 @@
       <li><a href="#flow">How it works</a></li>
       <li><a href="#demo">Demo</a></li>
       <li><a href="#models">Models</a></li>
-      <li><a href="#artgen">Artgen</a></li>
+      <li><a href="#artgen">Generative Art</a></li>
       <li><a href="#prompts">Prompts</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
@@ -1002,7 +1002,7 @@
       <strong>Hardware note:</strong> All video and image inference requires
       <strong>Blackhole hardware (QB2 — dual P300X2)</strong>. This is the primary
       development and test target. Wormhole (N150/N300) is not currently supported for
-      inference. The artgen text and SVG generators run on any machine via CPU.
+      inference. The Generative Art text and SVG generators run on any machine via CPU.
     </p>
 
     <div class="model-grid">
@@ -1037,7 +1037,7 @@
         <div class="model-hw"><span class="model-hw-dot"></span> CPU / CUDA — TT hardware support pending</div>
       </div>
       <div class="model-card">
-        <div class="model-type artgen">Artgen · Animated GIF</div>
+        <div class="model-type artgen">Generative Art · Animated GIF</div>
         <div class="model-name">AnimateDiff</div>
         <p class="model-desc">TTNN UNet with cross-frame temporal attention. Generates animated GIFs directly on Blackhole — no Docker, no server warmup. Every generation driven by the prompt engine.</p>
         <div class="model-hw"><span class="model-hw-dot"></span> QB2 / Blackhole P300c — no server needed</div>
@@ -1050,7 +1050,7 @@
 <section id="artgen">
   <div class="wrap">
     <div class="section-label">Built-in art generator</div>
-    <h2 class="section-title">Artgen — generative art, entirely on-device.</h2>
+    <h2 class="section-title">Generative Art — entirely on-device.</h2>
     <p class="section-sub">
       A second creative mode alongside video: SVG landscapes, color palettes, verse, ANSI
       art, and — on Blackhole hardware — animated GIFs via the AnimateDiff TTNN pipeline.
@@ -1058,8 +1058,8 @@
       Markov chain → LLM polish.
     </p>
     <p class="section-sub" style="margin-top:.75rem;">
-      <strong>Works from day one.</strong> Artgen automatically uses the best LLM available —
-      a dedicated artgen model when you have one running, or the lightweight Qwen3-0.6B
+      <strong>Works from day one.</strong> The Generative Art tab automatically uses the best LLM available —
+      a dedicated Generative Art model when you have one running, or the lightweight Qwen3-0.6B
       prompt server otherwise. Verse and palette generate well at any model size. SVG generators
       shine with a larger model. No configuration needed: start a bigger LLM and every
       subsequent generation upgrades automatically.
@@ -1719,12 +1719,12 @@
 
     <div class="prompt-panel" id="tab-artgen">
       <p style="color:var(--muted);font-size:.9rem;margin:0 0 .6rem;line-height:1.6">
-        Artgen sends structured generation prompts to an LLM and renders the output — SVG art,
+        The Generative Art tab sends structured generation prompts to an LLM and renders the output — SVG art,
         ANSI pixel grids, or plain text — directly in the gallery. Six starred examples from a real
         session are shown below, one for each generator type.
       </p>
       <p style="color:var(--muted);font-size:.85rem;margin:0 0 1.2rem;line-height:1.6">
-        The LLM is chosen automatically: dedicated artgen server first (Qwen3-8B, Llama-3.1-8B, etc.),
+        The LLM is chosen automatically: dedicated Generative Art server first (Qwen3-8B, Llama-3.1-8B, etc.),
         then the always-on Qwen3-0.6B prompt server as a fallback. Verse and palette work well
         at either size. SVG generators give richer results with a larger model but function at 0.6B too.
       </p>

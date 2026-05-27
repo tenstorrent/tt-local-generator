@@ -260,7 +260,7 @@ class ArtgenPanel(Gtk.Box):
         srv_pop_content.set_margin_start(12); srv_pop_content.set_margin_end(12)
         srv_pop_content.set_margin_top(10); srv_pop_content.set_margin_bottom(10)
         srv_pop_content.set_size_request(210, -1)
-        srv_pop_content.append(_section_lbl("artgen server"))
+        srv_pop_content.append(_section_lbl("Generative Art server"))
         self._srv_model_dd = _dd(_ARTGEN_MODELS, "Qwen3-8B")
         srv_pop_content.append(_row("Model", self._srv_model_dd, label_width=46))
         srv_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -296,7 +296,7 @@ class ArtgenPanel(Gtk.Box):
         srv_menu_btn.set_child(srv_btn_inner)
         srv_menu_btn.add_css_class("flat")
         srv_menu_btn.set_popover(srv_popover)
-        srv_menu_btn.set_tooltip_text("Artgen server controls (model, start/stop, health)")
+        srv_menu_btn.set_tooltip_text("Generative Art server controls (model, start/stop, health)")
         btn_row.append(srv_menu_btn)
 
         footer.append(btn_row)
