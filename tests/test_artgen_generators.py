@@ -20,6 +20,9 @@ _CONSTELLATION_PLUGIN = Path(__file__).parent.parent / "plugins" / "constellatio
 _GEOMETRIC_PLUGIN = Path(__file__).parent.parent / "plugins" / "geometric" / "plugin.py"
 _CIRCUIT_PLUGIN = Path(__file__).parent.parent / "plugins" / "circuit" / "plugin.py"
 _SKYLINE_PLUGIN = Path(__file__).parent.parent / "plugins" / "skyline" / "plugin.py"
+_LANDSCAPE_PLUGIN = Path(__file__).parent.parent / "plugins" / "landscape" / "plugin.py"
+_ANSI_PLUGIN = Path(__file__).parent.parent / "plugins" / "ansi" / "plugin.py"
+_ANIMATEDIFF_PLUGIN = Path(__file__).parent.parent / "plugins" / "animatediff" / "plugin.py"
 
 
 def _load_plugin(path: Path, module_name: str):
@@ -238,3 +241,91 @@ class TestSkylineGenerator:
 
     def test_default_output_is_svg(self):
         assert self.g.default_output().suffix == ".svg"
+
+
+class TestLandscapeGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_LANDSCAPE_PLUGIN, "landscape_plugin")
+        self.g = mod.LandscapeGenerator()
+
+    def test_build_prompt_includes_palette_colors(self):
+        # sunset palette has sky_bottom=#FF6B35 and adjective="warm, dramatic, cinematic"
+        args = _args(palette="sunset", mountains=True, clouds=False, stars=False)
+        result = self.g.build_prompt(args)
+        assert "#FF6B35" in result or "sunset" in result.lower()
+
+    def test_build_prompt_random_palette_works(self):
+        args = _args(palette="random", mountains=True, clouds=False, stars=False)
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_parse_output_valid_svg(self):
+        raw = '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450"><rect/></svg>'
+        result = self.g.parse_output(raw, _args())
+        assert result.startswith("<svg")
+
+    def test_parse_output_raises_on_no_svg(self):
+        with pytest.raises(ValueError, match="SVG"):
+            self.g.parse_output("no svg here at all", _args())
+
+    def test_default_output_is_svg(self):
+        assert self.g.default_output().suffix == ".svg"
+
+    def test_generate_artifact_calls_call_fn(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>'
+        fn = _mock_call_fn(svg)
+        args = _args(palette="sunset", mountains=True, clouds=False, stars=False, glitch=False)
+        result = self.g.generate_artifact(args, fn)
+        fn.assert_called_once()
+        assert result.startswith("<svg")
+
+
+class TestAnsiGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_ANSI_PLUGIN, "ansi_plugin")
+        self.g = mod.AnsiGenerator()
+
+    def test_build_prompt_returns_pass1_ascii_prompt(self):
+        args = _args(ansi_style="bbs", subject="a dragon", width=40, height=20)
+        result = self.g.build_prompt(args)
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_default_output_is_ans(self):
+        assert self.g.default_output().suffix == ".ans"
+
+    def test_generate_artifact_makes_three_llm_calls(self):
+        # AnsiGenerator is multi-pass — call_fn should be called 3 times
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append({"prompt": prompt, "max_tokens": max_tokens})
+            if len(calls) == 1:
+                return "A B C\nD E F"  # pass 1: ASCII
+            if len(calls) == 2:
+                return "█ ░ ▒\n▓ ▀ ▄"  # pass 2: blocks
+            return "\033[38;5;51m█\033[0m \033[38;5;82m▒\033[0m"  # pass 3: color
+
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        self.g.generate_artifact(args, fn)
+        assert len(calls) == 3
+
+
+class TestAnimateDiffGenerator:
+    @pytest.fixture(autouse=True)
+    def gen(self):
+        mod = _load_plugin(_ANIMATEDIFF_PLUGIN, "animatediff_plugin")
+        self.g = mod.AnimateDiffGenerator()
+
+    def test_build_prompt_raises(self):
+        """AnimateDiff bypasses the LLM pipeline — build_prompt must raise."""
+        with pytest.raises(RuntimeError, match="does not use build_prompt"):
+            self.g.build_prompt(_args())
+
+    def test_default_output_is_gif(self):
+        assert self.g.default_output().suffix == ".gif"
+
+    def test_name_is_animatediff(self):
+        assert self.g.name == "animatediff"
