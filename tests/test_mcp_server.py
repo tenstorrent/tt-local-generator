@@ -8,6 +8,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
+# FastAPI is available in the venv but not always under /usr/bin/python3.
+# Skip the whole module gracefully when it's absent.
+fastapi = pytest.importorskip("fastapi", reason="fastapi not installed — skipping MCP server tests")
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
