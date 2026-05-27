@@ -425,6 +425,25 @@ patterns (mock subprocess, network, no real hardware or LLM calls).
 
 ---
 
+## 8. Terminology: "Generative Art" replaces "ArtGen"
+
+All user-facing text — UI tab labels, button text, section headings, website
+copy, help strings, and CLI `--help` descriptions — should use **"Generative Art"**
+instead of "ArtGen". This applies to:
+
+- Tab label in the main window (currently "ArtGen" or "Artgen")
+- `tt-ctl artgen` subcommand description shown in `--help`
+- Website pages, navigation labels, and feature descriptions
+- Any `description` strings in `mcp.json` manifests that say "artgen"
+- `x-ttlg.tab` value in manifests: use `"generative-art"` (internal key, but
+  consistent with display label)
+
+**Scope boundary:** Internal Python identifiers (`ArtGenerator`, `artgen/`,
+`plugin_loader`, `artgen_panel`) are not renamed in this work — that is a
+separate refactor with its own migration cost. Only user-visible strings change.
+
+---
+
 ## Open Questions
 
 These are deferred — not blockers for the initial implementation:
