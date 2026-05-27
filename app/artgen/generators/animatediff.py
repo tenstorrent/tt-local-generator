@@ -131,6 +131,7 @@ def run_subprocess(
     negative_prompt: str = "blurry, low quality",
     temporal_alpha: float = 0.35,
     on_progress: Callable[[str], None] | None = None,
+    timeout: int = 1800,
 ) -> tuple[bool, str]:
     """Run generate_blackhole_v2.py as a subprocess.
 
@@ -141,8 +142,13 @@ def run_subprocess(
     frame-decode progress with \\n. PYTHONUNBUFFERED=1 ensures both come through
     in real-time; Python's universal-newlines mode (text=True) normalises \\r → \\n.
 
+    timeout: maximum wall-clock seconds before the subprocess is killed (default
+    1800 = 30 minutes). Raise for very long multi-frame runs; lower for CI.
+
     Returns (success, error_message). error_message is "" on success.
     """
+    import threading
+
     script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"
     if not script.exists():
         return False, (
@@ -177,6 +183,16 @@ def run_subprocess(
         "--output", str(out_path),
     ]
 
+    timed_out = threading.Event()
+
+    def _drain(proc):
+        """Read stdout in a thread so the timeout watchdog can kill from outside."""
+        for line in proc.stdout:
+            line = line.rstrip()
+            if on_progress and ("Frame" in line or "Step" in line
+                                or "Generating" in line or "Loading" in line):
+                on_progress(line.strip())
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -186,17 +202,31 @@ def run_subprocess(
             env=env,
             cwd=str(_SCRIPT_DIR),
         )
-        for line in proc.stdout:
-            line = line.rstrip()
-            if on_progress and ("Frame" in line or "Step" in line or "Generating" in line or "Loading" in line):
-                on_progress(line.strip())
-        proc.wait()
     except Exception as e:
         return False, f"Subprocess error: {e}"
 
+    drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
+    drain_thread.start()
+
+    drain_thread.join(timeout=timeout)
+
+    if drain_thread.is_alive():
+        # Subprocess is still running after the deadline — kill it.
+        timed_out.set()
+        proc.kill()
+        proc.wait()
+        drain_thread.join(timeout=5)
+        minutes = timeout // 60
+        return False, f"AnimateDiff timed out after {minutes} minutes and was stopped"
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
     if proc.returncode != 0:
         return False, f"generate_blackhole_v2.py exited with rc={proc.returncode}"
-
 
     if not out_path.exists():
         return False, "Script exited 0 but no output file was produced"

@@ -1,3 +1,24 @@
+tt-local-generator (0.4.0) noble; urgency=medium
+
+  * Plugin system: generators are now MCP-native plugins in plugins/<name>/
+    with mcp.json manifests and plugin.py executors; plugin_loader discovers
+    them from plugins/ and ~/.config/tt-local-gen/plugins/ at startup.
+  * MCP server (app/mcp_server.py) exposes all loaded plugins as JSON-RPC 2.0
+    tools on port 8003; tt-ctl mcp-config prints the client configuration.
+  * tt-ctl plugin list: tabular view of all registered plugins with name,
+    media type, tab, hardware, and tool count.
+  * Remix graph: artgen.remix_targets_for() and RemixContext dataclass wire
+    up cross-generator remixing via accepts_remix_from in manifests.
+  * AnimateDiff: generated GIFs now persist in the Video tab across app
+    restarts (media_type "animatediff" was being silently dropped from the
+    video gallery on reload).
+  * AnimateDiff: subprocess timeout (default 30 min) kills runaway generation
+    and returns a clear error instead of blocking forever.
+  * Terminology: "Artgen" renamed to "Generative Art" throughout the UI and
+    website.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 27 May 2026 16:33:52 -0700
+
 tt-local-generator (0.3.3) noble; urgency=medium
 
   * prompt engine: six structural slug templates rotate the syntactic shape

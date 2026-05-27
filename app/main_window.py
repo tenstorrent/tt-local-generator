@@ -7568,7 +7568,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # Route each record to the gallery that matches its media type.
         # GalleryWidget.load_history() replaces existing cards rather than
         # appending, so calling this method more than once is safe.
-        video_recs   = [r for r in records if r.media_type == "video"]
+        # animatediff GIFs live in the video gallery (same as _gallery_for_type routing).
+        video_recs   = [r for r in records if r.media_type in ("video", "animatediff")]
         animate_recs = [r for r in records if r.media_type == "animate"]
         image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
