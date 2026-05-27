@@ -75,6 +75,45 @@ import server_manager as sm              # noqa: E402
 from artgen.cli import cmd_artgen, _build_artgen_parser                 # noqa: E402
 
 
+# ── Plugin management commands ────────────────────────────────────────────────
+
+def cmd_plugin(args):
+    """Dispatch plugin sub-commands."""
+    if getattr(args, "plugin_cmd", None) == "list":
+        _cmd_plugin_list(args)
+    else:
+        print("Usage: tt-ctl plugin list")
+
+
+def _cmd_plugin_list(_args):
+    """List all loaded plugins with name, media type, tab, hardware, and tools."""
+    import plugin_loader
+    plugin_loader.load_plugins()
+    plugins = plugin_loader.all_plugins()
+    if not plugins:
+        print("No plugins loaded.")
+        return
+    print(f"{'NAME':<20} {'MEDIA':<10} {'TAB':<16} {'HARDWARE':<12} TOOLS")
+    print("-" * 72)
+    for p in plugins:
+        xttlg = p.manifest.get("x-ttlg", {})
+        hw = xttlg.get("hardware") or "—"
+        media = xttlg.get("media_type", "—")
+        tab = xttlg.get("tab", "—")
+        tool_names = ", ".join(t["name"] for t in p.tools)
+        print(f"{p.name:<20} {media:<10} {tab:<16} {hw:<12} {tool_names}")
+
+
+def cmd_mcp_config(_args):
+    """Emit Claude Code MCP config JSON for tt-local-gen."""
+    import json as _json
+    port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
+    config = {"tt-local-gen": {"url": f"http://localhost:{port}/mcp"}}
+    print(_json.dumps(config, indent=2))
+    print("\n# Append to ~/.claude/mcp.json or run:")
+    print("#   tt-ctl mcp-config >> ~/.claude/mcp.json")
+
+
 # ── Colour helpers (plain text when stdout is not a tty) ──────────────────────
 
 def _tty():
@@ -996,6 +1035,14 @@ def _build_parser() -> argparse.ArgumentParser:
     # artgen
     _build_artgen_parser(sub)
 
+    # plugin management
+    plugin_p = sub.add_parser("plugin", help="Plugin management")
+    plugin_sub = plugin_p.add_subparsers(dest="plugin_cmd")
+    plugin_sub.add_parser("list", help="List all loaded plugins")
+
+    # MCP config
+    sub.add_parser("mcp-config", help="Emit Claude Code MCP config JSON for tt-local-gen")
+
     # serve-inventory
     inv = sub.add_parser(
         "serve-inventory",
@@ -1081,6 +1128,8 @@ def main():
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,
         "artgen":           cmd_artgen,
+        "plugin":           cmd_plugin,
+        "mcp-config":       cmd_mcp_config,
     }
     dispatch[args.cmd](args)
 
