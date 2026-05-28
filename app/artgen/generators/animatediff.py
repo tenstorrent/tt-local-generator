@@ -49,15 +49,15 @@ if not _log.handlers:
 _TT_METAL = Path.home() / "tt-metal"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 
-# Prefer the copy bundled inside this repo (app/animatediff/).  Fall back to
-# the developer scratchpad path so local dev machines that have built
-# tt-animatediff from source still work without change.
+# Prefer the copy bundled inside this repo (app/animatediff/ — synced from
+# ~/code/tt-animatediff, the canonical source).  Fall back to the canonical
+# repo directly so in-place edits there are picked up without a re-sync.
 _BUNDLED_DIR = Path(__file__).resolve().parent.parent.parent / "animatediff"
-_SCRATCHPAD_DIR = Path.home() / "tt-scratchpad" / "tt-animatediff"
+_CANONICAL_DIR = Path.home() / "code" / "tt-animatediff"
 _SCRIPT_DIR = (
     _BUNDLED_DIR
     if (_BUNDLED_DIR / "examples" / "generate_blackhole_v2.py").exists()
-    else _SCRATCHPAD_DIR
+    else _CANONICAL_DIR
 )
 
 
