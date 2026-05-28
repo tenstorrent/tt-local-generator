@@ -107,7 +107,7 @@ def generate_frames_temporal(
     import ttnn
     from diffusers import PNDMScheduler
     from PIL import Image
-    from animatediff_ttnn.ttnn_pipeline import build_tlist
+    from animatediff_ttnn.ttnn_pipeline import build_tlist, to_device, from_device
     from models.demos.wormhole.stable_diffusion.sd_helper_funcs import tt_guide
     from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 
@@ -135,10 +135,7 @@ def generate_frames_temporal(
 
     frame_latents = []
     for _ in range(num_frames):
-        perturbed = base_noise + 0.05 * torch.randn(
-            base_noise.shape, generator=generator,
-            dtype=base_noise.dtype, device=base_noise.device,
-        )
+        perturbed = base_noise + 0.05 * torch.randn_like(base_noise)
         frame_latents.append(perturbed * init_noise_sigma)
 
     # Build TTNN time embeddings — needs a TtPNDMScheduler for timestep tensors
@@ -147,8 +144,8 @@ def generate_frames_temporal(
     _tlist = build_tlist(_tt_sched, torch_time_proj, device, lh, lw)
 
     # Text embeddings to device — same tensor reused for every frame at every step
-    ttnn_text_emb = ttnn.from_torch(
-        text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    ttnn_text_emb = to_device(
+        text_embeddings, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
     )
 
     # Parallel denoising with cross-frame attention at each step
@@ -156,11 +153,8 @@ def generate_frames_temporal(
         # Collect TTNN noise predictions for all frames at timestep t
         noise_preds = []
         for i in range(num_frames):
-            lat = ttnn.from_torch(
-                frame_latents[i],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
+            lat = to_device(
+                frame_latents[i], device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
             )
             # TTNN UNet expects batch=2 for CFG (unconditional + conditional)
             lat_input = ttnn.concat([lat, lat], dim=0)
@@ -175,7 +169,7 @@ def generate_frames_temporal(
                 config=config,
             )
             guided = tt_guide(ttnn_out, guidance_scale)
-            noise_preds.append(ttnn.to_torch(guided).to(torch.float32))
+            noise_preds.append(from_device(guided, device).to(torch.float32))
 
         # Cross-frame attention — [N, 4, H, W]
         stacked = torch.cat(noise_preds, dim=0)
