@@ -24,6 +24,7 @@ Script resolution order:
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,19 @@ from typing import Callable
 
 
 from artgen import ArtGenerator, register
+
+# Structured log for every animatediff run — written alongside generated GIFs
+# so failures are self-contained and don't require a running GUI to diagnose.
+# Log level: DEBUG captures all subprocess output; INFO captures run summaries.
+_LOG_DIR = Path.home() / "code" / "tt-local-generator" / "logs" / "animatediff"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_log = logging.getLogger("animatediff")
+if not _log.handlers:
+    _log.setLevel(logging.DEBUG)
+    _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    _log.addHandler(_fh)
 
 _TT_METAL = Path.home() / "tt-metal"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
@@ -95,14 +109,18 @@ def _find_tt_smi() -> str | None:
 
 
 def check_hardware() -> tuple[bool, str]:
-    """Check whether a Blackhole device is available.
+    """Check whether a Blackhole device is available and log per-chip health.
 
     Returns (ok, message). ok=True means at least one Blackhole device detected.
     Uses tt-smi -s (snapshot mode) to avoid launching the TUI.
+
+    Also logs per-chip temperature and power so ARC hangs (sentinel 65536°C /
+    4294W) are visible in the log before a run starts.
     """
     import json
     tt_smi = _find_tt_smi()
     if tt_smi is None:
+        _log.warning("tt-smi not found")
         return False, "tt-smi not found (expected at ~/.tenstorrent-venv/bin/tt-smi)"
     try:
         result = subprocess.run(
@@ -110,15 +128,36 @@ def check_hardware() -> tuple[bool, str]:
         )
         data = json.loads(result.stdout)
         devices = data.get("device_info", [])
-        for dev in devices:
-            arch = dev.get("board_info", {}).get("board_type", "").lower()
+        found_blackhole = False
+        arch_str = "unknown"
+        for i, dev in enumerate(devices):
+            bi = dev.get("board_info", {})
+            telem = dev.get("telemetry", {})
+            arch = bi.get("board_type", "").lower()
+            temp = telem.get("asic_temperature", "?")
+            power = telem.get("power", "?")
+            bus = bi.get("bus_id", "?")
+            # Sentinel values indicate ARC firmware hang (see bug-report-arc-hang-chip3.md)
+            temp_val = float(temp) if temp not in ("?", None) else 0
+            arc_dead = temp_val > 1000
+            _log.info("chip%d %s: temp=%s°C power=%sW%s",
+                      i, bus, temp, power, " *** ARC DEAD (sentinel values) ***" if arc_dead else "")
+            if arc_dead:
+                _log.warning("chip%d ARC appears hung — sentinel temp/power values. "
+                             "AC power cycle required to recover.", i)
             if "blackhole" in arch or "p100" in arch or "p300" in arch or "p150" in arch:
-                return True, arch
+                found_blackhole = True
+                arch_str = arch
+        if found_blackhole:
+            return True, arch_str
         if devices:
             arch = devices[0].get("board_info", {}).get("board_type", "unknown")
+            _log.warning("No Blackhole device (detected: %s)", arch)
             return False, f"No Blackhole device found (detected: {arch})"
+        _log.warning("No TT hardware detected by tt-smi")
         return False, "No TT hardware detected"
     except Exception as e:
+        _log.exception("tt-smi check failed")
         return False, f"tt-smi check failed: {e}"
 
 
@@ -183,15 +222,32 @@ def run_subprocess(
         "--output", str(out_path),
     ]
 
+    import datetime as _dt
+    run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Per-run log file captures complete subprocess output for post-mortem analysis.
+    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
+    _log.info("run_start run_id=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
+              run_id, out_path, prompt, frames, steps, seed)
+    _log.info("cmd: %s", " ".join(str(c) for c in cmd))
+
     timed_out = threading.Event()
+    all_output: list[str] = []   # accumulate every line for run_log and error reporting
 
     def _drain(proc):
-        """Read stdout in a thread so the timeout watchdog can kill from outside."""
-        for line in proc.stdout:
-            line = line.rstrip()
-            if on_progress and ("Frame" in line or "Step" in line
-                                or "Generating" in line or "Loading" in line):
-                on_progress(line.strip())
+        """Read stdout+stderr in a thread; log every line, forward progress lines to caller."""
+        with open(run_log_path, "w") as run_log:
+            run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                all_output.append(line)
+                run_log.write(line + "\n")
+                run_log.flush()
+                _log.debug("[subprocess] %s", line)
+                if on_progress and ("Frame" in line or "Step" in line
+                                    or "Generating" in line or "Loading" in line
+                                    or "Error" in line or "Traceback" in line
+                                    or "fatal" in line.lower() or "ARC" in line):
+                    on_progress(line.strip())
 
     try:
         proc = subprocess.Popen(
@@ -203,6 +259,7 @@ def run_subprocess(
             cwd=str(_SCRIPT_DIR),
         )
     except Exception as e:
+        _log.exception("Subprocess launch failed")
         return False, f"Subprocess error: {e}"
 
     drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
@@ -211,13 +268,14 @@ def run_subprocess(
     drain_thread.join(timeout=timeout)
 
     if drain_thread.is_alive():
-        # Subprocess is still running after the deadline — kill it.
         timed_out.set()
         proc.kill()
         proc.wait()
         drain_thread.join(timeout=5)
         minutes = timeout // 60
-        return False, f"AnimateDiff timed out after {minutes} minutes and was stopped"
+        msg = f"AnimateDiff timed out after {minutes} minutes and was stopped"
+        _log.error("run_timeout run_id=%s after %ds", run_id, timeout)
+        return False, msg
 
     try:
         proc.wait(timeout=5)
@@ -225,12 +283,22 @@ def run_subprocess(
         proc.kill()
         proc.wait()
 
-    if proc.returncode != 0:
-        return False, f"generate_blackhole_v2.py exited with rc={proc.returncode}"
+    rc = proc.returncode
+    if rc != 0:
+        # Surface the last 20 lines of output in the error message so the caller
+        # (and the UI) can show the actual TTNN/ARC error without opening the log.
+        tail = "\n".join(all_output[-20:]) if all_output else "(no output captured)"
+        msg = f"generate_blackhole_v2.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
+        _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
+        _log.error("last output:\n%s", tail)
+        return False, msg
 
     if not out_path.exists():
-        return False, "Script exited 0 but no output file was produced"
+        msg = f"Script exited 0 but no output file was produced (log: {run_log_path})"
+        _log.error("run_no_output run_id=%s", run_id)
+        return False, msg
 
+    _log.info("run_success run_id=%s out=%s", run_id, out_path)
     return True, ""
 
 
