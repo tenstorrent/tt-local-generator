@@ -9,8 +9,8 @@ Called from MainWindow._dispatch_remix on the GTK main thread.
 Routing rules
 ─────────────
 • target_type == "animate"
-    Switch to the animate source tab, populate prompts, and stash the reference
-    video path directly on controls so the animate source picker can pick it up.
+    Switch to the animate source tab and populate prompts with hint + seed image.
+    (Motion reference video not consumed — Animate UI no longer has that picker.)
 • target_type in _VIDEO_SOURCES or "video"
     Switch to the video source tab and populate prompts (with optional seed image).
 • target_type == "image"
@@ -53,13 +53,12 @@ def dispatch_remix(
 
     if target == "animate":
         # Switch to animate source and carry the prompt and seed image.
+        # Note: the Animate tab no longer has a separate motion-reference video
+        # picker in the UI — character image uses the seed well. ctx.ref_video_path
+        # is resolved by RemixPopover but not consumed here; future work if motion
+        # reference is restored to the UI.
         controls.switch_to_source("animate")
         controls.populate_prompts(ctx.hint, ctx.negative_hint, ctx.seed_image_path)
-        # Stash the reference video path for the animate picker to consume.
-        # This is a direct attribute assignment — ControlPanel reads it via
-        # _ref_video_path when building the animate API request.
-        if ctx.ref_video_path:
-            controls._ref_video_path = ctx.ref_video_path
 
     elif target in _VIDEO_SOURCES or target == "video":
         # Any video-family target maps to the standard video source tab.

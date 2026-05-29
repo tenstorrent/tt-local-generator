@@ -23,6 +23,7 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 from artgen.generators.animatediff import (
+    AnimateDiffGenerator,  # re-exported so plugin_loader can find the ArtGenerator subclass
     check_hardware,
     run_subprocess,
     make_gif_thumbnail,

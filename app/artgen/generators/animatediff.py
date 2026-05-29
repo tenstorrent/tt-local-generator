@@ -36,7 +36,7 @@ from artgen import ArtGenerator, register
 # Structured log for every animatediff run — written alongside generated GIFs
 # so failures are self-contained and don't require a running GUI to diagnose.
 # Log level: DEBUG captures all subprocess output; INFO captures run summaries.
-_LOG_DIR = Path.home() / "code" / "tt-local-generator" / "logs" / "animatediff"
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "logs" / "animatediff"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _log = logging.getLogger("animatediff")

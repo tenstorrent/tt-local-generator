@@ -129,13 +129,17 @@ def load_plugins() -> None:
                 tools[0],
             )
             name = primary["name"]
+            xttlg = manifest.get("x-ttlg", {})
+
+            # Utility plugins (ffmpeg etc.) are not generators — skip registration.
+            if xttlg.get("utility"):
+                _LOG.debug("plugin_loader: skipping utility plugin %s", plugin_dir.name)
+                continue
 
             # Resolve a runnable generator instance or skip
             generator = _load_generator(plugin_dir, manifest, name)
             if generator is None:
                 continue
-
-            xttlg = manifest.get("x-ttlg", {})
             _PLUGINS[name] = PluginDef(
                 path=plugin_dir,
                 manifest=manifest,

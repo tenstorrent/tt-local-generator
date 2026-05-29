@@ -9465,6 +9465,7 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery.replace_pending_with(record)
         self._gen_gallery = None
         self._controls.set_busy(False)
+        self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
         # Refresh "Repeat last" availability now that history has at least one record.
         self._controls._apply_seed_mode_from_settings()
         media_path = record.media_file_path

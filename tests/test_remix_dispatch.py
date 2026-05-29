@@ -33,12 +33,14 @@ def test_dispatch_video_switches_source():
 
 
 def test_dispatch_animate_switches_source():
+    """animate target: switches source and populates prompts. ref_video_path not consumed
+    (Animate UI no longer has a motion-reference picker)."""
     from remix_dispatch import dispatch_remix
     controls = MagicMock()
     ctx = _make_ctx(target_type="animate", ref_video_path="/tmp/src.mp4", hint="style guide")
     dispatch_remix(ctx, controls, MagicMock(), flash_fn=MagicMock())
     controls.switch_to_source.assert_called_once_with("animate")
-    assert controls._ref_video_path == "/tmp/src.mp4"
+    controls.populate_prompts.assert_called_once_with("style guide", "", "")
 
 
 def test_dispatch_image_switches_source():

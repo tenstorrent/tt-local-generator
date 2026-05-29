@@ -280,19 +280,27 @@ class RemixPopover(Gtk.Popover):
                     if thumb_path and Path(thumb_path).exists():
                         seed_image_path = thumb_path
                     elif media_path and Path(media_path).exists():
+                        tmp_path = None
                         try:
-                            import sys as _sys
-                            _sys.path.insert(
-                                0,
-                                str(Path(__file__).parent.parent / "plugins" / "ffmpeg"),
+                            import importlib.util as _ilu
+                            _spec = _ilu.spec_from_file_location(
+                                "ffmpeg_plugin",
+                                Path(__file__).parent.parent / "plugins" / "ffmpeg" / "plugin.py",
                             )
-                            from plugin import extract_frame as _ef
+                            _ffmpeg = _ilu.module_from_spec(_spec)
+                            _spec.loader.exec_module(_ffmpeg)
                             tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
                             tmp.close()
-                            _ef(media_path, tmp.name, timestamp=0.0)
-                            seed_image_path = tmp.name
+                            tmp_path = tmp.name
+                            _ffmpeg.extract_frame(media_path, tmp_path, timestamp=0.0)
+                            seed_image_path = tmp_path
+                            tmp_path = None  # ownership transferred to seed_image_path
                         except Exception:
-                            pass
+                            if tmp_path:
+                                try:
+                                    Path(tmp_path).unlink(missing_ok=True)
+                                except OSError:
+                                    pass
             elif source_type in (
                 "landscape", "skyline", "geometric", "circuit",
                 "constellation", "ansi", "image",

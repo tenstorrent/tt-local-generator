@@ -114,7 +114,10 @@ class ArtgenPanel(Gtk.Box):
     # now lives in the Video tab as a first-class generation mode.  Historical
     # artgen MediaRecords with generator_type="animatediff" still display in the
     # gallery; only the picker entry is removed.
-    _HIDDEN_GENERATORS: frozenset = frozenset({"animatediff"})
+    _HIDDEN_GENERATORS: frozenset = frozenset({
+        "animatediff",   # lives in Video tab, not Art tab
+        "generate_midi", # MCP-delegate stub — no implementation yet
+    })
 
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
