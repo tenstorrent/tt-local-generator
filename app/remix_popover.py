@@ -42,8 +42,21 @@ def _prompt_from_record(record) -> str:
 
 
 def _neg_from_record(record) -> str:
-    params = getattr(record, "params_dict", lambda: {})()
-    return params.get("negative_prompt", "")
+    """Extract negative prompt from either a GenerationRecord or MediaRecord."""
+    # GenerationRecord has negative_prompt as a direct field
+    neg = getattr(record, "negative_prompt", None)
+    if neg is not None:
+        return str(neg)
+    # MediaRecord stores it in params JSON via params_dict property
+    params_dict = getattr(record, "params_dict", None)
+    if isinstance(params_dict, dict):
+        return params_dict.get("negative_prompt", "")
+    if callable(params_dict):
+        try:
+            return params_dict().get("negative_prompt", "")
+        except Exception:
+            pass
+    return ""
 
 
 def _thumbnail_path(record) -> str:
@@ -173,7 +186,8 @@ class RemixPopover(Gtk.Popover):
             outer.append(carry_lbl)
 
             for spec in specs:
-                self._active_keys.add(spec.key)
+                if spec.default_on:               # only add key if checkbox starts checked
+                    self._active_keys.add(spec.key)
                 cb = Gtk.CheckButton.new_with_label(spec.label)
                 cb.set_active(spec.default_on)
                 cb.connect("toggled", self._on_ingredient_toggled, spec.key)
@@ -194,7 +208,8 @@ class RemixPopover(Gtk.Popover):
             outer.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         else:
             for spec in specs:
-                self._active_keys.add(spec.key)
+                if spec.default_on:
+                    self._active_keys.add(spec.key)
 
         # ── Target buttons ─────────────────────────────────────────────────────
         target_lbl = Gtk.Label(label="REMIX AS")
