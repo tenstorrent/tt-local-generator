@@ -1325,6 +1325,45 @@ popover.picker-popover > contents {
   color: #E8F0F2;
   font-size: 12px;
 }
+/* -- Log viewer ------------------------------------------------------------ */
+.log-sidebar {
+    background-color: @tt_bg_panel;
+}
+.log-section-header {
+    color: @tt_text_muted;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 8px 12px 2px;
+}
+.log-row-error {
+    color: @tt_error;
+}
+.log-row-ok {
+    color: @tt_success;
+}
+.log-content {
+    font-family: "Noto Mono", "Fira Code", monospace;
+    font-size: 11px;
+    background-color: @tt_bg_darkest;
+    color: @tt_text;
+    padding: 8px;
+}
+.log-footer {
+    background-color: @tt_bg_panel;
+    border-top: 1px solid @tt_border;
+}
+.log-footer-btn {
+    background: rgba(79, 209, 197, 0.12);
+    border: 1px solid @tt_accent;
+    border-radius: 3px;
+    color: @tt_accent;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+.log-footer-btn:hover {
+    background: rgba(79, 209, 197, 0.25);
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
