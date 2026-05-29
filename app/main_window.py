@@ -866,6 +866,15 @@ menubar > item:selected {
     background-color: @tt_bg_dark;
     color: @tt_text;
 }
+/* Context slot - teal accent to distinguish from fixed menus */
+menubar > item.context-menu-item > label {
+    color: @tt_accent;
+    font-weight: 600;
+}
+menubar > item.context-menu-item:hover > label,
+menubar > item.context-menu-item:selected > label {
+    color: @tt_accent_light;
+}
 /* Preferences dialog sections */
 .prefs-section-title {
     color: @tt_accent;
@@ -6829,7 +6838,8 @@ class MainWindow(Gtk.ApplicationWindow):
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
-        root_box.append(self._build_menu_bar())
+        self._menu_bar = self._build_menu_bar()
+        root_box.append(self._menu_bar)
 
         # ── Three-pane layout: controls | gallery | detail ────────────────────
         outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -7136,91 +7146,68 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add_action(art_delay_action)
 
     def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
-        """Build and return the Gtk.PopoverMenuBar driven by a Gio.Menu model."""
-        menumodel = Gio.Menu()
+        """Build the PopoverMenuBar.
 
-        # ── File ──────────────────────────────────────────────────────────────
+        Structure: File · Playlists · View ·· [context slot]
+        The context slot (last entry) is rebuilt by _rebuild_context_menu()
+        each time the source tab changes.
+        """
+        self._menumodel = Gio.Menu()
+
+        # ── File ─────────────────────────────────────────────────────────
         file_menu = Gio.Menu()
         file_menu.append("Open Media Folder", "win.open-media-folder")
-        file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
+        file_menu.append_section(None, Gio.Menu())
         file_menu.append("Recover Jobs…", "win.recover-jobs")
         file_menu.append("Refresh Remote Library", "win.refresh-remote-library")
         file_menu.append("Download Remote Library…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("Quit", "app.quit")
-        menumodel.append_submenu("File", file_menu)
+        self._menumodel.append_submenu("File", file_menu)
 
-        # ── Generation ────────────────────────────────────────────────────────
-        gen_menu = Gio.Menu()
-        quality_section = Gio.Menu()
-        for label, steps in [("Fast (10 steps)", "10"), ("Standard (30 steps)", "30"),
-                              ("High Quality (40 steps)", "40")]:
-            item = Gio.MenuItem.new(label, "win.quality")
-            item.set_attribute_value("target", GLib.Variant("s", steps))
-            quality_section.append_item(item)
-        gen_menu.append_section("Quality", quality_section)
-
-        sleep_section = Gio.Menu()
-        for label, val in [("Never", "0"), ("After 10 completions", "10"),
-                           ("After 20 completions", "20"), ("After 50 completions", "50")]:
-            item = Gio.MenuItem.new(label, "win.sleep-after")
-            item.set_attribute_value("target", GLib.Variant("s", val))
-            sleep_section.append_item(item)
-        gen_menu.append_section("Sleep After", sleep_section)
-
-        adv_section = Gio.Menu()
-        adv_section.append("Advanced Settings\u2026", "win.advanced-settings")
-        gen_menu.append_section(None, adv_section)
-        menumodel.append_submenu("Generation", gen_menu)
-
-        # ── Prompt ────────────────────────────────────────────────────────────
-        prompt_menu = Gio.Menu()
-        dir_prob_section = Gio.Menu()
-        for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
-                           ("Often (66%)", "66"), ("Always", "100")]:
-            item = Gio.MenuItem.new(label, "win.director-prob")
-            item.set_attribute_value("target", GLib.Variant("s", pct))
-            dir_prob_section.append_item(item)
-        prompt_menu.append_section("Director Style", dir_prob_section)
-
-        pin_section = Gio.Menu()
-        for display, full in _DIRECTOR_PINS:
-            item = Gio.MenuItem.new(display or "Random", "win.director-pin")
-            item.set_attribute_value("target", GLib.Variant("s", full))
-            pin_section.append_item(item)
-        prompt_menu.append_section("Pinned Director", pin_section)
-        menumodel.append_submenu("Prompt", prompt_menu)
-
-        # ── TT-TV ─────────────────────────────────────────────────────────────
-        tttv_menu = Gio.Menu()
-        tttv_menu.append("Configure TT-TV…", "win.preferences-tttv")
-        menumodel.append_submenu("TT-TV", tttv_menu)
-
-        # ── Playlists ─────────────────────────────────────────────────────────
+        # ── Playlists ─────────────────────────────────────────────────────
         # Keep mutable section references so _rebuild_playlists_menu() can
         # clear and repopulate them without rebuilding the whole menu model.
         pl_menu = Gio.Menu()
         pl_menu.append("Watch All Videos", "win.playlist-all")
-
-        self._playlists_model_section = Gio.Menu()   # one item per model in history
+        self._playlists_model_section = Gio.Menu()
         pl_menu.append_section("By Model", self._playlists_model_section)
-
-        self._playlists_playlist_section = Gio.Menu()  # one item per named playlist
+        self._playlists_playlist_section = Gio.Menu()
         pl_menu.append_section("Your Playlists", self._playlists_playlist_section)
-
         pl_manage = Gio.Menu()
         pl_manage.append("New Playlist…", "win.playlist-new")
         pl_menu.append_section(None, pl_manage)
+        self._menumodel.append_submenu("Playlists", pl_menu)
 
-        menumodel.append_submenu("Playlists", pl_menu)
-
-        # ── View ──────────────────────────────────────────────────────────────
+        # ── View ───────────────────────────────────────────────────────────
         view_menu = Gio.Menu()
-        view_menu.append("Toggle Detail Panel", "win.toggle-detail")
-        menumodel.append_submenu("View", view_menu)
+        toggle_section = Gio.Menu()
+        toggle_section.append("Detail Panel", "win.toggle-detail")
+        view_menu.append_section(None, toggle_section)
 
-        return Gtk.PopoverMenuBar.new_from_model(menumodel)
+        density_section = Gio.Menu()
+        for label, val in [("Comfortable", "comfortable"), ("Compact", "compact")]:
+            item = Gio.MenuItem.new(label, "win.gallery-density")
+            item.set_attribute_value("target", GLib.Variant("s", val))
+            density_section.append_item(item)
+        view_menu.append_section("Gallery Density", density_section)
+        self._menumodel.append_submenu("View", view_menu)
+
+        # ── Context slot placeholder (replaced by _rebuild_context_menu) ────
+        self._context_slot_idx = self._menumodel.get_n_items()
+        self._context_menu_model = Gio.Menu()
+        self._menumodel.append_submenu("🎥 Video", self._context_menu_model)
+
+        bar = Gtk.PopoverMenuBar.new_from_model(self._menumodel)
+        self._apply_context_menu_css(bar)
+        return bar
+
+    def _apply_context_menu_css(self, bar: Gtk.PopoverMenuBar) -> None:
+        """Add context-menu-item CSS class to the last (context slot) item."""
+        child = bar.get_last_child()
+        if child is not None:
+            child.add_css_class("context-menu-item")
 
     # ── Playlist menu helpers ──────────────────────────────────────────────────
 
