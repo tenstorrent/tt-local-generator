@@ -229,6 +229,54 @@
       color: var(--muted); font-size: .85rem;
     }
     footer a { color: var(--teal); }
+
+    /* ── Mobile ──────────────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .plugin-grid { grid-template-columns: repeat(2, 1fr); }
+      .gif-grid    { grid-template-columns: repeat(3, 1fr); }
+      .remix-row   { flex-wrap: wrap; }
+      table { font-size: .8rem; }
+      th, td { padding: .4rem .5rem; }
+    }
+
+    @media (max-width: 640px) {
+      /* Nav */
+      .nav-links { display: none !important; }
+      .nav-inner  { gap: .5rem; }
+
+      /* Layout */
+      .plugin-grid { grid-template-columns: 1fr; }
+      .gif-grid    { grid-template-columns: repeat(2, 1fr); }
+      .step-list li { flex-direction: column; }
+      .step-num     { width: 1.75rem; height: 1.75rem; }
+
+      /* Typography */
+      .section-title { font-size: 1.75rem; }
+      section { padding: 3rem 0; }
+
+      /* Tables scroll horizontally on phone */
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+
+      /* Code blocks */
+      pre { font-size: .75rem; padding: 1rem; }
+
+      /* Remix rows */
+      .remix-row { gap: .4rem; }
+      .remix-node { font-size: .75rem; padding: .2rem .5rem; }
+
+      /* Hero actions */
+      div[style*="display:flex;gap:1rem"] {
+        flex-direction: column !important;
+      }
+      div[style*="display:flex;gap:1rem"] a {
+        width: 100% !important;
+        text-align: center;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .gif-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>

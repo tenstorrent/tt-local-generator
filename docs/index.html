@@ -784,6 +784,56 @@
     @media (max-width: 640px) {
       .nav-links { display: none; }
       h1 { font-size: 2.25rem; }
+
+      /* Collapse inline grids on small screens using !important to beat
+         inline style="display:grid;grid-template-columns:..." specificity */
+      [style*="grid-template-columns:repeat(3"] {
+        grid-template-columns: 1fr !important;
+      }
+      [style*="grid-template-columns:repeat(2"] {
+        grid-template-columns: 1fr !important;
+      }
+      [style*="grid-template-columns:repeat(4"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
+      [style*="grid-template-columns:1.75fr"] {
+        grid-template-columns: 1fr !important;
+      }
+
+      /* Nav: show a compact hamburger-free nav with just key links */
+      .nav-links { display: none !important; }
+      nav { padding: .5rem 0; }
+      .nav-inner { flex-wrap: wrap; gap: .5rem; }
+
+      /* Hero text */
+      .hero-lead { font-size: 1rem; }
+      .hero-actions { flex-direction: column; align-items: flex-start; gap: .75rem; }
+      .hero-actions a { width: 100%; text-align: center; }
+
+      /* Screenshots */
+      .hero-screenshot-wrap { margin-left: 0; width: 100%; }
+
+      /* Model cards */
+      .model-card { min-width: 0; }
+
+      /* Install tabs */
+      .install-tabs { flex-wrap: wrap; gap: .25rem; }
+      .install-tab { font-size: .8rem; padding: .4rem .8rem; }
+
+      /* Sections */
+      section { padding: 3rem 0; }
+      .section-title { font-size: 1.75rem; }
+    }
+
+    @media (max-width: 900px) {
+      /* Artgen SVG gallery: 2 cols not 3 */
+      [style*="grid-template-columns:repeat(3,1fr)"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
+      /* Palette swatches */
+      [style*="grid-template-columns:repeat(4,1fr)"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
     }
   </style>
     <script>
