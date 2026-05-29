@@ -910,7 +910,7 @@
   <!-- Screenshot lives outside hero-inner so it can span full viewport width -->
   <div class="hero-screenshot-wrap">
     <div class="hero-screenshot">
-      <img src="assets/tt-local-generator-main.png"
+      <img src="assets/tt-local-generator-main.png" loading="lazy"
            alt="tt-local-generator main interface — video generation, history gallery, and TT-TV mode"
            width="1920" height="1080"
            loading="eager">
@@ -1120,6 +1120,18 @@
         See all 12 plugins — authoring guide — MCP wiring →
       </a>
     </p>
+
+    <!-- App screenshots: gallery view + detail view -->
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:2rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen-gallery.png" alt="Generative Art gallery — all plugin types visible including landscapes, circuits, palettes, verse, and animated GIFs" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Art gallery — all 12 plugin types in one grid</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen-detail.png" alt="Palette detail view — Cathedral Dust palette with hex swatches, color roles, prose lore, and the LLM prompt that generated it" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Palette detail — Cathedral Dust · hex values, roles, prose lore</figcaption>
+      </figure>
+    </div>
 
     <!-- SVG gallery: 3 top + 2 bottom -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-top:2rem;">
