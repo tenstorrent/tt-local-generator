@@ -4055,10 +4055,14 @@ class ControlPanel(Gtk.Box):
         srv_log_view.set_editable(False)
         srv_log_view.set_cursor_visible(False)
         srv_log_view.set_wrap_mode(Gtk.WrapMode.CHAR)
+        srv_log_view.set_hexpand(False)
         srv_log_view.add_css_class("server-log")
         srv_log_scroll = Gtk.ScrolledWindow()
         srv_log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         srv_log_scroll.set_size_request(-1, 80)
+        # Prevent long log lines from propagating their natural width upward
+        # and expanding the controls pane beyond the window's declared size.
+        srv_log_scroll.set_propagate_natural_width(False)
         srv_log_scroll.set_child(srv_log_view)
         self._srv_log_scroll = srv_log_scroll
         self._srv_log_detail_revealer.set_child(srv_log_scroll)
@@ -7105,6 +7109,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_lbl.set_xalign(0)
         self._status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         self._status_lbl.set_hexpand(True)
+        self._status_lbl.set_max_width_chars(1)   # let hexpand+ellipsize control width, not content
         self._status_lbl.add_css_class("status-bar")
         gallery_wrap.append(self._status_lbl)
 
