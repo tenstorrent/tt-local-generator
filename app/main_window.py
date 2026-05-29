@@ -7107,6 +7107,34 @@ class MainWindow(Gtk.ApplicationWindow):
         pl_delete.connect("activate", lambda _a, p: self._on_playlist_delete(p.get_string()))
         self.add_action(pl_delete)
 
+        # ── View: gallery density (radio) ─────────────────────────────────────
+        density_val = _settings.get("gallery_density") or "comfortable"
+        gallery_density_action = Gio.SimpleAction.new_stateful(
+            "gallery-density",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", density_val),
+        )
+        gallery_density_action.connect("activate", self._on_gallery_density_action)
+        self.add_action(gallery_density_action)
+
+        # ── Art: auto-generate toggle ──────────────────────────────────────────
+        art_autogen_action = Gio.SimpleAction.new_stateful(
+            "art-autogen",
+            None,
+            GLib.Variant("b", False),
+        )
+        art_autogen_action.connect("activate", self._on_art_autogen_action)
+        self.add_action(art_autogen_action)
+
+        # ── Art: auto-generate delay radio ────────────────────────────────────
+        art_delay_action = Gio.SimpleAction.new_stateful(
+            "art-autogen-delay",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", "3"),
+        )
+        art_delay_action.connect("activate", self._on_art_autogen_delay_action)
+        self.add_action(art_delay_action)
+
     def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
         """Build and return the Gtk.PopoverMenuBar driven by a Gio.Menu model."""
         menumodel = Gio.Menu()
@@ -7361,6 +7389,35 @@ class MainWindow(Gtk.ApplicationWindow):
         # self._detail's parent is detail_wrap (the Box containing detail + queue).
         # Hiding it collapses the entire right panel of the inner paned.
         self._detail.get_parent().set_visible(self._detail_visible)
+
+    def _on_gallery_density_action(self, action: Gio.SimpleAction,
+                                    param: GLib.Variant) -> None:
+        """Menu: switch gallery card size between comfortable and compact."""
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        _settings.set("gallery_density", val)
+        self._apply_gallery_density(val)
+
+    def _apply_gallery_density(self, density: str) -> None:
+        """Set card min-width on all video/image/animate GalleryWidget instances and relayout."""
+        card_w = (_THUMB_W + 20) if density == "comfortable" else 160
+        for gallery in (self._video_gallery, self._image_gallery, self._animate_gallery):
+            for card in gallery._cards:
+                card.set_size_request(card_w, -1)
+            gallery._relayout()
+
+    def _on_art_autogen_action(self, action: Gio.SimpleAction,
+                                _param: GLib.Variant) -> None:
+        """Menu: toggle artgen auto-generate on/off."""
+        new_state = self._artgen_panel.toggle_auto_gen()
+        action.set_state(GLib.Variant("b", new_state))
+
+    def _on_art_autogen_delay_action(self, action: Gio.SimpleAction,
+                                      param: GLib.Variant) -> None:
+        """Menu: set artgen auto-generate delay in seconds."""
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        self._artgen_panel.set_auto_gen_delay(int(val))
 
     # ── Screensaver inhibit ────────────────────────────────────────────────────
 

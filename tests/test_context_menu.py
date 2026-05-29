@@ -70,3 +70,51 @@ def test_set_auto_gen_delay_writes_server_config():
     with patch("artgen_panel.server_config", mock_sc):
         panel.set_auto_gen_delay(30)
     mock_sc.set.assert_called_once_with("artgen_auto", "delay", 30)
+
+
+# ── Action handler unit tests ─────────────────────────────────────────────────
+
+def test_gallery_density_action_saves_setting():
+    """win.gallery-density action saves 'compact' to settings."""
+    from app_settings import settings as _s
+    import gi
+    gi.require_version("GLib", "2.0")
+    from gi.repository import GLib, Gio
+    action = Gio.SimpleAction.new_stateful(
+        "gallery-density",
+        GLib.VariantType.new("s"),
+        GLib.Variant("s", "comfortable"),
+    )
+    _s.set("gallery_density", "comfortable")
+
+    def _handler(a, p):
+        val = p.get_string()
+        a.set_state(GLib.Variant("s", val))
+        _s.set("gallery_density", val)
+
+    action.connect("activate", _handler)
+    action.activate(GLib.Variant("s", "compact"))
+    assert _s.get("gallery_density") == "compact"
+
+
+def test_art_autogen_delay_action_calls_set_delay():
+    """win.art-autogen-delay action with '30' calls set_auto_gen_delay(30)."""
+    from unittest.mock import MagicMock
+    import gi
+    gi.require_version("GLib", "2.0")
+    from gi.repository import GLib, Gio
+    panel = MagicMock()
+    action = Gio.SimpleAction.new_stateful(
+        "art-autogen-delay",
+        GLib.VariantType.new("s"),
+        GLib.Variant("s", "3"),
+    )
+
+    def _handler(a, p):
+        val = p.get_string()
+        a.set_state(GLib.Variant("s", val))
+        panel.set_auto_gen_delay(int(val))
+
+    action.connect("activate", _handler)
+    action.activate(GLib.Variant("s", "30"))
+    panel.set_auto_gen_delay.assert_called_once_with(30)
