@@ -458,12 +458,19 @@
 
       <!-- Palette -->
       <div class="plugin-card">
-        <div class="plugin-card-preview" style="display:flex;flex-direction:row;min-height:60px;max-height:60px;">
-          <div style="flex:1;background:#2c3e50;"></div>
-          <div style="flex:1;background:#8e9eab;"></div>
-          <div style="flex:1;background:#c0392b;"></div>
-          <div style="flex:1;background:#f39c12;"></div>
-          <div style="flex:1;background:#ecf0f1;"></div>
+        <div class="plugin-card-preview" style="flex-direction:column;justify-content:flex-end;padding:0;overflow:hidden;">
+          <!-- Swatch bars filling the preview height -->
+          <div style="display:flex;flex:1;min-height:0;">
+            <div style="flex:1;background:#2c3e50;"></div>
+            <div style="flex:1;background:#8e9eab;"></div>
+            <div style="flex:1;background:#c0392b;"></div>
+            <div style="flex:1;background:#f39c12;"></div>
+            <div style="flex:1;background:#ecf0f1;"></div>
+          </div>
+          <!-- Palette name overlay -->
+          <div style="background:rgba(8,15,20,0.75);padding:.5rem .75rem;font-size:.75rem;font-family:monospace;color:#e8f0f2;letter-spacing:.04em;">
+            Drowned Ironwork &nbsp;<span style="color:#607d8b;">· 5 colors</span>
+          </div>
         </div>
         <div class="plugin-card-body">
           <div class="plugin-card-name">
