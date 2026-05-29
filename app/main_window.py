@@ -6865,6 +6865,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_completed_count: int = 0          # incremented in _on_finished; triggers sleep
         self._screensaver_inhibit_cookie: "int | None" = None  # D-Bus inhibit cookie
         self._prefs_dialog: "PreferencesDialog | None" = None  # singleton instance
+        self._last_error_log_path: "str | None" = None  # log path from most recent error
+        self._log_viewer_win: "LogViewerWindow | None" = None  # singleton log viewer
         # Remote inventory records fetched from the inventory server (if running).
         # These are shown alongside local records; keyed by record ID to avoid duplicates.
         self._remote_records: dict = {}  # {record.id: GenerationRecord}
@@ -7067,6 +7069,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_lbl.add_css_class("status-bar")
         gallery_wrap.append(self._status_lbl)
 
+        _status_click = Gtk.GestureClick()
+        _status_click.connect("released", self._on_status_bar_clicked)
+        self._status_lbl.add_controller(_status_click)
+
         inner_paned.set_start_child(gallery_wrap)
         inner_paned.set_shrink_start_child(False)
 
@@ -7113,6 +7119,13 @@ class MainWindow(Gtk.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         """Update status bar. Safe to call from main thread only."""
         self._status_lbl.set_label(text)
+
+    def _on_status_bar_clicked(self, _gesture, _n_press, _x, _y) -> None:
+        """Open log viewer to the most recent error log when status bar is clicked."""
+        if self._last_error_log_path:
+            self._open_log_viewer(self._last_error_log_path)
+        elif self._status_lbl.get_label().startswith("Error"):
+            self._open_log_viewer()
 
     def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
         """Show *message* in the status label for *duration_ms* ms, then restore.
@@ -7488,6 +7501,15 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         except Exception as exc:
             self._set_status(f"Could not open folder: {exc}")
+
+    def _open_log_viewer(self, path: "str | None" = None) -> None:
+        """Open (or present) the singleton LogViewerWindow, optionally jumping to *path*."""
+        from log_viewer import LogViewerWindow
+        if self._log_viewer_win is None or not self._log_viewer_win.get_visible():
+            self._log_viewer_win = LogViewerWindow(parent=self)
+        self._log_viewer_win.present()
+        if path:
+            self._log_viewer_win.open_to(path)
 
     def _open_preferences(self, scroll_tttv: bool = False) -> None:
         """Open (or present) the Preferences dialog."""
@@ -9398,12 +9420,16 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_error(self, message: str) -> bool:
+        from log_viewer import detect_log_path, shorten_error
         gallery = self._gen_gallery or self._active_gallery()
         gallery.remove_pending()
         self._gen_gallery = None
         self._controls.set_busy(False)
-        self._set_status(f"Error: {message}")
         self._screensaver_uninhibit()
+        self._last_error_log_path = detect_log_path(message)
+        short = shorten_error(message)
+        suffix = " — click for log" if self._last_error_log_path else ""
+        self._set_status(f"Error: {short}{suffix}")
         self._start_next_queued()
         return False
 
