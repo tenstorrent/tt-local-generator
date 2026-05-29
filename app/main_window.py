@@ -3559,7 +3559,7 @@ class ControlPanel(Gtk.Box):
         self._animate_mode = "animation"
         self._server_ready = False
         self._running_model: "str | None" = None  # model ID from /v1/models, or None
-        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from Generation menu
+        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from context menu → Advanced Settings…
         self._server_launching = False   # True while start/stop script is running
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
@@ -3879,7 +3879,7 @@ class ControlPanel(Gtk.Box):
         # ── Pinned footer — always visible, NOT inside the scroll ─────────────
         # MainWindow places self._footer_box below ctrl_scroll so these widgets
         # remain visible regardless of how short the window is.
-        # Advanced settings are now accessed via Generation → Advanced Settings…
+        # Advanced settings are accessed via the context menu → Advanced Settings…
         self._footer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
         # ── Server status row ─────────────────────────────────────────────────
@@ -4728,7 +4728,7 @@ class ControlPanel(Gtk.Box):
     def open_advanced_dialog(self) -> None:
         """Open or present the Advanced Generation Settings dialog.
 
-        Called from the Generation → Advanced Settings… menu item.
+        Called from the context menu → Advanced Settings… item.
         Creates a new AdvancedSettingsDialog on first call (or after it was
         closed); presents the existing one if already open.
         """
@@ -6258,7 +6258,7 @@ class AdvancedSettingsDialog(Gtk.Window):
 
     Reads initial values from the ControlPanel plain state attributes and
     writes back to them on every change, keeping the named buttons in sync.
-    Opened from Generation → Advanced Settings…
+    Opened from context menu → Advanced Settings…
     """
 
     def __init__(self, panel: "ControlPanel") -> None:
