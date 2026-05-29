@@ -6894,6 +6894,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._artgen_panel    = ArtgenPanel()
+        self._artgen_panel.on_remix = self._on_remix_card
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
