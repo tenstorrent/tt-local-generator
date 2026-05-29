@@ -1031,21 +1031,33 @@ menubar > item:selected {
     padding: 0;
     margin: 0;
 }
-.hover-action-btn-animate {
+.hover-action-btn-remix {
+    background: rgba(79, 209, 197, 0.18);
     color: @tt_accent;
-    border-color: @tt_accent;
+    border: 1px solid @tt_accent;
 }
-.hover-action-btn-animate:hover {
-    background-color: @tt_accent;
-    color: @tt_bg_darkest;
+.hover-action-btn-remix:hover {
+    background: rgba(79, 209, 197, 0.32);
 }
-.hover-action-btn-motion {
-    color: @tt_pink;
-    border-color: @tt_pink;
+.remix-target-btn {
+    background: rgba(79, 209, 197, 0.12);
+    border: 1px solid @tt_accent;
+    border-radius: 4px;
+    color: @tt_accent;
+    padding: 3px 10px;
+    font-size: 11px;
 }
-.hover-action-btn-motion:hover {
-    background-color: @tt_pink;
-    color: @tt_bg_darkest;
+.remix-target-btn:hover {
+    background: rgba(79, 209, 197, 0.25);
+}
+.remix-hint-preview {
+    background: @tt_bg_dark;
+    border-left: 2px solid @tt_accent;
+    border-radius: 0 3px 3px 0;
+    padding: 4px 8px;
+    color: @tt_text_muted;
+    font-style: italic;
+    font-size: 11px;
 }
 
 /* -- Mode description bar --------------------------------------------------- */
