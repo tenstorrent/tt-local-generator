@@ -67,13 +67,18 @@ def test_ingredients_for_palette_all():
 
 
 def test_ingredients_for_video_animate():
-    """video -> animate: full video + optional prompt; no thumbnail."""
+    """video -> animate: thumbnail (seed image) + prompt; no ref_video.
+
+    Animate tab uses a seed image, not a motion-reference video — the
+    motion-reference picker was removed from the UI. Using the thumbnail
+    as the seed image is the correct ingredient for this target.
+    """
     from artgen import ingredients_for
     specs = ingredients_for("video", "animate")
     keys = [s.key for s in specs]
-    assert "ref_video" in keys
+    assert "thumbnail" in keys
     assert "prompt" in keys
-    assert "thumbnail" not in keys
+    assert "ref_video" not in keys
 
 
 def test_ingredients_for_video_i2v():

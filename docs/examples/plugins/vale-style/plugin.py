@@ -80,6 +80,7 @@ class ValeStyleGenerator(ArtGenerator):
             )
 
         tmp_path = None
+        cfg_path = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -102,6 +103,8 @@ class ValeStyleGenerator(ArtGenerator):
         finally:
             if tmp_path:
                 Path(tmp_path).unlink(missing_ok=True)
+            if cfg_path:
+                Path(cfg_path).unlink(missing_ok=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -112,8 +115,18 @@ def _find_vale() -> "str | None":
 
 
 def _write_config(style: str) -> str:
-    """Write a minimal Vale config for the given style and return its path."""
-    styles_dir = Path(__file__).parent / "styles"
+    """Write a minimal Vale config for the given style and return its path.
+
+    Vale styles are installed by the user via `vale sync` and live in
+    ~/.local/share/vale/styles (Linux) or ~/Library/Application Support/vale
+    (macOS). We tell Vale to look there rather than bundling styles.
+    """
+    import platform
+    if platform.system() == "Darwin":
+        styles_dir = Path.home() / "Library" / "Application Support" / "vale" / "styles"
+    else:
+        styles_dir = Path.home() / ".local" / "share" / "vale" / "styles"
+
     cfg = (
         f"StylesPath = {styles_dir}\n"
         f"MinAlertLevel = suggestion\n\n"

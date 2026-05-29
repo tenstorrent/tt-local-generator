@@ -247,6 +247,11 @@ class RemixPopover(Gtk.Popover):
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _compute_hint(self, target_type: str) -> str:
+        # "New variation" re-uses the source prompt directly — no ingredient
+        # table entry exists for (source, "same"), and we want the existing
+        # prompt, not "(no text hint)" placeholder text.
+        if target_type == "same":
+            return _prompt_from_record(self._record) or "(no prompt)"
         specs = ingredients_for(self._source_type, target_type)
         active = {s.key for s in specs if s.key in self._active_keys}
         return _build_hint(self._record, self._source_type, target_type, active) or "(no text hint)"
@@ -285,8 +290,27 @@ class RemixPopover(Gtk.Popover):
             # Silent format conversions — spec §3 resolution rules
             if source_type in ("video", "gif", "animatediff"):
                 if target_key == "animate":
-                    if media_path and Path(media_path).exists():
-                        ref_video_path = media_path
+                    # Animate tab uses a seed image (thumbnail), not a motion
+                    # reference video — dispatch ignores ref_video_path since
+                    # the motion-reference picker was removed from the UI.
+                    if thumb_path and Path(thumb_path).exists():
+                        seed_image_path = thumb_path
+                    elif media_path and Path(media_path).exists():
+                        # Extract first frame as seed image
+                        try:
+                            import importlib.util as _ilu
+                            _spec = _ilu.spec_from_file_location(
+                                "ffmpeg_plugin",
+                                Path(__file__).parent.parent / "plugins" / "ffmpeg" / "plugin.py",
+                            )
+                            _ffmpeg = _ilu.module_from_spec(_spec)
+                            _spec.loader.exec_module(_ffmpeg)
+                            tmp2 = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+                            tmp2.close()
+                            _ffmpeg.extract_frame(media_path, tmp2.name, timestamp=0.0)
+                            seed_image_path = tmp2.name
+                        except Exception:
+                            pass
                 elif target_key in ("video", "image", "same"):
                     if thumb_path and Path(thumb_path).exists():
                         seed_image_path = thumb_path

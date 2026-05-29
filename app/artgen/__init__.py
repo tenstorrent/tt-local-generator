@@ -336,11 +336,11 @@ _INGREDIENT_TABLE: dict = {
     ("skyline",   "video"): ["thumbnail", "vibe", "prompt"],
     ("skyline",   "image"): ["thumbnail", "vibe", "prompt"],
     # video / gif source
-    ("video", "animate"):   ["ref_video", "prompt"],
+    ("video", "animate"):   ["thumbnail", "prompt"],  # Animate uses seed image, not motion ref
     ("video", "video"):     ["thumbnail", "prompt"],
     ("video", "image"):     ["thumbnail", "prompt"],
     ("gif",   "video"):     ["thumbnail", "prompt"],
-    ("gif",   "animate"):   ["ref_video", "prompt"],
+    ("gif",   "animate"):   ["thumbnail", "prompt"],  # Animate uses seed image, not motion ref
     # image source
     ("image", "video"):     ["image", "prompt"],
     ("image", "image"):     ["image", "prompt"],
@@ -416,7 +416,7 @@ def remix_targets_for(source_type: str) -> list:
     import plugin_loader
     return [
         p for p in plugin_loader.all_plugins()
-        if source_type in p.accepts_remix_from
+        if source_type in p.accepts_remix_from and p.runnable
     ]
 
 

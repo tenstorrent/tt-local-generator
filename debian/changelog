@@ -12,9 +12,10 @@ tt-local-generator (0.5.0) noble; urgency=medium
     error-line highlighting and copy-path/copy-all buttons.
   * AnimateDiff multi-chip fix: generate_blackhole_v2.py now opens only
     device_ids=[0] — UNet2D permute_conv_weights crashes on MeshShape([1,4]).
-  * ffmpeg utility plugin (plugins/ffmpeg/) exposes extract_frame,
-    get_metadata, convert_to_gif, convert_to_mp4, resize as MCP tools and
-    in-process callables for the remix engine.
+  * ffmpeg utility plugin (plugins/ffmpeg/) provides extract_frame,
+    get_metadata, convert_to_gif, convert_to_mp4, resize as in-process
+    callables for the remix engine (utility plugins are not exposed via the
+    MCP server).
   * Gallery density: View menu adds Comfortable/Compact card size toggle.
   * PendingCard layout fix: fixed-size thumbnail placeholder prevents FlowBox
     cell expansion during generation.
