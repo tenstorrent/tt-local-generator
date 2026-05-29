@@ -19,7 +19,8 @@ from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LOGS_DIR  = _REPO_ROOT / "logs"
-_ANIMATEDIFF_LOG_DIR = _LOGS_DIR / "animatediff"
+_USER_LOGS_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "logs"
+_ANIMATEDIFF_LOG_DIR = _USER_LOGS_DIR / "animatediff"
 _PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")
 
 
@@ -110,6 +111,7 @@ def is_error_log(content: str) -> bool:
 
 
 def collect_log_files(
+    animatediff_log_dir: "Optional[Path]" = None,
     repo_root: Path = _REPO_ROOT,
     prompt_log: Optional[Path] = _PROMPT_LOG,
 ) -> list[dict]:
@@ -123,8 +125,8 @@ def collect_log_files(
     """
     sections = []
 
-    # ANIMATEDIFF run logs (exclude the app-level animatediff.log)
-    ad_dir = repo_root / "logs" / "animatediff"
+    # ANIMATEDIFF run logs
+    ad_dir = animatediff_log_dir if animatediff_log_dir is not None else _USER_LOGS_DIR / "animatediff"
     run_logs = sorted(ad_dir.glob("run_*.log"), reverse=True) if ad_dir.exists() else []
     if run_logs:
         files = []
@@ -156,7 +158,7 @@ def collect_log_files(
         ]})
 
     # APP — the animatediff module log (distinct from run logs)
-    app_log = repo_root / "logs" / "animatediff" / "animatediff.log"
+    app_log = (animatediff_log_dir / "animatediff.log") if animatediff_log_dir is not None else (_USER_LOGS_DIR / "animatediff" / "animatediff.log")
     if app_log.exists():
         sections.append({"section": "APP", "files": [
             {"path": str(app_log), "name": "animatediff",

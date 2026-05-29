@@ -60,6 +60,8 @@ def _all_tools() -> list[dict]:
     """
     tools: list[dict] = []
     for pdef in plugin_loader.all_plugins():
+        if not pdef.runnable:
+            continue  # skip MCP-server stubs not yet delegating
         for tool in pdef.tools:
             tools.append({
                 "name": tool["name"],
@@ -186,7 +188,7 @@ async def handle_rpc(body: dict) -> JSONResponse:
         # miss non-primary tool names like stream_midi.
         pdef = None
         for candidate in plugin_loader.all_plugins():
-            if any(t["name"] == tool_name for t in candidate.tools):
+            if candidate.runnable and any(t["name"] == tool_name for t in candidate.tools):
                 pdef = candidate
                 break
         if pdef is None:
@@ -253,8 +255,8 @@ if __name__ == "__main__":
         help="Port to listen on (default: %(default)s, env: TTLG_MCP_PORT)",
     )
     parser.add_argument(
-        "--host", default="0.0.0.0",
-        help="Bind address (default: %(default)s)",
+        "--host", default="127.0.0.1",
+        help="Bind address (default: %(default)s). Use 0.0.0.0 to expose on LAN.",
     )
     cli_args = parser.parse_args()
     uvicorn.run(app, host=cli_args.host, port=cli_args.port)

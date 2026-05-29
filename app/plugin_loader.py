@@ -74,6 +74,7 @@ class PluginDef:
     generator: "ArtGenerator"
     accepts_remix_from: tuple[str, ...] = field(default_factory=tuple)
     can_remix_to: tuple[str, ...] = field(default_factory=tuple)
+    runnable: bool = True  # False for MCP-server stubs not yet delegating
 
 
 # Module-level registry populated by load_plugins().
@@ -150,6 +151,7 @@ def load_plugins() -> None:
                 generator=generator,
                 accepts_remix_from=tuple(xttlg.get("accepts_remix_from", [])),
                 can_remix_to=tuple(xttlg.get("can_remix_to", [])),
+                runnable=not getattr(generator, "_is_mcp_stub", False),
             )
             _LOG.debug("plugin_loader: loaded plugin %s from %s", name, plugin_dir)
 
@@ -226,6 +228,7 @@ def _make_mcp_stub(manifest: dict, name: str) -> "ArtGenerator":
     stub.name = name
     stub.description = description
     stub.output_ext = output_ext
+    stub._is_mcp_stub = True  # signals PluginDef.runnable = False
     return stub
 
 
