@@ -9,6 +9,13 @@ pytest>=7.4.0
 # Prompt generator (Tier 2 Markov chain) — optional, falls back to algo mode
 markovify>=0.9.4
 
+# MCP server (tt-ctl mcp-server start) — optional, only needed to expose plugins
+# to Claude Code / external MCP clients. The main app works without these.
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+# pydantic v2 is a transitive dep of fastapi>=0.100; listed explicitly for clarity
+pydantic>=2.0.0
+
 # GTK4 bindings — must be installed via system package manager, not pip:
 #   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0
 #

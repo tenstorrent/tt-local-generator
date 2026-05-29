@@ -192,6 +192,20 @@ else
     || echo "WARNING: markovify install failed. Prompt generator will fall back to algo mode."
 fi
 
+# MCP server dependencies (fastapi + uvicorn) — optional, only needed for
+# tt-ctl mcp-server start. The main GUI works without them.
+if "$PYTHON3" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
+    echo "fastapi/uvicorn already installed — skipping."
+else
+    echo "Installing fastapi + uvicorn (MCP server support)..."
+    "$PYTHON3" -m pip install --quiet \
+        --break-system-packages \
+        "fastapi>=0.100.0" \
+        "uvicorn[standard]>=0.23.0" \
+    && echo "fastapi/uvicorn installed." \
+    || echo "WARNING: fastapi/uvicorn install failed. MCP server (tt-ctl mcp-server start) will not work."
+fi
+
 # =============================================================================
 # STEP 5 — Create vendor .env (first-install only)
 #   Generates JWT_SECRET randomly and detects HF_TOKEN from the installing

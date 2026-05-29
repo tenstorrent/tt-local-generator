@@ -236,8 +236,13 @@ else
     echo "  ✓ Cloned"
 fi
 
-# pip-installable dependencies (requests; GTK bindings are already system-installed)
-pip3 install --break-system-packages requests
+# pip-installable dependencies (requests, markovify, fastapi/uvicorn for MCP server)
+# GTK4 bindings are system-installed above — not pip-installable.
+pip3 install --break-system-packages \
+    requests \
+    markovify \
+    "fastapi>=0.100.0" \
+    "uvicorn[standard]>=0.23.0"
 echo "  ✓ Python dependencies installed"
 echo ""
 
