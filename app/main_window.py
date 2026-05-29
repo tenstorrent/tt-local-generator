@@ -3162,6 +3162,7 @@ class PendingCard(Gtk.Frame):
         # job is in progress — the pending card won't be taller than a completed card.
         thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_hexpand(False)   # children must not push this box wider
         thumb_area.set_valign(Gtk.Align.CENTER)
         thumb_area.add_css_class("pending-thumb-area")
         thumb_area.set_margin_start(4)
@@ -3178,6 +3179,8 @@ class PendingCard(Gtk.Frame):
         spinner_lbl = Gtk.Label(label=spinner_text)
         spinner_lbl.add_css_class("teal")
         spinner_lbl.set_halign(Gtk.Align.CENTER)
+        spinner_lbl.set_max_width_chars(1)
+        spinner_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(spinner_lbl)
 
         self._bar = Gtk.ProgressBar()
@@ -3189,12 +3192,16 @@ class PendingCard(Gtk.Frame):
         self._status_lbl = Gtk.Label(label="Queued")
         self._status_lbl.add_css_class("muted")
         self._status_lbl.set_halign(Gtk.Align.CENTER)
+        self._status_lbl.set_max_width_chars(1)   # never wider than allocated space
+        self._status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(self._status_lbl)
 
         self._elapsed_lbl = Gtk.Label(label="0s elapsed")
         self._elapsed_lbl.add_css_class("teal")
         self._elapsed_lbl.set_attributes(_small_attrs())
         self._elapsed_lbl.set_halign(Gtk.Align.CENTER)
+        self._elapsed_lbl.set_max_width_chars(1)
+        self._elapsed_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(self._elapsed_lbl)
 
         outer.append(thumb_area)
