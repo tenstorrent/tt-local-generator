@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
 """Cross-frame temporal attention for AnimateDiff Phase 2.5 on Blackhole.
 
 Applies self-attention across N frames at each denoising step, giving genuine
@@ -80,10 +83,10 @@ def generate_frames_temporal(
 ) -> List:
     """Generate temporally-coherent frames on Blackhole with cross-frame attention.
 
-    All N frames are denoised in parallel (one TTNN UNet call per frame per step).
+    Frames are denoised sequentially (one TTNN UNet call per frame per step).
     Cross-frame attention is applied to the stacked noise predictions at each step
-    before the scheduler commits to the next latent. Total TTNN UNet calls equals
-    Phase 2: num_frames × num_steps.
+    before the scheduler commits to the next latent. Total TTNN UNet calls:
+    num_frames × num_steps (same as Phase 2).
 
     Args:
         device: TTNN Blackhole device from setup_blackhole()
@@ -135,7 +138,7 @@ def generate_frames_temporal(
 
     frame_latents = []
     for _ in range(num_frames):
-        perturbed = base_noise + 0.05 * torch.randn_like(base_noise)
+        perturbed = base_noise + 0.05 * torch.randn(base_noise.shape, generator=generator)
         frame_latents.append(perturbed * init_noise_sigma)
 
     # Build TTNN time embeddings — needs a TtPNDMScheduler for timestep tensors
@@ -148,7 +151,13 @@ def generate_frames_temporal(
         text_embeddings, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
     )
 
-    # Parallel denoising with cross-frame attention at each step
+    # Phase 2.5 note: the frame loop below is serialized in Python — one frame
+    # per TTNN call regardless of how many chips the MeshDevice contains. On a
+    # multi-chip system each `to_device` replicates the tensor to all chips, but
+    # only chip 0 produces the output used here, so extra chips pay replication
+    # cost without contributing throughput. Phase 3 will replace this with a
+    # ShardTensorToMesh mapper that dispatches N distinct frames to N chips in a
+    # single batched call. For now, use a single-chip MeshDevice (1×1) on QB2.
     for step_idx, t in enumerate(timesteps):
         # Collect TTNN noise predictions for all frames at timestep t
         noise_preds = []
