@@ -35,7 +35,7 @@
               "neon",
               "paper"
             ],
-            "default": "clean",
+            "default": "random",
             "description": "Visual style"
           }
         },

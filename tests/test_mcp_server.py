@@ -58,7 +58,10 @@ def client(tmp_path, monkeypatch):
 
     import importlib
     import mcp_server
-    importlib.reload(mcp_server)
+    # Patch load_plugins to a no-op before reload so the module-level call
+    # doesn't clear the fake registry we just populated.
+    with patch("plugin_loader.load_plugins"):
+        importlib.reload(mcp_server)
     return TestClient(mcp_server.app)
 
 

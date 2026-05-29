@@ -41,7 +41,7 @@ We welcome feature suggestions! Please open a [GitHub Issue](https://github.com/
 
 ### Prerequisites
 
-- Python 3.9 or later
+- Python 3.10 or later
 - A Tenstorrent Blackhole board (for hardware tests; CPU-only tests run without one)
 - TTNN installed and on `PYTHONPATH`
 

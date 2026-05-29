@@ -21,11 +21,11 @@
         "properties": {
           "era": {
             "type": "string",
-            "default": "retro"
+            "default": "modern"
           },
           "sky": {
             "type": "string",
-            "default": "dusk"
+            "default": "night"
           },
           "density": {
             "type": "string",

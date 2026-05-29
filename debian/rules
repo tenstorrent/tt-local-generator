@@ -24,8 +24,10 @@ override_dh_install:
 	install -d debian/tt-local-generator/usr/share/icons/hicolor/32x32/apps
 	install -d debian/tt-local-generator/usr/share/doc/tt-local-generator
 
-	# Copy the application source tree (app/, bin/, patches/)
-	cp -r app bin patches \
+	# Copy the application source tree (app/, bin/, patches/, plugins/)
+	# plugins/ must be installed alongside app/ so plugin_loader can find
+	# the built-in generators at /usr/lib/tt-local-generator/plugins/.
+	cp -r app bin patches plugins \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
 
 	# Copy the vendored tt-inference-server snapshot (if already materialised;

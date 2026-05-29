@@ -2,29 +2,61 @@
   "x-ttlg": {
     "output_ext": ".ans",
     "media_type": "text",
-    "accepts_remix_from": ["verse", "palette"],
+    "accepts_remix_from": [
+      "verse",
+      "palette"
+    ],
     "can_remix_to": [],
     "tab": "generative-art",
     "hardware": null
   },
-  "tools": [{
-    "name": "ansi",
-    "description": "ANSI block-character art via 3-pass LLM pipeline: ASCII layout → block character refinement → 256-color colorization",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "ansi_style": {"type": "string", "enum": ["bbs", "scene", "landscape", "portrait", "logo"], "default": "bbs"},
-        "subject": {"type": "string", "default": "a neon dragon"},
-        "width": {"type": "integer", "default": 40},
-        "height": {"type": "integer", "default": 20}
+  "tools": [
+    {
+      "name": "ansi",
+      "description": "ANSI block-character art via 3-pass LLM pipeline: ASCII layout \u2192 block character refinement \u2192 256-color colorization",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ansi_style": {
+            "type": "string",
+            "enum": [
+              "bbs",
+              "scene",
+              "landscape",
+              "portrait",
+              "logo"
+            ],
+            "default": "scene"
+          },
+          "subject": {
+            "type": "string",
+            "default": "a mountain at sunset"
+          },
+          "width": {
+            "type": "integer",
+            "description": "Canvas width in columns (default: 80 for bbs, 40 for other styles)"
+          }
+        },
+        "required": []
       },
-      "required": []
-    },
-    "examples": [
-      {"ansi_style": "bbs", "subject": "electric skull"},
-      {"ansi_style": "scene", "subject": "moonlit forest"},
-      {"ansi_style": "landscape", "subject": "volcanic crater"}
-    ],
-    "x-ttlg": {"streaming": null, "artifact_tool": true}
-  }]
+      "examples": [
+        {
+          "ansi_style": "bbs",
+          "subject": "electric skull"
+        },
+        {
+          "ansi_style": "scene",
+          "subject": "moonlit forest"
+        },
+        {
+          "ansi_style": "landscape",
+          "subject": "volcanic crater"
+        }
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
 }

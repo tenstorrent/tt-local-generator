@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 
-def _make_plugin(tmp_path, name, manifest_extra=None, with_py=False):
+def _make_plugin(tmp_path, name, manifest_extra=None, with_py=True):
     """Helper: write a minimal valid plugin directory."""
     d = tmp_path / name
     d.mkdir()
@@ -35,9 +35,10 @@ def _make_plugin(tmp_path, name, manifest_extra=None, with_py=False):
     if with_py:
         (d / "plugin.py").write_text(
             "from artgen import ArtGenerator\n"
-            "class TestGen(ArtGenerator):\n"
-            "    name = 'stub'\n"
+            f"class TestGen(ArtGenerator):\n"
+            f"    name = {name!r}\n"
             "    description = 'stub'\n"
+            "    output_ext = '.txt'\n"
             "    def build_prompt(self, args): return 'prompt'\n"
         )
     return d
@@ -108,6 +109,14 @@ def test_user_dir_overrides_repo_dir(tmp_path, monkeypatch):
     }
     (user_dir / "shared").mkdir()
     (user_dir / "shared" / "mcp.json").write_text(json.dumps(user_manifest))
+    (user_dir / "shared" / "plugin.py").write_text(
+        "from artgen import ArtGenerator\n"
+        "class _G(ArtGenerator):\n"
+        "    name = 'shared'\n"
+        "    description = 'user override'\n"
+        "    output_ext = '.svg'\n"
+        "    def build_prompt(self, args): return 'prompt'\n"
+    )
     import plugin_loader
     monkeypatch.setattr(plugin_loader, "_SEARCH_PATHS", [repo_dir, user_dir])
     plugin_loader._PLUGINS.clear()
@@ -137,6 +146,14 @@ def test_accepts_remix_from_populated(tmp_path, monkeypatch):
         }],
     }
     (d / "mcp.json").write_text(json.dumps(manifest))
+    (d / "plugin.py").write_text(
+        "from artgen import ArtGenerator\n"
+        "class _G(ArtGenerator):\n"
+        "    name = 'img'\n"
+        "    description = 'image gen'\n"
+        "    output_ext = '.svg'\n"
+        "    def build_prompt(self, args): return 'prompt'\n"
+    )
     import plugin_loader
     monkeypatch.setattr(plugin_loader, "_SEARCH_PATHS", [tmp_path])
     plugin_loader._PLUGINS.clear()

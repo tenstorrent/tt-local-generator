@@ -182,18 +182,21 @@ def _load_generator(
       1. plugin.py present → dynamically import and find ArtGenerator subclass
       2. x-ttlg.mcp_server declared → return a lightweight MCP stub
          (full McpDelegateGenerator implemented in Task 8)
-      3. Neither → return a generic placeholder stub so the plugin is still
-         discoverable (e.g. for UI listing, remix graph traversal) even if
-         generate_artifact() raises NotImplementedError at runtime
+      3. Neither → skip (return None); the plugin is not runnable and must
+         not appear in the generator picker or MCP tool list.
     """
     plugin_py = plugin_dir / "plugin.py"
     if plugin_py.exists():
         return _load_local_generator(plugin_py, name)
 
-    # Always return a stub — either an MCP-delegating one (if mcp_server is
-    # declared) or a generic placeholder.  Both raise NotImplementedError
-    # at generation time; the distinction is only meaningful to Task 8.
-    return _make_mcp_stub(manifest, name)
+    xttlg = manifest.get("x-ttlg", {})
+    if xttlg.get("mcp_server"):
+        # Declared MCP-server-backed plugin — stub that delegates at runtime.
+        return _make_mcp_stub(manifest, name)
+
+    # No plugin.py and no mcp_server — not runnable; skip entirely.
+    _LOG.debug("plugin_loader: skipping %s — no plugin.py and no mcp_server", name)
+    return None
 
 
 def _make_mcp_stub(manifest: dict, name: str) -> "ArtGenerator":

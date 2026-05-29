@@ -253,7 +253,7 @@ plugins as MCP tools. After installing your plugin:
 
 ```bash
 # Start the MCP server
-tt-ctl mcp-server start
+python3 app/mcp_server.py
 
 # Print the Claude Code configuration snippet
 tt-ctl mcp-config
