@@ -30,9 +30,10 @@ All video/image inference runs via a local [tt-inference-server](https://github.
 
 ## Generative Art
 
-The **Generative Art** tab runs twelve plugin-based generators entirely on-device — SVG
-landscapes, ANSI art, color palettes, verse, circuits, constellations, and AnimateDiff
-animated GIFs. Everything driven by the same three-tier prompt engine.
+The **Generative Art** tab offers ten plugin-based generators — SVG
+landscapes, ANSI art, color palettes, verse, circuits, constellations, geometric
+art, and more. AnimateDiff (animated GIF via Blackhole TTNN) is accessible from
+the Video tab. Everything driven by the same three-tier prompt engine.
 
 <table>
 <tr>

@@ -26,4 +26,8 @@ jobs:
             gir1.2-gtk-4.0
 
       - name: Run tests
-        run: python3 -m pytest tests/ -v
+        run: |
+          # tests/ — app unit tests (GTK-free, no hardware required)
+          # app/animatediff/tests/ is excluded: those tests require the tt-metal
+          # Python environment and Blackhole hardware, not available in CI.
+          python3 -m pytest tests/ -v

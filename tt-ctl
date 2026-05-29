@@ -110,9 +110,19 @@ def cmd_mcp_config(_args):
     port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
     config = {"tt-local-gen": {"url": f"http://localhost:{port}/mcp"}}
     print(_json.dumps(config, indent=2))
-    # Guidance to stderr so stdout stays machine-readable for >> redirection
-    print("\n# Append to ~/.claude/mcp.json or run:", file=sys.stderr)
-    print("#   tt-ctl mcp-config >> ~/.claude/mcp.json", file=sys.stderr)
+    # Guidance to stderr so stdout stays machine-readable.
+    # WARNING: appending with >> will corrupt an existing JSON file.
+    # Merge the key manually, or use this for a fresh config:
+    mcp_url = f"http://localhost:{port}/mcp"
+    print("\n# To add to Claude Code (merge into existing ~/.claude/mcp.json):", file=sys.stderr)
+    print("# WARNING: do not use >> — that corrupts existing JSON. Merge instead:", file=sys.stderr)
+    print("#   python3 -c '", file=sys.stderr)
+    print("#     import json, pathlib", file=sys.stderr)
+    print("#     p = pathlib.Path.home() / \".claude/mcp.json\"", file=sys.stderr)
+    print("#     cfg = json.loads(p.read_text()) if p.exists() else {}", file=sys.stderr)
+    print(f'#     cfg["tt-local-gen"] = {{"url": "{mcp_url}"}}', file=sys.stderr)
+    print("#     p.write_text(json.dumps(cfg, indent=2))", file=sys.stderr)
+    print("#   '", file=sys.stderr)
 
 
 # ── Colour helpers (plain text when stdout is not a tty) ──────────────────────

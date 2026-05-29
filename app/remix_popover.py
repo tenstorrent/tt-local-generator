@@ -174,11 +174,18 @@ class RemixPopover(Gtk.Popover):
         outer.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # ── Build target list from plugin registry + "New variation" always last ──
+        # _target_media_types maps plugin name → media_type for ingredients_for()
+        # lookup. The ingredient table is keyed by media type ("video", "image",
+        # "text"), not by plugin/generator name ("landscape", "verse"), so we
+        # must translate before querying ingredients.
         plugin_targets = remix_targets_for(self._source_type)
         _built_targets: list = []
+        self._target_media_types: dict = {}
         for pdef in plugin_targets:
             key = pdef.name
             label = getattr(pdef, "label", None) or key.title()
+            mt = pdef.manifest.get("x-ttlg", {}).get("media_type") or key
+            self._target_media_types[key] = mt
             _built_targets.append((key, label))
         _built_targets.append(("same", "✨ New variation"))
 
@@ -187,9 +194,10 @@ class RemixPopover(Gtk.Popover):
             (k for k, _ in _built_targets if k != "same"),
             "video",
         )
+        default_media_type = self._target_media_types.get(default_target, default_target)
 
         # ── Ingredient section (only if >1 ingredient for default target) ─────
-        specs = ingredients_for(self._source_type, default_target)
+        specs = ingredients_for(self._source_type, default_media_type)
         if len(specs) > 1:
             carry_lbl = Gtk.Label(label="CARRY INTO REMIX")
             carry_lbl.set_xalign(0)
@@ -252,9 +260,12 @@ class RemixPopover(Gtk.Popover):
         # prompt, not "(no text hint)" placeholder text.
         if target_type == "same":
             return _prompt_from_record(self._record) or "(no prompt)"
-        specs = ingredients_for(self._source_type, target_type)
+        # Translate plugin name to media_type for ingredient table lookup.
+        # e.g. "landscape" plugin → media_type "image" → ("palette","image") table entry.
+        media_type = getattr(self, "_target_media_types", {}).get(target_type, target_type)
+        specs = ingredients_for(self._source_type, media_type)
         active = {s.key for s in specs if s.key in self._active_keys}
-        return _build_hint(self._record, self._source_type, target_type, active) or "(no text hint)"
+        return _build_hint(self._record, self._source_type, media_type, active) or "(no text hint)"
 
     def _on_ingredient_toggled(self, cb: Gtk.CheckButton, key: str) -> None:
         if cb.get_active():
