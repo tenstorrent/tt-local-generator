@@ -7281,6 +7281,15 @@ class MainWindow(Gtk.ApplicationWindow):
         art_delay_action.connect("activate", self._on_art_autogen_delay_action)
         self.add_action(art_delay_action)
 
+        # -- Debug: log viewer ------------------------------------------------
+        open_log_viewer_action = Gio.SimpleAction.new("open-log-viewer", None)
+        open_log_viewer_action.connect("activate", lambda *_: self._open_log_viewer())
+        self.add_action(open_log_viewer_action)
+
+        open_logs_folder_action = Gio.SimpleAction.new("open-logs-folder", None)
+        open_logs_folder_action.connect("activate", self._on_open_logs_folder)
+        self.add_action(open_logs_folder_action)
+
     def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
         """Build the PopoverMenuBar.
 
@@ -7329,6 +7338,12 @@ class MainWindow(Gtk.ApplicationWindow):
             density_section.append_item(item)
         view_menu.append_section("Gallery Density", density_section)
         self._menumodel.append_submenu("View", view_menu)
+
+        # -- Debug ------------------------------------------------------------
+        debug_menu = Gio.Menu()
+        debug_menu.append("Open Log Viewer", "win.open-log-viewer")
+        debug_menu.append("Open Logs Folder…", "win.open-logs-folder")
+        self._menumodel.append_submenu("Debug", debug_menu)
 
         # ── Context slot placeholder (replaced by _rebuild_context_menu) ────
         self._context_slot_idx = self._menumodel.get_n_items()
@@ -7501,6 +7516,15 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         except Exception as exc:
             self._set_status(f"Could not open folder: {exc}")
+
+    def _on_open_logs_folder(self, _action, _param) -> None:
+        """Open the logs/ directory in the system file manager."""
+        from log_viewer import _LOGS_DIR
+        logs_uri = f"file://{_LOGS_DIR}"
+        try:
+            Gio.AppInfo.launch_default_for_uri(logs_uri, None)
+        except Exception as e:
+            self._set_status(f"Could not open logs folder: {e}")
 
     def _open_log_viewer(self, path: "str | None" = None) -> None:
         """Open (or present) the singleton LogViewerWindow, optionally jumping to *path*."""
