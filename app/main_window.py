@@ -185,6 +185,12 @@ button:disabled {
 .card:hover {
     border-color: @tt_accent;
 }
+/* Pending card thumbnail placeholder - recessed area matching the thumbnail zone */
+.pending-thumb-area {
+    background-color: @tt_bg_darkest;
+    border-radius: 4px;
+    min-height: 112px;
+}
 .queue-row {
     background-color: @tt_bg_dark;
     border: 1px solid @tt_border;
@@ -3102,17 +3108,26 @@ class PendingCard(Gtk.Frame):
     def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
+        # Width matches GenerationCard; height is unconstrained but anchored by
+        # the fixed-size visual placeholder below so FlowBox cells stay uniform.
         self.set_size_request(_THUMB_W + 20, -1)
         self.set_hexpand(True)
         self._start = time.monotonic()
         self._timer_id: Optional[int] = None
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(20)
-        box.set_margin_bottom(20)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        self.set_child(box)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_child(outer)
+
+        # Fixed-size thumbnail area matching GenerationCard's media zone.
+        # Anchors the FlowBox cell height so the gallery stays uniform while a
+        # job is in progress — the pending card won't be taller than a completed card.
+        thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_valign(Gtk.Align.CENTER)
+        thumb_area.add_css_class("pending-thumb-area")
+        thumb_area.set_margin_start(4)
+        thumb_area.set_margin_end(4)
+        thumb_area.set_margin_top(4)
 
         # Label differs by media type so the user can tell what is in flight
         if model_source == "image":
@@ -3123,32 +3138,47 @@ class PendingCard(Gtk.Frame):
             spinner_text = "⏳ Generating video…"
         spinner_lbl = Gtk.Label(label=spinner_text)
         spinner_lbl.add_css_class("teal")
-        box.append(spinner_lbl)
+        spinner_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(spinner_lbl)
+
+        self._bar = Gtk.ProgressBar()
+        self._bar.set_pulse_step(0.08)
+        self._bar.set_margin_start(12)
+        self._bar.set_margin_end(12)
+        thumb_area.append(self._bar)
+
+        self._status_lbl = Gtk.Label(label="Queued")
+        self._status_lbl.add_css_class("muted")
+        self._status_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(self._status_lbl)
+
+        self._elapsed_lbl = Gtk.Label(label="0s elapsed")
+        self._elapsed_lbl.add_css_class("teal")
+        self._elapsed_lbl.set_attributes(_small_attrs())
+        self._elapsed_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(self._elapsed_lbl)
+
+        outer.append(thumb_area)
+
+        # Footer: prompt text below the thumbnail area (same zone as card buttons)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_top(6)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        outer.append(box)
 
         if prompt:
             prompt_lbl = Gtk.Label(label=prompt)
             prompt_lbl.set_wrap(True)
             prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             prompt_lbl.set_max_width_chars(26)
-            prompt_lbl.set_lines(3)
+            prompt_lbl.set_lines(2)
             prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             prompt_lbl.set_xalign(0)
             prompt_lbl.set_tooltip_text(prompt)
             prompt_lbl.add_css_class("muted")
             box.append(prompt_lbl)
-
-        self._bar = Gtk.ProgressBar()
-        self._bar.set_pulse_step(0.08)
-        box.append(self._bar)
-
-        self._status_lbl = Gtk.Label(label="Queued")
-        self._status_lbl.add_css_class("muted")
-        box.append(self._status_lbl)
-
-        self._elapsed_lbl = Gtk.Label(label="0s elapsed")
-        self._elapsed_lbl.add_css_class("teal")
-        self._elapsed_lbl.set_attributes(_small_attrs())
-        box.append(self._elapsed_lbl)
 
         self._timer_id = GLib.timeout_add(1000, self._tick)
 
