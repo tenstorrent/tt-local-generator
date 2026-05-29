@@ -267,9 +267,9 @@ cd ~/code/tt-local-generator
   touching the app's source code. See [docs/PLUGIN_AUTHORING.md](docs/PLUGIN_AUTHORING.md)
   and the [plugins page](https://docs.tenstorrent.com/tt-local-generator/plugins.html)
   for the full authoring guide including a worked Vale prose-style example.
-- **MCP server** — `tt-ctl mcp-server start` exposes all loaded plugins as MCP tools on
-  port 8003. `tt-ctl mcp-config` prints the Claude Code integration snippet so every
-  generator is callable from a conversation.
+- **MCP server** — `python3 app/mcp_server.py` exposes all loaded plugins as MCP tools on
+  port 8003 (configurable via `TTLG_MCP_PORT`). `tt-ctl mcp-config` prints the Claude Code
+  integration snippet so every generator is callable from a conversation.
 - **🔀 Remix** — any artifact can be remixed into any compatible type. Click Remix on a
   video card to use its first frame as an I2V seed, or on a palette to carry its hex colors
   and lore into a new landscape or video prompt. The remix graph is derived entirely from

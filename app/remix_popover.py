@@ -32,9 +32,20 @@ _THUMB_H = 40
 
 
 def _source_type_from_record(record) -> str:
-    """Derive a canonical source_type string from whatever record type we have."""
-    mt = getattr(record, "media_type", None) or getattr(record, "generator_type", None) or "video"
-    return str(mt)
+    """Derive a canonical source_type string from whatever record type we have.
+
+    For artgen MediaRecords, media_type is always "artgen" but the actual generator
+    (palette, verse, landscape, etc.) lives in generator_type. Remix ingredient
+    tables and plugin targets are keyed by generator type, not "artgen", so we
+    prefer generator_type when present.
+    """
+    gt = getattr(record, "generator_type", None)
+    if gt:
+        return str(gt)
+    mt = getattr(record, "media_type", None)
+    if mt and mt != "artgen":
+        return str(mt)
+    return str(mt or "video")
 
 
 def _prompt_from_record(record) -> str:

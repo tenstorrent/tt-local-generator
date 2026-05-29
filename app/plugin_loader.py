@@ -92,9 +92,11 @@ def load_plugins() -> None:
     when the same plugin name is discovered twice, so user plugins shadow
     repo-bundled plugins.
 
-    Idempotent: clears and rebuilds each time it is called.  Tests clear
-    _PLUGINS before calling load_plugins() to avoid cross-test pollution.
+    Idempotent: clears and rebuilds each time it is called so that plugins
+    removed from the search paths (or left over from monkeypatched test paths)
+    do not remain registered after a later load.
     """
+    _PLUGINS.clear()
     for search_path in _SEARCH_PATHS:
         if not search_path.is_dir():
             continue

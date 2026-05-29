@@ -32,6 +32,10 @@ from fastapi.responses import JSONResponse
 
 import plugin_loader
 
+# Populate the plugin registry at import time so tools/list and tools/call work
+# whether this module is imported by tt-ctl or run standalone as __main__.
+plugin_loader.load_plugins()
+
 app = FastAPI(title="tt-local-gen MCP server", version="1.0.0")
 
 # MCP protocol version this server speaks.
@@ -68,20 +72,54 @@ def _all_tools() -> list[dict]:
     return tools
 
 
-def _noop_call_fn(prompt: str, system: str | None = None,
-                  max_tokens: int | None = None) -> str:
-    """
-    Placeholder call_fn passed to generate_artifact() via the MCP route.
+def _make_call_fn(base_url: str | None = None):
+    """Return a call_fn that routes to the best available LLM endpoint.
 
-    Real invocations that need an LLM should wire in the artgen endpoint
-    (prompt-server on port 8001, or a remote model server on port 8000).
-    Until that wiring is in place, any plugin that tries to call the LLM
-    will receive a descriptive RuntimeError rather than a silent hang.
+    Resolution order:
+      1. base_url if provided (from X-LLM-URL request header)
+      2. artgen server on port 8002
+      3. prompt-gen server on port 8001
+      4. RuntimeError with clear instructions
+
+    This makes MCP tool invocations for art generators fully functional when
+    a server is running, without requiring any extra configuration.
     """
-    raise RuntimeError(
-        "This plugin requires a live LLM — start the appropriate server first "
-        "(tt-ctl start prompt-server)."
-    )
+    import urllib.request
+    import json as _json
+
+    candidates = []
+    if base_url:
+        candidates.append(base_url)
+    candidates += ["http://localhost:8002/v1/chat/completions",
+                   "http://localhost:8001/v1/chat/completions"]
+
+    def _call_fn(prompt: str, system: str | None = None,
+                 max_tokens: int | None = None) -> str:
+        payload = _json.dumps({
+            "model": "default",
+            "messages": [
+                *([] if not system else [{"role": "system", "content": system}]),
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens or 2048,
+        }).encode()
+        for url in candidates:
+            try:
+                req = urllib.request.Request(
+                    url, data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    data = _json.loads(r.read())
+                return data["choices"][0]["message"]["content"]
+            except Exception:
+                continue
+        raise RuntimeError(
+            "No LLM server reachable. Start one first: "
+            "tt-ctl start artgen-qwen3-8b  or  tt-ctl start prompt-server"
+        )
+
+    return _call_fn
 
 
 # ── HTTP routes ───────────────────────────────────────────────────────────────
@@ -157,13 +195,17 @@ async def handle_rpc(body: dict) -> JSONResponse:
             })
 
         # Invoke the generator.  generate_artifact() receives an argparse
-        # Namespace built from the MCP arguments dict, plus our no-op call_fn.
+        # Namespace built from the MCP arguments dict, plus a call_fn that
+        # routes to the best available LLM server (artgen on 8002 → prompt-gen
+        # on 8001, or the URL from TTLG_LLM_URL env var).
         # Errors are surfaced as isError=True content (not JSON-RPC errors) so
         # MCP clients receive a structured response rather than a hard failure.
         try:
             import argparse as _ap
             args = _ap.Namespace(**arguments)
-            result = pdef.generator.generate_artifact(args, _noop_call_fn)
+            llm_url = os.environ.get("TTLG_LLM_URL")
+            call_fn = _make_call_fn(llm_url)
+            result = pdef.generator.generate_artifact(args, call_fn)
             return JSONResponse({
                 "jsonrpc": "2.0",
                 "id": rpc_id,

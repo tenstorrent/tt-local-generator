@@ -7,23 +7,56 @@
     "tab": "generative-art",
     "hardware": null
   },
-  "tools": [{
-    "name": "circuit",
-    "description": "Logic gate wiring diagram SVG: AND/OR/NOT/XOR gates with labelled inputs and output",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "inputs": {"type": "array", "items": {"type": "string"}, "default": ["A", "B", "C"]},
-        "gates": {"type": "array", "items": {"type": "string"}, "default": ["and", "or", "not"]},
-        "depth": {"type": "integer", "default": 2},
-        "style": {"type": "string", "enum": ["clean", "neon", "paper"], "default": "clean"}
+  "tools": [
+    {
+      "name": "circuit",
+      "description": "Logic gate wiring diagram SVG: AND/OR/NOT/XOR gates with labelled inputs and output",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "type": "string",
+            "default": "A,B,C",
+            "description": "Comma-separated input labels (e.g. A,B,C)"
+          },
+          "gates": {
+            "type": "string",
+            "default": "and,or",
+            "description": "Comma-separated gate types: and, or, not, xor"
+          },
+          "depth": {
+            "type": "integer",
+            "default": 2
+          },
+          "circuit_style": {
+            "type": "string",
+            "enum": [
+              "clean",
+              "neon",
+              "paper"
+            ],
+            "default": "clean",
+            "description": "Visual style"
+          }
+        },
+        "required": []
       },
-      "required": []
-    },
-    "examples": [
-      {"inputs": ["A", "B"], "gates": ["and", "not"], "style": "neon"},
-      {"inputs": ["X", "Y", "Z"], "gates": ["xor", "and"], "depth": 3}
-    ],
-    "x-ttlg": {"streaming": null, "artifact_tool": true}
-  }]
+      "examples": [
+        {
+          "inputs": "A,B",
+          "gates": "and,not",
+          "circuit_style": "neon"
+        },
+        {
+          "inputs": "X,Y,Z",
+          "gates": "xor,and",
+          "depth": 3
+        }
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
 }

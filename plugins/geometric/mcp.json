@@ -2,27 +2,66 @@
   "x-ttlg": {
     "output_ext": ".svg",
     "media_type": "image",
-    "accepts_remix_from": ["palette"],
+    "accepts_remix_from": [
+      "palette"
+    ],
     "can_remix_to": [],
     "tab": "generative-art",
     "hardware": null
   },
-  "tools": [{
-    "name": "geometric",
-    "description": "Abstract tiled SVG geometry: Mondrian grids, recursive subdivision, circuit traces, woven lattice",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "style": {"type": "string", "enum": ["mondrian", "circuit", "recursive", "weave"], "default": "mondrian"},
-        "palette": {"type": "string", "enum": ["teal", "mono", "ember", "forest"], "default": "teal"},
-        "complexity": {"type": "string", "enum": ["low", "high"], "default": "low"}
+  "tools": [
+    {
+      "name": "geometric",
+      "description": "Abstract tiled SVG geometry: Mondrian grids, recursive subdivision, circuit traces, woven lattice",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "style": {
+            "type": "string",
+            "enum": [
+              "mondrian",
+              "circuit",
+              "recursive",
+              "weave"
+            ],
+            "default": "mondrian"
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "high"
+            ],
+            "default": "low"
+          },
+          "geo_palette": {
+            "type": "string",
+            "enum": [
+              "teal",
+              "mono",
+              "ember",
+              "forest"
+            ],
+            "default": "teal"
+          }
+        },
+        "required": []
       },
-      "required": []
-    },
-    "examples": [
-      {"style": "mondrian", "palette": "teal"},
-      {"style": "recursive", "palette": "ember", "complexity": "high"}
-    ],
-    "x-ttlg": {"streaming": null, "artifact_tool": true}
-  }]
+      "examples": [
+        {
+          "style": "mondrian",
+          "geo_palette": "teal"
+        },
+        {
+          "style": "recursive",
+          "complexity": "high",
+          "geo_palette": "ember"
+        }
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
 }
