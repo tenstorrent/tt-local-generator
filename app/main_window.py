@@ -6976,6 +6976,22 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
         self._gallery_stack.set_visible_child_name("video")
 
+        # Apply saved gallery density preference on startup.  The default
+        # "comfortable" requires no work (it is the widget's natural size);
+        # only call _apply_gallery_density when a non-default value was saved.
+        _density = _settings.get("gallery_density") or "comfortable"
+        if _density != "comfortable":
+            self._apply_gallery_density(_density)
+
+        # Sync the art-autogen menu action state to match the panel's initial
+        # _auto_gen flag.  _build_menu_actions() registers the action before
+        # _build_ui() runs, so lookup_action() is guaranteed to find it here.
+        art_autogen_act = self.lookup_action("art-autogen")
+        if art_autogen_act:
+            art_autogen_act.set_state(
+                GLib.Variant("b", bool(self._artgen_panel._auto_gen))
+            )
+
         gallery_wrap.append(self._gallery_stack)
 
         # ── Selection-mode banner (hidden until user edits a playlist) ─────────
