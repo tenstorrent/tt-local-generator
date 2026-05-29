@@ -1602,6 +1602,34 @@ class ArtgenPanel(Gtk.Box):
             self._ad_seed.set_value(random.randint(0, 9999))
             # prompt written by _auto_fire_with_theme after Inspire
 
+    # ── Public API for context-aware menu bar ─────────────────────────────────
+
+    def toggle_auto_gen(self) -> bool:
+        """Toggle auto-generate on/off. Returns the new state (True = enabled).
+
+        Mirrors _on_auto_switch_changed. Blocks/unblocks the Switch signal
+        handler to avoid re-entrancy when syncing the widget state.
+        """
+        if self._auto_gen:
+            self._auto_stop("menu toggle")
+        else:
+            self._auto_gen = True
+            self._auto_maybe_schedule()
+        if hasattr(self, "_auto_switch") and hasattr(self, "_auto_switch_handler"):
+            self._auto_switch.handler_block(self._auto_switch_handler)
+            self._auto_switch.set_active(self._auto_gen)
+            self._auto_switch.handler_unblock(self._auto_switch_handler)
+        return self._auto_gen
+
+    def get_auto_gen_delay(self) -> int:
+        """Return the current auto-generate delay in seconds."""
+        val = server_config.get("artgen_auto", "delay")
+        return int(val) if val is not None else 3
+
+    def set_auto_gen_delay(self, seconds: int) -> None:
+        """Persist a new auto-generate delay. Takes effect on the next countdown cycle."""
+        server_config.set("artgen_auto", "delay", seconds)
+
     # ── Remix support ─────────────────────────────────────────────────────────
 
     def set_generator(self, name: str) -> None:
