@@ -1492,21 +1492,21 @@ class GenerationCard(Gtk.Frame):
     """
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
-    Buttons: 💾 Save, ↺ Iterate, 🗑 Delete.
-    Hover reveals: 💃 Animate (if animate_cb), ☆/★ star toggle.
+    Buttons: 💾 Save, 🔀 Remix, 🗑 Delete.
+    Hover reveals: 🔀 Remix button, ☆/★ star toggle.
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
+    remix_cb(record) is called when the Remix button is clicked (opens RemixPopover).
     star_cb(record, starred: bool) is called when the star is toggled.
     """
 
-    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
-                 animate_cb=None, star_cb=None):
+    def __init__(self, record: GenerationRecord, select_cb, delete_cb,
+                 remix_cb=None, star_cb=None):
         super().__init__()
         self._record = record
-        self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        self._animate_cb = animate_cb   # callable(record) or None
+        self._remix_cb = remix_cb       # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb         # callable(record, starred: bool) or None
         self.add_css_class("card")
         # Minimum card width; FlowBox packs cards at this natural width
@@ -1588,16 +1588,14 @@ class GenerationCard(Gtk.Frame):
         action_bar.add_css_class("hover-action-bar")
         action_bar.set_hexpand(True)
 
-        if self._animate_cb is not None:
-            animate_btn = Gtk.Button(label="💃 Animate")
-            animate_btn.add_css_class("hover-action-btn")
-            animate_btn.add_css_class("hover-action-btn-animate")
-            animate_btn.set_can_focus(False)
-            animate_btn.connect(
-                "clicked",
-                lambda _b, rec=self._record: self._animate_cb(rec),
-            )
-            action_bar.append(animate_btn)
+        # Remix button — always present so any card can be remixed into a new generation.
+        remix_btn = Gtk.Button(label="🔀 Remix")
+        remix_btn.add_css_class("hover-action-btn")
+        remix_btn.add_css_class("hover-action-btn-remix")
+        remix_btn.set_can_focus(False)
+        remix_btn.set_tooltip_text("Remix this into a new generation")
+        remix_btn.connect("clicked", self._on_remix_clicked)
+        action_bar.append(remix_btn)
 
         # Star toggle — always present so every card type can be starred.
         self._star_btn = Gtk.Button(label="★" if self._record.starred else "☆")
@@ -1759,11 +1757,6 @@ class GenerationCard(Gtk.Frame):
             if not self._record.media_exists:
                 conv_btn.set_sensitive(False)
             btn_row.append(conv_btn)
-
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
-        iter_btn.connect("clicked", self._iterate)
-        btn_row.append(iter_btn)
 
         btn_spacer = Gtk.Box()
         btn_spacer.set_hexpand(True)
@@ -2028,12 +2021,10 @@ class GenerationCard(Gtk.Frame):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _iterate(self, _btn) -> None:
-        self._iterate_cb(
-            self._record.prompt,
-            self._record.negative_prompt,
-            self._record.seed_image_path,
-        )
+    def _on_remix_clicked(self, _btn) -> None:
+        """Open the RemixPopover for this card when the 🔀 Remix button is clicked."""
+        if self._remix_cb:
+            self._remix_cb(self._record)
 
     def _on_trash_clicked(self, btn) -> None:
         """Propagate the delete request upward; prevent the click from selecting the card."""
@@ -2091,7 +2082,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         self.set_hexpand(False)
         self.set_size_request(420, -1)
         self._record: Optional[GenerationRecord] = None
-        self._iterate_cb = None
+        self._remix_cb = None
         self._video_widget: Optional[Gtk.Video] = None
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
@@ -2155,10 +2146,10 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_gif_pic = None
         self._show_empty()
 
-    def show_record(self, record: GenerationRecord, iterate_cb) -> None:
+    def show_record(self, record: GenerationRecord, remix_cb) -> None:
         """Populate the panel with a completed generation record."""
         self._record = record
-        self._iterate_cb = iterate_cb
+        self._remix_cb = remix_cb
 
         # Unload the previous video pipeline before replacing it.  Calling
         # set_file(None) starts GStreamer teardown immediately; without it the
@@ -2618,10 +2609,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_star_btn.connect("clicked", self._on_detail_star_clicked)
         action_row.append(self._detail_star_btn)
 
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Pre-fill the control panel with this prompt")
-        iter_btn.connect("clicked", self._iterate)
-        action_row.append(iter_btn)
+        remix_btn = Gtk.Button(label="🔀 Remix")
+        remix_btn.add_css_class("action-btn")
+        remix_btn.set_tooltip_text("Remix this into a new generation")
+        remix_btn.connect("clicked", self._on_remix_clicked)
+        action_row.append(remix_btn)
         content.append(action_row)
 
         self.set_child(content)
@@ -2645,7 +2637,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             return
         self._nav_idx = (self._nav_idx + delta) % len(self._nav_records)
         rec = self._nav_records[self._nav_idx]
-        self.show_record(rec, self._iterate_cb)
+        self.show_record(rec, self._remix_cb)
 
     def _on_detail_star_clicked(self, _btn) -> None:
         """Toggle the starred state for the currently displayed record."""
@@ -2731,7 +2723,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         btn.set_sensitive(False)
         btn.set_label("⬇ Downloading…")
         record = self._record
-        iterate_cb = self._iterate_cb
+        remix_cb = self._remix_cb
 
         inv_video_url  = (record.extra_meta or {}).get("_inventory_video_url", "")
         inv_thumb_url  = (record.extra_meta or {}).get("_inventory_thumbnail_url", "")
@@ -2792,14 +2784,14 @@ class DetailPanel(Gtk.ScrolledWindow):
                         GLib.idle_add(self._on_localized_cb, localized)
 
                     # Show the localized record in the detail panel.
-                    GLib.idle_add(self.show_record, localized, iterate_cb)
+                    GLib.idle_add(self.show_record, localized, remix_cb)
 
                 elif self._download_cb and record.id:
                     # Local history record — use the inference-server API.
                     dest = Path(record.video_path)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     self._download_cb(record.id, dest)
-                    GLib.idle_add(self.show_record, record, iterate_cb)
+                    GLib.idle_add(self.show_record, record, remix_cb)
                 else:
                     raise RuntimeError("No download source available for this record")
 
@@ -2915,13 +2907,13 @@ class DetailPanel(Gtk.ScrolledWindow):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _iterate(self, _btn) -> None:
-        if self._record and self._iterate_cb:
-            self._iterate_cb(
-                self._record.prompt,
-                self._record.negative_prompt,
-                self._record.seed_image_path,
-            )
+    def _on_remix_clicked(self, btn) -> None:
+        """Open a RemixPopover anchored to the Remix button in the detail panel."""
+        if self._record and self._remix_cb:
+            from remix_popover import RemixPopover
+            pop = RemixPopover(self._record, on_remix=self._remix_cb)
+            pop.set_parent(btn)
+            pop.popup()
 
 
 # ── Full-size video player window ─────────────────────────────────────────────
@@ -3195,15 +3187,14 @@ class GalleryWidget(Gtk.Box):
     hover-leave to minimise GStreamer resource use.
     """
 
-    def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video",
-                 animate_action_cb=None, star_cb=None):
+    def __init__(self, select_cb, delete_cb, media_type: str = "video",
+                 remix_cb=None, star_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
-        self._iterate_cb = iterate_cb
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
-        self._animate_action_cb = animate_action_cb  # callable(record) or None — opens Animate dialog
+        self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb            # callable(record, starred: bool) or None
         self._media_type = media_type
         self._active_filter: str = "all"   # "all" | "starred"
@@ -3350,10 +3341,9 @@ class GalleryWidget(Gtk.Box):
     def _make_card(self, record: GenerationRecord) -> "GenerationCard":
         return GenerationCard(
             record,
-            iterate_cb=self._iterate_cb,
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
-            animate_cb=self._animate_action_cb,
+            remix_cb=self._remix_cb,
             star_cb=self._star_cb,
         )
 
@@ -5246,11 +5236,10 @@ class ControlPanel(Gtk.Box):
         picker.popup()
 
     def set_char_input(self, path: str) -> None:
-        """Set the character / seed image path.
+        """Set the character image path (animate mode).
 
-        Called by MainWindow._on_animate_card_action when a gallery card is
-        used as the animate character.  Routes to _set_seed_image so the
-        seed image well is updated (the separate Character InputWidget was removed).
+        Called when remixing a card as an animate character.  Routes to
+        _set_seed_image so the inline thumbnail well updates.
         """
         self._set_seed_image(path)
 
@@ -6896,17 +6885,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.set_hhomogeneous(False)
 
         shared_cbs = dict(
-            iterate_cb=self._controls.populate_prompts,
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
-            animate_action_cb=self._on_animate_card_action,
+            remix_cb=self._on_remix_card,
             star_cb=self._on_star,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._artgen_panel    = ArtgenPanel()
-        self._artgen_panel.on_use_as_seed = self._on_artgen_use_as_seed
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
@@ -7004,26 +6991,6 @@ class MainWindow(Gtk.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         """Update status bar. Safe to call from main thread only."""
         self._status_lbl.set_label(text)
-
-    def _on_animate_card_action(self, record: "GenerationRecord") -> None:
-        """
-        '💃 Animate' gallery card action.
-
-        Copies the card's prompt and sets its thumbnail as the seed image, then
-        switches to the animate source tab.  The thumbnail is the first-frame still
-        for video records — a valid character seed.
-
-        The seed image well is now the sole character-image entry point (the
-        separate CHARACTER InputWidget was removed).  set_char_input delegates
-        to _set_seed_image so the well is updated correctly.
-        """
-        char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
-        # Use populate_prompts to carry the card's prompt and set the seed image.
-        # This mirrors the ↺ Iterate flow, but also switches to animate mode.
-        seed = char_path if (char_path and Path(char_path).exists()) else ""
-        self._controls.populate_prompts(record.prompt, record.negative_prompt, seed)
-        self._controls.switch_to_source("animate")
-        self._flash_status("Character set ✓ — switch to Animate")
 
     def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
         """Show *message* in the status label for *duration_ms* ms, then restore.
@@ -7483,7 +7450,40 @@ class MainWindow(Gtk.ApplicationWindow):
         visible = gallery.visible_cards()
         idx = next((i for i, c in enumerate(visible) if c._record.id == record.id), 0)
         self._detail.set_context([c._record for c in visible], idx)
-        self._detail.show_record(record, self._controls.populate_prompts)
+        self._detail.show_record(record, self._dispatch_remix)
+
+    # ── Remix routing ──────────────────────────────────────────────────────────
+
+    def _on_remix_card(self, record) -> None:
+        """Open RemixPopover anchored to the gallery card's 🔀 Remix button.
+
+        Called by GalleryWidget cards via the remix_cb hook.  The popover is
+        anchored to the MainWindow (self) as a fallback parent since the exact
+        button widget is not passed through the callback chain — the popover
+        will still appear in a reasonable position near the window centre.
+        Resolves remix ingredients in a background thread (see RemixPopover),
+        then calls _dispatch_remix on the GTK main thread.
+        """
+        from remix_popover import RemixPopover
+        pop = RemixPopover(record, on_remix=self._dispatch_remix)
+        pop.set_parent(self)
+        pop.popup()
+
+    def _dispatch_remix(self, ctx) -> None:
+        """Route a fully-resolved RemixContext to the appropriate tab and controls.
+
+        Called on the GTK main thread by RemixPopover after ingredient resolution
+        completes (via GLib.idle_add inside the popover's background thread).
+        Delegates to remix_dispatch.dispatch_remix which is pure Python and
+        fully unit-tested independently of GTK.
+        """
+        from remix_dispatch import dispatch_remix
+        dispatch_remix(
+            ctx,
+            controls=self._controls,
+            artgen_panel=self._artgen_panel,
+            flash_fn=self._flash_status,
+        )
 
     def _on_delete_card(self, record: GenerationRecord) -> None:
         """
@@ -7521,34 +7521,6 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery = self._gallery_for_type(record.media_type)
         if gallery._active_filter == "starred":
             gallery._relayout()
-
-    def _on_artgen_use_as_seed(self, rec) -> None:
-        """Switch to video mode and set the artgen artifact as a seed image."""
-        # Prefer PNG thumbnail (rendered from SVG); fall back to file_path (SVG works via librsvg).
-        thumb = getattr(rec, "thumbnail_path", "") or ""
-        file_path = getattr(rec, "file_path", "") or ""
-        if thumb and Path(thumb).suffix.lower() == ".png" and Path(thumb).exists():
-            seed_path = thumb
-        elif file_path and Path(file_path).exists():
-            seed_path = file_path
-        else:
-            return
-
-        # Switch source tab to video (activating the button triggers _set_source → _on_source_change).
-        if self._controls._model_source != "video":
-            self._controls._src_video_btn.set_active(True)
-
-        # Set seed image in controls.
-        self._controls._set_seed_image(seed_path)
-
-        # Inject vibe phrase into prompt (append if prompt already has text).
-        vibe = _artgen_vibe(rec)
-        if vibe:
-            buf = self._controls._prompt_view.get_buffer()
-            existing = buf.get_text(
-                buf.get_start_iter(), buf.get_end_iter(), False
-            ).strip()
-            buf.set_text(f"{existing}, {vibe}" if existing else vibe)
 
     def _load_history(self) -> None:
         local_records = self._store.all_records()

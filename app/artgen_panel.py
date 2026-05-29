@@ -1602,4 +1602,49 @@ class ArtgenPanel(Gtk.Box):
             self._ad_seed.set_value(random.randint(0, 9999))
             # prompt written by _auto_fire_with_theme after Inspire
 
+    # ── Remix support ─────────────────────────────────────────────────────────
+
+    def set_generator(self, name: str) -> None:
+        """Switch the generator type dropdown to *name* (if present in the picker).
+
+        Called by MainWindow._dispatch_remix when an artgen target is chosen in
+        RemixPopover. Updates both the dropdown selection and the controls stack
+        so the correct parameter widgets are visible.
+        """
+        import artgen
+        gen_names = artgen.all_names()
+        if name in gen_names:
+            self._type_dd.set_selected(gen_names.index(name))
+            self._controls_stack.set_visible_child_name(name)
+
+    def set_theme(self, theme: str) -> None:
+        """Pre-fill the theme/subject field for the currently selected generator.
+
+        Walks the active controls page for the first Gtk.Entry widget and sets
+        its text to *theme*. Silently does nothing if no Entry is found (e.g.
+        animatediff, which has no free-text theme field).
+
+        This matches the behavior of _auto_fire_with_theme but operates on the
+        currently-visible generator instead of a chosen one.
+        """
+        child = self._controls_stack.get_visible_child()
+        if child is None:
+            return
+
+        def _find_entry(widget):
+            """Depth-first search for the first Gtk.Entry in the widget tree."""
+            if isinstance(widget, Gtk.Entry):
+                return widget
+            w = widget.get_first_child()
+            while w:
+                found = _find_entry(w)
+                if found:
+                    return found
+                w = w.get_next_sibling()
+            return None
+
+        entry = _find_entry(child)
+        if entry:
+            entry.set_text(theme)
+
         # freeform: text written entirely by _auto_fire_with_theme after Inspire
