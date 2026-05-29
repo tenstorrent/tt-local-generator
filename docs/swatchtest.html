@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { background:#080f14; margin:40px; }
+.card { width:300px; border:1px solid #4fd1c5; overflow:hidden; }
+</style>
+</head>
+<body>
+<p style="color:white;">Test 1: flex row with min-height on children</p>
+<div class="card" style="display:flex;flex-direction:column;min-height:180px;">
+  <div style="display:flex;flex:1;min-height:148px;">
+    <div style="flex:1;background:#2c3e50;min-height:148px;"></div>
+    <div style="flex:1;background:#8e9eab;min-height:148px;"></div>
+    <div style="flex:1;background:#c0392b;min-height:148px;"></div>
+    <div style="flex:1;background:#f39c12;min-height:148px;"></div>
+    <div style="flex:1;background:#ecf0f1;min-height:148px;"></div>
+  </div>
+  <div style="background:rgba(8,15,20,0.85);padding:.5rem;color:white;font-size:.75rem;">
+    Drowned Ironwork · 5 colors
+  </div>
+</div>
+
+<p style="color:white;margin-top:20px;">Test 2: explicit height on row</p>
+<div class="card">
+  <div style="display:flex;height:148px;">
+    <div style="flex:1;background:#2c3e50;"></div>
+    <div style="flex:1;background:#8e9eab;"></div>
+    <div style="flex:1;background:#c0392b;"></div>
+    <div style="flex:1;background:#f39c12;"></div>
+    <div style="flex:1;background:#ecf0f1;"></div>
+  </div>
+  <div style="background:rgba(8,15,20,0.85);padding:.5rem;color:white;font-size:.75rem;">
+    Drowned Ironwork · 5 colors
+  </div>
+</div>
+</body>
+</html>

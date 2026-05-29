@@ -458,17 +458,17 @@
 
       <!-- Palette -->
       <div class="plugin-card">
-        <div class="plugin-card-preview" style="display:flex;flex-direction:column;padding:0;overflow:hidden;min-height:180px;">
-          <!-- Swatch bars — explicit height so empty divs don't collapse -->
-          <div style="display:flex;flex:1;min-height:148px;">
-            <div style="flex:1;background:#2c3e50;min-height:148px;"></div>
-            <div style="flex:1;background:#8e9eab;min-height:148px;"></div>
-            <div style="flex:1;background:#c0392b;min-height:148px;"></div>
-            <div style="flex:1;background:#f39c12;min-height:148px;"></div>
-            <div style="flex:1;background:#ecf0f1;min-height:148px;"></div>
+        <div class="plugin-card-preview" style="display:block;padding:0;overflow:hidden;min-height:180px;">
+          <!-- Swatch row: explicit height, no flex trickery needed -->
+          <div style="display:flex;height:148px;">
+            <div style="flex:1;background:#2c3e50;"></div>
+            <div style="flex:1;background:#8e9eab;"></div>
+            <div style="flex:1;background:#c0392b;"></div>
+            <div style="flex:1;background:#f39c12;"></div>
+            <div style="flex:1;background:#ecf0f1;"></div>
           </div>
           <!-- Palette name label -->
-          <div style="background:rgba(8,15,20,0.85);padding:.5rem .75rem;font-size:.75rem;font-family:monospace;color:#e8f0f2;letter-spacing:.04em;flex-shrink:0;">
+          <div style="background:#0f1d28;padding:.5rem .75rem;font-size:.75rem;font-family:monospace;color:#e8f0f2;letter-spacing:.04em;">
             Drowned Ironwork &nbsp;<span style="color:#8e9eab;">· 5 colors</span>
           </div>
         </div>
