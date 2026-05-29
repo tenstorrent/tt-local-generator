@@ -65,9 +65,14 @@ def test_build_tlist_returns_one_entry_per_timestep():
     mock_time_proj = MagicMock()
 
     # Patch _constant_prop_time_embeddings at module level so build_tlist() sees it
+    # MeshDevice must be a real class so isinstance() checks don't raise TypeError.
+    class _FakeMeshDevice:
+        pass
+    ttnn_mock = MagicMock()
+    ttnn_mock.MeshDevice = _FakeMeshDevice
     with patch.object(ttnn_pipeline, "_constant_prop_time_embeddings",
                       return_value=torch.randn(2, 320)):
-        with patch.dict(sys.modules, {"ttnn": MagicMock()}):
+        with patch.dict(sys.modules, {"ttnn": ttnn_mock}):
             result = ttnn_pipeline.build_tlist(mock_scheduler, mock_time_proj, mock_device)
 
     assert len(result) == 5

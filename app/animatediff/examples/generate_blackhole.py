@@ -126,7 +126,7 @@ def main():
     print()
 
     print("Opening Blackhole device...")
-    device = setup_blackhole()
+    device = setup_blackhole(device_ids=[0])  # UNet2D permute_conv_weights crashes on multi-chip MeshDevice
     print()
 
     try:

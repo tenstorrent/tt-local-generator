@@ -447,7 +447,10 @@ def _load_generators() -> None:
     import plugin_loader
     plugin_loader.load_plugins()
     for name, pdef in plugin_loader._PLUGINS.items():
-        _GENERATORS[name] = pdef.generator
+        # Only back-fill runnable plugins — MCP-server stubs (runnable=False)
+        # would appear in tt-ctl artgen and all_names() but raise NotImplementedError.
+        if pdef.runnable:
+            _GENERATORS[name] = pdef.generator
 
 
 _load_generators()
