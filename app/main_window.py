@@ -2055,30 +2055,6 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _artgen_vibe(rec) -> str:
-    """Return a short mood phrase from an artgen MediaRecord's params JSON blob."""
-    try:
-        import json as _json
-        p = _json.loads(rec.params or "{}")
-    except Exception:
-        return ""
-    for key in ("theme", "mood", "subject"):
-        if p.get(key):
-            return str(p[key])
-    gt = rec.generator_type or ""
-    if gt == "landscape":
-        return f"{p.get('palette', '')} landscape".strip()
-    if gt == "skyline":
-        return f"{p.get('era', '')} skyline at {p.get('sky', 'night')}".strip()
-    if gt == "constellation":
-        return f"{p.get('culture', 'invented')} constellation"
-    if gt == "geometric":
-        return f"{p.get('style', '')} geometry in {p.get('geo_palette', '')}".strip()
-    if gt == "circuit":
-        return f"{p.get('circuit_style', '')} circuit diagram".strip()
-    return ""
-
-
 # ── Detail panel ───────────────────────────────────────────────────────────────
 
 class DetailPanel(Gtk.ScrolledWindow):
