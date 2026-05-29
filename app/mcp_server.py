@@ -4,10 +4,9 @@ MCP server — exposes all loaded plugins as MCP tools over HTTP+SSE.
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
 Port: 8003 (configurable via TTLG_MCP_PORT env var).
 
-Start standalone:
+Start:
     python3 app/mcp_server.py
-Or via tt-ctl:
-    tt-ctl mcp-server start
+    python3 app/mcp_server.py --port 8003 --host 0.0.0.0
 
 Claude Code integration:
     tt-ctl mcp-config >> ~/.claude/mcp.json
@@ -181,10 +180,16 @@ async def handle_rpc(body: dict) -> JSONResponse:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
-        # Resolve the plugin — return JSON-RPC error if not found.
-        try:
-            pdef = plugin_loader.get(tool_name)
-        except KeyError:
+        # Resolve the plugin by scanning all tool lists, not just primary names.
+        # Multi-tool plugins (e.g. midi with generate_midi + stream_midi) are
+        # keyed by their primary tool name, so a direct get(tool_name) would
+        # miss non-primary tool names like stream_midi.
+        pdef = None
+        for candidate in plugin_loader.all_plugins():
+            if any(t["name"] == tool_name for t in candidate.tools):
+                pdef = candidate
+                break
+        if pdef is None:
             return JSONResponse({
                 "jsonrpc": "2.0",
                 "id": rpc_id,

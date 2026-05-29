@@ -10,8 +10,9 @@ CalledProcessError; callers in the remix engine catch this and apply fallback.
 In-process import usage (remix engine):
     from plugins.ffmpeg.plugin import extract_frame, get_metadata
 
-MCP tool usage (Claude Code, external tools):
-    Registered automatically via app/mcp_server.py on port 8003.
+Note: this plugin is marked utility:true in mcp.json, so plugin_loader skips
+it for the generator registry and the MCP server tool list. It is used
+in-process only by the remix engine (app/remix_popover.py).
 """
 from __future__ import annotations
 

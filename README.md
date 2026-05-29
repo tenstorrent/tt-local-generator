@@ -273,7 +273,9 @@ cd ~/code/tt-local-generator
 - **🔀 Remix** — any artifact can be remixed into any compatible type. Click Remix on a
   video card to use its first frame as an I2V seed, or on a palette to carry its hex colors
   and lore into a new landscape or video prompt. The remix graph is derived entirely from
-  plugin `accepts_remix_from` / `can_remix_to` declarations — no hardcoded routing.
+  plugin `accepts_remix_from` / `can_remix_to` declarations. The target list is
+  manifest-derived; the tab routing and ingredient combinations are defined in
+  `remix_dispatch.py` and `artgen._INGREDIENT_TABLE`.
 - **Seed image** — attach a reference photo or frame to guide color palette, composition, and
   style continuity between clips.
 - **Prompt queue** — write the next prompt while a generation runs; the queue drains

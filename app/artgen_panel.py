@@ -1643,7 +1643,9 @@ class ArtgenPanel(Gtk.Box):
         so the correct parameter widgets are visible.
         """
         import artgen
-        gen_names = artgen.all_names()
+        # Use the same filtered list the dropdown was built from so index
+        # matches the actual dropdown row (hidden generators are excluded).
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
         if name in gen_names:
             self._type_dd.set_selected(gen_names.index(name))
             self._controls_stack.set_visible_child_name(name)
