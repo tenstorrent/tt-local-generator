@@ -149,6 +149,27 @@ def test_gh_pages_workflow_copies_all_referenced_assets():
         )
 
 
+def test_svg_assets_valid_xml():
+    """Every SVG file in docs/assets/ must be valid XML (no truncation or parse errors).
+
+    Firefox silently shows an empty box for malformed SVGs used as <img> — this test
+    catches those before deployment.
+    """
+    import xml.etree.ElementTree as ET
+    artgen_dir = DOCS_DIR / "assets" / "artgen"
+    broken = []
+    for svg in sorted(artgen_dir.glob("*.svg")):
+        try:
+            ET.parse(svg)
+        except ET.ParseError as e:
+            broken.append(f"{svg.name}: {e}")
+    if broken:
+        report = "\n".join(f"  {b}" for b in broken)
+        raise AssertionError(
+            f"{len(broken)} invalid SVG file(s) in docs/assets/artgen/:\n{report}"
+        )
+
+
 def test_inter_page_links_resolve():
     """Internal HTML links between site pages must point to existing files."""
     broken = []

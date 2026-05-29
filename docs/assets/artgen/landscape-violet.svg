@@ -53,7 +53,6 @@
     <circle cx="320" cy="160" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="160" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="360" cy="150" r="24" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="440" cy="160" r="32" fill="#F0C0FF" opacity="0.9"/>
     <circle cx="260" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
@@ -77,7 +76,6 @@
     <circle cx="320" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="170" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="360" cy="170" r="24" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="440" cy="170" r="32" fill="#F0C0FF" opacity="0.9"/>
     <circle cx="260" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
@@ -89,7 +87,6 @@
     <circle cx="320" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="170" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="360" cy="170" r="24" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="440" cy="170" r="32" fill="#F0C0FF" opacity="0.9"/>
     <circle cx="260" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
@@ -101,7 +98,6 @@
     <circle cx="320" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="170" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="360" cy="170" r="24" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="440" cy="170" r="32" fill="#F0C0FF" opacity="0.9"/>
     <circle cx="260" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
@@ -113,7 +109,6 @@
     <circle cx="320" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="170" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="360" cy="170" r="24" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="440" cy="170" r="32" fill="#F0C0FF" opacity="0.9"/>
     <circle cx="260" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
@@ -125,4 +120,5 @@
     <circle cx="320" cy="170" r="34" fill="#F0C0FF" opacity="0.7"/>
     <circle cx="480" cy="170" r="26" fill="#F0C0FF" opacity="0.8"/>
     <circle cx="240" cy="170" r="28" fill="#F0C0FF" opacity="0.9"/>
-    <circle cx="540" cy="170" r="30" fill="#
+  </g>
+</svg>
