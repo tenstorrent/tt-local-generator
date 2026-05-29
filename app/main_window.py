@@ -6723,6 +6723,82 @@ class PreferencesDialog(Gtk.Window):
         GLib.idle_add(_do_scroll)
 
 
+# ── Context-menu builder (module-level for testability) ────────────────────────
+
+def _build_context_menu_for_source(source: str) -> "Gio.Menu":
+    """
+    Build and return a fresh Gio.Menu for the context slot matching *source*.
+
+    source: "video" | "animate" | "image" | "artgen"
+
+    Module-level so it can be unit-tested without a MainWindow instance.
+    Uses Gio and GLib (already imported at top of module) and _DIRECTOR_PINS
+    (module-level constant).
+    """
+    menu = Gio.Menu()
+
+    # Quality (video / animate / image)
+    if source in ("video", "animate", "image"):
+        quality_section = Gio.Menu()
+        for label, steps in [("Fast (10 steps)", "10"),
+                              ("Standard (30 steps)", "30"),
+                              ("High Quality (40 steps)", "40")]:
+            item = Gio.MenuItem.new(label, "win.quality")
+            item.set_attribute_value("target", GLib.Variant("s", steps))
+            quality_section.append_item(item)
+        menu.append_section("Quality", quality_section)
+
+    # Sleep After (all sources)
+    sleep_section = Gio.Menu()
+    for label, val in [("Never", "0"), ("After 10 completions", "10"),
+                       ("After 20 completions", "20"), ("After 50 completions", "50")]:
+        item = Gio.MenuItem.new(label, "win.sleep-after")
+        item.set_attribute_value("target", GLib.Variant("s", val))
+        sleep_section.append_item(item)
+    menu.append_section("Sleep After", sleep_section)
+
+    # Director Style (video / image only)
+    if source in ("video", "image"):
+        dir_prob_section = Gio.Menu()
+        for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
+                           ("Often (66%)", "66"), ("Always", "100")]:
+            item = Gio.MenuItem.new(label, "win.director-prob")
+            item.set_attribute_value("target", GLib.Variant("s", pct))
+            dir_prob_section.append_item(item)
+        menu.append_section("Director Style", dir_prob_section)
+
+    # Pinned Director (video only)
+    if source == "video":
+        pin_section = Gio.Menu()
+        for display, full in _DIRECTOR_PINS:
+            item = Gio.MenuItem.new(display or "Random", "win.director-pin")
+            item.set_attribute_value("target", GLib.Variant("s", full))
+            pin_section.append_item(item)
+        menu.append_section("Pinned Director", pin_section)
+
+    # Art: auto-generate controls
+    if source == "artgen":
+        auto_section = Gio.Menu()
+        auto_item = Gio.MenuItem.new("Enabled", "win.art-autogen")
+        auto_section.append_item(auto_item)
+        menu.append_section("Auto-generate", auto_section)
+
+        delay_section = Gio.Menu()
+        for label, val in [("3 seconds", "3"), ("10 seconds", "10"), ("30 seconds", "30")]:
+            item = Gio.MenuItem.new(label, "win.art-autogen-delay")
+            item.set_attribute_value("target", GLib.Variant("s", val))
+            delay_section.append_item(item)
+        menu.append_section("Auto Delay", delay_section)
+
+    # Advanced Settings (video / animate / image)
+    if source in ("video", "animate", "image"):
+        adv_section = Gio.Menu()
+        adv_section.append("Advanced Settings…", "win.advanced-settings")
+        menu.append_section(None, adv_section)
+
+    return menu
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -6839,6 +6915,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
+        self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
         # ── Three-pane layout: controls | gallery | detail ────────────────────
@@ -7209,6 +7286,51 @@ class MainWindow(Gtk.ApplicationWindow):
         if child is not None:
             child.add_css_class("context-menu-item")
 
+    def _rebuild_context_menu(self, source: str) -> None:
+        """Replace the context slot title and contents for the given source tab.
+
+        Clears self._context_menu_model in-place and repopulates it, then
+        replaces the submenu title by remove+insert_submenu on self._menumodel.
+        The PopoverMenuBar reflects the change immediately.
+        """
+        _TITLES = {
+            "video":   "\U0001f3a5 Video",
+            "animate": "\U0001f483 Animate",
+            "image":   "\U0001f5bc️ Image",
+            "artgen":  "\U0001f3a8 Art",
+        }
+        title = _TITLES.get(source, "\U0001f3a5 Video")
+
+        # Rebuild context_menu_model contents in-place
+        self._context_menu_model.remove_all()
+        fresh = _build_context_menu_for_source(source)
+        for i in range(fresh.get_n_items()):
+            section = fresh.get_item_link(i, "section")
+            submenu = fresh.get_item_link(i, "submenu")
+            if section:
+                label_v = fresh.get_item_attribute_value(
+                    i, "label", GLib.VariantType.new("s"))
+                self._context_menu_model.append_section(
+                    label_v.get_string() if label_v else None, section)
+            elif submenu:
+                label_v = fresh.get_item_attribute_value(
+                    i, "label", GLib.VariantType.new("s"))
+                self._context_menu_model.append_submenu(
+                    label_v.get_string() if label_v else None, submenu)
+            else:
+                lv = fresh.get_item_attribute_value(i, "label", GLib.VariantType.new("s"))
+                av = fresh.get_item_attribute_value(i, "action", GLib.VariantType.new("s"))
+                if lv and av:
+                    self._context_menu_model.append(lv.get_string(), av.get_string())
+
+        # Update the submenu title in the top-level menu model
+        self._menumodel.remove(self._context_slot_idx)
+        self._menumodel.insert_submenu(self._context_slot_idx, title,
+                                       self._context_menu_model)
+
+        # Re-mark the context CSS class on the last bar item
+        self._apply_context_menu_css(self._menu_bar)
+
     # ── Playlist menu helpers ──────────────────────────────────────────────────
 
     def _rebuild_playlists_menu(self) -> None:
@@ -7474,6 +7596,11 @@ class MainWindow(Gtk.ApplicationWindow):
         # the ArtgenPanel can use the full window width for its own layout.
         self._ctrl_wrapper.set_visible(not is_artgen)
         self._detail_wrap.set_visible(not is_artgen)
+        self._rebuild_context_menu(source)
+        # Grey out Detail Panel toggle on Art tab (no detail panel there)
+        toggle_act = self.lookup_action("toggle-detail")
+        if toggle_act:
+            toggle_act.set_enabled(source != "artgen")
 
     # ── Card selection ─────────────────────────────────────────────────────────
 

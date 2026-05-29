@@ -118,3 +118,83 @@ def test_art_autogen_delay_action_calls_set_delay():
     action.connect("activate", _handler)
     action.activate(GLib.Variant("s", "30"))
     panel.set_auto_gen_delay.assert_called_once_with(30)
+
+
+# ── _build_context_menu_for_source tests ─────────────────────────────────────
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib, Gio
+
+
+def _collect_menu_labels(menu: Gio.Menu) -> list:
+    """Recursively collect all item labels from a Gio.Menu."""
+    labels = []
+    for i in range(menu.get_n_items()):
+        label = menu.get_item_attribute_value(i, "label", GLib.VariantType.new("s"))
+        if label:
+            labels.append(label.get_string())
+        link_menu = menu.get_item_link(i, "section") or menu.get_item_link(i, "submenu")
+        if link_menu:
+            labels.extend(_collect_menu_labels(link_menu))
+    return labels
+
+
+def test_video_context_has_quality():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("video"))
+    assert any("Fast" in l for l in labels)
+    assert any("Standard" in l for l in labels)
+    assert any("High Quality" in l for l in labels)
+
+
+def test_video_context_has_director_style():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("video"))
+    assert any("Sometimes" in l for l in labels)
+    assert any("Always" in l for l in labels)
+
+
+def test_video_context_has_pinned_director():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("video"))
+    assert any("Random" in l for l in labels)
+
+
+def test_animate_context_has_no_director_style():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("animate"))
+    assert not any("Sometimes" in l for l in labels)
+    assert not any("Random" in l for l in labels)
+
+
+def test_animate_context_has_quality():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("animate"))
+    assert any("Fast" in l for l in labels)
+
+
+def test_artgen_context_has_auto_generate():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
+    assert any("Enabled" in l for l in labels)
+
+
+def test_artgen_context_has_auto_delay():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
+    assert any("3 seconds" in l for l in labels)
+    assert any("10 seconds" in l for l in labels)
+
+
+def test_artgen_context_has_sleep_after():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
+    assert any("Never" in l for l in labels)
+
+
+def test_artgen_context_has_no_director_style():
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
+    assert not any("Sometimes" in l for l in labels)
