@@ -1,0 +1,88 @@
+{
+  "x-ttlg": {
+    "output_ext": null,
+    "media_type": null,
+    "tab": null,
+    "hardware": null,
+    "utility": true,
+    "accepts_remix_from": [],
+    "can_remix_to": []
+  },
+  "tools": [
+    {
+      "name": "ffmpeg_extract_frame",
+      "description": "Extract a single frame from a video file as a JPEG or PNG image",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input_path", "output_path"],
+        "properties": {
+          "input_path":  {"type": "string", "description": "Path to input video file"},
+          "output_path": {"type": "string", "description": "Path for the output image"},
+          "timestamp":   {"type": "number", "description": "Time in seconds (default: 0)"},
+          "format":      {"type": "string", "enum": ["jpg", "png"], "default": "jpg"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "ffmpeg_get_metadata",
+      "description": "Return duration, dimensions, fps, codec, and file size of a video or audio file",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input_path"],
+        "properties": {
+          "input_path": {"type": "string"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "ffmpeg_convert_to_gif",
+      "description": "Convert a video to an optimised animated GIF using a two-pass palette",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input_path", "output_path"],
+        "properties": {
+          "input_path":  {"type": "string"},
+          "output_path": {"type": "string"},
+          "fps":         {"type": "integer", "default": 12},
+          "width":       {"type": "integer", "default": 480}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "ffmpeg_convert_to_mp4",
+      "description": "Re-encode a GIF or video file as an H.264 MP4 suitable for web playback",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input_path", "output_path"],
+        "properties": {
+          "input_path":  {"type": "string"},
+          "output_path": {"type": "string"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "ffmpeg_resize",
+      "description": "Resize a video or image to the given dimensions, preserving aspect ratio",
+      "inputSchema": {
+        "type": "object",
+        "required": ["input_path", "output_path", "width"],
+        "properties": {
+          "input_path":  {"type": "string"},
+          "output_path": {"type": "string"},
+          "width":       {"type": "integer"},
+          "height":      {"type": "integer"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    }
+  ]
+}
