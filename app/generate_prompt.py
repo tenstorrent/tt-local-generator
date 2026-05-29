@@ -411,14 +411,25 @@ _INSTRUCTION_LEAK_PATTERNS = [
     _re.compile(r'\bno\s+camera\s+moves?\b', _re.I),
     _re.compile(r'\bunder\s+\d+\s+words?\b', _re.I),
     _re.compile(r'\bdescribe\s+(?:what|only\s+the)\s+loop', _re.I),
+    # Screenplay-format headers that Qwen sometimes emits in guided mode:
+    # e.g. "[INT. LUXURY APARTMENT]  A man walks in" or "[ONE ACTION]  She runs"
+    # Only strip if there is actual text content after the closing bracket —
+    # keeps prompts that are entirely bracket-wrapped (edge case).
+    _re.compile(r'^\s*(?:\[[^\]]{0,80}\]\s*)+(?=\S)', _re.I),
 ]
 
 
 def _strip_instruction_leak(text: str) -> str:
-    """Remove instruction metadata that leaked into the LLM output."""
+    """Remove instruction metadata and screenplay headers from LLM output."""
     for pat in _INSTRUCTION_LEAK_PATTERNS:
         text = pat.sub("", text)
-    return text.strip(". \t\n")
+    text = text.strip(". \t\n")
+    # If the entire remaining text is wrapped in a single [...] pair, unwrap it.
+    # e.g. "[A woman selling enlightenment, ...]" → "A woman selling enlightenment, ..."
+    m = _re.match(r'^\[(.+)\]$', text, _re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    return text
 
 
 def _llm_available() -> bool:
