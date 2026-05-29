@@ -3975,9 +3975,13 @@ class ControlPanel(Gtk.Box):
         self._server_model_lbl.add_css_class("server-model-lbl")
         self._server_model_lbl.add_css_class("server-model-offline")
         self._server_model_lbl.set_xalign(0)
+        self._server_model_lbl.set_max_width_chars(1)
+        self._server_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         self._server_sub_lbl = Gtk.Label(label="localhost:8000 unreachable")
         self._server_sub_lbl.add_css_class("server-sub-lbl")
         self._server_sub_lbl.set_xalign(0)
+        self._server_sub_lbl.set_max_width_chars(1)
+        self._server_sub_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         text_col.append(self._server_model_lbl)
         text_col.append(self._server_sub_lbl)
         self._server_status_box.append(text_col)
@@ -4050,6 +4054,8 @@ class ControlPanel(Gtk.Box):
         self._srv_phase_lbl = Gtk.Label(label="Starting…")
         self._srv_phase_lbl.set_xalign(0)
         self._srv_phase_lbl.add_css_class("server-phase-lbl")
+        self._srv_phase_lbl.set_max_width_chars(1)
+        self._srv_phase_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         srv_launch_box.append(self._srv_phase_lbl)
 
         # Row 3: raw log text — hidden by default, toggled by the button above
@@ -4421,11 +4427,15 @@ class ControlPanel(Gtk.Box):
         self._shot_model_lbl = Gtk.Label()
         self._shot_model_lbl.add_css_class("model-badge-label")
         self._shot_model_lbl.set_xalign(0)
+        self._shot_model_lbl.set_max_width_chars(1)
+        self._shot_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         model_row.append(self._shot_model_lbl)
 
         self._shot_model_sub = Gtk.Label()
         self._shot_model_sub.add_css_class("model-badge-sub")
         self._shot_model_sub.set_xalign(0)
+        self._shot_model_sub.set_max_width_chars(1)
+        self._shot_model_sub.set_ellipsize(Pango.EllipsizeMode.END)
         model_row.append(self._shot_model_sub)
 
         _spacer = Gtk.Box()
@@ -4682,6 +4692,8 @@ class ControlPanel(Gtk.Box):
             name_lbl = Gtk.Label(label=sdef.label)
             name_lbl.add_css_class("servers-popover-key")
             name_lbl.set_xalign(0)
+            name_lbl.set_max_width_chars(1)
+            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             text_col.append(name_lbl)
             row.append(text_col)
 
@@ -5894,6 +5906,8 @@ class _StatusBar(Gtk.Box):
         self._srv_dot.add_css_class("tt-statusbar-dot-offline")
         self._srv_lbl = Gtk.Label(label="offline")
         self._srv_lbl.add_css_class("tt-statusbar-seg")
+        self._srv_lbl.set_max_width_chars(1)
+        self._srv_lbl.set_ellipsize(Pango.EllipsizeMode.END)
 
         srv_btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         srv_btn_content.append(self._srv_dot)
@@ -5945,6 +5959,8 @@ class _StatusBar(Gtk.Box):
             status_lbl = Gtk.Label(label="○ checking…")
             status_lbl.add_css_class("cap-row-offline")
             status_lbl.set_xalign(1)
+            status_lbl.set_max_width_chars(1)
+            status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             row.append(status_lbl)
             self._cap_rows[cap] = status_lbl
             pop_box.append(row)
