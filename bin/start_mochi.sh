@@ -2,7 +2,7 @@
 # start_mochi.sh — Start the mochi-1-preview video inference server on P300x2 (QB2).
 #
 # Uses the known-working configuration:
-#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.10.0-555f240
+#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3
 #   - --dev-mode: mounts tt-inference-server/patches/tt_dit/ into the container so
 #     two P300X2 hotpatches are applied:
 #       1. pipeline_mochi.py: assertion allows (2,2) mesh shape
@@ -37,7 +37,7 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.10.0-555f240"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 LOG_GLOB="media_*_mochi-1-preview_p300x2_server.log"
 
