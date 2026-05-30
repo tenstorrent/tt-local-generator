@@ -257,9 +257,18 @@ HF_HOME_BLOCK='    # Mount the full host HF cache as HF_HOME inside the containe
     if setup_config and getattr(setup_config, "host_hf_cache", None):
         _hf_home_dst = f"{user_home_path}/hf_home_cache"
         docker_command += [
-            "--mount", f"type=bind,src={setup_config.host_hf_cache},dst={_hf_home_dst},readonly",
+            "--mount", f"type=bind,src={setup_config.host_hf_cache},dst={_hf_home_dst}",
         ]
         docker_env_vars["HF_HOME"] = _hf_home_dst
+        # Also mount /mnt/bonus so that symlinks in the HF cache that point
+        # to /mnt/bonus (a separate model storage disk) resolve inside the container.
+        import pathlib as _pl
+        _bonus = _pl.Path("/mnt/bonus")
+        if _bonus.is_dir():
+            docker_command += [
+                "--mount", f"type=bind,src={_bonus},dst={_bonus},readonly",
+            ]
+            logger.info(f"Bonus disk mount: {_bonus} -> {_bonus}")
         logger.info(f"HF_HOME mount: {setup_config.host_hf_cache} -> {_hf_home_dst}")'
 
 python3 - "$RDS" "$HF_HOME_BLOCK" <<'PYEOF'
