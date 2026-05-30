@@ -198,7 +198,8 @@ MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --docker-server \
     --dev-mode \
     --override-docker-image "$DOCKER_IMAGE" \
-    --host-hf-cache "$HF_CACHE" &
+    --host-hf-cache "$HF_CACHE" \
+    --no-auth &
 WORKFLOW_PID=$!
 
 echo "Workflow PID: $WORKFLOW_PID"
