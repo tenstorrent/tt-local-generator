@@ -207,6 +207,9 @@ MODEL_SERVICE_RUNNER_MAP = {
         ModelRunners.TT_WAN_2_2_I2V_ANISORA,
         ModelRunners.TT_WAN_2_2_I2V_DISTILL,
         ModelRunners.TT_WAN_2_2_I2V_LORA,
+        ModelRunners.TT_WAN_2_2_ANIMATE,
+        ModelRunners.TT_SKYREELS_V2,
+        ModelRunners.TT_SKYREELS_V2_I2V,
         ModelRunners.SP_RUNNER,
     },
     ModelServices.TRAINING: {
@@ -236,6 +239,9 @@ INFERENCE_MODEL_RUNNER_TO_MODEL_NAMES_MAP = {
     ModelRunners.TT_WAN_2_2_I2V_ANISORA: {ModelNames.WAN_2_2_I2V_ANISORA},
     ModelRunners.TT_WAN_2_2_I2V_DISTILL: {ModelNames.WAN_2_2_I2V_DISTILL},
     ModelRunners.TT_WAN_2_2_I2V_LORA: {ModelNames.WAN_2_2_I2V_LORA},
+    ModelRunners.TT_WAN_2_2_ANIMATE: {ModelNames.WAN_2_2_ANIMATE},
+    ModelRunners.TT_SKYREELS_V2: {ModelNames.SKYREELS_V2_DF_1_3B_540P},
+    ModelRunners.TT_SKYREELS_V2_I2V: {ModelNames.SKYREELS_V2_I2V_14B_540P},
     ModelRunners.SP_RUNNER: {
         ModelNames.WAN_2_2,
         ModelNames.WAN_2_2_I2V,
