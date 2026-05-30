@@ -179,6 +179,14 @@ if [[ -z "$LOG_FILE" ]]; then
     exit 0
 fi
 
+# ── Fix prometheus multiproc permissions (v0.15.0) ────────────────────────────
+# v0.15.0 creates /tmp/prometheus_multiproc owned by root but workers run as
+# container_app_user, causing PermissionError on first generation request.
+CONTAINER_ID=$(docker ps --filter "ancestor=$DOCKER_IMAGE" --format "{{.ID}}" 2>/dev/null | head -1)
+if [[ -n "$CONTAINER_ID" ]]; then
+    docker exec "$CONTAINER_ID" chmod 777 /tmp/prometheus_multiproc 2>/dev/null || true
+fi
+
 # ── Tail the log ──────────────────────────────────────────────────────────────
 
 echo "Log file: $LOG_FILE"
