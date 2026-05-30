@@ -65,7 +65,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, Vae
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache as _ttnn_cache
 from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
-from models.tt_dit.utils.tensor import bf16_tensor, typed_tensor_2dshard
+from models.tt_dit.utils.tensor import bf16_tensor, typed_tensor, typed_tensor_2dshard
 
 import ttnn
 
@@ -458,10 +458,19 @@ class SkyReelsI2VTTNNTransformer(torch.nn.Module):
         enc_4d = encoder_hidden_states.unsqueeze(0).to(torch.bfloat16)
         tt_prompt = bf16_tensor(enc_4d, device=self.mesh_device)
 
+        # WanTransformer3DModel.prepare_timestep_conditioning passes the timestep directly
+        # to Timesteps.forward which asserts dtype==float32.  The diffusers scheduler
+        # produces torch.int64 timesteps, so we must cast and reshape to 4D here.
+        tt_timestep = typed_tensor(
+            timestep.float().view(-1, 1, 1, 1),
+            dtype=ttnn.float32,
+            device=self.mesh_device,
+        )
+
         noise_pred = self.ttnn_model(
             spatial=spatial,
             prompt=tt_prompt,
-            timestep=timestep,
+            timestep=tt_timestep,
             y=y,
         )
 
