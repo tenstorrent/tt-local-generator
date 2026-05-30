@@ -1,0 +1,35 @@
+{
+  "x-ttlg": {
+    "output_ext": null,
+    "media_type": null,
+    "tab": null,
+    "hardware": null,
+    "utility": true,
+    "accepts_remix_from": [],
+    "can_remix_to": []
+  },
+  "tools": [
+    {
+      "name": "blip_caption_image",
+      "description": "Generate a natural-language caption for an image using BLIP (Bootstrapping Language-Image Pre-training). Useful for auto-describing generated outputs, building reverse prompts from reference images, or tagging history items. Returns a plain text string.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["src"],
+        "properties": {
+          "src":            {"type": "string", "description": "Path to the input image"},
+          "prompt":         {"type": "string", "description": "Optional text prefix to condition the caption (e.g. 'a photograph of')", "default": ""},
+          "max_new_tokens": {"type": "integer", "description": "Maximum caption length in tokens", "default": 50}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "blip_is_available",
+      "description": "Return true if the blip plugin's required packages (torch, transformers) are installed",
+      "inputSchema": {"type": "object", "properties": {}},
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    }
+  ]
+}

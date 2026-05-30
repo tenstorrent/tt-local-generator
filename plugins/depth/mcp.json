@@ -1,0 +1,34 @@
+{
+  "x-ttlg": {
+    "output_ext": ".png",
+    "media_type": null,
+    "tab": null,
+    "hardware": null,
+    "utility": true,
+    "accepts_remix_from": [],
+    "can_remix_to": []
+  },
+  "tools": [
+    {
+      "name": "depth_estimate",
+      "description": "Estimate per-pixel depth from a single image using GLPN-KITTI. Returns a grayscale PNG depth map where brighter pixels are closer to the camera. Useful as a ControlNet conditioning hint, for parallax effects, or for analysing scene structure before compositing.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["src"],
+        "properties": {
+          "src":  {"type": "string", "description": "Path to the input image"},
+          "dest": {"type": "string", "description": "Output PNG path for the depth map (optional — a temp file is used if omitted)"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "depth_is_available",
+      "description": "Return true if the depth plugin's required packages (torch, transformers, numpy) are installed",
+      "inputSchema": {"type": "object", "properties": {}},
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    }
+  ]
+}
