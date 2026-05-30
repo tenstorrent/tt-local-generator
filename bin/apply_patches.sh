@@ -455,6 +455,83 @@ p.write_text(new_text)
 print(f"   inserted SkyReels I2V ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
 PYEOF
 
+# ── Step 8: Inject Wan2.2-Animate-14B-Diffusers into model_spec.py ───────────
+
+echo "8. Patching $MODEL_SPEC (Wan2.2-Animate-14B-Diffusers ModelSpecTemplate)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+MARKER = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
+if MARKER in text:
+    print("   already patched — nothing to do")
+    sys.exit(0)
+
+# Insert after the SkyReels I2V entry (or before image_templates as fallback)
+ANCHOR = "Skywork/SkyReels-V2-I2V-14B-540P"
+FALLBACK = "]\n\n# =============================================================================\n# image_templates"
+
+if ANCHOR in text:
+    idx = text.find(ANCHOR)
+    block_start = text.rfind("ModelSpecTemplate(", 0, idx)
+    depth, pos, insert_pos = 0, block_start, -1
+    while pos < len(text):
+        ch = text[pos]
+        if ch == '(': depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                insert_pos = pos + 1
+                while insert_pos < len(text) and text[insert_pos] in ',\n':
+                    insert_pos += 1
+                break
+        pos += 1
+    anchor_used = "after SkyReels I2V block"
+elif FALLBACK in text:
+    insert_pos = text.find(FALLBACK)
+    anchor_used = "before image_templates"
+else:
+    print(f"ERROR: could not find insertion anchor in {p}")
+    sys.exit(1)
+
+ANIMATE_ENTRY = """\
+    # Wan2.2-Animate-14B-Diffusers — character animation fine-tune on Wan2.2 I2V.
+    # Weights cached locally; same architecture as Wan2.2-I2V-A14B-Diffusers.
+    # Uses the I2V runner via the media server.
+    ModelSpecTemplate(
+        weights=["Wan-AI/Wan2.2-Animate-14B-Diffusers"],
+        version="0.15.0",
+        tt_metal_commit="7fbac63",
+        impl=tt_transformers_impl,
+        min_disk_gb=60,
+        min_ram_gb=32,
+        model_type=ModelType.VIDEO,
+        inference_engine=InferenceEngine.MEDIA.value,
+        device_model_specs=[
+            DeviceModelSpec(
+                device=DeviceTypes.P300X2,
+                max_concurrency=1,
+                max_context=64 * 1024,
+                default_impl=True,
+                override_tt_config={
+                    "trace_region_size": 30000000,
+                },
+            ),
+        ],
+        status=ModelStatusTypes.COMPLETE,
+    ),
+"""
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+new_text = text[:insert_pos] + ANIMATE_ENTRY + text[insert_pos:]
+p.write_text(new_text)
+print(f"   inserted Wan2.2-Animate ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
+PYEOF
+
 echo ""
 echo "Done. You can now run start_mochi.sh (or any media-server model with --dev-mode)"
 echo "and the patches/tt_dit/ files will be bind-mounted automatically."
