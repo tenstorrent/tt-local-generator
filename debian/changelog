@@ -1,3 +1,19 @@
+tt-local-generator (0.6.0) noble; urgency=medium
+
+  * Upgrade tt-inference-server vendor pin to v0.15.0 (image 0.15.0-25891d3).
+    Patches rebased for new VLLMForge API, WAN_2_2_I2V variants, updated runner
+    and domain model patterns.
+  * Fix: /mnt/bonus bind-mount added to apply_patches.sh so Docker containers
+    can follow HuggingFace cache symlinks to non-standard storage locations.
+  * Fix: --no-auth flag added to all start scripts (v0.15.0 enables auth by
+    default; clients would receive 401 without this flag).
+  * Fix: Prometheus multiproc directory permissions corrected automatically on
+    container start (v0.15.0 creates /tmp/prometheus_multiproc as root, causing
+    PermissionError on first generation request).
+  * Validated on QB2 (P300x2): Wan2.2-T2V-A14B-Diffusers generates successfully.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 29 May 2026 00:00:00 +0000
+
 tt-local-generator (0.5.0) noble; urgency=medium
 
   * Unified Remix UI: single "Remix" entry point on every card hover bar and
