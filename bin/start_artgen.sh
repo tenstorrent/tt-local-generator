@@ -38,8 +38,17 @@ HF_CACHE="$HOME/.cache/huggingface"
 SERVICE_PORT=8002
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 _GHCR="ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64"
-# QB2-targeted release image (locally available on this machine):
-_QB2_IMAGE="$_GHCR:qb2_launch-555f240-22be241"
+# Prefer the newest 0.11+ image compatible with v0.15.0 run.py.
+# Fall back to the locally-available qb2_launch image if 0.11+ is not yet pulled.
+if docker image inspect "$_GHCR:0.14.0-80180b9-7678b70" &>/dev/null 2>&1; then
+    _QB2_IMAGE="$_GHCR:0.14.0-80180b9-7678b70"
+elif docker image inspect "$_GHCR:0.11.1-bac8b34-7c6685a" &>/dev/null 2>&1; then
+    _QB2_IMAGE="$_GHCR:0.11.1-bac8b34-7c6685a"
+else
+    # qb2_launch is v0.10.0 — run.py will reject it with the v0.15.0 vendor.
+    # If this is hit, pull one of the images above first.
+    _QB2_IMAGE="$_GHCR:qb2_launch-555f240-22be241"
+fi
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
@@ -115,6 +124,21 @@ case "$MODEL" in
             HF_CACHE="$HOME/models"
         fi
         ;;
+    Qwen3-32B)
+        DOCKER_IMAGE="$_QB2_IMAGE"
+        DEFAULT_DEVICE="p300x2"    # 32B fits on full QB2 (4 chips)
+        DEFAULT_DEVICE_IDS=""
+        ;;
+    DeepSeek-R1-Distill-Llama-70B)
+        DOCKER_IMAGE="$_QB2_IMAGE"
+        DEFAULT_DEVICE="p300x2"
+        DEFAULT_DEVICE_IDS=""
+        ;;
+    Llama-3.1-70B-Instruct|Llama-3.1-70B)
+        DOCKER_IMAGE="$_QB2_IMAGE"
+        DEFAULT_DEVICE="p300x2"
+        DEFAULT_DEVICE_IDS=""
+        ;;
     Qwen2.5-7B-Instruct)
         DOCKER_IMAGE="$_GHCR:0.12.0-5b5db8a-e771fff"
         DEFAULT_DEVICE="n300"      # N300/N150X4 only; not for P300X2 machines
@@ -122,7 +146,9 @@ case "$MODEL" in
         ;;
     *)
         echo "ERROR: Unknown model '$MODEL'."
-        echo "  Supported: Qwen3-8B (default), Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct, Qwen2.5-7B-Instruct"
+        echo "  Supported: Qwen3-8B (default), Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct,"
+        echo "             Qwen3-32B, DeepSeek-R1-Distill-Llama-70B, Llama-3.1-70B-Instruct,"
+        echo "             Qwen2.5-7B-Instruct"
         exit 1
         ;;
 esac

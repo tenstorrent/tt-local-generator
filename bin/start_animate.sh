@@ -30,7 +30,7 @@ else
 fi
 HF_CACHE="$HOME/.cache/huggingface"
 DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
-MODEL="Wan2.2-I2V-A14B-Diffusers"
+MODEL="Wan2.2-Animate-14B-Diffusers"
 DEVICE="p300x2"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 LOG_GLOB="media_*_${MODEL}_${DEVICE}_server.log"

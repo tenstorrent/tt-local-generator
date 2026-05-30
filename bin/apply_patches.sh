@@ -532,6 +532,84 @@ p.write_text(new_text)
 print(f"   inserted Wan2.2-Animate ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
 PYEOF
 
+# ── Step 9: Bump DeepSeek-R1-Distill-Llama-70B P300X2 version to 0.14.0 ──────
+# The upstream spec pins it at v0.10.0 which the v0.15.0 run.py rejects.
+# The 0.14.0 image works for all Blackhole LLMs.
+
+echo "9. Patching $MODEL_SPEC (DeepSeek-R1-Distill-Llama-70B P300X2 version bump)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib, re
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+TARGET_ID = 'id_tt-transformers_DeepSeek-R1-Distill-Llama-70B_p300x2'
+if TARGET_ID not in text:
+    print("   model spec entry not found — skipping")
+    sys.exit(0)
+
+# Find the ModelSpec for this ID and bump its version
+OLD = "DeepSeek-R1-Distill-Llama-70B_p300x2"
+if '"0.14.0"' in text and OLD in text:
+    # Check if the p300x2 entry already has 0.14.0
+    idx = text.find(OLD)
+    chunk = text[max(0,idx-500):idx+500]
+    if '"0.14.0"' in chunk:
+        print("   already patched — nothing to do")
+        sys.exit(0)
+
+# Inject a new 0.14.0 template for DeepSeek on P300X2 if not already present
+MARKER = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
+if MARKER not in text:
+    print("   insertion anchor not found — skipping")
+    sys.exit(0)
+
+idx = text.find(MARKER)
+block_start = text.rfind("ModelSpecTemplate(", 0, idx)
+depth, pos, insert_pos = 0, block_start, -1
+while pos < len(text):
+    ch = text[pos]
+    if ch == '(': depth += 1
+    elif ch == ')':
+        depth -= 1
+        if depth == 0:
+            insert_pos = pos + 1
+            while insert_pos < len(text) and text[insert_pos] in ',\n':
+                insert_pos += 1
+            break
+    pos += 1
+
+DEEPSEEK_ENTRY = """\
+    # DeepSeek-R1-Distill-Llama-70B — P300X2 at v0.14.0 (upstream is v0.10.0 which run.py rejects).
+    ModelSpecTemplate(
+        weights=["deepseek-ai/DeepSeek-R1-Distill-Llama-70B"],
+        version="0.14.0",
+        tt_metal_commit="80180b9",
+        impl=tt_transformers_impl,
+        min_disk_gb=150,
+        min_ram_gb=64,
+        model_type=ModelType.LLM,
+        inference_engine=InferenceEngine.VLLM.value,
+        device_model_specs=[
+            DeviceModelSpec(
+                device=DeviceTypes.P300X2,
+                max_concurrency=1,
+                max_context=32768,
+                default_impl=True,
+            ),
+        ],
+        status=ModelStatusTypes.COMPLETE,
+    ),
+"""
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+new_text = text[:insert_pos] + DEEPSEEK_ENTRY + text[insert_pos:]
+p.write_text(new_text)
+print(f"   inserted DeepSeek-R1 P300X2 v0.14.0 entry ✓")
+PYEOF
+
 echo ""
 echo "Done. You can now run start_mochi.sh (or any media-server model with --dev-mode)"
 echo "and the patches/tt_dit/ files will be bind-mounted automatically."

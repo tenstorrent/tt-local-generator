@@ -170,6 +170,22 @@ SERVERS: dict[str, ServerDef] = {
             extra_args=("--model", "Llama-3.3-70B-Instruct"),
             capabilities=("artgen",),
         ),
+        ServerDef(
+            key="artgen-qwen3-32b",
+            label="Qwen3-32B",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "Qwen3-32B"),
+            capabilities=("artgen",),
+        ),
+        ServerDef(
+            key="artgen-deepseek-r1-70b",
+            label="DeepSeek-R1-Distill-70B",
+            script="start_artgen.sh",
+            health_url="http://localhost:8002/v1/models",
+            extra_args=("--model", "DeepSeek-R1-Distill-Llama-70B"),
+            capabilities=("artgen",),
+        ),
     ]
 }
 
