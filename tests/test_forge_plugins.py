@@ -34,7 +34,7 @@ def _load_plugin(name: str):
 
 
 def _make_test_png(tmp_path: Path) -> Path:
-    from PIL import Image
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
     img = Image.new("RGB", (4, 4), color=(128, 64, 32))
     p = tmp_path / "test.png"
     img.save(p)
@@ -111,7 +111,7 @@ def test_rmbg_writes_output(tmp_path):
     dest = str(tmp_path / "out.png")
 
     # Create a real output file so the function can return it
-    from PIL import Image
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
     Image.new("RGBA", (4, 4)).save(dest)
 
     with patch("subprocess.run", return_value=subprocess.CompletedProcess(
@@ -196,7 +196,7 @@ def test_depth_writes_output(tmp_path):
     src = _make_test_png(tmp_path)
     dest = str(tmp_path / "depth.png")
 
-    from PIL import Image
+    Image = pytest.importorskip("PIL.Image", reason="Pillow not installed")
     Image.new("L", (4, 4)).save(dest)
 
     with patch("subprocess.run", return_value=subprocess.CompletedProcess(
