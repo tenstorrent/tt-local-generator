@@ -849,6 +849,14 @@ ModelConfigs = {
         "max_batch_size": 1,
         "download_weights_from_service": False,
     },
+    # Wan2.2 Animate uses the same mesh config as T2V — same architecture, fine-tuned weights.
+    (ModelRunners.TT_WAN_2_2_ANIMATE, DeviceTypes.P300X2): {
+        "device_mesh_shape": (2, 2),
+        "is_galaxy": False,
+        "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
+        "max_batch_size": 1,
+        "download_weights_from_service": False,
+    },
     (ModelRunners.TT_WAN_2_2_I2V, DeviceTypes.T3K): {
         "device_mesh_shape": (2, 4),
         "is_galaxy": False,
