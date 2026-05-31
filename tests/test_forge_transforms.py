@@ -262,3 +262,97 @@ def test_gallery_widget_accepts_transform_cb():
     import main_window as mw
     sig = inspect.signature(mw.GalleryWidget.__init__)
     assert "transform_cb" in sig.parameters
+
+
+# ── transform logging ─────────────────────────────────────────────────────────
+
+def test_run_transform_writes_log_file(tmp_path):
+    """_run_transform writes a structured log file to _TRANSFORMS_LOG_DIR."""
+    import main_window as mw
+    import log_viewer
+
+    # Redirect log dir to tmp
+    orig_log_dir = log_viewer._TRANSFORMS_LOG_DIR
+    log_viewer._TRANSFORMS_LOG_DIR = tmp_path / "transforms"
+
+    img_path = str(tmp_path / "src.jpg")
+    Path(img_path).write_bytes(b"fake")
+    record = _make_record(image_path=img_path, video_path="", media_type="image")
+
+    fake_plugin = MagicMock()
+    fake_plugin.estimate_depth.side_effect = lambda src, dest: Path(dest).write_bytes(b"PNG")
+    spec = MagicMock(); spec.loader.exec_module = lambda m: None
+
+    try:
+        with patch("importlib.util.spec_from_file_location", return_value=spec), \
+             patch("importlib.util.module_from_spec", return_value=fake_plugin), \
+             patch("main_window._make_thumbnail_for"):
+            mw_inst = _make_mock_main_window()
+            mw.MainWindow._run_transform(mw_inst, record, "depth")
+
+        logs = list((tmp_path / "transforms").glob("*.log"))
+        assert len(logs) == 1, f"Expected 1 log file, got {len(logs)}"
+        content = logs[0].read_text()
+        assert "transform: depth" in content
+        assert "source:" in content
+        assert "status:    ok" in content
+        assert "elapsed:" in content
+    finally:
+        log_viewer._TRANSFORMS_LOG_DIR = orig_log_dir
+
+
+def test_run_transform_logs_error_on_failure(tmp_path):
+    """_run_transform writes ERROR to log and re-raises on plugin failure."""
+    import main_window as mw
+    import log_viewer
+
+    orig_log_dir = log_viewer._TRANSFORMS_LOG_DIR
+    log_viewer._TRANSFORMS_LOG_DIR = tmp_path / "transforms"
+
+    img_path = str(tmp_path / "src.jpg")
+    Path(img_path).write_bytes(b"fake")
+    record = _make_record(image_path=img_path, video_path="", media_type="image")
+
+    fake_plugin = MagicMock()
+    fake_plugin.remove_background.side_effect = RuntimeError("plugin crashed")
+    spec = MagicMock(); spec.loader.exec_module = lambda m: None
+
+    try:
+        with patch("importlib.util.spec_from_file_location", return_value=spec), \
+             patch("importlib.util.module_from_spec", return_value=fake_plugin), \
+             patch("main_window._make_thumbnail_for"):
+            mw_inst = _make_mock_main_window()
+            with pytest.raises(RuntimeError, match="plugin crashed"):
+                mw.MainWindow._run_transform(mw_inst, record, "rmbg")
+
+        logs = list((tmp_path / "transforms").glob("*.log"))
+        assert len(logs) == 1
+        content = logs[0].read_text()
+        assert "ERROR:" in content
+        assert "plugin crashed" in content
+    finally:
+        log_viewer._TRANSFORMS_LOG_DIR = orig_log_dir
+
+
+def test_collect_log_files_includes_transforms_section(tmp_path):
+    """collect_log_files returns a TRANSFORMS section when logs exist."""
+    import log_viewer
+
+    tx_dir = tmp_path / "transforms"
+    tx_dir.mkdir()
+    (tx_dir / "20260101_120000_rmbg_my_image.log").write_text(
+        "[12:00:00] transform: rmbg\n[12:00:01] status:    ok\n"
+    )
+
+    orig = log_viewer._TRANSFORMS_LOG_DIR
+    log_viewer._TRANSFORMS_LOG_DIR = tx_dir
+    try:
+        sections = log_viewer.collect_log_files(animatediff_log_dir=tmp_path / "ad")
+        names = [s["section"] for s in sections]
+        assert "TRANSFORMS" in names
+        tx = next(s for s in sections if s["section"] == "TRANSFORMS")
+        assert len(tx["files"]) == 1
+        assert tx["files"][0]["name"] == "rmbg  ←  my_image"
+        assert tx["files"][0]["is_error"] is False
+    finally:
+        log_viewer._TRANSFORMS_LOG_DIR = orig

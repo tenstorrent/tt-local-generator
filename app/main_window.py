@@ -7995,6 +7995,7 @@ class MainWindow(Gtk.ApplicationWindow):
         import uuid
         from datetime import datetime, timezone
         from history_store import IMAGES_DIR, THUMBNAILS_DIR
+        from log_viewer import _TRANSFORMS_LOG_DIR
 
         plugins_dir = Path(__file__).parent.parent / "plugins"
         spec = _ilu.spec_from_file_location(f"ttlg_transform_{key}",
@@ -8008,6 +8009,21 @@ class MainWindow(Gtk.ApplicationWindow):
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
         THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+        _TRANSFORMS_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Log file: YYYYMMDD_HHMMSS_<plugin>_<source_stem>.log
+        src_stem = Path(src).stem[:32]
+        log_path = _TRANSFORMS_LOG_DIR / f"{ts_str}_{key}_{src_stem}.log"
+        t_start = datetime.now(timezone.utc)
+
+        def _writelog(msg: str) -> None:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}\n")
+
+        _writelog(f"transform: {key}")
+        _writelog(f"source:    {src}")
+        _writelog(f"plugin:    {plugins_dir / key / 'plugin.py'}")
+        _writelog(f"record_id: {record.id}")
 
         # (fn_name, output_ext_or_None, display_label)
         _META = {
@@ -8018,18 +8034,27 @@ class MainWindow(Gtk.ApplicationWindow):
         fn_name, ext, label = _META[key]
         fn = getattr(mod, fn_name)
 
-        if ext:
-            dest = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}{ext}")
-            fn(src, dest)
-            image_path = dest
-            prompt = f"{label}: {record.prompt[:100]}"
-        else:
-            # blip: returns text, use original image for the card display
-            caption = fn(src)
-            image_path = src
-            prompt = caption
-            # Save caption as a sidecar for reference
-            (IMAGES_DIR / f"{ts_str}_{job_id[:8]}.txt").write_text(caption)
+        try:
+            if ext:
+                dest = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}{ext}")
+                fn(src, dest)
+                image_path = dest
+                prompt = f"{label}: {record.prompt[:100]}"
+                _writelog(f"output:    {dest}")
+            else:
+                # blip: returns text, use original image for the card display
+                caption = fn(src)
+                image_path = src
+                prompt = caption
+                (IMAGES_DIR / f"{ts_str}_{job_id[:8]}.txt").write_text(caption)
+                _writelog(f"caption:   {caption[:200]}")
+        except Exception as e:
+            _writelog(f"ERROR:     {e}")
+            raise
+
+        elapsed = (datetime.now(timezone.utc) - t_start).total_seconds()
+        _writelog(f"elapsed:   {elapsed:.1f}s")
+        _writelog("status:    ok")
 
         thumb = str(THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg")
         _make_thumbnail_for(image_path, thumb)
@@ -8050,6 +8075,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 "_source_id": record.id,
                 "_transform": key,
                 "_transform_label": label,
+                "_log_path": str(log_path),
             },
         )
 

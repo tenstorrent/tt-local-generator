@@ -21,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LOGS_DIR  = _REPO_ROOT / "logs"
 _USER_LOGS_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "logs"
 _ANIMATEDIFF_LOG_DIR = _USER_LOGS_DIR / "animatediff"
+_TRANSFORMS_LOG_DIR  = _USER_LOGS_DIR / "transforms"
 _PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")
 
 
@@ -124,6 +125,26 @@ def collect_log_files(
     Missing directories/files are silently skipped.
     """
     sections = []
+
+    # TRANSFORMS — forge plugin transform logs (rmbg, blip, depth, etc.)
+    tx_dir = _TRANSFORMS_LOG_DIR
+    tx_logs = sorted(tx_dir.glob("*.log"), reverse=True) if tx_dir.exists() else []
+    if tx_logs:
+        files = []
+        for p in tx_logs:
+            # Filename: YYYYMMDD_HHMMSS_<plugin>_<source_stem>.log
+            parts = p.stem.split("_", 3)
+            date = f"{parts[0][:4]}-{parts[0][4:6]}-{parts[0][6:]} {parts[1][:2]}:{parts[1][2:4]}" if len(parts) >= 2 else ""
+            plugin = parts[2] if len(parts) > 2 else p.stem
+            src_stem = parts[3] if len(parts) > 3 else ""
+            name = f"{plugin}  ←  {src_stem}" if src_stem else plugin
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = ""
+            files.append({"path": str(p), "name": name, "date": date,
+                          "is_error": is_error_log(content)})
+        sections.append({"section": "TRANSFORMS", "files": files})
 
     # ANIMATEDIFF run logs
     ad_dir = animatediff_log_dir if animatediff_log_dir is not None else _USER_LOGS_DIR / "animatediff"
