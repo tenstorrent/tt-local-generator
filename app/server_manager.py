@@ -106,10 +106,18 @@ SERVERS: dict[str, ServerDef] = {
         ),
         ServerDef(
             key="flux",
-            label="FLUX.1-dev",
+            label="FLUX.1-schnell",
             script="start_flux.sh",
             health_url="http://localhost:8000/tt-liveness",
-            runner_key="tt-flux.1-dev",
+            runner_key="tt-flux.1-schnell",
+            capabilities=("image",),
+        ),
+        ServerDef(
+            key="sdxl",
+            label="SDXL  (cpp_server)",
+            script="start_sdxl.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-sdxl-generate",
             capabilities=("image",),
         ),
         ServerDef(

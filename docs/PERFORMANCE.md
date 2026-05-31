@@ -14,8 +14,8 @@ tt-inference-server: **v0.15.0** (image `0.15.0-25891d3`)
 | SkyReels-V2-I2V-14B-540P | Image→Video | 480×272 | 9 | 10 | ~22 min (first run) | ~90 s | Validated 2026-05-30 |
 | Wan2.2-Animate-14B-Diffusers | Text→Video | 832×480 | 33 | 20 | — | — | In validation |
 | SkyReels-V2-DF-1.3B-540P | Text→Video | 480×272 | 33 | — | — | — | Not yet validated |
-| Mochi-1-preview | Text→Video | 480×848 | — | — | — | — | Weights not downloaded |
-| FLUX.1-dev | Text→Image | — | — | — | — | — | Weights not downloaded |
+| Mochi-1-preview | Text→Video | 480×848 | — | — | — | — | Validating... |
+| FLUX.1-schnell | Text→Image | 1024×1024 | 1 | 4 | ~3 min (cached) | **3.09 s** | ✅ Validated 2026-05-31 — no noise |
 
 **Warmup note:** First-run TTNN kernel compilation takes 20–45 min depending on model size.
 Subsequent starts load from compiled cache in 5–10 min.
@@ -54,15 +54,12 @@ Image: `vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.14.0-80180b9-7678b70`
 | Wan2.2-T2V-A14B-Diffusers | ✅ PASS | 2026-05-30 | Prometheus chmod fix needed |
 | SkyReels-V2-I2V-14B-540P | ✅ PASS | 2026-05-30 | Timestep dtype fix; runner map fix |
 | Artgen Qwen3-8B | ✅ PASS | 2026-05-30 | Needs 0.14.0 vLLM image; /health empty |
-| Wan2.2-Animate-14B-Diffusers | 🔄 Running | 2026-05-30 | Model spec fix applied |
-| Artgen Llama-3.1-8B | 🔄 Queued | — | — |
-| Artgen Qwen3-32B | 🔄 Queued | — | — |
-| Artgen Llama-3.3-70B | 🔄 Queued | — | — |
-| Mochi-1 | ⏳ Pending | — | Weights not downloaded (~20 GB) |
-| FLUX.1-dev | ⏳ Pending | — | Weights not downloaded (~34 GB) |
-| Artgen Llama-3.1-8B (artgen) | ⏳ Pending | — | — |
-| Artgen Qwen3-32B | ⏳ Pending | — | — |
-| Artgen Llama-3.3-70B | ⏳ Pending | — | — |
+| FLUX.1-schnell | ✅ PASS | 2026-05-31 | 3.09 s/image, no noise — vast improvement over FLUX.1-dev |
+| Artgen Llama-3.1-8B-Instruct | ✅ PASS | 2026-05-30 | 5 min ready |
+| Artgen Llama-3.3-70B-Instruct | ✅ PASS | 2026-05-30 | 2.5 min ready |
+| Artgen Qwen3-32B | ✅ PASS | 2026-05-30 | 2 min ready |
+| Mochi-1-preview | 🔄 Validating | 2026-05-31 | Weights downloaded (125 GB) |
+| Wan2.2-Animate-14B-Diffusers | ⚠️ BLOCKED | 2026-05-31 | ttnn.reshape type error in pipeline_wan_i2v.py warmup — needs deeper patch or v0.11.1 image bypass |
 
 ---
 

@@ -1391,7 +1391,7 @@ _DETAIL_VIDEO_H = 225
 _MODEL_DISPLAY: dict = {
     "wan2.2-t2v":            "Wan2.2",
     "mochi-1-preview":       "Mochi-1",
-    "flux.1-dev":            "FLUX",
+    "flux.1-schnell":            "FLUX",
     "wan2.2-animate-14b":    "Animate-14B",
     "skyreels-v2-i2v-14b-540p": "SkyReels I2V",
 }
@@ -1446,7 +1446,7 @@ _VIDEO_MODEL_IDS: dict = {
     "animatediff":  "animatediff-blackhole",
 }
 _IMAGE_MODEL_IDS: dict = {
-    "flux": "flux.1-dev",
+    "flux": "flux.1-schnell",
 }
 
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
@@ -3518,7 +3518,7 @@ _MODEL_TO_SOURCE: dict = {
     "SkyReels-V2-I2V-14B-540P": "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":    "animate",
-    "flux.1-dev":            "image",
+    "flux.1-schnell":            "image",
 }
 # Maps server model ID → internal video-model key used by ControlPanel
 _MODEL_TO_VIDEO_KEY: dict = {
@@ -3537,7 +3537,7 @@ _MODEL_DISPLAY_SERVER: dict = {
     "SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "Skywork/SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "wan2.2-animate-14b":    "Animate-14B online",
-    "flux.1-dev":            "FLUX online",
+    "flux.1-schnell":            "FLUX online",
 }
 # Maps server model ID (from /tt-liveness) → server_manager key ("wan2.2", "flux", …)
 _MODEL_TO_SERVER_KEY: dict = {
@@ -3547,7 +3547,7 @@ _MODEL_TO_SERVER_KEY: dict = {
     "SkyReels-V2-I2V-14B-540P":          "skyreels",
     "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
     "wan2.2-animate-14b":                "animate",
-    "flux.1-dev":                        "flux",
+    "flux.1-schnell":                        "flux",
 }
 # Maps server key → (source_tab, video_model_key) for startup pre-selection
 _SERVER_KEY_TO_SOURCE_MODEL: dict = {
@@ -3565,7 +3565,7 @@ _MODEL_TO_CAP: dict = {
     "SkyReels-V2-I2V-14B-540P":         "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":               "animate",
-    "flux.1-dev":                       "image",
+    "flux.1-schnell":                       "image",
 }
 # Maps source tab key → capability key
 _SOURCE_TO_CAP: dict = {
@@ -3703,7 +3703,7 @@ class ControlPanel(Gtk.Box):
         self._src_image_btn.add_css_class("source-btn")
         self._src_image_btn.add_css_class("source-btn-mid")
         self._src_image_btn.set_tooltip_text(
-            "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
+            "FLUX.1-schnell  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
         self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
@@ -4858,7 +4858,7 @@ class ControlPanel(Gtk.Box):
         elif is_image:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
-                "synchronous  ·  FLUX.1-dev  ·  ~15–90 s  ·  1024×1024 JPEG"
+                "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG"
             )
         elif is_animate:
             self._title_lbl.set_label("TT Local Generator")
@@ -8838,7 +8838,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if model_source == "image":
             model_name = _IMAGE_MODEL_IDS.get(
-                model_id or self._controls.get_image_model(), "flux.1-dev"
+                model_id or self._controls.get_image_model(), "flux.1-schnell"
             )
             self._set_status(f"Generating image with {model_name}…")
             gen = ImageGenerationWorker(
