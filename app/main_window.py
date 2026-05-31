@@ -1552,6 +1552,49 @@ class _QueueItem:
     from_attractor: bool = False     # True → enqueued by TT-TV auto-gen; purged on attractor close
 
 
+# ── Forge plugin transform helpers ────────────────────────────────────────────
+
+_TRANSFORM_AVAIL: "dict[str, bool]" = {}
+
+
+def _transform_available(key: str) -> bool:
+    """Return True if the named plugin is installed and its deps are available.
+
+    Result is cached after first call so repeated right-clicks are fast.
+    """
+    if key not in _TRANSFORM_AVAIL:
+        try:
+            import importlib.util as _ilu
+            _p = Path(__file__).parent.parent / "plugins" / key / "plugin.py"
+            spec = _ilu.spec_from_file_location(f"ttlg_transform_{key}", _p)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _TRANSFORM_AVAIL[key] = getattr(mod, "is_available", lambda: False)()
+        except Exception:
+            _TRANSFORM_AVAIL[key] = False
+    return _TRANSFORM_AVAIL[key]
+
+
+def _make_thumbnail_for(image_path: str, thumb_path: str) -> None:
+    """Create a 200×112 JPEG thumbnail via ffmpeg.  Mirrors worker.py._make_thumbnail."""
+    Path(thumb_path).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", image_path,
+                "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
+                       "pad=200:112:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "3", thumb_path,
+            ],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+        )
+    except Exception:
+        try:
+            shutil.copy2(image_path, thumb_path)
+        except Exception:
+            pass
+
+
 # ── Generation card ────────────────────────────────────────────────────────────
 
 class GenerationCard(Gtk.Frame):
@@ -1567,13 +1610,14 @@ class GenerationCard(Gtk.Frame):
     """
 
     def __init__(self, record: GenerationRecord, select_cb, delete_cb,
-                 remix_cb=None, star_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None):
         super().__init__()
         self._record = record
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        self._remix_cb = remix_cb       # callable(record) or None — opens RemixPopover
-        self._star_cb = star_cb         # callable(record, starred: bool) or None
+        self._remix_cb = remix_cb           # callable(record) or None — opens RemixPopover
+        self._star_cb = star_cb             # callable(record, starred: bool) or None
+        self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
         self.add_css_class("card")
         # Minimum card width; FlowBox packs cards at this natural width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1586,12 +1630,63 @@ class GenerationCard(Gtk.Frame):
         gesture.connect("pressed", lambda *_: self._select_cb(self))
         self.add_controller(gesture)
 
+        # Right-click: forge transform menu (remove background, describe, show depth…)
+        rclick = Gtk.GestureClick()
+        rclick.set_button(3)
+        rclick.connect("pressed", self._on_right_click)
+        self.add_controller(rclick)
+
         # Hover controller: reveals action bar (star, animate) on all card types;
         # also starts video preview on video/animate cards.
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_hover_enter)
         motion.connect("leave", self._on_hover_leave)
         self.add_controller(motion)
+
+    def _on_right_click(self, gesture, n_press: int, x: float, y: float) -> None:
+        """Build and show a forge-transform popover anchored to the click position."""
+        if not self._transform_cb:
+            return
+
+        # All available transforms: (plugin_key, intent → result label)
+        all_transforms = [
+            ("rmbg",  "Remove background  →  transparent PNG"),
+            ("blip",  "Describe this  →  text caption"),
+            ("depth", "Show depth  →  depth map"),
+        ]
+        available = [(k, lbl) for k, lbl in all_transforms if _transform_available(k)]
+        if not available:
+            return  # no plugins available — suppress empty menu
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        box.set_margin_start(4)
+        box.set_margin_end(4)
+
+        pop = Gtk.Popover()
+
+        for key, label in available:
+            btn = Gtk.Button(label=label)
+            btn.add_css_class("flat")
+            btn.set_hexpand(True)
+
+            def _on_clicked(_, k=key, p=pop):
+                p.popdown()
+                self._transform_cb(self._record, k)
+
+            btn.connect("clicked", _on_clicked)
+            box.append(btn)
+
+        pop.set_child(box)
+        pop.set_parent(self)
+        rect = Gdk.Rectangle()
+        rect.x = int(x)
+        rect.y = int(y)
+        rect.width = 1
+        rect.height = 1
+        pop.set_pointing_to(rect)
+        pop.popup()
 
     def set_selected(self, selected: bool) -> None:
         # Image cards use a pink selection border; video cards use teal.
@@ -3261,7 +3356,7 @@ class GalleryWidget(Gtk.Box):
     """
 
     def __init__(self, select_cb, delete_cb, media_type: str = "video",
-                 remix_cb=None, star_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
@@ -3269,6 +3364,7 @@ class GalleryWidget(Gtk.Box):
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
         self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb            # callable(record, starred: bool) or None
+        self._transform_cb = transform_cb  # callable(record, key) or None — forge transforms
         self._media_type = media_type
         self._active_filter: str = "all"   # "all" | "starred"
 
@@ -3418,6 +3514,7 @@ class GalleryWidget(Gtk.Box):
             delete_cb=self._delete_cb,
             remix_cb=self._remix_cb,
             star_cb=self._star_cb,
+            transform_cb=self._transform_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -7129,6 +7226,7 @@ class MainWindow(Gtk.ApplicationWindow):
             delete_cb=self._on_delete_card,
             remix_cb=self._on_remix_card,
             star_cb=self._on_star,
+            transform_cb=self._on_transform_card,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
@@ -7870,6 +7968,99 @@ class MainWindow(Gtk.ApplicationWindow):
             artgen_panel=self._artgen_panel,
             flash_fn=self._flash_status,
         )
+
+    # ── Forge transform pipeline ───────────────────────────────────────────────
+
+    def _on_transform_card(self, record: GenerationRecord, key: str) -> None:
+        """Dispatch a forge plugin transform in a background thread.
+
+        Called by GenerationCard right-click menu on the GTK main thread.
+        The transform runs in a daemon thread to avoid blocking the UI.
+        Result is posted back via GLib.idle_add.
+        """
+        self._flash_status(f"Applying transform: {key}…")
+
+        def _worker():
+            try:
+                result = self._run_transform(record, key)
+                GLib.idle_add(self._on_transform_finished, result)
+            except Exception as e:
+                GLib.idle_add(self._on_error, f"Transform '{key}' failed: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_transform(self, record: GenerationRecord, key: str) -> GenerationRecord:
+        """Run a forge plugin transform and return a new GenerationRecord for the result."""
+        import importlib.util as _ilu
+        import uuid
+        from datetime import datetime, timezone
+        from history_store import IMAGES_DIR, THUMBNAILS_DIR
+
+        plugins_dir = Path(__file__).parent.parent / "plugins"
+        spec = _ilu.spec_from_file_location(f"ttlg_transform_{key}",
+                                             plugins_dir / key / "plugin.py")
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        src = record.media_file_path
+        job_id = str(uuid.uuid4())
+        ts = datetime.now(timezone.utc)
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # (fn_name, output_ext_or_None, display_label)
+        _META = {
+            "rmbg":  ("remove_background", ".png", "Background removed"),
+            "blip":  ("caption_image",     None,   "Described"),
+            "depth": ("estimate_depth",    ".png", "Depth map"),
+        }
+        fn_name, ext, label = _META[key]
+        fn = getattr(mod, fn_name)
+
+        if ext:
+            dest = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}{ext}")
+            fn(src, dest)
+            image_path = dest
+            prompt = f"{label}: {record.prompt[:100]}"
+        else:
+            # blip: returns text, use original image for the card display
+            caption = fn(src)
+            image_path = src
+            prompt = caption
+            # Save caption as a sidecar for reference
+            (IMAGES_DIR / f"{ts_str}_{job_id[:8]}.txt").write_text(caption)
+
+        thumb = str(THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg")
+        _make_thumbnail_for(image_path, thumb)
+
+        return GenerationRecord(
+            id=job_id,
+            prompt=prompt,
+            negative_prompt="",
+            num_inference_steps=0,
+            seed=-1,
+            video_path="",
+            thumbnail_path=thumb,
+            created_at=ts.isoformat(),
+            media_type="image",
+            image_path=image_path,
+            model="",
+            extra_meta={
+                "_source_id": record.id,
+                "_transform": key,
+                "_transform_label": label,
+            },
+        )
+
+    def _on_transform_finished(self, record: GenerationRecord) -> bool:
+        """Add the transform result to the store and refresh the image gallery."""
+        self._store.append(record)
+        self._image_gallery.rebuild(
+            [r for r in self._store.all_records() if r.media_type == "image"]
+        )
+        self._flash_status(f"Transform complete — new card in Image gallery")
+        return False
 
     def _on_delete_card(self, record: GenerationRecord) -> None:
         """
