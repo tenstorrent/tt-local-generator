@@ -610,6 +610,47 @@ p.write_text(new_text)
 print(f"   inserted DeepSeek-R1 P300X2 v0.14.0 entry ✓")
 PYEOF
 
+# ── Step 10: Bump SDXL/cpp-server models to v0.15.0 on P300X2 ────────────────
+# stable-diffusion-xl-base-1.0 (and the img2img / inpaint variants) are pinned
+# at v0.11.1 which run.py v0.15.0 rejects.  The cpp_server auto-activates for
+# these models when SERVER_MODE=cpp is set; bumping to v0.15.0 allows run.py
+# to launch them while the cpp binary inside the 0.15.0 image handles serving.
+
+echo "10. Patching $MODEL_SPEC (SDXL cpp-server models version bump)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+OLD = '''        weights=[
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "stabilityai/stable-diffusion-xl-base-1.0-img-2-img",
+        ],
+        version="0.11.1",
+        tt_metal_commit="bac8b34",'''
+
+NEW = '''        weights=[
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "stabilityai/stable-diffusion-xl-base-1.0-img-2-img",
+        ],
+        version="0.15.0",  # cpp-server path — bumped from 0.11.1 by apply_patches.sh
+        tt_metal_commit="7fbac63",'''
+
+if OLD not in text:
+    if NEW in text:
+        print("   already patched — nothing to do")
+    else:
+        print("   SDXL template not found — skipping")
+    sys.exit(0)
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+p.write_text(text.replace(OLD, NEW, 1))
+print("   SDXL template version 0.11.1 → 0.15.0 ✓")
+PYEOF
+
 echo ""
 echo "Done. You can now run start_mochi.sh (or any media-server model with --dev-mode)"
 echo "and the patches/tt_dit/ files will be bind-mounted automatically."
