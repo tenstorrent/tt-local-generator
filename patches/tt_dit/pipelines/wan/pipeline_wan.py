@@ -136,6 +136,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
+        # Accepted but unused — WanPipelineI2V passes these via super().__init__
+        run_warmup: bool = True,
+        height: int = 480,
+        width: int = 832,
     ):
         super().__init__()
 
