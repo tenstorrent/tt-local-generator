@@ -910,9 +910,6 @@ class TTWan22AnimateRunner(TTDiTRunner):
         try:
             return WanPipelineAnimate.create_pipeline(
                 mesh_device=self.ttnn_device,
-                height=self.resolution.height,
-                width=self.resolution.width,
-                num_frames=WAN22_NUM_FRAMES,
             )
         except Exception as e:
             log_exception_chain(
