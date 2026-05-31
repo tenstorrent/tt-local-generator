@@ -812,6 +812,7 @@ ModelConfigs = {
         "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
         "max_batch_size": 1,
         "download_weights_from_service": False,
+        "request_processing_timeout_seconds": 7200,  # Mochi at 64 steps can take >30 min
     },
     (ModelRunners.TT_WAN_2_2, DeviceTypes.T3K): {
         "device_mesh_shape": (2, 4),
@@ -848,6 +849,7 @@ ModelConfigs = {
         "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
         "max_batch_size": 1,
         "download_weights_from_service": False,
+        "request_processing_timeout_seconds": 7200,  # 2h — generous for long generations
     },
     # Wan2.2 Animate uses the same mesh config as T2V — same architecture, fine-tuned weights.
     (ModelRunners.TT_WAN_2_2_ANIMATE, DeviceTypes.P300X2): {
@@ -856,6 +858,7 @@ ModelConfigs = {
         "device_ids": DeviceIds.DEVICE_IDS_4_GROUP.value,
         "max_batch_size": 1,
         "download_weights_from_service": False,
+        "request_processing_timeout_seconds": 7200,  # 2h — generous for long generations
     },
     (ModelRunners.TT_WAN_2_2_I2V, DeviceTypes.T3K): {
         "device_mesh_shape": (2, 4),
