@@ -153,6 +153,19 @@ class WanPipelineAnimate(WanPipelineI2V):
                 f"Unexpected non-Animate keys (first 5): {other_unexpected[:5]}"
             )
 
+    def warmup_buffers(self, height: int = 480, width: int = 832, image_prompt=None):
+        """Override: warmup_buffers passes a dummy black image as character_image."""
+        from PIL import Image as _Image
+        dummy = image_prompt or _Image.new("RGB", (width or 832, height or 480), (0, 0, 0))
+        self(
+            character_image=dummy,
+            prompt="warmup",
+            height=int(height) if height else 480,
+            width=int(width) if width else 832,
+            num_frames=17,
+            num_inference_steps=2,
+        )
+
     def __call__(self, character_image, reference_video_frames=None, **kwargs):
         """
         Run Animate inference on TT hardware.
