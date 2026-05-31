@@ -104,6 +104,46 @@ def _cmd_plugin_list(_args):
         print(f"{p.name:<20} {media:<10} {tab:<16} {hw:<12} {tool_names}")
 
 
+def cmd_workflow(args):
+    """Run or list generative workflow specs."""
+    if not hasattr(args, "workflow_cmd") or args.workflow_cmd is None:
+        print("Usage: tt-ctl workflow run <spec.json> [--dry-run]")
+        print("       tt-ctl workflow list")
+        return
+
+    if args.workflow_cmd == "list":
+        examples_dir = _HERE / "docs" / "examples" / "workflows"
+        if not examples_dir.exists():
+            print("No workflow examples found.")
+            return
+        print("Available workflows:")
+        for f in sorted(examples_dir.glob("*.json")):
+            import json as _json
+            try:
+                meta = _json.loads(f.read_text())
+                desc = meta.get("_description", "")[:80]
+            except Exception:
+                desc = ""
+            print(f"  {f.name}")
+            if desc:
+                print(f"    {desc}")
+        return
+
+    if args.workflow_cmd == "run":
+        spec_path = args.spec
+        dry_run = getattr(args, "dry_run", False)
+        runner = _HERE / "bin" / "run_workflow.sh"
+        if not runner.exists():
+            print(f"ERROR: {runner} not found", file=sys.stderr)
+            sys.exit(1)
+        cmd = ["bash", str(runner), spec_path]
+        if dry_run:
+            cmd.append("--dry-run")
+        import subprocess as _sp
+        result = _sp.run(cmd)
+        sys.exit(result.returncode)
+
+
 def cmd_mcp_config(_args):
     """Emit Claude Code MCP config JSON for tt-local-gen."""
     import json as _json
@@ -1051,6 +1091,14 @@ def _build_parser() -> argparse.ArgumentParser:
     plugin_sub = plugin_p.add_subparsers(dest="plugin_cmd")
     plugin_sub.add_parser("list", help="List all loaded plugins")
 
+    # Workflow runner
+    wf_p = sub.add_parser("workflow", help="Run a multi-step generative workflow")
+    wf_sub = wf_p.add_subparsers(dest="workflow_cmd")
+    wf_run = wf_sub.add_parser("run", help="Execute a workflow JSON spec")
+    wf_run.add_argument("spec", help="Path to workflow JSON (e.g. docs/examples/workflows/1964-worlds-fair.json)")
+    wf_run.add_argument("--dry-run", action="store_true", help="Print steps without running inference")
+    wf_sub.add_parser("list", help="List available workflow examples")
+
     # MCP config
     sub.add_parser("mcp-config", help="Emit Claude Code MCP config JSON for tt-local-gen")
 
@@ -1141,6 +1189,7 @@ def main():
         "artgen":           cmd_artgen,
         "plugin":           cmd_plugin,
         "mcp-config":       cmd_mcp_config,
+        "workflow":         cmd_workflow,
     }
     dispatch[args.cmd](args)
 
