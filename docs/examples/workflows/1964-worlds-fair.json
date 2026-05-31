@@ -1,0 +1,129 @@
+{
+  "_comment": "1964 World's Fair experiment — tt-local-generator ComfyUI-compatible workflow spec.",
+  "_spec_version": "comfyui-api-v1",
+  "_description": "Multi-step generative pipeline: image → caption+palette → video → poem → new image. All artifacts saved to a shared playlist.",
+  "_runner": "See bin/run_workflow.sh for the tt-ctl/bash implementation that executes this spec.",
+
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "Generate the seed image from a World's Fair prompt via FLUX.1-schnell",
+    "inputs": {
+      "model":   "FLUX.1-schnell",
+      "prompt":  "The 1964 New York World's Fair, Unisphere gleaming in the sunlight, futuristic pavilions, optimistic crowds in period clothing, Kodachrome colors, cinematic wide shot",
+      "negative_prompt": "blurry, low quality, modern, digital artifacts",
+      "width":   1024,
+      "height":  1024,
+      "steps":   4,
+      "seed":    1964,
+      "server":  "http://localhost:8000"
+    },
+    "outputs": ["image_path"]
+  },
+
+  "2": {
+    "class_type": "TTLGCaptionImage",
+    "_comment": "BLIP: describe the generated image — becomes the video prompt basis",
+    "inputs": {
+      "plugin":  "blip",
+      "src":     ["1", "image_path"],
+      "prompt":  "a cinematic scene showing"
+    },
+    "outputs": ["caption"]
+  },
+
+  "3": {
+    "class_type": "TTLGRemoveBackground",
+    "_comment": "RMBG: isolate the subject for palette extraction",
+    "inputs": {
+      "plugin":  "rmbg",
+      "src":     ["1", "image_path"]
+    },
+    "outputs": ["fg_path"]
+  },
+
+  "4": {
+    "class_type": "TTLGEstimateDepth",
+    "_comment": "Depth map — visual companion / optional conditioning hint",
+    "inputs": {
+      "plugin":  "depth",
+      "src":     ["1", "image_path"]
+    },
+    "outputs": ["depth_path"]
+  },
+
+  "5": {
+    "class_type": "TTLGPromptCompose",
+    "_comment": "Compose the video prompt from caption + era context",
+    "inputs": {
+      "template": "{caption}, 1964 World's Fair, Unisphere, retro-futuristic, Kodachrome, cinematic slow push-in",
+      "caption":  ["2", "caption"]
+    },
+    "outputs": ["video_prompt"]
+  },
+
+  "6": {
+    "class_type": "TTLGImageToVideo",
+    "_comment": "SkyReels I2V: animate the seed image with the composed prompt",
+    "inputs": {
+      "model":   "SkyReels-V2-I2V-14B-540P",
+      "prompt":  ["5", "video_prompt"],
+      "image":   ["1", "image_path"],
+      "width":   960,
+      "height":  544,
+      "num_frames": 33,
+      "steps":   20,
+      "seed":    1964,
+      "server":  "http://localhost:8000"
+    },
+    "outputs": ["video_path"]
+  },
+
+  "7": {
+    "class_type": "TTLGGenerateText",
+    "_comment": "Artgen LLM: write a poem about the video / image",
+    "inputs": {
+      "model":  "meta-llama/Llama-3.3-70B-Instruct",
+      "prompt": "Write a short, evocative poem (4-6 lines) inspired by this scene: {caption}. Set at the 1964 World's Fair. Use sensory detail, optimism, and a sense of wonder at the future.",
+      "caption": ["2", "caption"],
+      "max_tokens": 120,
+      "server": "http://localhost:8002"
+    },
+    "outputs": ["poem"]
+  },
+
+  "8": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "FLUX.1-schnell: generate a second image from the poem as prompt",
+    "inputs": {
+      "model":   "FLUX.1-schnell",
+      "prompt":  ["7", "poem"],
+      "negative_prompt": "blurry, low quality, digital artifacts",
+      "width":   1024,
+      "height":  1024,
+      "steps":   4,
+      "seed":    1965,
+      "server":  "http://localhost:8000"
+    },
+    "outputs": ["image2_path"]
+  },
+
+  "9": {
+    "class_type": "TTLGAddToPlaylist",
+    "_comment": "Collect all artifacts into one playlist",
+    "inputs": {
+      "playlist_name": "1964 world's fair experiment",
+      "artifacts": [
+        {"label": "Seed image",      "path": ["1", "image_path"],  "type": "image"},
+        {"label": "Foreground mask", "path": ["3", "fg_path"],     "type": "image"},
+        {"label": "Depth map",       "path": ["4", "depth_path"],  "type": "image"},
+        {"label": "World's Fair video", "path": ["6", "video_path"], "type": "video"},
+        {"label": "Poem image",      "path": ["8", "image2_path"], "type": "image"}
+      ],
+      "metadata": {
+        "caption": ["2", "caption"],
+        "poem":    ["7", "poem"]
+      }
+    },
+    "outputs": ["playlist_id"]
+  }
+}
