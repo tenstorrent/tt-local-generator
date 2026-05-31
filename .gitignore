@@ -35,3 +35,12 @@ debian/tt-model-animate/
 debian/tt-model-skyreels-t2v/
 debian/tt-model-skyreels-i2v/
 debian/tt-local-generator-models-all/
+
+# Local scratch files
+*.ans
+*.raw.txt
+landscape_glitch.svg
+steinbeck.png
+generate_library.sh
+/logs/
+media_*.log
