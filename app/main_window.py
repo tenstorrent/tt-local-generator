@@ -4114,9 +4114,10 @@ class ControlPanel(Gtk.Box):
 
     # ── QUALITY named button row ───────────────────────────────────────────────
 
-    # Ordered list of (key, display_label) for the video model dropdown.
-    # Index 0 is the placeholder shown when no model is running/available.
-    _VIDEO_MODEL_ENTRIES = [
+    # All available video model entries (key, display_label).
+    # Index 0 is always the placeholder; hidden models are filtered out at
+    # build time based on the "hidden_video_models" setting.
+    _ALL_VIDEO_MODEL_ENTRIES = [
         ("",            "— not running —"),
         ("wan2",        "Wan2.2  —  720p video"),
         ("mochi",       "Mochi-1  —  480×848 video"),
@@ -4141,6 +4142,12 @@ class ControlPanel(Gtk.Box):
         lbl.set_xalign(0)
         lbl.set_valign(Gtk.Align.CENTER)
         row.append(lbl)
+
+        hidden = set(_settings.get("hidden_plugins") or [])
+        self._VIDEO_MODEL_ENTRIES = [
+            (k, d) for k, d in self._ALL_VIDEO_MODEL_ENTRIES
+            if k == "" or k not in hidden  # always keep the placeholder
+        ]
 
         string_list = Gtk.StringList()
         for _, display in self._VIDEO_MODEL_ENTRIES:
@@ -6547,6 +6554,66 @@ class PreferencesDialog(Gtk.Window):
         box.set_margin_end(16)
         scroll.set_child(box)
         self.set_child(scroll)
+
+        # ── Plugins ───────────────────────────────────────────────────────────
+        box.append(self._section("Plugins"))
+        plugins_note = Gtk.Label(
+            label="Uncheck a plugin or model to hide it from the UI. "
+                  "Nothing is removed — you can re-enable at any time."
+        )
+        plugins_note.set_xalign(0)
+        plugins_note.set_wrap(True)
+        plugins_note.add_css_class("muted")
+        plugins_note.set_margin_bottom(4)
+        box.append(plugins_note)
+
+        hidden = set(_settings.get("hidden_plugins") or [])
+
+        # Video models
+        video_entries = [
+            ("wan2",        "Wan2.2-T2V  —  720p video"),
+            ("mochi",       "Mochi-1  —  480×848 video"),
+            ("skyreels",    "SkyReels I2V  —  960×544"),
+            ("animatediff", "AnimateDiff  —  local Blackhole GIF"),
+        ]
+        for key, label in video_entries:
+            cb = Gtk.CheckButton(label=label)
+            cb.set_active(key not in hidden)
+            cb.set_tooltip_text(f"Video model key: {key!r}")
+            def _on_plugin_toggle(widget, k=key):
+                h = set(_settings.get("hidden_plugins") or [])
+                if widget.get_active():
+                    h.discard(k)
+                else:
+                    h.add(k)
+                _settings.set("hidden_plugins", sorted(h))
+            cb.connect("toggled", _on_plugin_toggle)
+            box.append(cb)
+
+        # Artgen generators (from plugin loader)
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        try:
+            import plugin_loader as _pl
+            _pl.load_plugins()
+            artgen_names = sorted(
+                n for n in _pl.all_names()
+                if _pl.get(n).runnable
+            )
+        except Exception:
+            artgen_names = []
+        for name in artgen_names:
+            cb = Gtk.CheckButton(label=f"Artgen: {name}")
+            cb.set_active(name not in hidden)
+            cb.set_tooltip_text(f"Artgen plugin key: {name!r}")
+            def _on_artgen_toggle(widget, k=name):
+                h = set(_settings.get("hidden_plugins") or [])
+                if widget.get_active():
+                    h.discard(k)
+                else:
+                    h.add(k)
+                _settings.set("hidden_plugins", sorted(h))
+            cb.connect("toggled", _on_artgen_toggle)
+            box.append(cb)
 
         # ── Generation ────────────────────────────────────────────────────────
         box.append(self._section("Generation"))

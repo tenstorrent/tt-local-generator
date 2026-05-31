@@ -6,15 +6,18 @@ Most inference models require a QB2 or equivalent Blackhole system; see the hard
 
 **Supported models:**
 
-| Mode | Model | Hardware |
-|------|-------|----------|
-| Video | [Wan2.2-T2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | **QB2** (P300X2) — also P150x4 via `start_wan.sh` |
-| Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | **QB2** (P300X2) |
-| Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | **QB2** / Blackhole P300X2 — image-to-video |
-| Image | [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | **QB2** (4× P300c) |
-| Animate | [Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-14B-720P-Diffusers) | CPU/CUDA (TT hardware support pending) |
-| Artgen GIF | [AnimateDiff (TTNN)](app/animatediff/) | **QB2** / Blackhole P300c — no Docker |
-| Artgen SVG/text | Built-in LLM generators | Any — runs on CPU via prompt server |
+| Mode | Model | Hardware | Status |
+|------|-------|----------|--------|
+| Video | [Wan2.2-T2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) | **QB2** (P300X2) | ✅ Validated |
+| Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | **QB2** (P300X2) — image-to-video | ✅ Validated |
+| Video | [Wan2.2-Animate-14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B-Diffusers) | **QB2** (P300X2) | 🔄 In validation |
+| Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | **QB2** (P300X2) | ⏳ Pending validation |
+| Image | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell) | **QB2** (P300X2) | ⏳ Pending validation |
+| Image | [stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) | **QB2** (P300X2) — cpp_server backend | ⏳ Pending validation |
+| Artgen LLM | Qwen3-8B, Llama-3.1-8B-Instruct | **QB2** single P300 card (2 chips) | ✅ Validated |
+| Artgen LLM | Qwen3-32B, Llama-3.3-70B-Instruct | **QB2** (P300X2, all 4 chips) | ✅ Validated |
+| Artgen GIF | [AnimateDiff (TTNN)](app/animatediff/) | **QB2** / Blackhole P300c — no Docker | ✅ Validated |
+| Artgen SVG/text | Built-in generators + LLM polish | Any — CPU via Qwen3-0.6B prompt server | ✅ Validated |
 
 > **Note:** Wormhole (N150/N300) is not currently supported. All video and image inference
 > requires Blackhole hardware. The artgen text/SVG generators and prompt engine run on any
@@ -109,7 +112,7 @@ tt-local-generator/
     tt-inference-server/ ← pinned to VENDOR_SHA, patched by apply_patches.sh
     VENDOR_SHA           ← SHA of the vendored commit
   docker/                ← Docker image archive (Git LFS)
-    tt-media-inference-server-0.11.1-bac8b34.tar.gz
+    tt-media-inference-server-0.15.0-25891d3.tar.gz
     README.md
   tests/                 ← pytest test suite (196 tests)
   tt-gen                 ← launcher: starts the GUI
@@ -187,18 +190,23 @@ cd ~/code/tt-local-generator
 
 # Run a generation now (blocking)
 ./tt-ctl run "a red fox"
-./tt-ctl run "a red fox" --steps 50 --seed 42 --model mochi
+./tt-ctl run "a red fox" --steps 50 --seed 42 --model skyreels
 ./tt-ctl run "a red fox" --neg "blurry, bad quality"
-# --model choices: video | image | animate | skyreels | mochi
+# --model choices: video | image | animate | skyreels
 
 # Service management
-./tt-ctl start wan2.2         # start the Wan2.2 server (non-blocking by default)
-./tt-ctl start prompt-server  # start the Qwen prompt server
-./tt-ctl start all            # start the recommended set (wan2.2 + prompt-server)
+./tt-ctl start wan2.2              # start the Wan2.2 server (non-blocking by default)
+./tt-ctl start skyreels            # start the SkyReels I2V server
+./tt-ctl start artgen-qwen3-8b     # start the Qwen3-8B artgen LLM (port 8002)
+./tt-ctl start artgen-llama-3.3-70b  # start the Llama-3.3-70B artgen LLM (port 8002)
+./tt-ctl start prompt-server       # start the Qwen3-0.6B prompt server
+./tt-ctl start all                 # start the recommended set (wan2.2 + prompt-server)
 ./tt-ctl stop  wan2.2
 ./tt-ctl restart wan2.2
 ./tt-ctl start wan2.2 --blocking   # wait for the script to exit
-# Service keys: wan2.2  mochi  skyreels  flux  animate  prompt-server  all
+# Service keys: wan2.2  mochi  skyreels  flux  animate  prompt-server
+#               artgen-qwen3-8b  artgen-llama-3.1-8b  artgen-llama-3.3-70b
+#               artgen-qwen3-32b  artgen-qwen2.5-7b  all
 
 # Queue management
 ./tt-ctl queue                          # list pending items

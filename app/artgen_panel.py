@@ -41,6 +41,7 @@ except Exception:
 
 import artgen
 from media_store import media_store as _media_store, MediaRecord, make_artgen_path, make_thumbnail
+from app_settings import settings as _settings
 from server_config import server_config
 
 
@@ -215,7 +216,7 @@ class ArtgenPanel(Gtk.Box):
         type_lbl = _section_lbl("type")
         type_lbl.set_size_request(44, -1)
         type_bar.append(type_lbl)
-        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS and n not in (set(_settings.get("hidden_plugins") or []))]
         self._type_dd = _dd(gen_names, "landscape")
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
@@ -1645,7 +1646,7 @@ class ArtgenPanel(Gtk.Box):
         import artgen
         # Use the same filtered list the dropdown was built from so index
         # matches the actual dropdown row (hidden generators are excluded).
-        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS and n not in (set(_settings.get("hidden_plugins") or []))]
         if name in gen_names:
             self._type_dd.set_selected(gen_names.index(name))
             self._controls_stack.set_visible_child_name(name)

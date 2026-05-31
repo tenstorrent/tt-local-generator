@@ -242,7 +242,8 @@ pip3 install --break-system-packages \
     requests \
     markovify \
     "fastapi>=0.100.0" \
-    "uvicorn[standard]>=0.23.0"
+    "uvicorn[standard]>=0.23.0" \
+    huggingface_hub
 echo "  ✓ Python dependencies installed"
 echo ""
 
@@ -253,7 +254,7 @@ echo ""
 
 echo "── Step 6: Docker image pre-pull ───────────────────────────"
 
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
 
 if docker image inspect "$DOCKER_IMAGE" &>/dev/null 2>&1; then
     echo "  ✓ Docker image already present — skipping pull"

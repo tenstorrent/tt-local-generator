@@ -86,14 +86,18 @@ From the terminal (all scripts are in `bin/`):
 
 ```bash
 cd ~/code/tt-local-generator
-./bin/start_wan_qb2.sh         # Wan2.2-T2V on QB2 (P300x2) — default
-./bin/start_wan_qb2.sh --stop  # stop the running server container
-./bin/start_wan.sh             # Wan2.2-T2V on P150x4
-./bin/start_mochi.sh           # Mochi-1 on QB2
-./bin/start_skyreels.sh        # SkyReels-V2-DF-1.3B-540P on Blackhole (P150X4/P300X2)
-./bin/start_animate.sh         # Wan2.2-Animate-14B (CPU/CUDA Phase 1)
-./bin/start_flux.sh            # FLUX.1-dev image server
-./bin/start_prompt_gen.sh      # Qwen3-0.6B prompt server (CPU, port 8001)
+./bin/start_wan_qb2.sh                       # Wan2.2-T2V on QB2 (P300x2)
+./bin/start_wan_qb2.sh --stop                # stop the running server container
+./bin/start_wan.sh                           # Wan2.2-T2V on P150x4
+./bin/start_skyreels_i2v.sh                  # SkyReels-V2-I2V-14B-540P on QB2
+./bin/start_animate.sh                       # Wan2.2-Animate-14B on QB2 (P300x2)
+./bin/start_mochi.sh                         # Mochi-1 on QB2 (weights needed)
+./bin/start_flux.sh                          # FLUX.1-schnell image server on QB2
+./bin/start_sdxl.sh                          # SDXL via cpp_server backend on QB2
+./bin/start_artgen.sh                        # Artgen LLM (Qwen3-8B default, port 8002)
+./bin/start_artgen.sh --model Llama-3.3-70B-Instruct   # 70B artgen LLM
+./bin/start_artgen.sh --model Qwen3-32B                # 32B artgen LLM
+./bin/start_prompt_gen.sh                    # Qwen3-0.6B prompt server (CPU, port 8001)
 ```
 
 Or via the CLI:
@@ -579,7 +583,7 @@ sudo apt install ../tt-local-generator_0.1.0_amd64.deb
 ### Known issues / next steps
 
 - **`snapshot_vendor.sh` placeholder SHA:** `DEFAULT_SHA` in `bin/snapshot_vendor.sh`
-  is a placeholder. Replace with the real git SHA of the `0.11.1-bac8b34` image's
+  is a placeholder. Replace with the real git SHA of the `0.15.0-25891d3` image's
   source commit before building for distribution.
 - **`vendor/VENDOR_SHA`:** The `vendor/` directory is gitignored. Either remove
   the gitignore entry before a release build, or run `snapshot_vendor.sh` as part
