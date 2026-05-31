@@ -1,0 +1,175 @@
+API_KEY is not set. Using a default key for media/forge server auth. Set API_KEY in .env or as an environment variable.
+2026-05-06 08:19:37,068 - run.py:611 - INFO: TT-Inference version: 0.13.0
+2026-05-06 08:19:37,068 - run.py:612 - INFO: TT-Inference SHA: fe70e22c1df8
+2026-05-06 08:19:37,068 - run.py:613 - INFO: 
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      SkyReels-V2-I2V-14B-540P
+  device:                     p300x2
+  impl:                       tt-transformers
+  engine:                     media
+  workflow:                   server
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   True
+  docker_server:              True
+  local_server:               False
+  no_auth:                    False
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              None
+  vllm_dir:                   None
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      False
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         None
+  skip_system_sw_validation:  False
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              /home/ttuser/.cache/huggingface
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-05-06 08:19:37,068 - run.py:619 - INFO: Runtime model spec saved to: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_plXtkzcM.json
+2026-05-06 08:19:37,068 - validate_setup.py:158 - INFO: Starting local setup validation
+2026-05-06 08:19:37,069 - workflow_venvs.py:550 - INFO: running setup_system_software_validation() ...
+2026-05-06 08:19:37,069 - utils.py:234 - INFO: Running command: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_system_software_validation/bin/python packaging==25.0 PyYAML
+Using Python 3.11.14 environment at: .workflow_venvs/.venv_system_software_validation
+Checked 2 packages in 0.40ms
+2026-05-06 08:19:37,074 - utils.py:234 - INFO: Running command: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_system_software_validation/bin/python /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflows/run_system_software_validation.py --runtime-model-spec-json /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_plXtkzcM.json
+2026-05-06 08:19:37,123 - run_system_software_validation.py:245 - INFO: Running /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflows/run_system_software_validation.py ...
+2026-05-06 08:19:37,124 - workflow_venvs.py:566 - INFO: running setup_tt_smi() ...
+2026-05-06 08:19:37,124 - utils.py:234 - INFO: Running command: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_tt_smi/bin/python tt-smi==3.0.39
+2026-05-06 08:19:37,128 - utils.py:185 - INFO: Using Python 3.10.19 environment at: .workflow_venvs/.venv_tt_smi
+2026-05-06 08:19:37,130 - utils.py:185 - INFO: Checked 1 package in 1ms
+2026-05-06 08:19:37,130 - run_system_software_validation.py:41 - INFO: Running tt-smi -s to get device telemetry
+2026-05-06 08:19:37,339 - run_system_software_validation.py:65 - INFO: Successfully parsed tt-smi data
+2026-05-06 08:19:37,339 - run_system_software_validation.py:308 - INFO: System info:
+================================================================================
+FW bundle versions (across all devices): ['19.7.99.0', '19.7.99.0', '19.7.99.0', '19.7.99.0']
+KMD version (on host): 2.8.0
+Board types: ['p300c', 'p300c', 'p300c', 'p300c']
+Topology: SystemTopology.ISOLATED
+================================================================================
+2026-05-06 08:19:37,349 - validate_setup.py:186 - INFO: ✅ validating system software dependencies completed
+2026-05-06 08:19:37,349 - validate_setup.py:194 - INFO: ✅ validating local setup completed
+2026-05-06 08:19:37,350 - validate_setup.py:346 - INFO: ✅ Bind mount permission check passed for --host-hf-cache=/home/ttuser/.cache/huggingface (uid=1000, write=False)
+2026-05-06 08:19:37,350 - run.py:627 - INFO: Running inference server in Docker container ...
+2026-05-06 08:19:37,350 - setup_host.py:280 - INFO: has_weights: True
+2026-05-06 08:19:37,350 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:37,350 - setup_host.py:282 - INFO: has_params: False
+2026-05-06 08:19:37,351 - setup_host.py:280 - INFO: has_weights: True
+2026-05-06 08:19:37,351 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:37,351 - setup_host.py:282 - INFO: has_params: True
+2026-05-06 08:19:37,351 - setup_host.py:280 - INFO: has_weights: False
+2026-05-06 08:19:37,351 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:37,351 - setup_host.py:282 - INFO: has_params: True
+2026-05-06 08:19:37,351 - setup_host.py:291 - WARNING: Incomplete model setup for SkyReels-V2-I2V-14B-540P. checked: /home/ttuser/.cache/huggingface/hub/models--Skywork--SkyReels-V2-I2V-14B-540P/snapshots/0205be4d0df6a2fbcf216bd8cdfb242a70c8a745
+2026-05-06 08:19:37,351 - setup_host.py:368 - INFO: ✅ Sufficient RAM: 229GB (Required: 32GB)
+2026-05-06 08:19:38,184 - setup_host.py:427 - INFO: ✅ HF_TOKEN is valid.
+2026-05-06 08:19:38,185 - setup_host.py:388 - INFO: ✅ HF_HOME set to /home/ttuser/.cache/huggingface
+2026-05-06 08:19:38,185 - setup_host.py:344 - INFO: ✅ Sufficient disk space: 99GB (Required: 75GB)
+2026-05-06 08:19:38,185 - setup_host.py:280 - INFO: has_weights: True
+2026-05-06 08:19:38,185 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:38,185 - setup_host.py:282 - INFO: has_params: False
+2026-05-06 08:19:38,185 - setup_host.py:280 - INFO: has_weights: True
+2026-05-06 08:19:38,185 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:38,185 - setup_host.py:282 - INFO: has_params: True
+2026-05-06 08:19:38,185 - setup_host.py:280 - INFO: has_weights: False
+2026-05-06 08:19:38,185 - setup_host.py:281 - INFO: has_tokenizer: False
+2026-05-06 08:19:38,185 - setup_host.py:282 - INFO: has_params: True
+2026-05-06 08:19:38,185 - setup_host.py:291 - WARNING: Incomplete model setup for SkyReels-V2-I2V-14B-540P. checked: /home/ttuser/.cache/huggingface/hub/models--Skywork--SkyReels-V2-I2V-14B-540P/snapshots/0205be4d0df6a2fbcf216bd8cdfb242a70c8a745
+2026-05-06 08:19:38,185 - workflow_venvs.py:473 - INFO: running setup_hf_setup() ...
+2026-05-06 08:19:38,185 - utils.py:234 - INFO: Running command: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_hf_setup/bin/python 'huggingface_hub>=1.0.0'
+Using Python 3.10.19 environment at: .workflow_venvs/.venv_hf_setup
+Checked 1 package in 1ms
+2026-05-06 08:19:38,192 - setup_host.py:563 - INFO: Downloading model to host HF cache: Skywork/SkyReels-V2-I2V-14B-540P
+2026-05-06 08:19:38,192 - setup_host.py:564 - INFO: Command: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.workflow_venvs/.venv_hf_setup/bin/hf download Skywork/SkyReels-V2-I2V-14B-540P --exclude 'original/**'
+path=/home/ttuser/.cache/huggingface/hub/models--Skywork--SkyReels-V2-I2V-14B-540P/snapshots/0205be4d0df6a2fbcf216bd8cdfb242a70c8a745
+2026-05-06 08:19:38,611 - setup_host.py:571 - INFO: ✅ Using weights directory: /home/ttuser/.cache/huggingface/hub/models--Skywork--SkyReels-V2-I2V-14B-540P
+2026-05-06 08:19:38,611 - setup_host.py:655 - INFO: ✅ done setup_weights
+2026-05-06 08:19:38,611 - setup_host.py:667 - INFO: ✅ done run_setup
+2026-05-06 08:19:38,611 - run_docker_server.py:430 - INFO: Starting Docker inference server ...
+2026-05-06 08:19:38,612 - run_docker_server.py:61 - INFO: running: docker pull ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+2026-05-06 08:19:38,612 - run_docker_server.py:62 - INFO: this may take several minutes ...
+2026-05-06 08:19:38,612 - utils.py:234 - INFO: Running command: docker pull ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+0.11.1-bac8b34: Pulling from tenstorrent/tt-media-inference-server
+Digest: sha256:3fd30fdb904449d319adc4e2f426e1bcb785597fa2304cc834f1d745656679a8
+Status: Image is up to date for ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+2026-05-06 08:19:40,272 - run_docker_server.py:71 - INFO: ✅ Docker Image pulled successfully.
+2026-05-06 08:19:40,273 - utils.py:234 - INFO: Running command: docker inspect '--format='"'"'ID: {{.Id}}, Created: {{.Created}}'"'"'' ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+'ID: sha256:3fd30fdb904449d319adc4e2f426e1bcb785597fa2304cc834f1d745656679a8, Created: 2026-03-24T20:03:09.946847151Z'
+2026-05-06 08:19:40,300 - run_docker_server.py:87 - INFO: ✅ Docker Image available locally. See SHA and built timestamp above.
+2026-05-06 08:19:40,300 - run_docker_server.py:54 - INFO: Media server environment variables: MODEL=SkyReels-V2-I2V-14B-540P, DEVICE=p300x2
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/mochi/pipeline_mochi.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/mochi/pipeline_mochi.py
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/skyreels_v2/__init__.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/__init__.py
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/skyreels_v2/pipeline_skyreels.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/pipeline_skyreels.py
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/skyreels_v2/pipeline_skyreels_i2v.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/pipeline_skyreels_i2v.py
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/wan/pipeline_wan.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/wan/pipeline_wan.py
+2026-05-06 08:19:40,301 - run_docker_server.py:278 - INFO: Hotpatch (tt_dit): pipelines/wan/pipeline_wan_animate.py -> /home/container_app_user/tt-metal/models/tt_dit/pipelines/wan/pipeline_wan_animate.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): config/constants.py -> /home/container_app_user/tt-metal/server/config/constants.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): domain/video_generate_request.py -> /home/container_app_user/tt-metal/server/domain/video_generate_request.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): tt_model_runners/dit_runners.py -> /home/container_app_user/tt-metal/server/tt_model_runners/dit_runners.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): tt_model_runners/runner_fabric.py -> /home/container_app_user/tt-metal/server/tt_model_runners/runner_fabric.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): tt_model_runners/skyreels_i2v_runner.py -> /home/container_app_user/tt-metal/server/tt_model_runners/skyreels_i2v_runner.py
+2026-05-06 08:19:40,301 - run_docker_server.py:293 - INFO: Config patch (media_server_config): tt_model_runners/skyreels_runner.py -> /home/container_app_user/tt-metal/server/tt_model_runners/skyreels_runner.py
+2026-05-06 08:19:40,301 - run_docker_server.py:305 - INFO: HF_HOME mount: /home/ttuser/.cache/huggingface -> /home/container_app_user/hf_home_cache
+2026-05-06 08:19:40,301 - run_docker_server.py:449 - INFO: Docker run command:
+docker run \
+  --rm \
+  --name tt-inference-server-3dfc7118 \
+  --env-file /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/.env \
+  --ipc host \
+  --publish 0.0.0.0:8000:8000 \
+  --device /dev/tenstorrent:/dev/tenstorrent \
+  --mount type=bind,src=/dev/hugepages-1G,dst=/dev/hugepages-1G \
+  --volume volume_id_tt_transformers-SkyReels-V2-I2V-14B-540P:/home/container_app_user/cache_root \
+  --mount type=bind,src=/home/ttuser/.cache/huggingface/hub/models--Skywork--SkyReels-V2-I2V-14B-540P,dst=/home/container_app_user/readonly_weights_mount/SkyReels-V2-I2V-14B-540P,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_plXtkzcM.json,dst=/home/container_app_user/model_specs/runtime_model_spec_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_plXtkzcM.json,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/benchmarking,dst=/home/container_app_user/app/benchmarking \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/evals,dst=/home/container_app_user/app/evals \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/utils,dst=/home/container_app_user/app/utils \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/tests,dst=/home/container_app_user/app/tests \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/tt-media-server,dst=/home/container_app_user/tt-metal/server \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/mochi/pipeline_mochi.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/mochi/pipeline_mochi.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/skyreels_v2/__init__.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/__init__.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/skyreels_v2/pipeline_skyreels.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/pipeline_skyreels.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/skyreels_v2/pipeline_skyreels_i2v.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/skyreels_v2/pipeline_skyreels_i2v.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/wan/pipeline_wan.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/wan/pipeline_wan.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/tt_dit/pipelines/wan/pipeline_wan_animate.py,dst=/home/container_app_user/tt-metal/models/tt_dit/pipelines/wan/pipeline_wan_animate.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/config/constants.py,dst=/home/container_app_user/tt-metal/server/config/constants.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/domain/video_generate_request.py,dst=/home/container_app_user/tt-metal/server/domain/video_generate_request.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/tt_model_runners/dit_runners.py,dst=/home/container_app_user/tt-metal/server/tt_model_runners/dit_runners.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/tt_model_runners/runner_fabric.py,dst=/home/container_app_user/tt-metal/server/tt_model_runners/runner_fabric.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/tt_model_runners/skyreels_i2v_runner.py,dst=/home/container_app_user/tt-metal/server/tt_model_runners/skyreels_i2v_runner.py,readonly \
+  --mount type=bind,src=/home/ttuser/code/tt-local-generator/vendor/tt-inference-server/patches/media_server_config/tt_model_runners/skyreels_runner.py,dst=/home/container_app_user/tt-metal/server/tt_model_runners/skyreels_runner.py,readonly \
+  --mount type=bind,src=/home/ttuser/.cache/huggingface,dst=/home/container_app_user/hf_home_cache,readonly \
+  -e MODEL_WEIGHTS_DIR=/home/container_app_user/readonly_weights_mount/SkyReels-V2-I2V-14B-540P/snapshots/0205be4d0df6a2fbcf216bd8cdfb242a70c8a745 \
+  -e CACHE_ROOT=/home/container_app_user/cache_root \
+  -e MODEL=SkyReels-V2-I2V-14B-540P \
+  -e DEVICE=p300x2 \
+  -e RUNTIME_MODEL_SPEC_JSON_PATH=/home/container_app_user/model_specs/runtime_model_spec_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_plXtkzcM.json \
+  -e HF_HOME=/home/container_app_user/hf_home_cache \
+  ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+
+2026-05-06 08:19:40,302 - run_docker_server.py:352 - INFO: Running docker container with log file: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/docker_server/media_2026-05-06_08-19-38_SkyReels-V2-I2V-14B-540P_p300x2_server.log
+2026-05-06 08:19:40,860 - run.py:719 - INFO: Completed server workflow, skipping run_workflows().
+2026-05-06 08:19:40,860 - run.py:723 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-05-06 08:19:40,860 - run.py:727 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-05-06 08:19:40,860 - run.py:731 - INFO: This log file is saved on local machine at: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/run_logs/run_2026-05-06_08-19-37_id_tt-transformers_SkyReels-V2-I2V-14B-540P_p300x2_server_-hmp6zX2.log
+2026-05-06 08:19:40,861 - run_docker_server.py:396 - INFO: Created Docker container ID: f021f39cab91
+2026-05-06 08:19:40,861 - run_docker_server.py:397 - INFO: Access container logs via: docker logs -f f021f39cab91
+2026-05-06 08:19:40,861 - run_docker_server.py:398 - INFO: Docker logs are also streamed to log file: /home/ttuser/code/tt-local-generator/vendor/tt-inference-server/workflow_logs/docker_server/media_2026-05-06_08-19-38_SkyReels-V2-I2V-14B-540P_p300x2_server.log
+2026-05-06 08:19:40,861 - run_docker_server.py:401 - INFO: To stop the running container run: docker stop f021f39cab91

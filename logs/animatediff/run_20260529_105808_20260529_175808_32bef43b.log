@@ -1,0 +1,148 @@
+# animatediff run 20260529_105808
+# cmd: /home/ttuser/tt-metal/python_env/bin/python /home/ttuser/code/tt-local-generator/app/animatediff/examples/generate_blackhole_v2.py --prompt A lava lamp blob drifts upward in a sign through a familiar, blood-lit apartment block, static from a psychedelic and presses a rented apartment, threat --negative-prompt blurry, low quality --frames 8 --steps 20 --seed 42 --temporal-alpha 0.35 --output /home/ttuser/.local/share/tt-video-gen/videos/20260529_175808_32bef43b.gif
+
+AnimateDiff Phase 2.5 — Blackhole TTNN UNet + cross-frame temporal attention
+  Prompt         : A lava lamp blob drifts upward in a sign through a familiar, blood-lit apartment block, static from a psychedelic and presses a rented apartment, threat
+  Frames         : 8  Steps: 20  Seed: 42
+  Temporal alpha : 0.35
+
+Opening Blackhole device...
+2026-05-29 10:58:10.907 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-05-29 10:58:10.985 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_0_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:10.985 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_0_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:10.985 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_0_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:10.985 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_0_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:10.985 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:10.985 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG (robust_mutex.cpp:139)
+2026-05-29 10:58:11.504 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:11.504 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:11.504 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:11.504 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:11.929 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_2_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:11.929 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_2_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:11.929 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_2_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:11.929 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_2_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:11.929 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:11.929 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG (robust_mutex.cpp:139)
+2026-05-29 10:58:12.353 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_3_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:12.353 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_3_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:12.353 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_3_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:12.353 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_3_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:13.038 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:213)
+2026-05-29 10:58:13.071 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_0_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:13.071 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_0_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:13.071 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_0_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:13.071 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_0_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:13.608 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:13.608 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:13.608 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:13.608 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:17.261 | info     |             UMD | Harvesting mask for chip 3 is 0x1100 (NOC0: 0x1100, simulated harvesting mask: 0x0). (cluster.cpp:399)
+2026-05-29 10:58:17.291 | info     |             UMD | Initializing iommu for sysmem (size: 0x100000000). (sysmem_manager.cpp:300)
+2026-05-29 10:58:17.291 | info     |             UMD | Allocating sysmem without hugepages (size: 0x100000000). (sysmem_manager.cpp:306)
+2026-05-29 10:58:17.780 | info     |             UMD | Harvesting mask for chip 2 is 0x101 (NOC0: 0x101, simulated harvesting mask: 0x0). (cluster.cpp:399)
+2026-05-29 10:58:17.809 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:17.809 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:17.809 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_1_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:17.809 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_1_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:17.809 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:17.809 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG (robust_mutex.cpp:139)
+2026-05-29 10:58:17.809 | info     |             UMD | Initializing iommu for sysmem (size: 0x100000000). (sysmem_manager.cpp:300)
+2026-05-29 10:58:17.809 | info     |             UMD | Allocating sysmem without hugepages (size: 0x100000000). (sysmem_manager.cpp:306)
+2026-05-29 10:58:18.249 | info     |             UMD | Harvesting mask for chip 1 is 0x810 (NOC0: 0x810, simulated harvesting mask: 0x0). (cluster.cpp:399)
+2026-05-29 10:58:18.277 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_2_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:18.277 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_2_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:18.277 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_2_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:18.277 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_2_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:18.277 | info     |             UMD | Initializing iommu for sysmem (size: 0x100000000). (sysmem_manager.cpp:300)
+2026-05-29 10:58:18.277 | info     |             UMD | Allocating sysmem without hugepages (size: 0x100000000). (sysmem_manager.cpp:306)
+2026-05-29 10:58:18.704 | info     |             UMD | Harvesting mask for chip 0 is 0x2800 (NOC0: 0x2800, simulated harvesting mask: 0x0). (cluster.cpp:399)
+2026-05-29 10:58:18.756 | warning  |             UMD | File size 56 is not as expected 48 for mutex ARC_MSG_3_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:18.756 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: ARC_MSG_3_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:18.756 | warning  |             UMD | File size 56 is not as expected 48 for mutex REMOTE_ARC_MSG_3_PCIe. This could be due to new pthread library version, or some other external factor. (robust_mutex.cpp:185)
+2026-05-29 10:58:18.756 | warning  |             UMD | The file was resized, but the initialized flag is correct. This is an unexpected case, the mutex might fail. Mutex name: REMOTE_ARC_MSG_3_PCIe (robust_mutex.cpp:139)
+2026-05-29 10:58:18.757 | info     |             UMD | Initializing iommu for sysmem (size: 0x100000000). (sysmem_manager.cpp:300)
+2026-05-29 10:58:18.757 | info     |             UMD | Allocating sysmem without hugepages (size: 0x100000000). (sysmem_manager.cpp:306)
+2026-05-29 10:58:19.665 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[3, 2, 1, 0] and remote chip ids {} (cluster.cpp:251)
+2026-05-29 10:58:19.665 | warning  |             UMD | Firmware version 19.8.0 on the system is newer than the maximum supported version 18.10.0 for blackhole architecture. New features may not be supported. (cluster.cpp:211)
+2026-05-29 10:58:19.665 | info     |             UMD | All devices in cluster running firmware version: 19.8.0 (cluster.cpp:231)
+2026-05-29 10:58:19.665 | info     |             UMD | IOMMU: enabled (cluster.cpp:173)
+2026-05-29 10:58:19.665 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:176)
+2026-05-29 10:58:19.730 | info     |             UMD | Pinning pages for DMA: virtual address 0x7e60e3c00000 and size 0x100000000 pinned to physical address 0xfffffffe00000000 without mapping to noc (pci_device.cpp:678)
+2026-05-29 10:58:19.730 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xfffffffe00000000; NOC address 0x32273458 (sysmem_manager.cpp:354)
+2026-05-29 10:58:19.730 | info     |             UMD | Device: 3 Mapped iATU region 0 from 0x0 to 0x3fffffff to 0xfffffffe00000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.730 | info     |             UMD | Device: 3 Mapped iATU region 1 from 0x40000000 to 0x7fffffff to 0xfffffffe40000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.730 | info     |             UMD | Device: 3 Mapped iATU region 2 from 0x80000000 to 0xbfffffff to 0xfffffffe80000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.730 | info     |             UMD | Device: 3 Mapped iATU region 3 from 0xc0000000 to 0xffffffff to 0xfffffffec0000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.769 | info     |             UMD | Pinning pages for DMA: virtual address 0x7e6a03c00000 and size 0x100000000 pinned to physical address 0xfffffffe00000000 without mapping to noc (pci_device.cpp:678)
+2026-05-29 10:58:19.769 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xfffffffe00000000; NOC address 0x32273628 (sysmem_manager.cpp:354)
+2026-05-29 10:58:19.769 | info     |             UMD | Device: 2 Mapped iATU region 0 from 0x0 to 0x3fffffff to 0xfffffffe00000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.769 | info     |             UMD | Device: 2 Mapped iATU region 1 from 0x40000000 to 0x7fffffff to 0xfffffffe40000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.769 | info     |             UMD | Device: 2 Mapped iATU region 2 from 0x80000000 to 0xbfffffff to 0xfffffffe80000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.769 | info     |             UMD | Device: 2 Mapped iATU region 3 from 0xc0000000 to 0xffffffff to 0xfffffffec0000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.822 | info     |             UMD | Pinning pages for DMA: virtual address 0x7e7323e00000 and size 0x100000000 pinned to physical address 0xfffffffe00000000 without mapping to noc (pci_device.cpp:678)
+2026-05-29 10:58:19.822 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xfffffffe00000000; NOC address 0x321d16a8 (sysmem_manager.cpp:354)
+2026-05-29 10:58:19.822 | info     |             UMD | Device: 1 Mapped iATU region 0 from 0x0 to 0x3fffffff to 0xfffffffe00000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.822 | info     |             UMD | Device: 1 Mapped iATU region 1 from 0x40000000 to 0x7fffffff to 0xfffffffe40000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.822 | info     |             UMD | Device: 1 Mapped iATU region 2 from 0x80000000 to 0xbfffffff to 0xfffffffe80000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.822 | info     |             UMD | Device: 1 Mapped iATU region 3 from 0xc0000000 to 0xffffffff to 0xfffffffec0000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.906 | info     |             UMD | Pinning pages for DMA: virtual address 0x7e7c43e00000 and size 0x100000000 pinned to physical address 0xfffffffe00000000 without mapping to noc (pci_device.cpp:678)
+2026-05-29 10:58:19.906 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xfffffffe00000000; NOC address 0x0 (sysmem_manager.cpp:354)
+2026-05-29 10:58:19.906 | info     |             UMD | Device: 0 Mapped iATU region 0 from 0x0 to 0x3fffffff to 0xfffffffe00000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.906 | info     |             UMD | Device: 0 Mapped iATU region 1 from 0x40000000 to 0x7fffffff to 0xfffffffe40000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.906 | info     |             UMD | Device: 0 Mapped iATU region 2 from 0x80000000 to 0xbfffffff to 0xfffffffe80000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:19.906 | info     |             UMD | Device: 0 Mapped iATU region 3 from 0xc0000000 to 0xffffffff to 0xfffffffec0000000 (blackhole_tt_device.cpp:92)
+2026-05-29 10:58:20.096 | DEBUG    | ttnn.device:__init__:150 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-05-29 10:58:20.096 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 0 and chip 1 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 0 and chip 3 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 1 and chip 0 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 1 and chip 2 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 3 and chip 0 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 3 and chip 2 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 2 and chip 1 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.097 | warning  |          Fabric | Ethernet between chip 2 and chip 3 have 4 expected ethernet ports, but only 2 present (control_plane.cpp:115)
+2026-05-29 10:58:20.569 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_pool.cpp:303)
+
+Loading SD 1.4 models onto Blackhole...
+  Loading PyTorch VAE (CPU decode)...
+  Loading PyTorch UNet (for config and time_proj)...
+  Building TTNN UNet on Blackhole (~2-3 min first run, cached after)...
+2026-05-29 10:58:22.321 | DEBUG    | ttnn:manage_config:85 - Set ttnn.CONFIG.enable_logging to False
+2026-05-29 10:58:22.321 | DEBUG    | ttnn:manage_config:85 - Set ttnn.CONFIG.enable_comparison_mode to False
+2026-05-29 10:58:22.321 | WARNING  | ttnn.model_preprocessing:from_torch:533 - ttnn: model cache can be enabled by passing model_name argument to preprocess_model[_parameters] and setting env variable TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true}'
+/home/ttuser/tt-metal/models/demos/wormhole/stable_diffusion/custom_preprocessing.py:33: UserWarning: The use of `x.T` on tensors of dimension other than 2 to reverse their shape is deprecated and it will throw an error in a future release. Consider `x.mT` to transpose batches of matrices or `x.permute(*torch.arange(x.ndim - 1, -1, -1))` to reverse the dimensions of a tensor. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4413.)
+  weight = model.weight.T.contiguous()
+2026-05-29 10:58:23.742 | DEBUG    | ttnn.model_preprocessing:from_torch:612 - Moving model weights to device
+2026-05-29 10:58:23.890 | DEBUG    | ttnn.model_preprocessing:from_torch:614 - Moved model weights to device
+2026-05-29 10:58:23.890 | DEBUG    | ttnn:manage_config:88 - Restored ttnn.CONFIG.enable_comparison_mode to False
+2026-05-29 10:58:23.890 | DEBUG    | ttnn:manage_config:88 - Restored ttnn.CONFIG.enable_logging to False
+2026-05-29 10:58:23.912 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:99 - CIN: height: 64, width: 64, dim: 8192
+2026-05-29 10:58:23.912 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:105 - D-1: height: 64, width: 64, dim: 8192
+2026-05-29 10:58:25.698 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv:__init__:36 - Cross Attention Down Block Input = 64x64 Output = 32x32
+2026-05-29 10:58:25.698 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:132 - D0:  height: 32, width: 32, dim: 2048
+2026-05-29 10:58:26.566 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv:__init__:36 - Cross Attention Down Block Input = 32x32 Output = 16x16
+2026-05-29 10:58:26.566 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:132 - D1:  height: 16, width: 16, dim: 512
+2026-05-29 10:58:27.274 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv:__init__:36 - Cross Attention Down Block Input = 16x16 Output = 8x8
+2026-05-29 10:58:27.274 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:132 - D2:  height: 8, width: 8, dim: 128
+2026-05-29 10:58:27.358 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:132 - D3:  height: 8, width: 8, dim: 128
+2026-05-29 10:58:27.623 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:145 - MID: height: 8, width: 8, dim: 128
+2026-05-29 10:58:27.855 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv:__init__:68 - Upsample Output = 16x16
+2026-05-29 10:58:27.855 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv:__init__:31 - Upblock Input = 8x8 Output = 16x16
+2026-05-29 10:58:27.855 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:174 - UP0: height: 16, width: 16, dim: 512
+2026-05-29 10:58:28.640 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv:__init__:68 - Upsample Output = 32x32
+2026-05-29 10:58:28.640 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv:__init__:42 - Cross Attention UpBlock Input = 16x16 Output = 32x32
+2026-05-29 10:58:28.640 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:174 - UP1: height: 32, width: 32, dim: 2048
+2026-05-29 10:58:29.027 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv:__init__:68 - Upsample Output = 64x64
+2026-05-29 10:58:29.027 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv:__init__:42 - Cross Attention UpBlock Input = 32x32 Output = 64x64
+2026-05-29 10:58:29.027 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:174 - UP2: height: 64, width: 64, dim: 8192
+2026-05-29 10:58:29.785 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv:__init__:42 - Cross Attention UpBlock Input = 64x64 Output = 64x64
+2026-05-29 10:58:29.785 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:174 - UP3: height: 64, width: 64, dim: 8192
+2026-05-29 10:58:29.786 | INFO     | models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv:__init__:190 - COU: height: 64, width: 64, dim: 8192
+  Models loaded in 8.1s
+
+Encoding prompts with CLIP...
+  Embeddings shape: torch.Size([2, 96, 768])
+
+Generating 8 frames with temporal attention on Blackhole...

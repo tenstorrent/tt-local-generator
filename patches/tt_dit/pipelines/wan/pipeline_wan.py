@@ -686,6 +686,21 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def attention_kwargs(self):
         return self._attention_kwargs
 
+    def warmup_buffers(self, height: int = 480, width: int = 832, image_prompt=None):
+        """Compile TTNN kernels via a short 2-step inference pass.
+
+        Called by TTWan22AnimateRunner.warmup() after pipeline creation.
+        height/width default to 480×832 (standard Wan2.2 resolution).
+        image_prompt is accepted for I2V subclasses but not used by T2V.
+        """
+        self(
+            prompt="warmup",
+            height=int(height) if height else 480,
+            width=int(width) if width else 832,
+            num_frames=17,
+            num_inference_steps=2,
+        )
+
     @torch.no_grad()
     def __call__(
         self,
