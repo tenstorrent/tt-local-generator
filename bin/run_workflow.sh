@@ -312,26 +312,82 @@ python3 - "$PLAYLIST_NAME" "$IMAGE_PATH" "$IMAGE2_PATH" \
     "$(get_result '["6", "video_path"]')" \
     "$(get_result '["3", "fg_path"]')" \
     "$(get_result '["4", "depth_path"]')" \
-    "$CAPTION" "$POEM" << 'PY'
-import sys, json
+    "$CAPTION" "$POEM" "$RESULTS_JSON" << 'PY'
+import sys, json, shutil, uuid
 from pathlib import Path
+from datetime import datetime, timezone
 
-playlist_name, img1, img2, video, fg, depth, caption, poem = sys.argv[1:]
+playlist_name, img1, img2, video, fg, depth, caption, poem, results_json = sys.argv[1:]
+
+# Import artifacts into the app's media store and create a playlist
+APP_DIR = Path.home() / ".local" / "share" / "tt-local-generator"
+IMAGES_DIR = APP_DIR / "images"
+VIDEOS_DIR = APP_DIR / "videos"
+THUMBS_DIR = APP_DIR / "thumbnails"
+for d in (IMAGES_DIR, VIDEOS_DIR, THUMBS_DIR): d.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
+try:
+    from media_store import media_store as _ms, MediaRecord
+    from playlist_store import PlaylistStore
+
+    _ps = PlaylistStore()
+    pl = _ps.create(playlist_name)
+    record_ids = []
+
+    def _import(src, media_type, prompt_text, model="workflow"):
+        src = Path(src)
+        if not src.exists(): return None
+        ext = src.suffix
+        ts = datetime.now(timezone.utc)
+        rid = str(uuid.uuid4())
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        dest_dir = VIDEOS_DIR if media_type == "video" else IMAGES_DIR
+        dest = dest_dir / f"{ts_str}_{rid[:8]}{ext}"
+        shutil.copy2(src, dest)
+        # Thumbnail: copy for images, first-frame for video
+        thumb = THUMBS_DIR / f"{ts_str}_{rid[:8]}.jpg"
+        try:
+            import subprocess
+            subprocess.run(["ffmpeg", "-y", "-i", str(dest),
+                "-vf", "scale=200:112:force_original_aspect_ratio=decrease,pad=200:112:(ow-iw)/2:(oh-ih)/2",
+                "-frames:v", "1", "-update", "1", "-q:v", "3", str(thumb)],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+        except Exception:
+            shutil.copy2(dest, thumb)
+        rec = MediaRecord(
+            id=rid, file_path=str(dest), thumbnail_path=str(thumb),
+            prompt=prompt_text, media_type=media_type,
+            created_at=ts.isoformat(), model=model,
+            params=json.dumps({"workflow": "1964-worlds-fair"}),
+        )
+        _ms.add(rec)
+        return rid
+
+    # Add artifacts in narrative order
+    for path, mtype, prompt in [
+        (img1,  "image",  f"1964 World's Fair seed image: {caption[:80]}"),
+        (fg,    "image",  "Background removed: World's Fair subject"),
+        (depth, "image",  "Depth map: World's Fair scene"),
+        (video, "video",  f"SkyReels I2V: {caption[:80]}"),
+        (img2,  "image",  f"Poem image: {poem[:80]}"),
+    ]:
+        rid = _import(path, mtype, prompt)
+        if rid: record_ids.append(rid)
+
+    if record_ids:
+        _ps.add_records(pl["id"], record_ids)
+
+    print(f"\n✅ Playlist '{playlist_name}' created in the app ({len(record_ids)} artifacts)")
+    print(f"   Open tt-gen → File → Playlists to view")
+except Exception as e:
+    print(f"\n⚠️  Could not write to app store: {e}")
+    print(f"   Artifacts are in: {str(Path(img1).parent) if Path(img1).exists() else results_json}")
+
 print(f"\n{'─'*60}")
-print(f"Playlist: {playlist_name}")
+print(f"Caption: {caption}")
+print(f"\nPoem:\n{poem}")
 print(f"{'─'*60}")
-print(f"  Seed image:   {img1}  ({Path(img1).stat().st_size // 1024} KB)" if Path(img1).exists() else f"  Seed image:   MISSING")
-print(f"  FG mask:      {fg}")
-print(f"  Depth map:    {depth}")
-print(f"  Video:        {video}")
-print(f"  Poem image:   {img2}")
-print(f"\n  Caption: {caption}")
-print(f"\n  Poem:\n{poem}")
-print(f"{'─'*60}")
-print(f"\nAll artifacts in: {str(Path(img1).parent) if Path(img1).exists() else '?'}")
-print(f"\nTo import into the app:")
-print(f"  Copy these files to ~/.local/share/tt-local-generator/videos/ and images/")
-print(f"  Then use File → Import in the app to add them to a playlist.")
 PY
 
 log ""
