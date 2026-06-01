@@ -532,10 +532,11 @@ class AnimateGenerationWorker:
 
 class ImageGenerationWorker:
     """
-    Runs a single FLUX image generation request end-to-end in a background thread.
+    Runs a single image generation request end-to-end in a background thread.
 
-    The image API is synchronous: the POST request blocks until the image is ready.
-    No polling is required. The response contains the image as a base64-encoded JPEG.
+    Supports FLUX.1-schnell (Python/uvicorn, ~3s) and SDXL via the C++ cpp_server
+    (~2s). The image API is synchronous: the POST blocks until the image is ready.
+    No polling is required. The response contains the image as base64-encoded JPEG.
 
     Usage (GTK):
         gen = ImageGenerationWorker(client, store, prompt, ...)
@@ -556,7 +557,7 @@ class ImageGenerationWorker:
         num_inference_steps: int,
         seed: int,
         guidance_scale: float = 3.5,
-        model: str = "flux.1-dev",
+        model: str = "flux.1-schnell",
     ):
         self._client = client
         self._store = store

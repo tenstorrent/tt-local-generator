@@ -1,3 +1,30 @@
+tt-local-generator (0.7.0) noble; urgency=medium
+
+  * Full v0.15.0 model validation on QB2 (P300X2). Validated models:
+    Wan2.2-T2V (360s), SkyReels-V2-I2V (90s), FLUX.1-schnell (3s),
+    SDXL/cpp_server (2s — fastest), Mochi-1 (19 min @ 64 steps, HQ),
+    Artgen Qwen3-8B / Llama-3.1-8B / Llama-3.3-70B / Qwen3-32B.
+  * FLUX.1-schnell promoted to default image model (no noise, 3s/image).
+  * SDXL via cpp_server: new start_sdxl.sh, fastest image generation (2s),
+    first test of the C++ inference backend on QB2.
+  * Mochi: request_processing_timeout bumped to 7200s (was 1000s);
+    full 64-step 97-frame generation now works end-to-end.
+  * Right-click transform menu on gallery cards (intent-first, forge-powered):
+    Remove background, Describe this, Show depth — powered by rmbg/blip/depth
+    plugins; results flow into Remix as seed images.
+  * Plugin transform logging: every transform writes a structured log visible
+    in Debug → Open Log Viewer under TRANSFORMS section.
+  * tt-ctl workflow subcommand: run/list ComfyUI-compatible workflow JSON specs.
+    1964 World's Fair example pipeline included.
+  * hidden_plugins setting: Preferences → Plugins lets users hide any video
+    model or artgen plugin from the UI without removing it.
+  * forge utility plugins: rmbg (background removal), blip (captioning),
+    depth (GLPN depth map) — all run via tenstorrent venv subprocess.
+  * Documentation: PERFORMANCE.md with validated timings, README and CLAUDE.md
+    accuracy pass for v0.15.0 reality, UPGRADE.md for 0.5→0.6 migration.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 01 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.6.0) noble; urgency=medium
 
   * Upgrade tt-inference-server vendor pin to v0.15.0 (image 0.15.0-25891d3).

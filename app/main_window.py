@@ -1435,6 +1435,7 @@ _SERVER_SCRIPTS: dict = {
     ("video",   "mochi"):     ("start_mochi.sh",    "Mochi-1 video"),
     ("video",   "skyreels"):  ("start_skyreels_i2v.sh", "SkyReels-V2-I2V video (Blackhole)"),
     ("image",   "flux"):      ("start_flux.sh",     "FLUX image"),
+    ("image",   "sdxl"):      ("start_sdxl.sh",     "SDXL image (cpp_server)"),
     ("animate", ""):          ("start_animate.sh",  "Wan2.2-Animate"),
 }
 
@@ -1447,6 +1448,7 @@ _VIDEO_MODEL_IDS: dict = {
 }
 _IMAGE_MODEL_IDS: dict = {
     "flux": "flux.1-schnell",
+    "sdxl": "stable-diffusion-xl-base-1.0",
 }
 
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
@@ -3645,6 +3647,8 @@ _MODEL_TO_SERVER_KEY: dict = {
     "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
     "wan2.2-animate-14b":                "animate",
     "flux.1-schnell":                        "flux",
+    "tt-sdxl-trace":                         "sdxl",
+    "stable-diffusion-xl-base-1.0":          "sdxl",
 }
 # Maps server key → (source_tab, video_model_key) for startup pre-selection
 _SERVER_KEY_TO_SOURCE_MODEL: dict = {
@@ -3652,6 +3656,7 @@ _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "mochi":    ("video",   "mochi"),
     "skyreels": ("video",   "skyreels"),
     "flux":     ("image",   ""),
+    "sdxl":     ("image",   ""),
     "animate":  ("animate", ""),
 }
 # Maps server model ID → capability key (for capability-centric status labels)
@@ -3737,7 +3742,7 @@ class ControlPanel(Gtk.Box):
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
         self._video_model: str = "wan2"   # "wan2" | "mochi"
-        self._image_model: str = "flux"   # "flux" | future models
+        self._image_model: str = "flux"   # "flux" | "sdxl"
         self.set_margin_top(12)
         self.set_margin_bottom(12)
         self.set_margin_start(12)
@@ -3800,7 +3805,7 @@ class ControlPanel(Gtk.Box):
         self._src_image_btn.add_css_class("source-btn")
         self._src_image_btn.add_css_class("source-btn-mid")
         self._src_image_btn.set_tooltip_text(
-            "FLUX.1-schnell  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
+            "FLUX.1-schnell (~3s) or SDXL/cpp_server (~2s)  ·  1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
         self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
@@ -5100,7 +5105,7 @@ class ControlPanel(Gtk.Box):
         return self._video_model
 
     def get_image_model(self) -> str:
-        """Return the currently selected image model key ('flux' or future)."""
+        """Return the currently selected image model key ('flux' or 'sdxl')."""
         return self._image_model
 
     def set_server_state(self, ready: bool, running_model: "str | None") -> None:
@@ -9054,18 +9059,25 @@ class MainWindow(Gtk.ApplicationWindow):
         # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
 
         if model_source == "image":
-            model_name = _IMAGE_MODEL_IDS.get(
-                model_id or self._controls.get_image_model(), "flux.1-schnell"
-            )
+            img_model_key = model_id or self._controls.get_image_model()
+            model_name = _IMAGE_MODEL_IDS.get(img_model_key, "flux.1-schnell")
             self._set_status(f"Generating image with {model_name}…")
+            # SDXL (cpp_server) uses a different default guidance scale and
+            # a dedicated service_key for correct auth token resolution.
+            is_sdxl = img_model_key == "sdxl" or "sdxl" in model_name.lower()
+            effective_guidance = guidance_scale if guidance_scale != 3.5 else (5.0 if is_sdxl else 3.5)
+            image_client = APIClient(
+                self._client.base_url,
+                service_key="sdxl" if is_sdxl else "flux",
+            ) if is_sdxl else self._client
             gen = ImageGenerationWorker(
-                client=self._client,
+                client=image_client,
                 store=self._store,
                 prompt=prompt,
                 negative_prompt=neg,
                 num_inference_steps=steps,
                 seed=seed,
-                guidance_scale=guidance_scale,
+                guidance_scale=effective_guidance,
                 model=model_name,
             )
         elif model_source == "animate":
