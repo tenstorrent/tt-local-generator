@@ -14,7 +14,8 @@ tt-inference-server: **v0.15.0** (image `0.15.0-25891d3`)
 | SkyReels-V2-I2V-14B-540P | Image→Video | 480×272 | 9 | 10 | ~22 min (first run) | ~90 s | Validated 2026-05-30 |
 | Wan2.2-Animate-14B-Diffusers | Text→Video | 832×480 | 33 | 20 | — | — | In validation |
 | SkyReels-V2-DF-1.3B-540P | Text→Video | 480×272 | 33 | — | — | — | Not yet validated |
-| Mochi-1-preview | Text→Video | 480×848 | 31 | 20 | ~4 min (cached) | ~6 min | ✅ Validated 2026-05-31 — 1.4MB; quality TBD at 64 steps |
+| Mochi-1-preview | Text→Video | 480×848 | 31 | 20 | ~4 min (cached) | ~6 min | ✅ Validated 2026-05-31 |
+| Mochi-1-preview | Text→Video | 480×848 | 97 | 64 | cached | **19 min** | ✅ HQ run — 2.3MB, neg prompt, guidance 6.0 |
 | FLUX.1-schnell | Text→Image | 1024×1024 | 1 | 4 | ~3 min (cached) | **3.09 s** | ✅ Validated 2026-05-31 — no noise |
 | stable-diffusion-xl-base-1.0 | Text→Image | 1024×1024 | 1 | 20 | ~2 min (cached) | **2.12 s** | ✅ Validated 2026-05-31 — cpp_server backend |
 
