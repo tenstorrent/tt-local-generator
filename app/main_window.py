@@ -7684,6 +7684,12 @@ class MainWindow(Gtk.ApplicationWindow):
         counts: dict[str, int] = {}
         for r in records:
             mid = getattr(r, "model", "") or ""
+            # Skip workflow-runner records — their model_id is "workflow" (or a
+            # workflow-prefixed variant like "workflow-v2").  These are pipeline
+            # artifacts, not direct inference generations, so they should not
+            # appear as standalone model entries in the By Model menu.
+            if mid.startswith("workflow"):
+                continue
             if mid and getattr(r, "media_type", "video") != "image":
                 counts[mid] = counts.get(mid, 0) + 1
         for mid, cnt in sorted(counts.items()):
