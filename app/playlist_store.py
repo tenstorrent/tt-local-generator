@@ -72,6 +72,18 @@ class PlaylistStore:
             raise RuntimeError(f"playlist {pl_id!r} missing immediately after creation")
         return pl
 
+    def get_or_create(self, name: str) -> Playlist:
+        """Return an existing playlist by name, or create one if none exists.
+
+        If multiple playlists share the name, returns the one with records
+        (preferring non-empty), or the first one found.
+        """
+        candidates = [p for p in self.all() if p.name == name.strip()]
+        if candidates:
+            with_records = [p for p in candidates if p.record_ids]
+            return with_records[0] if with_records else candidates[0]
+        return self.create(name)
+
     def rename(self, playlist_id: str, new_name: str) -> bool:
         """Rename a playlist. Returns True if found and renamed, False otherwise."""
         from media_store import media_store as _ms

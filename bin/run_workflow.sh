@@ -332,7 +332,7 @@ try:
     from playlist_store import PlaylistStore
 
     _ps = PlaylistStore()
-    pl = _ps.create(playlist_name)
+    pl = _ps.get_or_create(playlist_name)
     record_ids = []
 
     def _import(src, media_type, prompt_text, model="workflow"):
@@ -359,7 +359,7 @@ try:
             id=rid, file_path=str(dest), thumbnail_path=str(thumb),
             prompt=prompt_text, media_type=media_type,
             created_at=ts.isoformat(), model=model,
-            params=json.dumps({"workflow": "1964-worlds-fair"}),
+            params=json.dumps({"workflow": "1964-worlds-fair", "video_path": str(dest) if mtype == "video" else "", "image_path": str(dest) if mtype != "video" else ""}),
         )
         _ms.add(rec)
         return rid

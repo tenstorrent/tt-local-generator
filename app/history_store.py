@@ -323,21 +323,34 @@ class HistoryStore:
 
     @staticmethod
     def _to_gen(r) -> GenerationRecord:
-        """Convert a MediaRecord back to a GenerationRecord for API compatibility."""
+        """Convert a MediaRecord back to a GenerationRecord for API compatibility.
+
+        Falls back to r.file_path when params lack explicit video_path/image_path —
+        this handles records imported via external tools (workflow runner, etc.) that
+        store the path in MediaRecord.file_path rather than in params.
+        """
         p = r.params_dict
+        # Determine video/image paths: prefer params, fall back to file_path
+        file_path = r.file_path or ""
+        if r.media_type == "video":
+            video_path = p.get("video_path", "") or file_path
+            image_path = p.get("image_path", "")
+        else:
+            video_path = p.get("video_path", "")
+            image_path = p.get("image_path", "") or file_path
         return GenerationRecord(
             id=r.id,
             prompt=r.prompt,
             negative_prompt=p.get("negative_prompt", ""),
             num_inference_steps=p.get("num_inference_steps", 0),
             seed=p.get("seed", -1),
-            video_path=p.get("video_path", ""),
+            video_path=video_path,
             thumbnail_path=r.thumbnail_path,
             created_at=r.created_at,
             duration_s=p.get("duration_s", 0.0),
             seed_image_path=p.get("seed_image_path", ""),
             media_type=r.media_type,
-            image_path=p.get("image_path", ""),
+            image_path=image_path,
             guidance_scale=p.get("guidance_scale", 0.0),
             model=r.model_id,
             extra_meta=p.get("extra_meta", {}),
