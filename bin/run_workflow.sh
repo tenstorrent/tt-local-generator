@@ -125,6 +125,18 @@ with open('$RESULTS_JSON', 'w') as f: json.dump(d, f, indent=2)
 " "$value"
 }
 
+# Store a human-readable label for a node (pulled from spec _comment field).
+# The portfolio viewer reads node._label to display alongside thumbnails.
+set_node_label() {
+    local node_id="$1" label="$2"
+    python3 -c "
+import json, sys
+with open('$RESULTS_JSON') as f: d = json.load(f)
+d.setdefault('$node_id', {})['_label'] = sys.argv[1]
+with open('$RESULTS_JSON', 'w') as f: json.dump(d, f, indent=2)
+" "$label"
+}
+
 get_result() {
     local ref="$1"  # e.g. '["1", "image_path"]'
     python3 -c "
@@ -351,8 +363,9 @@ stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
 _run_node "node1(flux-image)" node_text_to_image "1" \
     "FLUX.1-schnell" \
-    "The 1964 New York World's Fair, Unisphere gleaming in the sunlight, futuristic pavilions, optimistic crowds in period clothing, Kodachrome colors, cinematic wide shot" \
-    "1024" "1024" "4" "1964" "http://localhost:8000"
+    "SEED_PROMPT_PLACEHOLDER" \
+    "1024" "1024" "4" "SEED_PLACEHOLDER" "http://localhost:8000"
+set_node_label "1" "seed image"
 
 IMAGE_PATH=$(get_result '["1", "image_path"]')
 if [[ -z "$IMAGE_PATH" ]]; then
@@ -362,18 +375,22 @@ fi
 # ── Nodes 2-4: CPU plugins (no reset) ────────────────────────────────────────
 log_step "Node 2: Caption image — BLIP (CPU)"
 _run_node "node2(blip-caption)" node_caption_image "2" "$IMAGE_PATH" "a cinematic scene showing"
+set_node_label "2" "caption"
 CAPTION=$(get_result '["2", "caption"]')
 
 log_step "Node 3: Remove background — RMBG (CPU)"
 _run_node "node3(rmbg)" node_remove_background "3" "$IMAGE_PATH"
+set_node_label "3" "foreground"
 
 log_step "Node 4: Depth map — GLPN (CPU)"
 _run_node "node4(depth)" node_estimate_depth "4" "$IMAGE_PATH"
+set_node_label "4" "depth map"
 
 # ── Node 5: Compose video prompt ─────────────────────────────────────────────
 log_step "Node 5: Compose video prompt"
-VIDEO_PROMPT="$CAPTION, 1964 World's Fair, Unisphere, retro-futuristic, Kodachrome, cinematic slow push-in"
+VIDEO_PROMPT="$CAPTION, ERA_CONTEXT_PLACEHOLDER, cinematic slow push-in"
 set_result "5" "video_prompt" "$VIDEO_PROMPT"
+set_node_label "5" "video prompt"
 log "  Video prompt: ${VIDEO_PROMPT:0:100}..."
 
 # ── Node 6: Video (SkyReels I2V) — board reset required ─────────────────────
@@ -384,7 +401,8 @@ _run_node "node6(skyreels-i2v)" node_image_to_video "6" \
     "SkyReels-V2-I2V-14B-540P" \
     "$VIDEO_PROMPT" \
     "$IMAGE_PATH" \
-    "960" "544" "33" "20" "1964" "http://localhost:8000"
+    "960" "544" "97" "20" "SEED_PLACEHOLDER" "http://localhost:8000"
+set_node_label "6" "video"
 
 # ── Node 7: Poem (Llama-3.3-70B) — board reset required ─────────────────────
 log_step "Node 7: Poem — Llama-3.3-70B-Instruct"
@@ -392,10 +410,11 @@ stop_and_reset "artgen-llama-3.3-70b"
 start_server "artgen-llama-3.3-70b" "http://localhost:8002/v1/models" 30
 _run_node "node7(llama-poem)" node_generate_text "7" \
     "meta-llama/Llama-3.3-70B-Instruct" \
-    "Write a short, evocative poem (4-6 lines) inspired by this scene: {caption}. Set at the 1964 World's Fair. Use sensory detail, optimism, and a sense of wonder at the future." \
+    "POEM_PROMPT_PLACEHOLDER" \
     "$CAPTION" \
     "120" \
     "http://localhost:8002"
+set_node_label "7" "poem"
 POEM=$(get_result '["7", "poem"]')
 
 # ── Node 8: Poem image (FLUX.1-schnell) — board reset required ───────────────
@@ -405,7 +424,8 @@ start_server "flux" "http://localhost:8000/tt-liveness" 30
 _run_node "node8(flux-image)" node_text_to_image "8" \
     "FLUX.1-schnell" \
     "$POEM" \
-    "1024" "1024" "4" "1965" "http://localhost:8000"
+    "1024" "1024" "4" "POEM_SEED_PLACEHOLDER" "http://localhost:8000"
+set_node_label "8" "poem image"
 IMAGE2_PATH=$(get_result '["8", "image_path"]')
 
 # ── Node 9: Add to playlist ───────────────────────────────────────────────────

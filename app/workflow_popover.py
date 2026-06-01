@@ -7,19 +7,23 @@ workflow JSON specs.
 Structure mirrors RemixPopover: three zones stacked vertically inside a
 Gtk.Popover anchored to a Gtk.MenuButton in the main toolbar.
 
-  ┌─ WORKFLOW ────────────────────┐
-  │ [spec dropdown            ▾] │
-  │ <description line>           │
-  ├───────────────────────────────┤
-  │ PARAMETERS                   │
-  │ prompt  [………………………………………]   │
-  │ seed    [   1964          ]  │
-  ├───────────────────────────────┤
-  │ RECENT RUNS                  │
-  │ Jun 01  ✅ 5 art [→ Watch]  │
-  │ May 28  ✅ 5 art [→ Watch]  │
-  │               [▶ Run]        │
-  └──────────────────────────────┘
+  ┌─ WORKFLOW ─────────────────────────┐
+  │ [spec dropdown                 ▾] │
+  │ <description line>               │
+  ├────────────────────────────────────┤
+  │ PARAMETERS                       │
+  │ prompt  [………………………………………]        │
+  │ seed    [   1964             ]   │
+  ├────────────────────────────────────┤
+  │ RECENT RUNS                      │
+  │ Jun 01  ✅ 5 art [→ Watch] [📋] │
+  │   ▼ expanded: thumbnail grid     │
+  │   [img] seed image               │
+  │   [img] foreground mask          │
+  │   [vid] World's Fair video       │
+  │   [img] poem image               │
+  │   "The Unisphere gleams…" (poem) │
+  └──────────────────────────────────┘
 
 Threading:
   Run launches run_workflow.sh via subprocess.Popen (non-blocking).
@@ -31,6 +35,11 @@ Persistence:
   ~/.local/share/tt-local-generator/workflow-runs/index.json
   Each record: {id, spec_path, spec_name, started_at, finished_at,
                 status, playlist_id, params_override, output_dir}.
+
+Portfolio view:
+  Clicking a completed run row toggles an expanded artifact grid showing
+  every output from results.json, with thumbnail, node label, and any
+  text output (captions, poems). Built from the run's output_dir.
 """
 from __future__ import annotations
 
@@ -61,6 +70,62 @@ _OVERRIDABLE_KEYS = {"prompt", "negative_prompt", "seed", "model", "width", "hei
                      "num_inference_steps", "steps", "guidance_scale"}
 
 _MAX_HISTORY_ROWS = 6
+
+# Map results.json output key → human label
+_OUTPUT_LABELS: dict[str, str] = {
+    "image_path":  "seed image",
+    "image2_path": "poem image",
+    "fg_path":     "foreground",
+    "depth_path":  "depth map",
+    "video_path":  "video",
+    "caption":     None,   # text — shown as caption block, not thumbnail
+    "poem":        None,   # text — shown as quote block
+}
+
+# ── Run portfolio loader ──────────────────────────────────────────────────────
+
+def _load_run_portfolio(run: dict) -> list[dict]:
+    """
+    Read the run's results.json and return an ordered list of artifact items.
+
+    Each item is one of:
+      {"type": "image", "path": str, "label": str}
+      {"type": "video", "path": str, "label": str}
+      {"type": "text",  "text": str, "label": str}
+    """
+    output_dir = run.get("output_dir") or ""
+    results_path = Path(output_dir) / "results.json" if output_dir else None
+    if not results_path or not results_path.exists():
+        return []
+
+    try:
+        results = json.loads(results_path.read_text())
+    except Exception:
+        return []
+
+    items: list[dict] = []
+    for node_id in sorted(results.keys(), key=lambda k: int(k) if k.isdigit() else 999):
+        node_data = results.get(node_id, {})
+        # _label written by set_node_label — use it to override default key labels
+        node_label_override = node_data.get("_label")
+
+        for key, value in node_data.items():
+            if key == "_label" or not value:
+                continue
+
+            if key in ("caption", "poem"):
+                # Text outputs — shown as quoted blocks with the node label
+                label_text = node_label_override or key
+                items.append({"type": "text", "text": str(value), "label": label_text})
+            elif key in _OUTPUT_LABELS and _OUTPUT_LABELS[key] is not None:
+                p = Path(str(value))
+                if not p.exists():
+                    continue
+                suffix = p.suffix.lower()
+                media_type = "video" if suffix in (".mp4", ".webm", ".mov") else "image"
+                label = node_label_override or _OUTPUT_LABELS[key]
+                items.append({"type": media_type, "path": str(value), "label": label})
+    return items
 
 
 # ── Run index (persistence) ───────────────────────────────────────────────────
@@ -328,9 +393,19 @@ class WorkflowPopover(Gtk.Popover):
             self._history_rows.append((run["id"], row))
 
     def _make_history_row(self, run: dict) -> Gtk.Box:
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        row.set_margin_top(2)
-        row.set_name(f"wf-run-{run['id']}")
+        """Build a history row widget.
+
+        For completed runs, the row is a collapsible container: a summary header
+        line (date / status / buttons) plus a hidden portfolio grid that expands
+        when the user clicks the row.
+        """
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        container.set_margin_top(2)
+        container.set_name(f"wf-run-{run['id']}")
+
+        # ── Summary header ────────────────────────────────────────────────────
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        container.append(header)
 
         # Date
         try:
@@ -342,64 +417,208 @@ class WorkflowPopover(Gtk.Popover):
         date_lbl.set_xalign(0)
         date_lbl.add_css_class("muted")
         date_lbl.set_size_request(46, -1)
-        row.append(date_lbl)
+        header.append(date_lbl)
 
         # Status + live progress
         status = run.get("status", "running")
         icon = {"done": "✅", "failed": "❌", "running": "⏳"}.get(status, "⏳")
         status_lbl = Gtk.Label(label=icon)
-        row.append(status_lbl)
+        header.append(status_lbl)
 
         # Progress / artifact count label
         if status == "running":
             prog = Gtk.Label(label=run.get("progress", "starting…"))
         else:
             artifacts = run.get("artifact_count", 0)
-            prog = Gtk.Label(label=f"{artifacts} art" if artifacts else "")
+            prog = Gtk.Label(label=f"{artifacts} artifacts" if artifacts else "")
         prog.set_hexpand(True)
         prog.set_xalign(0)
         prog.add_css_class("muted")
-        row.append(prog)
+        header.append(prog)
         run["_progress_lbl"] = prog  # stash for live updates
 
-        # Warning badge — shown when any ⚠️ lines were seen during the run.
-        # Displays the count ("⚠️ 2") so the operator knows how many nodes were
-        # skipped without having to open the full log.
+        # Warning badge
         if run.get("had_partial_failure"):
             wcount = run.get("warning_count", 1)
             warn_lbl = Gtk.Label(label=f"⚠️ {wcount}" if wcount > 1 else "⚠️")
             warn_lbl.set_tooltip_text(
                 f"{wcount} warning(s) during this run — open Log for details"
             )
-            row.append(warn_lbl)
+            header.append(warn_lbl)
 
-        # Watch button (only when done + playlist)
+        # Watch button
         playlist_id = run.get("playlist_id")
         if playlist_id and status == "done":
             watch_btn = Gtk.Button(label="→ Watch")
             watch_btn.add_css_class("flat")
             watch_btn.connect("clicked", lambda _, pid=playlist_id: self._on_watch(pid))
-            row.append(watch_btn)
+            header.append(watch_btn)
 
-        # Log button — shown for completed and failed runs when a log file exists
+        # Log button
         log_path = run.get("log_file") or run.get("log_path")
         if log_path and status in ("done", "failed"):
-            from pathlib import Path as _Path
-            if _Path(log_path).exists():
-                log_btn = Gtk.Button(label="📋 Log")
+            if Path(log_path).exists():
+                log_btn = Gtk.Button(label="📋")
+                log_btn.set_tooltip_text("View run log")
                 log_btn.add_css_class("flat")
                 log_btn.connect("clicked", lambda _, lp=log_path: self._on_view_log(lp))
-                row.append(log_btn)
+                header.append(log_btn)
 
-        # Cancel button — only shown while this run is the active running run
+        # Expand/collapse toggle for completed runs with output
+        if status == "done":
+            toggle_btn = Gtk.Button(label="▾")
+            toggle_btn.set_tooltip_text("Show artifacts")
+            toggle_btn.add_css_class("flat")
+            header.append(toggle_btn)
+
+            # Portfolio grid — hidden by default
+            portfolio = self._make_portfolio_grid(run)
+            portfolio.set_visible(False)
+            container.append(portfolio)
+
+            def _toggle_portfolio(btn, grid=portfolio):
+                expanded = grid.get_visible()
+                grid.set_visible(not expanded)
+                btn.set_label("▴" if not expanded else "▾")
+                btn.set_tooltip_text("Hide artifacts" if not expanded else "Show artifacts")
+            toggle_btn.connect("clicked", _toggle_portfolio)
+
+        # Cancel button — only while this run is the active running run
         if status == "running" and run.get("id") == self._active_run_id:
             cancel_btn = Gtk.Button(label="⏹")
             cancel_btn.set_tooltip_text("Cancel this run")
             cancel_btn.add_css_class("flat")
             cancel_btn.connect("clicked", lambda _, r=run: self._on_cancel_row(r))
-            row.append(cancel_btn)
+            header.append(cancel_btn)
 
-        return row
+        return container
+
+    def _make_portfolio_grid(self, run: dict) -> Gtk.Box:
+        """Build the expanded artifact grid for a completed run.
+
+        Shows each artifact from results.json: thumbnail (image/video frame)
+        with label, plus text outputs (caption, poem) as quoted blocks.
+        """
+        grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        grid.set_margin_top(6)
+        grid.set_margin_bottom(4)
+        grid.set_margin_start(8)
+
+        items = _load_run_portfolio(run)
+        if not items:
+            lbl = Gtk.Label(label="No artifact data found for this run.")
+            lbl.add_css_class("muted")
+            lbl.set_xalign(0)
+            grid.append(lbl)
+            return grid
+
+        # Collect image/video items for a thumbnail strip
+        media_items = [it for it in items if it["type"] in ("image", "video")]
+        text_items  = [it for it in items if it["type"] == "text"]
+
+        if media_items:
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+            scroll.set_min_content_height(90)
+            scroll.set_max_content_height(90)
+
+            strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            strip.set_margin_top(2)
+            strip.set_margin_bottom(2)
+            scroll.set_child(strip)
+
+            for item in media_items:
+                cell = self._make_artifact_cell(item)
+                strip.append(cell)
+
+            grid.append(scroll)
+
+        for item in text_items:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.set_margin_top(2)
+
+            tag = Gtk.Label(label=item["label"].upper())
+            tag.set_size_request(52, -1)
+            tag.set_xalign(0)
+            tag.set_valign(Gtk.Align.START)
+            tag.add_css_class("muted")
+            row.append(tag)
+
+            text_lbl = Gtk.Label(label=item["text"][:160] + ("…" if len(item["text"]) > 160 else ""))
+            text_lbl.set_xalign(0)
+            text_lbl.set_wrap(True)
+            text_lbl.set_max_width_chars(36)
+            text_lbl.set_hexpand(True)
+            row.append(text_lbl)
+
+            grid.append(row)
+
+        return grid
+
+    def _make_artifact_cell(self, item: dict) -> Gtk.Box:
+        """80×80 thumbnail cell with label below."""
+        cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        cell.set_size_request(80, -1)
+
+        try:
+            if item["type"] == "image":
+                pb = self._load_thumbnail(item["path"], 80, 80)
+            else:
+                # Video — try to extract a frame via GdkPixbuf paintable
+                pb = self._load_video_thumbnail(item["path"], 80, 80)
+
+            if pb:
+                img = Gtk.Image.new_from_pixbuf(pb)
+                img.set_size_request(80, 80)
+            else:
+                img = Gtk.Label(label="🎬" if item["type"] == "video" else "🖼")
+                img.set_size_request(80, 80)
+        except Exception:
+            img = Gtk.Label(label="?")
+            img.set_size_request(80, 80)
+
+        cell.append(img)
+
+        lbl = Gtk.Label(label=item["label"])
+        lbl.set_max_width_chars(10)
+        lbl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+        lbl.add_css_class("muted")
+        lbl.set_xalign(0.5)
+        cell.append(lbl)
+        return cell
+
+    @staticmethod
+    def _load_thumbnail(path: str, w: int, h: int):
+        """Load image as scaled GdkPixbuf."""
+        try:
+            from gi.repository import GdkPixbuf
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, w, h, True)
+            return pb
+        except Exception:
+            return None
+
+    @staticmethod
+    def _load_video_thumbnail(path: str, w: int, h: int):
+        """Extract a GdkPixbuf thumbnail from an MP4 using the app's existing thumbnail."""
+        try:
+            # First try: same-basename .jpg in thumbnails dir
+            from gi.repository import GdkPixbuf
+            from pathlib import Path as _Path
+            storage = _Path.home() / ".local" / "share" / "tt-video-gen" / "thumbnails"
+            stem = _Path(path).stem
+            for ext in (".jpg", ".jpeg", ".png"):
+                thumb = storage / (stem + ext)
+                if thumb.exists():
+                    return GdkPixbuf.Pixbuf.new_from_file_at_scale(str(thumb), w, h, True)
+            # Second try: tt-local-generator thumbnails dir
+            storage2 = _Path.home() / ".local" / "share" / "tt-local-generator" / "thumbnails"
+            for ext in (".jpg", ".jpeg", ".png"):
+                thumb2 = storage2 / (stem + ext)
+                if thumb2.exists():
+                    return GdkPixbuf.Pixbuf.new_from_file_at_scale(str(thumb2), w, h, True)
+        except Exception:
+            pass
+        return None
 
     # ── Signal handlers ───────────────────────────────────────────────────────
 
