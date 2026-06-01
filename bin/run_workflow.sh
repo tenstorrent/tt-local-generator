@@ -42,6 +42,14 @@ mkdir -p "$OUTPUT_DIR"
 RESULTS_JSON="$OUTPUT_DIR/results.json"
 echo "{}" > "$RESULTS_JSON"
 
+# ── Fix 5: Tee all output to a timestamped log file ──────────────────────────
+# The popover captures the LOG: prefix line and stores the path in the run record
+# so the "Log" button in history rows can open the file in LogViewerWindow.
+LOG_FILE="${HOME}/.local/share/tt-local-generator/logs/workflow/$(date +%Y%m%d_%H%M%S)_run.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "LOG:$LOG_FILE"
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 log_step() { echo ""; echo "══ $* ══"; }
 
@@ -84,7 +92,22 @@ start_server() {
             docker exec "$(docker ps -q | head -1)" chmod 777 /tmp/prometheus_multiproc 2>/dev/null || true
             return 0
         fi
-        [[ $((i % 4)) -eq 0 ]] && log "  ... $((i*30/60))min elapsed"
+        # Fix 2: Emit tagged progress lines every ~2 min so the popover progress
+        # label updates during long SkyReels warmup (model compile can take 60 min).
+        # Every 4th poll (2 min) we also tail the latest SkyReels container log so
+        # operators can see actual compile/load progress without grepping manually.
+        if [[ $((i % 4)) -eq 0 ]]; then
+            log "[${server_key} warmup] $((i*30/60))min elapsed, waiting for model…"
+            # Tail the most recent media_*SkyReels* log file if present
+            local skyreels_log
+            skyreels_log=$(ls -t "${HOME}/code/tt-local-generator"/media_*SkyReels*.log 2>/dev/null | head -1)
+            if [[ -n "$skyreels_log" ]]; then
+                # Grab the last meaningful line (non-empty, skip progress bar noise)
+                local last_line
+                last_line=$(grep -v '^\s*$' "$skyreels_log" 2>/dev/null | grep -v '\[=' | tail -1 || true)
+                [[ -n "$last_line" ]] && log "⏳ SkyReels: ${last_line:0:120}"
+            fi
+        fi
     done
     log "  ❌ $server_key timed out after ${max_wait_min} min"
     return 1
@@ -120,25 +143,73 @@ node_text_to_image() {
     log "  Generating image: $model (${width}x${height}, ${steps} steps)"
     [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "image_path" "$OUTPUT_DIR/node${node_id}_image.png"; return 0; }
 
-    JOB=$(python3 - "$prompt" "$width" "$height" "$steps" "$seed" "$server" << 'PY'
-import sys, json, urllib.request
+    # Fix 1: Add 2s delay before each FLUX submission to avoid overwhelming the
+    # server when multiple image nodes run in sequence (prevents silent 429s).
+    sleep 2
+
+    # Fix 4: Retry job submission up to 3 times with 10s backoff on any failure
+    # (covers transient network errors and server-side 429 rate limiting).
+    local JOB="" attempt
+    for attempt in 1 2 3; do
+        JOB=$(python3 - "$prompt" "$width" "$height" "$steps" "$seed" "$server" << 'PY'
+import sys, json, urllib.request, urllib.error
 prompt, w, h, steps, seed, server = sys.argv[1:]
 payload = {"prompt": prompt, "width": int(w), "height": int(h),
            "num_inference_steps": int(steps), "seed": int(seed)}
 req = urllib.request.Request(f"{server}/v1/images/generations",
     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
-with urllib.request.urlopen(req, timeout=30) as r:
-    d = json.loads(r.read()); print(d.get("id", "ERROR:"+str(d)))
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read()); print(d.get("id", "ERROR:"+str(d)))
+except urllib.error.HTTPError as e:
+    # Emit the HTTP status so the shell can detect rate limiting
+    print(f"HTTP_ERROR:{e.code}")
+except Exception as e:
+    print(f"ERROR:{e}")
 PY
-    )
+        2>/dev/null || true)
+        if [[ -z "$JOB" || "$JOB" == ERROR:* || "$JOB" == HTTP_ERROR:* ]]; then
+            log "  ⚠️  Job submission attempt $attempt failed: $JOB"
+            if [[ $attempt -lt 3 ]]; then
+                log "  Waiting 10s before retry..."
+                sleep 10
+            fi
+        else
+            break
+        fi
+    done
+
+    if [[ -z "$JOB" || "$JOB" == ERROR:* || "$JOB" == HTTP_ERROR:* ]]; then
+        log "  ❌ Image generation failed after 3 submission attempts (node $node_id)"
+        return 1
+    fi
+
     log "  Job: $JOB"
     OUT="$OUTPUT_DIR/node${node_id}_image.png"
     for i in $(seq 1 40); do
         sleep 30
-        STATUS=$(curl -sf "$server/v1/images/generations/$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null)
+        # Fix 1: Detect 429 rate limit responses during poll; back off and retry
+        # rather than silently dropping the status and leaving $STATUS empty.
+        RAW_STATUS=$(curl -s -w '\n%{http_code}' "$server/v1/images/generations/$JOB" 2>/dev/null)
+        HTTP_CODE=$(echo "$RAW_STATUS" | tail -1)
+        if [[ "$HTTP_CODE" == "429" ]]; then
+            log "  ⚠️  Rate limited (429) — waiting 60s before continuing poll"
+            sleep 60
+            continue
+        fi
+        STATUS=$(echo "$RAW_STATUS" | head -1 | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || true)
         [[ "$STATUS" == "completed" ]] && break
-        [[ "$STATUS" == "failed" ]] && { log "  ❌ Image generation failed"; return 1; }
+        [[ "$STATUS" == "failed" ]] && { log "  ❌ Image generation failed (server reported failure)"; return 1; }
+        if [[ -z "$STATUS" || "$STATUS" == "?" ]]; then
+            log "  ⚠️  Unexpected poll status '$STATUS' HTTP=$HTTP_CODE (node $node_id, poll $i)"
+        fi
     done
+
+    if [[ "$STATUS" != "completed" ]]; then
+        log "  ⚠️  node $node_id skipped: image job did not complete (final status: $STATUS)"
+        return 1
+    fi
+
     curl -sf "$server/v1/images/generations/$JOB/download" -o "$OUT"
     log "  ✅ Image saved: $OUT ($(du -sh "$OUT" | cut -f1))"
     set_result "$node_id" "image_path" "$OUT"
@@ -167,11 +238,24 @@ PY
     OUT="$OUTPUT_DIR/node${node_id}_video.mp4"
     for i in $(seq 1 40); do
         sleep 30
-        STATUS=$(curl -sf "$server/v1/videos/generations/$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null)
+        STATUS=$(curl -sf "$server/v1/videos/generations/$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || true)
         [[ "$STATUS" == "completed" ]] && break
-        [[ "$STATUS" == "failed" ]] && { log "  ❌ Video generation failed"; return 1; }
-        [[ $((i % 4)) -eq 0 ]] && log "  ... $((i*30))s elapsed"
+        [[ "$STATUS" == "failed" ]] && { log "  ❌ Video generation failed (server reported failure)"; return 1; }
+        # Fix 2 (I2V variant) + Fix 3: emit tagged progress lines so the popover
+        # label updates live; also surface unexpected poll states.
+        if [[ $((i % 4)) -eq 0 ]]; then
+            log "[SkyReels I2V] $((i*30))s elapsed, generating…"
+        fi
+        if [[ -z "$STATUS" || "$STATUS" == "?" ]]; then
+            log "  ⚠️  Unexpected poll status '$STATUS' for I2V job $JOB (poll $i)"
+        fi
     done
+
+    if [[ "$STATUS" != "completed" ]]; then
+        log "  ⚠️  node $node_id skipped: video job did not complete (final status: $STATUS)"
+        return 1
+    fi
+
     curl -sf "$server/v1/videos/generations/$JOB/download" -o "$OUT"
     log "  ✅ Video saved: $OUT ($(du -sh "$OUT" | cut -f1))"
     set_result "$node_id" "video_path" "$OUT"
@@ -241,27 +325,50 @@ log_step "1964 World's Fair Experiment"
 log "Output directory: $OUTPUT_DIR"
 [[ $DRY_RUN -eq 1 ]] && log "DRY RUN — no actual inference will run"
 
+# Fix 3: Track partial failures so we can distinguish "all good" from "some
+# nodes skipped" in the final summary.  Node functions emit ⚠️ lines on their
+# own, and the popover _on_run_stdout parser picks those up for live display.
+_failed_nodes=""
+
+# Guard helper: run a node function; on failure record the node tag and
+# continue (set +e scope) rather than aborting the whole pipeline via set -e.
+_run_node() {
+    local tag="$1"; shift
+    set +e
+    "$@"
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+        _failed_nodes="${_failed_nodes} ${tag}"
+        log "  ⚠️  ${tag} failed (exit $rc) — continuing pipeline"
+    fi
+    return 0
+}
+
 # ── Node 1: Seed image (FLUX.1-schnell) ──────────────────────────────────────
 log_step "Node 1: Seed image — FLUX.1-schnell"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
-node_text_to_image "1" \
+_run_node "node1(flux-image)" node_text_to_image "1" \
     "FLUX.1-schnell" \
     "The 1964 New York World's Fair, Unisphere gleaming in the sunlight, futuristic pavilions, optimistic crowds in period clothing, Kodachrome colors, cinematic wide shot" \
     "1024" "1024" "4" "1964" "http://localhost:8000"
 
 IMAGE_PATH=$(get_result '["1", "image_path"]')
+if [[ -z "$IMAGE_PATH" ]]; then
+    log "  ⚠️  node1 skipped: image_path is empty — downstream nodes may fail"
+fi
 
 # ── Nodes 2-4: CPU plugins (no reset) ────────────────────────────────────────
 log_step "Node 2: Caption image — BLIP (CPU)"
-node_caption_image "2" "$IMAGE_PATH" "a cinematic scene showing"
+_run_node "node2(blip-caption)" node_caption_image "2" "$IMAGE_PATH" "a cinematic scene showing"
 CAPTION=$(get_result '["2", "caption"]')
 
 log_step "Node 3: Remove background — RMBG (CPU)"
-node_remove_background "3" "$IMAGE_PATH"
+_run_node "node3(rmbg)" node_remove_background "3" "$IMAGE_PATH"
 
 log_step "Node 4: Depth map — GLPN (CPU)"
-node_estimate_depth "4" "$IMAGE_PATH"
+_run_node "node4(depth)" node_estimate_depth "4" "$IMAGE_PATH"
 
 # ── Node 5: Compose video prompt ─────────────────────────────────────────────
 log_step "Node 5: Compose video prompt"
@@ -273,7 +380,7 @@ log "  Video prompt: ${VIDEO_PROMPT:0:100}..."
 log_step "Node 6: World's Fair video — SkyReels I2V"
 stop_and_reset "skyreels"
 start_server "skyreels" "http://localhost:8000/tt-liveness" 60
-node_image_to_video "6" \
+_run_node "node6(skyreels-i2v)" node_image_to_video "6" \
     "SkyReels-V2-I2V-14B-540P" \
     "$VIDEO_PROMPT" \
     "$IMAGE_PATH" \
@@ -283,7 +390,7 @@ node_image_to_video "6" \
 log_step "Node 7: Poem — Llama-3.3-70B-Instruct"
 stop_and_reset "artgen-llama-3.3-70b"
 start_server "artgen-llama-3.3-70b" "http://localhost:8002/v1/models" 30
-node_generate_text "7" \
+_run_node "node7(llama-poem)" node_generate_text "7" \
     "meta-llama/Llama-3.3-70B-Instruct" \
     "Write a short, evocative poem (4-6 lines) inspired by this scene: {caption}. Set at the 1964 World's Fair. Use sensory detail, optimism, and a sense of wonder at the future." \
     "$CAPTION" \
@@ -295,7 +402,7 @@ POEM=$(get_result '["7", "poem"]')
 log_step "Node 8: Poem image — FLUX.1-schnell"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
-node_text_to_image "8" \
+_run_node "node8(flux-image)" node_text_to_image "8" \
     "FLUX.1-schnell" \
     "$POEM" \
     "1024" "1024" "4" "1965" "http://localhost:8000"
@@ -391,5 +498,12 @@ print(f"{'─'*60}")
 PY
 
 log ""
-log "✅ 1964 World's Fair pipeline complete!"
-log "   Results JSON: $RESULTS_JSON"
+# Fix 3: Report partial vs full success so the popover and log make it clear
+# when some nodes were skipped rather than silently claiming full completion.
+if [[ -n "$_failed_nodes" ]]; then
+    log "⚠️  Pipeline finished with partial failures:$_failed_nodes"
+    log "   Results JSON: $RESULTS_JSON"
+else
+    log "✅ 1964 World's Fair pipeline complete!"
+    log "   Results JSON: $RESULTS_JSON"
+fi

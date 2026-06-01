@@ -183,6 +183,8 @@ class WorkflowPopover(Gtk.Popover):
         self._active_run_id: Optional[str] = None
         self._active_run_proc: Optional[subprocess.Popen] = None
         self._history_rows: list[Gtk.Widget] = []
+        # "run" or "cancel" — tracks what the run button currently does
+        self._run_btn_mode: str = "run"
 
         self.set_position(Gtk.PositionType.BOTTOM)
         self.set_autohide(True)
@@ -360,6 +362,17 @@ class WorkflowPopover(Gtk.Popover):
         row.append(prog)
         run["_progress_lbl"] = prog  # stash for live updates
 
+        # Warning badge — shown when any ⚠️ lines were seen during the run.
+        # Displays the count ("⚠️ 2") so the operator knows how many nodes were
+        # skipped without having to open the full log.
+        if run.get("had_partial_failure"):
+            wcount = run.get("warning_count", 1)
+            warn_lbl = Gtk.Label(label=f"⚠️ {wcount}" if wcount > 1 else "⚠️")
+            warn_lbl.set_tooltip_text(
+                f"{wcount} warning(s) during this run — open Log for details"
+            )
+            row.append(warn_lbl)
+
         # Watch button (only when done + playlist)
         playlist_id = run.get("playlist_id")
         if playlist_id and status == "done":
@@ -367,6 +380,24 @@ class WorkflowPopover(Gtk.Popover):
             watch_btn.add_css_class("flat")
             watch_btn.connect("clicked", lambda _, pid=playlist_id: self._on_watch(pid))
             row.append(watch_btn)
+
+        # Log button — shown for completed and failed runs when a log file exists
+        log_path = run.get("log_file") or run.get("log_path")
+        if log_path and status in ("done", "failed"):
+            from pathlib import Path as _Path
+            if _Path(log_path).exists():
+                log_btn = Gtk.Button(label="📋 Log")
+                log_btn.add_css_class("flat")
+                log_btn.connect("clicked", lambda _, lp=log_path: self._on_view_log(lp))
+                row.append(log_btn)
+
+        # Cancel button — only shown while this run is the active running run
+        if status == "running" and run.get("id") == self._active_run_id:
+            cancel_btn = Gtk.Button(label="⏹")
+            cancel_btn.set_tooltip_text("Cancel this run")
+            cancel_btn.add_css_class("flat")
+            cancel_btn.connect("clicked", lambda _, r=run: self._on_cancel_row(r))
+            row.append(cancel_btn)
 
         return row
 
@@ -381,7 +412,57 @@ class WorkflowPopover(Gtk.Popover):
         self.popdown()
         self._on_watch_playlist(playlist_id)
 
+    def _on_view_log(self, log_path: str) -> None:
+        """Open the workflow run log file.
+
+        Tries the app's Debug → Log Viewer first (via the root MainWindow).
+        Falls back to xdg-open so the log is always reachable even if the
+        LogViewerWindow class is unavailable.
+        """
+        opened_in_viewer = False
+        try:
+            root = self.get_root()
+            if root is not None and hasattr(root, "_open_log_viewer"):
+                root._open_log_viewer()
+                # Give the viewer a moment to construct, then load the file
+                def _load_after_open():
+                    try:
+                        viewer = getattr(root, "_log_viewer_win", None)
+                        if viewer and hasattr(viewer, "open_to"):
+                            viewer.open_to(log_path)
+                    except Exception:
+                        pass
+                    return GLib.SOURCE_REMOVE
+                GLib.timeout_add(300, _load_after_open)
+                opened_in_viewer = True
+        except Exception:
+            pass
+        if not opened_in_viewer:
+            subprocess.Popen(["xdg-open", log_path])
+
+    def _on_cancel_row(self, run: dict) -> None:
+        """Cancel button in a running history row — terminate the active process."""
+        if run.get("id") != self._active_run_id:
+            return  # guard: only the live run can be cancelled this way
+        self._cancel_run()
+
+    def _cancel_run(self) -> None:
+        """Terminate the active run process and mark the run as failed."""
+        proc = self._active_run_proc
+        if proc and proc.poll() is None:
+            proc.terminate()
+        # _finish_run will be called via the IO_HUP path once the process exits;
+        # reset mode immediately so the run button is usable again right away.
+        self._run_btn_mode = "run"
+        self._run_btn.set_label("▶  Run Workflow")
+        self._run_btn.set_sensitive(True)
+
     def _on_run_clicked(self, _btn) -> None:
+        # If the button is in cancel mode (active run in progress), cancel it.
+        if self._run_btn_mode == "cancel":
+            self._cancel_run()
+            return
+
         idx = self._spec_dd.get_selected()
         if idx >= len(self._specs):
             return
@@ -424,9 +505,12 @@ class WorkflowPopover(Gtk.Popover):
         live_row = self._make_history_row(run)
         self._history_box.prepend(live_row)
 
-        # Disable run button
-        self._run_btn.set_label("⟳  Running…")
-        self._run_btn.set_sensitive(False)
+        # Repurpose the run button as a cancel button while a run is active.
+        # Keeping it sensitive lets the user abort a long-running SkyReels warmup
+        # without having to kill the terminal process manually.
+        self._run_btn.set_label("■  Cancel")
+        self._run_btn.set_sensitive(True)
+        self._run_btn_mode = "cancel"
 
         # Launch subprocess
         env = {**os.environ, "WORKFLOW_RUN_ID": run_id}
@@ -451,7 +535,18 @@ class WorkflowPopover(Gtk.Popover):
                 return GLib.SOURCE_CONTINUE
 
             line = line.rstrip()
-            # Parse progress hints from run_workflow.sh
+
+            # Fix 5: Capture the log file path emitted early by run_workflow.sh.
+            # Format: LOG:/path/to/file.log — store in run record so the history
+            # row "Log" button can open it in LogViewerWindow.
+            if line.startswith("LOG:"):
+                log_path = line[4:].strip()
+                run["log_file"] = log_path
+                _run_index.update(run["id"], log_file=log_path)
+
+            # Parse progress hints from run_workflow.sh.
+            # Matches lines starting with ══ (log_step) or [ (tagged progress like
+            # "[SkyReels warmup] 8min elapsed" or "[10:23:45] Node 1:…").
             if line.startswith("══") or line.startswith("["):
                 step = line.strip("═ []")
                 progress = step[:40] if step else "running…"
@@ -459,6 +554,29 @@ class WorkflowPopover(Gtk.Popover):
                 _run_index.update(run["id"], progress=progress)
                 if prog_lbl:
                     GLib.idle_add(prog_lbl.set_label, progress)
+
+            # Fix 4: SkyReels warmup lines — run_workflow.sh tails the container log
+            # and emits "⏳ SkyReels: <last non-empty log line>" every ~2 min.
+            # Show these verbatim in the progress label so the operator can see
+            # compile / weight-load progress without opening the full log.
+            if line.startswith("⏳ SkyReels:") or "⏳ SkyReels:" in line:
+                skyreels_text = line.strip()[:60]
+                run["progress"] = skyreels_text
+                _run_index.update(run["id"], progress=skyreels_text)
+                if prog_lbl:
+                    GLib.idle_add(prog_lbl.set_label, skyreels_text)
+
+            # Fix 3 / Fix 5: Surface ⚠️ partial-failure / warning lines in the
+            # progress label so operators notice skipped nodes without opening
+            # the log file.  Also track warning count for the badge in history rows.
+            if "⚠️" in line or "partial failures" in line.lower():
+                warning_text = line.strip()[:60]
+                run["had_partial_failure"] = True
+                run["warning_count"] = run.get("warning_count", 0) + 1
+                _run_index.update(run["id"], had_partial_failure=True,
+                                  warning_count=run["warning_count"])
+                if prog_lbl:
+                    GLib.idle_add(prog_lbl.set_label, warning_text)
 
             # Detect playlist creation
             if "PLAYLIST:" in line:
@@ -501,9 +619,10 @@ class WorkflowPopover(Gtk.Popover):
                           playlist_id=run.get("playlist_id"),
                           artifact_count=run.get("artifact_count", 0))
 
-        # Re-enable run button
+        # Restore the run button to its default state
         self._run_btn.set_label("▶  Run Workflow")
         self._run_btn.set_sensitive(True)
+        self._run_btn_mode = "run"
         self._active_run_id = None
         self._active_run_proc = None
 
