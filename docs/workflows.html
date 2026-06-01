@@ -335,66 +335,51 @@
       artifacts. Plugins are the atomic units; workflows are the compositions.
     </p>
 
-    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 1rem;color:var(--text);">Node types</h3>
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 1rem;color:var(--text);">Supported class_types</h3>
     <table>
       <thead>
-        <tr><th>class_type</th><th>What it does</th><th>Key inputs</th></tr>
+        <tr><th>class_type</th><th>What it does</th><th>Hardware</th></tr>
       </thead>
       <tbody>
         <tr>
-          <td>PromptConditioner</td>
-          <td>Polishes or expands a raw text prompt using the Qwen3-0.6B prompt server</td>
-          <td>text, style_hint, model</td>
+          <td>TTLGTextToImage</td>
+          <td>Text-to-image via FLUX.1-schnell (~3s) or SDXL/cpp_server (~2s)</td>
+          <td>QB2 (P300X2)</td>
         </tr>
         <tr>
-          <td>CLIPTextEncode</td>
-          <td>Encodes a text prompt for diffusion models (ComfyUI standard node)</td>
-          <td>text, clip</td>
+          <td>TTLGImageToVideo</td>
+          <td>Image-to-video via SkyReels V2 I2V (~90s) or Wan2.2 T2V</td>
+          <td>QB2 (P300X2)</td>
         </tr>
         <tr>
-          <td>CheckpointLoaderSimple</td>
-          <td>Loads a model checkpoint by name from the HuggingFace cache</td>
-          <td>ckpt_name</td>
+          <td>TTLGGenerateText</td>
+          <td>LLM text generation — Llama-3.3-70B, Qwen3-32B, Qwen3-8B, etc.</td>
+          <td>QB2 artgen server</td>
         </tr>
         <tr>
-          <td>KSampler</td>
-          <td>Runs diffusion sampling — standard ComfyUI sampler node</td>
-          <td>model, positive, negative, latent_image, steps, cfg, sampler_name, scheduler</td>
+          <td>TTLGCaptionImage</td>
+          <td>Image captioning via BLIP — returns a natural-language description</td>
+          <td>CPU (tenstorrent venv)</td>
         </tr>
         <tr>
-          <td>VAEDecode</td>
-          <td>Decodes a latent tensor to pixel space</td>
-          <td>samples, vae</td>
+          <td>TTLGRemoveBackground</td>
+          <td>Background removal via RMBG-1.4 — returns a transparent PNG</td>
+          <td>CPU (tenstorrent venv)</td>
         </tr>
         <tr>
-          <td>SaveImage</td>
-          <td>Writes the output artifact to the history store and the file system</td>
-          <td>images, filename_prefix</td>
+          <td>TTLGEstimateDepth</td>
+          <td>Depth map via GLPN-KITTI — returns a grayscale depth PNG (brighter = closer)</td>
+          <td>CPU (tenstorrent venv)</td>
         </tr>
         <tr>
-          <td>VideoGenNode</td>
-          <td>Submits a text-to-video request to the running inference server (Wan2.2, Mochi, etc.)</td>
-          <td>prompt, model_name, server_url, num_frames</td>
+          <td>TTLGPromptCompose</td>
+          <td>String template — combines outputs from prior nodes into a new prompt string</td>
+          <td>None (string operation)</td>
         </tr>
         <tr>
-          <td>ImageToVideoNode</td>
-          <td>Submits an image-to-video (I2V) request — SkyReels seed frame workflow</td>
-          <td>image, prompt, model_name, server_url</td>
-        </tr>
-        <tr>
-          <td>ArtGenNode</td>
-          <td>Runs any registered art generator plugin by name</td>
-          <td>plugin_name, args (dict)</td>
-        </tr>
-        <tr>
-          <td>RemixNode</td>
-          <td>Takes one artifact and remixes it into another type via the plugin remix graph</td>
-          <td>source, target_type, ingredients</td>
-        </tr>
-        <tr>
-          <td>FFmpegExtractFrame</td>
-          <td>Extracts a single frame from a video at a given timestamp</td>
-          <td>video_path, timestamp_s</td>
+          <td>TTLGAddToPlaylist</td>
+          <td>Imports all output artifacts into the app and creates a named playlist for TT-TV</td>
+          <td>None (app store write)</td>
         </tr>
       </tbody>
     </table>

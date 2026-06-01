@@ -331,7 +331,7 @@
 <section id="plugins">
   <div class="wrap">
     <div class="section-label">Built-in generators</div>
-    <h2 class="section-title">Twelve plugins, one interface</h2>
+    <h2 class="section-title">Plugins &amp; transforms</h2>
     <p class="section-sub">
       All built-in plugins live in <code>plugins/</code> at the repo root. Each one has an
       <code>mcp.json</code> manifest declaring its tool schema, output type, and remix graph edges,
@@ -657,6 +657,46 @@
       </div>
 
     </div><!-- /plugin-grid -->
+
+    <!-- Forge transform plugins -->
+    <h3 style="font-size:1.2rem;font-weight:700;margin-top:4rem;margin-bottom:.5rem;">Right-click transforms</h3>
+    <p style="color:var(--text2);font-size:.9rem;margin-bottom:1.5rem;">
+      Right-click any gallery card to apply a forge-powered transform. Results appear as new cards
+      and feed straight into the <strong>Remix</strong> flow — use a background-removed image as a
+      SkyReels I2V seed, or a depth map as compositing reference.
+    </p>
+    <div class="plugin-grid" style="margin-top:0;">
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Remove background <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Isolates the foreground subject into a transparent PNG using RMBG-1.4. No hardware needed — runs in the tenstorrent Python venv in ~15–30 seconds.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> briaai/RMBG-1.4</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> transparent PNG</span>
+          </div>
+        </div>
+      </div>
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Describe this <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Generates a natural-language caption for any image using BLIP. The caption populates the prompt field — useful as a starting point for variations or as a video prompt.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> Salesforce/blip-image-captioning-base</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> text caption</span>
+          </div>
+        </div>
+      </div>
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Show depth <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Produces a grayscale depth map from any image using GLPN-KITTI. Brighter = closer to camera. Useful as a compositing hint or ControlNet conditioning reference.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> vinvino02/glpn-kitti</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> grayscale PNG</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- AnimateDiff GIF gallery -->
     <h3 style="font-size:1.2rem;font-weight:700;margin-top:4rem;margin-bottom:.5rem;">AnimateDiff examples</h3>
