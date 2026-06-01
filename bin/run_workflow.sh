@@ -358,7 +358,7 @@ try:
         rec = MediaRecord(
             id=rid, file_path=str(dest), thumbnail_path=str(thumb),
             prompt=prompt_text, media_type=media_type,
-            created_at=ts.isoformat(), model=model,
+            created_at=ts.isoformat(), model_id=model, generator_type=None, starred=0,
             params=json.dumps({"workflow": "1964-worlds-fair", "video_path": str(dest) if mtype == "video" else "", "image_path": str(dest) if mtype != "video" else ""}),
         )
         _ms.add(rec)
@@ -376,7 +376,7 @@ try:
         if rid: record_ids.append(rid)
 
     if record_ids:
-        _ps.add_records(pl["id"], record_ids)
+        _ps.add_records(pl.id, record_ids)
 
     print(f"\n✅ Playlist '{playlist_name}' created in the app ({len(record_ids)} artifacts)")
     print(f"   Open tt-gen → File → Playlists to view")
