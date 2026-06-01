@@ -8,7 +8,8 @@
 #
 # Weights:  stabilityai/stable-diffusion-xl-base-1.0 (cached at ~/.cache/huggingface)
 # Port:     8000  (same as the media server)
-# Endpoint: POST /image/generations  (cpp OpenAI-compatible image API)
+# Endpoint: POST /v1/images/generations  (cpp OpenAI-compatible image API)
+# Auth:     Bearer your-secret-key  (cpp default; set OPENAI_API_KEY env to override)
 #
 # Usage:
 #   ./start_sdxl.sh            # start server and tail its log
