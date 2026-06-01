@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workflows — tt-local-generator</title>
+  <meta name="description" content="Multi-step generative pipelines for tt-local-generator. Chain FLUX images, SkyReels video, LLM text, and forge plugins into one run from the ⚙ Workflow toolbar button.">
+  <link rel="icon" href="assets/tenstorrent.png" type="image/png">
+
+  <style>
+    :root {
+      --bg0: #080f14; --bg1: #0d1b24; --bg2: #122130;
+      --card: #162838; --card2: #1a3040;
+      --teal: #4fd1c5; --teal-dim: #3aada2; --teal-glow: rgba(79,209,197,.15);
+      --pink: #ec96b8; --gold: #f4c471; --green: #27ae60; --red: #e05555;
+      --text: #e8f0f2; --text2: #b0c4d0; --muted: #607d8b;
+      --border: rgba(79,209,197,.18); --radius: 12px; --radius-sm: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg0); color: var(--text); font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+    img, video { display: block; max-width: 100%; }
+    a { color: var(--teal); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(1.25rem, 5vw, 5rem); }
+    section { padding: 5rem 0; }
+    section:nth-child(even) { background: var(--bg1); }
+    .section-label { display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); margin-bottom: .75rem; }
+    .section-title { font-size: clamp(1.75rem, 4vw, 2.75rem); font-weight: 700; line-height: 1.2; color: var(--text); margin-bottom: 1rem; }
+    .section-sub { font-size: 1.05rem; color: var(--text2); max-width: 680px; margin-bottom: 3rem; }
+
+    nav { position: sticky; top: 0; z-index: 100; background: rgba(8,15,20,.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+    .nav-inner { max-width: 1200px; margin: 0 auto; padding: .75rem clamp(1.25rem,5vw,5rem); display: flex; align-items: center; gap: 1.5rem; }
+    .nav-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: .95rem; color: var(--teal); text-decoration: none; white-space: nowrap; }
+    .nav-logo span span { color: var(--text2); }
+    .nav-links { display: flex; align-items: center; gap: .25rem; list-style: none; flex: 1; }
+    .nav-links a { padding: .3rem .65rem; border-radius: 6px; font-size: .875rem; color: var(--text2); transition: color .15s; }
+    .nav-links a:hover, .nav-links a.active { color: var(--teal); text-decoration: none; }
+    .nav-cta { margin-left: auto; padding: .35rem .9rem !important; border: 1px solid var(--border); border-radius: 20px; color: var(--teal) !important; font-size: .82rem !important; }
+
+    pre, code { font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: .83rem; }
+    pre { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1.25rem 1.5rem; overflow-x: auto; margin: 1rem 0; color: var(--text2); line-height: 1.6; }
+    code { color: var(--teal); background: rgba(79,209,197,.08); padding: 1px 5px; border-radius: 3px; }
+    pre code { color: inherit; background: none; padding: 0; }
+
+    /* Hero */
+    .hero { padding: 6rem 0 4rem; background: linear-gradient(160deg, var(--bg0) 0%, var(--bg2) 100%); position: relative; overflow: hidden; }
+    .hero::before { content: ''; position: absolute; top: -200px; right: -200px; width: 600px; height: 600px; background: radial-gradient(circle, rgba(79,209,197,.06) 0%, transparent 70%); pointer-events: none; }
+    .hero-eyebrow { color: var(--teal); font-size: .85rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 1rem; }
+    .hero-title { font-size: clamp(2.5rem, 6vw, 4rem); font-weight: 800; line-height: 1.1; margin-bottom: 1.25rem; }
+    .hero-title span { color: var(--teal); }
+    .hero-sub { font-size: 1.15rem; color: var(--text2); max-width: 600px; margin-bottom: 2.5rem; }
+    .hero-chips { display: flex; gap: .75rem; flex-wrap: wrap; }
+    .chip { display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .85rem; border-radius: 20px; font-size: .82rem; font-weight: 600; border: 1px solid; }
+    .chip-teal { color: var(--teal); border-color: var(--border); background: var(--teal-glow); }
+    .chip-gold { color: var(--gold); border-color: rgba(244,196,113,.3); background: rgba(244,196,113,.08); }
+    .chip-pink { color: var(--pink); border-color: rgba(236,150,184,.3); background: rgba(236,150,184,.08); }
+
+    /* Popover mockup */
+    .popover-mockup { background: var(--card); border: 1px solid var(--teal); border-radius: var(--radius); padding: 1.25rem; max-width: 340px; font-family: 'Fira Code', monospace; font-size: .82rem; color: var(--text2); line-height: 1.8; }
+    .popover-mockup .zone-label { color: var(--teal); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin: .5rem 0 .25rem; }
+    .popover-mockup .sep { border: none; border-top: 1px solid var(--border); margin: .5rem 0; }
+    .popover-mockup .field { display: flex; gap: .5rem; align-items: center; }
+    .popover-mockup .field-key { color: var(--muted); width: 72px; flex-shrink: 0; }
+    .popover-mockup .field-val { color: var(--text); background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; flex: 1; }
+    .popover-mockup .run-row { display: flex; gap: .5rem; align-items: center; }
+    .popover-mockup .status-ok { color: var(--green); }
+    .popover-mockup .watch-btn { margin-left: auto; color: var(--teal); font-size: .75rem; cursor: pointer; }
+    .popover-mockup .run-btn { margin-top: .75rem; width: 100%; background: var(--teal); color: var(--bg0); border: none; border-radius: 6px; padding: .45rem; font-weight: 700; font-size: .88rem; cursor: pointer; }
+
+    /* Two-col layout */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: start; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Node pipeline */
+    .pipeline { display: flex; flex-direction: column; gap: 0; }
+    .node { display: flex; gap: 1rem; align-items: flex-start; padding: 1.25rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color .2s; }
+    .node:hover { border-color: var(--teal); }
+    .node + .node { border-top: none; border-radius: 0; }
+    .node:first-child { border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+    .node:last-child { border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+    .node-num { width: 28px; height: 28px; border-radius: 50%; background: var(--teal-glow); border: 1px solid var(--border); color: var(--teal); font-size: .8rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; }
+    .node-type { font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: .2rem; }
+    .node-name { font-weight: 700; color: var(--text); margin-bottom: .25rem; }
+    .node-desc { font-size: .88rem; color: var(--text2); line-height: 1.5; }
+    .node-output { margin-top: .4rem; font-size: .78rem; color: var(--teal); }
+    .connector { width: 2px; height: 16px; background: var(--border); margin-left: 13px; }
+
+    /* Steps */
+    .steps { display: flex; flex-direction: column; gap: 1.5rem; }
+    .step { display: flex; gap: 1.25rem; }
+    .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--teal); color: var(--bg0); font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: .9rem; }
+    .step-body h3 { font-size: 1rem; font-weight: 700; margin-bottom: .35rem; }
+    .step-body p { font-size: .92rem; color: var(--text2); line-height: 1.55; }
+
+    /* CLI table */
+    .cli-table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+    .cli-table td, .cli-table th { padding: .65rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+    .cli-table th { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .cli-table td:first-child { font-family: 'Fira Code', monospace; font-size: .82rem; color: var(--teal); white-space: nowrap; }
+    .cli-table td:last-child { font-size: .88rem; color: var(--text2); }
+
+    /* Note box */
+    .note { background: var(--teal-glow); border: 1px solid var(--border); border-left: 3px solid var(--teal); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: .85rem 1.25rem; margin: 1.5rem 0; font-size: .9rem; color: var(--text2); line-height: 1.6; }
+    .note strong { color: var(--teal); }
+
+    /* Footer */
+    footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align: center; color: var(--muted); font-size: .875rem; }
+    footer a { color: var(--text2); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/tenstorrent.png" width="22" height="22" alt="">
+      <span>tt-local-gen <span>/ docs</span></span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="workflows.html" class="active">Workflows</a></li>
+      <li><a href="PLUGIN_AUTHORING.html">Authoring</a></li>
+    </ul>
+    <a class="nav-links nav-cta" href="https://github.com/tenstorrent/tt-local-generator" target="_blank">GitHub ↗</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="wrap">
+    <p class="hero-eyebrow">Multi-step pipelines</p>
+    <h1 class="hero-title">Workflows — <span>chain anything</span></h1>
+    <p class="hero-sub">
+      String together FLUX images, SkyReels video, LLM text, and forge plugins into a single
+      named pipeline. Run from the toolbar. Results land in a playlist. Watch in TT-TV.
+    </p>
+    <div class="hero-chips">
+      <span class="chip chip-teal">⚙ Toolbar button</span>
+      <span class="chip chip-gold">ComfyUI-compatible JSON</span>
+      <span class="chip chip-pink">tt-ctl workflow run</span>
+    </div>
+  </div>
+</section>
+
+<!-- The Popover -->
+<section>
+  <div class="wrap">
+    <div class="two-col">
+      <div>
+        <p class="section-label">The UI</p>
+        <h2 class="section-title">One button, three zones</h2>
+        <p class="section-sub">
+          The <strong>⚙ Workflow</strong> button lives in the main toolbar, next to TT-TV.
+          Click it to get a compact popover: pick a spec, tweak parameters, see recent runs, hit Run.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h3>Pick a spec</h3>
+              <p>Choose from built-in workflows in <code>docs/examples/workflows/</code> or drop your own JSON into <code>~/.local/share/tt-local-generator/workflows/</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h3>Adjust parameters</h3>
+              <p>Any <code>prompt</code>, <code>seed</code>, <code>model</code>, or <code>guidance_scale</code> that isn't a node-to-node wire appears as an editable field. Overrides write to a temp file — your spec is never mutated.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h3>Run &amp; watch</h3>
+              <p>Hit <strong>▶ Run</strong>. The progress label updates live as the pipeline moves through nodes. When it finishes, a <strong>→ Watch</strong> button appears to open TT-TV for that run's playlist.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="popover-mockup">
+          <div class="zone-label">Workflow</div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;color:var(--text);">
+            1964 World's Fair &nbsp;▾
+          </div>
+          <div style="font-size:.75rem;color:var(--muted);margin:.3rem 0 .5rem;">9 steps · image→caption→video→poem→image</div>
+          <hr class="sep">
+          <div class="zone-label">Parameters</div>
+          <div class="field" style="margin-bottom:.3rem">
+            <span class="field-key">prompt</span>
+            <span class="field-val">The 1964 NY World's Fair…</span>
+          </div>
+          <div class="field" style="margin-bottom:.3rem">
+            <span class="field-key">seed</span>
+            <span class="field-val">1964</span>
+          </div>
+          <div class="field">
+            <span class="field-key">model</span>
+            <span class="field-val">FLUX.1-schnell</span>
+          </div>
+          <hr class="sep">
+          <div class="zone-label">Recent Runs</div>
+          <div class="run-row" style="margin-bottom:.25rem">
+            <span class="status-ok">✅</span>
+            <span>Jun 01 &nbsp;5 art</span>
+            <span class="watch-btn">→ Watch</span>
+          </div>
+          <div class="run-row">
+            <span class="status-ok">✅</span>
+            <span>May 28 &nbsp;5 art</span>
+            <span class="watch-btn">→ Watch</span>
+          </div>
+          <button class="run-btn">▶  Run Workflow</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pipeline walkthrough -->
+<section>
+  <div class="wrap">
+    <p class="section-label">Example</p>
+    <h2 class="section-title">1964 World's Fair pipeline</h2>
+    <p class="section-sub">
+      Nine nodes. Five prompts. Thirty artifacts. One playlist. Here's what each node does.
+    </p>
+    <div class="two-col">
+      <div class="pipeline">
+        <div class="node">
+          <div class="node-num">1</div>
+          <div>
+            <div class="node-type">TTLGTextToImage</div>
+            <div class="node-name">Seed image — FLUX.1-schnell</div>
+            <div class="node-desc">Generates a 1024×1024 JPEG from the prompt. Takes ~3 seconds on QB2.</div>
+            <div class="node-output">→ image_path</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">2</div>
+          <div>
+            <div class="node-type">TTLGCaptionImage</div>
+            <div class="node-name">Describe — BLIP (CPU)</div>
+            <div class="node-desc">Reads the image and writes a natural-language caption. Runs on CPU, no hardware needed.</div>
+            <div class="node-output">→ caption</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">3</div>
+          <div>
+            <div class="node-type">TTLGRemoveBackground</div>
+            <div class="node-name">Remove background — RMBG (CPU)</div>
+            <div class="node-desc">Isolates the foreground into a transparent PNG. Runs on CPU via tenstorrent venv.</div>
+            <div class="node-output">→ fg_path</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">4</div>
+          <div>
+            <div class="node-type">TTLGEstimateDepth</div>
+            <div class="node-name">Depth map — GLPN (CPU)</div>
+            <div class="node-desc">Produces a grayscale depth map. Brighter = closer. Useful as a compositing hint.</div>
+            <div class="node-output">→ depth_path</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">5</div>
+          <div>
+            <div class="node-type">TTLGPromptCompose</div>
+            <div class="node-name">Compose video prompt</div>
+            <div class="node-desc">Combines the caption with era context to build a richer I2V prompt.</div>
+            <div class="node-output">→ video_prompt</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">6</div>
+          <div>
+            <div class="node-type">TTLGImageToVideo</div>
+            <div class="node-name">Animate — SkyReels I2V</div>
+            <div class="node-desc">Turns the seed image into a 97-frame 960×544 video using the composed prompt. ~90s on QB2.</div>
+            <div class="node-output">→ video_path</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">7</div>
+          <div>
+            <div class="node-type">TTLGGenerateText</div>
+            <div class="node-name">Write poem — Llama-3.3-70B</div>
+            <div class="node-desc">Llama-3.3-70B writes a 4–6 line poem from the caption. Ready in ~2.5 min on QB2.</div>
+            <div class="node-output">→ poem</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">8</div>
+          <div>
+            <div class="node-type">TTLGTextToImage</div>
+            <div class="node-name">Poem image — FLUX.1-schnell</div>
+            <div class="node-desc">Renders the poem as a second image. Same 3-second generation.</div>
+            <div class="node-output">→ image2_path</div>
+          </div>
+        </div>
+        <div class="node">
+          <div class="node-num">9</div>
+          <div>
+            <div class="node-type">TTLGAddToPlaylist</div>
+            <div class="node-name">Save to playlist</div>
+            <div class="node-desc">Imports all artifacts into the app and creates a named playlist. → TT-TV.</div>
+            <div class="node-output">→ playlist_id</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="section-label" style="margin-bottom:1rem">The JSON format</p>
+        <p style="color:var(--text2);font-size:.9rem;margin-bottom:1rem;">
+          Workflows are <strong>ComfyUI-compatible JSON</strong>. Numbered nodes, <code>class_type</code>
+          dispatch, and <code>["node_id", "output_key"]</code> references for wiring.
+        </p>
+        <pre><code>{
+  "_description": "image → caption → video → poem → image",
+  "_spec_version": "comfyui-api-v1",
+
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "inputs": {
+      "model":  "FLUX.1-schnell",
+      "prompt": "The 1964 World's Fair…",
+      "seed":   1964
+    },
+    "outputs": ["image_path"]
+  },
+
+  "2": {
+    "class_type": "TTLGCaptionImage",
+    "inputs": {
+      "src": ["1", "image_path"]
+    },
+    "outputs": ["caption"]
+  }
+}</code></pre>
+        <div class="note">
+          <strong>Any key that isn't a <code>["node_id", "key"]</code> reference</strong>
+          and matches a known name (<code>prompt</code>, <code>seed</code>, <code>model</code>…)
+          appears as an editable field in the popover — no extra config needed.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CLI -->
+<section>
+  <div class="wrap">
+    <p class="section-label">Command line</p>
+    <h2 class="section-title">tt-ctl workflow</h2>
+    <p class="section-sub">
+      Everything the UI does is also available from the terminal.
+    </p>
+    <table class="cli-table">
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td>tt-ctl workflow list</td><td>Show all available workflow specs with descriptions</td></tr>
+        <tr><td>tt-ctl workflow run &lt;spec.json&gt;</td><td>Execute a workflow — manages hardware, runs each node</td></tr>
+        <tr><td>tt-ctl workflow run &lt;spec.json&gt; --dry-run</td><td>Print each step without touching hardware</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--text2);margin-bottom:1rem;">Or call the runner directly with a spec path:</p>
+    <pre><code>./bin/run_workflow.sh docs/examples/workflows/1964-worlds-fair.json
+./bin/run_workflow.sh my-workflow.json --dry-run</code></pre>
+  </div>
+</section>
+
+<!-- Write your own -->
+<section>
+  <div class="wrap">
+    <p class="section-label">Authoring</p>
+    <h2 class="section-title">Write your own workflow</h2>
+    <p class="section-sub">A minimal 2-node workflow that generates an image and captions it.</p>
+    <pre><code>{
+  "_description": "my first workflow → image + caption",
+  "_spec_version": "comfyui-api-v1",
+
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "Generate a 1024×1024 JPEG",
+    "inputs": {
+      "model":              "FLUX.1-schnell",
+      "prompt":             "a neon city at night, cinematic",
+      "guidance_scale":     3.5,
+      "num_inference_steps": 4,
+      "seed":               42,
+      "server":             "http://localhost:8000"
+    },
+    "outputs": ["image_path"]
+  },
+
+  "2": {
+    "class_type": "TTLGCaptionImage",
+    "_comment": "Describe the image using BLIP",
+    "inputs": {
+      "plugin": "blip",
+      "src":    ["1", "image_path"]
+    },
+    "outputs": ["caption"]
+  }
+}</code></pre>
+
+    <div class="note">
+      Save this as <code>~/.local/share/tt-local-generator/workflows/my-workflow.json</code>
+      and it will appear instantly in the <strong>⚙ Workflow</strong> dropdown — no restart needed.
+    </div>
+
+    <h3 style="margin-top:2.5rem;margin-bottom:1rem;font-size:1.1rem;">Supported class types</h3>
+    <table class="cli-table">
+      <thead><tr><th>class_type</th><th>What it runs</th><th>Hardware</th></tr></thead>
+      <tbody>
+        <tr><td>TTLGTextToImage</td><td>FLUX.1-schnell or SDXL image generation</td><td>QB2 (P300X2)</td></tr>
+        <tr><td>TTLGImageToVideo</td><td>SkyReels V2 I2V or Wan2.2 video</td><td>QB2 (P300X2)</td></tr>
+        <tr><td>TTLGGenerateText</td><td>LLM text (Llama-3.3-70B, Qwen3-32B…)</td><td>QB2 (artgen)</td></tr>
+        <tr><td>TTLGCaptionImage</td><td>BLIP image captioning plugin</td><td>CPU</td></tr>
+        <tr><td>TTLGRemoveBackground</td><td>RMBG-1.4 background removal plugin</td><td>CPU</td></tr>
+        <tr><td>TTLGEstimateDepth</td><td>GLPN-KITTI depth estimation plugin</td><td>CPU</td></tr>
+        <tr><td>TTLGPromptCompose</td><td>String template — combines outputs into a new prompt</td><td>None</td></tr>
+        <tr><td>TTLGAddToPlaylist</td><td>Import artifacts into the app, create a playlist</td><td>None</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Hardware note -->
+<section>
+  <div class="wrap" style="max-width:720px">
+    <p class="section-label">Hardware note</p>
+    <h2 class="section-title">Board resets between steps</h2>
+    <p style="color:var(--text2);margin-bottom:1rem;">
+      FLUX, SkyReels, and Llama-3.3-70B all use different inference stacks on the same QB2 hardware.
+      The workflow runner handles this automatically:
+    </p>
+    <ul style="color:var(--text2);padding-left:1.5rem;line-height:2;">
+      <li>CPU plugins (BLIP, RMBG, depth) run any time — no hardware needed</li>
+      <li>Switching between media server models → <code>docker stop</code> + <code>tt-smi -r</code></li>
+      <li>Switching media server → artgen VLLM → same reset</li>
+      <li>Sequential requests to the <em>same</em> server → no reset</li>
+    </ul>
+    <div class="note" style="margin-top:1.5rem">
+      <strong>Warmup time:</strong> SkyReels I2V takes 20–25 min on first cold start (TTNN kernel compilation).
+      Subsequent starts from cache are ~2 min. The runner starts SkyReels in parallel with CPU plugins
+      to overlap the wait.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>tt-local-generator · <a href="https://github.com/tenstorrent/tt-local-generator">GitHub</a> · <a href="index.html">Home</a> · <a href="plugins.html">Plugins</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
