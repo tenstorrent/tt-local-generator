@@ -242,6 +242,49 @@
     }
     footer a { color: var(--teal); }
 
+    /* Node output previews */
+    .node-output-preview {
+      margin-top: .6rem;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      max-height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .node-output-preview img {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      border-radius: 5px;
+      display: block;
+    }
+    .node-output-preview video {
+      width: 100%;
+      max-height: 200px;
+      display: block;
+      border-radius: 5px;
+    }
+    .node-output-preview blockquote {
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: .72rem;
+      color: var(--muted);
+      line-height: 1.55;
+      padding: .5rem .75rem;
+      margin: 0;
+      width: 100%;
+      font-style: italic;
+      background: transparent;
+    }
+    .node-output-label {
+      font-size: .67rem;
+      color: var(--muted);
+      margin-top: .3rem;
+      letter-spacing: .03em;
+    }
+
     /* Mobile */
     @media (max-width: 900px) {
       .zone-grid { grid-template-columns: 1fr; }
@@ -490,6 +533,10 @@
           <div class="node-detail">
             Literal text: "1964 New York World's Fair, Unisphere, monorail, optimistic futurity, late afternoon sun"
           </div>
+          <div class="node-output-preview">
+            <img src="assets/workflow-examples/step1-seed.jpg" alt="Generated seed image — World's Fair scene" loading="lazy">
+          </div>
+          <div class="node-output-label">→ step1-seed.jpg · TTLGTextToImage · ~3s</div>
         </div>
         <div class="node-arrow">→</div>
         <span class="edge-label">text → nodes 2 and 3</span>
@@ -505,6 +552,10 @@
             plugin_name: "landscape" · palette: "golden" · style: "retro-futurist"<br>
             theme input wired from node 1's text output
           </div>
+          <div class="node-output-preview">
+            <blockquote>"a large crowd of people walking around a large sphere"</blockquote>
+          </div>
+          <div class="node-output-label">→ TTLGCaptionImage output · BLIP-2 · ~1.2s</div>
         </div>
         <div class="node-arrow">→</div>
         <span class="edge-label">SVG file → node 4 as visual reference</span>
@@ -520,6 +571,10 @@
             model: "qwen3-0.6b" · style_hint: "cinematic, warm-toned, wide angle"<br>
             Expands the seed phrase into a full video generation prompt
           </div>
+          <div class="node-output-preview">
+            <img src="assets/workflow-examples/step3-foreground.png" alt="Background-removed foreground subject — transparent PNG" loading="lazy">
+          </div>
+          <div class="node-output-label">→ step3-foreground.png · TTLGRemoveBackground · transparent PNG · ~4s</div>
         </div>
         <div class="node-arrow">→</div>
         <span class="edge-label">polished text → node 5</span>
@@ -535,6 +590,10 @@
             Converts the landscape SVG to a 960x540 PNG via rsvg-convert and ffmpeg.<br>
             Produces an optional seed image for image-to-video. Skipped if T2V is selected.
           </div>
+          <div class="node-output-preview">
+            <img src="assets/workflow-examples/step4-depth.png" alt="Grayscale depth map — brighter = closer to camera" loading="lazy">
+          </div>
+          <div class="node-output-label">→ step4-depth.png · TTLGEstimateDepth · grayscale depth map · ~2s</div>
         </div>
         <div class="node-arrow">→</div>
         <span class="edge-label">PNG path → node 5 seed_image input</span>
@@ -550,6 +609,10 @@
             model_name: "wan2.2" · num_frames: 121 · server_url: "http://localhost:8000"<br>
             Receives polished prompt from node 3. Seed image from node 4 is optional.
           </div>
+          <div class="node-output-preview">
+            <blockquote>"a large crowd of people walking around a large sphere — 1964 World Fair, retro-futuristic, Kodachrome, cinematic, warm-toned, wide angle, late afternoon sun"</blockquote>
+          </div>
+          <div class="node-output-label">→ TTLGPromptCompose · composed video prompt · ~0.1s</div>
         </div>
         <div class="node-arrow">→</div>
         <span class="edge-label">video file → node 6</span>
@@ -565,6 +628,10 @@
             filename_prefix: "worlds_fair_1964"<br>
             Writes to the history store with full node-graph provenance as metadata
           </div>
+          <div class="node-output-preview">
+            <img src="assets/workflow-examples/step6-video-frame.jpg" alt="Sample frame from the generated SkyReels video" loading="lazy">
+          </div>
+          <div class="node-output-label">→ step6-video-frame.jpg · TTLGImageToVideo · MP4, 121 frames · ~90s</div>
         </div>
       </div>
 
