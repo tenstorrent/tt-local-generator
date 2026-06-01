@@ -317,6 +317,7 @@
       <li><a href="#what">What are workflows</a></li>
       <li><a href="#toolbar">Toolbar</a></li>
       <li><a href="#example">1964 World's Fair</a></li>
+      <li><a href="#results">Results</a></li>
       <li><a href="#authoring">Write a workflow</a></li>
       <li><a href="#cli">tt-ctl</a></li>
       <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
@@ -682,6 +683,177 @@ tt-ctl workflow run worlds_fair_1964 \
 
 <span class="cm"># Validate the graph without running anything</span>
 tt-ctl workflow run worlds_fair_1964 <span class="fn">--dry-run</span></code></pre>
+  </div>
+</section>
+
+<!-- ── Five World's Fairs: results side by side ─────────────────────── -->
+<section id="results">
+  <div class="wrap">
+    <div class="section-label">Run results</div>
+    <h2 class="section-title">Five world's fairs — one pipeline</h2>
+    <p class="section-sub">
+      The same workflow JSON ran on five different prompts: 1964 New York, 1939 New York,
+      1893 Chicago, 1970 Osaka, and 1967 Montreal. Each produced a seed image, a video,
+      and a poem image. Here's what came out.
+    </p>
+
+    <style>
+      .fair-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: .75rem;
+        margin: 2rem 0;
+      }
+      @media (max-width: 900px) { .fair-grid { grid-template-columns: repeat(3, 1fr); } }
+      @media (max-width: 600px) { .fair-grid { grid-template-columns: repeat(2, 1fr); } }
+      .fair-col { display: flex; flex-direction: column; gap: .5rem; }
+      .fair-col-label {
+        font-size: .72rem; font-weight: 700; letter-spacing: .08em;
+        text-transform: uppercase; color: var(--teal); margin-bottom: .25rem;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .fair-img-wrap {
+        background: var(--bg2); border: 1px solid var(--border);
+        border-radius: 6px; overflow: hidden; aspect-ratio: 4/3;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .fair-img-wrap img {
+        width: 100%; height: 100%; object-fit: cover; display: block;
+      }
+      .fair-step-label {
+        font-size: .68rem; color: var(--muted); text-align: center;
+        padding: .2rem 0; letter-spacing: .04em;
+      }
+      .fair-step-heading {
+        font-size: .82rem; font-weight: 700; color: var(--text2);
+        margin: 1.5rem 0 .5rem; display: flex; align-items: center; gap: .5rem;
+      }
+      .fair-step-heading .step-badge {
+        background: var(--teal-glow); border: 1px solid var(--border);
+        border-radius: 4px; padding: 1px 6px; font-size: .7rem;
+        color: var(--teal); font-weight: 700; flex-shrink: 0;
+      }
+      .forge-note {
+        background: var(--card); border: 1px solid var(--border);
+        border-left: 3px solid var(--gold); border-radius: 0 6px 6px 0;
+        padding: .75rem 1rem; margin: 1.5rem 0;
+        font-size: .88rem; color: var(--text2); line-height: 1.6;
+      }
+      .forge-note strong { color: var(--gold); }
+    </style>
+
+    <!-- Step 1: Seed images -->
+    <div class="fair-step-heading">
+      <span class="step-badge">Node 1</span>
+      TTLGTextToImage — FLUX.1-schnell · ~3s each · QB2 (P300X2)
+    </div>
+    <div class="fair-grid">
+      <div class="fair-col">
+        <div class="fair-col-label">1964 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1964-ny-seed.jpg" alt="1964 NY World's Fair seed image" loading="lazy"></div>
+        <div class="fair-step-label">seed image · 230KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1939 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1939-ny-seed.jpg" alt="1939 NY World's Fair seed image" loading="lazy"></div>
+        <div class="fair-step-label">seed image · 129KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1893 Chicago</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1893-chicago-seed.jpg" alt="1893 Chicago World's Fair seed image" loading="lazy"></div>
+        <div class="fair-step-label">seed image · 253KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1970 Osaka</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1970-osaka-seed.jpg" alt="1970 Osaka World Expo seed image" loading="lazy"></div>
+        <div class="fair-step-label">seed image · 200KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1967 Montreal</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1967-montreal-seed.jpg" alt="1967 Montreal Expo seed image" loading="lazy"></div>
+        <div class="fair-step-label">seed image · 138KB</div>
+      </div>
+    </div>
+
+    <!-- Forge note -->
+    <div class="forge-note">
+      <strong>Why CPU for the forge steps (caption, background removal, depth)?</strong>
+      The RMBG, BLIP, and GLPN models run on CPU via the tenstorrent Python venv — not on
+      TT hardware. These models are small enough (100MB–2GB) that CPU inference takes 3–30s,
+      making the overhead of TTNN compilation and device dispatch unnecessary for
+      single-image transforms. The TT hardware stays free for the heavy lifting:
+      FLUX image generation (~3s) and SkyReels video generation (~90s).
+    </div>
+
+    <!-- Step 6: Video frames -->
+    <div class="fair-step-heading">
+      <span class="step-badge">Node 6</span>
+      TTLGImageToVideo — SkyReels V2 I2V · 97 frames · ~90s each · QB2 (P300X2)
+    </div>
+    <div class="fair-grid">
+      <div class="fair-col">
+        <div class="fair-col-label">1964 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1964-ny-frame.jpg" alt="1964 NY video frame" loading="lazy"></div>
+        <div class="fair-step-label">video frame · 1.4MB mp4</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1939 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1939-ny-frame.jpg" alt="1939 NY video frame" loading="lazy"></div>
+        <div class="fair-step-label">video frame · 880KB mp4</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1893 Chicago</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1893-chicago-frame.jpg" alt="1893 Chicago video frame" loading="lazy"></div>
+        <div class="fair-step-label">video frame · 1.3MB mp4</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1970 Osaka</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1970-osaka-frame.jpg" alt="1970 Osaka video frame" loading="lazy"></div>
+        <div class="fair-step-label">video frame · 1.1MB mp4</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1967 Montreal</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1967-montreal-frame.jpg" alt="1967 Montreal video frame" loading="lazy"></div>
+        <div class="fair-step-label">video frame · 808KB mp4</div>
+      </div>
+    </div>
+
+    <!-- Step 8: Poem images -->
+    <div class="fair-step-heading">
+      <span class="step-badge">Node 8</span>
+      TTLGTextToImage — FLUX.1-schnell · poem as prompt · ~3s each · QB2 (P300X2)
+    </div>
+    <div class="fair-grid">
+      <div class="fair-col">
+        <div class="fair-col-label">1964 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1964-ny-poem.jpg" alt="1964 NY poem image" loading="lazy"></div>
+        <div class="fair-step-label">poem image · 168KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1939 New York</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1939-ny-poem.jpg" alt="1939 NY poem image" loading="lazy"></div>
+        <div class="fair-step-label">poem image · 217KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1893 Chicago</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1893-chicago-poem.jpg" alt="1893 Chicago poem image" loading="lazy"></div>
+        <div class="fair-step-label">poem image · 112KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1970 Osaka</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1970-osaka-poem.jpg" alt="1970 Osaka poem image" loading="lazy"></div>
+        <div class="fair-step-label">poem image · 88KB</div>
+      </div>
+      <div class="fair-col">
+        <div class="fair-col-label">1967 Montreal</div>
+        <div class="fair-img-wrap"><img src="assets/workflow-examples/fair-1967-montreal-poem.jpg" alt="1967 Montreal poem image" loading="lazy"></div>
+        <div class="fair-step-label">poem image · 88KB</div>
+      </div>
+    </div>
+
+    <p style="color:var(--muted);font-size:.85rem;margin-top:1.5rem;text-align:center;">
+      Total pipeline time: ~45 min wall time · ~3 min pure inference · 30 artifacts · 1 playlist
+    </p>
   </div>
 </section>
 
