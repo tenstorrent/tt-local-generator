@@ -87,37 +87,11 @@ for FAIR in "${FAIRS[@]}"; do
     echo "{}" > "$RUN_ROOT/$FAIR/results.json"
 done
 
-set_result() {
-    local fair="$1" node_id="$2" key="$3" value="$4"
-    local rj="$RUN_ROOT/$fair/results.json"
-    python3 -c "
-import json, sys
-with open('$rj') as f: d = json.load(f)
-d.setdefault('$node_id', {})['$key'] = sys.argv[1]
-with open('$rj', 'w') as f: json.dump(d, f, indent=2)
-" "$value"
-}
+_RW="$REPO_ROOT/bin/_results_rw.py"
 
-set_node_label() {
-    local fair="$1" node_id="$2" label="$3"
-    local rj="$RUN_ROOT/$fair/results.json"
-    python3 -c "
-import json, sys
-with open('$rj') as f: d = json.load(f)
-d.setdefault('$node_id', {})['_label'] = sys.argv[1]
-with open('$rj', 'w') as f: json.dump(d, f, indent=2)
-" "$label"
-}
-
-get_result() {
-    local fair="$1" node_id="$2" key="$3"
-    local rj="$RUN_ROOT/$fair/results.json"
-    python3 -c "
-import json
-with open('$rj') as f: d = json.load(f)
-print(d.get('$node_id', {}).get('$key', ''))
-"
-}
+set_result()    { python3 "$_RW" set_result  "$RUN_ROOT/$1/results.json" "$2" "$3" "$4"; }
+set_node_label(){ python3 "$_RW" set_label   "$RUN_ROOT/$1/results.json" "$2" "$3"; }
+get_result()    { python3 "$_RW" get_result  "$RUN_ROOT/$1/results.json" "$2" "$3"; }
 
 # ── Hardware management ───────────────────────────────────────────────────────
 
@@ -166,42 +140,36 @@ start_server() {
     log "  ❌ $server_key timed out"; return 1
 }
 
-# ── Image generation (single) ─────────────────────────────────────────────────
+# ── Image generation (submit + poll, file-based job ID handoff) ───────────────
+# Job IDs are written to $RUN_ROOT/$fair/job_nodeN.txt so we never fight the
+# tee stdout redirect when trying to capture output via $(...).
 
-gen_image() {
-    local fair="$1" node_id="$2" prompt="$3" seed="$4" out="$5"
+submit_image() {
+    local fair="$1" node_id="$2" prompt="$3" seed="$4"
+    local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
     log "  [$fair] Submitting image node $node_id..."
-    [[ $DRY_RUN -eq 1 ]] && { set_result "$fair" "$node_id" "image_path" "$out"; set_node_label "$fair" "$node_id" "seed image"; touch "$out"; return 0; }
-    sleep 1  # brief stagger to avoid simultaneous submission
+    [[ $DRY_RUN -eq 1 ]] && { echo "DRYRUN" > "$job_file"; return 0; }
+    sleep 1
     local JOB="" attempt
     for attempt in 1 2 3; do
-        JOB=$(python3 - "$prompt" "$seed" << 'PY'
-import sys, json, urllib.request, urllib.error
-prompt, seed = sys.argv[1:]
-payload = {"prompt": prompt, "width": 1024, "height": 1024,
-           "num_inference_steps": 4, "seed": int(seed)}
-req = urllib.request.Request("http://localhost:8000/v1/images/generations",
-    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
-try:
-    with urllib.request.urlopen(req, timeout=30) as r:
-        d = json.loads(r.read()); print(d.get("id", "ERROR:"+str(d)))
-except Exception as e:
-    print(f"ERROR:{e}")
-PY
-        2>/dev/null || true)
+        JOB=$(python3 "$REPO_ROOT/bin/_submit_image.py" "$prompt" "$seed" 2>/dev/null) || JOB=""
         [[ -z "$JOB" || "$JOB" == ERROR:* ]] && { sleep 10; continue; }
         break
     done
     if [[ -z "$JOB" || "$JOB" == ERROR:* ]]; then
-        log "  [$fair] ❌ image node $node_id submission failed: $JOB"; return 1
+        log "  [$fair] ❌ image node $node_id failed: $JOB"
+        echo "FAILED" > "$job_file"; return 1
     fi
-    log "  [$fair] image job $JOB"
-    echo "$JOB"  # caller captures this
+    log "  [$fair] image node $node_id job: $JOB"
+    echo "$JOB" > "$job_file"
 }
 
 poll_image() {
-    local fair="$1" node_id="$2" job="$3" out="$4" label="$5"
-    [[ "$job" == "DRYRUN_JOB" || $DRY_RUN -eq 1 ]] && return 0
+    local fair="$1" node_id="$2" out="$3" label="$4"
+    local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
+    local JOB; JOB=$(cat "$job_file" 2>/dev/null || echo "")
+    [[ "$JOB" == "DRYRUN" ]] && { touch "$out"; set_result "$fair" "$node_id" "image_path" "$out"; set_node_label "$fair" "$node_id" "$label"; return 0; }
+    [[ -z "$JOB" || "$JOB" == "FAILED" ]] && { log "  [$fair] ⚠️ image node $node_id skipped (no job)"; return 1; }
     local STATUS=""
     for i in $(seq 1 40); do
         sleep 30
@@ -221,32 +189,26 @@ poll_image() {
 
 # ── Video generation (submit + poll) ─────────────────────────────────────────
 
-gen_video() {
+submit_video() {
     local fair="$1" node_id="$2" prompt="$3" image_path="$4" seed="$5"
+    local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
     log "  [$fair] Submitting video node $node_id..."
-    [[ $DRY_RUN -eq 1 ]] && { local out="$RUN_ROOT/$fair/node${node_id}_video.mp4"; set_result "$fair" "$node_id" "video_path" "$out"; set_node_label "$fair" "$node_id" "video"; touch "$out"; echo "DRYRUN_JOB"; return 0; }
-    local B64; B64=$(python3 -c "import base64; print(base64.b64encode(open('$image_path','rb').read()).decode())")
-    local JOB; JOB=$(python3 - "$prompt" "$B64" "$seed" << 'PY'
-import sys, json, urllib.request
-prompt, b64, seed = sys.argv[1:]
-payload = {"prompt": prompt, "image": b64, "width": 960, "height": 544,
-           "num_frames": 97, "num_inference_steps": 20, "seed": int(seed)}
-req = urllib.request.Request("http://localhost:8000/v1/video/generations",
-    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
-with urllib.request.urlopen(req, timeout=60) as r:
-    d = json.loads(r.read()); print(d.get("id", "ERROR"))
-PY
-    2>/dev/null || true)
+    [[ $DRY_RUN -eq 1 ]] && { echo "DRYRUN" > "$job_file"; return 0; }
+    local JOB; JOB=$(python3 "$REPO_ROOT/bin/_submit_video.py" "$prompt" "$image_path" "$seed" 2>/dev/null) || true
     if [[ -z "$JOB" || "$JOB" == ERROR* ]]; then
-        log "  [$fair] ❌ video submission failed: $JOB"; return 1
+        log "  [$fair] ❌ video submission failed: $JOB"
+        echo "FAILED" > "$job_file"; return 1
     fi
-    log "  [$fair] video job $JOB"
-    echo "$JOB"
+    log "  [$fair] video node $node_id job: $JOB"
+    echo "$JOB" > "$job_file"
 }
 
 poll_video() {
-    local fair="$1" node_id="$2" job="$3"
-    [[ "$job" == "DRYRUN_JOB" || $DRY_RUN -eq 1 ]] && return 0
+    local fair="$1" node_id="$2"
+    local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
+    local JOB; JOB=$(cat "$job_file" 2>/dev/null || echo "")
+    [[ "$JOB" == "DRYRUN" ]] && return 0
+    [[ -z "$JOB" || "$JOB" == "FAILED" ]] && { log "  [$fair] ⚠️ video skipped (no job)"; return 1; }
     local out="$RUN_ROOT/$fair/node${node_id}_video.mp4"
     local STATUS=""
     for i in $(seq 1 240); do
@@ -277,20 +239,7 @@ gen_poem() {
     local fair="$1" node_id="$2" poem_context="$3"
     log "  [$fair] Generating poem..."
     [[ $DRY_RUN -eq 1 ]] && { set_result "$fair" "$node_id" "poem" "The future blazes in a vacuum tube — dry run."; set_node_label "$fair" "$node_id" "poem"; return 0; }
-    local TEXT; TEXT=$(python3 - "$poem_context" << 'PY'
-import sys, json, urllib.request
-poem_context = sys.argv[1]
-prompt = f"Write a short, evocative poem (4-6 lines) about this scene: {poem_context}\nUse specific historical detail. Focus on wonder, strangeness, and the gap between the future imagined and the future that arrived."
-payload = {"model": "meta-llama/Llama-3.3-70B-Instruct",
-           "messages": [{"role": "user", "content": prompt}],
-           "max_tokens": 150, "temperature": 0.85}
-req = urllib.request.Request("http://localhost:8002/v1/chat/completions",
-    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
-with urllib.request.urlopen(req, timeout=60) as r:
-    d = json.loads(r.read())
-    print(d["choices"][0]["message"]["content"].strip())
-PY
-    2>/dev/null || true)
+    local TEXT; TEXT=$(python3 "$REPO_ROOT/bin/_gen_poem.py" "$poem_context" 2>/dev/null) || true
     if [[ -z "$TEXT" ]]; then
         log "  [$fair] ⚠️ poem empty"; return 1
     fi
@@ -334,75 +283,8 @@ import_playlist() {
     local rj="$RUN_ROOT/$fair/results.json"
 
     log "  [$fair] Importing to playlist: $pname"
-    python3 - "$pname" "$img1" "$img2" "$video" "$depth" "$poem" "$rj" "$fair" << 'PY'
-import sys, json, shutil, uuid
-from pathlib import Path
-from datetime import datetime, timezone
-
-pname, img1, img2, video, depth, poem, rj, fair_key = sys.argv[1:]
-
-APP_DIR = Path.home() / ".local" / "share" / "tt-local-generator"
-IMAGES_DIR = APP_DIR / "images"
-VIDEOS_DIR = APP_DIR / "videos"
-THUMBS_DIR = APP_DIR / "thumbnails"
-for d in (IMAGES_DIR, VIDEOS_DIR, THUMBS_DIR): d.mkdir(parents=True, exist_ok=True)
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
-try:
-    from media_store import media_store as _ms, MediaRecord
-    from playlist_store import PlaylistStore
-
-    _ps = PlaylistStore()
-    pl = _ps.get_or_create(pname)
-    record_ids = []
-
-    def _import(src, media_type, prompt_text):
-        src = Path(src) if src else None
-        if not src or not src.exists(): return None
-        ts = datetime.now(timezone.utc)
-        rid = str(uuid.uuid4())
-        ts_str = ts.strftime("%Y%m%d_%H%M%S")
-        dest_dir = VIDEOS_DIR if media_type == "video" else IMAGES_DIR
-        dest = dest_dir / f"{ts_str}_{rid[:8]}{src.suffix}"
-        shutil.copy2(src, dest)
-        thumb = THUMBS_DIR / f"{ts_str}_{rid[:8]}.jpg"
-        try:
-            import subprocess
-            subprocess.run(["ffmpeg", "-y", "-i", str(dest),
-                "-vf", "scale=200:112:force_original_aspect_ratio=decrease,pad=200:112:(ow-iw)/2:(oh-ih)/2",
-                "-frames:v", "1", "-update", "1", "-q:v", "3", str(thumb)],
-                stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
-        except Exception:
-            try: shutil.copy2(dest, thumb)
-            except Exception: pass
-        params = {"workflow": f"worlds-fair-{fair_key}"}
-        params["video_path" if media_type == "video" else "image_path"] = str(dest)
-        rec = MediaRecord(
-            id=rid, file_path=str(dest), thumbnail_path=str(thumb),
-            prompt=prompt_text, media_type=media_type,
-            created_at=ts.isoformat(), model_id="workflow", generator_type=None, starred=0,
-            params=json.dumps(params),
-        )
-        _ms.add(rec)
-        return rid
-
-    for path, mtype, lbl in [
-        (img1,  "image", f"{pname}: seed image"),
-        (depth, "image", f"{pname}: depth map"),
-        (video, "video", f"{pname}: SkyReels I2V"),
-        (img2,  "image", f"{pname}: poem image"),
-    ]:
-        rid = _import(path, mtype, lbl)
-        if rid: record_ids.append(rid)
-
-    if record_ids:
-        _ps.add_records(pl.id, record_ids)
-    print(f"PLAYLIST:{len(record_ids)}:{pname}")
-    print(f"✅ {pname}: {len(record_ids)} artifacts")
-except Exception as e:
-    import traceback; traceback.print_exc()
-    print(f"⚠️  playlist import failed: {e}")
-PY
+    python3 "$REPO_ROOT/bin/_import_playlist.py" \
+        "$pname" "$img1" "$img2" "$video" "$depth" "$poem" "$rj" "$fair"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -418,23 +300,13 @@ log_step "Phase 1: FLUX.1-schnell — 5 seed images"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
 
-# Submit all 5 jobs simultaneously, capture job IDs
-declare -A SEED_JOBS
 for FAIR in "${FAIRS[@]}"; do
-    out="$RUN_ROOT/$FAIR/node1_image.png"
-    JOB=$(gen_image "$FAIR" "1" "${SEED_PROMPT[$FAIR]}" "${SEED[$FAIR]}" "$out" 2>/dev/null) || JOB=""
-    SEED_JOBS[$FAIR]="$JOB"
-    sleep 2  # brief stagger between submissions
+    submit_image "$FAIR" "1" "${SEED_PROMPT[$FAIR]}" "${SEED[$FAIR]}"
+    sleep 2
 done
-
 log "  All 5 seed image jobs submitted. Polling..."
-
-# Poll all 5 in parallel using background subshells
 for FAIR in "${FAIRS[@]}"; do
-    JOB="${SEED_JOBS[$FAIR]:-}"
-    [[ -z "$JOB" || "$JOB" == "DRYRUN_JOB" ]] && continue
-    out="$RUN_ROOT/$FAIR/node1_image.png"
-    poll_image "$FAIR" "1" "$JOB" "$out" "seed image" &
+    poll_image "$FAIR" "1" "$RUN_ROOT/$FAIR/node1_image.png" "seed image" &
 done
 wait
 log "  Phase 1 complete."
@@ -450,39 +322,31 @@ done
 wait
 log "  Phase 2 complete."
 
-# ── Phase 3: SkyReels I2V — 5 videos (submit all, then poll all) ─────────────
+# ── Phase 3: SkyReels I2V — 5 videos (submit all, poll all) ──────────────────
 log_step "Phase 3: SkyReels V2 I2V — 5 videos (97 frames each)"
 stop_and_reset "skyreels"
 start_server "skyreels" "http://localhost:8000/tt-liveness" 90
 
-declare -A VIDEO_JOBS
 for FAIR in "${FAIRS[@]}"; do
     img=$(get_result "$FAIR" "1" "image_path")
     [[ -z "$img" || ! -f "$img" ]] && { log "  [$FAIR] video skipped (no seed image)"; continue; }
     VIDEO_PROMPT="${ERA_CONTEXT[$FAIR]}, cinematic slow push-in, photorealistic"
     set_result "$FAIR" "3" "video_prompt" "$VIDEO_PROMPT"
     set_node_label "$FAIR" "3" "video prompt"
-    JOB=$(gen_video "$FAIR" "4" "$VIDEO_PROMPT" "$img" "${SEED[$FAIR]}" 2>/dev/null) || JOB=""
-    VIDEO_JOBS[$FAIR]="$JOB"
-    sleep 3  # brief stagger
+    submit_video "$FAIR" "4" "$VIDEO_PROMPT" "$img" "${SEED[$FAIR]}"
+    sleep 3
 done
-
-log "  All video jobs submitted. Polling (SkyReels queues them sequentially)..."
-
-# Poll all 5 — SkyReels processes them one at a time internally but we poll concurrently
+log "  All video jobs submitted. Polling..."
 for FAIR in "${FAIRS[@]}"; do
-    JOB="${VIDEO_JOBS[$FAIR]:-}"
-    [[ -z "$JOB" || "$JOB" == "DRYRUN_JOB" ]] && continue
-    poll_video "$FAIR" "4" "$JOB" &
+    poll_video "$FAIR" "4" &
 done
 wait
 log "  Phase 3 complete."
 
-# ── Phase 4: Llama-3.3-70B — 5 poems (parallel API calls) ───────────────────
+# ── Phase 4: Llama-3.3-70B — 5 poems ─────────────────────────────────────────
 log_step "Phase 4: Llama-3.3-70B — 5 poems"
 stop_and_reset "artgen-llama-3.3-70b"
 start_server "artgen-llama-3.3-70b" "http://localhost:8002/v1/models" 30
-
 for FAIR in "${FAIRS[@]}"; do
     gen_poem "$FAIR" "5" "${POEM_CONTEXT[$FAIR]}" &
 done
@@ -493,22 +357,15 @@ log "  Phase 4 complete."
 log_step "Phase 5: FLUX.1-schnell — 5 poem images"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
-
-declare -A POEM_JOBS
 for FAIR in "${FAIRS[@]}"; do
     POEM=$(get_result "$FAIR" "5" "poem")
     [[ -z "$POEM" ]] && { log "  [$FAIR] poem image skipped (no poem)"; continue; }
-    out="$RUN_ROOT/$FAIR/node6_image.png"
-    JOB=$(gen_image "$FAIR" "6" "$POEM" "$(( ${SEED[$FAIR]} + 1 ))" "$out" 2>/dev/null) || JOB=""
-    POEM_JOBS[$FAIR]="$JOB"
+    submit_image "$FAIR" "6" "$POEM" "$(( ${SEED[$FAIR]} + 1 ))"
     sleep 2
 done
-
+log "  All 5 poem image jobs submitted. Polling..."
 for FAIR in "${FAIRS[@]}"; do
-    JOB="${POEM_JOBS[$FAIR]:-}"
-    [[ -z "$JOB" || "$JOB" == "DRYRUN_JOB" ]] && continue
-    out="$RUN_ROOT/$FAIR/node6_image.png"
-    poll_image "$FAIR" "6" "$JOB" "$out" "poem image" &
+    poll_image "$FAIR" "6" "$RUN_ROOT/$FAIR/node6_image.png" "poem image" &
 done
 wait
 log "  Phase 5 complete."
