@@ -758,8 +758,12 @@ class AttractorWindow(Gtk.Window):
         # them in, but we need the full list to support in-window channel switching.
         self._all_records: list = list(records)
         self._att_poll_stop = threading.Event()
-        video_records = [r for r in records if getattr(r, "media_type", "video") != "image"]
-        _log.debug("pool filter: %d total → %d video records", len(records), len(video_records))
+        # Include images in the pool — they display with IMAGE_DWELL_MS dwell time
+        # (10s by default, configurable in Preferences → TT-TV → Image dwell).
+        # Previously images were excluded, making image-only or mixed playlists
+        # appear empty in TT-TV.
+        video_records = [r for r in records if getattr(r, "media_type", "video") != "artgen"]
+        _log.debug("pool filter: %d total → %d playable records (video+image)", len(records), len(video_records))
         self._pool = AttractorPool(video_records)
         self._gen_stop = threading.Event()
         self._paused = False
