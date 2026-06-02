@@ -104,8 +104,9 @@ stop_and_reset() {
     fi
     if docker ps -q 2>/dev/null | grep -q .; then
         log "  Stopping containers..."
-        docker ps -q | xargs docker stop 2>/dev/null || true
-        sleep 3
+        docker ps -q | xargs docker stop --time 8 2>/dev/null || \
+            docker ps -q | xargs docker kill 2>/dev/null || true
+        sleep 2
     fi
     if [[ -n "$_current_server" ]]; then
         log "  Resetting boards ($_current_server → ${next_server:-none})..."
