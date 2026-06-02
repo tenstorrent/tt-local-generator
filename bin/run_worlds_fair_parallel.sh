@@ -102,21 +102,17 @@ stop_and_reset() {
     if [[ "$_current_server" == "$next_server" && -n "$next_server" ]]; then
         return 0
     fi
-    if docker ps -q 2>/dev/null | grep -q .; then
-        log "  Killing containers..."
-        # The container may be in kernel D-state during TT hardware compile/warmup;
-        # even SIGKILL blocks until the hardware operation completes. Run in a
-        # setsid subshell (detached from our process group) so bash's `wait`
-        # builtin never sees this child and doesn't block on it.
-        # tt-smi -r below will also forcibly reset the hardware.
-        ( docker ps -q | xargs docker kill 2>/dev/null ) &
-        disown $!
-        sleep 1
-    fi
     if [[ -n "$_current_server" ]]; then
         log "  Resetting boards ($_current_server → ${next_server:-none})..."
+        # tt-smi -r forcibly resets all TT hardware and kills any process in
+        # D-state waiting on it — including Docker containers running inference.
+        # We rely on this rather than docker stop/kill, which can block
+        # indefinitely if the container is mid-compile on the chips.
         [[ $DRY_RUN -eq 0 ]] && tt-smi -r 2>/dev/null | head -1 || echo "  [dry-run] tt-smi -r"
         sleep 8
+        # After hardware reset, any inference containers will have crashed.
+        # Remove them so Docker doesn't complain about name conflicts on next start.
+        docker ps -aq | xargs docker rm -f 2>/dev/null || true
     fi
     _current_server="$next_server"
 }
