@@ -144,39 +144,50 @@ start_server() {
 # Job IDs are written to $RUN_ROOT/$fair/job_nodeN.txt so we never fight the
 # tee stdout redirect when trying to capture output via $(...).
 
+# FLUX is synchronous: _submit_image.py saves the image and prints "DONE".
+# We use a status file ($job_file) so "poll_image" just checks if the file was written.
 submit_image() {
     local fair="$1" node_id="$2" prompt="$3" seed="$4"
+    local out="$RUN_ROOT/$fair/node${node_id}_image.png"
     local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
-    log "  [$fair] Submitting image node $node_id..."
-    [[ $DRY_RUN -eq 1 ]] && { echo "DRYRUN" > "$job_file"; return 0; }
+    log "  [$fair] Generating image node $node_id..."
+    [[ $DRY_RUN -eq 1 ]] && { touch "$out"; echo "DONE" > "$job_file"; return 0; }
     sleep 1
-    local JOB="" attempt
+    local RESULT="" attempt
     for attempt in 1 2 3; do
-        JOB=$(python3 "$REPO_ROOT/bin/_submit_image.py" "$prompt" "$seed" 2>/dev/null) || JOB=""
-        [[ -z "$JOB" || "$JOB" == ERROR:* ]] && { sleep 10; continue; }
-        break
+        RESULT=$(python3 "$REPO_ROOT/bin/_submit_image.py" "$prompt" "$seed" "$out" 2>/dev/null) || RESULT=""
+        [[ "$RESULT" == "DONE" ]] && break
+        log "  [$fair] image attempt $attempt failed: $RESULT — retrying..."
+        sleep 10
     done
-    if [[ -z "$JOB" || "$JOB" == ERROR:* ]]; then
-        log "  [$fair] ❌ image node $node_id failed: $JOB"
+    if [[ "$RESULT" != "DONE" ]]; then
+        log "  [$fair] ❌ image node $node_id failed after 3 attempts"
         echo "FAILED" > "$job_file"; return 1
     fi
-    log "  [$fair] image node $node_id job: $JOB"
-    echo "$JOB" > "$job_file"
+    log "  [$fair] ✅ image node $node_id done ($(du -sh "$out" | cut -f1))"
+    echo "DONE" > "$job_file"
+    set_result "$fair" "$node_id" "image_path" "$out"
+    set_node_label "$fair" "$node_id" "seed image"
 }
 
 poll_image() {
+    # For synchronous FLUX: image is already saved by submit_image.
+    # This is a no-op barrier — just waits for the job_file to confirm completion.
     local fair="$1" node_id="$2" out="$3" label="$4"
     local job_file="$RUN_ROOT/$fair/job_node${node_id}.txt"
     local JOB; JOB=$(cat "$job_file" 2>/dev/null || echo "")
-    [[ "$JOB" == "DRYRUN" ]] && { touch "$out"; set_result "$fair" "$node_id" "image_path" "$out"; set_node_label "$fair" "$node_id" "$label"; return 0; }
-    [[ -z "$JOB" || "$JOB" == "FAILED" ]] && { log "  [$fair] ⚠️ image node $node_id skipped (no job)"; return 1; }
+    if [[ "$JOB" == "DONE" && -f "$out" ]]; then
+        set_result "$fair" "$node_id" "image_path" "$out"
+        set_node_label "$fair" "$node_id" "$label"
+        return 0
+    fi
+    [[ "$JOB" == "FAILED" || -z "$JOB" ]] && { log "  [$fair] ⚠️ image node $node_id not available"; return 1; }
+    # Should not reach here with synchronous FLUX
     local STATUS=""
     for i in $(seq 1 40); do
         sleep 30
-        local RAW; RAW=$(curl -s -w '\n%{http_code}' "http://localhost:8000/v1/images/generations/$job" 2>/dev/null)
-        local HTTP_CODE; HTTP_CODE=$(echo "$RAW" | tail -1)
-        [[ "$HTTP_CODE" == "429" ]] && { sleep 60; continue; }
-        STATUS=$(echo "$RAW" | head -1 | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || true)
+        STATUS=$(curl -s "http://localhost:8000/v1/images/generations/$JOB" 2>/dev/null | \
+            python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || true)
         [[ "$STATUS" == "completed" ]] && break
         [[ "$STATUS" == "failed" ]] && { log "  [$fair] ❌ image node $node_id failed"; return 1; }
     done
@@ -302,13 +313,7 @@ start_server "flux" "http://localhost:8000/tt-liveness" 30
 
 for FAIR in "${FAIRS[@]}"; do
     submit_image "$FAIR" "1" "${SEED_PROMPT[$FAIR]}" "${SEED[$FAIR]}"
-    sleep 2
 done
-log "  All 5 seed image jobs submitted. Polling..."
-for FAIR in "${FAIRS[@]}"; do
-    poll_image "$FAIR" "1" "$RUN_ROOT/$FAIR/node1_image.png" "seed image" &
-done
-wait
 log "  Phase 1 complete."
 
 # ── Phase 2: CPU depth maps (parallel, no GPU) ───────────────────────────────
@@ -361,13 +366,7 @@ for FAIR in "${FAIRS[@]}"; do
     POEM=$(get_result "$FAIR" "5" "poem")
     [[ -z "$POEM" ]] && { log "  [$FAIR] poem image skipped (no poem)"; continue; }
     submit_image "$FAIR" "6" "$POEM" "$(( ${SEED[$FAIR]} + 1 ))"
-    sleep 2
 done
-log "  All 5 poem image jobs submitted. Polling..."
-for FAIR in "${FAIRS[@]}"; do
-    poll_image "$FAIR" "6" "$RUN_ROOT/$FAIR/node6_image.png" "poem image" &
-done
-wait
 log "  Phase 5 complete."
 
 # ── Phase 6: Import all playlists ────────────────────────────────────────────
