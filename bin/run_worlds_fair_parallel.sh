@@ -103,12 +103,14 @@ stop_and_reset() {
         return 0
     fi
     if docker ps -q 2>/dev/null | grep -q .; then
-        log "  Killing containers (background)..."
-        # Run docker kill in background — the container may be in kernel D-state
-        # during TT hardware compile/warmup, making even SIGKILL block until the
-        # hardware operation completes. We don't wait; tt-smi -r below will
-        # forcefully reset the hardware which also terminates the container.
-        docker ps -q | xargs docker kill 2>/dev/null &
+        log "  Killing containers..."
+        # The container may be in kernel D-state during TT hardware compile/warmup;
+        # even SIGKILL blocks until the hardware operation completes. Run in a
+        # setsid subshell (detached from our process group) so bash's `wait`
+        # builtin never sees this child and doesn't block on it.
+        # tt-smi -r below will also forcibly reset the hardware.
+        ( docker ps -q | xargs docker kill 2>/dev/null ) &
+        disown $!
         sleep 1
     fi
     if [[ -n "$_current_server" ]]; then
