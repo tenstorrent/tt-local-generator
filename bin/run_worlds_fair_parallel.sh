@@ -226,7 +226,7 @@ poll_video() {
     local STATUS=""
     for i in $(seq 1 240); do
         sleep 30
-        STATUS=$(curl -s "http://localhost:8000/v1/video/generations/$job" 2>/dev/null | \
+        STATUS=$(curl -s "http://localhost:8000/v1/videos/generations/$JOB" 2>/dev/null | \
             python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || true)
         [[ "$STATUS" == "completed" ]] && break
         [[ "$STATUS" == "failed" ]] && { log "  [$fair] ❌ video failed"; return 1; }
@@ -240,7 +240,7 @@ poll_video() {
         fi
     done
     [[ "$STATUS" != "completed" ]] && { log "  [$fair] ⚠️ video timed out"; return 1; }
-    curl -sf "http://localhost:8000/v1/video/generations/$job/download" -o "$out"
+    curl -sf "http://localhost:8000/v1/videos/generations/$JOB/download" -o "$out"
     log "  [$fair] ✅ video: $(du -sh "$out" | cut -f1)"
     set_result "$fair" "$node_id" "video_path" "$out"
     set_node_label "$fair" "$node_id" "video"
