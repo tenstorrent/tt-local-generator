@@ -104,7 +104,7 @@ stop_and_reset() {
     fi
     if docker ps -q 2>/dev/null | grep -q .; then
         log "  Stopping containers..."
-        docker ps -q | xargs docker stop --time 8 2>/dev/null || \
+        docker ps -q | xargs docker stop --timeout 8 2>/dev/null || \
             docker ps -q | xargs docker kill 2>/dev/null || true
         sleep 2
     fi
