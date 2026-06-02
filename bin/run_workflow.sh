@@ -331,6 +331,38 @@ node_generate_text() {
     set_result "$node_id" "poem" "$TEXT"
 }
 
+node_svg_render() {
+    local node_id="$1" src="$2" size="${3:-1024}"
+    local out="$OUTPUT_DIR/node${node_id}_logo.png"
+    log "  Rendering SVG → PNG: $src (${size}px)"
+    [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "png_path" "$out"; set_result "$node_id" "_label" "SVG render"; touch "$out"; return 0; }
+    "$PYTHON3" "$REPO_ROOT/plugins/svg_render/plugin.py" "$src" "$out" "$size" 2>&1 | tail -2
+    if [[ -f "$out" ]]; then
+        log "  ✅ SVG render: $out ($(du -sh "$out" | cut -f1))"
+        set_result "$node_id" "png_path" "$out"
+        set_result "$node_id" "_label" "SVG render"
+    else
+        log "  ⚠️  SVG render produced no output"
+        return 1
+    fi
+}
+
+node_composite() {
+    local node_id="$1" background_path="$2" foreground_path="$3" scale="${4:-0.72}"
+    local out="$OUTPUT_DIR/node${node_id}_composite.jpg"
+    log "  Compositing mark over background (scale=$scale)..."
+    [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "composite_path" "$out"; set_result "$node_id" "_label" "composite"; touch "$out"; return 0; }
+    "$PYTHON3" "$REPO_ROOT/plugins/composite/plugin.py" "$background_path" "$foreground_path" "$out" "$scale" 2>&1 | tail -2
+    if [[ -f "$out" ]]; then
+        log "  ✅ Composite: $out ($(du -sh "$out" | cut -f1))"
+        set_result "$node_id" "composite_path" "$out"
+        set_result "$node_id" "_label" "composite"
+    else
+        log "  ⚠️  Composite produced no output"
+        return 1
+    fi
+}
+
 # ── The 1964 World's Fair pipeline ───────────────────────────────────────────
 
 log_step "1964 World's Fair Experiment"

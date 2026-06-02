@@ -1,0 +1,95 @@
+{
+  "_comment": "Logo decoration workflow — takes an existing SVG or PNG logo and wraps it with a FLUX-generated decorative layer.",
+  "_spec_version": "comfyui-api-v1",
+  "_description": "Logo decorator: isolate mark → generate decoration → composite. Change decoration_prompt in node 5 and src in node 1.",
+  "_runner": "See bin/run_workflow.sh for the bash implementation.",
+
+  "1": {
+    "class_type": "TTLGSVGRender",
+    "_comment": "Render SVG logo to raster PNG. Skip this node if your input is already a PNG — wire node 2 src directly to your PNG path.",
+    "inputs": {
+      "plugin": "svg_render",
+      "src": "/path/to/your/logo.svg",
+      "size": 1024
+    },
+    "outputs": ["png_path"]
+  },
+
+  "2": {
+    "class_type": "TTLGRemoveBackground",
+    "_comment": "RMBG: isolate the logo mark, strip background → RGBA PNG. The isolated mark stays crisp over any FLUX-generated background.",
+    "inputs": {
+      "plugin": "rmbg",
+      "src": ["1", "png_path"]
+    },
+    "outputs": ["fg_path"]
+  },
+
+  "3": {
+    "class_type": "TTLGCaptionImage",
+    "_comment": "BLIP: describe the logo mark — feeds into the decoration prompt so FLUX knows what it's decorating around.",
+    "inputs": {
+      "plugin": "blip",
+      "src": ["1", "png_path"],
+      "prompt": "a logo mark showing"
+    },
+    "outputs": ["caption"]
+  },
+
+  "5": {
+    "class_type": "TTLGPromptCompose",
+    "_comment": "Compose the FLUX decoration prompt. Change decoration_prompt to control the style — this is the main creative input.",
+    "inputs": {
+      "template": "{caption}, {decoration_prompt}, professional graphic design, centered composition, no text, studio quality",
+      "caption": ["3", "caption"],
+      "decoration_prompt": "wrapped in Art Nouveau botanical gold vines on dark midnight blue background"
+    },
+    "outputs": ["decoration_prompt_text"]
+  },
+
+  "4": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "FLUX.1-schnell: generate the decorative background layer using the composed prompt.",
+    "inputs": {
+      "model": "FLUX.1-schnell",
+      "prompt": ["5", "decoration_prompt_text"],
+      "negative_prompt": "text, watermark, blurry, low quality",
+      "width": 1024,
+      "height": 1024,
+      "steps": 4,
+      "seed": 2025,
+      "server": "http://localhost:8000"
+    },
+    "outputs": ["image_path"]
+  },
+
+  "6": {
+    "class_type": "TTLGComposite",
+    "_comment": "Layer the isolated logo mark (fg_path) centered over the FLUX decoration background. scale controls how large the mark is relative to the canvas.",
+    "inputs": {
+      "plugin": "composite",
+      "background": ["4", "image_path"],
+      "foreground": ["2", "fg_path"],
+      "scale": 0.72
+    },
+    "outputs": ["composite_path"]
+  },
+
+  "7": {
+    "class_type": "TTLGAddToPlaylist",
+    "_comment": "Collect all artifacts into one playlist for review in TT-TV.",
+    "inputs": {
+      "playlist_name": "logo decoration",
+      "artifacts": [
+        {"label": "source logo",      "path": ["1", "png_path"],       "type": "image"},
+        {"label": "isolated mark",    "path": ["2", "fg_path"],        "type": "image"},
+        {"label": "decoration layer", "path": ["4", "image_path"],     "type": "image"},
+        {"label": "decorated logo",   "path": ["6", "composite_path"], "type": "image"}
+      ],
+      "metadata": {
+        "caption": ["3", "caption"]
+      }
+    },
+    "outputs": ["playlist_id"]
+  }
+}

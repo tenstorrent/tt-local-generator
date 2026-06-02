@@ -318,15 +318,18 @@ for FAIR in "${FAIRS[@]}"; do
 done
 log "  Phase 1 complete."
 
-# ── Phase 2: CPU depth maps (parallel, no GPU) ───────────────────────────────
-log_step "Phase 2: GLPN depth maps (CPU, parallel)"
+# ── Phase 2: CPU depth maps (sequential — avoids bash job-table hang) ─────────
+# Running depth maps sequentially rather than with & + wait because the wait
+# builtin picks up ALL background jobs including long-lived server processes
+# launched by start_server, causing an indefinite block.  Depth maps take
+# ~30s each; running 4 sequentially is still only ~2 min total.
+log_step "Phase 2: GLPN depth maps (CPU)"
 for FAIR in "${FAIRS[@]}"; do
     [[ "${USE_DEPTH[$FAIR]}" == "0" ]] && { log "  [$FAIR] depth skipped (fog/exterior)"; continue; }
     img=$(get_result "$FAIR" "1" "image_path")
     [[ -z "$img" || ! -f "$img" ]] && { log "  [$FAIR] depth skipped (no seed image)"; continue; }
-    gen_depth "$FAIR" "2" "$img" &
+    gen_depth "$FAIR" "2" "$img"
 done
-wait
 log "  Phase 2 complete."
 
 # ── Phase 3: SkyReels I2V — 5 videos (submit all, poll all) ──────────────────
@@ -343,11 +346,10 @@ for FAIR in "${FAIRS[@]}"; do
     submit_video "$FAIR" "4" "$VIDEO_PROMPT" "$img" "${SEED[$FAIR]}"
     sleep 3
 done
-log "  All video jobs submitted. Polling..."
+log "  All video jobs submitted. Polling sequentially (SkyReels queues them internally)..."
 for FAIR in "${FAIRS[@]}"; do
-    poll_video "$FAIR" "4" &
+    poll_video "$FAIR" "4"
 done
-wait
 log "  Phase 3 complete."
 
 # ── Phase 4: Llama-3.3-70B — 5 poems ─────────────────────────────────────────
@@ -355,9 +357,8 @@ log_step "Phase 4: Llama-3.3-70B — 5 poems"
 stop_and_reset "artgen-llama-3.3-70b"
 start_server "artgen-llama-3.3-70b" "http://localhost:8002/v1/models" 30
 for FAIR in "${FAIRS[@]}"; do
-    gen_poem "$FAIR" "5" "${POEM_CONTEXT[$FAIR]}" &
+    gen_poem "$FAIR" "5" "${POEM_CONTEXT[$FAIR]}"
 done
-wait
 log "  Phase 4 complete."
 
 # ── Phase 5: FLUX — 5 poem images ────────────────────────────────────────────
