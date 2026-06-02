@@ -71,9 +71,12 @@
     /* ── Fair cards ── */
     .fairs-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
       gap: 2.5rem;
       margin-top: 3rem;
+    }
+    @media (max-width: 520px) {
+      .fairs-grid { grid-template-columns: 1fr; }
     }
     .fair-card {
       background: var(--card);
@@ -115,8 +118,9 @@
     }
     .fair-video-wrap video {
       width: 100%;
-      aspect-ratio: 16/9;
-      object-fit: cover;
+      aspect-ratio: 960/544;
+      object-fit: contain;
+      background: #000;
       display: block;
     }
     .fair-video-badge {
