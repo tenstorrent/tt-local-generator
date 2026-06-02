@@ -313,13 +313,26 @@ class WorkflowPopover(Gtk.Popover):
         self._run_btn.connect("clicked", self._on_run_clicked)
         outer.append(self._run_btn)
 
-        # Populate on first show
-        self.connect("show", lambda *_: self._refresh())
+        # Populate on first show.
+        # Note: connect via realize → idle_add to ensure the widget tree is
+        # fully set up before _refresh touches child widgets.
+        self.connect("show", self._on_show)
+
+    def _on_show(self, *_) -> None:
+        GLib.idle_add(self._refresh)
 
     # ── Refresh ───────────────────────────────────────────────────────────────
 
     def _refresh(self) -> None:
         """Reload specs and history whenever the popover is shown."""
+        try:
+            self._refresh_inner()
+        except Exception as e:
+            import traceback
+            print(f"[WorkflowPopover] _refresh error: {e}")
+            traceback.print_exc()
+
+    def _refresh_inner(self) -> None:
         self._specs = _discover_specs()
 
         string_list = Gtk.StringList()

@@ -103,10 +103,13 @@ stop_and_reset() {
         return 0
     fi
     if docker ps -q 2>/dev/null | grep -q .; then
-        log "  Stopping containers..."
-        docker ps -q | xargs docker stop --timeout 8 2>/dev/null || \
-            docker ps -q | xargs docker kill 2>/dev/null || true
-        sleep 2
+        log "  Killing containers (background)..."
+        # Run docker kill in background — the container may be in kernel D-state
+        # during TT hardware compile/warmup, making even SIGKILL block until the
+        # hardware operation completes. We don't wait; tt-smi -r below will
+        # forcefully reset the hardware which also terminates the container.
+        docker ps -q | xargs docker kill 2>/dev/null &
+        sleep 1
     fi
     if [[ -n "$_current_server" ]]; then
         log "  Resetting boards ($_current_server → ${next_server:-none})..."
@@ -267,12 +270,12 @@ gen_depth() {
     local dest="$RUN_ROOT/$fair/node${node_id}_depth.png"
     log "  [$fair] Estimating depth (CPU)..."
     [[ $DRY_RUN -eq 1 ]] && { set_result "$fair" "$node_id" "depth_path" "$dest"; set_node_label "$fair" "$node_id" "depth map"; touch "$dest"; return 0; }
-    "$PYTHON3" -c "
+    timeout 90 "$PYTHON3" -c "
 import sys
 sys.path.insert(0, '$REPO_ROOT/plugins/depth')
 from plugin import estimate_depth
 estimate_depth('$src', '$dest')
-" 2>&1 | tail -2
+" 2>&1 | tail -2 || log "  [$fair] ⚠️ depth timed out or failed"
     if [[ -f "$dest" ]]; then
         log "  [$fair] ✅ depth: $(du -sh "$dest" | cut -f1)"
         set_result "$fair" "$node_id" "depth_path" "$dest"
