@@ -7,6 +7,7 @@ b64 = base64.b64encode(open(image_path, "rb").read()).decode()
 
 payload = {
     "prompt": prompt,
+    "num_frames": 33,       # ~1.4s at 24fps; 97 frames takes 10x longer
     "num_inference_steps": 20,
     "seed": int(seed),
     "image_prompts": [{"image": b64, "frame_pos": 0}],
