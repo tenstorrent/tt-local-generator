@@ -10030,20 +10030,42 @@ class MainWindow(Gtk.ApplicationWindow):
         self._detail.show_record(rec, self._dispatch_remix)
 
     def _on_pipeline_retry_node(self, job_name: str, node_id: str) -> None:
-        """Retry a single failed node in the active pipeline run."""
-        if hasattr(self, "_pipeline_runner") and self._pipeline_runner:
-            try:
-                self._pipeline_runner.retry_node(job_name, node_id)
-            except NotImplementedError:
-                pass
+        """Retry a single failed node in the active pipeline run.
+
+        Calls PipelineRunner.retry_node() with the same GTK-safe callbacks used
+        by the initial run so the grid and panel update on the main thread.
+        """
+        runner = getattr(self, "_pipeline_runner", None)
+        if runner is None:
+            return
+        try:
+            runner.retry_node(
+                job_name, node_id,
+                on_node_update=self._on_pipeline_node_update,
+                on_run_finished=self._on_pipeline_run_finished,
+            )
+        except (ValueError, Exception) as e:
+            if hasattr(self, "_pipeline_panel"):
+                self._pipeline_panel.set_running(False, f"Retry failed: {e}")
 
     def _on_pipeline_retry_job(self, job_name: str) -> None:
-        """Retry all failed nodes in a specific pipeline job."""
-        if hasattr(self, "_pipeline_runner") and self._pipeline_runner:
-            try:
-                self._pipeline_runner.retry_job(job_name)
-            except NotImplementedError:
-                pass
+        """Retry all failed nodes in a specific pipeline job.
+
+        Calls PipelineRunner.retry_job() with the same GTK-safe callbacks used
+        by the initial run so the grid and panel update on the main thread.
+        """
+        runner = getattr(self, "_pipeline_runner", None)
+        if runner is None:
+            return
+        try:
+            runner.retry_job(
+                job_name,
+                on_node_update=self._on_pipeline_node_update,
+                on_run_finished=self._on_pipeline_run_finished,
+            )
+        except (ValueError, Exception) as e:
+            if hasattr(self, "_pipeline_panel"):
+                self._pipeline_panel.set_running(False, f"Retry failed: {e}")
 
     def _restore_pipeline_run(self) -> bool:
         """Called via GLib.idle_add on startup. Restores pipeline state.

@@ -119,6 +119,8 @@ if _GTK_AVAILABLE:
             # Tracks cells that already have a terminal GestureClick attached,
             # so repeated update_cell calls cannot accumulate duplicate controllers.
             self._terminal_cells: set[tuple[str, str]] = set()
+            # Maps job_name → per-job retry button so update_cell can toggle sensitivity.
+            self._retry_buttons: dict[str, "Gtk.Button"] = {}
             self._build()
 
         def _build(self) -> None:
@@ -127,6 +129,7 @@ if _GTK_AVAILABLE:
                 self.remove(child)
             self._cell_widgets.clear()
             self._terminal_cells = set()  # reset per-cell gesture tracking
+            self._retry_buttons = {}  # reset per-job retry button refs
 
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
@@ -191,6 +194,7 @@ if _GTK_AVAILABLE:
                 retry_btn.job_name = job_name  # type: ignore[attr-defined]
                 retry_btn.connect("clicked", self._on_retry_job_clicked)
                 grid.attach(retry_btn, len(self._state.phases) + 1, row_idx, 1, 1)
+                self._retry_buttons[job_name] = retry_btn  # store ref for sensitivity updates
 
         def _make_cell(self, job_name: str, node_id: str, state: dict) -> Gtk.Box:
             status = state.get("status", "pending")
@@ -254,6 +258,16 @@ if _GTK_AVAILABLE:
                         self._on_cell_clicked(jn, nid, det)
                 )
                 old_cell.add_controller(gesture)
+
+            # Enable/disable the per-job retry button based on whether any
+            # cell in this job's row is in the "failed" state.
+            job_has_failure = any(
+                self._state.cell(job_name, p["id"]).get("status") == "failed"
+                for p in self._state.phases
+            )
+            retry_btn = self._retry_buttons.get(job_name)
+            if retry_btn:
+                retry_btn.set_sensitive(job_has_failure)
 
         def _on_cell_clicked(self, job_name: str, node_id: str, detail: str) -> None:
             if self._on_cell_click:
