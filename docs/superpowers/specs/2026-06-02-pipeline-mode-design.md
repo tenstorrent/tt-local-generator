@@ -277,3 +277,103 @@ When a pipeline run completes, the center pane offers a **"→ View Playlist"** 
 11. Existing Video/Animate/Image/Art tabs are completely unaffected.
 12. All existing tests pass; new `tests/test_pipeline_*.py` suite covers `PipelineRunner`, `PipelineStore`, node signal parsing, history-load round-trip, and restart-recovery with a mock subprocess.
 13. **Restart recovery:** closing the app during a SkyReels generation and reopening reconnects to the in-progress job and shows ✓ when it completes, without user action.
+
+---
+
+## Workflow Compatibility Layer
+
+### Problem
+
+ComfyUI workflows reference node types (`class_type`) that may not exist in tt-local-generator, or may exist under different names. A user importing a community workflow that calls for `ControlNetApply` or `IPAdapterApply` shouldn't get a hard failure — they should get a best-effort run with the unsupported nodes skipped and a clear explanation of what was omitted.
+
+### Design
+
+A `COMPATIBILITY_MAP` in `app/workflow_compat.py` maps ComfyUI class types to tt-local-generator equivalents, with three tiers:
+
+```python
+COMPATIBILITY_MAP = {
+    # Tier 1 — Exact: native tt-local-generator node types
+    "TTLGTextToImage":      {"ttlg": "TTLGTextToImage",   "optional": False},
+    "TTLGImageToVideo":     {"ttlg": "TTLGImageToVideo",  "optional": False},
+    "TTLGGenerateText":     {"ttlg": "TTLGGenerateText",  "optional": False},
+    "TTLGCaptionImage":     {"ttlg": "TTLGCaptionImage",  "optional": True},
+    "TTLGRemoveBackground": {"ttlg": "TTLGRemoveBackground", "optional": True},
+    "TTLGEstimateDepth":    {"ttlg": "TTLGEstimateDepth", "optional": True},
+    "TTLGPromptCompose":    {"ttlg": "TTLGPromptCompose", "optional": False},
+    "TTLGAddToPlaylist":    {"ttlg": "TTLGAddToPlaylist", "optional": False},
+    "TTLGComposite":        {"ttlg": "TTLGComposite",     "optional": True},
+    "TTLGSVGRender":        {"ttlg": "TTLGSVGRender",     "optional": True},
+
+    # Tier 2 — Mapped: ComfyUI standard types we can substitute
+    "KSampler":             {"ttlg": "TTLGTextToImage",   "optional": False,
+                             "note": "mapped from KSampler — seed/steps params adapted"},
+    "CLIPTextEncode":       {"ttlg": "TTLGPromptCompose", "optional": True,
+                             "note": "prompt text passed through directly"},
+    "VAEDecode":            {"ttlg": None,                "optional": True,
+                             "note": "VAE decode is internal to TTNN pipeline"},
+    "LoadImage":            {"ttlg": None,                "optional": True,
+                             "note": "use input_image param on the job instead"},
+
+    # Tier 3 — Skippable: nodes we don't support but can omit without breaking the run
+    "ControlNetApply":      {"ttlg": None, "optional": True,
+                             "note": "ControlNet not supported — node skipped, base model used"},
+    "IPAdapterApply":       {"ttlg": None, "optional": True,
+                             "note": "IP-Adapter not supported — node skipped"},
+    "UpscaleImage":         {"ttlg": None, "optional": True,
+                             "note": "upscaling not supported — original resolution kept"},
+}
+```
+
+### Preflight validation
+
+Before a run starts, `PipelineRunner.validate_spec(spec_path)` runs a preflight check:
+
+1. Load the workflow JSON
+2. For each node, look up its `class_type` in `COMPATIBILITY_MAP`
+3. Classify each node as: **native**, **mapped** (with substitution), **skippable** (omit with warning), or **blocking** (unknown + required)
+4. Return a `ValidationResult` with:
+   - `ok: bool` — False only if any blocking node is found
+   - `warnings: list[str]` — skippable nodes that will be omitted
+   - `mappings: list[str]` — nodes that are substituted
+   - `blocking: list[str]` — unknown nodes that prevent the run (if any)
+
+The UI shows this as a preflight panel before the Run button is active:
+
+```
+⚠️  3 nodes will be skipped (not supported on this hardware):
+   · ControlNetApply (node 4) — base model used instead
+   · IPAdapterApply (node 5) — skipped
+   · UpscaleImage (node 9) — original resolution kept
+
+✅ All required nodes are supported. Run will proceed.
+[▶ Run anyway]  [✕ Cancel]
+```
+
+If any blocking node is found:
+```
+❌ Cannot run: 1 required node type not recognised:
+   · MyCustomNode (node 3) — unknown class_type, no substitution available
+
+Install a plugin that provides MyCustomNode, or remove it from the workflow.
+```
+
+### Wire-compatibility for mapped nodes
+
+When a ComfyUI `KSampler` node is mapped to `TTLGTextToImage`, the runner translates its input keys:
+- `seed` → `seed`
+- `steps` → `num_inference_steps`  
+- `cfg` → `guidance_scale`
+- `positive` (wire ref to CLIPTextEncode) → resolved as the prompt string
+
+This translation lives in `workflow_compat.py` as `translate_inputs(class_type, inputs) -> dict`, keeping the runner clean.
+
+### What is NOT attempted
+
+- Structural rewiring — if a skipped node's output feeds a required downstream node, the pipeline will fail at that downstream node with a clear error ("input missing: node 4 was skipped"). The user is told this in the preflight if detectable.
+- Semantic translation beyond simple key remapping — we don't try to convert ComfyUI's sampler scheduler names to TTNN equivalents, just pass through what we can and let the model handle it.
+
+### Success criteria added
+
+14. Loading a ComfyUI workflow with unsupported optional nodes shows a preflight warning listing skipped nodes, then runs successfully with those nodes omitted.
+15. Loading a workflow with an unknown required node shows a blocking error before the run starts, with a clear description of what's missing.
+16. `workflow_compat.py` has a `COMPATIBILITY_MAP` and `validate_spec()` function covered by unit tests.
