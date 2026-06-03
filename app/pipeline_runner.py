@@ -68,6 +68,21 @@ class PipelineRunner:
 
         if line.startswith("LOG:"):
             self._log_file = line[4:].strip()
+            # Derive output_dir from the log filename timestamp.
+            # Log path:    .../logs/workflow/YYYYMMDD_HHMMSS_*.log
+            # Output dir:  .../workflow-runs/YYYYMMDD_HHMMSS/
+            # Both are written by run_workflow.sh (and run_single_node.sh for
+            # retries) using the same timestamp prefix, so the pairing is exact.
+            import re as _re
+            m = _re.search(r'(\d{8}_\d{6})_', self._log_file)
+            if m and self._run_id:
+                ts = m.group(1)
+                output_dir = str(
+                    Path.home() / ".local" / "share" / "tt-local-generator"
+                    / "workflow-runs" / ts
+                )
+                self._store.update_log_file(self._run_id, self._log_file)
+                self._store.update_output_dir(self._run_id, output_dir)
             return
 
         if line.startswith("NODE:"):
@@ -157,13 +172,98 @@ class PipelineRunner:
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
 
-    def retry_node(self, job_name: str, node_id: str) -> None:
-        """Re-run a single failed node. Implemented in Plan 2."""
-        raise NotImplementedError("retry_node implemented in Plan 2")
+    def retry_node(
+        self,
+        job_name: str,
+        node_id: str,
+        on_node_update: Callable,
+        on_run_finished: Callable,
+    ) -> None:
+        """Re-run a single failed node using the existing results.json as context.
 
-    def retry_job(self, job_name: str) -> None:
-        """Re-run a job from its first failed node. Implemented in Plan 2."""
-        raise NotImplementedError("retry_job implemented in Plan 2")
+        Launches bin/run_single_node.sh <results.json> <node_id> as a new
+        subprocess and streams its output through the normal _watch_stdout /
+        _parse_line pipeline so node-state callbacks and the store are updated
+        identically to a fresh run.
+
+        Raises:
+            ValueError: if no active run, run not in store, output_dir not set,
+                        or results.json missing at the expected path.
+        """
+        if not self._run_id:
+            raise ValueError("No active run — call start() or reattach() first")
+
+        store_run = self._store.get_run(self._run_id)
+        if not store_run:
+            raise ValueError(f"Run {self._run_id} not found in store")
+
+        output_dir = store_run.get("output_dir", "")
+        if not output_dir:
+            raise ValueError(
+                "output_dir not set — run may not have emitted a LOG: signal yet"
+            )
+
+        results_json = Path(output_dir) / "results.json"
+        if not results_json.exists():
+            raise ValueError(f"results.json not found at {results_json}")
+
+        self._on_node_update = on_node_update
+        self._on_run_finished = on_run_finished
+        self._cancelled = False
+
+        script = _REPO_ROOT / "bin" / "run_single_node.sh"
+        env = {**os.environ}
+        try:
+            self._proc = subprocess.Popen(
+                ["bash", str(script), str(results_json), node_id],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            threading.Thread(
+                target=self._watch_stdout,
+                args=(job_name,),
+                daemon=True,
+            ).start()
+        except Exception:
+            self._dispatch(on_run_finished, False)
+
+    def retry_job(
+        self,
+        job_name: str,
+        on_node_update: Callable,
+        on_run_finished: Callable,
+    ) -> None:
+        """Re-run a job starting from its first failed node.
+
+        Finds the lowest-numbered node with status "failed" for *job_name*
+        in the stored run record and delegates to retry_node().  If no failed
+        nodes exist this is a no-op (idempotent — safe to call defensively).
+
+        Raises the same errors as retry_node() when a failed node is found.
+        """
+        if not self._run_id:
+            raise ValueError("No active run")
+
+        store_run = self._store.get_run(self._run_id)
+        if not store_run:
+            raise ValueError(f"Run {self._run_id} not found")
+
+        job_states = store_run.get("job_states", {}).get(job_name, {})
+        failed_nodes = [
+            nid for nid, state in job_states.items()
+            if state.get("status") == "failed"
+        ]
+        if not failed_nodes:
+            # Nothing to retry — treat as success (caller need not handle this).
+            return
+
+        # Sort numerically where possible; non-numeric node IDs sort last.
+        first_failed = sorted(
+            failed_nodes, key=lambda n: int(n) if n.isdigit() else 999
+        )[0]
+        self.retry_node(job_name, first_failed, on_node_update, on_run_finished)
 
     def reattach(
         self,

@@ -16,6 +16,7 @@ Each run record:
         "param_overrides": dict,
         "pid":            int,       # subprocess PID for liveness check
         "log_file":       str,       # path to tee'd log for re-attach
+        "output_dir":     str,       # workflow-runs/<timestamp>/ for results.json
         "status":         "running" | "done" | "failed" | "interrupted",
         "started_at":     str (ISO),
         "finished_at":    str | None,
@@ -100,6 +101,7 @@ class PipelineStore:
             "param_overrides": param_overrides,
             "pid": pid,
             "log_file": log_file,
+            "output_dir": "",
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
@@ -174,5 +176,22 @@ class PipelineStore:
             for r in records:
                 if r["id"] == run_id:
                     r["log_file"] = log_file
+                    break
+            self._save(records)
+
+    def update_output_dir(self, run_id: str, output_dir: str) -> None:
+        """Persist the workflow output directory path for an existing run record.
+
+        Called by PipelineRunner._parse_line() when a LOG: signal arrives —
+        the timestamp in the log filename is used to derive the matching
+        workflow-runs/<timestamp>/ directory where results.json is written.
+        Required by retry_node() to locate results.json without a full
+        directory scan.
+        """
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r["output_dir"] = output_dir
                     break
             self._save(records)
