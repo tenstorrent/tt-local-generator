@@ -116,17 +116,11 @@ class PipelineRunner:
         log_dir = Path.home() / ".local" / "share" / "tt-local-generator" / "logs" / "pipeline"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        self._run_id = self._store.create_run(
-            spec_path=spec_path,
-            spec_name=Path(spec_path).stem,
-            jobs=jobs,
-            param_overrides=param_overrides,
-            pid=0,
-            log_file="",
-        )
-
-        env = {**os.environ, "PIPELINE_RUN_ID": self._run_id}
+        env = {**os.environ}
         try:
+            # Launch the subprocess first so we have the real PID before
+            # writing the run record — eliminates the window where reattach()
+            # could see pid=0, find /proc/0 absent, and mark the run interrupted.
             self._proc = subprocess.Popen(
                 ["bash", str(_REPO_ROOT / "bin" / "run_workflow.sh"), spec_path],
                 stdout=subprocess.PIPE,
@@ -134,13 +128,14 @@ class PipelineRunner:
                 text=True,
                 env=env,
             )
-            # Update PID now that we have it
-            records = self._store._load()
-            for r in records:
-                if r["id"] == self._run_id:
-                    r["pid"] = self._proc.pid
-                    break
-            self._store._save(records)
+            self._run_id = self._store.create_run(
+                spec_path=spec_path,
+                spec_name=Path(spec_path).stem,
+                jobs=jobs,
+                param_overrides=param_overrides,
+                pid=self._proc.pid,   # real PID — no pid=0 patch needed
+                log_file="",
+            )
 
             threading.Thread(
                 target=self._watch_stdout,
@@ -148,7 +143,8 @@ class PipelineRunner:
                 daemon=True,
             ).start()
         except Exception:
-            self._store.finish_run(self._run_id, success=False)
+            if self._run_id:
+                self._store.finish_run(self._run_id, success=False)
             self._dispatch(on_run_finished, False)
 
     def cancel(self) -> None:

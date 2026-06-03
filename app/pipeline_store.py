@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,9 @@ class PipelineStore:
 
     def __init__(self) -> None:
         _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        # Protects all _load/_save pairs against concurrent access from the
+        # background _watch_stdout thread and the GTK main thread.
+        self._lock = threading.Lock()
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
@@ -54,24 +58,27 @@ class PipelineStore:
         _INDEX_PATH.write_text(json.dumps(records, indent=2))
 
     def get_run(self, run_id: str) -> Optional[dict]:
-        return next((r for r in self._load() if r["id"] == run_id), None)
+        with self._lock:
+            return next((r for r in self._load() if r["id"] == run_id), None)
 
     def list_runs(self, spec_path: Optional[str] = None, limit: int = 50) -> list[dict]:
-        records = self._load()
-        if spec_path:
-            records = [r for r in records if r.get("spec_path") == spec_path]
-        return records[:limit]
+        with self._lock:
+            records = self._load()
+            if spec_path:
+                records = [r for r in records if r.get("spec_path") == spec_path]
+            return records[:limit]
 
     def find_interrupted_runs(self) -> list[dict]:
         """Return runs with status 'running' whose PID is no longer alive."""
-        result = []
-        for r in self._load():
-            if r.get("status") != "running":
-                continue
-            pid = r.get("pid", 0)
-            if not os.path.exists(f"/proc/{pid}"):
-                result.append(r)
-        return result
+        with self._lock:
+            result = []
+            for r in self._load():
+                if r.get("status") != "running":
+                    continue
+                pid = r.get("pid", 0)
+                if not os.path.exists(f"/proc/{pid}"):
+                    result.append(r)
+            return result
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
@@ -99,9 +106,10 @@ class PipelineStore:
             "job_states": {j["name"]: {} for j in jobs},
             "playlist_ids": {j["name"]: None for j in jobs},
         }
-        records = self._load()
-        records.insert(0, record)
-        self._save(records)
+        with self._lock:
+            records = self._load()
+            records.insert(0, record)
+            self._save(records)
         return run_id
 
     def update_node(
@@ -113,39 +121,43 @@ class PipelineStore:
         detail: str = "",
         elapsed_s: float = 0.0,
     ) -> None:
-        records = self._load()
-        for r in records:
-            if r["id"] != run_id:
-                continue
-            r.setdefault("job_states", {}).setdefault(job_name, {})[node_id] = {
-                "status": status,
-                "detail": detail,
-                "elapsed_s": elapsed_s,
-            }
-            break
-        self._save(records)
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] != run_id:
+                    continue
+                r.setdefault("job_states", {}).setdefault(job_name, {})[node_id] = {
+                    "status": status,
+                    "detail": detail,
+                    "elapsed_s": elapsed_s,
+                }
+                break
+            self._save(records)
 
     def update_playlist(self, run_id: str, job_name: str, playlist_id: str) -> None:
-        records = self._load()
-        for r in records:
-            if r["id"] == run_id:
-                r.setdefault("playlist_ids", {})[job_name] = playlist_id
-                break
-        self._save(records)
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r.setdefault("playlist_ids", {})[job_name] = playlist_id
+                    break
+            self._save(records)
 
     def finish_run(self, run_id: str, success: bool) -> None:
-        records = self._load()
-        for r in records:
-            if r["id"] == run_id:
-                r["status"] = "done" if success else "failed"
-                r["finished_at"] = datetime.now(timezone.utc).isoformat()
-                break
-        self._save(records)
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r["status"] = "done" if success else "failed"
+                    r["finished_at"] = datetime.now(timezone.utc).isoformat()
+                    break
+            self._save(records)
 
     def mark_interrupted(self, run_id: str) -> None:
-        records = self._load()
-        for r in records:
-            if r["id"] == run_id:
-                r["status"] = "interrupted"
-                break
-        self._save(records)
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r["status"] = "interrupted"
+                    break
+            self._save(records)
