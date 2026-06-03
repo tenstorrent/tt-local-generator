@@ -165,6 +165,9 @@ def test_reattach_marks_interrupted_if_proc_dead(monkeypatch, tmp_path):
 
 
 def test_reattach_returns_false_for_missing_log(monkeypatch, tmp_path):
+    """reattach() returns False when log_file is set but the file does not exist
+    and no candidate log is found in the pipeline logs directory.  The run must
+    NOT be marked interrupted because the process is still alive."""
     monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
     monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
     monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
@@ -180,6 +183,112 @@ def test_reattach_returns_false_for_missing_log(monkeypatch, tmp_path):
     runner._store = store
     result = runner.reattach(run_id, on_node_update=MagicMock(), on_run_finished=MagicMock())
     assert result is False
+    # Run must remain "running" — not interrupted — because the PID is alive.
+    assert store.get_run(run_id)["status"] == "running"
+
+
+def test_reattach_dispatches_warn_when_no_log_found(monkeypatch, tmp_path):
+    """When the PID is alive but no log file can be found (neither the stored
+    path nor any candidate in the logs directory), reattach() must dispatch a
+    synthetic warn node-update rather than silently returning False."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
+    monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
+    import os
+    monkeypatch.setattr(os.path, "exists",
+                        lambda p: p == f"/proc/{os.getpid()}")
+    from pipeline_runner import PipelineRunner
+    from pipeline_store import PipelineStore
+    store = PipelineStore()
+    run_id = store.create_run("/s", "s", [{"name": "j"}], {}, os.getpid(), "")
+    runner = PipelineRunner()
+    runner._store = store
+    on_node_update = MagicMock()
+    on_run_finished = MagicMock()
+    result = runner.reattach(run_id, on_node_update=on_node_update,
+                             on_run_finished=on_run_finished)
+    assert result is False
+    # A warn synthetic signal must be dispatched to on_node_update.
+    on_node_update.assert_called_once()
+    args = on_node_update.call_args[0]
+    assert args[0] == "__health__"
+    assert args[1] == "__reattach__"
+    assert args[2] == "warn"
+    # on_run_finished must NOT be called — the run is still live.
+    on_run_finished.assert_not_called()
+
+
+def test_tail_log_finally_reports_true_for_already_completed_run(monkeypatch, tmp_path):
+    """_tail_log finally block must call on_run_finished(True) when the run
+    record already has status 'done' before tailing begins (i.e. the run
+    completed during app downtime and reattach is catching up)."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
+    monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
+
+    # Create a log file that is already at EOF so _tail_log exits immediately.
+    log_file = tmp_path / "run.log"
+    log_file.write_text("")
+
+    import os
+    # PID does not exist → the inner polling loop exits on the first readline()
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+
+    from pipeline_runner import PipelineRunner
+    from pipeline_store import PipelineStore
+    store = PipelineStore()
+    run_id = store.create_run("/s", "s", [{"name": "j"}], {}, 99999,
+                              str(log_file))
+    # Pre-set the run to 'done' to simulate a run that finished during downtime.
+    store.finish_run(run_id, success=True)
+
+    on_run_finished = MagicMock()
+    runner = PipelineRunner()
+    runner._store = store
+    runner._run_id = run_id
+    runner._on_node_update = MagicMock()
+    runner._on_run_finished = on_run_finished
+    runner._cancelled = False
+
+    # Run _tail_log synchronously (it will exit immediately).
+    runner._tail_log(str(log_file), "j")
+
+    on_run_finished.assert_called_once_with(True)
+
+
+def test_tail_log_finally_reports_false_when_run_was_still_running(monkeypatch, tmp_path):
+    """_tail_log finally block must call on_run_finished(False) and mark the
+    run failed when the process ended while we were watching (status is still
+    'running' at finally time)."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
+    monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
+
+    log_file = tmp_path / "run.log"
+    log_file.write_text("")
+
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+
+    from pipeline_runner import PipelineRunner
+    from pipeline_store import PipelineStore
+    store = PipelineStore()
+    run_id = store.create_run("/s", "s", [{"name": "j"}], {}, 99999,
+                              str(log_file))
+    # Leave status as 'running' — simulates the process dying unexpectedly.
+
+    on_run_finished = MagicMock()
+    runner = PipelineRunner()
+    runner._store = store
+    runner._run_id = run_id
+    runner._on_node_update = MagicMock()
+    runner._on_run_finished = on_run_finished
+    runner._cancelled = False
+
+    runner._tail_log(str(log_file), "j")
+
+    on_run_finished.assert_called_once_with(False)
+    assert store.get_run(run_id)["status"] == "failed"
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

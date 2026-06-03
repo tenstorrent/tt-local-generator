@@ -161,3 +161,18 @@ class PipelineStore:
                     r["status"] = "interrupted"
                     break
             self._save(records)
+
+    def update_log_file(self, run_id: str, log_file: str) -> None:
+        """Persist a discovered log_file path for an existing run record.
+
+        Called by reattach() when the log file was found by scanning the logs
+        directory rather than from the stored record directly — ensures future
+        restarts can find the log without re-scanning.
+        """
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r["log_file"] = log_file
+                    break
+            self._save(records)

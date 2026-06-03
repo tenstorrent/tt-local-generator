@@ -98,3 +98,20 @@ def test_running_run_with_live_pid_not_interrupted(store, monkeypatch):
 
 def test_get_nonexistent_run_returns_none(store):
     assert store.get_run("does-not-exist") is None
+
+
+def test_update_log_file(store):
+    """update_log_file() must persist the new path so future get_run() calls
+    return the updated log_file value."""
+    run_id = store.create_run(
+        spec_path="/s", spec_name="s", jobs=[], param_overrides={},
+        pid=1, log_file=""
+    )
+    assert store.get_run(run_id)["log_file"] == ""
+    store.update_log_file(run_id, "/tmp/discovered.log")
+    assert store.get_run(run_id)["log_file"] == "/tmp/discovered.log"
+
+
+def test_update_log_file_unknown_run_is_noop(store):
+    """update_log_file() on a non-existent run_id must not raise."""
+    store.update_log_file("does-not-exist", "/tmp/x.log")  # must not raise

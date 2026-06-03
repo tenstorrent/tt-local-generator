@@ -184,8 +184,53 @@ class PipelineRunner:
             return False
 
         if not log_file or not os.path.exists(log_file):
-            self._store.mark_interrupted(run_id)
-            return False
+            # The process is still alive but we don't have a log path.  This
+            # happens when the app crashed before run_workflow.sh emitted its
+            # first LOG: signal.  Rather than marking the run interrupted and
+            # orphaning a potentially long job, try to locate the log file by
+            # scanning the pipeline logs directory for any file created on or
+            # after the run's start timestamp.
+            log_dir = Path.home() / ".local" / "share" / "tt-local-generator" / "logs" / "pipeline"
+            candidate = None
+            if log_dir.exists():
+                from datetime import datetime, timezone as _tz
+                started_ts = run.get("started_at", "")
+                try:
+                    started_epoch = (
+                        datetime.fromisoformat(started_ts).timestamp()
+                        if started_ts
+                        else 0.0
+                    )
+                    # Sort newest-first so we pick the most recent log for the
+                    # run; allow a 5 s grace window for filesystem timestamp skew.
+                    candidates = sorted(
+                        log_dir.glob("*.log"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    for c in candidates:
+                        if c.stat().st_mtime >= started_epoch - 5:
+                            candidate = str(c)
+                            break
+                except Exception:
+                    pass
+
+            if candidate:
+                log_file = candidate
+                # Persist the discovered path so future restarts find it directly.
+                self._store.update_log_file(run_id, log_file)
+            else:
+                # No log file found even though the process is running.  We
+                # cannot show progress, but we must not mark the run interrupted
+                # — the job is still alive and may complete.  Emit a warning
+                # synthetic node signal so the UI can surface the situation.
+                self._dispatch(
+                    on_node_update,
+                    "__health__", "__reattach__",
+                    "warn",
+                    f"Live process (pid={pid}) but no log file — cannot show progress",
+                )
+                return False
 
         self._run_id = run_id
         self._on_node_update = on_node_update
@@ -261,6 +306,15 @@ class PipelineRunner:
         finally:
             if self._run_id:
                 run = self._store.get_run(self._run_id)
-                if run and run.get("status") == "running":
-                    self._store.finish_run(self._run_id, success=False)
-            self._dispatch(self._on_run_finished, False)
+                if run:
+                    if run.get("status") == "running":
+                        # Process ended while we were watching — mark as failed.
+                        self._store.finish_run(self._run_id, success=False)
+                        self._dispatch(self._on_run_finished, False)
+                    else:
+                        # Run already has a terminal status (done/failed/interrupted)
+                        # that was set before reattach was called (e.g. it completed
+                        # during app downtime).  Report the actual outcome truthfully
+                        # rather than always reporting False.
+                        success = run.get("status") == "done"
+                        self._dispatch(self._on_run_finished, success)
