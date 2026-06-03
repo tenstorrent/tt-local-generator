@@ -811,6 +811,38 @@ menubutton.workflow-btn > button:hover {
     color: @tt_text;
 }
 
+/* -- Pipeline tab ---------------------------------------------------------- */
+button.pipeline-source-btn {
+    background-color: @tt_bg_dark;
+    color: @tt_accent;
+    border: 1px solid @tt_accent;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}
+button.pipeline-source-btn:hover {
+    background-color: @tt_bg_darkest;
+}
+
+/* -- Phase grid ------------------------------------------------------------ */
+.phase-grid-header {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: @tt_text_muted;
+    padding: 2px 4px;
+}
+.phase-cell-pending   { background-color: @tt_bg_dark;    border: 1px solid rgba(79,209,197,.1);  border-radius: 4px; }
+.phase-cell-running   { background-color: #1a2a3a;        border: 2px solid @tt_accent;           border-radius: 4px; }
+.phase-cell-done      { background-color: #1a3a20;        border: 2px solid @tt_success;          border-radius: 4px; }
+.phase-cell-failed    { background-color: #3a1a1a;        border: 2px solid @tt_error;            border-radius: 4px; cursor: pointer; }
+.phase-cell-skipped   { background-color: #2a2010;        border: 1px solid rgba(244,196,113,.4); border-radius: 4px; }
+.phase-cell-selected  { outline: 2px solid @tt_accent; outline-offset: 1px; }
+.phase-job-label      { font-size: 10px; font-weight: 700; color: @tt_text; }
+.phase-job-sublabel   { font-size: 9px;  color: @tt_text_muted; }
+
 /* -- Toolbar (logo + source + model, pinned to top of window) -------------- */
 .tt-toolbar {
     background-color: @tt_bg_darkest;
