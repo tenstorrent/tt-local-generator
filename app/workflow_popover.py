@@ -511,6 +511,11 @@ class WorkflowPopover(Gtk.Popover):
 
         Shows each artifact from results.json: thumbnail (image/video frame)
         with label, plus text outputs (caption, poem) as quoted blocks.
+
+        Thumbnail loading is intentionally deferred to a background thread to
+        avoid blocking the GTK main thread with disk I/O.  Each cell is built
+        immediately with a placeholder icon; a single daemon thread then loads
+        every pixbuf and replaces the placeholder via GLib.idle_add once ready.
         """
         grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         grid.set_margin_top(6)
@@ -540,11 +545,47 @@ class WorkflowPopover(Gtk.Popover):
             strip.set_margin_bottom(2)
             scroll.set_child(strip)
 
+            # Build placeholder cells immediately — no disk I/O on main thread.
+            # Each cell holds a label icon for now; the background thread below
+            # will swap the label for a real Gtk.Image once the pixbuf is loaded.
+            cells: list[tuple[dict, Gtk.Box]] = []
             for item in media_items:
-                cell = self._make_artifact_cell(item)
+                cell = self._make_artifact_cell(item, pixbuf=None)
                 strip.append(cell)
+                cells.append((item, cell))
 
             grid.append(scroll)
+
+            # Load thumbnails in a daemon background thread.
+            # The inner _update closure captures cell and pb by default-arg to
+            # avoid the classic loop-variable capture pitfall, and is posted to
+            # the GTK main thread via GLib.idle_add — the ONLY safe way to
+            # modify GTK widgets from outside the main thread.
+            def _load_thumbs(cells: list = cells) -> None:
+                for item, cell in cells:
+                    try:
+                        if item["type"] == "image":
+                            pb = self._load_thumbnail(item["path"], 80, 80)
+                        else:
+                            pb = self._load_video_thumbnail(item["path"], 80, 80)
+                    except Exception:
+                        pb = None
+
+                    if pb is not None:
+                        # Schedule the widget update on the GTK main thread.
+                        def _update(cell: Gtk.Box = cell, pb=pb) -> bool:
+                            # Remove the placeholder (first child of the cell box)
+                            # and prepend a real image widget in its place.
+                            old = cell.get_first_child()
+                            if old is not None:
+                                cell.remove(old)
+                            img = Gtk.Image.new_from_pixbuf(pb)
+                            img.set_size_request(80, 80)
+                            cell.prepend(img)
+                            return GLib.SOURCE_REMOVE
+                        GLib.idle_add(_update)
+
+            threading.Thread(target=_load_thumbs, daemon=True).start()
 
         for item in text_items:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -568,28 +609,25 @@ class WorkflowPopover(Gtk.Popover):
 
         return grid
 
-    def _make_artifact_cell(self, item: dict) -> Gtk.Box:
-        """80×80 thumbnail cell with label below."""
+    def _make_artifact_cell(self, item: dict, pixbuf=None) -> Gtk.Box:
+        """80×80 thumbnail cell with label below.
+
+        Args:
+            item:   Artifact dict with at least ``type`` and ``label`` keys.
+            pixbuf: Pre-loaded GdkPixbuf, or None to show a placeholder icon.
+                    Pass None when building cells before async thumbnail loading
+                    has completed; the caller is responsible for replacing the
+                    placeholder once the pixbuf arrives on the main thread.
+        """
         cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         cell.set_size_request(80, -1)
 
-        try:
-            if item["type"] == "image":
-                pb = self._load_thumbnail(item["path"], 80, 80)
-            else:
-                # Video — try to extract a frame via GdkPixbuf paintable
-                pb = self._load_video_thumbnail(item["path"], 80, 80)
-
-            if pb:
-                img = Gtk.Image.new_from_pixbuf(pb)
-                img.set_size_request(80, 80)
-            else:
-                img = Gtk.Label(label="🎬" if item["type"] == "video" else "🖼")
-                img.set_size_request(80, 80)
-        except Exception:
-            img = Gtk.Label(label="?")
-            img.set_size_request(80, 80)
-
+        if pixbuf is not None:
+            img = Gtk.Image.new_from_pixbuf(pixbuf)
+        else:
+            # Placeholder shown while the background thread loads the real thumbnail
+            img = Gtk.Label(label="🎬" if item["type"] == "video" else "🖼")
+        img.set_size_request(80, 80)
         cell.append(img)
 
         lbl = Gtk.Label(label=item["label"])
