@@ -33,7 +33,24 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 class PipelineRunner:
     """Manages the lifecycle of a single pipeline batch run."""
 
-    def __init__(self) -> None:
+    def __init__(self, idle_add=None) -> None:
+        """
+        Args:
+            idle_add: callable(fn, *args) that schedules fn(*args) on the GTK
+                      main loop.  Pass GLib.idle_add in production.  When None,
+                      defaults to GLib.idle_add if GLib is available, or a
+                      direct-call shim when running headless (tests/CI).
+        """
+        if idle_add is not None:
+            self._idle_add = idle_add
+        elif GLib is not None and isinstance(getattr(GLib, "MAXINT", None), int):
+            # Real GLib binding confirmed (MAXINT is a C integer constant that
+            # MagicMocks and other fakes do not expose as an int).
+            self._idle_add = GLib.idle_add
+        else:
+            # Headless / test environment — call directly on the current thread.
+            self._idle_add = lambda fn, *a: fn(*a)
+
         self._store = PipelineStore()
         self._run_id: Optional[str] = None
         self._proc: Optional[subprocess.Popen] = None
@@ -74,23 +91,10 @@ class PipelineRunner:
             return
 
     def _dispatch(self, callback: Optional[Callable], *args) -> None:
-        """Post callback to GTK main thread if GLib available, else call directly.
-
-        Checks whether the module-level GLib name is the real GLib binding by
-        looking for a C-level attribute only the genuine gi binding possesses
-        (_gi_module or MAXINT).  In tests, monkeypatching GLib with a MagicMock
-        will fail this check and fall back to calling the callback directly,
-        which is correct for single-threaded test execution.
-        """
+        """Schedule callback(*args) on the GTK main thread via self._idle_add."""
         if callback is None:
             return
-        # Detect the real GLib binding: it exposes MAXINT (a C constant).
-        # MagicMock objects also respond to attribute access but return another
-        # Mock, not an integer — so `isinstance(..., int)` distinguishes them.
-        if GLib is not None and isinstance(getattr(GLib, "MAXINT", None), int):
-            GLib.idle_add(callback, *args)
-        else:
-            callback(*args)
+        self._idle_add(callback, *args)
 
     # ── Public API ────────────────────────────────────────────────────────────
 

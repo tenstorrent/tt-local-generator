@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 def make_runner(on_node_update=None, on_run_finished=None):
     from pipeline_runner import PipelineRunner
     runner = PipelineRunner.__new__(PipelineRunner)
+    runner._idle_add = lambda fn, *a: fn(*a)  # direct-call shim for headless tests
     runner._on_node_update = on_node_update or MagicMock()
     runner._on_run_finished = on_run_finished or MagicMock()
     runner._run_id = "test-run-id"
