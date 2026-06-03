@@ -69,16 +69,38 @@ The core input widget. Structure:
 
 Template is optional — if the user clears it, all rows switch to free-text mode automatically.
 
-**Section 3 — Run controls**  
-- **▶ Run Pipeline** button (`suggested-action` CSS class)  
+**Section 3 — Left pane tabs**
+
+The left pane has two tabs — **Configure** and **History** — switchable via a `Gtk.StackSwitcher` at the top of the pane.
+
+**Configure tab** (default on first launch):
+- Template row + variable table + parameter overrides + Run button as described above.
+- After a run completes, stays on the Configure tab so the user can tweak and re-run. The table retains the values from the last run so iteration is fast.
+
+**History tab**:
+- Scrollable list of past runs for the currently-selected spec, newest first.
+- Each run entry shows: timestamp, job count, artifact count, total time, status (✅ complete / ⚠️ partial / ❌ failed), and a "→ Load" button.
+- Clicking anywhere on a run entry (not just the button) loads it: the Configure tab's job table is populated with that run's job names and variable values, and the center phase grid updates to show that run's completed artifacts — exactly as they were when the run finished.
+- This makes the history tab a **learning tool**: you look at last run's grid (real images in cells, poems visible on click) while the Configure tab shows the inputs that produced them, ready to tweak.
+- The loaded run's phase grid is read-only (it already happened). A "▶ Run again" button at the bottom of the Configure tab triggers a new run with the (possibly modified) job table.
+
+**Section 4 — Run controls**
+- **▶ Run Pipeline** button (`suggested-action` CSS class)
 - While running: **■ Cancel** + live status line ("⏳ Phase 3: SkyReels loading — 2/5 complete")
 - Spec parameter overrides (collapsed by default, same as current WorkflowPopover zone 2): allows overriding leaf inputs like `seed`, `steps`, `num_frames` that apply to all jobs
 
 ---
 
-### 2. Phase Progress Grid (center pane, replaces gallery during active run)
+### 2. Phase Progress Grid (center pane)
 
 When a run is started, the center pane switches from `GalleryWidget` to a `PhaseGridWidget`. On run completion the gallery re-appears (or persists alongside via a tab switcher).
+
+The grid is shown in the center pane in two contexts:
+
+1. **During an active run** — cells update live as phases complete.
+2. **When a past run is loaded from History** — grid shows that run's completed state, read-only, as a reference while the user edits the job table on the left. This is the core learning-loop interaction: last run's results visible while composing next run's inputs.
+
+The grid is the same widget in both contexts; the difference is whether cells are mutable (active run) or read-only (loaded history).
 
 **Grid layout:**
 
@@ -91,7 +113,7 @@ When a run is started, the center pane switches from `GalleryWidget` to a `Phase
 1967 Mon  ✗      —      —      —       —       —
 ```
 
-Column headers show the node name and model (e.g. "Seed · FLUX"). Row labels show the job name. 
+Column headers show the node name and model (e.g. "Seed · FLUX"). Row labels show the job name. For workflows with many phases the grid scrolls horizontally; job name column is sticky (always visible on the left).
 
 **Cell states:**
 - `pending` — empty, dim border
@@ -163,7 +185,9 @@ Thin wrapper over `~/.local/share/tt-local-generator/workflow-runs/index.json` (
 - `run.job_states: dict[job_id, dict[node_id, {status, path, timing}]]` — per-cell state
 - `run.spec_path`, `run.param_overrides`
 
-On app restart, the Pipeline tab shows the last run's grid in its final state (no live re-connection — just a static view of results).
+On app restart, the Pipeline tab opens with the History tab active, showing all past runs. The most recent run's grid is loaded into the center pane automatically — the user sees their last results without any navigation. The Configure tab is pre-populated with that run's job table, ready to tweak and re-run.
+
+`PipelineStore.load_run(run_id)` returns the full run record including job states, which `PipelinePanel` uses to populate both the Configure tab's job table and the center pane's phase grid.
 
 ---
 
@@ -213,10 +237,14 @@ When a pipeline run completes, the center pane offers a **"→ View Playlist"** 
 ## Success criteria
 
 1. User can define 5 jobs with a template + variable table, pick a spec, click Run, and watch the phase grid fill in — no terminal required.
-2. Clicking a completed video cell plays the video in the detail pane.
+2. Clicking a completed image/video cell loads it in the right detail pane with play/star/export/remix actions.
 3. A failed cell shows the error and a one-click retry that re-runs just that node.
-4. Per-job ↺ retry re-runs from first failure.
-5. Run completion auto-creates playlists and offers "→ View Playlist".
-6. `tt-health-check.sh` runs before each phase and surfaces chip degradation in the status bar.
-7. Existing Video/Animate/Image/Art tabs are completely unaffected.
-8. All existing tests pass; new `tests/test_pipeline_*.py` suite covers `PipelineRunner`, `PipelineStore`, and node signal parsing.
+4. Per-job ↺ retry re-runs from the first failed node.
+5. Run completion auto-creates playlists and offers "→ Watch" per job.
+6. `tt-health-check.sh` runs before each phase and surfaces chip degradation in the status bar — does not block the run.
+7. Left pane has Configure and History tabs. History tab lists all past runs for the selected spec.
+8. Clicking a past run in History loads its job table into Configure **and** loads its completed artifact grid into the center pane — both at once.
+9. On app restart, the most recent run's grid is pre-loaded in the center pane automatically.
+10. Phase grid scrolls horizontally for long workflows; job name column is sticky.
+11. Existing Video/Animate/Image/Art tabs are completely unaffected.
+12. All existing tests pass; new `tests/test_pipeline_*.py` suite covers `PipelineRunner`, `PipelineStore`, node signal parsing, and history-load round-trip.
