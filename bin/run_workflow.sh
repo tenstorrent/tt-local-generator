@@ -152,9 +152,29 @@ node_signal() {
     # Emit a structured signal for the PipelineRunner to parse.
     # Format: NODE:<node_id>:<status>:<detail>
     # status: running | done | skipped | failed
+    # PipelineRunner parses with line.split(":", 3) so detail absorbs any
+    # remaining colons (e.g. file paths, URLs) without truncation.
     local node_id="$1" status="$2" detail="${3:-}"
     echo "NODE:${node_id}:${status}:${detail}"
+    # Track the most-recently-started node so the ERR trap can emit a
+    # failure signal if the script exits unexpectedly mid-run.
+    # Use if/then (not [[...]] && ...) to avoid a false-return triggering
+    # the ERR trap when status is anything other than "running".
+    if [[ "$status" == "running" ]]; then _current_node="$node_id"; fi
 }
+
+# _current_node: updated by node_signal() on each "running" transition.
+# The ERR trap uses this to emit a NODE failure for the active node when
+# the script exits due to set -euo pipefail catching an unexpected error
+# (e.g. start_server timeout returning 1 while a node is still "running").
+_current_node=""
+
+# ERR trap: fires when any command exits non-zero under set -euo pipefail.
+# Emits a NODE failed signal so PipelineRunner can mark the in-progress node
+# as failed rather than leaving it stuck in the "running" state forever.
+# Uses _current_node if set; falls back to sentinel "*" so the runner can
+# mark all still-running nodes failed.
+trap 'node_signal "${_current_node:-*}" "failed" "script exited unexpectedly (exit $?)"' ERR
 
 # ── Node implementations ──────────────────────────────────────────────────────
 
