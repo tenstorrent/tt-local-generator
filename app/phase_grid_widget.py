@@ -52,8 +52,11 @@ class GridState:
         return self._cells.get(job_name, {}).get(node_id, dict(_PENDING))
 
     def cells_for_job(self, job_name: str) -> dict[str, dict]:
-        """Return all cells for a job, filling in pending for unknown phase IDs."""
-        phase_ids = {p["id"] for p in self.phases}
+        """Return all cells for a job, filling in pending for unknown phase IDs.
+
+        Uses a list (not a set) so dict keys preserve the phase display order.
+        """
+        phase_ids = [p["id"] for p in self.phases]
         row = self._cells.get(job_name, {})
         return {pid: row.get(pid, dict(_PENDING)) for pid in phase_ids}
 
@@ -113,6 +116,9 @@ if _GTK_AVAILABLE:
             self._on_retry_node = on_retry_node
             self._on_retry_job = on_retry_job
             self._cell_widgets: dict[tuple[str, str], Gtk.Widget] = {}
+            # Tracks cells that already have a terminal GestureClick attached,
+            # so repeated update_cell calls cannot accumulate duplicate controllers.
+            self._terminal_cells: set[tuple[str, str]] = set()
             self._build()
 
         def _build(self) -> None:
@@ -120,6 +126,7 @@ if _GTK_AVAILABLE:
             while child := self.get_first_child():
                 self.remove(child)
             self._cell_widgets.clear()
+            self._terminal_cells = set()  # reset per-cell gesture tracking
 
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
@@ -221,6 +228,8 @@ if _GTK_AVAILABLE:
             self._state.update(job_name, node_id, status, detail)
             key = (job_name, node_id)
             if key not in self._cell_widgets:
+                # New job appeared after initial build — rebuild grid to include it.
+                self._build()
                 return
             old_cell = self._cell_widgets[key]
             # Update CSS class in-place (cheaper than rebuilding the whole grid)
@@ -233,8 +242,11 @@ if _GTK_AVAILABLE:
             if isinstance(child, Gtk.Label):
                 child.set_label({"done": "✓", "failed": "✗", "running": "⏳",
                                   "skipped": "skip", "pending": ""}.get(status, ""))
-            # Wire click handler for newly-terminal cells
-            if status in ("done", "failed"):
+            # Wire click handler for newly-terminal cells — guard prevents
+            # duplicate controllers when update_cell is called more than once
+            # for the same cell (e.g. status refresh after "done").
+            if status in ("done", "failed") and key not in self._terminal_cells:
+                self._terminal_cells.add(key)
                 gesture = Gtk.GestureClick()
                 gesture.connect(
                     "pressed",
