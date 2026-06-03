@@ -207,6 +207,34 @@ User fills table + clicks Run
 
 ---
 
+## Restart Recovery
+
+When the app starts, `PipelineStore` checks `index.json` for any run with `status: running`. If found:
+
+1. **Restore last-known grid** from `results.json` per job — completed cells show ✓, cells with no entry show as unknown/interrupted.
+
+2. **Re-attach to the log file** (path stored in run record as `log_file`). `PipelineRunner.reattach(run_id)` opens the log file, seeks to EOF, and begins tailing it with `GLib.io_add_watch` — exactly like the original pipe watch. New `NODE:` and `PLAYLIST:` signals from the still-running subprocess arrive and update the grid in real time.
+
+3. **Check subprocess liveness** via the stored PID (`run.pid`). If the process is dead (PID not in `/proc/`), the run is marked `interrupted` and shown as such in the grid — no false "still running" state. The user can then retry failed/incomplete nodes manually.
+
+4. **Poll in-flight server jobs** — for nodes where a job ID was submitted but completion not yet recorded (e.g. a SkyReels video still generating when the app closed), `PipelineRunner` re-polls the server using the stored job ID from `job_nodeN.txt`. If the job completed during the downtime, the cell updates to ✓ and the artifact is downloaded.
+
+**What gets stored per run to enable this:**
+- `run.pid` — PID of the `run_workflow.sh` subprocess
+- `run.log_file` — path to the tee'd log (already stored, used by Log button)
+- `job_nodeN.txt` files — submitted server job IDs per node (already written by parallel scripts)
+- `results.json` per job — node outputs as they complete (already written incrementally)
+
+**What the user sees on restart with an in-progress run:**
+- Pipeline tab opens automatically (not History — the active run takes priority)
+- Phase grid shows last-known state: green cells where work completed, a pulsing "reconnecting…" state on cells that were in-flight
+- Within a few seconds, live updates resume if the subprocess is still alive
+- If the subprocess died, cells that were running show as "interrupted" with a retry affordance
+
+**Success criterion added:** If the app is closed during a SkyReels video generation and reopened, the grid reconnects to the running job and shows the ✓ when it completes — without the user taking any action.
+
+---
+
 ## Error Handling
 
 - **Node failure:** Cell turns red with "✗ retry". Run continues to next job/phase rather than aborting. Same `_run_node` guard pattern as `run_workflow.sh`.
@@ -247,4 +275,5 @@ When a pipeline run completes, the center pane offers a **"→ View Playlist"** 
 9. On app restart, the most recent run's grid is pre-loaded in the center pane automatically.
 10. Phase grid scrolls horizontally for long workflows; job name column is sticky.
 11. Existing Video/Animate/Image/Art tabs are completely unaffected.
-12. All existing tests pass; new `tests/test_pipeline_*.py` suite covers `PipelineRunner`, `PipelineStore`, node signal parsing, and history-load round-trip.
+12. All existing tests pass; new `tests/test_pipeline_*.py` suite covers `PipelineRunner`, `PipelineStore`, node signal parsing, history-load round-trip, and restart-recovery with a mock subprocess.
+13. **Restart recovery:** closing the app during a SkyReels generation and reopening reconnects to the in-progress job and shows ✓ when it completes, without user action.
