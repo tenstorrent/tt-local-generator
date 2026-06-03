@@ -148,6 +148,14 @@ print(d.get(node_id, {}).get(key, ''))
 " "$ref"
 }
 
+node_signal() {
+    # Emit a structured signal for the PipelineRunner to parse.
+    # Format: NODE:<node_id>:<status>:<detail>
+    # status: running | done | skipped | failed
+    local node_id="$1" status="$2" detail="${3:-}"
+    echo "NODE:${node_id}:${status}:${detail}"
+}
+
 # ── Node implementations ──────────────────────────────────────────────────────
 
 node_text_to_image() {
@@ -391,6 +399,7 @@ _run_node() {
 
 # ── Node 1: Seed image (FLUX.1-schnell) ──────────────────────────────────────
 log_step "Node 1: Seed image — FLUX.1-schnell"
+node_signal "1" "running" "FLUX.1-schnell"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
 _run_node "node1(flux-image)" node_text_to_image "1" \
@@ -401,32 +410,50 @@ set_node_label "1" "seed image"
 
 IMAGE_PATH=$(get_result '["1", "image_path"]')
 if [[ -z "$IMAGE_PATH" ]]; then
+    node_signal "1" "failed" "image_path empty"
     log "  ⚠️  node1 skipped: image_path is empty — downstream nodes may fail"
+else
+    node_signal "1" "done" "$IMAGE_PATH"
 fi
 
 # ── Nodes 2-4: CPU plugins (no reset) ────────────────────────────────────────
 log_step "Node 2: Caption image — BLIP (CPU)"
+node_signal "2" "running" "BLIP"
 _run_node "node2(blip-caption)" node_caption_image "2" "$IMAGE_PATH" "a cinematic scene showing"
 set_node_label "2" "caption"
 CAPTION=$(get_result '["2", "caption"]')
+if [[ -z "$CAPTION" ]]; then
+    node_signal "2" "failed" "caption empty"
+else
+    node_signal "2" "done" "$CAPTION"
+fi
 
 log_step "Node 3: Remove background — RMBG (CPU)"
+node_signal "3" "running" "RMBG"
 _run_node "node3(rmbg)" node_remove_background "3" "$IMAGE_PATH"
 set_node_label "3" "foreground"
+FG_PATH=$(get_result '["3", "fg_path"]')
+[[ -n "$FG_PATH" ]] && node_signal "3" "done" "$FG_PATH" || node_signal "3" "failed" "no fg_path"
 
 log_step "Node 4: Depth map — GLPN (CPU)"
+node_signal "4" "running" "GLPN"
 _run_node "node4(depth)" node_estimate_depth "4" "$IMAGE_PATH"
 set_node_label "4" "depth map"
+DEPTH_PATH=$(get_result '["4", "depth_path"]')
+[[ -n "$DEPTH_PATH" ]] && node_signal "4" "done" "$DEPTH_PATH" || node_signal "4" "failed" "no depth_path"
 
 # ── Node 5: Compose video prompt ─────────────────────────────────────────────
 log_step "Node 5: Compose video prompt"
+node_signal "5" "running" "compose"
 VIDEO_PROMPT="$CAPTION, ERA_CONTEXT_PLACEHOLDER, cinematic slow push-in"
 set_result "5" "video_prompt" "$VIDEO_PROMPT"
 set_node_label "5" "video prompt"
 log "  Video prompt: ${VIDEO_PROMPT:0:100}..."
+node_signal "5" "done" "$VIDEO_PROMPT"
 
 # ── Node 6: Video (SkyReels I2V) — board reset required ─────────────────────
 log_step "Node 6: World's Fair video — SkyReels I2V"
+node_signal "6" "running" "SkyReels-V2-I2V"
 stop_and_reset "skyreels"
 start_server "skyreels" "http://localhost:8000/tt-liveness" 60
 _run_node "node6(skyreels-i2v)" node_image_to_video "6" \
@@ -435,9 +462,12 @@ _run_node "node6(skyreels-i2v)" node_image_to_video "6" \
     "$IMAGE_PATH" \
     "960" "544" "97" "20" "SEED_PLACEHOLDER" "http://localhost:8000"
 set_node_label "6" "video"
+VIDEO_PATH=$(get_result '["6", "video_path"]')
+[[ -n "$VIDEO_PATH" ]] && node_signal "6" "done" "$VIDEO_PATH" || node_signal "6" "failed" "no video_path"
 
 # ── Node 7: Poem (Llama-3.3-70B) — board reset required ─────────────────────
 log_step "Node 7: Poem — Llama-3.3-70B-Instruct"
+node_signal "7" "running" "Llama-3.3-70B"
 stop_and_reset "artgen-llama-3.3-70b"
 start_server "artgen-llama-3.3-70b" "http://localhost:8002/v1/models" 30
 _run_node "node7(llama-poem)" node_generate_text "7" \
@@ -448,9 +478,15 @@ _run_node "node7(llama-poem)" node_generate_text "7" \
     "http://localhost:8002"
 set_node_label "7" "poem"
 POEM=$(get_result '["7", "poem"]')
+if [[ -z "$POEM" ]]; then
+    node_signal "7" "failed" "no poem"
+else
+    node_signal "7" "done" "${POEM:0:80}"
+fi
 
 # ── Node 8: Poem image (FLUX.1-schnell) — board reset required ───────────────
 log_step "Node 8: Poem image — FLUX.1-schnell"
+node_signal "8" "running" "FLUX.1-schnell"
 stop_and_reset "flux"
 start_server "flux" "http://localhost:8000/tt-liveness" 30
 _run_node "node8(flux-image)" node_text_to_image "8" \
@@ -459,6 +495,7 @@ _run_node "node8(flux-image)" node_text_to_image "8" \
     "1024" "1024" "4" "POEM_SEED_PLACEHOLDER" "http://localhost:8000"
 set_node_label "8" "poem image"
 IMAGE2_PATH=$(get_result '["8", "image_path"]')
+[[ -n "$IMAGE2_PATH" ]] && node_signal "8" "done" "$IMAGE2_PATH" || node_signal "8" "failed" "no image2_path"
 
 # ── Node 9: Add to playlist ───────────────────────────────────────────────────
 log_step "Node 9: Save to playlist"
