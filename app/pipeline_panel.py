@@ -35,14 +35,19 @@ def resolve_prompt(template: str, row: dict) -> str:
 
     If row has __custom__=True, returns row['prompt'] directly.
     Missing variables are left as {variable} in the output.
+    Uses a single-pass regex so longer variable names like {style_hint}
+    are never corrupted by shorter overlapping names like {style}.
     """
     if row.get("__custom__"):
         return row.get("prompt", "")
-    result = template
-    for key, value in row.items():
-        if key not in ("name", "enabled", "__custom__", "prompt"):
-            result = result.replace(f"{{{key}}}", str(value))
-    return result
+    _skip = {"name", "enabled", "__custom__", "prompt"}
+    substitutions = {k: str(v) for k, v in row.items() if k not in _skip}
+
+    def _replace(m: re.Match) -> str:
+        key = m.group(1)
+        return substitutions.get(key, m.group(0))  # leave {missing} as-is
+
+    return re.sub(r'\{(\w+)\}', _replace, template)
 
 
 def jobs_to_runner_format(template: str, rows: list[dict]) -> list[dict]:
