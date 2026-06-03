@@ -154,8 +154,15 @@ node_signal() {
     # status: running | done | skipped | failed
     # PipelineRunner parses with line.split(":", 3) so detail absorbs any
     # remaining colons (e.g. file paths, URLs) without truncation.
+    #
+    # Bug #7 guard: echo to stdout can raise SIGPIPE (exit 141) if the
+    # consumer has closed the pipe (e.g. user cancelled).  Under
+    # set -euo pipefail that cascades and skips stop_and_reset / tt-smi -r.
+    # Redirect to stderr (less likely to be closed) and suppress any
+    # remaining error so node_signal never returns non-zero — which would
+    # re-trigger the ERR trap.
     local node_id="$1" status="$2" detail="${3:-}"
-    echo "NODE:${node_id}:${status}:${detail}"
+    echo "NODE:${node_id}:${status}:${detail}" 2>/dev/null || true
     # Track the most-recently-started node so the ERR trap can emit a
     # failure signal if the script exits unexpectedly mid-run.
     # Use if/then (not [[...]] && ...) to avoid a false-return triggering
@@ -174,7 +181,7 @@ _current_node=""
 # as failed rather than leaving it stuck in the "running" state forever.
 # Uses _current_node if set; falls back to sentinel "*" so the runner can
 # mark all still-running nodes failed.
-trap 'node_signal "${_current_node:-*}" "failed" "script exited unexpectedly (exit $?)"' ERR
+trap 'node_signal "${_current_node:-*}" "failed" "script exited unexpectedly (exit $?)" || true' ERR
 
 # ── Node implementations ──────────────────────────────────────────────────────
 
@@ -554,6 +561,25 @@ try:
     def _import(src, media_type, prompt_text, model="workflow"):
         src = Path(src)
         if not src.exists(): return None
+
+        # Bug #8 dedup: if this source path was already imported (e.g. on a
+        # workflow retry), reuse the existing record rather than copying again
+        # and creating duplicate files.  source_path is stored in the params
+        # JSON for every record we create below, so a simple LIKE query finds it.
+        try:
+            import sqlite3 as _sq3
+            _db = APP_DIR / "media.db"
+            _conn = _sq3.connect(str(_db))
+            _row = _conn.execute(
+                "SELECT id, file_path FROM media WHERE params LIKE ?",
+                (f'%"source_path": "{str(src)}"%',)
+            ).fetchone()
+            _conn.close()
+            if _row and Path(_row[1]).exists():
+                return _row[0]
+        except Exception:
+            pass  # dedup failure is non-fatal; fall through to normal import
+
         ext = src.suffix
         ts = datetime.now(timezone.utc)
         rid = str(uuid.uuid4())
@@ -575,7 +601,13 @@ try:
             id=rid, file_path=str(dest), thumbnail_path=str(thumb),
             prompt=prompt_text, media_type=media_type,
             created_at=ts.isoformat(), model_id=model, generator_type=None, starred=0,
-            params=json.dumps({"workflow": "1964-worlds-fair", "video_path": str(dest) if mtype == "video" else "", "image_path": str(dest) if mtype != "video" else ""}),
+            params=json.dumps({
+                "workflow": "1964-worlds-fair",
+                # source_path is stored so future runs can dedup (Bug #8)
+                "source_path": str(src),
+                "video_path": str(dest) if media_type == "video" else "",
+                "image_path": str(dest) if media_type != "video" else "",
+            }),
         )
         _ms.add(rec)
         return rid

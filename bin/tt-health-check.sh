@@ -48,6 +48,36 @@ except Exception:
     d2 = d1
 chips2 = d2.get("device_info", [])
 
+# ── Schema sanity check (Bug #10) ────────────────────────────────────────────
+# If a firmware upgrade renames telemetry keys, t.get('AICLK', '0x0') silently
+# returns '0x0' for every chip, making all chips look throttled/critical.
+# Guard: if every chip reports AICLK=0 AND no other expected key (TDP, VCORE)
+# has a non-zero value either, the schema has likely changed — warn and bail
+# rather than emitting a false critical that would block inference runs.
+raw_aiclks = [int(c.get("smbus_telem", {}).get("AICLK", "0x0"), 16) for c in chips1]
+if chips1 and all(v == 0 for v in raw_aiclks):
+    has_any_telem = any(
+        int(c.get("smbus_telem", {}).get("TDP",   "0x0"), 16) != 0 or
+        int(c.get("smbus_telem", {}).get("VCORE", "0x0"), 16) != 0
+        for c in chips1
+    )
+    if not has_any_telem:
+        msg = (
+            "WARN: tt-smi telemetry keys may have changed — all AICLK/TDP/VCORE "
+            "values are 0x0.\n"
+            "  Cannot determine chip health. Assuming healthy to avoid false alerts.\n"
+            "  If firmware was recently upgraded, update the key names in "
+            "tt-health-check.sh."
+        )
+        if as_json:
+            print(json.dumps({"overall": "unknown", "chips": [], "issues": [
+                {"chip": "all", "severity": "warn", "issue": "schema mismatch",
+                 "detail": "all telemetry values 0x0 — key names may have changed"}
+            ]}))
+        else:
+            print(msg)
+        sys.exit(0)  # Don't block runs when schema is uncertain
+
 # ── Analyse each chip ─────────────────────────────────────────────────────────
 issues = []
 chip_data = []
