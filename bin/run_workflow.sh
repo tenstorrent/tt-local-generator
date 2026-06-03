@@ -596,6 +596,8 @@ try:
 
     print(f"\n✅ Playlist '{playlist_name}' created in the app ({len(record_ids)} artifacts)")
     print(f"   Open tt-gen → File → Playlists to view")
+    # Emit structured signal for PipelineRunner to track playlist state
+    print(f"PLAYLIST:{len(record_ids)}:{playlist_name}")
 except Exception as e:
     print(f"\n⚠️  Could not write to app store: {e}")
     print(f"   Artifacts are in: {str(Path(img1).parent) if Path(img1).exists() else results_json}")
