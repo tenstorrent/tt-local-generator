@@ -10046,12 +10046,47 @@ class MainWindow(Gtk.ApplicationWindow):
                 pass
 
     def _restore_pipeline_run(self) -> bool:
-        """Called via GLib.idle_add on startup to restore the most recent pipeline run into the grid."""
+        """Called via GLib.idle_add on startup. Restores pipeline state.
+
+        Priority order:
+        1. If any run is still LIVE (process alive), reattach and show it.
+        2. Mark any runs with status=running but dead process as interrupted.
+        3. Show the most recent completed run's grid for reference.
+        """
         from pipeline_store import PipelineStore
+        from pipeline_runner import PipelineRunner
         store = PipelineStore()
-        runs = store.list_runs(limit=1)
-        if runs and hasattr(self, "_phase_grid"):
-            self._on_pipeline_load_run(runs[0]["id"])
+
+        # Find runs that claim to be running
+        all_runs = store.list_runs(limit=10)
+        running_runs = [r for r in all_runs if r.get("status") == "running"]
+
+        reattached = False
+        for run in running_runs:
+            runner = PipelineRunner(idle_add=GLib.idle_add)
+            runner._store = store
+            ok = runner.reattach(
+                run["id"],
+                on_node_update=self._on_pipeline_node_update,
+                on_run_finished=self._on_pipeline_run_finished,
+            )
+            if ok:
+                # Live run found — show its grid and switch to Pipeline tab
+                self._on_pipeline_load_run(run["id"])
+                if hasattr(self, "_src_pipeline_btn"):
+                    self._src_pipeline_btn.set_active(True)
+                self._pipeline_runner = runner
+                if hasattr(self, "_pipeline_panel"):
+                    self._pipeline_panel.set_running(True, "Reconnected to running pipeline…")
+                reattached = True
+                break  # Only reattach to first live run
+
+        if not reattached:
+            # No live runs — load the most recent completed run for reference
+            runs = store.list_runs(limit=1)
+            if runs and hasattr(self, "_phase_grid"):
+                self._on_pipeline_load_run(runs[0]["id"])
+
         return GLib.SOURCE_REMOVE
 
     def do_close_request(self) -> bool:
