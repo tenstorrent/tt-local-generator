@@ -814,15 +814,21 @@ menubutton.workflow-btn > button:hover {
 /* -- Pipeline tab ---------------------------------------------------------- */
 button.pipeline-source-btn {
     background-color: @tt_bg_dark;
-    color: @tt_accent;
-    border: 1px solid @tt_accent;
+    color: @tt_text_muted;
+    border: 1px solid @tt_border;
     border-radius: 4px;
     padding: 3px 10px;
     font-size: 11px;
     font-weight: 700;
 }
 button.pipeline-source-btn:hover {
+    color: @tt_text;
     background-color: @tt_bg_darkest;
+}
+button.pipeline-source-btn:checked {
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    border-color: @tt_accent;
 }
 
 /* -- Phase grid ------------------------------------------------------------ */
@@ -4890,7 +4896,7 @@ class ControlPanel(Gtk.Box):
             if key == last_dep:
                 star = Gtk.Label(label="★")
                 star.add_css_class("servers-popover-last-star")
-                star.set_tooltip_text("Last successfully deployed")
+                star.set_tooltip_text("Most recently started server")
                 row.append(star)
 
             outer.append(row)
@@ -8055,6 +8061,10 @@ class MainWindow(Gtk.ApplicationWindow):
         toggle_act = self.lookup_action("toggle-detail")
         if toggle_act:
             toggle_act.set_enabled(source not in ("artgen", "pipeline"))
+        # Grey out gallery density on Art/Pipeline tabs (their galleries are fixed-size)
+        density_act = self.lookup_action("gallery-density")
+        if density_act:
+            density_act.set_enabled(source not in ("artgen", "pipeline"))
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
