@@ -204,6 +204,13 @@ if _GTK_AVAILABLE:
             self._spec_dd.connect("notify::selected", self._on_spec_changed)
             box.append(self._spec_dd)
 
+            self._preflight_lbl = Gtk.Label(label="")
+            self._preflight_lbl.set_xalign(0)
+            self._preflight_lbl.set_wrap(True)
+            self._preflight_lbl.set_max_width_chars(36)
+            self._preflight_lbl.add_css_class("muted")
+            box.append(self._preflight_lbl)
+
             # Template
             tmpl_lbl = Gtk.Label(label="PROMPT TEMPLATE")
             tmpl_lbl.set_xalign(0)
@@ -320,11 +327,39 @@ if _GTK_AVAILABLE:
             if self._specs:
                 self._spec_dd.set_selected(0)
                 self._spec_path = self._specs[0]["path"]
+                self._run_preflight()
 
         def _on_spec_changed(self, dd: Gtk.DropDown, _pspec) -> None:
             idx = dd.get_selected()
             if idx < len(self._specs):
                 self._spec_path = self._specs[idx]["path"]
+                self._run_preflight()
+
+        def _run_preflight(self) -> None:
+            """Validate the selected spec and update the preflight warning label."""
+            if not self._spec_path or not hasattr(self, "_preflight_lbl"):
+                return
+            from workflow_compat import validate_spec
+            result = validate_spec(self._spec_path)
+            if result.blocking:
+                self._preflight_lbl.set_label(f"❌ {result.blocking[0]}")
+                self._preflight_lbl.remove_css_class("muted")
+                self._preflight_lbl.add_css_class("error")
+                if hasattr(self, "_run_btn"):
+                    self._run_btn.set_sensitive(False)
+            elif result.warnings:
+                self._preflight_lbl.set_label(
+                    f"⚠️ {len(result.warnings)} node(s) will be skipped"
+                )
+                self._preflight_lbl.remove_css_class("error")
+                self._preflight_lbl.add_css_class("muted")
+                if hasattr(self, "_run_btn"):
+                    self._run_btn.set_sensitive(True)
+            else:
+                self._preflight_lbl.set_label("")
+                self._preflight_lbl.remove_css_class("error")
+                if hasattr(self, "_run_btn"):
+                    self._run_btn.set_sensitive(True)
 
         # ── Template management ───────────────────────────────────────────────
 
