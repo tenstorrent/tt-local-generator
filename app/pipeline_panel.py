@@ -359,22 +359,28 @@ if _GTK_AVAILABLE:
             except Exception:
                 return
 
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            col_count = 0
+            # Build a vertical list: one parameter per row (label + widget side by side)
+            # This scales to any number of parameters without horizontal overflow.
+            seen_keys: set[str] = set()  # dedup same key from multiple nodes
             for node_id, node in data.items():
                 if node_id.startswith("_") or not isinstance(node, dict):
                     continue
                 for key, val in node.get("inputs", {}).items():
                     if key not in _OVERRIDABLE or isinstance(val, list):
                         continue
+                    if key in seen_keys:
+                        continue  # only show each overridable key once
+                    seen_keys.add(key)
                     self._param_inputs.append({"node_id": node_id, "key": key, "value": val,
                                                "type": "int" if isinstance(val, int) else
                                                         "float" if isinstance(val, float) else "str"})
-                    col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                    row.set_margin_top(1)
                     lbl = Gtk.Label(label=key)
+                    lbl.set_size_request(90, -1)
                     lbl.set_xalign(0)
                     lbl.add_css_class("muted")
-                    col.append(lbl)
+                    row.append(lbl)
                     if isinstance(val, int):
                         widget = Gtk.SpinButton.new_with_range(0, 100_000, 1)
                         widget.set_value(val)
@@ -385,18 +391,10 @@ if _GTK_AVAILABLE:
                     else:
                         widget = Gtk.Entry()
                         widget.set_text(str(val))
-                        widget.set_max_width_chars(16)
                     widget.set_hexpand(True)
-                    col.append(widget)
+                    row.append(widget)
                     self._param_widgets[(node_id, key)] = widget
-                    row.append(col)
-                    col_count += 1
-                    if col_count >= 3:  # max 3 per visual row
-                        self._params_box.append(row)
-                        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-                        col_count = 0
-            if col_count > 0:
-                self._params_box.append(row)
+                    self._params_box.append(row)
 
         def _run_preflight(self) -> None:
             """Validate the selected spec and update the preflight warning label."""

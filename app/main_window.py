@@ -843,7 +843,7 @@ button.pipeline-source-btn:checked {
 .phase-cell-pending   { background-color: @tt_bg_dark;    border: 1px solid rgba(79,209,197,.1);  border-radius: 4px; }
 .phase-cell-running   { background-color: #1a2a3a;        border: 2px solid @tt_accent;           border-radius: 4px; }
 .phase-cell-done      { background-color: #1a3a20;        border: 2px solid @tt_success;          border-radius: 4px; }
-.phase-cell-failed    { background-color: #3a1a1a;        border: 2px solid @tt_error;            border-radius: 4px; cursor: pointer; }
+.phase-cell-failed    { background-color: #3a1a1a;        border: 2px solid @tt_error;            border-radius: 4px; }
 .phase-cell-skipped   { background-color: #2a2010;        border: 1px solid rgba(244,196,113,.4); border-radius: 4px; }
 .phase-cell-selected  { outline: 2px solid @tt_accent; outline-offset: 1px; }
 .phase-job-label      { font-size: 10px; font-weight: 700; color: @tt_text; }
@@ -8053,9 +8053,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # the ArtgenPanel can use the full window width for its own layout.
         # Pipeline mode keeps the left pane (PipelinePanel) but hides the detail pane.
         self._ctrl_wrapper.set_visible(not is_artgen)
-        # Detail pane is hidden in artgen (full-width panel) but SHOWN in pipeline
-        # (clicking a completed cell loads the artifact there)
-        self._detail_wrap.set_visible(not is_artgen)
+        # Detail pane: hidden in artgen (full-width) and hidden by default in pipeline
+        # (only revealed when the user clicks a cell — see _on_pipeline_cell_click).
+        # Restore normal visibility when leaving pipeline.
+        if is_pipeline:
+            self._detail_wrap.set_visible(False)
+        elif not is_artgen:
+            self._detail_wrap.set_visible(True)
         self._rebuild_context_menu(source)
         # Grey out Detail Panel toggle on Art/Pipeline tabs (no detail panel there)
         toggle_act = self.lookup_action("toggle-detail")
@@ -10037,6 +10041,12 @@ class MainWindow(Gtk.ApplicationWindow):
             image_path=path if not is_video else "",
             model="pipeline",
         )
+        # Reveal the detail pane on first click (it starts hidden in pipeline mode)
+        if hasattr(self, "_detail_wrap") and not self._detail_wrap.get_visible():
+            self._detail_wrap.set_visible(True)
+            # Give the grid less space now that detail pane is open
+            if hasattr(self, "_inner_paned"):
+                self._inner_paned.set_position(580)
         self._detail.show_record(rec, self._dispatch_remix)
 
     def _on_pipeline_retry_node(self, job_name: str, node_id: str) -> None:
