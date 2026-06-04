@@ -15,13 +15,13 @@
       "properties": {
         "era": {"type": "string", "default": "retro"},
         "sky": {"type": "string", "default": "dusk"},
-        "density": {"type": "string", "enum": ["sparse", "medium", "dense"], "default": "medium"}
+        "density": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"}
       },
       "required": []
     },
     "examples": [
       {"era": "retro", "sky": "dusk"},
-      {"era": "futuristic", "sky": "night", "density": "dense"}
+      {"era": "futuristic", "sky": "night", "density": "high"}
     ],
     "x-ttlg": {"streaming": null, "artifact_tool": true}
   }]

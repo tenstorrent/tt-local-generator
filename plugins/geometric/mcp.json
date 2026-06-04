@@ -14,14 +14,14 @@
       "type": "object",
       "properties": {
         "style": {"type": "string", "enum": ["mondrian", "circuit", "recursive", "weave"], "default": "mondrian"},
-        "palette": {"type": "string", "enum": ["teal", "mono", "ember", "forest"], "default": "teal"},
+        "geo_palette": {"type": "string", "enum": ["teal", "mono", "ember", "forest"], "default": "teal"},
         "complexity": {"type": "string", "enum": ["low", "high"], "default": "low"}
       },
       "required": []
     },
     "examples": [
-      {"style": "mondrian", "palette": "teal"},
-      {"style": "recursive", "palette": "ember", "complexity": "high"}
+      {"style": "mondrian", "geo_palette": "teal"},
+      {"style": "recursive", "geo_palette": "ember", "complexity": "high"}
     ],
     "x-ttlg": {"streaming": null, "artifact_tool": true}
   }]

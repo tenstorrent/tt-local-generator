@@ -13,16 +13,16 @@
     "inputSchema": {
       "type": "object",
       "properties": {
-        "inputs": {"type": "array", "items": {"type": "string"}, "default": ["A", "B", "C"]},
-        "gates": {"type": "array", "items": {"type": "string"}, "default": ["and", "or", "not"]},
+        "inputs": {"type": "string", "default": "A,B,C"},
+        "gates": {"type": "string", "default": "and,or,not"},
         "depth": {"type": "integer", "default": 2},
-        "style": {"type": "string", "enum": ["clean", "neon", "paper"], "default": "clean"}
+        "circuit_style": {"type": "string", "enum": ["clean", "neon", "paper"], "default": "clean"}
       },
       "required": []
     },
     "examples": [
-      {"inputs": ["A", "B"], "gates": ["and", "not"], "style": "neon"},
-      {"inputs": ["X", "Y", "Z"], "gates": ["xor", "and"], "depth": 3}
+      {"inputs": "A,B", "gates": "and,not", "circuit_style": "neon"},
+      {"inputs": "X,Y,Z", "gates": "xor,and", "depth": 3}
     ],
     "x-ttlg": {"streaming": null, "artifact_tool": true}
   }]
