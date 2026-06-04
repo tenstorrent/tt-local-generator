@@ -13,7 +13,7 @@ long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
     name="animatediff-ttnn",
-    version="0.1.0",
+    version="0.2.0",
     author="Tenstorrent Community",
     author_email="",
     description="AnimateDiff video generation on Tenstorrent Blackhole via TTNN UNet (SD 1.4)",
@@ -36,13 +36,12 @@ setup(
         "torch>=2.0.0",
         "numpy>=1.24.0",
         "Pillow>=9.0.0",
+        "diffusers>=0.32.1",
+        "transformers>=4.30.0",
+        "accelerate>=0.20.0",
         # tt-metal and ttnn must be installed separately (not on PyPI)
-        # diffusers is optional (only needed for video export)
     ],
     extras_require={
-        "video": [
-            "diffusers>=0.32.1",
-        ],
         "dev": [
             "pytest>=7.0.0",
             "black>=23.0.0",

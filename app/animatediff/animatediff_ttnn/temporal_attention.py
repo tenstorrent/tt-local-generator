@@ -111,8 +111,8 @@ def generate_frames_temporal(
     from diffusers import PNDMScheduler
     from PIL import Image
     from animatediff_ttnn.ttnn_pipeline import build_tlist, to_device, from_device
-    from models.demos.wormhole.stable_diffusion.sd_helper_funcs import tt_guide
-    from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
+    from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import tt_guide
+    from models.demos.vision.generative.stable_diffusion.wormhole.sd_pndm_scheduler import TtPNDMScheduler
 
     lh, lw = height // 8, width // 8
 

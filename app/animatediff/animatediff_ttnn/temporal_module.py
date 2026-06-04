@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2024 Tenstorrent USA, Inc.
 
 """
 Temporal Attention Module for AnimateDiff Integration
@@ -149,11 +149,11 @@ def temporal_attention_torch(
 
 
 def temporal_attention_ttnn(
-    hidden_states,
+    hidden_states: "ttnn.Tensor",
     weights: TemporalAttentionWeights,
     num_frames: int,
-    device,
-):
+    device: "ttnn.Device",
+) -> "ttnn.Tensor":
     """Phase 3 stub: temporal attention via CPU bounce (not yet TTNN-native).
 
     NOTE: Despite the name, all compute happens on CPU — this bounces the tensor

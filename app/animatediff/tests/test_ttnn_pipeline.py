@@ -21,9 +21,13 @@ def test_setup_blackhole_sets_env_var(tmp_path, monkeypatch):
 
     from animatediff_ttnn import ttnn_pipeline
 
+    ttnn_mock = MagicMock()
+    ttnn_mock.GetNumAvailableDevices.return_value = 1
+    ttnn_mock.MeshShape = MagicMock()
+    ttnn_mock.open_mesh_device = MagicMock()
     with patch.dict(sys.modules, {
-        "ttnn": MagicMock(),
-        "models.demos.wormhole.stable_diffusion.common": MagicMock(SD_L1_SMALL_SIZE=21056),
+        "ttnn": ttnn_mock,
+        "models.demos.vision.generative.stable_diffusion.wormhole.common": MagicMock(SD_L1_SMALL_SIZE=21056),
     }):
         with patch.object(ttnn_pipeline, "TT_METAL_PATH", tmp_path):
             ttnn_pipeline.setup_blackhole()
@@ -37,10 +41,14 @@ def test_setup_blackhole_preserves_existing_arch_name(monkeypatch):
 
     from animatediff_ttnn import ttnn_pipeline
 
+    ttnn_mock = MagicMock()
+    ttnn_mock.GetNumAvailableDevices.return_value = 1
+    ttnn_mock.MeshShape = MagicMock()
+    ttnn_mock.open_mesh_device = MagicMock()
     with patch.object(ttnn_pipeline, "_ensure_tt_metal_path"):
         with patch.dict(sys.modules, {
-            "ttnn": MagicMock(),
-            "models.demos.wormhole.stable_diffusion.common": MagicMock(SD_L1_SMALL_SIZE=21056),
+            "ttnn": ttnn_mock,
+            "models.demos.vision.generative.stable_diffusion.wormhole.common": MagicMock(SD_L1_SMALL_SIZE=21056),
         }):
             ttnn_pipeline.setup_blackhole()
 
@@ -57,9 +65,14 @@ def test_build_tlist_returns_one_entry_per_timestep():
     mock_time_proj = MagicMock()
 
     # Patch _constant_prop_time_embeddings at module level so build_tlist() sees it
+    # MeshDevice must be a real class so isinstance() checks don't raise TypeError.
+    class _FakeMeshDevice:
+        pass
+    ttnn_mock = MagicMock()
+    ttnn_mock.MeshDevice = _FakeMeshDevice
     with patch.object(ttnn_pipeline, "_constant_prop_time_embeddings",
                       return_value=torch.randn(2, 320)):
-        with patch.dict(sys.modules, {"ttnn": MagicMock()}):
+        with patch.dict(sys.modules, {"ttnn": ttnn_mock}):
             result = ttnn_pipeline.build_tlist(mock_scheduler, mock_time_proj, mock_device)
 
     assert len(result) == 5

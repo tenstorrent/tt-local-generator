@@ -12,3 +12,13 @@ accelerate>=0.20.0
 
 # Testing
 pytest>=7.0.0
+
+# tt-metal / ttnn (install separately — not on PyPI)
+# Tested with firmware bundle 19.8.0, KMD 2.8.0
+# Install: git clone https://github.com/tenstorrent/tt-metal && ./build_metal.sh
+# Activate: source ~/tt-metal/python_env/bin/activate
+#
+# SD 1.4 model path changed in 19.8.0:
+#   old: models.demos.wormhole.stable_diffusion.*
+#   new: models.demos.vision.generative.stable_diffusion.wormhole.*
+# See docs/HARDWARE_COMPAT.md for full details.

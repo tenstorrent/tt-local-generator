@@ -1,9 +1,9 @@
 tt-animatediff
-Copyright 2026 Tenstorrent USA, Inc.
+Copyright 2024 Tenstorrent USA, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+You may obtain a copy of the LICENSE file at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
@@ -17,18 +17,39 @@ limitations under the License.
 
 Third-Party Dependencies:
 
-This project uses the following open-source packages. See requirements.txt
-for version details.
+This project depends on the following third-party libraries:
 
-diffusers (Apache-2.0) — Hugging Face diffusion model library
-transformers (Apache-2.0) — Hugging Face transformers library
-accelerate (Apache-2.0) — Hugging Face accelerate library
-torch (BSD-3-Clause) — PyTorch deep learning framework
-safetensors (Apache-2.0) — Safe tensor serialization
-tqdm (MPL-2.0 / MIT) — Progress bars
-Pillow (HPND) — Python Imaging Library fork
-imageio (BSD-2-Clause) — Image/video I/O
-imageio-ffmpeg (BSD-2-Clause) — FFmpeg bindings for imageio
-numpy (BSD-3-Clause) — Numerical computing library
+PyTorch (torch>=2.0.0)
+  License: BSD-3-Clause
+  Copyright: Facebook, Inc. and its affiliates
+  https://github.com/pytorch/pytorch
 
-Tenstorrent TTNN (Apache-2.0) — Tenstorrent neural network execution framework
+NumPy (numpy>=1.24.0)
+  License: BSD-3-Clause
+  Copyright: NumPy Developers
+  https://github.com/numpy/numpy
+
+Pillow (Pillow>=9.0.0)
+  License: HPND (PIL License)
+  Copyright: Jeffrey A. Clark (Alex) and Contributors
+  https://github.com/python-pillow/Pillow
+
+Diffusers (diffusers>=0.32.1)
+  License: Apache-2.0
+  Copyright: The HuggingFace Team
+  https://github.com/huggingface/diffusers
+
+Transformers (transformers>=4.30.0)
+  License: Apache-2.0
+  Copyright: The HuggingFace Team
+  https://github.com/huggingface/transformers
+
+Accelerate (accelerate>=0.20.0)
+  License: Apache-2.0
+  Copyright: The HuggingFace Team
+  https://github.com/huggingface/accelerate
+
+PyTest (pytest>=7.0.0)
+  License: MIT
+  Copyright: Holger Krekel and others
+  https://github.com/pytest-dev/pytest

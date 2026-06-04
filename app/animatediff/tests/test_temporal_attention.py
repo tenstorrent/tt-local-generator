@@ -4,7 +4,6 @@
 """Tests for cross_frame_attention() — runs without hardware (pure PyTorch)."""
 
 import torch
-import pytest
 
 from animatediff_ttnn.temporal_attention import cross_frame_attention
 

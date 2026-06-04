@@ -69,7 +69,7 @@ def setup_blackhole(device_ids: list[int] | None = None):
     _ensure_tt_metal_path()
 
     import ttnn
-    from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+    from models.demos.vision.generative.stable_diffusion.wormhole.common import SD_L1_SMALL_SIZE
 
     if device_ids is None:
         # Warn if any hwmon entry shows the ARC-dead sentinel (temp > 1000°C /
@@ -214,7 +214,7 @@ def generate_frames(
         see Phase 1 (generate_baseline.py) for that.
     """
     import ttnn
-    from models.demos.wormhole.stable_diffusion.sd_helper_funcs import tt_guide
+    from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import tt_guide
 
     num_steps = ttnn_scheduler.num_inference_steps
     lh, lw = height // 8, width // 8
