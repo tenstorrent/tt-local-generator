@@ -59,6 +59,9 @@ class PipelineRunner:
         self._on_run_finished: Optional[Callable] = None
         self._active_jobs: dict[str, dict] = {}
         self._cancelled = False
+        # _retry_mode: set True by retry_node() so _watch_stdout does not call
+        # finish_run() and overwrite the original run record's status/job_states.
+        self._retry_mode = False
 
     # ── Signal parser ─────────────────────────────────────────────────────────
 
@@ -210,6 +213,9 @@ class PipelineRunner:
         self._on_node_update = on_node_update
         self._on_run_finished = on_run_finished
         self._cancelled = False
+        # Flag _watch_stdout to skip finish_run() so the original run record's
+        # status and job_states are not overwritten by the single-node retry.
+        self._retry_mode = True
 
         script = _REPO_ROOT / "bin" / "run_single_node.sh"
         env = {**os.environ}
@@ -227,6 +233,7 @@ class PipelineRunner:
                 daemon=True,
             ).start()
         except Exception:
+            self._retry_mode = False
             self._dispatch(on_run_finished, False)
 
     def retry_job(
@@ -387,8 +394,12 @@ class PipelineRunner:
             if not isinstance(exit_code, int):
                 return
             success = (exit_code == 0) and not self._cancelled
-            if self._run_id:
+            # Only update the persistent run record for full runs, not single-node
+            # retries.  retry_node() sets _retry_mode=True to prevent overwriting
+            # the original run's status and job_states on retry completion.
+            if self._run_id and not self._retry_mode:
                 self._store.finish_run(self._run_id, success=success)
+            self._retry_mode = False
             self._dispatch(self._on_run_finished, success)
 
     def _tail_log(self, log_file: str, current_job: str) -> None:

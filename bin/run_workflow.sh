@@ -565,14 +565,17 @@ try:
         # Bug #8 dedup: if this source path was already imported (e.g. on a
         # workflow retry), reuse the existing record rather than copying again
         # and creating duplicate files.  source_path is stored in the params
-        # JSON for every record we create below, so a simple LIKE query finds it.
+        # JSON for every record we create below, so a LIKE query finds it.
+        # Escape SQL LIKE wildcards (_ and %) in the path so directory names
+        # that contain these characters don't match unintended records.
         try:
             import sqlite3 as _sq3
             _db = APP_DIR / "media.db"
             _conn = _sq3.connect(str(_db))
+            _escaped = str(src).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             _row = _conn.execute(
-                "SELECT id, file_path FROM media WHERE params LIKE ?",
-                (f'%"source_path": "{str(src)}"%',)
+                "SELECT id, file_path FROM media WHERE params LIKE ? ESCAPE '\\'",
+                (f'%"source_path": "{_escaped}"%',)
             ).fetchone()
             _conn.close()
             if _row and Path(_row[1]).exists():

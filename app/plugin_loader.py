@@ -126,9 +126,11 @@ def load_plugins() -> None:
                 )
                 continue
 
-            # Primary name = first tool with artifact_tool=True, or first tool overall
+            # Primary name = first tool with artifact_tool=True, or first tool overall.
+            # Default is False: tools that don't explicitly declare artifact_tool=True
+            # should not be treated as the primary generator — they must opt in.
             primary = next(
-                (t for t in tools if t.get("x-ttlg", {}).get("artifact_tool", True)),
+                (t for t in tools if t.get("x-ttlg", {}).get("artifact_tool", False)),
                 tools[0],
             )
             name = primary["name"]
@@ -259,6 +261,10 @@ def _load_local_generator(
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:
+        # Remove the poisoned partial module from sys.modules so that a
+        # subsequent load_plugins() call (or test re-import) does not retrieve
+        # the broken module instead of retrying the import from scratch.
+        sys.modules.pop(module_name, None)
         _LOG.warning("plugin_loader: error importing %s: %s", plugin_py, exc)
         return None
 

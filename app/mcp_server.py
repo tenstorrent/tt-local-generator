@@ -201,6 +201,12 @@ async def handle_rpc(body: dict) -> JSONResponse:
                 },
             })
 
+        # Find the matching tool definition so we can validate arguments against
+        # its inputSchema before constructing the Namespace.
+        tool_def = next(
+            (t for t in pdef.tools if t["name"] == tool_name), {}
+        )
+
         # Invoke the generator.  generate_artifact() receives an argparse
         # Namespace built from the MCP arguments dict, plus a call_fn that
         # routes to the best available LLM server (artgen on 8002 → prompt-gen
@@ -209,7 +215,33 @@ async def handle_rpc(body: dict) -> JSONResponse:
         # MCP clients receive a structured response rather than a hard failure.
         try:
             import argparse as _ap
-            args = _ap.Namespace(**arguments)
+
+            # Validate argument keys against the tool's inputSchema.  Reject
+            # unknown keys outright (they would silently land in the Namespace
+            # and could shadow plugin attributes or trigger unexpected behaviour).
+            # Only validate when the schema actually declares properties; tools
+            # with an empty/absent schema accept any arguments (legacy compat).
+            allowed_keys = set(
+                tool_def.get("inputSchema", {}).get("properties", {}).keys()
+            )
+            if allowed_keys:
+                bad_keys = set(arguments.keys()) - allowed_keys
+                if bad_keys:
+                    return JSONResponse({
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "result": {
+                            "content": [{"type": "text",
+                                         "text": f"Unknown argument(s): {sorted(bad_keys)}"}],
+                            "isError": True,
+                        },
+                    })
+
+            # Strip any keys that are not valid Python identifiers as a second
+            # safety layer — argparse.Namespace(**kw) raises if a key is not a
+            # valid attribute name (e.g. "my-arg" with a hyphen).
+            safe_args = {k: v for k, v in arguments.items() if k.isidentifier()}
+            args = _ap.Namespace(**safe_args)
             llm_url = os.environ.get("TTLG_LLM_URL")
             call_fn = _make_call_fn(llm_url)
             result = pdef.generator.generate_artifact(args, call_fn)
