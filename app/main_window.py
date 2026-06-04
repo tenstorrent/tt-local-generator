@@ -7382,6 +7382,11 @@ class MainWindow(Gtk.ApplicationWindow):
             on_retry_job=self._on_pipeline_retry_job,
         )
         self._gallery_stack.add_named(self._phase_grid, "pipeline")
+        from pipeline_portfolio_view import PipelinePortfolioView
+        self._pipeline_portfolio = PipelinePortfolioView(
+            on_artifact_click=self._on_pipeline_portfolio_artifact_click,
+        )
+        self._gallery_stack.add_named(self._pipeline_portfolio, "pipeline-portfolio")
         GLib.idle_add(self._restore_pipeline_run)
 
         self._gallery_stack.set_visible_child_name("video")
@@ -8104,6 +8109,9 @@ class MainWindow(Gtk.ApplicationWindow):
             if hasattr(self, "_inner_paned"):
                 self._inner_paned.set_position(700)  # more space for multi-column grid
         else:
+            # Leaving pipeline — clear portfolio to free video/image resources
+            if hasattr(self, "_pipeline_portfolio"):
+                GLib.idle_add(self._pipeline_portfolio.clear)
             # Restore the normal scrollable ControlPanel when leaving pipeline mode.
             if hasattr(self, "_pipeline_panel") and self._pipeline_panel.get_parent() is not None:
                 self._ctrl_wrapper.remove(self._pipeline_panel)
@@ -10034,6 +10042,8 @@ class MainWindow(Gtk.ApplicationWindow):
         state = GridState(jobs=[j["name"] for j in jobs], phases=phases)
         self._phase_grid._state = state
         self._phase_grid._build()
+        # Always show the phase grid while a run is active — switch to portfolio on completion
+        self._gallery_stack.set_visible_child_name("pipeline")
         self._pipeline_runner = PipelineRunner(idle_add=GLib.idle_add)
         self._pipeline_runner.start(
             spec_path=spec_path,
@@ -10061,23 +10071,56 @@ class MainWindow(Gtk.ApplicationWindow):
         if hasattr(self, "_pipeline_panel"):
             self._pipeline_panel.set_running(
                 False,
-                "Pipeline complete" if success else "Pipeline failed"
+                "✅ Done — scroll cards to browse" if success
+                else "❌ Failed — check grid for details"
             )
+        if success and hasattr(self, "_pipeline_runner") and self._pipeline_runner:
+            run_id = self._pipeline_runner._run_id
+            if run_id:
+                # Brief delay so store write completes, then switch to portfolio
+                GLib.timeout_add(
+                    800,
+                    lambda rid=run_id: (
+                        self._on_pipeline_load_run(rid) or GLib.SOURCE_REMOVE
+                    ),
+                )
 
     def _on_pipeline_load_run(self, run_id: str) -> None:
-        """Load a past run's grid state into the phase grid."""
+        """Load a past run — portfolio view for done runs, phase grid for others."""
         from pipeline_store import PipelineStore
         from phase_grid_widget import GridState
         from pipeline_panel import phases_from_spec
+        from pipeline_portfolio_view import run_has_portfolio_artifacts
+
         store = PipelineStore()
         run = store.get_run(run_id)
         if not run:
             return
+
         phases = phases_from_spec(run.get("spec_path", ""))
-        state = GridState.from_run_record(run, phases)
-        if hasattr(self, "_phase_grid"):
-            self._phase_grid._state = state
-            self._phase_grid._build()
+        status = run.get("status", "")
+
+        use_portfolio = (
+            status == "done"
+            and run_has_portfolio_artifacts(run.get("job_states", {}), phases)
+            and hasattr(self, "_pipeline_portfolio")
+        )
+
+        if use_portfolio:
+            self._pipeline_portfolio.load_run(run, phases)
+            self._gallery_stack.set_visible_child_name("pipeline-portfolio")
+        else:
+            state = GridState.from_run_record(run, phases)
+            if hasattr(self, "_phase_grid"):
+                self._phase_grid._state = state
+                self._phase_grid._build()
+            self._gallery_stack.set_visible_child_name("pipeline")
+
+    def _on_pipeline_portfolio_artifact_click(
+        self, detail: str, artifact_type: str
+    ) -> None:
+        """Route portfolio card clicks to the detail pane via existing cell-click logic."""
+        self._on_pipeline_cell_click("portfolio", "?", detail)
 
     def _on_pipeline_cell_click(self, job_name: str, node_id: str, detail: str) -> None:
         """Load a clicked phase grid artifact into the detail pane.
