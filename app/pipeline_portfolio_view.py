@@ -396,7 +396,8 @@ if _GTK_AVAILABLE:
 
         def __init__(self, on_artifact_click=None) -> None:
             super().__init__()
-            self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+            # Both axes scroll: horizontal to browse jobs, vertical for tall cards
+            self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
             self.set_vexpand(True)
             self.set_hexpand(True)
             self._on_artifact_click = on_artifact_click

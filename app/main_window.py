@@ -10183,9 +10183,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # Reveal the detail pane on first click (it starts hidden in pipeline mode)
         if hasattr(self, "_detail_wrap") and not self._detail_wrap.get_visible():
             self._detail_wrap.set_visible(True)
-            # Give the grid less space now that detail pane is open
+            # Constrain detail pane to a fixed sidebar width in pipeline mode
+            # so it doesn't consume the portfolio cards area.
             if hasattr(self, "_inner_paned"):
-                self._inner_paned.set_position(580)
+                alloc = self._inner_paned.get_allocation()
+                total_w = alloc.width if alloc.width > 100 else 700
+                # Keep ~320px for detail, give rest to portfolio
+                self._inner_paned.set_position(max(400, total_w - 340))
         self._detail.show_record(rec, self._dispatch_remix)
 
     def _on_pipeline_retry_node(self, job_name: str, node_id: str) -> None:
