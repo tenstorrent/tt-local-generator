@@ -166,12 +166,269 @@ def run_has_portfolio_artifacts(
     return False
 
 
-# ── GTK portfolio widgets (populated in later tasks) ─────────────────────────
+# ── GTK portfolio widgets ─────────────────────────────────────────────────────
 
 try:
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import GLib, Gtk  # noqa: F401  (used in later tasks)
+    from gi.repository import GLib, Gtk  # noqa: F401
     _GTK_AVAILABLE = True
 except ImportError:
     _GTK_AVAILABLE = False
+
+if _GTK_AVAILABLE:
+    import threading as _threading
+
+    class PortfolioJobCard(Gtk.Box):
+        """
+        A single pipeline job's portfolio card — vertical layout:
+          job title → seed image → video (autoplay muted) → poem text → poem image
+
+        Images load asynchronously via daemon threads + GLib.idle_add.
+        Clicking any artifact calls on_artifact_click(detail, artifact_type).
+        """
+
+        CARD_WIDTH = 360
+
+        def __init__(
+            self,
+            job_name: str,
+            artifacts: dict,
+            on_artifact_click=None,
+        ) -> None:
+            super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            self._job_name = job_name
+            self._artifacts = artifacts
+            self._on_click = on_artifact_click
+            self.add_css_class("portfolio-job-card")
+            self.set_size_request(self.CARD_WIDTH, -1)
+            self._build()
+
+        def _build(self) -> None:
+            # Job name header
+            hdr = Gtk.Label(label=self._job_name)
+            hdr.set_xalign(0)
+            hdr.set_ellipsize(3)
+            hdr.set_margin_start(12)
+            hdr.set_margin_end(12)
+            hdr.set_margin_top(10)
+            hdr.set_margin_bottom(6)
+            hdr.add_css_class("portfolio-card-title")
+            self.append(hdr)
+
+            # Seed image
+            self.append(self._make_image_section(
+                self._artifacts.get("seed_image"), "seed image · FLUX"
+            ))
+
+            # Video
+            self.append(self._make_video_section(self._artifacts.get("video")))
+
+            # Poem text (only if present)
+            poem = self._artifacts.get("poem")
+            if poem:
+                self.append(self._make_poem_section(poem))
+
+            # Poem image (only if present)
+            poem_img = self._artifacts.get("poem_image")
+            if poem_img:
+                self.append(self._make_image_section(poem_img, "poem image · FLUX"))
+
+        def _make_image_section(self, path, label_text: str) -> Gtk.Box:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            box.add_css_class("portfolio-image-section")
+
+            frame = Gtk.Box()
+            frame.set_size_request(self.CARD_WIDTH, self.CARD_WIDTH)
+            frame.add_css_class("portfolio-image-frame")
+            frame.set_halign(Gtk.Align.FILL)
+
+            if path and Path(path).exists():
+                placeholder = Gtk.Label(label="🖼")
+                placeholder.set_halign(Gtk.Align.CENTER)
+                placeholder.set_valign(Gtk.Align.CENTER)
+                frame.append(placeholder)
+                self._load_image_async(path, frame, placeholder)
+                if self._on_click:
+                    gesture = Gtk.GestureClick()
+                    gesture.connect(
+                        "pressed",
+                        lambda g, n, x, y, p=path: self._on_click(p, "image"),
+                    )
+                    frame.add_controller(gesture)
+                    frame.add_css_class("portfolio-clickable")
+            else:
+                empty = Gtk.Label(label="—")
+                empty.add_css_class("muted")
+                empty.set_halign(Gtk.Align.CENTER)
+                empty.set_valign(Gtk.Align.CENTER)
+                frame.append(empty)
+
+            box.append(frame)
+
+            lbl = Gtk.Label(label=label_text)
+            lbl.set_xalign(0)
+            lbl.set_margin_start(12)
+            lbl.set_margin_top(3)
+            lbl.set_margin_bottom(6)
+            lbl.add_css_class("portfolio-artifact-label")
+            box.append(lbl)
+            return box
+
+        def _make_video_section(self, path) -> Gtk.Box:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            box.add_css_class("portfolio-video-section")
+
+            vid_w = self.CARD_WIDTH
+            vid_h = int(vid_w * 544 / 960)  # 960×544 SkyReels native ratio
+
+            frame = Gtk.Box()
+            frame.set_size_request(vid_w, vid_h)
+            frame.add_css_class("portfolio-image-frame")
+
+            if path and Path(path).exists():
+                video = Gtk.Video()
+                video.set_autoplay(True)
+                video.set_loop(True)
+                video.set_size_request(vid_w, vid_h)
+                video.set_halign(Gtk.Align.FILL)
+                video.set_valign(Gtk.Align.FILL)
+                from gi.repository import Gio
+                video.set_file(Gio.File.new_for_path(path))
+                frame.append(video)
+                if self._on_click:
+                    gesture = Gtk.GestureClick()
+                    gesture.connect(
+                        "pressed",
+                        lambda g, n, x, y, p=path: self._on_click(p, "video"),
+                    )
+                    frame.add_controller(gesture)
+                    frame.add_css_class("portfolio-clickable")
+            else:
+                placeholder = Gtk.Label(label="▶  no video")
+                placeholder.add_css_class("muted")
+                placeholder.set_halign(Gtk.Align.CENTER)
+                placeholder.set_valign(Gtk.Align.CENTER)
+                frame.append(placeholder)
+
+            box.append(frame)
+
+            lbl = Gtk.Label(label="video · SkyReels V2 I2V")
+            lbl.set_xalign(0)
+            lbl.set_margin_start(12)
+            lbl.set_margin_top(3)
+            lbl.set_margin_bottom(6)
+            lbl.add_css_class("portfolio-artifact-label")
+            box.append(lbl)
+            return box
+
+        def _make_poem_section(self, poem: str) -> Gtk.Box:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            box.add_css_class("portfolio-poem-section")
+            box.set_margin_start(12)
+            box.set_margin_end(12)
+            box.set_margin_top(8)
+            box.set_margin_bottom(8)
+
+            lbl = Gtk.Label(label="poem · Llama")
+            lbl.set_xalign(0)
+            lbl.add_css_class("portfolio-artifact-label")
+            box.append(lbl)
+
+            poem_lbl = Gtk.Label()
+            poem_lbl.set_markup(
+                f"<i>{GLib.markup_escape_text(poem)}</i>"
+            )
+            poem_lbl.set_xalign(0)
+            poem_lbl.set_wrap(True)
+            poem_lbl.set_max_width_chars(38)
+            poem_lbl.set_margin_top(4)
+            poem_lbl.add_css_class("portfolio-poem-text")
+            if self._on_click:
+                gesture = Gtk.GestureClick()
+                gesture.connect(
+                    "pressed",
+                    lambda g, n, x, y, p=poem: self._on_click(p, "text"),
+                )
+                poem_lbl.add_controller(gesture)
+            box.append(poem_lbl)
+            return box
+
+        @staticmethod
+        def _load_image_async(path: str, container: Gtk.Box, placeholder: Gtk.Label) -> None:
+            """Load pixbuf off-thread, swap placeholder on main thread via idle_add."""
+            card_w = PortfolioJobCard.CARD_WIDTH
+
+            def _load() -> None:
+                # NOTE: no GTK widget calls are allowed here — we are on a
+                # background daemon thread.  Only GLib.idle_add is safe.
+                try:
+                    from gi.repository import GdkPixbuf
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, card_w, card_w, True)
+                except Exception:
+                    return
+
+                def _swap(pb=pb, c=container, ph=placeholder) -> bool:
+                    # Runs on the GTK main thread via idle_add — widget ops safe.
+                    # Default-arg capture (pb=pb etc.) prevents late-binding bugs.
+                    try:
+                        c.remove(ph)
+                        img = Gtk.Image.new_from_pixbuf(pb)
+                        img.set_size_request(card_w, card_w)
+                        img.set_halign(Gtk.Align.FILL)
+                        img.set_valign(Gtk.Align.FILL)
+                        c.append(img)
+                    except Exception:
+                        pass
+                    return GLib.SOURCE_REMOVE
+
+                GLib.idle_add(_swap)
+
+            _threading.Thread(target=_load, daemon=True).start()
+
+    class PipelinePortfolioView(Gtk.ScrolledWindow):
+        """
+        Horizontal scrollable strip of PortfolioJobCards — one per pipeline job.
+
+        Replaces PhaseGridWidget in the gallery stack for completed runs.
+        Load with load_run(run_record, phases). Clear with clear().
+        """
+
+        def __init__(self, on_artifact_click=None) -> None:
+            super().__init__()
+            self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+            self.set_vexpand(True)
+            self.set_hexpand(True)
+            self._on_artifact_click = on_artifact_click
+            self._cards_box = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL,
+                spacing=16,
+            )
+            self._cards_box.set_margin_start(16)
+            self._cards_box.set_margin_end(16)
+            self._cards_box.set_margin_top(12)
+            self._cards_box.set_margin_bottom(12)
+            self.set_child(self._cards_box)
+
+        def load_run(self, run: dict, phases: list[dict]) -> None:
+            """Populate cards from a PipelineStore run record. Call on GTK main thread."""
+            while child := self._cards_box.get_first_child():
+                self._cards_box.remove(child)
+
+            jobs_order = [j["name"] for j in run.get("jobs", [])]
+            job_states_map = run.get("job_states", {})
+
+            for job_name in jobs_order:
+                job_states = job_states_map.get(job_name, {})
+                artifacts = extract_job_artifacts(job_states, phases)
+                card = PortfolioJobCard(
+                    job_name=job_name,
+                    artifacts=artifacts,
+                    on_artifact_click=self._on_artifact_click,
+                )
+                self._cards_box.append(card)
+
+        def clear(self) -> None:
+            """Remove all cards — call when leaving pipeline mode."""
+            while child := self._cards_box.get_first_child():
+                self._cards_box.remove(child)

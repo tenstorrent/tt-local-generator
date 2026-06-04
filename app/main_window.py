@@ -825,6 +825,43 @@ button.pipeline-source-btn:hover {
     color: @tt_text;
     background-color: @tt_bg_darkest;
 }
+/* -- Pipeline portfolio view ----------------------------------------------- */
+.portfolio-job-card {
+    background-color: @tt_bg_card;
+    border: 1px solid @tt_border;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.portfolio-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: @tt_text;
+}
+.portfolio-image-frame {
+    background-color: #000;
+    overflow: hidden;
+}
+.portfolio-artifact-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: @tt_text_muted;
+}
+.portfolio-poem-section {
+    background-color: @tt_bg_dark;
+    border-top: 1px solid @tt_border;
+    border-bottom: 1px solid @tt_border;
+}
+.portfolio-poem-text {
+    font-size: 12px;
+    color: @tt_text2;
+    line-height: 1.7;
+}
+.portfolio-video-section { }
+.portfolio-image-section { }
+.portfolio-clickable:hover { background-color: alpha(@tt_accent, 0.08); }
+
 button.pipeline-source-btn:checked {
     background-color: @tt_accent;
     color: @tt_bg_darkest;
