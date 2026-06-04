@@ -199,22 +199,49 @@ if _GTK_AVAILABLE:
         def _make_cell(self, job_name: str, node_id: str, state: dict) -> Gtk.Box:
             status = state.get("status", "pending")
             detail = state.get("detail", "")
-            cell = Gtk.Box()
-            cell.set_size_request(52, 28)
-            cell.set_halign(Gtk.Align.CENTER)
-            cell.set_valign(Gtk.Align.CENTER)
-            cell.add_css_class(f"phase-cell-{status}")
+            is_image_path = detail and detail.endswith((".png", ".jpg", ".jpeg")) and __import__("pathlib").Path(detail).exists()
+            is_video_path = detail and detail.endswith((".mp4", ".webm", ".mov")) and __import__("pathlib").Path(detail).exists()
 
-            label_text = {
-                "pending":  "",
-                "running":  "⏳",
-                "done":     "✓",
-                "failed":   "✗",
-                "skipped":  "skip",
-            }.get(status, "")
-            lbl = Gtk.Label(label=label_text)
-            lbl.set_halign(Gtk.Align.CENTER)
-            cell.append(lbl)
+            # Image cells: show thumbnail; video cells: show ▶ icon + teal border; others: text
+            if status == "done" and is_image_path:
+                cell = Gtk.Box()
+                cell.set_size_request(52, 52)
+                cell.set_halign(Gtk.Align.CENTER)
+                cell.set_valign(Gtk.Align.CENTER)
+                cell.add_css_class("phase-cell-done")
+                try:
+                    from gi.repository import GdkPixbuf
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(detail, 48, 48, True)
+                    img = Gtk.Image.new_from_pixbuf(pb)
+                    img.set_size_request(48, 48)
+                    cell.append(img)
+                except Exception:
+                    lbl = Gtk.Label(label="✓")
+                    lbl.set_halign(Gtk.Align.CENTER)
+                    cell.append(lbl)
+            elif status == "done" and is_video_path:
+                cell = Gtk.Box()
+                cell.set_size_request(52, 36)
+                cell.set_halign(Gtk.Align.CENTER)
+                cell.set_valign(Gtk.Align.CENTER)
+                cell.add_css_class("phase-cell-done")
+                lbl = Gtk.Label()
+                lbl.set_markup('<span foreground="#4fd1c5" size="large">▶</span>')
+                lbl.set_halign(Gtk.Align.CENTER)
+                cell.append(lbl)
+            else:
+                cell = Gtk.Box()
+                cell.set_size_request(52, 28)
+                cell.set_halign(Gtk.Align.CENTER)
+                cell.set_valign(Gtk.Align.CENTER)
+                cell.add_css_class(f"phase-cell-{status}")
+                label_text = {
+                    "pending": "", "running": "⏳", "done": "✓",
+                    "failed": "✗", "skipped": "skip",
+                }.get(status, "")
+                lbl = Gtk.Label(label=label_text)
+                lbl.set_halign(Gtk.Align.CENTER)
+                cell.append(lbl)
 
             if status in ("done", "failed"):
                 gesture = Gtk.GestureClick()

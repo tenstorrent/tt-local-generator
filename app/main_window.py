@@ -8048,7 +8048,9 @@ class MainWindow(Gtk.ApplicationWindow):
         # the ArtgenPanel can use the full window width for its own layout.
         # Pipeline mode keeps the left pane (PipelinePanel) but hides the detail pane.
         self._ctrl_wrapper.set_visible(not is_artgen)
-        self._detail_wrap.set_visible(not is_artgen and not is_pipeline)
+        # Detail pane is hidden in artgen (full-width panel) but SHOWN in pipeline
+        # (clicking a completed cell loads the artifact there)
+        self._detail_wrap.set_visible(not is_artgen)
         self._rebuild_context_menu(source)
         # Grey out Detail Panel toggle on Art/Pipeline tabs (no detail panel there)
         toggle_act = self.lookup_action("toggle-detail")

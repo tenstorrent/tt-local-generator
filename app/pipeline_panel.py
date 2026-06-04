@@ -249,28 +249,17 @@ if _GTK_AVAILABLE:
             add_btn.connect("clicked", lambda _: self._add_row())
             box.append(add_btn)
 
-            # Param overrides
+            # Param overrides — populated dynamically from the spec's overridable inputs
             params_lbl = Gtk.Label(label="PARAMETERS")
             params_lbl.set_xalign(0)
             params_lbl.add_css_class("section-label")
             params_lbl.set_margin_top(4)
             box.append(params_lbl)
 
-            params_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            for label, placeholder, attr in [("num_frames", "33", "_frames_entry"),
-                                              ("seed",       "auto", "_seed_entry")]:
-                col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                lbl = Gtk.Label(label=label)
-                lbl.set_xalign(0)
-                lbl.add_css_class("muted")
-                entry = Gtk.Entry()
-                entry.set_placeholder_text(placeholder)
-                entry.set_hexpand(True)
-                col.append(lbl)
-                col.append(entry)
-                setattr(self, attr, entry)
-                params_row.append(col)
-            box.append(params_row)
+            self._params_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            self._param_widgets: dict[tuple, Gtk.Widget] = {}  # (node_id, key) → widget
+            self._param_inputs: list[dict] = []
+            box.append(self._params_box)
 
             # Spacer
             spacer = Gtk.Box()
@@ -328,12 +317,76 @@ if _GTK_AVAILABLE:
                 self._spec_dd.set_selected(0)
                 self._spec_path = self._specs[0]["path"]
                 self._run_preflight()
+                self._rebuild_params()
 
         def _on_spec_changed(self, dd: Gtk.DropDown, _pspec) -> None:
             idx = dd.get_selected()
             if idx < len(self._specs):
                 self._spec_path = self._specs[idx]["path"]
                 self._run_preflight()
+                self._rebuild_params()
+
+        def _rebuild_params(self) -> None:
+            """Rebuild the parameter override widgets from the selected spec."""
+            if not hasattr(self, "_params_box"):
+                return
+            for child in list(self._params_box):
+                self._params_box.remove(child)
+            self._param_widgets.clear()
+            self._param_inputs.clear()
+
+            if not self._spec_path:
+                return
+
+            # Parse overridable leaf inputs from the spec (same as WorkflowPopover zone 2)
+            _OVERRIDABLE = {"prompt", "negative_prompt", "seed", "model",
+                            "width", "height", "num_inference_steps", "steps",
+                            "guidance_scale", "num_frames"}
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                data = _json.loads(_Path(self._spec_path).read_text())
+            except Exception:
+                return
+
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            col_count = 0
+            for node_id, node in data.items():
+                if node_id.startswith("_") or not isinstance(node, dict):
+                    continue
+                for key, val in node.get("inputs", {}).items():
+                    if key not in _OVERRIDABLE or isinstance(val, list):
+                        continue
+                    self._param_inputs.append({"node_id": node_id, "key": key, "value": val,
+                                               "type": "int" if isinstance(val, int) else
+                                                        "float" if isinstance(val, float) else "str"})
+                    col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                    lbl = Gtk.Label(label=key)
+                    lbl.set_xalign(0)
+                    lbl.add_css_class("muted")
+                    col.append(lbl)
+                    if isinstance(val, int):
+                        widget = Gtk.SpinButton.new_with_range(0, 100_000, 1)
+                        widget.set_value(val)
+                    elif isinstance(val, float):
+                        widget = Gtk.SpinButton.new_with_range(0, 20, 0.5)
+                        widget.set_digits(1)
+                        widget.set_value(val)
+                    else:
+                        widget = Gtk.Entry()
+                        widget.set_text(str(val))
+                        widget.set_max_width_chars(16)
+                    widget.set_hexpand(True)
+                    col.append(widget)
+                    self._param_widgets[(node_id, key)] = widget
+                    row.append(col)
+                    col_count += 1
+                    if col_count >= 3:  # max 3 per visual row
+                        self._params_box.append(row)
+                        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                        col_count = 0
+            if col_count > 0:
+                self._params_box.append(row)
 
         def _run_preflight(self) -> None:
             """Validate the selected spec and update the preflight warning label."""
@@ -444,9 +497,16 @@ if _GTK_AVAILABLE:
             if not jobs:
                 self._status_lbl.set_label("Add at least one job to run.")
                 return
+            # Collect parameter overrides from dynamic spec-driven widgets
             overrides = {}
-            if self._frames_entry.get_text().strip().isdigit():
-                overrides["num_frames"] = int(self._frames_entry.get_text().strip())
+            for (node_id, key), widget in self._param_widgets.items():
+                orig = next((i for i in self._param_inputs
+                             if i["node_id"] == node_id and i["key"] == key), None)
+                if isinstance(widget, Gtk.SpinButton):
+                    val = int(widget.get_value()) if (orig and orig["type"] == "int") else widget.get_value()
+                else:
+                    val = widget.get_text()
+                overrides[f"{node_id}.{key}"] = val
             self._running = True
             self._run_btn.set_label("■  Cancel")
             self._status_lbl.set_label("Starting…")
