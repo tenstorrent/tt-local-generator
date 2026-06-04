@@ -831,6 +831,10 @@ button.pipeline-source-btn:checked {
     border-color: @tt_accent;
 }
 
+/* -- Detail pane dismiss bar ----------------------------------------------- */
+.detail-close-bar { padding: 2px 4px 0; min-height: 20px; }
+.detail-close-bar button { padding: 0 4px; min-height: 16px; font-size: 10px; color: @tt_text_muted; }
+
 /* -- Phase grid ------------------------------------------------------------ */
 .phase-grid-header {
     font-size: 9px;
@@ -7435,6 +7439,28 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_margin_bottom(6)
 
         self._detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # Thin dismiss bar at the top of the detail pane — ← collapses it.
+        # Visible universally (not just Pipeline) so users can always reclaim space.
+        _detail_close_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        _detail_close_bar.add_css_class("detail-close-bar")
+        _detail_close_spacer = Gtk.Box()
+        _detail_close_spacer.set_hexpand(True)
+        _detail_close_bar.append(_detail_close_spacer)
+        _detail_close_btn = Gtk.Button(label="✕")
+        _detail_close_btn.add_css_class("flat")
+        _detail_close_btn.set_tooltip_text("Close detail pane")
+        _detail_close_btn.connect("clicked", lambda _: (
+            self._detail_wrap.set_visible(False),
+            setattr(self, "_detail_visible", False),
+            self._inner_paned.set_position(
+                700 if self._model_source == "pipeline" else
+                self._inner_paned.get_allocation().width
+            ) if hasattr(self, "_inner_paned") else None,
+        ))
+        _detail_close_bar.append(_detail_close_btn)
+        self._detail_wrap.append(_detail_close_bar)
+
         self._detail_wrap.append(self._detail)
         self._detail_wrap.append(self._queue_section_lbl)
         self._detail_wrap.append(self._queue_box)
@@ -10017,30 +10043,63 @@ class MainWindow(Gtk.ApplicationWindow):
             self._phase_grid._build()
 
     def _on_pipeline_cell_click(self, job_name: str, node_id: str, detail: str) -> None:
-        """Load a clicked phase grid artifact into the detail pane."""
+        """Load a clicked phase grid artifact into the detail pane.
+
+        Handles all artifact types: images, videos, and text (poems, captions).
+        Text artifacts are displayed as the prompt field in a read-only record.
+        """
         from pathlib import Path as _Path
         import uuid as _uuid
         from datetime import datetime, timezone
-        path = detail
-        if not path or not _Path(path).exists():
-            return
-        suffix = _Path(path).suffix.lower()
-        is_video = suffix in (".mp4", ".webm", ".mov")
-        # Build a minimal GenerationRecord so the existing DetailPanel can display it.
         from history_store import GenerationRecord
-        rec = GenerationRecord(
-            id=str(_uuid.uuid4()),
-            prompt=f"Pipeline: {job_name} · node {node_id}",
-            negative_prompt="",
-            num_inference_steps=0,
-            seed=-1,
-            video_path=path if is_video else "",
-            thumbnail_path="",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            media_type="video" if is_video else "image",
-            image_path=path if not is_video else "",
-            model="pipeline",
-        )
+
+        if not detail:
+            return
+
+        path = detail
+        is_path = path.startswith("/") and _Path(path).exists()
+        suffix = _Path(path).suffix.lower() if is_path else ""
+        is_video = suffix in (".mp4", ".webm", ".mov")
+        is_image = suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp")
+        is_text = not is_path  # poems, captions, prompts — show as text in detail
+
+        # Friendly display name from node_id
+        node_labels = {
+            "1": "Seed image", "2": "BLIP caption", "3": "Background removed",
+            "4": "Depth map",  "5": "Video prompt", "6": "Video",
+            "7": "Poem",       "8": "Poem image",   "9": "Saved",
+        }
+        label = node_labels.get(node_id, f"Node {node_id}")
+
+        if is_text:
+            # Show text content as the prompt in a text-type record
+            rec = GenerationRecord(
+                id=str(_uuid.uuid4()),
+                prompt=detail,          # the poem/caption IS the content
+                negative_prompt="",
+                num_inference_steps=0,
+                seed=-1,
+                video_path="",
+                thumbnail_path="",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                media_type="artgen",    # artgen records display as text
+                image_path="",
+                model=f"Pipeline: {job_name} · {label}",
+            )
+        else:
+            rec = GenerationRecord(
+                id=str(_uuid.uuid4()),
+                prompt=f"{job_name} · {label}",
+                negative_prompt="",
+                num_inference_steps=0,
+                seed=-1,
+                video_path=path if is_video else "",
+                thumbnail_path="",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                media_type="video" if is_video else "image",
+                image_path=path if is_image else "",
+                model="pipeline",
+            )
         # Reveal the detail pane on first click (it starts hidden in pipeline mode)
         if hasattr(self, "_detail_wrap") and not self._detail_wrap.get_visible():
             self._detail_wrap.set_visible(True)
