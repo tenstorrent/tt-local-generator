@@ -10044,6 +10044,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._phase_grid._build()
         # Always show the phase grid while a run is active — switch to portfolio on completion
         self._gallery_stack.set_visible_child_name("pipeline")
+        # Assign before start() so on_run_finished can reference _pipeline_runner
+        # even if the callback fires synchronously (e.g. in tests).
         self._pipeline_runner = PipelineRunner(idle_add=GLib.idle_add)
         self._pipeline_runner.start(
             spec_path=spec_path,
@@ -10078,7 +10080,7 @@ class MainWindow(Gtk.ApplicationWindow):
             run_id = self._pipeline_runner._run_id
             if run_id:
                 # Brief delay so store write completes, then switch to portfolio
-                GLib.timeout_add(
+                self._pipeline_load_timer = GLib.timeout_add(
                     800,
                     lambda rid=run_id: (
                         self._on_pipeline_load_run(rid) or GLib.SOURCE_REMOVE
@@ -10108,7 +10110,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if use_portfolio:
             self._pipeline_portfolio.load_run(run, phases)
-            self._gallery_stack.set_visible_child_name("pipeline-portfolio")
+            # Switch gallery stack directly (portfolio is a sub-view within pipeline source)
+            # Only switch the stack child — don't re-invoke _on_source_change which would
+            # rebuild the entire left pane. The pipeline source tab handles left pane swap.
+            if self._gallery_stack.get_visible_child_name() != "pipeline-portfolio":
+                self._gallery_stack.set_visible_child_name("pipeline-portfolio")
         else:
             state = GridState.from_run_record(run, phases)
             if hasattr(self, "_phase_grid"):
@@ -10277,6 +10283,11 @@ class MainWindow(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def do_close_request(self) -> bool:
+        # Cancel any pending pipeline portfolio load timer
+        timer_id = getattr(self, "_pipeline_load_timer", None)
+        if timer_id is not None:
+            GLib.source_remove(timer_id)
+            self._pipeline_load_timer = None
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
         if self._flash_restore_id:
             GLib.source_remove(self._flash_restore_id)
