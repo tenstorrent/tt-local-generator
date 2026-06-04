@@ -7251,19 +7251,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
 
-        # ── Workflow button ───────────────────────────────────────────────────
+        # ── Workflow popover (kept for legacy run history access, not shown in toolbar) ─
+        # Pipeline tab (⚙ Pipeline source button) replaces this as the primary workflow UI.
         from workflow_popover import WorkflowPopover
         self._workflow_popover = WorkflowPopover(
             on_watch_playlist=self._on_open_attractor_for_playlist,
         )
-        self._workflow_btn = Gtk.MenuButton(label="⚙ Workflow")
-        self._workflow_btn.add_css_class("workflow-btn")
-        self._workflow_btn.set_popover(self._workflow_popover)
-        self._workflow_btn.set_tooltip_text(
-            "Browse, parameterize, and run multi-step generation workflows.\n"
-            "Results are saved to a playlist and can be watched in TT-TV."
-        )
-        main_toolbar.append(self._workflow_btn)
 
         root_box.append(main_toolbar)
 
@@ -10115,9 +10108,13 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if not reattached:
             # No live runs — load the most recent completed run for reference
+            # and pre-populate the Pipeline tab so it's ready to browse.
             runs = store.list_runs(limit=1)
             if runs and hasattr(self, "_phase_grid"):
                 self._on_pipeline_load_run(runs[0]["id"])
+                # Switch to Pipeline tab so the user sees the grid on first open
+                if hasattr(self, "_src_pipeline_btn"):
+                    self._src_pipeline_btn.set_active(True)
 
         return GLib.SOURCE_REMOVE
 
