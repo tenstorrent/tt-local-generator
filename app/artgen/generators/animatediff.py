@@ -18,8 +18,8 @@ Phase 2.5 architecture (generate_blackhole_v2.py):
 
 Hardware requirement: Blackhole device (P100/P150/P300c/QB2). No CPU fallback.
 Script resolution order:
-  1. app/animatediff/examples/generate_blackhole_v2.py  (bundled in this repo)
-  2. ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py  (dev fallback)
+  1. vendor/tt-animatediff/examples/generate_blackhole_v2.py  (git submodule, v0.1.0+)
+  2. ~/code/tt-animatediff/examples/generate_blackhole_v2.py  (developer checkout)
 """
 
 from __future__ import annotations
@@ -55,12 +55,16 @@ _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 
 # Prefer the copy bundled inside this repo (app/animatediff/ — synced from
 # ~/code/tt-animatediff, the canonical source).  Fall back to the canonical
-# repo directly so in-place edits there are picked up without a re-sync.
-_BUNDLED_DIR = Path(__file__).resolve().parent.parent.parent / "animatediff"
+# Resolution order (first match wins):
+#   1. vendor/tt-animatediff/  — git submodule pinned to official release tag
+#   2. ~/code/tt-animatediff   — developer checkout (canonical source)
+# The old app/animatediff/ bundle has been removed in favour of the submodule.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_SUBMODULE_DIR = _REPO_ROOT / "vendor" / "tt-animatediff"
 _CANONICAL_DIR = Path.home() / "code" / "tt-animatediff"
 _SCRIPT_DIR = (
-    _BUNDLED_DIR
-    if (_BUNDLED_DIR / "examples" / "generate_blackhole_v2.py").exists()
+    _SUBMODULE_DIR
+    if (_SUBMODULE_DIR / "examples" / "generate_blackhole_v2.py").exists()
     else _CANONICAL_DIR
 )
 

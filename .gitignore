@@ -44,3 +44,8 @@ steinbeck.png
 generate_library.sh
 /logs/
 media_*.log
+
+# tt-animatediff submodule — weights and generated output are not committed
+vendor/tt-animatediff/weights/
+vendor/tt-animatediff/output/
+vendor/tt-animatediff/.claude/

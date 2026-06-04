@@ -1,0 +1,4 @@
+[submodule "tt-animatediff"]
+	path = vendor/tt-animatediff
+	url = https://github.com/tenstorrent/tt-animatediff.git
+	branch = v0.1.0
