@@ -459,8 +459,9 @@ def extract_remix_hint(record: dict) -> str:
 def _load_generators() -> None:
     import plugin_loader
     plugin_loader.load_plugins()
-    for name, pdef in plugin_loader._PLUGINS.items():
-        _GENERATORS[name] = pdef.generator
+    _GENERATORS.clear()
+    for pdef in plugin_loader.all_plugins():
+        _GENERATORS[pdef.name] = pdef.generator
 
 
 _load_generators()

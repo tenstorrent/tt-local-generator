@@ -1,5 +1,5 @@
 """
-MCP server — exposes all loaded plugins as MCP tools over HTTP+SSE.
+MCP server — exposes all loaded plugins as MCP tools over HTTP (JSON-RPC 2.0).
 
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
 Port: 8003 (configurable via TTLG_MCP_PORT env var).
@@ -82,8 +82,9 @@ def _noop_call_fn(prompt: str, system: str | None = None,
     will receive a descriptive RuntimeError rather than a silent hang.
     """
     raise RuntimeError(
-        "This plugin requires a live LLM — start the appropriate server first "
-        "(tt-ctl start prompt-server)."
+        "This plugin requires a live LLM server. "
+        "Start the artgen server first (bin/start_artgen.sh) or the prompt server "
+        "(bin/start_prompt_gen.sh), then retry the tools/call request."
     )
 
 
