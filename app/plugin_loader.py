@@ -24,8 +24,10 @@ Loading behaviour:
   - Plugins whose mcp.json is missing or unparseable are skipped with a
     warning logged at WARNING level.
   - Plugins with no tools declared are also skipped.
+  - Plugins with x-ttlg.utility set are skipped (internal helpers, not tools).
   - Plugins with neither a plugin.py ArtGenerator subclass nor an
-    mcp_server declaration are skipped (no generator to run).
+    mcp_server declaration get a generic placeholder stub (still registered,
+    but generate_artifact() will raise a descriptive error).
   - Later search paths override earlier ones when names collide, enabling
     user-installed plugins to shadow repo-bundled ones.
 """

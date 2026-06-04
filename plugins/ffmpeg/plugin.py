@@ -11,7 +11,8 @@ In-process import usage (remix engine):
     from plugins.ffmpeg.plugin import extract_frame, get_metadata
 
 MCP tool usage (Claude Code, external tools):
-    Registered automatically via app/mcp_server.py on port 8003.
+    Not registered as an MCP tool — this is a utility plugin (x-ttlg.utility)
+    used internally by the remix engine, not exposed via the MCP server.
 """
 from __future__ import annotations
 

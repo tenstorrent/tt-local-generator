@@ -40,20 +40,29 @@ from artgen import ArtGenerator, register
 # Use the XDG user state directory (~/.local/share/tt-video-gen/logs/animatediff)
 # rather than a repo-relative path so the installed .deb package (which lives
 # under /usr/lib/tt-local-generator, not writable by the user) does not crash
-# at import time with a PermissionError.  mkdir is deferred until the first log
-# file is actually opened — not at module load — so importing this module is
-# always safe even when the user home directory is unusual.
+# at import time with a PermissionError.
 _LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
 
 _log = logging.getLogger("animatediff")
-if not _log.handlers:
-    _log.setLevel(logging.DEBUG)
-    # Create the log directory lazily here, at handler-attach time, so that the
-    # mkdir never runs during a bare import (e.g. test collection or CLI --help).
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
-    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
-    _log.addHandler(_fh)
+_log.setLevel(logging.DEBUG)
+
+
+def _ensure_log_handler() -> None:
+    """Attach a FileHandler the first time a log entry is actually emitted.
+
+    Called at the top of check_hardware() and run_subprocess() — never at
+    module import time — so importing this module is always safe for test
+    collection, CLI --help, and .deb installs where $HOME may be unusual.
+    """
+    if _log.handlers:
+        return
+    try:
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+        _log.addHandler(_fh)
+    except OSError:
+        _log.addHandler(logging.NullHandler())
 
 _TT_METAL = Path.home() / "tt-metal"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
@@ -130,6 +139,7 @@ def check_hardware() -> tuple[bool, str]:
     Also logs per-chip temperature and power so ARC hangs (sentinel 65536°C /
     4294W) are visible in the log before a run starts.
     """
+    _ensure_log_handler()
     import json
     tt_smi = _find_tt_smi()
     if tt_smi is None:
@@ -199,6 +209,7 @@ def run_subprocess(
 
     Returns (success, error_message). error_message is "" on success.
     """
+    _ensure_log_handler()
     import threading
 
     script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"

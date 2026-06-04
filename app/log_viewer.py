@@ -19,7 +19,9 @@ from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LOGS_DIR  = _REPO_ROOT / "logs"
-_ANIMATEDIFF_LOG_DIR = _LOGS_DIR / "animatediff"
+# AnimateDiff logs live under the XDG user state dir (not the repo) so that
+# the installed .deb (code under /usr/lib/…, not writable) works correctly.
+_ANIMATEDIFF_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
 _PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")
 
 
@@ -61,11 +63,15 @@ def shorten_error(message: str) -> str:
 def parse_run_log_name(filename: str) -> tuple[str, str]:
     """Parse an AnimateDiff run log filename into (display_name, date_str).
 
-    Expected format: run_YYYYMMDD_HHMMSS_YYYYMMDD_HHMMSS_<jobid8>.log
+    Accepts two naming schemes:
+      - run_YYYYMMDD_HHMMSS_<stem>.log  (current — animatediff.py run_id format)
+      - run_YYYYMMDD_HHMMSS_YYYYMMDD_HHMMSS_<jobid8>.log  (legacy)
+
     Returns ("run_HH:MM", "Mon D") on success, or (stem, "") on mismatch.
     """
     stem = Path(filename).stem
-    m = re.match(r"run_(\d{8})_(\d{6})_\d{8}_\d{6}_[0-9a-f]+$", stem)
+    # Current format: run_<date>_<time>_<anything>
+    m = re.match(r"run_(\d{8})_(\d{6})_(.+)$", stem)
     if not m:
         return stem, ""
     date_part, time_part = m.group(1), m.group(2)
@@ -112,6 +118,7 @@ def is_error_log(content: str) -> bool:
 def collect_log_files(
     repo_root: Path = _REPO_ROOT,
     prompt_log: Optional[Path] = _PROMPT_LOG,
+    animatediff_log_dir: Optional[Path] = None,
 ) -> list[dict]:
     """Return a list of section dicts for the log tree.
 
@@ -123,9 +130,10 @@ def collect_log_files(
     """
     sections = []
 
-    # ANIMATEDIFF run logs (exclude the app-level animatediff.log)
-    ad_dir = repo_root / "logs" / "animatediff"
-    run_logs = sorted(ad_dir.glob("run_*.log"), reverse=True) if ad_dir.exists() else []
+    # ANIMATEDIFF run logs — in XDG state dir (not repo root)
+    ad_dir = animatediff_log_dir if animatediff_log_dir is not None else _ANIMATEDIFF_LOG_DIR
+    run_logs = sorted(ad_dir.glob("run_*.log"), reverse=True) \
+               if ad_dir.exists() else []
     if run_logs:
         files = []
         for p in run_logs:
@@ -156,7 +164,7 @@ def collect_log_files(
         ]})
 
     # APP — the animatediff module log (distinct from run logs)
-    app_log = repo_root / "logs" / "animatediff" / "animatediff.log"
+    app_log = ad_dir / "animatediff.log"
     if app_log.exists():
         sections.append({"section": "APP", "files": [
             {"path": str(app_log), "name": "animatediff",

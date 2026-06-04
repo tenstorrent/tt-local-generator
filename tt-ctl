@@ -110,11 +110,13 @@ def _cmd_plugin_list(_args):
 def cmd_mcp_config(_args):
     """Emit Claude Code MCP config JSON for tt-local-gen."""
     import json as _json
+    import sys
     port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
     config = {"tt-local-gen": {"url": f"http://localhost:{port}/mcp"}}
     print(_json.dumps(config, indent=2))
-    print("\n# Append to ~/.claude/mcp.json or run:")
-    print("#   tt-ctl mcp-config >> ~/.claude/mcp.json")
+    # Usage hint goes to stderr so stdout stays valid JSON for piping/appending.
+    print("\n# Append to ~/.claude/mcp.json or run:", file=sys.stderr)
+    print("#   tt-ctl mcp-config >> ~/.claude/mcp.json", file=sys.stderr)
 
 
 # ── Colour helpers (plain text when stdout is not a tty) ──────────────────────

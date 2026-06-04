@@ -6,8 +6,6 @@ Port: 8003 (configurable via TTLG_MCP_PORT env var).
 
 Start standalone:
     python3 app/mcp_server.py
-Or via tt-ctl:
-    tt-ctl mcp-server start
 
 Claude Code integration:
     tt-ctl mcp-config >> ~/.claude/mcp.json
@@ -33,6 +31,11 @@ from fastapi.responses import JSONResponse
 import plugin_loader
 
 app = FastAPI(title="tt-local-gen MCP server", version="1.0.0")
+
+# Load plugins once at module import time so that tools/list and tools/call
+# work correctly even when running standalone (python3 app/mcp_server.py).
+# plugin_loader.load_plugins() is idempotent — safe to call multiple times.
+plugin_loader.load_plugins()
 
 # MCP protocol version this server speaks.
 _PROTOCOL_VERSION = "2024-11-05"

@@ -318,6 +318,19 @@ class IngredientSpec:
 # Ingredient definitions per (source_type, target_type) pair.
 # Each entry is a list of ingredient keys in display order.
 _INGREDIENT_TABLE: dict = {
+    # "same" target — re-generate from the same source; ingredients mirror the source type
+    ("palette",       "same"): ["colors", "lore", "prompt"],
+    ("verse",         "same"): ["text", "prompt"],
+    ("haiku",         "same"): ["text", "prompt"],
+    ("landscape",     "same"): ["thumbnail", "vibe", "prompt"],
+    ("skyline",       "same"): ["thumbnail", "vibe", "prompt"],
+    ("video",         "same"): ["thumbnail", "prompt"],
+    ("gif",           "same"): ["thumbnail", "prompt"],
+    ("image",         "same"): ["image", "prompt"],
+    ("ansi",          "same"): ["thumbnail", "prompt"],
+    ("geometric",     "same"): ["thumbnail", "prompt"],
+    ("circuit",       "same"): ["thumbnail", "prompt"],
+    ("constellation", "same"): ["thumbnail", "prompt"],
     # palette source
     ("palette", "video"):   ["colors", "lore", "prompt"],
     ("palette", "image"):   ["colors", "lore", "prompt"],
