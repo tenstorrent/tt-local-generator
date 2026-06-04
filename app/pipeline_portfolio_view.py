@@ -372,6 +372,11 @@ if _GTK_AVAILABLE:
                     # Runs on the GTK main thread via idle_add — widget ops safe.
                     # Default-arg capture (pb=pb etc.) prevents late-binding bugs.
                     try:
+                        # Guard: if the container was detached by a card/grid
+                        # rebuild that ran before this idle callback fired,
+                        # skip silently to avoid operating on orphaned widgets.
+                        if c.get_parent() is None:
+                            return GLib.SOURCE_REMOVE
                         c.remove(ph)
                         img = Gtk.Image.new_from_pixbuf(pb)
                         img.set_size_request(card_w, card_w)

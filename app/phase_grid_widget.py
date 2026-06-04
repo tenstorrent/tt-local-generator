@@ -225,6 +225,11 @@ if _GTK_AVAILABLE:
                         from gi.repository import GdkPixbuf
                         pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 50, 50, True)
                         def _update(pb=pb, c=c, ph=ph):
+                            # Guard: if the container was detached by a grid
+                            # rebuild that ran before this idle callback fired,
+                            # skip silently to avoid operating on orphaned widgets.
+                            if c.get_parent() is None:
+                                return GLib.SOURCE_REMOVE
                             c.remove(ph)
                             img = Gtk.Image.new_from_pixbuf(pb)
                             img.set_size_request(50, 50)
