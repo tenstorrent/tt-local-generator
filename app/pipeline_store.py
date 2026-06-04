@@ -42,7 +42,14 @@ class PipelineStore:
     """JSON-backed list of pipeline run records."""
 
     def __init__(self) -> None:
-        _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        # Capture paths at construction time so this instance always writes to
+        # the same location, even if module-level globals are later monkeypatched
+        # by tests and then restored during test teardown. Without this, a daemon
+        # thread that outlives the monkeypatch context would write to the restored
+        # (production) path instead of the test's tmp_path.
+        self._index_path = _INDEX_PATH
+        self._runs_dir = _RUNS_DIR
+        self._runs_dir.mkdir(parents=True, exist_ok=True)
         # Protects all _load/_save pairs against concurrent access from the
         # background _watch_stdout thread and the GTK main thread.
         self._lock = threading.Lock()
@@ -51,12 +58,12 @@ class PipelineStore:
 
     def _load(self) -> list[dict]:
         try:
-            return json.loads(_INDEX_PATH.read_text())
+            return json.loads(self._index_path.read_text())
         except Exception:
             return []
 
     def _save(self, records: list[dict]) -> None:
-        _INDEX_PATH.write_text(json.dumps(records, indent=2))
+        self._index_path.write_text(json.dumps(records, indent=2))
 
     def get_run(self, run_id: str) -> Optional[dict]:
         with self._lock:
