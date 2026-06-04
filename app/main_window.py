@@ -7292,6 +7292,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Inner paned splits gallery (left) from detail panel (right)
         inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         inner_paned.set_position(480)   # default gallery width before detail panel
+        self._inner_paned = inner_paned  # stored so _on_source_change can adjust split
 
         gallery_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
@@ -8037,12 +8038,16 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._ctrl_wrapper.remove(self._ctrl_scroll_inner)
                 if self._pipeline_panel.get_parent() is None:
                     self._ctrl_wrapper.prepend(self._pipeline_panel)
+            if hasattr(self, "_inner_paned"):
+                self._inner_paned.set_position(700)  # more space for multi-column grid
         else:
             # Restore the normal scrollable ControlPanel when leaving pipeline mode.
             if hasattr(self, "_pipeline_panel") and self._pipeline_panel.get_parent() is not None:
                 self._ctrl_wrapper.remove(self._pipeline_panel)
             if hasattr(self, "_ctrl_scroll_inner") and self._ctrl_scroll_inner.get_parent() is None:
                 self._ctrl_wrapper.prepend(self._ctrl_scroll_inner)
+            if hasattr(self, "_inner_paned"):
+                self._inner_paned.set_position(480)  # restore normal split
 
         # Hide the left ControlPanel and right DetailPanel in artgen mode so
         # the ArtgenPanel can use the full window width for its own layout.

@@ -150,7 +150,7 @@ if _GTK_AVAILABLE:
             job_hdr = Gtk.Label(label="Job")
             job_hdr.add_css_class("phase-grid-header")
             job_hdr.set_xalign(0)
-            job_hdr.set_size_request(110, -1)
+            job_hdr.set_size_request(90, -1)
             grid.attach(job_hdr, 0, 0, 1, 1)
 
             for col, phase in enumerate(self._state.phases, start=1):
@@ -158,12 +158,15 @@ if _GTK_AVAILABLE:
                 name_lbl = Gtk.Label(label=phase["label"])
                 name_lbl.add_css_class("phase-grid-header")
                 model_lbl = Gtk.Label()
-                model_lbl.set_markup(
-                    f'<span foreground="#4fd1c5" size="xx-small">{phase.get("model","")}</span>'
-                )
+                _model_tag = phase.get("model", "")
+                if _model_tag:
+                    model_lbl.set_markup(
+                        f'<span foreground="#4fd1c5" size="xx-small">'
+                        f'{GLib.markup_escape_text(_model_tag)}</span>'
+                    )
                 hdr.append(name_lbl)
                 hdr.append(model_lbl)
-                hdr.set_size_request(52, -1)
+                hdr.set_size_request(58, -1)
                 grid.attach(hdr, col, 0, 1, 1)
 
             # Retry-all column header (empty)
@@ -172,8 +175,10 @@ if _GTK_AVAILABLE:
             # Job rows
             for row_idx, job_name in enumerate(self._state.jobs, start=1):
                 job_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-                job_box.set_size_request(110, -1)
-                job_lbl = Gtk.Label(label=job_name)
+                job_box.set_size_request(90, -1)
+                job_box.set_tooltip_text(job_name)
+                job_lbl = Gtk.Label()
+                job_lbl.set_text(job_name[:14] + ("…" if len(job_name) > 14 else ""))
                 job_lbl.set_xalign(0)
                 job_lbl.add_css_class("phase-job-label")
                 job_lbl.set_ellipsize(3)
@@ -205,33 +210,44 @@ if _GTK_AVAILABLE:
             # Image cells: show thumbnail; video cells: show ▶ icon + teal border; others: text
             if status == "done" and is_image_path:
                 cell = Gtk.Box()
-                cell.set_size_request(52, 52)
+                cell.set_size_request(58, 52)
                 cell.set_halign(Gtk.Align.CENTER)
                 cell.set_valign(Gtk.Align.CENTER)
                 cell.add_css_class("phase-cell-done")
-                try:
-                    from gi.repository import GdkPixbuf
-                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(detail, 48, 48, True)
-                    img = Gtk.Image.new_from_pixbuf(pb)
-                    img.set_size_request(48, 48)
-                    cell.append(img)
-                except Exception:
-                    lbl = Gtk.Label(label="✓")
-                    lbl.set_halign(Gtk.Align.CENTER)
-                    cell.append(lbl)
+                placeholder = Gtk.Label(label="🖼")
+                placeholder.set_halign(Gtk.Align.CENTER)
+                cell.append(placeholder)
+                # Load thumbnail asynchronously to avoid blocking the main thread
+                # while decoding potentially large image files.
+                import threading as _threading
+                def _load(path=detail, c=cell, ph=placeholder):
+                    try:
+                        from gi.repository import GdkPixbuf
+                        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 50, 50, True)
+                        def _update(pb=pb, c=c, ph=ph):
+                            c.remove(ph)
+                            img = Gtk.Image.new_from_pixbuf(pb)
+                            img.set_size_request(50, 50)
+                            c.append(img)
+                            return GLib.SOURCE_REMOVE
+                        GLib.idle_add(_update)
+                    except Exception:
+                        pass
+                _threading.Thread(target=_load, daemon=True).start()
             elif status == "done" and is_video_path:
                 cell = Gtk.Box()
-                cell.set_size_request(52, 36)
+                cell.set_size_request(58, 52)
                 cell.set_halign(Gtk.Align.CENTER)
                 cell.set_valign(Gtk.Align.CENTER)
                 cell.add_css_class("phase-cell-done")
                 lbl = Gtk.Label()
                 lbl.set_markup('<span foreground="#4fd1c5" size="large">▶</span>')
                 lbl.set_halign(Gtk.Align.CENTER)
+                lbl.set_valign(Gtk.Align.CENTER)
                 cell.append(lbl)
             else:
                 cell = Gtk.Box()
-                cell.set_size_request(52, 28)
+                cell.set_size_request(58, 52)
                 cell.set_halign(Gtk.Align.CENTER)
                 cell.set_valign(Gtk.Align.CENTER)
                 cell.add_css_class(f"phase-cell-{status}")

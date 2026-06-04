@@ -249,6 +249,16 @@ if _GTK_AVAILABLE:
             add_btn.connect("clicked", lambda _: self._add_row())
             box.append(add_btn)
 
+            # Preview row — shows the resolved prompt for the first enabled job,
+            # updated live as variable entries change.
+            self._preview_lbl = Gtk.Label(label="")
+            self._preview_lbl.set_xalign(0)
+            self._preview_lbl.set_wrap(True)
+            self._preview_lbl.set_max_width_chars(36)
+            self._preview_lbl.add_css_class("muted")
+            self._preview_lbl.set_use_markup(True)  # italic via Pango markup
+            box.append(self._preview_lbl)
+
             # Param overrides — populated dynamically from the spec's overridable inputs
             params_lbl = Gtk.Label(label="PARAMETERS")
             params_lbl.set_xalign(0)
@@ -432,6 +442,7 @@ if _GTK_AVAILABLE:
                 self._job_list_box.remove(child)
             for row in self._rows:
                 self._job_list_box.append(self._make_job_row_widget(row))
+            self._update_preview()
 
         def _make_job_row_widget(self, row: dict) -> Gtk.Box:
             vars_ = parse_template_variables(self._template)
@@ -449,6 +460,7 @@ if _GTK_AVAILABLE:
             name_entry.set_text(row.get("name", ""))
             name_entry.set_size_request(70, -1)
             name_entry.connect("changed", lambda e, r=row: r.update({"name": e.get_text()}))
+            name_entry.connect("changed", lambda _e: self._update_preview())
             box.append(name_entry)
 
             if row.get("__custom__"):
@@ -457,6 +469,7 @@ if _GTK_AVAILABLE:
                 prompt_entry.set_hexpand(True)
                 prompt_entry.set_placeholder_text("custom prompt…")
                 prompt_entry.connect("changed", lambda e, r=row: r.update({"prompt": e.get_text()}))
+                prompt_entry.connect("changed", lambda _e: self._update_preview())
                 box.append(prompt_entry)
             else:
                 for var in vars_:
@@ -466,6 +479,7 @@ if _GTK_AVAILABLE:
                     var_entry.set_placeholder_text(var)
                     var_entry.connect("changed",
                                       lambda e, r=row, v=var: r.update({v: e.get_text()}))
+                    var_entry.connect("changed", lambda _e: self._update_preview())
                     box.append(var_entry)
 
             # Delete button
@@ -484,6 +498,24 @@ if _GTK_AVAILABLE:
         def _remove_row(self, row: dict) -> None:
             self._rows = [r for r in self._rows if r is not row]
             self._rebuild_job_rows()
+
+        def _update_preview(self) -> None:
+            """Update _preview_lbl with the resolved prompt of the first enabled row.
+
+            Resolves the template against the first enabled job's variable values and
+            displays the result in italic muted text below the job table.  Clears the
+            label when there are no enabled rows or no template.
+            """
+            if not hasattr(self, "_preview_lbl"):
+                return
+            first = next((r for r in self._rows if r.get("enabled", True)), None)
+            if not first or not self._template:
+                self._preview_lbl.set_markup("")
+                return
+            resolved = resolve_prompt(self._template, first)
+            # Pango markup: italic, HTML-escaped so angle brackets in prompts are safe
+            import html as _html
+            self._preview_lbl.set_markup(f"<i>{_html.escape(resolved)}</i>")
 
         # ── Run / Cancel ──────────────────────────────────────────────────────
 
@@ -594,8 +626,16 @@ if _GTK_AVAILABLE:
                 self._template_entry.set_text(stored_template)
 
             self._rebuild_job_rows()
-            # Switch to Configure tab
+            # Switch to Configure tab and briefly flash the Run button so the
+            # user knows the load landed.
             self._stack.set_visible_child_name("configure")
+            self._run_btn.set_label("✅ Loaded — ready to tweak")
+            GLib.timeout_add(2000, lambda: self._run_btn.set_label("▶  Run Pipeline") or GLib.SOURCE_REMOVE)
+            if hasattr(self, "_run_btn") and hasattr(self, "_status_lbl"):
+                self._status_lbl.set_label("✅ Run loaded — tweak and re-run")
+                GLib.timeout_add(3000, lambda: (
+                    self._status_lbl.set_label("") or GLib.SOURCE_REMOVE
+                ))
 
             if self._on_load_run:
                 self._on_load_run(run_id)
