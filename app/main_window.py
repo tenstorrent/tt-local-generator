@@ -10263,14 +10263,12 @@ class MainWindow(Gtk.ApplicationWindow):
                 break  # Only reattach to first live run
 
         if not reattached:
-            # No live runs — load the most recent completed run for reference
-            # and pre-populate the Pipeline tab so it's ready to browse.
+            # No live runs — silently pre-populate the Pipeline tab in the
+            # background so it's ready when the user clicks it, but do NOT
+            # switch to it automatically. The user's last active tab stays active.
             runs = store.list_runs(limit=1)
             if runs and hasattr(self, "_phase_grid"):
                 self._on_pipeline_load_run(runs[0]["id"])
-                # Switch to Pipeline tab so the user sees the grid on first open
-                if hasattr(self, "_src_pipeline_btn"):
-                    self._src_pipeline_btn.set_active(True)
 
         return GLib.SOURCE_REMOVE
 
