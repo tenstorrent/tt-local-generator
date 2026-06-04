@@ -36,12 +36,21 @@ from artgen import ArtGenerator, register
 # Structured log for every animatediff run — written alongside generated GIFs
 # so failures are self-contained and don't require a running GUI to diagnose.
 # Log level: DEBUG captures all subprocess output; INFO captures run summaries.
-_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "logs" / "animatediff"
-_LOG_DIR.mkdir(parents=True, exist_ok=True)
+#
+# Use the XDG user state directory (~/.local/share/tt-video-gen/logs/animatediff)
+# rather than a repo-relative path so the installed .deb package (which lives
+# under /usr/lib/tt-local-generator, not writable by the user) does not crash
+# at import time with a PermissionError.  mkdir is deferred until the first log
+# file is actually opened — not at module load — so importing this module is
+# always safe even when the user home directory is unusual.
+_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
 
 _log = logging.getLogger("animatediff")
 if not _log.handlers:
     _log.setLevel(logging.DEBUG)
+    # Create the log directory lazily here, at handler-attach time, so that the
+    # mkdir never runs during a bare import (e.g. test collection or CLI --help).
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
     _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
     _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
     _log.addHandler(_fh)
