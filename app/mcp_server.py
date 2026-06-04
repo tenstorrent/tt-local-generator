@@ -143,10 +143,20 @@ async def handle_rpc(body: dict) -> JSONResponse:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
-        # Resolve the plugin — return JSON-RPC error if not found.
-        try:
-            pdef = plugin_loader.get(tool_name)
-        except KeyError:
+        # Resolve the plugin by searching all tools in all plugins.
+        # plugin_loader.get() only looks up by PluginDef.name (the primary
+        # artifact tool), so multi-tool plugins would be advertised via
+        # tools/list but unreachable here.  Instead we walk every plugin and
+        # every tool entry to find the matching name.
+        pdef = None
+        for _pdef in plugin_loader.all_plugins():
+            for _tool in _pdef.tools:
+                if _tool.get("name") == tool_name:
+                    pdef = _pdef
+                    break
+            if pdef:
+                break
+        if pdef is None:
             return JSONResponse({
                 "jsonrpc": "2.0",
                 "id": rpc_id,
