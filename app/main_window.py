@@ -6367,6 +6367,38 @@ class _StatusBar(Gtk.Box):
         cls._tt_smi_path = cls._TT_SMI_SKIP
         return None
 
+    def _count_blackhole_chips(self) -> int:
+        """Return the number of Blackhole devices visible to tt-smi, or 0 on failure.
+
+        Used to decide whether AnimateDiff and a running server would compete
+        for the same chip. Counts only live (non-sentinel) chips.
+        """
+        import json as _json
+        tt_smi = self._resolve_tt_smi()
+        if not tt_smi:
+            return 0
+        try:
+            result = __import__("subprocess").run(
+                [tt_smi, "-s"], capture_output=True, text=True, timeout=10
+            )
+            data = _json.loads(result.stdout)
+            count = 0
+            for dev in data.get("device_info", []):
+                arch = dev.get("board_info", {}).get("board_type", "").lower()
+                telem = dev.get("telemetry", {})
+                temp = telem.get("asic_temperature", 0)
+                # Skip ARC-dead chips (sentinel temp > 1000°C)
+                try:
+                    if float(temp) > 1000:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                if any(k in arch for k in ("blackhole", "p100", "p150", "p300")):
+                    count += 1
+            return count
+        except Exception:
+            return 0
+
     @staticmethod
     def _read_sysfs_clocks() -> list[int]:
         """Read AICLK (MHz) for each chip from sysfs. Never raises."""
@@ -9136,6 +9168,15 @@ class MainWindow(Gtk.ApplicationWindow):
             video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
+                # Guard: if only 1 chip is present and a server model is loaded on it,
+                # AnimateDiff can't run — both want exclusive access to the same device.
+                if self._server_ready and self._count_blackhole_chips() == 1:
+                    model_lbl = self._running_model or "a model"
+                    self._set_status(
+                        f"Can't run AnimateDiff while {model_lbl} is loaded — "
+                        "your Blackhole chip is busy. Stop the server first, then try again."
+                    )
+                    return
                 self._set_status("Starting AnimateDiff generation on Blackhole…")
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,
