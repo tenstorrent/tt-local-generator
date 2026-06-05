@@ -515,6 +515,11 @@ class ArtgenDetail(Gtk.Box):
         self._webview.set_hexpand(True)
         self._webview.set_vexpand(True)
         self._art_stack.add_named(self._webview, "reading")
+        # Pending HTML to load once the WebView is realized. load_html() called
+        # before realize is a silent no-op that leaves the widget white — we
+        # queue the content here and flush it in _on_webview_realize().
+        self._pending_html: str | None = None
+        self._webview.connect("realize", self._on_webview_realize)
 
         art_box.append(self._art_stack)
         body.append(art_box)
@@ -682,13 +687,32 @@ class ArtgenDetail(Gtk.Box):
                 html = _palette_to_html(data) if "colors" in data else _md_to_html(raw, title=doc_title)
             except Exception:
                 html = _md_to_html(raw, title=doc_title)
-            self._webview.load_html(html, "about:blank")
+            self._load_html(html)
             self._art_stack.set_visible_child_name("reading")
         else:
             # verse .txt, freeform — render as markdown reading view
             html = _md_to_html(raw, title=doc_title, verse_mode=verse_mode)
-            self._webview.load_html(html, "about:blank")
+            self._load_html(html)
             self._art_stack.set_visible_child_name("reading")
+
+    def _load_html(self, html: str) -> None:
+        """Load HTML into the WebView, deferring until it is realized.
+
+        WebKit.WebView.load_html() called before realize is a silent no-op
+        that leaves the widget white — this is the white-screen bug seen when
+        opening a palette or verse from the gallery before the panel has been
+        shown for the first time.  Queue the content and flush on realize.
+        """
+        if self._webview.get_realized():
+            self._webview.load_html(html, "about:blank")
+        else:
+            self._pending_html = html
+
+    def _on_webview_realize(self, _widget) -> None:
+        """Flush any HTML that was queued before the WebView was realized."""
+        if self._pending_html is not None:
+            self._webview.load_html(self._pending_html, "about:blank")
+            self._pending_html = None
 
     def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
         """Drive an animated GIF on a Gtk.Picture via GdkPixbufAnimationIter.
