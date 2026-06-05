@@ -50,6 +50,7 @@
     /* ── Reset ─────────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
+    body { overflow-x: hidden; }
     body {
       background: var(--bg0);
       color: var(--text);
@@ -499,7 +500,7 @@
 
     .prompt-examples {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
       gap: 1rem;
     }
     .prompt-ex {
@@ -771,6 +772,8 @@
     .install-note-box strong { color: var(--text); }
 
     /* ── Responsive ─────────────────────────────────────────────────── */
+
+    /* Tablet — 900px */
     @media (max-width: 900px) {
       .flow-grid {
         grid-template-columns: 1fr;
@@ -779,11 +782,58 @@
       .flow-arrow { display: none; }
       .tttv-grid { grid-template-columns: 1fr; }
       .prompt-examples { grid-template-columns: 1fr; }
-      .tier-row { grid-template-columns: 1fr; }
+      .tier-row { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
     }
+
+    /* Mobile — 640px: collapse most multi-column inline grids */
     @media (max-width: 640px) {
       .nav-links { display: none; }
       h1 { font-size: 2.25rem; }
+      h2 { font-size: 1.5rem; }
+
+      /* Named grid classes */
+      .features-grid    { grid-template-columns: 1fr !important; }
+      .wordbank-grid    { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+      .tier-row         { grid-template-columns: 1fr !important; }
+      .prompt-examples  { grid-template-columns: 1fr !important; }
+
+      /* Inline grids: catch repeat(2–4, 1fr) patterns with attribute selector.
+         Reflows any div whose style attribute contains these grid declarations. */
+      [style*="grid-template-columns:repeat(2"],
+      [style*="grid-template-columns:repeat(3"],
+      [style*="grid-template-columns:repeat(4"],
+      [style*="grid-template-columns: repeat(2"],
+      [style*="grid-template-columns: repeat(3"],
+      [style*="grid-template-columns: repeat(4"] {
+        grid-template-columns: 1fr !important;
+      }
+
+      /* Minimum-width auto-fill grids: loosen the min so they don't overflow */
+      [style*="minmax(480px"] { grid-template-columns: 1fr !important; }
+      [style*="minmax(300px"] { grid-template-columns: 1fr !important; }
+
+      /* Install tab code blocks — allow horizontal scroll on narrow screens */
+      .install-step pre { font-size: .75rem; }
+      pre { overflow-x: auto; }
+
+      /* Constrain nav so logo and CTA stay on one line */
+      .nav-inner { gap: .5rem; }
+      .nav-cta   { font-size: .8rem; padding: .35rem .7rem; }
+
+      /* Hero tweaks */
+      .hero-ctas { flex-direction: column; align-items: flex-start; }
+      .hero-secondary { flex-direction: column; align-items: flex-start; }
+
+      /* Section padding — less breathing room needed on small screens */
+      section { padding: 3rem 0; }
+      #hero   { padding: 3rem 0 0; }
+    }
+
+    /* Very narrow — 420px: tighten further */
+    @media (max-width: 420px) {
+      .wrap { padding: 0 1rem; }
+      .wordbank-grid { grid-template-columns: 1fr 1fr; }
+      h1 { font-size: 1.9rem; }
     }
   </style>
     <script>
