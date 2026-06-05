@@ -105,7 +105,8 @@ Or via the CLI:
 ```bash
 ./tt-ctl start wan2.2          # non-blocking; same as start_wan_qb2.sh --gui
 ./tt-ctl stop  wan2.2
-./tt-ctl start all             # wan2.2 + prompt-server
+./tt-ctl start all             # wan2.2 + prompt-server (QB2 / P300X2 recommended set)
+./tt-ctl start 1chip           # artgen-qwen3-8b + prompt-server (single Blackhole card or CPU-only)
 ./tt-ctl servers               # live health of every managed service
 ```
 

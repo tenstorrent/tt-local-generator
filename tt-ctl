@@ -11,7 +11,8 @@ Usage:
     tt-ctl status                   Server health, queue depth, history summary
     tt-ctl servers                  Live status of every managed service
     tt-ctl start <service>          Start a service (wan2.2 | mochi | flux | animate |
-                                    prompt-server | all)
+                                    skyreels | artgen-qwen3-8b | prompt-server |
+                                    all | 1chip)
     tt-ctl stop  <service>          Stop a service (same keys as start)
     tt-ctl restart <service>        Stop then re-start a service
     tt-ctl queue                    List pending queue items

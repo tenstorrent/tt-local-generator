@@ -23,7 +23,8 @@ Usage examples
     restart("wan2.2")         # stop then start
     health("wan2.2")          # {"wan2.2": True/False}
     status_all()              # {"wan2.2": True, "prompt-server": False, ...}
-    start("all")              # start the default "best experience" set
+    start("all")              # start the default "best experience" set (QB2/P300X2)
+    start("1chip")            # artgen + prompt-server — single Blackhole card or CPU-only
 """
 
 import json
@@ -82,8 +83,13 @@ CAPABILITY_LABELS: dict = {
 }
 
 
-# Ordered: "all" starts these in sequence.
+# Ordered: "all" starts these in sequence (QB2 / P300X2 recommended set).
 _ALL_KEYS = ["wan2.2", "prompt-server"]
+
+# "1chip" = services that run on a single Blackhole card (or CPU-only).
+# Wan2.2 needs 4+ chips; skip it. AnimateDiff runs standalone (no server).
+# Artgen + prompt-server give the full generative art + prompt experience.
+_ONE_CHIP_KEYS = ["artgen-qwen3-8b", "prompt-server"]
 
 SERVERS: dict[str, ServerDef] = {
     s.key: s
@@ -202,8 +208,10 @@ def servers_for_capability(cap: str) -> "list[ServerDef]":
     """Return all ServerDef entries that provide the given capability."""
     return [s for s in SERVERS.values() if cap in s.capabilities]
 
-# "all" = the recommended everyday set.
+# "all" = the recommended everyday set (QB2 / P300X2).
 ALL_KEY = "all"
+# "1chip" = artgen + prompt-server only — works on a single Blackhole card.
+ONE_CHIP_KEY = "1chip"
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +222,10 @@ def _resolve(key: str) -> list[ServerDef]:
     """Expand key → list[ServerDef].  Raises KeyError for unknown keys."""
     if key == ALL_KEY:
         return [SERVERS[k] for k in _ALL_KEYS]
+    if key == ONE_CHIP_KEY:
+        return [SERVERS[k] for k in _ONE_CHIP_KEYS]
     if key not in SERVERS:
-        known = ", ".join(sorted(SERVERS.keys()) + [ALL_KEY])
+        known = ", ".join(sorted(SERVERS.keys()) + [ALL_KEY, ONE_CHIP_KEY])
         raise KeyError(f"Unknown server: {key!r}.  Known: {known}")
     return [SERVERS[key]]
 
