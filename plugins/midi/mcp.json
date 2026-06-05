@@ -32,7 +32,7 @@
     },
     {
       "name": "stream_midi",
-      "description": "Open a continuous live MIDI event stream — runs until cancelled",
+      "description": "Open a continuous live MIDI event stream — runs until cancelled. Note: reachable via MCP only (no tt-ctl artgen subcommand); artifact_tool:false means plugin_loader registers generate_midi as the primary entry point.",
       "inputSchema": {
         "type": "object",
         "properties": {

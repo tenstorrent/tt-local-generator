@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -30,12 +31,22 @@ from fastapi.responses import JSONResponse
 
 import plugin_loader
 
-app = FastAPI(title="tt-local-gen MCP server", version="1.0.0")
 
-# Load plugins once at module import time so that tools/list and tools/call
-# work correctly even when running standalone (python3 app/mcp_server.py).
-# plugin_loader.load_plugins() is idempotent — safe to call multiple times.
-plugin_loader.load_plugins()
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Load plugins at server startup, unload on shutdown.
+
+    Using a lifespan handler (rather than module-level load_plugins()) means
+    that importlib.reload(mcp_server) in tests does NOT trigger a real plugin
+    scan — the scan only runs when the ASGI server actually starts up.  Tests
+    can safely inject fake plugins into plugin_loader._PLUGINS before creating
+    a TestClient without having them overwritten.
+    """
+    plugin_loader.load_plugins()
+    yield
+
+
+app = FastAPI(title="tt-local-gen MCP server", version="1.0.0", lifespan=_lifespan)
 
 # MCP protocol version this server speaks.
 _PROTOCOL_VERSION = "2024-11-05"

@@ -88,9 +88,15 @@ def parse_run_log_name(filename: str) -> tuple[str, str]:
 def parse_server_log_name(filename: str) -> tuple[str, str]:
     """Parse a server log filename into (model_name, date_str).
 
-    Expected format: media_YYYY-MM-DD_HH-MM-SS_<ModelName>_<device>_server.log
+    Expected format: media_YYYY-MM-DD_HH-MM-SS_<ModelName>[_<device>]_server.log
+    The optional device token is a known hardware identifier (p150x4, p300x2,
+    qb2, n150, n300, etc.). Strip it if present, leave model name intact if not.
     Returns (model_name, date_str) on success, or (stem, "") on mismatch.
     """
+    _DEVICE_TOKENS = frozenset({
+        "p150x4", "p300x2", "p300c", "p150", "p300",
+        "n150", "n300", "qb2", "t3k", "galaxy",
+    })
     stem = Path(filename).stem
     if stem.endswith("_server"):
         stem = stem[:-7]
@@ -98,8 +104,12 @@ def parse_server_log_name(filename: str) -> tuple[str, str]:
     if not m:
         return stem, ""
     date_raw, rest = m.group(1), m.group(2)
+    # Only strip the trailing token if it matches a known device name.
     parts = rest.rsplit("_", 1)
-    model = parts[0] if len(parts) == 2 else rest
+    if len(parts) == 2 and parts[1].lower() in _DEVICE_TOKENS:
+        model = parts[0]
+    else:
+        model = rest
     try:
         from datetime import datetime
         dt = datetime.strptime(date_raw, "%Y-%m-%d")

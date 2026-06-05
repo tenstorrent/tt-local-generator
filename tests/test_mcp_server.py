@@ -58,8 +58,11 @@ def client(tmp_path, monkeypatch):
 
     import importlib
     import mcp_server
-    importlib.reload(mcp_server)
-    return TestClient(mcp_server.app)
+    # Reload so the app object is fresh, but patch load_plugins to a no-op so
+    # the lifespan handler doesn't overwrite the fake registry we just built.
+    with patch("plugin_loader.load_plugins"):
+        importlib.reload(mcp_server)
+        return TestClient(mcp_server.app)
 
 
 def test_tools_list_returns_all_plugins(client):
