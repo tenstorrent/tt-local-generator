@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -31,11 +32,20 @@ from fastapi.responses import JSONResponse
 
 import plugin_loader
 
-# Populate the plugin registry at import time so tools/list and tools/call work
-# whether this module is imported by tt-ctl or run standalone as __main__.
-plugin_loader.load_plugins()
 
-app = FastAPI(title="tt-local-gen MCP server", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Load plugins at server startup.
+
+    Using a lifespan handler (rather than module-level load_plugins()) means
+    that importlib.reload(mcp_server) in tests does NOT trigger a real plugin
+    scan — the scan only runs when the ASGI server actually starts up.
+    """
+    plugin_loader.load_plugins()
+    yield
+
+
+app = FastAPI(title="tt-local-gen MCP server", version="1.0.0", lifespan=_lifespan)
 
 # MCP protocol version this server speaks.
 _PROTOCOL_VERSION = "2024-11-05"

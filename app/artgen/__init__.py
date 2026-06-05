@@ -318,6 +318,19 @@ class IngredientSpec:
 # Ingredient definitions per (source_type, target_type) pair.
 # Each entry is a list of ingredient keys in display order.
 _INGREDIENT_TABLE: dict = {
+    # "same" target — re-generate from the same source; ingredients mirror the source type
+    ("palette",       "same"): ["colors", "lore", "prompt"],
+    ("verse",         "same"): ["text", "prompt"],
+    ("haiku",         "same"): ["text", "prompt"],
+    ("landscape",     "same"): ["thumbnail", "vibe", "prompt"],
+    ("skyline",       "same"): ["thumbnail", "vibe", "prompt"],
+    ("video",         "same"): ["thumbnail", "prompt"],
+    ("gif",           "same"): ["thumbnail", "prompt"],
+    ("image",         "same"): ["image", "prompt"],
+    ("ansi",          "same"): ["thumbnail", "prompt"],
+    ("geometric",     "same"): ["thumbnail", "prompt"],
+    ("circuit",       "same"): ["thumbnail", "prompt"],
+    ("constellation", "same"): ["thumbnail", "prompt"],
     # palette source
     ("palette", "video"):   ["colors", "lore", "prompt"],
     ("palette", "image"):   ["colors", "lore", "prompt"],
@@ -446,11 +459,12 @@ def extract_remix_hint(record: dict) -> str:
 def _load_generators() -> None:
     import plugin_loader
     plugin_loader.load_plugins()
-    for name, pdef in plugin_loader._PLUGINS.items():
+    _GENERATORS.clear()
+    for pdef in plugin_loader.all_plugins():
         # Only back-fill runnable plugins — MCP-server stubs (runnable=False)
         # would appear in tt-ctl artgen and all_names() but raise NotImplementedError.
         if pdef.runnable:
-            _GENERATORS[name] = pdef.generator
+            _GENERATORS[pdef.name] = pdef.generator
 
 
 _load_generators()

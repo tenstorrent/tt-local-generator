@@ -93,9 +93,16 @@ def parse_server_log_name(filename: str) -> tuple[str, str]:
     m = re.match(r"media_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}_(.+)$", stem)
     if not m:
         return stem, ""
+    _DEVICE_TOKENS = frozenset({
+        "p150x4", "p300x2", "p300c", "p150", "p300",
+        "n150", "n300", "qb2", "t3k", "galaxy",
+    })
     date_raw, rest = m.group(1), m.group(2)
     parts = rest.rsplit("_", 1)
-    model = parts[0] if len(parts) == 2 else rest
+    if len(parts) == 2 and parts[1].lower() in _DEVICE_TOKENS:
+        model = parts[0]
+    else:
+        model = rest
     try:
         from datetime import datetime
         dt = datetime.strptime(date_raw, "%Y-%m-%d")
