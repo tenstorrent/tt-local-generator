@@ -266,15 +266,202 @@ def repair_svg(raw: str) -> str:
     return body
 
 
-# ── Lazy generator import ─────────────────────────────────────────────────────
-# Import all generators so their @register decorators fire.  Done lazily here
-# so importing artgen itself doesn't fail if a generator has a missing dep.
+# ── Remix support ─────────────────────────────────────────────────────────────
+
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class RemixContext:
+    """
+    Carries all context needed to drive a remix operation from one artifact
+    type to another.
+
+    Attributes:
+        source_record  : the originating history record dict
+        source_type    : media/artifact type of the source (e.g. "verse", "palette", "video")
+        target_type    : media/artifact type the remix will produce
+        hint           : combined text hint to inject into the target prompt
+        seed_image_path: resolved path to a still image for I2V/seed (may be "")
+        ref_video_path : resolved path to the full video for Animate motion ref (may be "")
+        target_label   : human-readable target name shown in flash status
+        negative_hint  : negative prompt text to carry (may be "")
+    """
+
+    source_record: dict
+    source_type: str
+    target_type: str
+    hint: str
+    seed_image_path: str = ""
+    ref_video_path: str = ""
+    target_label: str = ""
+    negative_hint: str = ""
+
+
+@_dataclass
+class IngredientSpec:
+    """
+    Describes one toggleable ingredient shown in the Remix popover.
+
+    Attributes:
+        key       : internal identifier used to build RemixContext fields
+        label     : human-readable checkbox label (e.g. "Prompt text")
+        value     : truncated display value shown below the label
+        default_on: whether the checkbox starts checked
+    """
+    key: str
+    label: str
+    value: str
+    default_on: bool = True
+
+
+# Ingredient definitions per (source_type, target_type) pair.
+# Each entry is a list of ingredient keys in display order.
+_INGREDIENT_TABLE: dict = {
+    # "same" target — re-generate from the same source; ingredients mirror the source type
+    ("palette",       "same"): ["colors", "lore", "prompt"],
+    ("verse",         "same"): ["text", "prompt"],
+    ("haiku",         "same"): ["text", "prompt"],
+    ("landscape",     "same"): ["thumbnail", "vibe", "prompt"],
+    ("skyline",       "same"): ["thumbnail", "vibe", "prompt"],
+    ("video",         "same"): ["thumbnail", "prompt"],
+    ("gif",           "same"): ["thumbnail", "prompt"],
+    ("image",         "same"): ["image", "prompt"],
+    ("ansi",          "same"): ["thumbnail", "prompt"],
+    ("geometric",     "same"): ["thumbnail", "prompt"],
+    ("circuit",       "same"): ["thumbnail", "prompt"],
+    ("constellation", "same"): ["thumbnail", "prompt"],
+    # palette source
+    ("palette", "video"):   ["colors", "lore", "prompt"],
+    ("palette", "image"):   ["colors", "lore", "prompt"],
+    ("palette", "verse"):   ["lore", "prompt"],
+    ("palette", "animate"): ["lore", "prompt"],
+    # verse / haiku source
+    ("verse", "video"):     ["text", "prompt"],
+    ("verse", "image"):     ["text", "prompt"],
+    ("verse", "animate"):   ["text", "prompt"],
+    ("haiku", "video"):     ["text", "prompt"],
+    ("haiku", "image"):     ["text", "prompt"],
+    ("haiku", "animate"):   ["text", "prompt"],
+    # landscape / skyline SVG source
+    ("landscape", "video"): ["thumbnail", "vibe", "prompt"],
+    ("landscape", "image"): ["thumbnail", "vibe", "prompt"],
+    ("skyline",   "video"): ["thumbnail", "vibe", "prompt"],
+    ("skyline",   "image"): ["thumbnail", "vibe", "prompt"],
+    # video / gif source
+    ("video", "animate"):   ["ref_video", "prompt"],
+    ("video", "video"):     ["thumbnail", "prompt"],
+    ("video", "image"):     ["thumbnail", "prompt"],
+    ("gif",   "video"):     ["thumbnail", "prompt"],
+    ("gif",   "animate"):   ["ref_video", "prompt"],
+    # image source
+    ("image", "video"):     ["image", "prompt"],
+    ("image", "image"):     ["image", "prompt"],
+    # ansi / geometric / circuit / constellation source
+    ("ansi",          "video"): ["thumbnail", "prompt"],
+    ("ansi",          "image"): ["thumbnail", "prompt"],
+    ("geometric",     "video"): ["thumbnail", "prompt"],
+    ("geometric",     "image"): ["thumbnail", "prompt"],
+    ("circuit",       "video"): ["thumbnail", "prompt"],
+    ("circuit",       "image"): ["thumbnail", "prompt"],
+    ("constellation", "video"): ["thumbnail", "prompt"],
+    ("constellation", "image"): ["thumbnail", "prompt"],
+}
+
+# Human-readable labels for each ingredient key.
+_INGREDIENT_LABELS: dict = {
+    "colors":    "Colors",
+    "lore":      "Lore / feel",
+    "prompt":    "Original prompt",
+    "text":      "Full text",
+    "vibe":      "Vibe phrase",
+    "thumbnail": "Frame / thumbnail",
+    "image":     "Image",
+    "ref_video": "Full video (motion reference)",
+}
+
+
+def ingredients_for(source_type: str, target_type: str) -> list:
+    """
+    Return the list of IngredientSpec for a given (source_type, target_type) pair.
+
+    Returns an empty list when the pair is not in the table (caller should fall
+    back to a plain text hint with no checkboxes).
+
+    Args:
+        source_type: the artifact/media type produced by the source generator
+                     (e.g. "verse", "palette", "video").
+        target_type: the artifact/media type the remix will produce
+                     (e.g. "video", "image", "animate").
+
+    Returns:
+        List of IngredientSpec in display order, or [] if the pair is unknown.
+    """
+    keys = _INGREDIENT_TABLE.get((source_type, target_type), [])
+    return [
+        IngredientSpec(
+            key=k,
+            label=_INGREDIENT_LABELS.get(k, k),
+            value="",
+            default_on=True,
+        )
+        for k in keys
+    ]
+
+
+def remix_targets_for(source_type: str) -> list:
+    """
+    Return a list of PluginDef objects for all loaded plugins that accept
+    *source_type* as a remix input.
+
+    Delegates to plugin_loader.all_plugins() so the result always reflects the
+    current plugin registry — no caching.  Returns an empty list when no plugins
+    accept the given source type or when the plugin registry is empty.
+
+    Args:
+        source_type: the artifact/media type produced by the source generator
+                     (e.g. "verse", "palette", "landscape").
+
+    Returns:
+        Sorted (by name) list of PluginDef whose accepts_remix_from tuple
+        contains source_type.
+    """
+    import plugin_loader
+    return [
+        p for p in plugin_loader.all_plugins()
+        if source_type in p.accepts_remix_from
+    ]
+
+
+def extract_remix_hint(record: dict) -> str:
+    """
+    Default remix hint extractor — returns the prompt text from a history record.
+
+    Plugin generators may override this by implementing their own extraction
+    logic, but the default works for any record that stores a plain-text prompt
+    in the "prompt" key (which all built-in generators do).
+
+    Args:
+        record: a history record dict, typically loaded from history_store.
+
+    Returns:
+        The string value of record["prompt"], or "" if the key is absent.
+    """
+    return record.get("prompt", "")
+
+
+# ── Plugin-driven generator loading ──────────────────────────────────────────
+# plugin_loader scans plugins/ and ~/.config/tt-local-gen/plugins/.
+# _GENERATORS is back-filled so existing code using artgen.get() and
+# artgen.all_names() continues to work.
+
 
 def _load_generators() -> None:
-    from artgen.generators import (  # noqa: F401
-        landscape, skyline, constellation, geometric,
-        ansi, palette, verse, circuit, freeform, animatediff,
-    )
+    import plugin_loader
+    plugin_loader.load_plugins()
+    _GENERATORS.clear()
+    for pdef in plugin_loader.all_plugins():
+        _GENERATORS[pdef.name] = pdef.generator
 
 
 _load_generators()

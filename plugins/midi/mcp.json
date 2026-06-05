@@ -1,0 +1,50 @@
+{
+  "x-ttlg": {
+    "output_ext": ".mid",
+    "media_type": "midi",
+    "accepts_remix_from": ["verse", "palette"],
+    "can_remix_to": [],
+    "tab": "generative-art",
+    "hardware": null,
+    "mcp_server": {
+      "command": "npx",
+      "args": ["-y", "tt-midi-maker"]
+    }
+  },
+  "tools": [
+    {
+      "name": "generate_midi",
+      "description": "Generate a complete MIDI file from a text prompt, verse, or palette hint",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {"type": "string", "description": "Musical description or mood"},
+          "tempo": {"type": "integer", "default": 120, "description": "BPM"},
+          "bars": {"type": "integer", "default": 16, "description": "Number of bars"}
+        },
+        "required": ["prompt"]
+      },
+      "examples": [
+        {"prompt": "melancholic late-night jazz, muted trumpet", "tempo": 80, "bars": 32},
+        {"prompt": "volcanic percussion, tribal rhythm", "tempo": 140}
+      ],
+      "x-ttlg": {"streaming": "progress", "artifact_tool": true}
+    },
+    {
+      "name": "stream_midi",
+      "description": "Open a continuous live MIDI event stream — runs until cancelled. Note: reachable via MCP only (no tt-ctl artgen subcommand); artifact_tool:false means plugin_loader registers generate_midi as the primary entry point.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {"type": "string", "description": "Musical description or mood"},
+          "tempo": {"type": "integer", "default": 120}
+        },
+        "required": ["prompt"]
+      },
+      "examples": [
+        {"prompt": "ambient generative drone, slowly evolving", "tempo": 60}
+      ],
+      "x-ttlg": {"streaming": "continuous", "artifact_tool": false}
+    }
+  ]
+}

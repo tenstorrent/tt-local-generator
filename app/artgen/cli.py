@@ -46,7 +46,7 @@ def _build_artgen_parser(sub):
     types_list = "  ".join(artgen.all_names())
     art = sub.add_parser(
         "artgen",
-        help="Generate art artifacts via LLM (SVG, ANSI, verse, palettes, …)",
+        help="Generate generative art via LLM (SVG, ANSI, verse, palettes, …)",
         description=(
             "Generate generative art artifacts using the currently running LLM.\n\n"
             f"Types: {types_list}\n\n"

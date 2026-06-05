@@ -1,0 +1,38 @@
+{
+  "x-ttlg": {
+    "output_ext": ".txt",
+    "media_type": "text",
+    "accepts_remix_from": [],
+    "can_remix_to": [],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [
+    {
+      "name": "freeform",
+      "description": "Pass any prompt directly to the LLM — output format inferred from file extension (.svg, .json, .ans, .txt)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "freeform": {
+            "type": "string",
+            "description": "Freeform prompt — describe anything you want generated"
+          },
+          "output": {
+            "type": "string",
+            "description": "Output filename — extension determines format (.svg, .json, .ans, .txt)"
+          }
+        },
+        "required": ["freeform"]
+      },
+      "examples": [
+        {"freeform": "a sad robot circuit diagram", "output": "robot.svg"},
+        {"freeform": "a haiku about silicon", "output": "silicon.txt"}
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
+}

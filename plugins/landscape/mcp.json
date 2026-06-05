@@ -1,0 +1,32 @@
+{
+  "x-ttlg": {
+    "output_ext": ".svg",
+    "media_type": "image",
+    "accepts_remix_from": ["verse", "palette"],
+    "can_remix_to": ["video", "image"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "landscape",
+    "description": "Layered SVG landscape: sky gradients, mountain ridges, atmospheric glow, sun/moon, optional glitch effects",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "palette": {"type": "string", "enum": ["sunset", "blue", "purple", "red", "orange", "random"], "default": "random"},
+        "mountains": {"type": "boolean", "default": true},
+        "clouds": {"type": "boolean", "default": false},
+        "stars": {"type": "boolean", "default": false},
+        "glitch": {"type": "boolean", "default": false},
+        "glitch_seed": {"type": "integer", "description": "Seed for reproducible glitch"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"palette": "sunset", "glitch": true},
+      {"palette": "blue", "stars": true, "clouds": true},
+      {"palette": "random", "mountains": true}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

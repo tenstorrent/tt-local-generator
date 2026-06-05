@@ -29,23 +29,32 @@ Recommends:
 Suggests:
  nvidia-container-toolkit
 Description: GTK4 frontend for Tenstorrent AI media generation
- tt-local-generator is a GTK4 desktop application for generating AI videos
- and images using Tenstorrent hardware (Wormhole / Blackhole devices).
+ tt-local-generator is a GTK4 desktop application for generating AI videos,
+ images, and generative art using Tenstorrent hardware (Wormhole / Blackhole).
  .
  Supports multiple inference backends:
-  - Wan2.2-T2V-A14B — text-to-video (QB2 / P300x2 or P150x4)
-  - Wan2.2-Animate-14B — character animation (video-to-video)
-  - SkyReels-V2-DF-1.3B — fast T2V on Blackhole (P150X4 / P300X2)
-  - SkyReels-V2-I2V-14B — image-to-video on Blackhole
-  - Mochi-1 — alternative video backend
-  - FLUX.1-dev — text-to-image
+  - Wan2.2-T2V-A14B -- text-to-video (QB2 / P300x2 or P150x4)
+  - Wan2.2-Animate-14B -- character animation (video-to-video)
+  - SkyReels-V2-DF-1.3B -- fast T2V on Blackhole (P150X4 / P300X2)
+  - SkyReels-V2-I2V-14B -- image-to-video on Blackhole
+  - Mochi-1 -- alternative video backend
+  - FLUX.1-dev -- text-to-image
+  - AnimateDiff (TTNN) -- animated GIF generation, Blackhole-only, no server
  .
- Includes a three-tier prompt generator (algorithmic, Markov chain, LLM
- polish via Qwen3-0.6B), a playlist / TT-TV channel system, and a
- generation history browser.
+ Key features:
+  - Three-tier prompt generator (algorithmic, Markov chain, LLM via Qwen3-0.6B)
+  - Unified Remix UI: remix any artifact into any other media type
+  - Generative Art tab: SVG landscapes, ANSI art, constellations, palettes,
+    verse, and more via an extensible plugin system (MCP-native)
+  - TT-TV attractor mode: kiosk playlist display with auto-generation
+  - Log viewer: Debug menu with browsable per-run logs and error highlighting
+  - Context-aware menu bar: settings surface per active tab
+ .
+ Optional: fastapi + uvicorn for the MCP server (tt-ctl mcp-server start),
+ which exposes all generators as MCP tools to Claude Code and other clients.
  .
  Requires: Docker CE, Tenstorrent firmware + kernel module (via tt-installer),
- and ~118 GB of model weights downloaded from HuggingFace (first-run setup).
+ and model weights downloaded from HuggingFace (see tt-model-* packages).
 
 Package: tt-model-wan2-t2v
 Architecture: all

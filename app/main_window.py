@@ -185,6 +185,12 @@ button:disabled {
 .card:hover {
     border-color: @tt_accent;
 }
+/* Pending card thumbnail placeholder - recessed area matching the thumbnail zone */
+.pending-thumb-area {
+    background-color: @tt_bg_darkest;
+    border-radius: 4px;
+    min-height: 112px;
+}
 .queue-row {
     background-color: @tt_bg_dark;
     border: 1px solid @tt_border;
@@ -866,6 +872,15 @@ menubar > item:selected {
     background-color: @tt_bg_dark;
     color: @tt_text;
 }
+/* Context slot - teal accent to distinguish from fixed menus */
+menubar > item.context-menu-item > label {
+    color: @tt_accent;
+    font-weight: 600;
+}
+menubar > item.context-menu-item:hover > label,
+menubar > item.context-menu-item:selected > label {
+    color: @tt_accent_light;
+}
 /* Preferences dialog sections */
 .prefs-section-title {
     color: @tt_accent;
@@ -1031,21 +1046,33 @@ menubar > item:selected {
     padding: 0;
     margin: 0;
 }
-.hover-action-btn-animate {
+.hover-action-btn-remix {
+    background: rgba(79, 209, 197, 0.18);
     color: @tt_accent;
-    border-color: @tt_accent;
+    border: 1px solid @tt_accent;
 }
-.hover-action-btn-animate:hover {
-    background-color: @tt_accent;
-    color: @tt_bg_darkest;
+.hover-action-btn-remix:hover {
+    background: rgba(79, 209, 197, 0.32);
 }
-.hover-action-btn-motion {
-    color: @tt_pink;
-    border-color: @tt_pink;
+.remix-target-btn {
+    background: rgba(79, 209, 197, 0.12);
+    border: 1px solid @tt_accent;
+    border-radius: 4px;
+    color: @tt_accent;
+    padding: 3px 10px;
+    font-size: 11px;
 }
-.hover-action-btn-motion:hover {
-    background-color: @tt_pink;
-    color: @tt_bg_darkest;
+.remix-target-btn:hover {
+    background: rgba(79, 209, 197, 0.25);
+}
+.remix-hint-preview {
+    background: @tt_bg_dark;
+    border-left: 2px solid @tt_accent;
+    border-radius: 0 3px 3px 0;
+    padding: 4px 8px;
+    color: @tt_text_muted;
+    font-style: italic;
+    font-size: 11px;
 }
 
 /* -- Mode description bar --------------------------------------------------- */
@@ -1298,6 +1325,45 @@ popover.picker-popover > contents {
   color: #E8F0F2;
   font-size: 12px;
 }
+/* -- Log viewer ------------------------------------------------------------ */
+.log-sidebar {
+    background-color: @tt_bg_panel;
+}
+.log-section-header {
+    color: @tt_text_muted;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 8px 12px 2px;
+}
+.log-row-error {
+    color: @tt_error;
+}
+.log-row-ok {
+    color: @tt_success;
+}
+.log-content {
+    font-family: "Noto Mono", "Fira Code", monospace;
+    font-size: 11px;
+    background-color: @tt_bg_darkest;
+    color: @tt_text;
+    padding: 8px;
+}
+.log-footer {
+    background-color: @tt_bg_panel;
+    border-top: 1px solid @tt_border;
+}
+.log-footer-btn {
+    background: rgba(79, 209, 197, 0.12);
+    border: 1px solid @tt_accent;
+    border-radius: 3px;
+    color: @tt_accent;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+.log-footer-btn:hover {
+    background: rgba(79, 209, 197, 0.25);
+}
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -1492,21 +1558,21 @@ class GenerationCard(Gtk.Frame):
     """
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
-    Buttons: 💾 Save, ↺ Iterate, 🗑 Delete.
-    Hover reveals: 💃 Animate (if animate_cb), ☆/★ star toggle.
+    Buttons: 💾 Save, 🔀 Remix, 🗑 Delete.
+    Hover reveals: 🔀 Remix button, ☆/★ star toggle.
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
+    remix_cb(record) is called when the Remix button is clicked (opens RemixPopover).
     star_cb(record, starred: bool) is called when the star is toggled.
     """
 
-    def __init__(self, record: GenerationRecord, iterate_cb, select_cb, delete_cb,
-                 animate_cb=None, star_cb=None):
+    def __init__(self, record: GenerationRecord, select_cb, delete_cb,
+                 remix_cb=None, star_cb=None):
         super().__init__()
         self._record = record
-        self._iterate_cb = iterate_cb
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        self._animate_cb = animate_cb   # callable(record) or None
+        self._remix_cb = remix_cb       # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb         # callable(record, starred: bool) or None
         self.add_css_class("card")
         # Minimum card width; FlowBox packs cards at this natural width
@@ -1588,16 +1654,14 @@ class GenerationCard(Gtk.Frame):
         action_bar.add_css_class("hover-action-bar")
         action_bar.set_hexpand(True)
 
-        if self._animate_cb is not None:
-            animate_btn = Gtk.Button(label="💃 Animate")
-            animate_btn.add_css_class("hover-action-btn")
-            animate_btn.add_css_class("hover-action-btn-animate")
-            animate_btn.set_can_focus(False)
-            animate_btn.connect(
-                "clicked",
-                lambda _b, rec=self._record: self._animate_cb(rec),
-            )
-            action_bar.append(animate_btn)
+        # Remix button — always present so any card can be remixed into a new generation.
+        remix_btn = Gtk.Button(label="🔀 Remix")
+        remix_btn.add_css_class("hover-action-btn")
+        remix_btn.add_css_class("hover-action-btn-remix")
+        remix_btn.set_can_focus(False)
+        remix_btn.set_tooltip_text("Remix this into a new generation")
+        remix_btn.connect("clicked", self._on_remix_clicked)
+        action_bar.append(remix_btn)
 
         # Star toggle — always present so every card type can be starred.
         self._star_btn = Gtk.Button(label="★" if self._record.starred else "☆")
@@ -1759,11 +1823,6 @@ class GenerationCard(Gtk.Frame):
             if not self._record.media_exists:
                 conv_btn.set_sensitive(False)
             btn_row.append(conv_btn)
-
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Re-use this prompt in the control panel")
-        iter_btn.connect("clicked", self._iterate)
-        btn_row.append(iter_btn)
 
         btn_spacer = Gtk.Box()
         btn_spacer.set_hexpand(True)
@@ -2028,12 +2087,10 @@ class GenerationCard(Gtk.Frame):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _iterate(self, _btn) -> None:
-        self._iterate_cb(
-            self._record.prompt,
-            self._record.negative_prompt,
-            self._record.seed_image_path,
-        )
+    def _on_remix_clicked(self, _btn) -> None:
+        """Open the RemixPopover for this card when the 🔀 Remix button is clicked."""
+        if self._remix_cb:
+            self._remix_cb(self._record)
 
     def _on_trash_clicked(self, btn) -> None:
         """Propagate the delete request upward; prevent the click from selecting the card."""
@@ -2052,30 +2109,6 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _artgen_vibe(rec) -> str:
-    """Return a short mood phrase from an artgen MediaRecord's params JSON blob."""
-    try:
-        import json as _json
-        p = _json.loads(rec.params or "{}")
-    except Exception:
-        return ""
-    for key in ("theme", "mood", "subject"):
-        if p.get(key):
-            return str(p[key])
-    gt = rec.generator_type or ""
-    if gt == "landscape":
-        return f"{p.get('palette', '')} landscape".strip()
-    if gt == "skyline":
-        return f"{p.get('era', '')} skyline at {p.get('sky', 'night')}".strip()
-    if gt == "constellation":
-        return f"{p.get('culture', 'invented')} constellation"
-    if gt == "geometric":
-        return f"{p.get('style', '')} geometry in {p.get('geo_palette', '')}".strip()
-    if gt == "circuit":
-        return f"{p.get('circuit_style', '')} circuit diagram".strip()
-    return ""
-
-
 # ── Detail panel ───────────────────────────────────────────────────────────────
 
 class DetailPanel(Gtk.ScrolledWindow):
@@ -2091,7 +2124,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         self.set_hexpand(False)
         self.set_size_request(420, -1)
         self._record: Optional[GenerationRecord] = None
-        self._iterate_cb = None
+        self._remix_cb = None
         self._video_widget: Optional[Gtk.Video] = None
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
@@ -2155,10 +2188,10 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_gif_pic = None
         self._show_empty()
 
-    def show_record(self, record: GenerationRecord, iterate_cb) -> None:
+    def show_record(self, record: GenerationRecord, remix_cb) -> None:
         """Populate the panel with a completed generation record."""
         self._record = record
-        self._iterate_cb = iterate_cb
+        self._remix_cb = remix_cb
 
         # Unload the previous video pipeline before replacing it.  Calling
         # set_file(None) starts GStreamer teardown immediately; without it the
@@ -2618,10 +2651,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_star_btn.connect("clicked", self._on_detail_star_clicked)
         action_row.append(self._detail_star_btn)
 
-        iter_btn = Gtk.Button(label="↺ Iterate")
-        iter_btn.set_tooltip_text("Pre-fill the control panel with this prompt")
-        iter_btn.connect("clicked", self._iterate)
-        action_row.append(iter_btn)
+        remix_btn = Gtk.Button(label="🔀 Remix")
+        remix_btn.add_css_class("action-btn")
+        remix_btn.set_tooltip_text("Remix this into a new generation")
+        remix_btn.connect("clicked", self._on_remix_clicked)
+        action_row.append(remix_btn)
         content.append(action_row)
 
         self.set_child(content)
@@ -2645,7 +2679,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             return
         self._nav_idx = (self._nav_idx + delta) % len(self._nav_records)
         rec = self._nav_records[self._nav_idx]
-        self.show_record(rec, self._iterate_cb)
+        self.show_record(rec, self._remix_cb)
 
     def _on_detail_star_clicked(self, _btn) -> None:
         """Toggle the starred state for the currently displayed record."""
@@ -2731,7 +2765,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         btn.set_sensitive(False)
         btn.set_label("⬇ Downloading…")
         record = self._record
-        iterate_cb = self._iterate_cb
+        remix_cb = self._remix_cb
 
         inv_video_url  = (record.extra_meta or {}).get("_inventory_video_url", "")
         inv_thumb_url  = (record.extra_meta or {}).get("_inventory_thumbnail_url", "")
@@ -2792,14 +2826,14 @@ class DetailPanel(Gtk.ScrolledWindow):
                         GLib.idle_add(self._on_localized_cb, localized)
 
                     # Show the localized record in the detail panel.
-                    GLib.idle_add(self.show_record, localized, iterate_cb)
+                    GLib.idle_add(self.show_record, localized, remix_cb)
 
                 elif self._download_cb and record.id:
                     # Local history record — use the inference-server API.
                     dest = Path(record.video_path)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     self._download_cb(record.id, dest)
-                    GLib.idle_add(self.show_record, record, iterate_cb)
+                    GLib.idle_add(self.show_record, record, remix_cb)
                 else:
                     raise RuntimeError("No download source available for this record")
 
@@ -2915,13 +2949,13 @@ class DetailPanel(Gtk.ScrolledWindow):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _iterate(self, _btn) -> None:
-        if self._record and self._iterate_cb:
-            self._iterate_cb(
-                self._record.prompt,
-                self._record.negative_prompt,
-                self._record.seed_image_path,
-            )
+    def _on_remix_clicked(self, btn) -> None:
+        """Open a RemixPopover anchored to the Remix button in the detail panel."""
+        if self._record and self._remix_cb:
+            from remix_popover import RemixPopover
+            pop = RemixPopover(self._record, on_remix=self._remix_cb)
+            pop.set_parent(btn)
+            pop.popup()
 
 
 # ── Full-size video player window ─────────────────────────────────────────────
@@ -3113,17 +3147,26 @@ class PendingCard(Gtk.Frame):
     def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
+        # Width matches GenerationCard; height is unconstrained but anchored by
+        # the fixed-size visual placeholder below so FlowBox cells stay uniform.
         self.set_size_request(_THUMB_W + 20, -1)
         self.set_hexpand(True)
         self._start = time.monotonic()
         self._timer_id: Optional[int] = None
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(20)
-        box.set_margin_bottom(20)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        self.set_child(box)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_child(outer)
+
+        # Fixed-size thumbnail area matching GenerationCard's media zone.
+        # Anchors the FlowBox cell height so the gallery stays uniform while a
+        # job is in progress — the pending card won't be taller than a completed card.
+        thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_valign(Gtk.Align.CENTER)
+        thumb_area.add_css_class("pending-thumb-area")
+        thumb_area.set_margin_start(4)
+        thumb_area.set_margin_end(4)
+        thumb_area.set_margin_top(4)
 
         # Label differs by media type so the user can tell what is in flight
         if model_source == "image":
@@ -3134,32 +3177,47 @@ class PendingCard(Gtk.Frame):
             spinner_text = "⏳ Generating video…"
         spinner_lbl = Gtk.Label(label=spinner_text)
         spinner_lbl.add_css_class("teal")
-        box.append(spinner_lbl)
+        spinner_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(spinner_lbl)
+
+        self._bar = Gtk.ProgressBar()
+        self._bar.set_pulse_step(0.08)
+        self._bar.set_margin_start(12)
+        self._bar.set_margin_end(12)
+        thumb_area.append(self._bar)
+
+        self._status_lbl = Gtk.Label(label="Queued")
+        self._status_lbl.add_css_class("muted")
+        self._status_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(self._status_lbl)
+
+        self._elapsed_lbl = Gtk.Label(label="0s elapsed")
+        self._elapsed_lbl.add_css_class("teal")
+        self._elapsed_lbl.set_attributes(_small_attrs())
+        self._elapsed_lbl.set_halign(Gtk.Align.CENTER)
+        thumb_area.append(self._elapsed_lbl)
+
+        outer.append(thumb_area)
+
+        # Footer: prompt text below the thumbnail area (same zone as card buttons)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_top(6)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        outer.append(box)
 
         if prompt:
             prompt_lbl = Gtk.Label(label=prompt)
             prompt_lbl.set_wrap(True)
             prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             prompt_lbl.set_max_width_chars(26)
-            prompt_lbl.set_lines(3)
+            prompt_lbl.set_lines(2)
             prompt_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             prompt_lbl.set_xalign(0)
             prompt_lbl.set_tooltip_text(prompt)
             prompt_lbl.add_css_class("muted")
             box.append(prompt_lbl)
-
-        self._bar = Gtk.ProgressBar()
-        self._bar.set_pulse_step(0.08)
-        box.append(self._bar)
-
-        self._status_lbl = Gtk.Label(label="Queued")
-        self._status_lbl.add_css_class("muted")
-        box.append(self._status_lbl)
-
-        self._elapsed_lbl = Gtk.Label(label="0s elapsed")
-        self._elapsed_lbl.add_css_class("teal")
-        self._elapsed_lbl.set_attributes(_small_attrs())
-        box.append(self._elapsed_lbl)
 
         self._timer_id = GLib.timeout_add(1000, self._tick)
 
@@ -3195,15 +3253,14 @@ class GalleryWidget(Gtk.Box):
     hover-leave to minimise GStreamer resource use.
     """
 
-    def __init__(self, iterate_cb, select_cb, delete_cb, media_type: str = "video",
-                 animate_action_cb=None, star_cb=None):
+    def __init__(self, select_cb, delete_cb, media_type: str = "video",
+                 remix_cb=None, star_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
-        self._iterate_cb = iterate_cb
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
-        self._animate_action_cb = animate_action_cb  # callable(record) or None — opens Animate dialog
+        self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb            # callable(record, starred: bool) or None
         self._media_type = media_type
         self._active_filter: str = "all"   # "all" | "starred"
@@ -3350,10 +3407,9 @@ class GalleryWidget(Gtk.Box):
     def _make_card(self, record: GenerationRecord) -> "GenerationCard":
         return GenerationCard(
             record,
-            iterate_cb=self._iterate_cb,
             select_cb=self.select_card,
             delete_cb=self._delete_cb,
-            animate_cb=self._animate_action_cb,
+            remix_cb=self._remix_cb,
             star_cb=self._star_cb,
         )
 
@@ -3572,7 +3628,7 @@ class ControlPanel(Gtk.Box):
         self._animate_mode = "animation"
         self._server_ready = False
         self._running_model: "str | None" = None  # model ID from /v1/models, or None
-        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from Generation menu
+        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from context menu → Advanced Settings…
         self._server_launching = False   # True while start/stop script is running
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
@@ -3643,7 +3699,7 @@ class ControlPanel(Gtk.Box):
             "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
-        self._src_art_btn = Gtk.ToggleButton(label="🎨 Art")
+        self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
         self._src_art_btn.add_css_class("source-btn")
         self._src_art_btn.add_css_class("source-btn-right")
         self._src_art_btn.set_tooltip_text(
@@ -3892,7 +3948,7 @@ class ControlPanel(Gtk.Box):
         # ── Pinned footer — always visible, NOT inside the scroll ─────────────
         # MainWindow places self._footer_box below ctrl_scroll so these widgets
         # remain visible regardless of how short the window is.
-        # Advanced settings are now accessed via Generation → Advanced Settings…
+        # Advanced settings are accessed via the context menu → Advanced Settings…
         self._footer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
         # ── Server status row ─────────────────────────────────────────────────
@@ -3999,10 +4055,14 @@ class ControlPanel(Gtk.Box):
         srv_log_view.set_editable(False)
         srv_log_view.set_cursor_visible(False)
         srv_log_view.set_wrap_mode(Gtk.WrapMode.CHAR)
+        srv_log_view.set_hexpand(False)
         srv_log_view.add_css_class("server-log")
         srv_log_scroll = Gtk.ScrolledWindow()
         srv_log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         srv_log_scroll.set_size_request(-1, 80)
+        # Prevent long log lines from propagating their natural width upward
+        # and expanding the controls pane beyond the window's declared size.
+        srv_log_scroll.set_propagate_natural_width(False)
         srv_log_scroll.set_child(srv_log_view)
         self._srv_log_scroll = srv_log_scroll
         self._srv_log_detail_revealer.set_child(srv_log_scroll)
@@ -4741,7 +4801,7 @@ class ControlPanel(Gtk.Box):
     def open_advanced_dialog(self) -> None:
         """Open or present the Advanced Generation Settings dialog.
 
-        Called from the Generation → Advanced Settings… menu item.
+        Called from the context menu → Advanced Settings… item.
         Creates a new AdvancedSettingsDialog on first call (or after it was
         closed); presents the existing one if already open.
         """
@@ -5246,11 +5306,10 @@ class ControlPanel(Gtk.Box):
         picker.popup()
 
     def set_char_input(self, path: str) -> None:
-        """Set the character / seed image path.
+        """Set the character image path (animate mode).
 
-        Called by MainWindow._on_animate_card_action when a gallery card is
-        used as the animate character.  Routes to _set_seed_image so the
-        seed image well is updated (the separate Character InputWidget was removed).
+        Called when remixing a card as an animate character.  Routes to
+        _set_seed_image so the inline thumbnail well updates.
         """
         self._set_seed_image(path)
 
@@ -6272,7 +6331,7 @@ class AdvancedSettingsDialog(Gtk.Window):
 
     Reads initial values from the ControlPanel plain state attributes and
     writes back to them on every change, keeping the named buttons in sync.
-    Opened from Generation → Advanced Settings…
+    Opened from context menu → Advanced Settings…
     """
 
     def __init__(self, panel: "ControlPanel") -> None:
@@ -6737,6 +6796,82 @@ class PreferencesDialog(Gtk.Window):
         GLib.idle_add(_do_scroll)
 
 
+# ── Context-menu builder (module-level for testability) ────────────────────────
+
+def _build_context_menu_for_source(source: str) -> "Gio.Menu":
+    """
+    Build and return a fresh Gio.Menu for the context slot matching *source*.
+
+    source: "video" | "animate" | "image" | "artgen"
+
+    Module-level so it can be unit-tested without a MainWindow instance.
+    Uses Gio and GLib (already imported at top of module) and _DIRECTOR_PINS
+    (module-level constant).
+    """
+    menu = Gio.Menu()
+
+    # Quality (video / animate / image)
+    if source in ("video", "animate", "image"):
+        quality_section = Gio.Menu()
+        for label, steps in [("Fast (10 steps)", "10"),
+                              ("Standard (30 steps)", "30"),
+                              ("High Quality (40 steps)", "40")]:
+            item = Gio.MenuItem.new(label, "win.quality")
+            item.set_attribute_value("target", GLib.Variant("s", steps))
+            quality_section.append_item(item)
+        menu.append_section("Quality", quality_section)
+
+    # Sleep After (all sources)
+    sleep_section = Gio.Menu()
+    for label, val in [("Never", "0"), ("After 10 completions", "10"),
+                       ("After 20 completions", "20"), ("After 50 completions", "50")]:
+        item = Gio.MenuItem.new(label, "win.sleep-after")
+        item.set_attribute_value("target", GLib.Variant("s", val))
+        sleep_section.append_item(item)
+    menu.append_section("Sleep After", sleep_section)
+
+    # Director Style (video / image only)
+    if source in ("video", "image"):
+        dir_prob_section = Gio.Menu()
+        for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
+                           ("Often (66%)", "66"), ("Always", "100")]:
+            item = Gio.MenuItem.new(label, "win.director-prob")
+            item.set_attribute_value("target", GLib.Variant("s", pct))
+            dir_prob_section.append_item(item)
+        menu.append_section("Director Style", dir_prob_section)
+
+    # Pinned Director (video only)
+    if source == "video":
+        pin_section = Gio.Menu()
+        for display, full in _DIRECTOR_PINS:
+            item = Gio.MenuItem.new(display or "Random", "win.director-pin")
+            item.set_attribute_value("target", GLib.Variant("s", full))
+            pin_section.append_item(item)
+        menu.append_section("Pinned Director", pin_section)
+
+    # Art: auto-generate controls
+    if source == "artgen":
+        auto_section = Gio.Menu()
+        auto_item = Gio.MenuItem.new("Enabled", "win.art-autogen")
+        auto_section.append_item(auto_item)
+        menu.append_section("Auto-generate", auto_section)
+
+        delay_section = Gio.Menu()
+        for label, val in [("3 seconds", "3"), ("10 seconds", "10"), ("30 seconds", "30")]:
+            item = Gio.MenuItem.new(label, "win.art-autogen-delay")
+            item.set_attribute_value("target", GLib.Variant("s", val))
+            delay_section.append_item(item)
+        menu.append_section("Auto Delay", delay_section)
+
+    # Advanced Settings (video / animate / image)
+    if source in ("video", "animate", "image"):
+        adv_section = Gio.Menu()
+        adv_section.append("Advanced Settings…", "win.advanced-settings")
+        menu.append_section(None, adv_section)
+
+    return menu
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -6773,6 +6908,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_completed_count: int = 0          # incremented in _on_finished; triggers sleep
         self._screensaver_inhibit_cookie: "int | None" = None  # D-Bus inhibit cookie
         self._prefs_dialog: "PreferencesDialog | None" = None  # singleton instance
+        self._last_error_log_path: "str | None" = None  # log path from most recent error
+        self._log_viewer_win: "LogViewerWindow | None" = None  # singleton log viewer
         # Remote inventory records fetched from the inventory server (if running).
         # These are shown alongside local records; keyed by record ID to avoid duplicates.
         self._remote_records: dict = {}  # {record.id: GenerationRecord}
@@ -6852,7 +6989,9 @@ class MainWindow(Gtk.ApplicationWindow):
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
-        root_box.append(self._build_menu_bar())
+        self._menu_bar = self._build_menu_bar()
+        self._rebuild_context_menu("video")
+        root_box.append(self._menu_bar)
 
         # ── Three-pane layout: controls | gallery | detail ────────────────────
         outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -6896,22 +7035,37 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.set_hhomogeneous(False)
 
         shared_cbs = dict(
-            iterate_cb=self._controls.populate_prompts,
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
-            animate_action_cb=self._on_animate_card_action,
+            remix_cb=self._on_remix_card,
             star_cb=self._on_star,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._artgen_panel    = ArtgenPanel()
-        self._artgen_panel.on_use_as_seed = self._on_artgen_use_as_seed
+        self._artgen_panel.on_remix = self._on_remix_card
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
         self._gallery_stack.set_visible_child_name("video")
+
+        # Apply saved gallery density preference on startup.  The default
+        # "comfortable" requires no work (it is the widget's natural size);
+        # only call _apply_gallery_density when a non-default value was saved.
+        _density = _settings.get("gallery_density") or "comfortable"
+        if _density != "comfortable":
+            self._apply_gallery_density(_density)
+
+        # Sync the art-autogen menu action state to match the panel's initial
+        # _auto_gen flag.  _build_menu_actions() registers the action before
+        # _build_ui() runs, so lookup_action() is guaranteed to find it here.
+        art_autogen_act = self.lookup_action("art-autogen")
+        if art_autogen_act:
+            art_autogen_act.set_state(
+                GLib.Variant("b", bool(self._artgen_panel._auto_gen))
+            )
 
         gallery_wrap.append(self._gallery_stack)
 
@@ -6955,8 +7109,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_lbl.set_xalign(0)
         self._status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         self._status_lbl.set_hexpand(True)
+        self._status_lbl.set_max_width_chars(1)   # let hexpand+ellipsize control width, not content
         self._status_lbl.add_css_class("status-bar")
         gallery_wrap.append(self._status_lbl)
+
+        _status_click = Gtk.GestureClick()
+        _status_click.connect("released", self._on_status_bar_clicked)
+        self._status_lbl.add_controller(_status_click)
 
         inner_paned.set_start_child(gallery_wrap)
         inner_paned.set_shrink_start_child(False)
@@ -7005,25 +7164,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """Update status bar. Safe to call from main thread only."""
         self._status_lbl.set_label(text)
 
-    def _on_animate_card_action(self, record: "GenerationRecord") -> None:
-        """
-        '💃 Animate' gallery card action.
-
-        Copies the card's prompt and sets its thumbnail as the seed image, then
-        switches to the animate source tab.  The thumbnail is the first-frame still
-        for video records — a valid character seed.
-
-        The seed image well is now the sole character-image entry point (the
-        separate CHARACTER InputWidget was removed).  set_char_input delegates
-        to _set_seed_image so the well is updated correctly.
-        """
-        char_path = record.thumbnail_path if record.thumbnail_exists else record.media_file_path
-        # Use populate_prompts to carry the card's prompt and set the seed image.
-        # This mirrors the ↺ Iterate flow, but also switches to animate mode.
-        seed = char_path if (char_path and Path(char_path).exists()) else ""
-        self._controls.populate_prompts(record.prompt, record.negative_prompt, seed)
-        self._controls.switch_to_source("animate")
-        self._flash_status("Character set ✓ — switch to Animate")
+    def _on_status_bar_clicked(self, _gesture, _n_press, _x, _y) -> None:
+        """Open log viewer to the most recent error log when status bar is clicked."""
+        if self._last_error_log_path:
+            self._open_log_viewer(self._last_error_log_path)
+        elif self._status_lbl.get_label().startswith("Error"):
+            self._open_log_viewer()
 
     def _flash_status(self, message: str, duration_ms: int = 1500) -> None:
         """Show *message* in the status label for *duration_ms* ms, then restore.
@@ -7151,92 +7297,157 @@ class MainWindow(Gtk.ApplicationWindow):
         pl_delete.connect("activate", lambda _a, p: self._on_playlist_delete(p.get_string()))
         self.add_action(pl_delete)
 
-    def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
-        """Build and return the Gtk.PopoverMenuBar driven by a Gio.Menu model."""
-        menumodel = Gio.Menu()
+        # ── View: gallery density (radio) ─────────────────────────────────────
+        density_val = _settings.get("gallery_density") or "comfortable"
+        gallery_density_action = Gio.SimpleAction.new_stateful(
+            "gallery-density",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", density_val),
+        )
+        gallery_density_action.connect("activate", self._on_gallery_density_action)
+        self.add_action(gallery_density_action)
 
-        # ── File ──────────────────────────────────────────────────────────────
+        # ── Art: auto-generate toggle ──────────────────────────────────────────
+        art_autogen_action = Gio.SimpleAction.new_stateful(
+            "art-autogen",
+            None,
+            GLib.Variant("b", False),
+        )
+        art_autogen_action.connect("activate", self._on_art_autogen_action)
+        self.add_action(art_autogen_action)
+
+        # ── Art: auto-generate delay radio ────────────────────────────────────
+        art_delay_action = Gio.SimpleAction.new_stateful(
+            "art-autogen-delay",
+            GLib.VariantType.new("s"),
+            GLib.Variant("s", "3"),
+        )
+        art_delay_action.connect("activate", self._on_art_autogen_delay_action)
+        self.add_action(art_delay_action)
+
+        # -- Debug: log viewer ------------------------------------------------
+        open_log_viewer_action = Gio.SimpleAction.new("open-log-viewer", None)
+        open_log_viewer_action.connect("activate", lambda *_: self._open_log_viewer())
+        self.add_action(open_log_viewer_action)
+
+        open_logs_folder_action = Gio.SimpleAction.new("open-logs-folder", None)
+        open_logs_folder_action.connect("activate", self._on_open_logs_folder)
+        self.add_action(open_logs_folder_action)
+
+    def _build_menu_bar(self) -> Gtk.PopoverMenuBar:
+        """Build the PopoverMenuBar.
+
+        Structure: File · Playlists · View ·· [context slot]
+        The context slot (last entry) is rebuilt by _rebuild_context_menu()
+        each time the source tab changes.
+        """
+        self._menumodel = Gio.Menu()
+
+        # ── File ─────────────────────────────────────────────────────────
         file_menu = Gio.Menu()
         file_menu.append("Open Media Folder", "win.open-media-folder")
-        file_menu.append_section(None, Gio.Menu())  # visual separator via empty section
+        file_menu.append_section(None, Gio.Menu())
         file_menu.append("Recover Jobs…", "win.recover-jobs")
         file_menu.append("Refresh Remote Library", "win.refresh-remote-library")
         file_menu.append("Download Remote Library…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("Quit", "app.quit")
-        menumodel.append_submenu("File", file_menu)
+        self._menumodel.append_submenu("File", file_menu)
 
-        # ── Generation ────────────────────────────────────────────────────────
-        gen_menu = Gio.Menu()
-        quality_section = Gio.Menu()
-        for label, steps in [("Fast (10 steps)", "10"), ("Standard (30 steps)", "30"),
-                              ("High Quality (40 steps)", "40")]:
-            item = Gio.MenuItem.new(label, "win.quality")
-            item.set_attribute_value("target", GLib.Variant("s", steps))
-            quality_section.append_item(item)
-        gen_menu.append_section("Quality", quality_section)
-
-        sleep_section = Gio.Menu()
-        for label, val in [("Never", "0"), ("After 10 completions", "10"),
-                           ("After 20 completions", "20"), ("After 50 completions", "50")]:
-            item = Gio.MenuItem.new(label, "win.sleep-after")
-            item.set_attribute_value("target", GLib.Variant("s", val))
-            sleep_section.append_item(item)
-        gen_menu.append_section("Sleep After", sleep_section)
-
-        adv_section = Gio.Menu()
-        adv_section.append("Advanced Settings\u2026", "win.advanced-settings")
-        gen_menu.append_section(None, adv_section)
-        menumodel.append_submenu("Generation", gen_menu)
-
-        # ── Prompt ────────────────────────────────────────────────────────────
-        prompt_menu = Gio.Menu()
-        dir_prob_section = Gio.Menu()
-        for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
-                           ("Often (66%)", "66"), ("Always", "100")]:
-            item = Gio.MenuItem.new(label, "win.director-prob")
-            item.set_attribute_value("target", GLib.Variant("s", pct))
-            dir_prob_section.append_item(item)
-        prompt_menu.append_section("Director Style", dir_prob_section)
-
-        pin_section = Gio.Menu()
-        for display, full in _DIRECTOR_PINS:
-            item = Gio.MenuItem.new(display or "Random", "win.director-pin")
-            item.set_attribute_value("target", GLib.Variant("s", full))
-            pin_section.append_item(item)
-        prompt_menu.append_section("Pinned Director", pin_section)
-        menumodel.append_submenu("Prompt", prompt_menu)
-
-        # ── TT-TV ─────────────────────────────────────────────────────────────
-        tttv_menu = Gio.Menu()
-        tttv_menu.append("Configure TT-TV…", "win.preferences-tttv")
-        menumodel.append_submenu("TT-TV", tttv_menu)
-
-        # ── Playlists ─────────────────────────────────────────────────────────
+        # ── Playlists ─────────────────────────────────────────────────────
         # Keep mutable section references so _rebuild_playlists_menu() can
         # clear and repopulate them without rebuilding the whole menu model.
         pl_menu = Gio.Menu()
         pl_menu.append("Watch All Videos", "win.playlist-all")
-
-        self._playlists_model_section = Gio.Menu()   # one item per model in history
+        self._playlists_model_section = Gio.Menu()
         pl_menu.append_section("By Model", self._playlists_model_section)
-
-        self._playlists_playlist_section = Gio.Menu()  # one item per named playlist
+        self._playlists_playlist_section = Gio.Menu()
         pl_menu.append_section("Your Playlists", self._playlists_playlist_section)
-
         pl_manage = Gio.Menu()
         pl_manage.append("New Playlist…", "win.playlist-new")
         pl_menu.append_section(None, pl_manage)
+        self._menumodel.append_submenu("Playlists", pl_menu)
 
-        menumodel.append_submenu("Playlists", pl_menu)
-
-        # ── View ──────────────────────────────────────────────────────────────
+        # ── View ───────────────────────────────────────────────────────────
         view_menu = Gio.Menu()
-        view_menu.append("Toggle Detail Panel", "win.toggle-detail")
-        menumodel.append_submenu("View", view_menu)
+        toggle_section = Gio.Menu()
+        toggle_section.append("Detail Panel", "win.toggle-detail")
+        view_menu.append_section(None, toggle_section)
 
-        return Gtk.PopoverMenuBar.new_from_model(menumodel)
+        density_section = Gio.Menu()
+        for label, val in [("Comfortable", "comfortable"), ("Compact", "compact")]:
+            item = Gio.MenuItem.new(label, "win.gallery-density")
+            item.set_attribute_value("target", GLib.Variant("s", val))
+            density_section.append_item(item)
+        view_menu.append_section("Gallery Density", density_section)
+        self._menumodel.append_submenu("View", view_menu)
+
+        # -- Debug ------------------------------------------------------------
+        debug_menu = Gio.Menu()
+        debug_menu.append("Open Log Viewer", "win.open-log-viewer")
+        debug_menu.append("Open Logs Folder…", "win.open-logs-folder")
+        self._menumodel.append_submenu("Debug", debug_menu)
+
+        # ── Context slot placeholder (replaced by _rebuild_context_menu) ────
+        self._context_slot_idx = self._menumodel.get_n_items()
+        self._context_menu_model = Gio.Menu()
+        self._menumodel.append_submenu("🎥 Video", self._context_menu_model)
+
+        bar = Gtk.PopoverMenuBar.new_from_model(self._menumodel)
+        self._apply_context_menu_css(bar)
+        return bar
+
+    def _apply_context_menu_css(self, bar: Gtk.PopoverMenuBar) -> None:
+        """Add context-menu-item CSS class to the last (context slot) item."""
+        child = bar.get_last_child()
+        if child is not None:
+            child.add_css_class("context-menu-item")
+
+    def _rebuild_context_menu(self, source: str) -> None:
+        """Replace the context slot title and contents for the given source tab.
+
+        Clears self._context_menu_model in-place and repopulates it, then
+        replaces the submenu title by remove+insert_submenu on self._menumodel.
+        The PopoverMenuBar reflects the change immediately.
+        """
+        _TITLES = {
+            "video":   "\U0001f3a5 Video",
+            "animate": "\U0001f483 Animate",
+            "image":   "\U0001f5bc️ Image",
+            "artgen":  "\U0001f3a8 Art",
+        }
+        title = _TITLES.get(source, "\U0001f3a5 Video")
+
+        # Rebuild context_menu_model contents in-place
+        self._context_menu_model.remove_all()
+        fresh = _build_context_menu_for_source(source)
+        for i in range(fresh.get_n_items()):
+            section = fresh.get_item_link(i, "section")
+            submenu = fresh.get_item_link(i, "submenu")
+            if section:
+                label_v = fresh.get_item_attribute_value(
+                    i, "label", GLib.VariantType.new("s"))
+                self._context_menu_model.append_section(
+                    label_v.get_string() if label_v else None, section)
+            elif submenu:
+                label_v = fresh.get_item_attribute_value(
+                    i, "label", GLib.VariantType.new("s"))
+                self._context_menu_model.append_submenu(
+                    label_v.get_string() if label_v else None, submenu)
+            else:
+                lv = fresh.get_item_attribute_value(i, "label", GLib.VariantType.new("s"))
+                av = fresh.get_item_attribute_value(i, "action", GLib.VariantType.new("s"))
+                if lv and av:
+                    self._context_menu_model.append(lv.get_string(), av.get_string())
+
+        # Update the submenu title in the top-level menu model
+        self._menumodel.remove(self._context_slot_idx)
+        self._menumodel.insert_submenu(self._context_slot_idx, title,
+                                       self._context_menu_model)
+
+        # Re-mark the context CSS class on the last bar item
+        self._apply_context_menu_css(self._menu_bar)
 
     # ── Playlist menu helpers ──────────────────────────────────────────────────
 
@@ -7350,6 +7561,24 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as exc:
             self._set_status(f"Could not open folder: {exc}")
 
+    def _on_open_logs_folder(self, _action, _param) -> None:
+        """Open the logs/ directory in the system file manager."""
+        from log_viewer import _LOGS_DIR
+        logs_uri = f"file://{_LOGS_DIR}"
+        try:
+            Gio.AppInfo.launch_default_for_uri(logs_uri, None)
+        except Exception as e:
+            self._set_status(f"Could not open logs folder: {e}")
+
+    def _open_log_viewer(self, path: "str | None" = None) -> None:
+        """Open (or present) the singleton LogViewerWindow, optionally jumping to *path*."""
+        from log_viewer import LogViewerWindow
+        if self._log_viewer_win is None or not self._log_viewer_win.get_visible():
+            self._log_viewer_win = LogViewerWindow(parent=self)
+        self._log_viewer_win.present()
+        if path:
+            self._log_viewer_win.open_to(path)
+
     def _open_preferences(self, scroll_tttv: bool = False) -> None:
         """Open (or present) the Preferences dialog."""
         if self._prefs_dialog is None or not self._prefs_dialog.get_visible():
@@ -7405,6 +7634,35 @@ class MainWindow(Gtk.ApplicationWindow):
         # self._detail's parent is detail_wrap (the Box containing detail + queue).
         # Hiding it collapses the entire right panel of the inner paned.
         self._detail.get_parent().set_visible(self._detail_visible)
+
+    def _on_gallery_density_action(self, action: Gio.SimpleAction,
+                                    param: GLib.Variant) -> None:
+        """Menu: switch gallery card size between comfortable and compact."""
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        _settings.set("gallery_density", val)
+        self._apply_gallery_density(val)
+
+    def _apply_gallery_density(self, density: str) -> None:
+        """Set card min-width on all video/image/animate GalleryWidget instances and relayout."""
+        card_w = (_THUMB_W + 20) if density == "comfortable" else 160
+        for gallery in (self._video_gallery, self._image_gallery, self._animate_gallery):
+            for card in gallery._cards:
+                card.set_size_request(card_w, -1)
+            gallery._relayout()
+
+    def _on_art_autogen_action(self, action: Gio.SimpleAction,
+                                _param: GLib.Variant) -> None:
+        """Menu: toggle artgen auto-generate on/off."""
+        new_state = self._artgen_panel.toggle_auto_gen()
+        action.set_state(GLib.Variant("b", new_state))
+
+    def _on_art_autogen_delay_action(self, action: Gio.SimpleAction,
+                                      param: GLib.Variant) -> None:
+        """Menu: set artgen auto-generate delay in seconds."""
+        val = param.get_string()
+        action.set_state(GLib.Variant("s", val))
+        self._artgen_panel.set_auto_gen_delay(int(val))
 
     # ── Screensaver inhibit ────────────────────────────────────────────────────
 
@@ -7474,6 +7732,11 @@ class MainWindow(Gtk.ApplicationWindow):
         # the ArtgenPanel can use the full window width for its own layout.
         self._ctrl_wrapper.set_visible(not is_artgen)
         self._detail_wrap.set_visible(not is_artgen)
+        self._rebuild_context_menu(source)
+        # Grey out Detail Panel toggle on Art tab (no detail panel there)
+        toggle_act = self.lookup_action("toggle-detail")
+        if toggle_act:
+            toggle_act.set_enabled(source != "artgen")
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
@@ -7483,7 +7746,40 @@ class MainWindow(Gtk.ApplicationWindow):
         visible = gallery.visible_cards()
         idx = next((i for i, c in enumerate(visible) if c._record.id == record.id), 0)
         self._detail.set_context([c._record for c in visible], idx)
-        self._detail.show_record(record, self._controls.populate_prompts)
+        self._detail.show_record(record, self._dispatch_remix)
+
+    # ── Remix routing ──────────────────────────────────────────────────────────
+
+    def _on_remix_card(self, record) -> None:
+        """Open RemixPopover anchored to the gallery card's 🔀 Remix button.
+
+        Called by GalleryWidget cards via the remix_cb hook.  The popover is
+        anchored to the MainWindow (self) as a fallback parent since the exact
+        button widget is not passed through the callback chain — the popover
+        will still appear in a reasonable position near the window centre.
+        Resolves remix ingredients in a background thread (see RemixPopover),
+        then calls _dispatch_remix on the GTK main thread.
+        """
+        from remix_popover import RemixPopover
+        pop = RemixPopover(record, on_remix=self._dispatch_remix)
+        pop.set_parent(self)
+        pop.popup()
+
+    def _dispatch_remix(self, ctx) -> None:
+        """Route a fully-resolved RemixContext to the appropriate tab and controls.
+
+        Called on the GTK main thread by RemixPopover after ingredient resolution
+        completes (via GLib.idle_add inside the popover's background thread).
+        Delegates to remix_dispatch.dispatch_remix which is pure Python and
+        fully unit-tested independently of GTK.
+        """
+        from remix_dispatch import dispatch_remix
+        dispatch_remix(
+            ctx,
+            controls=self._controls,
+            artgen_panel=self._artgen_panel,
+            flash_fn=self._flash_status,
+        )
 
     def _on_delete_card(self, record: GenerationRecord) -> None:
         """
@@ -7522,34 +7818,6 @@ class MainWindow(Gtk.ApplicationWindow):
         if gallery._active_filter == "starred":
             gallery._relayout()
 
-    def _on_artgen_use_as_seed(self, rec) -> None:
-        """Switch to video mode and set the artgen artifact as a seed image."""
-        # Prefer PNG thumbnail (rendered from SVG); fall back to file_path (SVG works via librsvg).
-        thumb = getattr(rec, "thumbnail_path", "") or ""
-        file_path = getattr(rec, "file_path", "") or ""
-        if thumb and Path(thumb).suffix.lower() == ".png" and Path(thumb).exists():
-            seed_path = thumb
-        elif file_path and Path(file_path).exists():
-            seed_path = file_path
-        else:
-            return
-
-        # Switch source tab to video (activating the button triggers _set_source → _on_source_change).
-        if self._controls._model_source != "video":
-            self._controls._src_video_btn.set_active(True)
-
-        # Set seed image in controls.
-        self._controls._set_seed_image(seed_path)
-
-        # Inject vibe phrase into prompt (append if prompt already has text).
-        vibe = _artgen_vibe(rec)
-        if vibe:
-            buf = self._controls._prompt_view.get_buffer()
-            existing = buf.get_text(
-                buf.get_start_iter(), buf.get_end_iter(), False
-            ).strip()
-            buf.set_text(f"{existing}, {vibe}" if existing else vibe)
-
     def _load_history(self) -> None:
         local_records = self._store.all_records()
         # Merge remote records, excluding any whose ID already exists locally.
@@ -7568,7 +7836,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # Route each record to the gallery that matches its media type.
         # GalleryWidget.load_history() replaces existing cards rather than
         # appending, so calling this method more than once is safe.
-        video_recs   = [r for r in records if r.media_type == "video"]
+        # animatediff GIFs live in the video gallery (same as _gallery_for_type routing).
+        video_recs   = [r for r in records if r.media_type in ("video", "animatediff")]
         animate_recs = [r for r in records if r.media_type == "animate"]
         image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
@@ -9196,6 +9465,7 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery.replace_pending_with(record)
         self._gen_gallery = None
         self._controls.set_busy(False)
+        self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
         # Refresh "Repeat last" availability now that history has at least one record.
         self._controls._apply_seed_mode_from_settings()
         media_path = record.media_file_path
@@ -9219,12 +9489,16 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_error(self, message: str) -> bool:
+        from log_viewer import detect_log_path, shorten_error
         gallery = self._gen_gallery or self._active_gallery()
         gallery.remove_pending()
         self._gen_gallery = None
         self._controls.set_busy(False)
-        self._set_status(f"Error: {message}")
         self._screensaver_uninhibit()
+        self._last_error_log_path = detect_log_path(message)
+        short = shorten_error(message)
+        suffix = " — click for log" if self._last_error_log_path else ""
+        self._set_status(f"Error: {short}{suffix}")
         self._start_next_queued()
         return False
 

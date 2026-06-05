@@ -1,0 +1,48 @@
+{
+  "x-ttlg": {
+    "output_ext": ".txt",
+    "media_type": "text",
+    "accepts_remix_from": ["palette"],
+    "can_remix_to": ["video", "image"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [
+    {
+      "name": "verse",
+      "description": "Structured text art: haiku sequences, lore fragments, epitaphs, and rhyming couplets",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "string",
+            "enum": ["haiku", "lore", "epitaph", "couplet"],
+            "default": "haiku",
+            "description": "Verse form"
+          },
+          "theme": {
+            "type": "string",
+            "default": "the passage of time",
+            "description": "Thematic seed"
+          },
+          "count": {
+            "type": "integer",
+            "default": 3,
+            "description": "Number of verses to generate"
+          }
+        },
+        "required": []
+      },
+      "examples": [
+        {"form": "haiku", "theme": "winter forges"},
+        {"form": "lore", "theme": "abandoned space station"},
+        {"form": "epitaph", "theme": "a forgotten compiler"},
+        {"form": "couplet", "theme": "electric dreams"}
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
+}

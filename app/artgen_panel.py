@@ -114,11 +114,14 @@ class ArtgenPanel(Gtk.Box):
     # now lives in the Video tab as a first-class generation mode.  Historical
     # artgen MediaRecords with generator_type="animatediff" still display in the
     # gallery; only the picker entry is removed.
-    _HIDDEN_GENERATORS: frozenset = frozenset({"animatediff"})
+    _HIDDEN_GENERATORS: frozenset = frozenset({
+        "animatediff",   # lives in Video tab, not Art tab
+        "generate_midi", # MCP-delegate stub — no implementation yet
+    })
 
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.on_use_as_seed: "Optional[Callable[['MediaRecord'], None]]" = None
+        self.on_remix: "Optional[Callable[['MediaRecord'], None]]" = None
         self._generating: bool = False
         self._gen_queue: deque = deque()  # (gen_name, args) tuples pending manual generation
         self._last_out_path: Path | None = None
@@ -181,13 +184,13 @@ class ArtgenPanel(Gtk.Box):
         self._gallery.on_card_activated = self._on_gallery_card_activated
         self._gallery.on_watch_requested = self._on_watch_requested
         self._gallery.on_card_deleted = self._on_gallery_card_deleted
-        self._gallery.on_use_as_seed = self._on_use_as_seed
+        self._gallery.on_remix = self._on_remix_record
         self._sub_stack.add_named(self._gallery, "gallery")
 
         self._detail = ArtgenDetail()
         self._detail.on_back = self._on_detail_back
         self._detail.on_deleted = self._on_detail_deleted
-        self._detail.on_use_as_seed = self._on_use_as_seed
+        self._detail.on_remix = self._on_remix_record
         self._sub_stack.add_named(self._detail, "detail")
 
         self._watch = ArtgenWatch()
@@ -260,7 +263,7 @@ class ArtgenPanel(Gtk.Box):
         srv_pop_content.set_margin_start(12); srv_pop_content.set_margin_end(12)
         srv_pop_content.set_margin_top(10); srv_pop_content.set_margin_bottom(10)
         srv_pop_content.set_size_request(210, -1)
-        srv_pop_content.append(_section_lbl("artgen server"))
+        srv_pop_content.append(_section_lbl("Generative Art server"))
         self._srv_model_dd = _dd(_ARTGEN_MODELS, "Qwen3-8B")
         srv_pop_content.append(_row("Model", self._srv_model_dd, label_width=46))
         srv_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -296,7 +299,7 @@ class ArtgenPanel(Gtk.Box):
         srv_menu_btn.set_child(srv_btn_inner)
         srv_menu_btn.add_css_class("flat")
         srv_menu_btn.set_popover(srv_popover)
-        srv_menu_btn.set_tooltip_text("Artgen server controls (model, start/stop, health)")
+        srv_menu_btn.set_tooltip_text("Generative Art server controls (model, start/stop, health)")
         btn_row.append(srv_menu_btn)
 
         footer.append(btn_row)
@@ -1212,10 +1215,10 @@ class ArtgenPanel(Gtk.Box):
         if self._watch._records:
             self._watch._records = [r for r in self._watch._records if r.id != media_id]
 
-    def _on_use_as_seed(self, rec: "MediaRecord") -> None:
-        """Forward the seed request to the MainWindow callback if wired."""
-        if self.on_use_as_seed:
-            self.on_use_as_seed(rec)
+    def _on_remix_record(self, rec: "MediaRecord") -> None:
+        """Forward the remix request to the MainWindow callback if wired."""
+        if self.on_remix:
+            self.on_remix(rec)
 
     def _on_watch_requested(self, generator_type: str | None) -> None:
         records = _media_store.query(media_type="artgen", generator_type=generator_type)
@@ -1601,5 +1604,81 @@ class ArtgenPanel(Gtk.Box):
             self._ad_steps.set_value(25)
             self._ad_seed.set_value(random.randint(0, 9999))
             # prompt written by _auto_fire_with_theme after Inspire
+
+    # ── Public API for context-aware menu bar ─────────────────────────────────
+
+    def toggle_auto_gen(self) -> bool:
+        """Toggle auto-generate on/off. Returns the new state (True = enabled).
+
+        Mirrors _on_auto_switch_changed. Blocks/unblocks the Switch signal
+        handler to avoid re-entrancy when syncing the widget state.
+        """
+        if self._auto_gen:
+            self._auto_stop("menu toggle")
+        else:
+            self._auto_gen = True
+            self._auto_maybe_schedule()
+        if hasattr(self, "_auto_switch") and hasattr(self, "_auto_switch_handler"):
+            self._auto_switch.handler_block(self._auto_switch_handler)
+            self._auto_switch.set_active(self._auto_gen)
+            self._auto_switch.handler_unblock(self._auto_switch_handler)
+        return self._auto_gen
+
+    def get_auto_gen_delay(self) -> int:
+        """Return the current auto-generate delay in seconds."""
+        val = server_config.get("artgen_auto", "delay")
+        return int(val) if val is not None else 3
+
+    def set_auto_gen_delay(self, seconds: int) -> None:
+        """Persist a new auto-generate delay. Takes effect on the next countdown cycle."""
+        server_config.set("artgen_auto", "delay", seconds)
+
+    # ── Remix support ─────────────────────────────────────────────────────────
+
+    def set_generator(self, name: str) -> None:
+        """Switch the generator type dropdown to *name* (if present in the picker).
+
+        Called by MainWindow._dispatch_remix when an artgen target is chosen in
+        RemixPopover. Updates both the dropdown selection and the controls stack
+        so the correct parameter widgets are visible.
+        """
+        import artgen
+        # Use the same filtered list the dropdown was built from so the index
+        # matches the dropdown model — unfiltered all_names() would be off-by-N
+        # whenever hidden generators (e.g. animatediff) appear earlier in the list.
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
+        if name in gen_names:
+            self._type_dd.set_selected(gen_names.index(name))
+            self._controls_stack.set_visible_child_name(name)
+
+    def set_theme(self, theme: str) -> None:
+        """Pre-fill the theme/subject field for the currently selected generator.
+
+        Walks the active controls page for the first Gtk.Entry widget and sets
+        its text to *theme*. Silently does nothing if no Entry is found (e.g.
+        animatediff, which has no free-text theme field).
+
+        This matches the behavior of _auto_fire_with_theme but operates on the
+        currently-visible generator instead of a chosen one.
+        """
+        child = self._controls_stack.get_visible_child()
+        if child is None:
+            return
+
+        def _find_entry(widget):
+            """Depth-first search for the first Gtk.Entry in the widget tree."""
+            if isinstance(widget, Gtk.Entry):
+                return widget
+            w = widget.get_first_child()
+            while w:
+                found = _find_entry(w)
+                if found:
+                    return found
+                w = w.get_next_sibling()
+            return None
+
+        entry = _find_entry(child)
+        if entry:
+            entry.set_text(theme)
 
         # freeform: text written entirely by _auto_fire_with_theme after Inspire

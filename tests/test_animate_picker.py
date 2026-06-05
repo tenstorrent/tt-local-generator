@@ -184,14 +184,14 @@ def test_mode_desc_bar_css_class_swap():
 
 @gtk_required
 def test_generation_card_stores_action_callbacks():
-    """Verify animate_cb is stored on GenerationCard (motion_cb removed)."""
+    """Verify remix_cb is stored on GenerationCard (animate_cb replaced by remix_cb)."""
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
     from main_window import GenerationCard
     from history_store import GenerationRecord
     import datetime
 
-    animate_calls = []
+    remix_calls = []
 
     rec = GenerationRecord(
         id="test-card-0001",
@@ -207,27 +207,26 @@ def test_generation_card_stores_action_callbacks():
 
     card = GenerationCard(
         rec,
-        iterate_cb=lambda r: None,
         select_cb=lambda c: None,
         delete_cb=lambda r: None,
-        animate_cb=lambda r: animate_calls.append(r),
+        remix_cb=lambda r: remix_calls.append(r),
     )
 
-    card._animate_cb(rec)
+    card._remix_cb(rec)
 
-    assert len(animate_calls) == 1
-    assert animate_calls[0].id == "test-card-0001"
+    assert len(remix_calls) == 1
+    assert remix_calls[0].id == "test-card-0001"
 
 
 @gtk_required
 def test_gallery_card_action_callbacks_invoked():
-    """Verify animate_cb is stored on GenerationCard (motion_cb removed)."""
+    """Verify remix_cb is stored on GenerationCard (animate_cb replaced by remix_cb)."""
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
     from main_window import GenerationCard
     from history_store import GenerationRecord
 
-    animate_calls = []
+    remix_calls = []
 
     rec = GenerationRecord(
         id="test-0001", prompt="test", negative_prompt="",
@@ -240,14 +239,13 @@ def test_gallery_card_action_callbacks_invoked():
 
     card = GenerationCard(
         rec,
-        iterate_cb=lambda r: None,
         select_cb=lambda c: None,
         delete_cb=lambda r: None,
-        animate_cb=lambda r: animate_calls.append(r),
+        remix_cb=lambda r: remix_calls.append(r),
     )
 
     # Simulate callbacks being invoked
-    card._animate_cb(rec)
+    card._remix_cb(rec)
 
-    assert len(animate_calls) == 1
-    assert animate_calls[0].id == "test-0001"
+    assert len(remix_calls) == 1
+    assert remix_calls[0].id == "test-0001"

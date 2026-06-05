@@ -1,0 +1,28 @@
+{
+  "x-ttlg": {
+    "output_ext": ".svg",
+    "media_type": "image",
+    "accepts_remix_from": ["verse", "palette"],
+    "can_remix_to": ["video"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [{
+    "name": "skyline",
+    "description": "City skyline SVG: buildings, windows, atmospheric sky, era-appropriate silhouettes",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "era": {"type": "string", "default": "retro"},
+        "sky": {"type": "string", "default": "dusk"},
+        "density": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"}
+      },
+      "required": []
+    },
+    "examples": [
+      {"era": "retro", "sky": "dusk"},
+      {"era": "futuristic", "sky": "night", "density": "high"}
+    ],
+    "x-ttlg": {"streaming": null, "artifact_tool": true}
+  }]
+}

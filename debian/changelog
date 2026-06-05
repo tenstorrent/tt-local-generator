@@ -1,3 +1,53 @@
+tt-local-generator (0.5.0) noble; urgency=medium
+
+  * Unified Remix UI: single "Remix" entry point on every card hover bar and
+    detail panel replaces scattered Animate, Use-as-seed, and Iterate buttons.
+    RemixPopover shows source thumbnail, ingredient checkboxes, live hint
+    preview, and target buttons derived from plugin manifests.
+  * Context-aware menu bar: File / Playlists / View fixed on left, dynamic
+    context slot on right changes title+contents per active source tab (Video,
+    Animate, Image, Art). Removes the static Generation/Prompt/TT-TV menus.
+  * Log viewer: Debug menu opens a sidebar-tree + content-pane window for
+    browsing AnimateDiff run logs, server logs, and prompt server logs with
+    error-line highlighting and copy-path/copy-all buttons.
+  * AnimateDiff multi-chip fix: generate_blackhole_v2.py now opens only
+    device_ids=[0] — UNet2D permute_conv_weights crashes on MeshShape([1,4]).
+  * ffmpeg utility plugin (plugins/ffmpeg/) provides extract_frame,
+    get_metadata, convert_to_gif, convert_to_mp4, resize as in-process
+    callables for the remix engine (not exposed as MCP tools — utility plugin).
+  * Gallery density: View menu adds Comfortable/Compact card size toggle.
+  * PendingCard layout fix: fixed-size thumbnail placeholder prevents FlowBox
+    cell expansion during generation.
+  * Status bar fix: error messages capped at 80 chars; log path extracted and
+    stored; clicking status bar opens log viewer to the failing run log.
+  * Prompt bracket fix: _strip_instruction_leak now handles screenplay-format
+    [INT. X] headers and fully-bracket-wrapped prompts from guided LLM output.
+  * Deps: fastapi + uvicorn added for MCP server; markovify added to
+    setup_ubuntu.sh pip installs; requirements.txt updated.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 29 May 2026 10:00:00 -0700
+
+tt-local-generator (0.4.0) noble; urgency=medium
+
+  * Plugin system: generators are now MCP-native plugins in plugins/<name>/
+    with mcp.json manifests and plugin.py executors; plugin_loader discovers
+    them from plugins/ and ~/.config/tt-local-gen/plugins/ at startup.
+  * MCP server (app/mcp_server.py) exposes all loaded plugins as JSON-RPC 2.0
+    tools on port 8003; tt-ctl mcp-config prints the client configuration.
+  * tt-ctl plugin list: tabular view of all registered plugins with name,
+    media type, tab, hardware, and tool count.
+  * Remix graph: artgen.remix_targets_for() and RemixContext dataclass wire
+    up cross-generator remixing via accepts_remix_from in manifests.
+  * AnimateDiff: generated GIFs now persist in the Video tab across app
+    restarts (media_type "animatediff" was being silently dropped from the
+    video gallery on reload).
+  * AnimateDiff: subprocess timeout (default 30 min) kills runaway generation
+    and returns a clear error instead of blocking forever.
+  * Terminology: "Artgen" renamed to "Generative Art" throughout the UI and
+    website.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 27 May 2026 16:33:52 -0700
+
 tt-local-generator (0.3.3) noble; urgency=medium
 
   * prompt engine: six structural slug templates rotate the syntactic shape

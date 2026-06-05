@@ -18,12 +18,13 @@ Phase 2.5 architecture (generate_blackhole_v2.py):
 
 Hardware requirement: Blackhole device (P100/P150/P300c/QB2). No CPU fallback.
 Script resolution order:
-  1. app/animatediff/examples/generate_blackhole_v2.py  (bundled in this repo)
-  2. ~/tt-scratchpad/tt-animatediff/examples/generate_blackhole_v2.py  (dev fallback)
+  1. vendor/tt-animatediff/examples/generate_blackhole_v2.py  (git submodule, v0.1.0+)
+  2. ~/code/tt-animatediff/examples/generate_blackhole_v2.py  (developer checkout)
 """
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -32,18 +33,53 @@ from typing import Callable
 
 from artgen import ArtGenerator, register
 
+# Structured log for every animatediff run — written alongside generated GIFs
+# so failures are self-contained and don't require a running GUI to diagnose.
+# Log level: DEBUG captures all subprocess output; INFO captures run summaries.
+#
+# Use the XDG user state directory (~/.local/share/tt-video-gen/logs/animatediff)
+# rather than a repo-relative path so the installed .deb package (which lives
+# under /usr/lib/tt-local-generator, not writable by the user) does not crash
+# at import time with a PermissionError.
+_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
+
+_log = logging.getLogger("animatediff")
+_log.setLevel(logging.DEBUG)
+
+
+def _ensure_log_handler() -> None:
+    """Attach a FileHandler the first time a log entry is actually emitted.
+
+    Called at the top of check_hardware() and run_subprocess() — never at
+    module import time — so importing this module is always safe for test
+    collection, CLI --help, and .deb installs where $HOME may be unusual.
+    """
+    if _log.handlers:
+        return
+    try:
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+        _log.addHandler(_fh)
+    except OSError:
+        _log.addHandler(logging.NullHandler())
+
 _TT_METAL = Path.home() / "tt-metal"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 
-# Prefer the copy bundled inside this repo (app/animatediff/).  Fall back to
-# the developer scratchpad path so local dev machines that have built
-# tt-animatediff from source still work without change.
-_BUNDLED_DIR = Path(__file__).resolve().parent.parent.parent / "animatediff"
-_SCRATCHPAD_DIR = Path.home() / "tt-scratchpad" / "tt-animatediff"
+# Prefer the copy bundled inside this repo (app/animatediff/ — synced from
+# ~/code/tt-animatediff, the canonical source).  Fall back to the canonical
+# Resolution order (first match wins):
+#   1. vendor/tt-animatediff/  — git submodule pinned to official release tag
+#   2. ~/code/tt-animatediff   — developer checkout (canonical source)
+# The old app/animatediff/ bundle has been removed in favour of the submodule.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_SUBMODULE_DIR = _REPO_ROOT / "vendor" / "tt-animatediff"
+_CANONICAL_DIR = Path.home() / "code" / "tt-animatediff"
 _SCRIPT_DIR = (
-    _BUNDLED_DIR
-    if (_BUNDLED_DIR / "examples" / "generate_blackhole_v2.py").exists()
-    else _SCRATCHPAD_DIR
+    _SUBMODULE_DIR
+    if (_SUBMODULE_DIR / "examples" / "generate_blackhole_v2.py").exists()
+    else _CANONICAL_DIR
 )
 
 
@@ -95,14 +131,19 @@ def _find_tt_smi() -> str | None:
 
 
 def check_hardware() -> tuple[bool, str]:
-    """Check whether a Blackhole device is available.
+    """Check whether a Blackhole device is available and log per-chip health.
 
     Returns (ok, message). ok=True means at least one Blackhole device detected.
     Uses tt-smi -s (snapshot mode) to avoid launching the TUI.
+
+    Also logs per-chip temperature and power so ARC hangs (sentinel 65536°C /
+    4294W) are visible in the log before a run starts.
     """
+    _ensure_log_handler()
     import json
     tt_smi = _find_tt_smi()
     if tt_smi is None:
+        _log.warning("tt-smi not found")
         return False, "tt-smi not found (expected at ~/.tenstorrent-venv/bin/tt-smi)"
     try:
         result = subprocess.run(
@@ -110,15 +151,36 @@ def check_hardware() -> tuple[bool, str]:
         )
         data = json.loads(result.stdout)
         devices = data.get("device_info", [])
-        for dev in devices:
-            arch = dev.get("board_info", {}).get("board_type", "").lower()
+        found_blackhole = False
+        arch_str = "unknown"
+        for i, dev in enumerate(devices):
+            bi = dev.get("board_info", {})
+            telem = dev.get("telemetry", {})
+            arch = bi.get("board_type", "").lower()
+            temp = telem.get("asic_temperature", "?")
+            power = telem.get("power", "?")
+            bus = bi.get("bus_id", "?")
+            # Sentinel values indicate ARC firmware hang (see bug-report-arc-hang-chip3.md)
+            temp_val = float(temp) if temp not in ("?", None) else 0
+            arc_dead = temp_val > 1000
+            _log.info("chip%d %s: temp=%s°C power=%sW%s",
+                      i, bus, temp, power, " *** ARC DEAD (sentinel values) ***" if arc_dead else "")
+            if arc_dead:
+                _log.warning("chip%d ARC appears hung — sentinel temp/power values. "
+                             "AC power cycle required to recover.", i)
             if "blackhole" in arch or "p100" in arch or "p300" in arch or "p150" in arch:
-                return True, arch
+                found_blackhole = True
+                arch_str = arch
+        if found_blackhole:
+            return True, arch_str
         if devices:
             arch = devices[0].get("board_info", {}).get("board_type", "unknown")
+            _log.warning("No Blackhole device (detected: %s)", arch)
             return False, f"No Blackhole device found (detected: {arch})"
+        _log.warning("No TT hardware detected by tt-smi")
         return False, "No TT hardware detected"
     except Exception as e:
+        _log.exception("tt-smi check failed")
         return False, f"tt-smi check failed: {e}"
 
 
@@ -131,6 +193,7 @@ def run_subprocess(
     negative_prompt: str = "blurry, low quality",
     temporal_alpha: float = 0.35,
     on_progress: Callable[[str], None] | None = None,
+    timeout: int = 1800,
 ) -> tuple[bool, str]:
     """Run generate_blackhole_v2.py as a subprocess.
 
@@ -141,8 +204,14 @@ def run_subprocess(
     frame-decode progress with \\n. PYTHONUNBUFFERED=1 ensures both come through
     in real-time; Python's universal-newlines mode (text=True) normalises \\r → \\n.
 
+    timeout: maximum wall-clock seconds before the subprocess is killed (default
+    1800 = 30 minutes). Raise for very long multi-frame runs; lower for CI.
+
     Returns (success, error_message). error_message is "" on success.
     """
+    _ensure_log_handler()
+    import threading
+
     script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"
     if not script.exists():
         return False, (
@@ -177,6 +246,33 @@ def run_subprocess(
         "--output", str(out_path),
     ]
 
+    import datetime as _dt
+    run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Per-run log file captures complete subprocess output for post-mortem analysis.
+    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
+    _log.info("run_start run_id=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
+              run_id, out_path, prompt, frames, steps, seed)
+    _log.info("cmd: %s", " ".join(str(c) for c in cmd))
+
+    timed_out = threading.Event()
+    all_output: list[str] = []   # accumulate every line for run_log and error reporting
+
+    def _drain(proc):
+        """Read stdout+stderr in a thread; log every line, forward progress lines to caller."""
+        with open(run_log_path, "w") as run_log:
+            run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                all_output.append(line)
+                run_log.write(line + "\n")
+                run_log.flush()
+                _log.debug("[subprocess] %s", line)
+                if on_progress and ("Frame" in line or "Step" in line
+                                    or "Generating" in line or "Loading" in line
+                                    or "Error" in line or "Traceback" in line
+                                    or "fatal" in line.lower() or "ARC" in line):
+                    on_progress(line.strip())
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -186,21 +282,47 @@ def run_subprocess(
             env=env,
             cwd=str(_SCRIPT_DIR),
         )
-        for line in proc.stdout:
-            line = line.rstrip()
-            if on_progress and ("Frame" in line or "Step" in line or "Generating" in line or "Loading" in line):
-                on_progress(line.strip())
-        proc.wait()
     except Exception as e:
+        _log.exception("Subprocess launch failed")
         return False, f"Subprocess error: {e}"
 
-    if proc.returncode != 0:
-        return False, f"generate_blackhole_v2.py exited with rc={proc.returncode}"
+    drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
+    drain_thread.start()
 
+    drain_thread.join(timeout=timeout)
+
+    if drain_thread.is_alive():
+        timed_out.set()
+        proc.kill()
+        proc.wait()
+        drain_thread.join(timeout=5)
+        minutes = timeout // 60
+        msg = f"AnimateDiff timed out after {minutes} minutes and was stopped"
+        _log.error("run_timeout run_id=%s after %ds", run_id, timeout)
+        return False, msg
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+    rc = proc.returncode
+    if rc != 0:
+        # Surface the last 20 lines of output in the error message so the caller
+        # (and the UI) can show the actual TTNN/ARC error without opening the log.
+        tail = "\n".join(all_output[-20:]) if all_output else "(no output captured)"
+        msg = f"generate_blackhole_v2.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
+        _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
+        _log.error("last output:\n%s", tail)
+        return False, msg
 
     if not out_path.exists():
-        return False, "Script exited 0 but no output file was produced"
+        msg = f"Script exited 0 but no output file was produced (log: {run_log_path})"
+        _log.error("run_no_output run_id=%s", run_id)
+        return False, msg
 
+    _log.info("run_success run_id=%s out=%s", run_id, out_path)
     return True, ""
 
 

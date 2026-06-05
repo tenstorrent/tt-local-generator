@@ -1,0 +1,30 @@
+{
+  "x-ttlg": {
+    "output_ext": ".gif",
+    "media_type": "gif",
+    "accepts_remix_from": ["image"],
+    "can_remix_to": ["video"],
+    "tab": "generative-art",
+    "hardware": "blackhole"
+  },
+  "tools": [{
+    "name": "animatediff",
+    "description": "Blackhole-accelerated animated GIF via TTNN UNet with cross-frame temporal attention (requires Blackhole hardware)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "prompt": {"type": "string", "description": "Generation prompt"},
+        "negative_prompt": {"type": "string", "default": ""},
+        "steps": {"type": "integer", "default": 20},
+        "frames": {"type": "integer", "default": 16},
+        "temporal_alpha": {"type": "number", "default": 0.5}
+      },
+      "required": ["prompt"]
+    },
+    "examples": [
+      {"prompt": "a cyberpunk city at night, rain, neon reflections", "frames": 16},
+      {"prompt": "slow motion waterfall in a crystal cave", "steps": 25}
+    ],
+    "x-ttlg": {"streaming": "progress", "artifact_tool": true}
+  }]
+}
