@@ -63,11 +63,14 @@ def shorten_error(message: str) -> str:
 def parse_run_log_name(filename: str) -> tuple[str, str]:
     """Parse an AnimateDiff run log filename into (display_name, date_str).
 
-    Expected format: run_YYYYMMDD_HHMMSS_YYYYMMDD_HHMMSS_<jobid8>.log
+    Accepts two naming schemes:
+      - run_YYYYMMDD_HHMMSS_<stem>.log  (current — animatediff.py run_id format)
+      - run_YYYYMMDD_HHMMSS_YYYYMMDD_HHMMSS_<jobid8>.log  (legacy)
+
     Returns ("run_HH:MM", "Mon D") on success, or (stem, "") on mismatch.
     """
     stem = Path(filename).stem
-    m = re.match(r"run_(\d{8})_(\d{6})_\d{8}_\d{6}_[0-9a-f]+$", stem)
+    m = re.match(r"run_(\d{8})_(\d{6})_(.+)$", stem)
     if not m:
         return stem, ""
     date_part, time_part = m.group(1), m.group(2)

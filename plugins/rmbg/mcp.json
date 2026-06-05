@@ -11,7 +11,7 @@
   "tools": [
     {
       "name": "rmbg_remove_background",
-      "description": "Remove the background from an image using RMBG-2.0, returning a PNG with a transparent background. Works on photos, illustrations, and screenshots. Ideal for compositing subjects onto new backgrounds before image-to-video generation.",
+      "description": "Remove the background from an image using RMBG-1.4 (public model; RMBG-2.0 is gated), returning a PNG with a transparent background. Works on photos, illustrations, and screenshots. Ideal for compositing subjects onto new backgrounds before image-to-video generation.",
       "inputSchema": {
         "type": "object",
         "required": ["src"],

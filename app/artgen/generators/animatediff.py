@@ -37,18 +37,36 @@ from artgen import ArtGenerator, register
 # so failures are self-contained and don't require a running GUI to diagnose.
 # Log level: DEBUG captures all subprocess output; INFO captures run summaries.
 _LOG_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "logs" / "animatediff"
-try:
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
-except OSError:
-    _LOG_DIR = Path("/tmp/tt-local-generator/logs/animatediff")
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _log = logging.getLogger("animatediff")
-if not _log.handlers:
-    _log.setLevel(logging.DEBUG)
-    _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
-    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
-    _log.addHandler(_fh)
+_log.setLevel(logging.DEBUG)
+
+
+def _ensure_log_handler() -> None:
+    """Attach a FileHandler the first time a log entry is actually emitted.
+
+    Called at the top of check_hardware() and run_subprocess() — never at
+    module import time — so importing this module is always safe for test
+    collection, CLI --help, and .deb installs where $HOME may be unusual.
+    """
+    if _log.handlers:
+        return
+    log_dir = _LOG_DIR
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log_dir = Path("/tmp/tt-local-generator/logs/animatediff")
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            _log.addHandler(logging.NullHandler())
+            return
+    try:
+        _fh = logging.FileHandler(log_dir / "animatediff.log")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+        _log.addHandler(_fh)
+    except OSError:
+        _log.addHandler(logging.NullHandler())
 
 _TT_METAL = Path.home() / "tt-metal"
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
@@ -121,6 +139,7 @@ def check_hardware() -> tuple[bool, str]:
     Also logs per-chip temperature and power so ARC hangs (sentinel 65536°C /
     4294W) are visible in the log before a run starts.
     """
+    _ensure_log_handler()
     import json
     tt_smi = _find_tt_smi()
     if tt_smi is None:
@@ -190,6 +209,7 @@ def run_subprocess(
 
     Returns (success, error_message). error_message is "" on success.
     """
+    _ensure_log_handler()
     import threading
 
     script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"

@@ -260,7 +260,7 @@ tt-ctl mcp-config
 # → {"tt-local-gen": {"url": "http://localhost:8003/mcp"}}
 
 # Add it to Claude Code
-tt-ctl mcp-config >> ~/.claude/mcp.json
+tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)
 ```
 
 Your tool will then be available in Claude Code sessions as

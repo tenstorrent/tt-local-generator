@@ -1,5 +1,5 @@
 """
-MCP server — exposes all loaded plugins as MCP tools over HTTP+SSE.
+MCP server — exposes all loaded plugins as MCP tools over HTTP (JSON-RPC 2.0).
 
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
 Port: 8003 (configurable via TTLG_MCP_PORT env var).
@@ -9,7 +9,7 @@ Start:
     python3 app/mcp_server.py --port 8003 --host 0.0.0.0
 
 Claude Code integration:
-    tt-ctl mcp-config >> ~/.claude/mcp.json
+    tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)
 
 Endpoints:
     GET  /mcp   — server manifest listing all available tools
