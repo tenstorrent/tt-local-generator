@@ -40,6 +40,9 @@ Usage:
                                            --simulate  --freeform "describe anything"
                                     Types: landscape skyline constellation geometric
                                            ansi palette verse circuit freeform
+    tt-ctl plugin list              List all discovered plugins (name, tab, output type)
+    tt-ctl mcp-config               Emit Claude Code MCP config JSON for tt-local-gen
+                                    (pipe to ~/.claude/mcp.json to register with Claude)
 
 All commands accept --server URL to override the default http://localhost:8000.
 """
