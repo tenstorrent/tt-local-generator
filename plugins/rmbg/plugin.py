@@ -12,7 +12,7 @@ is_available() returns False and remove_background() raises RuntimeError with
 an install hint.  plugin_loader never imports plugin.py for utility plugins,
 so missing deps do not prevent the app from starting.
 
-In-process usage by the MCP server or remix engine:
+In-process usage by the right-click transform menu and remix engine:
     from plugins.rmbg.plugin import remove_background, is_available
 """
 from __future__ import annotations

@@ -87,7 +87,7 @@ def _make_call_fn(base_url: str | None = None):
     """Return a call_fn that routes to the best available LLM endpoint.
 
     Resolution order:
-      1. base_url if provided (from X-LLM-URL request header)
+      1. base_url if provided (from TTLG_LLM_URL environment variable)
       2. artgen server on port 8002
       3. prompt-gen server on port 8001
       4. RuntimeError with clear instructions

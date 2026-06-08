@@ -12,7 +12,7 @@ process stays clean.
 Graceful degradation: if venv or packages are missing, is_available() returns
 False and estimate_depth() raises RuntimeError.
 
-In-process usage by the MCP server or remix engine:
+In-process usage by the right-click transform menu and remix engine:
     from plugins.depth.plugin import estimate_depth, is_available
 """
 from __future__ import annotations
