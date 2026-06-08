@@ -765,15 +765,18 @@ class WorkflowPopover(Gtk.Popover):
         """GLib IO watch callback — runs on main thread."""
         if condition & GLib.IO_IN:
             line = source.readline()
-            if not line:
-                return GLib.SOURCE_CONTINUE
+            # When readline() returns "" the pipe is at EOF.  Fall through to
+            # the IO_HUP check below — do NOT return SOURCE_CONTINUE.  GLib can
+            # deliver IO_IN | IO_HUP in a single callback invocation; returning
+            # early here would bypass the HUP handler and leave the dead pipe in
+            # GLib's watch table, spinning the main loop on every idle iteration.
+            if line:
+                line = line.rstrip()
 
-            line = line.rstrip()
-
-            # Fix 5: Capture the log file path emitted early by run_workflow.sh.
-            # Format: LOG:/path/to/file.log — store in run record so the history
-            # row "Log" button can open it in LogViewerWindow.
-            if line.startswith("LOG:"):
+                # Fix 5: Capture the log file path emitted early by run_workflow.sh.
+                # Format: LOG:/path/to/file.log — store in run record so the history
+                # row "Log" button can open it in LogViewerWindow.
+            if line and line.startswith("LOG:"):
                 log_path = line[4:].strip()
                 run["log_file"] = log_path
                 _run_index.update(run["id"], log_file=log_path)

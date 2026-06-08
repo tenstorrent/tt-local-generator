@@ -1,3 +1,14 @@
+tt-local-generator (0.7.1) noble; urgency=medium
+
+  * Fix scroll sluggishness: GLib.io_add_watch dead-pipe spin loop in
+    workflow_popover.py._on_run_stdout. When readline() returned "" at pipe
+    EOF, the old code returned SOURCE_CONTINUE before reaching the IO_HUP
+    handler, leaving the dead fd in GLib's watch table and spinning the main
+    loop on every idle iteration. Fixed by falling through to the IO_HUP
+    check on empty reads so SOURCE_REMOVE is returned and the watch removed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.7.0) noble; urgency=medium
 
   * Full v0.15.0 model validation on QB2 (P300X2). Validated models:
