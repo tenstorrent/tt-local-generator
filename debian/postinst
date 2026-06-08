@@ -279,25 +279,29 @@ fi
 _section "Pulling Docker inference image"
 
 if _have docker && docker info &>/dev/null 2>&1; then
-    echo "Pulling pinned image: $DOCKER_IMAGE"
-    if docker pull "$DOCKER_IMAGE" 2>/dev/null; then
-        echo "Pulled: $DOCKER_IMAGE"
+    if docker image inspect "$DOCKER_IMAGE" &>/dev/null 2>&1; then
+        echo "Image already present locally: $DOCKER_IMAGE — skipping pull."
     else
-        echo "WARNING: Pinned image not found ($DOCKER_IMAGE)."
-        echo "Falling back to :latest…"
-        if docker pull "$DOCKER_IMAGE_LATEST"; then
-            echo "Pulled: $DOCKER_IMAGE_LATEST"
-            # Tag it with the pinned name so start_wan_qb2.sh finds it by the
-            # exact ancestor filter string without code changes.
-            docker tag "$DOCKER_IMAGE_LATEST" "$DOCKER_IMAGE"
-            echo "Tagged :latest as $DOCKER_IMAGE"
-            echo "NOTE: Verify compatibility with your tt-inference-server version."
-            echo "      See: https://github.com/tenstorrent/tt-inference-server/releases"
+        echo "Pulling pinned image: $DOCKER_IMAGE"
+        if docker pull "$DOCKER_IMAGE" 2>/dev/null; then
+            echo "Pulled: $DOCKER_IMAGE"
         else
-            echo ""
-            echo "ERROR: Could not pull Docker inference image."
-            echo "The application will not start inference until you manually run:"
-            echo "  docker pull $DOCKER_IMAGE_LATEST"
+            echo "WARNING: Pinned image not found ($DOCKER_IMAGE)."
+            echo "Falling back to :latest…"
+            if docker pull "$DOCKER_IMAGE_LATEST"; then
+                echo "Pulled: $DOCKER_IMAGE_LATEST"
+                # Tag it with the pinned name so start_wan_qb2.sh finds it by the
+                # exact ancestor filter string without code changes.
+                docker tag "$DOCKER_IMAGE_LATEST" "$DOCKER_IMAGE"
+                echo "Tagged :latest as $DOCKER_IMAGE"
+                echo "NOTE: Verify compatibility with your tt-inference-server version."
+                echo "      See: https://github.com/tenstorrent/tt-inference-server/releases"
+            else
+                echo ""
+                echo "ERROR: Could not pull Docker inference image."
+                echo "The application will not start inference until you manually run:"
+                echo "  docker pull $DOCKER_IMAGE_LATEST"
+            fi
         fi
     fi
 else
