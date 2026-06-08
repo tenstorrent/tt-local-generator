@@ -76,6 +76,12 @@ class TestResolve:
         assert "wan2.2" in keys
         assert "prompt-server" in keys
 
+    def test_single_chip_expands_to_artgen_and_prompt(self):
+        result = sm._resolve("single-chip")
+        keys = [s.key for s in result]
+        assert "artgen-qwen3-8b" in keys
+        assert "prompt-server" in keys
+
     def test_unknown_key_raises(self):
         with pytest.raises(KeyError, match="Unknown server"):
             sm._resolve("nonexistent-server")
