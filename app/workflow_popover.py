@@ -711,8 +711,9 @@ class WorkflowPopover(Gtk.Popover):
                 val = widget.get_text()
             overrides[(node_id, key)] = val
 
-        # Write overridden spec to temp file
-        spec_path = _apply_overrides(spec["path"], overrides) if overrides else spec["path"]
+        # Write overridden spec to temp file (None when no overrides — nothing to clean up)
+        _tmp_spec_path = _apply_overrides(spec["path"], overrides) if overrides else None
+        spec_path = _tmp_spec_path or spec["path"]
 
         # Build run record
         run_id = str(uuid.uuid4())
@@ -720,6 +721,7 @@ class WorkflowPopover(Gtk.Popover):
         run = {
             "id": run_id,
             "spec_path": spec["path"],
+            "_tmp_spec_path": _tmp_spec_path,  # cleaned up in _finish_run
             "spec_name": spec["name"],
             "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
@@ -835,7 +837,11 @@ class WorkflowPopover(Gtk.Popover):
 
         if condition & GLib.IO_HUP:
             proc = self._active_run_proc
-            success = (proc is not None and proc.wait() == 0)
+            # poll() is non-blocking — safe on the GTK main thread.
+            # The process has exited (IO_HUP fired) so poll() returns the
+            # exit code immediately without blocking.
+            rc = proc.poll() if proc is not None else None
+            success = (rc == 0)
             GLib.idle_add(self._finish_run, run, success)
             return GLib.SOURCE_REMOVE
 
@@ -850,6 +856,14 @@ class WorkflowPopover(Gtk.Popover):
         _run_index.update(run["id"], status=status, finished_at=now,
                           playlist_id=run.get("playlist_id"),
                           artifact_count=run.get("artifact_count", 0))
+
+        # Clean up the parameterized temp spec file if one was created.
+        tmp = run.pop("_tmp_spec_path", None)
+        if tmp:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except OSError:
+                pass
 
         # Restore the run button to its default state
         self._run_btn.set_label("▶  Run Workflow")
