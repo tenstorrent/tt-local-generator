@@ -332,7 +332,7 @@ class HistoryStore:
         p = r.params_dict
         # Determine video/image paths: prefer params, fall back to file_path
         file_path = r.file_path or ""
-        if r.media_type == "video":
+        if r.media_type in ("video", "animate", "animatediff"):
             video_path = p.get("video_path", "") or file_path
             image_path = p.get("image_path", "")
         else:

@@ -59,7 +59,7 @@ if not _log.handlers:
 _MODEL_LABELS: dict[str, str] = {
     "wan2.2-t2v":               "Wan2.2",
     "mochi-1-preview":          "Mochi-1",
-    "flux.1-dev":               "FLUX",
+    "flux.1-schnell":           "FLUX",
     "wan2.2-animate-14b":       "Animate-14B",
     "skyreels-v2-i2v-14b-540p": "SkyReels I2V",
 }

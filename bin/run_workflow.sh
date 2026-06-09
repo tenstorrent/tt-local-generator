@@ -233,10 +233,10 @@ PY
 
     log "  Job: $JOB"
     OUT="$OUTPUT_DIR/node${node_id}_image.png"
+    STATUS=""  # initialise so set -u never fires if all iterations are rate-limited
     for i in $(seq 1 40); do
         sleep 30
-        # Fix 1: Detect 429 rate limit responses during poll; back off and retry
-        # rather than silently dropping the status and leaving $STATUS empty.
+        # Detect 429 rate limit responses; back off and retry without overwriting STATUS.
         RAW_STATUS=$(curl -s -w '\n%{http_code}' "$server/v1/images/generations/$JOB" 2>/dev/null)
         HTTP_CODE=$(echo "$RAW_STATUS" | tail -1)
         if [[ "$HTTP_CODE" == "429" ]]; then
@@ -267,8 +267,12 @@ node_image_to_video() {
     log "  Generating video: $model (${width}x${height}, ${frames}f)"
     [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "video_path" "$OUTPUT_DIR/node${node_id}_video.mp4"; return 0; }
 
-    # Encode image as base64
-    B64=$(python3 -c "import base64; print(base64.b64encode(open('$image_path','rb').read()).decode())")
+    # Encode image as base64 — pass path via sys.argv so single quotes in the path are safe
+    B64=$(python3 - "$image_path" << 'PY'
+import sys, base64
+print(base64.b64encode(open(sys.argv[1], 'rb').read()).decode())
+PY
+    )
     JOB=$(python3 - "$prompt" "$B64" "$width" "$height" "$frames" "$steps" "$seed" "$server" << 'PY'
 import sys, json, urllib.request
 prompt, b64, w, h, frames, steps, seed, server = sys.argv[1:]
@@ -312,13 +316,14 @@ node_caption_image() {
     local node_id="$1" src="$2" prompt="${3:-}"
     log "  Captioning image with BLIP: $src"
     [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "caption" "The 1964 World's Fair Unisphere stands tall against a bright sky."; return 0; }
-    CAPTION=$("$PYTHON3" -c "
-import sys; sys.path.insert(0, '$REPO_ROOT/plugins/blip')
-import importlib.util
-spec = importlib.util.spec_from_file_location('blip_plugin', '$REPO_ROOT/plugins/blip/plugin.py')
+    CAPTION=$("$PYTHON3" - "$REPO_ROOT" "$src" "$prompt" << 'PY'
+import sys, importlib.util, pathlib
+repo_root, src, prompt = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location('blip_plugin', pathlib.Path(repo_root) / 'plugins' / 'blip' / 'plugin.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-print(mod.caption_image('$src', '$prompt'))
-")
+print(mod.caption_image(src, prompt))
+PY
+    )
     log "  Caption: $CAPTION"
     set_result "$node_id" "caption" "$CAPTION"
 }
@@ -328,12 +333,13 @@ node_remove_background() {
     local dest="$OUTPUT_DIR/node${node_id}_fg.png"
     log "  Removing background with RMBG: $src"
     [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "fg_path" "$dest"; return 0; }
-    "$PYTHON3" -c "
-import importlib.util
-spec = importlib.util.spec_from_file_location('rmbg_plugin', '$REPO_ROOT/plugins/rmbg/plugin.py')
+    "$PYTHON3" - "$REPO_ROOT" "$src" "$dest" << 'PY'
+import sys, importlib.util, pathlib
+repo_root, src, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location('rmbg_plugin', pathlib.Path(repo_root) / 'plugins' / 'rmbg' / 'plugin.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-mod.remove_background('$src', '$dest')
-"
+mod.remove_background(src, dest)
+PY
     log "  ✅ Foreground: $dest"
     set_result "$node_id" "fg_path" "$dest"
 }
@@ -343,12 +349,13 @@ node_estimate_depth() {
     local dest="$OUTPUT_DIR/node${node_id}_depth.png"
     log "  Estimating depth with GLPN: $src"
     [[ $DRY_RUN -eq 1 ]] && { set_result "$node_id" "depth_path" "$dest"; return 0; }
-    "$PYTHON3" -c "
-import importlib.util
-spec = importlib.util.spec_from_file_location('depth_plugin', '$REPO_ROOT/plugins/depth/plugin.py')
+    "$PYTHON3" - "$REPO_ROOT" "$src" "$dest" << 'PY'
+import sys, importlib.util, pathlib
+repo_root, src, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location('depth_plugin', pathlib.Path(repo_root) / 'plugins' / 'depth' / 'plugin.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-mod.estimate_depth('$src', '$dest')
-"
+mod.estimate_depth(src, dest)
+PY
     log "  ✅ Depth map: $dest"
     set_result "$node_id" "depth_path" "$dest"
 }

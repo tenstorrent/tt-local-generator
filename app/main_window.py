@@ -1390,8 +1390,6 @@ popover.picker-popover > contents {
 .log-footer-btn:hover {
     background: rgba(79, 209, 197, 0.25);
 }
-/* Hide GTK4's built-in video mediacontrols overlay (eject button, etc.). */
-video > mediacontrols { opacity: 0; }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -1648,6 +1646,7 @@ class GenerationCard(Gtk.Frame):
         self._remix_cb = remix_cb           # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb             # callable(record, starred: bool) or None
         self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
+        self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
         self.add_css_class("card")
         # Minimum card width; FlowBox packs cards at this natural width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1688,6 +1687,11 @@ class GenerationCard(Gtk.Frame):
         if not available:
             return  # no plugins available — suppress empty menu
 
+        # Dismiss any popover left open from a previous right-click on this card.
+        if self._ctx_pop is not None:
+            self._ctx_pop.popdown()
+            self._ctx_pop = None
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.set_margin_top(6)
         box.set_margin_bottom(6)
@@ -1695,6 +1699,7 @@ class GenerationCard(Gtk.Frame):
         box.set_margin_end(4)
 
         pop = Gtk.Popover()
+        self._ctx_pop = pop
 
         for key, label in available:
             btn = Gtk.Button(label=label)
@@ -3664,6 +3669,10 @@ class GalleryWidget(Gtk.Box):
         gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
         start = self._page * self._PAGE_SIZE
         return pending + gen_cards[start: start + self._PAGE_SIZE]
+
+    def all_cards(self) -> list:
+        """Return all filtered cards across all pages — used for detail-panel navigation."""
+        return self._filtered_cards()
 
     def _relayout(self) -> None:
         """Re-populate the FlowBox with the current page slice, update pager."""
@@ -7249,6 +7258,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
         self._start_artgen_health_worker()
+        # Pre-warm transform availability cache off the main thread so the first
+        # right-click doesn't block while importing plugin modules (torch etc.).
+        threading.Thread(
+            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth")],
+            daemon=True,
+        ).start()
         if self._inventory_url:
             self._start_inventory_fetch()
 
@@ -8113,9 +8128,10 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_card_selected(self, record: GenerationRecord) -> None:
         """Called when the user clicks a gallery card. Populates the detail panel."""
         gallery = self._gallery_for_type(record.media_type)
-        visible = gallery.visible_cards()
-        idx = next((i for i, c in enumerate(visible) if c._record.id == record.id), 0)
-        self._detail.set_context([c._record for c in visible], idx)
+        # Use all_cards() so prev/next navigation crosses page boundaries.
+        all_cards = gallery.all_cards()
+        idx = next((i for i, c in enumerate(all_cards) if c._record.id == record.id), 0)
+        self._detail.set_context([c._record for c in all_cards], idx)
         self._detail.show_record(record, self._dispatch_remix)
 
     # ── Remix routing ──────────────────────────────────────────────────────────
