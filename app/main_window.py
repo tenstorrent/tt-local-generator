@@ -796,62 +796,6 @@ scrollbar slider:hover {
     border-color: @tt_bg_dark;
 }
 
-/* -- Pipeline tab ---------------------------------------------------------- */
-button.pipeline-source-btn {
-    background-color: @tt_bg_dark;
-    color: @tt_text_muted;
-    border: 1px solid @tt_border;
-    border-radius: 4px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 700;
-}
-button.pipeline-source-btn:hover {
-    color: @tt_text;
-    background-color: @tt_bg_darkest;
-}
-/* -- Pipeline portfolio view ----------------------------------------------- */
-.portfolio-job-card {
-    background-color: @tt_bg_card;
-    border: 1px solid @tt_border;
-    border-radius: 8px;
-    overflow: hidden;
-}
-.portfolio-card-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: @tt_text;
-}
-.portfolio-image-frame {
-    background-color: #000;
-    overflow: hidden;
-}
-.portfolio-artifact-label {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: @tt_text_muted;
-}
-.portfolio-poem-section {
-    background-color: @tt_bg_dark;
-    border-top: 1px solid @tt_border;
-    border-bottom: 1px solid @tt_border;
-}
-.portfolio-poem-text {
-    font-size: 12px;
-    color: @tt_text2;
-    line-height: 1.7;
-}
-.portfolio-video-section { }
-.portfolio-image-section { }
-.portfolio-clickable:hover { background-color: alpha(@tt_accent, 0.08); }
-
-button.pipeline-source-btn:checked {
-    background-color: @tt_accent;
-    color: @tt_bg_darkest;
-    border-color: @tt_accent;
-}
 
 /* -- Detail pane dismiss bar ----------------------------------------------- */
 .detail-close-bar { padding: 2px 4px 0; min-height: 20px; }
@@ -3975,17 +3919,6 @@ class ControlPanel(Gtk.Box):
             "Generative art via LLM  ·  SVG / ANSI / verse / palette\n"
             "Requires a chat model on port 8002 (not the diffusion server)"
         )
-        self._src_pipeline_btn = Gtk.ToggleButton(label="⚙ Pipeline")
-        self._src_pipeline_btn.add_css_class("source-btn")
-        self._src_pipeline_btn.add_css_class("source-btn-right-extra")
-        self._src_pipeline_btn.add_css_class("pipeline-source-btn")
-        self._src_pipeline_btn.set_tooltip_text(
-            "Pipeline mode — batch multi-step generation\n"
-            "Template + variable table → phase grid → playlists"
-        )
-        self._src_pipeline_btn.set_group(self._src_video_btn)
-        self._src_pipeline_btn.connect("toggled",
-            lambda b: b.get_active() and self._set_source("pipeline"))
         self._src_animate_btn.set_group(self._src_video_btn)
         self._src_image_btn.set_group(self._src_video_btn)
         self._src_art_btn.set_group(self._src_video_btn)
@@ -3999,7 +3932,6 @@ class ControlPanel(Gtk.Box):
         self._src_animate_btn.set_visible(True)
         src_row.append(self._src_image_btn)
         src_row.append(self._src_art_btn)
-        src_row.append(self._src_pipeline_btn)
         self._toolbar_box.append(src_row)
 
         # Spacer (MainWindow appends attractor + other buttons after this)
@@ -5112,7 +5044,7 @@ class ControlPanel(Gtk.Box):
     # ── Source toggle ──────────────────────────────────────────────────────────
 
     def _set_source(self, source: str) -> None:
-        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), 'image' (FLUX), 'artgen' (LLM art), 'pipeline' (batch)."""
+        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), 'image' (FLUX), 'artgen' (LLM art)."""
         if source == self._model_source:
             return
         self._model_source = source
@@ -5122,14 +5054,7 @@ class ControlPanel(Gtk.Box):
         is_artgen = source == "artgen"
 
         # Active state is handled automatically by the ToggleButton group (:checked CSS).
-        if source == "pipeline":
-            self._title_lbl.set_label("TT Local Generator")
-            self._source_desc_lbl.set_label(
-                "pipeline mode  ·  batch generation  ·  phase grid  ·  playlists"
-            )
-            self._on_source_change(source)
-            return
-        elif is_artgen:
+        if is_artgen:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
                 "generative art via LLM  ·  SVG / ANSI / verse / palette  ·  port 8002"
@@ -7459,28 +7384,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
 
-        # Pipeline mode: left pane becomes PipelinePanel; gallery stack shows PhaseGridWidget
-        from pipeline_panel import PipelinePanel
-        from phase_grid_widget import PhaseGridWidget, GridState
-        self._pipeline_panel = PipelinePanel(
-            on_run=self._on_pipeline_run,
-            on_cancel=self._on_pipeline_cancel,
-            on_load_run=self._on_pipeline_load_run,
-        )
-        self._phase_grid = PhaseGridWidget(
-            state=GridState(jobs=[], phases=[]),
-            on_cell_click=self._on_pipeline_cell_click,
-            on_retry_node=self._on_pipeline_retry_node,
-            on_retry_job=self._on_pipeline_retry_job,
-        )
-        self._gallery_stack.add_named(self._phase_grid, "pipeline")
-        from pipeline_portfolio_view import PipelinePortfolioView
-        self._pipeline_portfolio = PipelinePortfolioView(
-            on_artifact_click=self._on_pipeline_portfolio_artifact_click,
-        )
-        self._gallery_stack.add_named(self._pipeline_portfolio, "pipeline-portfolio")
-        GLib.idle_add(self._restore_pipeline_run)
-
         self._gallery_stack.set_visible_child_name("video")
 
         # Apply saved gallery density preference on startup.  The default
@@ -7588,7 +7491,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._detail_wrap.set_visible(False),
             setattr(self, "_detail_visible", False),
             self._inner_paned.set_position(
-                700 if self._model_source == "pipeline" else
                 self._inner_paned.get_allocation().width
             ) if hasattr(self, "_inner_paned") else None,
         ))
@@ -8188,53 +8090,23 @@ class MainWindow(Gtk.ApplicationWindow):
         return self._video_gallery
 
     def _on_source_change(self, source: str) -> None:
-        """Switch the gallery stack; in artgen/pipeline mode collapse side panels for full-width view."""
+        """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
         self._gallery_stack.set_visible_child_name(source)
         is_artgen = source == "artgen"
-        is_pipeline = source == "pipeline"
-
-        # In pipeline mode, swap the left pane from the scrollable ControlPanel
-        # to PipelinePanel (a standalone widget with its own layout).
-        if is_pipeline:
-            if hasattr(self, "_ctrl_scroll_inner") and hasattr(self, "_pipeline_panel"):
-                if self._ctrl_scroll_inner.get_parent() is not None:
-                    self._ctrl_wrapper.remove(self._ctrl_scroll_inner)
-                if self._pipeline_panel.get_parent() is None:
-                    self._ctrl_wrapper.prepend(self._pipeline_panel)
-            if hasattr(self, "_inner_paned"):
-                self._inner_paned.set_position(700)  # more space for multi-column grid
-        else:
-            # Leaving pipeline — clear portfolio to free video/image resources
-            if hasattr(self, "_pipeline_portfolio"):
-                GLib.idle_add(self._pipeline_portfolio.clear)
-            # Restore the normal scrollable ControlPanel when leaving pipeline mode.
-            if hasattr(self, "_pipeline_panel") and self._pipeline_panel.get_parent() is not None:
-                self._ctrl_wrapper.remove(self._pipeline_panel)
-            if hasattr(self, "_ctrl_scroll_inner") and self._ctrl_scroll_inner.get_parent() is None:
-                self._ctrl_wrapper.prepend(self._ctrl_scroll_inner)
-            if hasattr(self, "_inner_paned"):
-                self._inner_paned.set_position(480)  # restore normal split
 
         # Hide the left ControlPanel and right DetailPanel in artgen mode so
         # the ArtgenPanel can use the full window width for its own layout.
-        # Pipeline mode keeps the left pane (PipelinePanel) but hides the detail pane.
         self._ctrl_wrapper.set_visible(not is_artgen)
-        # Detail pane: hidden in artgen (full-width) and hidden by default in pipeline
-        # (only revealed when the user clicks a cell — see _on_pipeline_cell_click).
-        # Restore normal visibility when leaving pipeline.
-        if is_pipeline:
-            self._detail_wrap.set_visible(False)
-        elif not is_artgen:
+        if not is_artgen:
             self._detail_wrap.set_visible(True)
         self._rebuild_context_menu(source)
-        # Grey out Detail Panel toggle on Art/Pipeline tabs (no detail panel there)
+        # Grey out Detail Panel toggle / gallery density on Art tab (no detail panel there)
         toggle_act = self.lookup_action("toggle-detail")
         if toggle_act:
-            toggle_act.set_enabled(source not in ("artgen", "pipeline"))
-        # Grey out gallery density on Art/Pipeline tabs (their galleries are fixed-size)
+            toggle_act.set_enabled(source != "artgen")
         density_act = self.lookup_action("gallery-density")
         if density_act:
-            density_act.set_enabled(source not in ("artgen", "pipeline"))
+            density_act.set_enabled(source != "artgen")
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
@@ -10135,263 +10007,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._start_next_queued()
         return False
 
-    # ── Pipeline source callbacks ─────────────────────────────────────────────
-
-    def _on_pipeline_run(self, jobs: list, spec_path: str, param_overrides: dict) -> None:
-        """Called on main thread when the PipelinePanel Run button is clicked."""
-        from pipeline_runner import PipelineRunner
-        from phase_grid_widget import GridState
-        from pipeline_panel import phases_from_spec
-        phases = phases_from_spec(spec_path)
-        state = GridState(jobs=[j["name"] for j in jobs], phases=phases)
-        self._phase_grid._state = state
-        self._phase_grid._build()
-        # Always show the phase grid while a run is active — switch to portfolio on completion
-        self._gallery_stack.set_visible_child_name("pipeline")
-        # Assign before start() so on_run_finished can reference _pipeline_runner
-        # even if the callback fires synchronously (e.g. in tests).
-        self._pipeline_runner = PipelineRunner(idle_add=GLib.idle_add)
-        self._pipeline_runner.start(
-            spec_path=spec_path,
-            jobs=jobs,
-            param_overrides=param_overrides,
-            on_node_update=self._on_pipeline_node_update,
-            on_run_finished=self._on_pipeline_run_finished,
-        )
-
-    def _on_pipeline_cancel(self) -> None:
-        """Called on main thread when the PipelinePanel Cancel button is clicked."""
-        if hasattr(self, "_pipeline_runner") and self._pipeline_runner:
-            self._pipeline_runner.cancel()
-
-    def _on_pipeline_node_update(self, job_name: str, node_id: str, status: str, detail: str) -> None:
-        """Called on GTK main thread via GLib.idle_add by PipelineRunner — safe to touch widgets."""
-        if job_name == "__health__" and status == "degraded":
-            self._hw_statusbar.update_server(False, f"⚠ Chips degraded: {detail}")
-            return
-        if hasattr(self, "_phase_grid"):
-            self._phase_grid.update_cell(job_name, node_id, status, detail)
-
-    def _on_pipeline_run_finished(self, success: bool) -> None:
-        """Called on GTK main thread via GLib.idle_add when the run subprocess exits."""
-        if hasattr(self, "_pipeline_panel"):
-            self._pipeline_panel.set_running(
-                False,
-                "✅ Done — scroll cards to browse" if success
-                else "❌ Failed — check grid for details"
-            )
-        if success and hasattr(self, "_pipeline_runner") and self._pipeline_runner:
-            run_id = self._pipeline_runner._run_id
-            if run_id:
-                # Brief delay so store write completes, then switch to portfolio
-                self._pipeline_load_timer = GLib.timeout_add(
-                    800,
-                    lambda rid=run_id: (
-                        self._on_pipeline_load_run(rid) or GLib.SOURCE_REMOVE
-                    ),
-                )
-
-    def _on_pipeline_load_run(self, run_id: str) -> None:
-        """Load a past run — portfolio view for done runs, phase grid for others."""
-        from pipeline_store import PipelineStore
-        from phase_grid_widget import GridState
-        from pipeline_panel import phases_from_spec
-        from pipeline_portfolio_view import run_has_portfolio_artifacts
-
-        store = PipelineStore()
-        run = store.get_run(run_id)
-        if not run:
-            return
-
-        phases = phases_from_spec(run.get("spec_path", ""))
-        status = run.get("status", "")
-
-        use_portfolio = (
-            status == "done"
-            and run_has_portfolio_artifacts(run.get("job_states", {}), phases)
-            and hasattr(self, "_pipeline_portfolio")
-        )
-
-        if use_portfolio:
-            self._pipeline_portfolio.load_run(run, phases)
-            # Switch gallery stack directly (portfolio is a sub-view within pipeline source)
-            # Only switch the stack child — don't re-invoke _on_source_change which would
-            # rebuild the entire left pane. The pipeline source tab handles left pane swap.
-            if self._gallery_stack.get_visible_child_name() != "pipeline-portfolio":
-                self._gallery_stack.set_visible_child_name("pipeline-portfolio")
-        else:
-            state = GridState.from_run_record(run, phases)
-            if hasattr(self, "_phase_grid"):
-                self._phase_grid._state = state
-                self._phase_grid._build()
-            self._gallery_stack.set_visible_child_name("pipeline")
-
-    def _on_pipeline_portfolio_artifact_click(
-        self, detail: str, artifact_type: str
-    ) -> None:
-        """Route portfolio card clicks to the detail pane via existing cell-click logic."""
-        self._on_pipeline_cell_click("portfolio", "?", detail)
-
-    def _on_pipeline_cell_click(self, job_name: str, node_id: str, detail: str) -> None:
-        """Load a clicked phase grid artifact into the detail pane.
-
-        Handles all artifact types: images, videos, and text (poems, captions).
-        Text artifacts are displayed as the prompt field in a read-only record.
-        """
-        from pathlib import Path as _Path
-        import uuid as _uuid
-        from datetime import datetime, timezone
-        from history_store import GenerationRecord
-
-        if not detail:
-            return
-
-        path = detail
-        is_path = path.startswith("/") and _Path(path).exists()
-        suffix = _Path(path).suffix.lower() if is_path else ""
-        is_video = suffix in (".mp4", ".webm", ".mov")
-        is_image = suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp")
-        is_text = not is_path  # poems, captions, prompts — show as text in detail
-
-        # Friendly display name from node_id
-        node_labels = {
-            "1": "Seed image", "2": "BLIP caption", "3": "Background removed",
-            "4": "Depth map",  "5": "Video prompt", "6": "Video",
-            "7": "Poem",       "8": "Poem image",   "9": "Saved",
-        }
-        label = node_labels.get(node_id, f"Node {node_id}")
-
-        if is_text:
-            # Show text content as the prompt in a text-type record
-            rec = GenerationRecord(
-                id=str(_uuid.uuid4()),
-                prompt=detail,          # the poem/caption IS the content
-                negative_prompt="",
-                num_inference_steps=0,
-                seed=-1,
-                video_path="",
-                thumbnail_path="",
-                created_at=datetime.now(timezone.utc).isoformat(),
-                media_type="artgen",    # artgen records display as text
-                image_path="",
-                model=f"Pipeline: {job_name} · {label}",
-            )
-        else:
-            rec = GenerationRecord(
-                id=str(_uuid.uuid4()),
-                prompt=f"{job_name} · {label}",
-                negative_prompt="",
-                num_inference_steps=0,
-                seed=-1,
-                video_path=path if is_video else "",
-                thumbnail_path="",
-                created_at=datetime.now(timezone.utc).isoformat(),
-                media_type="video" if is_video else "image",
-                image_path=path if is_image else "",
-                model="pipeline",
-            )
-        # Reveal the detail pane on first click (it starts hidden in pipeline mode)
-        if hasattr(self, "_detail_wrap") and not self._detail_wrap.get_visible():
-            self._detail_wrap.set_visible(True)
-            # Constrain detail pane to a fixed sidebar width in pipeline mode
-            # so it doesn't consume the portfolio cards area.
-            if hasattr(self, "_inner_paned"):
-                alloc = self._inner_paned.get_allocation()
-                total_w = alloc.width if alloc.width > 100 else 700
-                # Keep ~320px for detail, give rest to portfolio
-                self._inner_paned.set_position(max(400, total_w - 340))
-        self._detail.show_record(rec, self._dispatch_remix)
-
-    def _on_pipeline_retry_node(self, job_name: str, node_id: str) -> None:
-        """Retry a single failed node in the active pipeline run.
-
-        Calls PipelineRunner.retry_node() with the same GTK-safe callbacks used
-        by the initial run so the grid and panel update on the main thread.
-        """
-        runner = getattr(self, "_pipeline_runner", None)
-        if runner is None:
-            return
-        try:
-            runner.retry_node(
-                job_name, node_id,
-                on_node_update=self._on_pipeline_node_update,
-                on_run_finished=self._on_pipeline_run_finished,
-            )
-        except (ValueError, Exception) as e:
-            if hasattr(self, "_pipeline_panel"):
-                self._pipeline_panel.set_running(False, f"Retry failed: {e}")
-
-    def _on_pipeline_retry_job(self, job_name: str) -> None:
-        """Retry all failed nodes in a specific pipeline job.
-
-        Calls PipelineRunner.retry_job() with the same GTK-safe callbacks used
-        by the initial run so the grid and panel update on the main thread.
-        """
-        runner = getattr(self, "_pipeline_runner", None)
-        if runner is None:
-            return
-        try:
-            runner.retry_job(
-                job_name,
-                on_node_update=self._on_pipeline_node_update,
-                on_run_finished=self._on_pipeline_run_finished,
-            )
-        except (ValueError, Exception) as e:
-            if hasattr(self, "_pipeline_panel"):
-                self._pipeline_panel.set_running(False, f"Retry failed: {e}")
-
-    def _restore_pipeline_run(self) -> bool:
-        """Called via GLib.idle_add on startup. Restores pipeline state.
-
-        Priority order:
-        1. If any run is still LIVE (process alive), reattach and show it.
-        2. Mark any runs with status=running but dead process as interrupted.
-        3. Show the most recent completed run's grid for reference.
-        """
-        from pipeline_store import PipelineStore
-        from pipeline_runner import PipelineRunner
-        store = PipelineStore()
-
-        # Find runs that claim to be running
-        all_runs = store.list_runs(limit=10)
-        running_runs = [r for r in all_runs if r.get("status") == "running"]
-
-        reattached = False
-        for run in running_runs:
-            runner = PipelineRunner(idle_add=GLib.idle_add)
-            runner._store = store
-            ok = runner.reattach(
-                run["id"],
-                on_node_update=self._on_pipeline_node_update,
-                on_run_finished=self._on_pipeline_run_finished,
-            )
-            if ok:
-                # Live run found — show its grid and switch to Pipeline tab
-                self._on_pipeline_load_run(run["id"])
-                if hasattr(self, "_src_pipeline_btn"):
-                    self._src_pipeline_btn.set_active(True)
-                self._pipeline_runner = runner
-                if hasattr(self, "_pipeline_panel"):
-                    self._pipeline_panel.set_running(True, "Reconnected to running pipeline…")
-                reattached = True
-                break  # Only reattach to first live run
-
-        if not reattached:
-            # No live runs — silently pre-populate the Pipeline tab in the
-            # background so it's ready when the user clicks it, but do NOT
-            # switch to it automatically. The user's last active tab stays active.
-            runs = store.list_runs(limit=1)
-            if runs and hasattr(self, "_phase_grid"):
-                self._on_pipeline_load_run(runs[0]["id"])
-
-        return GLib.SOURCE_REMOVE
 
     def do_close_request(self) -> bool:
-        # Cancel any pending pipeline portfolio load timer
-        timer_id = getattr(self, "_pipeline_load_timer", None)
-        if timer_id is not None:
-            GLib.source_remove(timer_id)
-            self._pipeline_load_timer = None
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
         if self._flash_restore_id:
             GLib.source_remove(self._flash_restore_id)
