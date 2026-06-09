@@ -327,8 +327,16 @@ find ~/code/tt-local-generator/app -name "__pycache__" -type d -exec rm -rf {} +
 ## Running tests
 
 ```bash
-/usr/bin/python3 -m pytest tests/ -q   # 107 tests, all should pass
+# Full suite — xvfb-run provides a virtual X11 display so GTK widget tests run
+xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/ -q
+
+# Headless fallback (no display available) — GTK widget tests are skipped
+/usr/bin/python3 -m pytest tests/ -q
 ```
+
+`xvfb-run` is pre-installed on Ubuntu 24.04 (`apt install xvfb` if missing).
+One pre-existing failure (`test_forge_transforms::test_on_transform_finished_appends_and_refreshes`)
+and one environment skip (`test_regression_guards` when `docs/assets/` is absent) are expected.
 
 Tests are in `tests/` at repo root. Each file does `sys.path.insert(0, str(Path(__file__).parent.parent / "app"))` to import from `app/`. Tests mock all subprocess and network calls.
 
