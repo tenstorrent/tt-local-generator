@@ -58,6 +58,7 @@ def test_workflow_popover_not_imported_at_startup():
     )
 
 
+@gtk_required
 def test_gif_gallery_cards_use_static_thumbnail_not_animated_widget():
     """ArtgenGallery must show static thumbnails for GIF records, not _AnimatedGifWidget.
 
@@ -114,6 +115,7 @@ def test_gif_gallery_cards_use_static_thumbnail_not_animated_widget():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+@gtk_required
 def test_gif_fallback_without_thumbnail_uses_animated_widget():
     """When a GIF has no thumbnail, make_card_content falls back to _AnimatedGifWidget.
 
