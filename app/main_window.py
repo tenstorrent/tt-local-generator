@@ -9295,7 +9295,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if video_model_key == "animatediff":
                 # Guard: if only 1 chip is present and a server model is loaded on it,
                 # AnimateDiff can't run — both want exclusive access to the same device.
-                if self._server_ready and self._count_blackhole_chips() == 1:
+                if self._controls._server_ready and self._count_blackhole_chips() == 1:
                     model_lbl = self._running_model or "a model"
                     self._gen_gallery.remove_pending()
                     self._gen_gallery = None
@@ -9355,11 +9355,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._worker_gen = gen
 
         def run():
-            gen.run_with_callbacks(
-                on_progress=lambda msg: GLib.idle_add(self._on_progress, msg, pending),
-                on_finished=lambda rec: GLib.idle_add(self._on_finished, rec),
-                on_error=lambda msg: GLib.idle_add(self._on_error, msg),
-            )
+            try:
+                gen.run_with_callbacks(
+                    on_progress=lambda msg: GLib.idle_add(self._on_progress, msg, pending),
+                    on_finished=lambda rec: GLib.idle_add(self._on_finished, rec),
+                    on_error=lambda msg: GLib.idle_add(self._on_error, msg),
+                )
+            except Exception as _exc:
+                import traceback as _tb
+                GLib.idle_add(self._on_error, f"Worker crashed: {_exc}\n{_tb.format_exc()}")
 
         self._worker = threading.Thread(target=run, daemon=True)
         self._worker.start()
