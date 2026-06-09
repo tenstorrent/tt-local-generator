@@ -796,21 +796,6 @@ scrollbar slider:hover {
     border-color: @tt_bg_dark;
 }
 
-/* -- Workflow button -------------------------------------------------------- */
-menubutton.workflow-btn > button {
-    background-color: @tt_bg_darkest;
-    color: @tt_accent_light;
-    border: 1px solid @tt_border;
-    border-radius: 4px;
-    padding: 3px 10px;
-    font-size: 11px;
-}
-menubutton.workflow-btn > button:hover {
-    background-color: @tt_bg_dark;
-    border-color: @tt_accent;
-    color: @tt_text;
-}
-
 /* -- Toolbar (logo + source + model, pinned to top of window) -------------- */
 .tt-toolbar {
     background-color: @tt_bg_darkest;
@@ -1380,6 +1365,8 @@ popover.picker-popover > contents {
 .log-footer-btn:hover {
     background: rgba(79, 209, 197, 0.25);
 }
+/* Hide GTK4's built-in video mediacontrols overlay (eject button, etc.). */
+video > mediacontrols { opacity: 0; }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -7303,24 +7290,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
 
-        # ── Workflow button ───────────────────────────────────────────────────
-        from workflow_popover import WorkflowPopover
-        self._workflow_popover = WorkflowPopover(
-            on_watch_playlist=self._on_open_attractor_for_playlist,
-        )
-        self._workflow_btn = Gtk.MenuButton(label="⚙ Workflow")
-        self._workflow_btn.add_css_class("workflow-btn")
-        self._workflow_btn.set_popover(self._workflow_popover)
-        self._workflow_btn.set_tooltip_text(
-            "Browse, parameterize, and run multi-step generation workflows.\n"
-            "Results are saved to a playlist and can be watched in TT-TV."
-        )
-        main_toolbar.append(self._workflow_btn)
-
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
+        self._context_menu_source: str = ""   # last source built; skip rebuild if unchanged
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
@@ -7743,6 +7717,9 @@ class MainWindow(Gtk.ApplicationWindow):
         replaces the submenu title by remove+insert_submenu on self._menumodel.
         The PopoverMenuBar reflects the change immediately.
         """
+        if getattr(self, "_context_menu_source", None) == source:
+            return   # nothing changed — skip the relayout
+        self._context_menu_source = source
         _TITLES = {
             "video":   "\U0001f3a5 Video",
             "animate": "\U0001f483 Animate",
