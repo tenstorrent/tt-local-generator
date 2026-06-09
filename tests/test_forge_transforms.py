@@ -240,7 +240,7 @@ def test_on_transform_finished_appends_and_refreshes(tmp_path):
         result = mw.MainWindow._on_transform_finished(mw_inst, record)
 
     mw_inst._store.append.assert_called_once_with(record)
-    mw_inst._image_gallery.rebuild.assert_called_once()
+    mw_inst._image_gallery.load_history.assert_called_once()
     assert result is False  # must return False for GLib.idle_add
 
 
