@@ -9297,6 +9297,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 # AnimateDiff can't run — both want exclusive access to the same device.
                 if self._server_ready and self._count_blackhole_chips() == 1:
                     model_lbl = self._running_model or "a model"
+                    self._gen_gallery.remove_pending()
+                    self._gen_gallery = None
+                    self._controls.set_busy(False)
                     self._set_status(
                         f"Can't run AnimateDiff while {model_lbl} is loaded — "
                         "your Blackhole chip is busy. Stop the server first, then try again."
