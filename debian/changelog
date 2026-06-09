@@ -1,3 +1,13 @@
+tt-local-generator (0.7.3) noble; urgency=medium
+
+  * Fix startup latency: defer ArtgenGallery.refresh() in ArtgenPanel._build()
+    via GLib.idle_add so it runs after the window paints. With 161 artgen records,
+    _rebuild_grid() was taking ~250 ms synchronously, making app startup feel slow
+    even with an empty video/image history. ArtgenPanel init drops from 302 ms
+    to 64 ms (5x improvement); window appears instantly.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.7.2) noble; urgency=medium
 
   * Gallery pagination: show at most 48 cards per page in each gallery

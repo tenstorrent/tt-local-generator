@@ -199,7 +199,10 @@ class ArtgenPanel(Gtk.Box):
         self._sub_stack.add_named(self._watch, "watch")
 
         self._sub_stack.set_visible_child_name("gallery")
-        self._gallery.refresh()
+        # Defer the initial gallery refresh so it runs after the window paints.
+        # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously,
+        # which delays the first frame.
+        GLib.idle_add(self._gallery.refresh)
         body.append(self._sub_stack)
         self.append(body)
 
