@@ -1,5 +1,5 @@
 """
-MCP server — exposes all loaded plugins as MCP tools over HTTP+SSE.
+MCP server — exposes all loaded plugins as MCP tools over HTTP (JSON-RPC 2.0).
 
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
 Port: 8003 (configurable via TTLG_MCP_PORT env var).
@@ -9,7 +9,7 @@ Start:
     python3 app/mcp_server.py --port 8003 --host 0.0.0.0
 
 Claude Code integration:
-    tt-ctl mcp-config >> ~/.claude/mcp.json
+    tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)
 
 Endpoints:
     GET  /mcp   — server manifest listing all available tools
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -31,11 +32,20 @@ from fastapi.responses import JSONResponse
 
 import plugin_loader
 
-# Populate the plugin registry at import time so tools/list and tools/call work
-# whether this module is imported by tt-ctl or run standalone as __main__.
-plugin_loader.load_plugins()
 
-app = FastAPI(title="tt-local-gen MCP server", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Load plugins at server startup.
+
+    Using a lifespan handler (rather than module-level load_plugins()) means
+    that importlib.reload(mcp_server) in tests does NOT trigger a real plugin
+    scan — the scan only runs when the ASGI server actually starts up.
+    """
+    plugin_loader.load_plugins()
+    yield
+
+
+app = FastAPI(title="tt-local-gen MCP server", version="1.0.0", lifespan=_lifespan)
 
 # MCP protocol version this server speaks.
 _PROTOCOL_VERSION = "2024-11-05"
@@ -77,7 +87,7 @@ def _make_call_fn(base_url: str | None = None):
     """Return a call_fn that routes to the best available LLM endpoint.
 
     Resolution order:
-      1. base_url if provided (from X-LLM-URL request header)
+      1. base_url if provided (from TTLG_LLM_URL environment variable)
       2. artgen server on port 8002
       3. prompt-gen server on port 8001
       4. RuntimeError with clear instructions

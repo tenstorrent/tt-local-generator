@@ -10,7 +10,7 @@ process stays clean.
 Graceful degradation: if the venv python or transformers are missing,
 is_available() returns False and caption_image() raises RuntimeError.
 
-In-process usage by the MCP server or remix engine:
+In-process usage by the right-click transform menu and remix engine:
     from plugins.blip.plugin import caption_image, is_available
 """
 from __future__ import annotations

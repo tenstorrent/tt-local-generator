@@ -796,21 +796,6 @@ scrollbar slider:hover {
     border-color: @tt_bg_dark;
 }
 
-/* -- Workflow button -------------------------------------------------------- */
-menubutton.workflow-btn > button {
-    background-color: @tt_bg_darkest;
-    color: @tt_accent_light;
-    border: 1px solid @tt_border;
-    border-radius: 4px;
-    padding: 3px 10px;
-    font-size: 11px;
-}
-menubutton.workflow-btn > button:hover {
-    background-color: @tt_bg_dark;
-    border-color: @tt_accent;
-    color: @tt_text;
-}
-
 /* -- Pipeline tab ---------------------------------------------------------- */
 button.pipeline-source-btn {
     background-color: @tt_bg_dark;
@@ -890,6 +875,8 @@ button.pipeline-source-btn:checked {
 .phase-job-label      { font-size: 10px; font-weight: 700; color: @tt_text; }
 .phase-job-sublabel   { font-size: 9px;  color: @tt_text_muted; }
 
+/* Hide GTK4's built-in video mediacontrols overlay (eject button, etc.). */
+video > mediacontrols { opacity: 0; }
 /* -- Toolbar (logo + source + model, pinned to top of window) -------------- */
 .tt-toolbar {
     background-color: @tt_bg_darkest;
@@ -1372,6 +1359,7 @@ popover.picker-popover > contents {
 .artgen-subnav-btn:checked { color: @tt_accent; border-bottom: 2px solid @tt_accent; }
 .artgen-filter-chip { border-radius: 12px; padding: 2px 10px; font-size: 11px; }
 .artgen-filter-chip:checked { background: @tt_accent; color: @tt_bg_dark; }
+.gallery-page-label { font-size: 11px; color: @tt_text_muted; }
 .artgen-card { border-radius: 4px; background: @tt_bg_panel; }
 .artgen-card-new { border: 2px solid @tt_accent; }
 .artgen-card-placeholder { font-size: 20px; }
@@ -1458,6 +1446,8 @@ popover.picker-popover > contents {
 .log-footer-btn:hover {
     background: rgba(79, 209, 197, 0.25);
 }
+/* Hide GTK4's built-in video mediacontrols overlay (eject button, etc.). */
+video > mediacontrols { opacity: 0; }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -3449,7 +3439,13 @@ class GalleryWidget(Gtk.Box):
     Hover-to-preview: hovering over a video card plays it silently in the
     thumbnail.  Pipelines are loaded lazily on hover-enter and released on
     hover-leave to minimise GStreamer resource use.
+
+    Pagination: at most _PAGE_SIZE cards are built and shown at once.  The pager
+    bar at the bottom lets the user navigate pages.  All records are kept in
+    self._cards; only the current page slice is appended to the FlowBox.
     """
+
+    _PAGE_SIZE = 48  # cards per page — ~4 rows of 4 at comfortable density
 
     def __init__(self, select_cb, delete_cb, media_type: str = "video",
                  remix_cb=None, star_cb=None, transform_cb=None):
@@ -3463,6 +3459,7 @@ class GalleryWidget(Gtk.Box):
         self._transform_cb = transform_cb  # callable(record, key) or None — forge transforms
         self._media_type = media_type
         self._active_filter: str = "all"   # "all" | "starred"
+        self._page: int = 0                # 0-indexed current page
 
         # ── Filter bar ────────────────────────────────────────────────────────
         filter_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -3510,6 +3507,28 @@ class GalleryWidget(Gtk.Box):
         self._flow.set_valign(Gtk.Align.START)
         self._scroll.set_child(self._flow)
         self.append(self._scroll)
+
+        # ── Pager bar (hidden until there are multiple pages) ──────────────────
+        self._pager_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._pager_bar.set_halign(Gtk.Align.CENTER)
+        self._pager_bar.set_margin_top(6)
+        self._pager_bar.set_margin_bottom(8)
+
+        self._pager_prev = Gtk.Button(label="◀ Prev")
+        self._pager_prev.add_css_class("flat")
+        self._pager_prev.connect("clicked", lambda _b: self._set_page(self._page - 1))
+        self._pager_bar.append(self._pager_prev)
+
+        self._pager_label = Gtk.Label(label="")
+        self._pager_label.add_css_class("gallery-page-label")
+        self._pager_bar.append(self._pager_label)
+
+        self._pager_next = Gtk.Button(label="Next ▶")
+        self._pager_next.add_css_class("flat")
+        self._pager_next.connect("clicked", lambda _b: self._set_page(self._page + 1))
+        self._pager_bar.append(self._pager_next)
+
+        self.append(self._pager_bar)
 
         self._cards: list = []                       # all card widgets, index 0 = top-left
         self._pending: Optional[PendingCard] = None
@@ -3573,6 +3592,8 @@ class GalleryWidget(Gtk.Box):
         else:
             self._cards.insert(0, card)
         self._pending = None
+        # New generations always land on page 1 so they're immediately visible.
+        self._page = 0
         self._relayout()
         # Auto-select the freshly completed card so the detail panel updates immediately
         self.select_card(card)
@@ -3594,6 +3615,7 @@ class GalleryWidget(Gtk.Box):
         # Preserve in-flight pending card so active generations survive a refresh.
         preserved = [c for c in self._cards if isinstance(c, PendingCard)]
         self._cards = preserved  # clear all GenerationCards
+        self._page = 0           # reset to first page on every history reload
 
         seen: set = set()
         for record in records:
@@ -3667,36 +3689,80 @@ class GalleryWidget(Gtk.Box):
         # Deactivate the other chip (manual radio group).
         other = self._filter_star_btn if filt == "all" else self._filter_all_btn
         other.set_active(False)
+        self._page = 0  # reset to first page when filter changes
         self._relayout()
 
-    def visible_cards(self) -> list:
-        """Return the currently visible (filtered) GenerationCards in display order."""
+    def _filtered_cards(self) -> list:
+        """All GenerationCards (and any PendingCard) that pass the active filter."""
         if self._active_filter == "starred":
             return [c for c in self._cards
-                    if isinstance(c, GenerationCard) and c._record.starred]
-        return [c for c in self._cards if isinstance(c, GenerationCard)]
+                    if isinstance(c, PendingCard) or
+                    (isinstance(c, GenerationCard) and c._record.starred)]
+        return list(self._cards)
+
+    def _set_page(self, page: int) -> None:
+        """Navigate to page *page* (0-indexed), clamped to valid range."""
+        filtered = self._filtered_cards()
+        # PendingCards are always on page 0; exclude them for page-count math.
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+        n_pages = max(1, -(-len(gen_cards) // self._PAGE_SIZE))  # ceil division
+        self._page = max(0, min(page, n_pages - 1))
+        self._relayout()
+        # Scroll back to the top when the page changes.
+        adj = self._scroll.get_vadjustment()
+        if adj:
+            adj.set_value(0)
+
+    def visible_cards(self) -> list:
+        """Return the GenerationCards currently shown on the active page."""
+        filtered = self._filtered_cards()
+        pending = [c for c in filtered if isinstance(c, PendingCard)]
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+        start = self._page * self._PAGE_SIZE
+        return pending + gen_cards[start: start + self._PAGE_SIZE]
 
     def _relayout(self) -> None:
-        """Re-populate the FlowBox from self._cards, applying the active filter."""
-        visible = self._cards if self._active_filter == "all" else (
-            [c for c in self._cards
-             if isinstance(c, PendingCard) or
-             (isinstance(c, GenerationCard) and c._record.starred)]
-        )
-        # Remove all FlowBoxChild wrappers; our card widgets remain alive in self._cards.
+        """Re-populate the FlowBox with the current page slice, update pager."""
+        filtered = self._filtered_cards()
+        pending = [c for c in filtered if isinstance(c, PendingCard)]
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+
+        n_pages = max(1, -(-len(gen_cards) // self._PAGE_SIZE))  # ceil division
+        # Clamp page in case records were deleted.
+        self._page = max(0, min(self._page, n_pages - 1))
+
+        start = self._page * self._PAGE_SIZE
+        page_cards = pending + gen_cards[start: start + self._PAGE_SIZE]
+
+        # Remove all FlowBoxChild wrappers; card widgets remain alive in self._cards.
         child = self._flow.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self._flow.remove(child)
             child = nxt
-        # Re-add filtered cards; FlowBox automatically wraps each in a FlowBoxChild.
-        for card in visible:
+        # Add only the current page.
+        for card in page_cards:
             self._flow.append(card)
-        # Re-apply selection mode checkboxes to any newly added cards.
+
+        # Re-apply selection mode checkboxes to newly visible cards.
         if self._selection_mode and self._active_playlist_id:
-            for card in visible:
+            for card in page_cards:
                 if isinstance(card, GenerationCard) and not card.is_checked():
                     card.set_selection_visible(True)
+
+        # Update pager bar visibility and state.
+        if n_pages <= 1:
+            self._pager_bar.set_visible(False)
+        else:
+            self._pager_bar.set_visible(True)
+            total = len(gen_cards)
+            page_start = start + 1
+            page_end = min(start + self._PAGE_SIZE, total)
+            self._pager_label.set_label(
+                f"{page_start}–{page_end} of {total}  ·  page {self._page + 1}/{n_pages}"
+            )
+            self._pager_prev.set_sensitive(self._page > 0)
+            self._pager_next.set_sensitive(self._page < n_pages - 1)
 
 
 # ── Control panel ──────────────────────────────────────────────────────────────
@@ -6465,6 +6531,38 @@ class _StatusBar(Gtk.Box):
         cls._tt_smi_path = cls._TT_SMI_SKIP
         return None
 
+    def _count_blackhole_chips(self) -> int:
+        """Return the number of Blackhole devices visible to tt-smi, or 0 on failure.
+
+        Used to decide whether AnimateDiff and a running server would compete
+        for the same chip. Counts only live (non-sentinel) chips.
+        """
+        import json as _json
+        tt_smi = self._resolve_tt_smi()
+        if not tt_smi:
+            return 0
+        try:
+            result = __import__("subprocess").run(
+                [tt_smi, "-s"], capture_output=True, text=True, timeout=10
+            )
+            data = _json.loads(result.stdout)
+            count = 0
+            for dev in data.get("device_info", []):
+                arch = dev.get("board_info", {}).get("board_type", "").lower()
+                telem = dev.get("telemetry", {})
+                temp = telem.get("asic_temperature", 0)
+                # Skip ARC-dead chips (sentinel temp > 1000°C)
+                try:
+                    if float(temp) > 1000:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                if any(k in arch for k in ("blackhole", "p100", "p150", "p300")):
+                    count += 1
+            return count
+        except Exception:
+            return 0
+
     @staticmethod
     def _read_sysfs_clocks() -> list[int]:
         """Read AICLK (MHz) for each chip from sysfs. Never raises."""
@@ -7292,17 +7390,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
 
-        # ── Workflow popover (kept for legacy run history access, not shown in toolbar) ─
-        # Pipeline tab (⚙ Pipeline source button) replaces this as the primary workflow UI.
-        from workflow_popover import WorkflowPopover
-        self._workflow_popover = WorkflowPopover(
-            on_watch_playlist=self._on_open_attractor_for_playlist,
-        )
-
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
+        self._context_menu_source: str = ""   # last source built; skip rebuild if unchanged
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
@@ -7773,6 +7865,9 @@ class MainWindow(Gtk.ApplicationWindow):
         replaces the submenu title by remove+insert_submenu on self._menumodel.
         The PopoverMenuBar reflects the change immediately.
         """
+        if getattr(self, "_context_menu_source", None) == source:
+            return   # nothing changed — skip the relayout
+        self._context_menu_source = source
         _TITLES = {
             "video":   "\U0001f3a5 Video",
             "animate": "\U0001f483 Animate",
@@ -8297,7 +8392,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_transform_finished(self, record: GenerationRecord) -> bool:
         """Add the transform result to the store and refresh the image gallery."""
         self._store.append(record)
-        self._image_gallery.rebuild(
+        self._image_gallery.load_history(
             [r for r in self._store.all_records() if r.media_type == "image"]
         )
         self._flash_status(f"Transform complete — new card in Image gallery")
@@ -9310,6 +9405,15 @@ class MainWindow(Gtk.ApplicationWindow):
             video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
+                # Guard: if only 1 chip is present and a server model is loaded on it,
+                # AnimateDiff can't run — both want exclusive access to the same device.
+                if self._server_ready and self._count_blackhole_chips() == 1:
+                    model_lbl = self._running_model or "a model"
+                    self._set_status(
+                        f"Can't run AnimateDiff while {model_lbl} is loaded — "
+                        "your Blackhole chip is busy. Stop the server first, then try again."
+                    )
+                    return
                 self._set_status("Starting AnimateDiff generation on Blackhole…")
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,

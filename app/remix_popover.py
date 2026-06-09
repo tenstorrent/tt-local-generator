@@ -86,7 +86,17 @@ def _media_path(record) -> str:
 def _build_hint(record, source_type: str, target_type: str, active_keys: set) -> str:
     """Build the combined hint string from the checked ingredient keys."""
     parts = []
-    if "text" in active_keys or "prompt" in active_keys:
+    if "text" in active_keys:
+        # For text-output generators (verse, haiku) read the artifact file so
+        # the full generated text is used, not just the generation prompt.
+        try:
+            artifact_text = Path(_media_path(record)).read_text(encoding="utf-8").strip()
+        except Exception:
+            artifact_text = ""
+        content = artifact_text or _prompt_from_record(record)
+        if content:
+            parts.append(content)
+    if "prompt" in active_keys:
         p = _prompt_from_record(record)
         if p:
             parts.append(p)
@@ -109,8 +119,10 @@ def _build_hint(record, source_type: str, target_type: str, active_keys: set) ->
         except Exception:
             pass
     if "vibe" in active_keys:
+        # vibe is the short descriptive phrase stored in the prompt field,
+        # distinct from "prompt" — dedup if already added via "prompt".
         p = _prompt_from_record(record)
-        if p:
+        if p and p not in parts:
             parts.append(p)
     return ", ".join(p for p in parts if p)
 

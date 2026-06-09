@@ -3,7 +3,7 @@
 """
 RMBG background-removal utility plugin.
 
-Wraps briaai/RMBG-2.0 via HuggingFace transformers.  Inference runs in the
+Wraps briaai/RMBG-1.4 via HuggingFace transformers. (RMBG-2.0 is gated; 1.4 is public.)  Inference runs in the
 tenstorrent venv python (which has torch + transformers) via subprocess so
 the GTK process stays clean.
 
@@ -12,7 +12,7 @@ is_available() returns False and remove_background() raises RuntimeError with
 an install hint.  plugin_loader never imports plugin.py for utility plugins,
 so missing deps do not prevent the app from starting.
 
-In-process usage by the MCP server or remix engine:
+In-process usage by the right-click transform menu and remix engine:
     from plugins.rmbg.plugin import remove_background, is_available
 """
 from __future__ import annotations

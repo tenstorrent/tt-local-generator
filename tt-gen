@@ -11,7 +11,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve through symlinks so SCRIPT_DIR is the real script directory even
+# when invoked via /usr/bin/tt-local-gen → /usr/lib/tt-local-generator/tt-gen.
+_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$_SELF")" && pwd)"
 
 # Select the Python3 interpreter that has GTK4/GI bindings.
 #

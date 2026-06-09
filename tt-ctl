@@ -11,7 +11,9 @@ Usage:
     tt-ctl status                   Server health, queue depth, history summary
     tt-ctl servers                  Live status of every managed service
     tt-ctl start <service>          Start a service (wan2.2 | mochi | flux | animate |
-                                    prompt-server | all)
+                                    skyreels | artgen-qwen3-8b | prompt-server | all)
+    tt-ctl start --single-chip      Start artgen + prompt-server only
+                                    (single Blackhole card or CPU-only)
     tt-ctl stop  <service>          Stop a service (same keys as start)
     tt-ctl restart <service>        Stop then re-start a service
     tt-ctl queue                    List pending queue items
@@ -39,6 +41,9 @@ Usage:
                                            --simulate  --freeform "describe anything"
                                     Types: landscape skyline constellation geometric
                                            ansi palette verse circuit freeform
+    tt-ctl plugin list              List all discovered plugins (name, tab, output type)
+    tt-ctl mcp-config               Emit Claude Code MCP config JSON for tt-local-gen
+                                    (pipe to ~/.claude/mcp.json to register with Claude)
 
 All commands accept --server URL to override the default http://localhost:8000.
 """
@@ -307,8 +312,18 @@ def cmd_servers(args):
     print(dim(f"Services:    {' | '.join(sm.SERVERS)} | all"))
 
 
+def _resolve_service_arg(args) -> str:
+    """Resolve service key from positional arg or --single-chip flag."""
+    if getattr(args, "single_chip", False):
+        return sm.ONE_CHIP_KEY
+    if not args.service:
+        print(red("error: specify a SERVICE or use --single-chip"))
+        sys.exit(1)
+    return args.service
+
+
 def cmd_start(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -334,7 +349,7 @@ def cmd_start(args):
 
 
 def cmd_stop(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -357,7 +372,7 @@ def cmd_stop(args):
 
 
 def cmd_restart(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -1035,8 +1050,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for _verb in ("start", "stop", "restart"):
         _sp = sub.add_parser(_verb, help=f"{_verb.capitalize()} a managed service")
-        _sp.add_argument("service", choices=_service_choices, metavar="SERVICE",
+        _sp.add_argument("service", nargs="?", choices=_service_choices, metavar="SERVICE",
                          help=_service_help)
+        _sp.add_argument("--single-chip", action="store_true", dest="single_chip",
+                         help="Start artgen + prompt-server (single Blackhole card or CPU-only)")
         if _verb != "stop":
             _sp.add_argument("--blocking", action="store_true",
                              help="Wait for the script to exit (default: --gui mode)")

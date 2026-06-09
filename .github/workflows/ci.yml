@@ -23,11 +23,13 @@ jobs:
             python3-pytest \
             python3-requests \
             python3-yaml \
-            gir1.2-gtk-4.0
+            gir1.2-gtk-4.0 \
+            xvfb
 
       - name: Run tests
         run: |
-          # tests/ — app unit tests (GTK-free, no hardware required)
+          # tests/ — app unit tests.  xvfb-run provides a virtual X11 display so
+          # @gtk_required tests (Gtk.Picture, GdkPixbuf, etc.) run instead of skipping.
           # app/animatediff/tests/ is excluded: those tests require the tt-metal
           # Python environment and Blackhole hardware, not available in CI.
-          python3 -m pytest tests/ -v
+          xvfb-run --auto-servernum python3 -m pytest tests/ -v

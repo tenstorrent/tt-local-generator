@@ -25,6 +25,10 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
+          # Disable Jekyll processing — docs/ contains Liquid-incompatible code
+          # in plan/spec markdown files. .nojekyll tells GitHub Pages to serve
+          # files as-is without running them through Jekyll.
+          touch _site/.nojekyll
           cp docs/index.html _site/
           cp docs/plugins.html _site/
           cp docs/PLUGIN_AUTHORING.md _site/
