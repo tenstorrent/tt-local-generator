@@ -1,3 +1,20 @@
+tt-local-generator (0.7.4) noble; urgency=medium
+
+  * Remove WorkflowPopover from toolbar (workflows moved to tt-ctl only).
+  * Fix gallery scroll/tab-switch lag: ArtgenGallery GIF cards now show static
+    thumbnails at rest; animated widget only on hover — eliminates 62 concurrent
+    GLib.timeout_add timers saturating the GTK main loop.
+  * Add context menu rebuild guard: skip PopoverMenuBar relayout when tab source
+    unchanged.
+  * Hide GTK 4.14 built-in video mediacontrols overlay (eject button on hover).
+  * CI: add xvfb so @gtk_required tests run instead of silently skipping.
+  * Merge Pipeline tab, PipelinePortfolioView, and all retry/compat fixes from
+    feat/remix — now includes animated GIF Pipeline phase grid, portfolio view
+    for completed runs, and per-job retry buttons.
+  * Vendor tt-animatediff as git submodule (removes bundled app/animatediff/ copy).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 09 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.7.3) noble; urgency=medium
 
   * Fix startup latency: defer ArtgenGallery.refresh() in ArtgenPanel._build()
