@@ -19,9 +19,9 @@ from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LOGS_DIR  = _REPO_ROOT / "logs"
-# AnimateDiff logs live under the XDG user state dir (not the repo) so that
-# the installed .deb (code under /usr/lib/…, not writable) works correctly.
-_ANIMATEDIFF_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
+_USER_LOGS_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "logs"
+_ANIMATEDIFF_LOG_DIR = _USER_LOGS_DIR / "animatediff"
+_TRANSFORMS_LOG_DIR  = _USER_LOGS_DIR / "transforms"
 _PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")
 
 
@@ -70,7 +70,6 @@ def parse_run_log_name(filename: str) -> tuple[str, str]:
     Returns ("run_HH:MM", "Mon D") on success, or (stem, "") on mismatch.
     """
     stem = Path(filename).stem
-    # Current format: run_<date>_<time>_<anything>
     m = re.match(r"run_(\d{8})_(\d{6})_(.+)$", stem)
     if not m:
         return stem, ""
@@ -88,23 +87,20 @@ def parse_run_log_name(filename: str) -> tuple[str, str]:
 def parse_server_log_name(filename: str) -> tuple[str, str]:
     """Parse a server log filename into (model_name, date_str).
 
-    Expected format: media_YYYY-MM-DD_HH-MM-SS_<ModelName>[_<device>]_server.log
-    The optional device token is a known hardware identifier (p150x4, p300x2,
-    qb2, n150, n300, etc.). Strip it if present, leave model name intact if not.
+    Expected format: media_YYYY-MM-DD_HH-MM-SS_<ModelName>_<device>_server.log
     Returns (model_name, date_str) on success, or (stem, "") on mismatch.
     """
-    _DEVICE_TOKENS = frozenset({
-        "p150x4", "p300x2", "p300c", "p150", "p300",
-        "n150", "n300", "qb2", "t3k", "galaxy",
-    })
     stem = Path(filename).stem
     if stem.endswith("_server"):
         stem = stem[:-7]
     m = re.match(r"media_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}_(.+)$", stem)
     if not m:
         return stem, ""
+    _DEVICE_TOKENS = frozenset({
+        "p150x4", "p300x2", "p300c", "p150", "p300",
+        "n150", "n300", "qb2", "t3k", "galaxy",
+    })
     date_raw, rest = m.group(1), m.group(2)
-    # Only strip the trailing token if it matches a known device name.
     parts = rest.rsplit("_", 1)
     if len(parts) == 2 and parts[1].lower() in _DEVICE_TOKENS:
         model = parts[0]
@@ -126,9 +122,9 @@ def is_error_log(content: str) -> bool:
 
 
 def collect_log_files(
+    animatediff_log_dir: "Optional[Path]" = None,
     repo_root: Path = _REPO_ROOT,
     prompt_log: Optional[Path] = _PROMPT_LOG,
-    animatediff_log_dir: Optional[Path] = None,
 ) -> list[dict]:
     """Return a list of section dicts for the log tree.
 
@@ -140,10 +136,29 @@ def collect_log_files(
     """
     sections = []
 
-    # ANIMATEDIFF run logs — in XDG state dir (not repo root)
-    ad_dir = animatediff_log_dir if animatediff_log_dir is not None else _ANIMATEDIFF_LOG_DIR
-    run_logs = sorted(ad_dir.glob("run_*.log"), reverse=True) \
-               if ad_dir.exists() else []
+    # TRANSFORMS — forge plugin transform logs (rmbg, blip, depth, etc.)
+    tx_dir = _TRANSFORMS_LOG_DIR
+    tx_logs = sorted(tx_dir.glob("*.log"), reverse=True) if tx_dir.exists() else []
+    if tx_logs:
+        files = []
+        for p in tx_logs:
+            # Filename: YYYYMMDD_HHMMSS_<plugin>_<source_stem>.log
+            parts = p.stem.split("_", 3)
+            date = f"{parts[0][:4]}-{parts[0][4:6]}-{parts[0][6:]} {parts[1][:2]}:{parts[1][2:4]}" if len(parts) >= 2 else ""
+            plugin = parts[2] if len(parts) > 2 else p.stem
+            src_stem = parts[3] if len(parts) > 3 else ""
+            name = f"{plugin}  ←  {src_stem}" if src_stem else plugin
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = ""
+            files.append({"path": str(p), "name": name, "date": date,
+                          "is_error": is_error_log(content)})
+        sections.append({"section": "TRANSFORMS", "files": files})
+
+    # ANIMATEDIFF run logs
+    ad_dir = animatediff_log_dir if animatediff_log_dir is not None else _USER_LOGS_DIR / "animatediff"
+    run_logs = sorted(ad_dir.glob("run_*.log"), reverse=True) if ad_dir.exists() else []
     if run_logs:
         files = []
         for p in run_logs:
@@ -174,7 +189,7 @@ def collect_log_files(
         ]})
 
     # APP — the animatediff module log (distinct from run logs)
-    app_log = ad_dir / "animatediff.log"
+    app_log = (animatediff_log_dir / "animatediff.log") if animatediff_log_dir is not None else (_USER_LOGS_DIR / "animatediff" / "animatediff.log")
     if app_log.exists():
         sections.append({"section": "APP", "files": [
             {"path": str(app_log), "name": "animatediff",

@@ -796,6 +796,31 @@ scrollbar slider:hover {
     border-color: @tt_bg_dark;
 }
 
+
+/* -- Detail pane dismiss bar ----------------------------------------------- */
+.detail-close-bar { padding: 2px 4px 0; min-height: 20px; }
+.detail-close-bar button { padding: 0 4px; min-height: 16px; font-size: 10px; color: @tt_text_muted; }
+
+/* -- Phase grid ------------------------------------------------------------ */
+.phase-grid-header {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: @tt_text_muted;
+    padding: 2px 4px;
+}
+.phase-cell-pending   { background-color: @tt_bg_dark;    border: 1px solid rgba(79,209,197,.1);  border-radius: 4px; }
+.phase-cell-running   { background-color: #1a2a3a;        border: 2px solid @tt_accent;           border-radius: 4px; }
+.phase-cell-done      { background-color: #1a3a20;        border: 2px solid @tt_success;          border-radius: 4px; }
+.phase-cell-failed    { background-color: #3a1a1a;        border: 2px solid @tt_error;            border-radius: 4px; }
+.phase-cell-skipped   { background-color: #2a2010;        border: 1px solid rgba(244,196,113,.4); border-radius: 4px; }
+.phase-cell-selected  { outline: 2px solid @tt_accent; outline-offset: 1px; }
+.phase-job-label      { font-size: 10px; font-weight: 700; color: @tt_text; }
+.phase-job-sublabel   { font-size: 9px;  color: @tt_text_muted; }
+
+/* Hide GTK4's built-in video mediacontrols overlay (eject button, etc.). */
+video > mediacontrols { opacity: 0; }
 /* -- Toolbar (logo + source + model, pinned to top of window) -------------- */
 .tt-toolbar {
     background-color: @tt_bg_darkest;
@@ -1278,6 +1303,7 @@ popover.picker-popover > contents {
 .artgen-subnav-btn:checked { color: @tt_accent; border-bottom: 2px solid @tt_accent; }
 .artgen-filter-chip { border-radius: 12px; padding: 2px 10px; font-size: 11px; }
 .artgen-filter-chip:checked { background: @tt_accent; color: @tt_bg_dark; }
+.gallery-page-label { font-size: 11px; color: @tt_text_muted; }
 .artgen-card { border-radius: 4px; background: @tt_bg_panel; }
 .artgen-card-new { border: 2px solid @tt_accent; }
 .artgen-card-placeholder { font-size: 20px; }
@@ -1391,7 +1417,7 @@ _DETAIL_VIDEO_H = 225
 _MODEL_DISPLAY: dict = {
     "wan2.2-t2v":            "Wan2.2",
     "mochi-1-preview":       "Mochi-1",
-    "flux.1-dev":            "FLUX",
+    "flux.1-schnell":            "FLUX",
     "wan2.2-animate-14b":    "Animate-14B",
     "skyreels-v2-i2v-14b-540p": "SkyReels I2V",
 }
@@ -1435,6 +1461,7 @@ _SERVER_SCRIPTS: dict = {
     ("video",   "mochi"):     ("start_mochi.sh",    "Mochi-1 video"),
     ("video",   "skyreels"):  ("start_skyreels_i2v.sh", "SkyReels-V2-I2V video (Blackhole)"),
     ("image",   "flux"):      ("start_flux.sh",     "FLUX image"),
+    ("image",   "sdxl"):      ("start_sdxl.sh",     "SDXL image (cpp_server)"),
     ("animate", ""):          ("start_animate.sh",  "Wan2.2-Animate"),
 }
 
@@ -1446,7 +1473,8 @@ _VIDEO_MODEL_IDS: dict = {
     "animatediff":  "animatediff-blackhole",
 }
 _IMAGE_MODEL_IDS: dict = {
-    "flux": "flux.1-dev",
+    "flux": "flux.1-schnell",
+    "sdxl": "stable-diffusion-xl-base-1.0",
 }
 
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
@@ -1552,6 +1580,49 @@ class _QueueItem:
     from_attractor: bool = False     # True → enqueued by TT-TV auto-gen; purged on attractor close
 
 
+# ── Forge plugin transform helpers ────────────────────────────────────────────
+
+_TRANSFORM_AVAIL: "dict[str, bool]" = {}
+
+
+def _transform_available(key: str) -> bool:
+    """Return True if the named plugin is installed and its deps are available.
+
+    Result is cached after first call so repeated right-clicks are fast.
+    """
+    if key not in _TRANSFORM_AVAIL:
+        try:
+            import importlib.util as _ilu
+            _p = Path(__file__).parent.parent / "plugins" / key / "plugin.py"
+            spec = _ilu.spec_from_file_location(f"ttlg_transform_{key}", _p)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _TRANSFORM_AVAIL[key] = getattr(mod, "is_available", lambda: False)()
+        except Exception:
+            _TRANSFORM_AVAIL[key] = False
+    return _TRANSFORM_AVAIL[key]
+
+
+def _make_thumbnail_for(image_path: str, thumb_path: str) -> None:
+    """Create a 200×112 JPEG thumbnail via ffmpeg.  Mirrors worker.py._make_thumbnail."""
+    Path(thumb_path).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", image_path,
+                "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
+                       "pad=200:112:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "3", thumb_path,
+            ],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+        )
+    except Exception:
+        try:
+            shutil.copy2(image_path, thumb_path)
+        except Exception:
+            pass
+
+
 # ── Generation card ────────────────────────────────────────────────────────────
 
 class GenerationCard(Gtk.Frame):
@@ -1567,13 +1638,15 @@ class GenerationCard(Gtk.Frame):
     """
 
     def __init__(self, record: GenerationRecord, select_cb, delete_cb,
-                 remix_cb=None, star_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None):
         super().__init__()
         self._record = record
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        self._remix_cb = remix_cb       # callable(record) or None — opens RemixPopover
-        self._star_cb = star_cb         # callable(record, starred: bool) or None
+        self._remix_cb = remix_cb           # callable(record) or None — opens RemixPopover
+        self._star_cb = star_cb             # callable(record, starred: bool) or None
+        self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
+        self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
         self.add_css_class("card")
         # Minimum card width; FlowBox packs cards at this natural width
         # and expands them to fill the row, so actual width adapts to the pane size.
@@ -1586,12 +1659,69 @@ class GenerationCard(Gtk.Frame):
         gesture.connect("pressed", lambda *_: self._select_cb(self))
         self.add_controller(gesture)
 
+        # Right-click: forge transform menu (remove background, describe, show depth…)
+        rclick = Gtk.GestureClick()
+        rclick.set_button(3)
+        rclick.connect("pressed", self._on_right_click)
+        self.add_controller(rclick)
+
         # Hover controller: reveals action bar (star, animate) on all card types;
         # also starts video preview on video/animate cards.
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_hover_enter)
         motion.connect("leave", self._on_hover_leave)
         self.add_controller(motion)
+
+    def _on_right_click(self, gesture, n_press: int, x: float, y: float) -> None:
+        """Build and show a forge-transform popover anchored to the click position."""
+        if not self._transform_cb:
+            return
+
+        # All available transforms: (plugin_key, intent → result label)
+        all_transforms = [
+            ("rmbg",  "Remove background  →  transparent PNG"),
+            ("blip",  "Describe this  →  text caption"),
+            ("depth", "Show depth  →  depth map"),
+        ]
+        available = [(k, lbl) for k, lbl in all_transforms if _transform_available(k)]
+        if not available:
+            return  # no plugins available — suppress empty menu
+
+        # Dismiss any popover left open from a previous right-click on this card.
+        if self._ctx_pop is not None:
+            self._ctx_pop.popdown()
+            self._ctx_pop = None
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        box.set_margin_start(4)
+        box.set_margin_end(4)
+
+        pop = Gtk.Popover()
+        self._ctx_pop = pop
+
+        for key, label in available:
+            btn = Gtk.Button(label=label)
+            btn.add_css_class("flat")
+            btn.set_hexpand(True)
+
+            def _on_clicked(_, k=key, p=pop):
+                p.popdown()
+                self._transform_cb(self._record, k)
+
+            btn.connect("clicked", _on_clicked)
+            box.append(btn)
+
+        pop.set_child(box)
+        pop.set_parent(self)
+        rect = Gdk.Rectangle()
+        rect.x = int(x)
+        rect.y = int(y)
+        rect.width = 1
+        rect.height = 1
+        pop.set_pointing_to(rect)
+        pop.popup()
 
     def set_selected(self, selected: bool) -> None:
         # Image cards use a pink selection border; video cards use teal.
@@ -3162,6 +3292,7 @@ class PendingCard(Gtk.Frame):
         # job is in progress — the pending card won't be taller than a completed card.
         thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_hexpand(False)   # children must not push this box wider
         thumb_area.set_valign(Gtk.Align.CENTER)
         thumb_area.add_css_class("pending-thumb-area")
         thumb_area.set_margin_start(4)
@@ -3178,6 +3309,8 @@ class PendingCard(Gtk.Frame):
         spinner_lbl = Gtk.Label(label=spinner_text)
         spinner_lbl.add_css_class("teal")
         spinner_lbl.set_halign(Gtk.Align.CENTER)
+        spinner_lbl.set_max_width_chars(1)
+        spinner_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(spinner_lbl)
 
         self._bar = Gtk.ProgressBar()
@@ -3189,12 +3322,16 @@ class PendingCard(Gtk.Frame):
         self._status_lbl = Gtk.Label(label="Queued")
         self._status_lbl.add_css_class("muted")
         self._status_lbl.set_halign(Gtk.Align.CENTER)
+        self._status_lbl.set_max_width_chars(1)   # never wider than allocated space
+        self._status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(self._status_lbl)
 
         self._elapsed_lbl = Gtk.Label(label="0s elapsed")
         self._elapsed_lbl.add_css_class("teal")
         self._elapsed_lbl.set_attributes(_small_attrs())
         self._elapsed_lbl.set_halign(Gtk.Align.CENTER)
+        self._elapsed_lbl.set_max_width_chars(1)
+        self._elapsed_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         thumb_area.append(self._elapsed_lbl)
 
         outer.append(thumb_area)
@@ -3251,10 +3388,16 @@ class GalleryWidget(Gtk.Box):
     Hover-to-preview: hovering over a video card plays it silently in the
     thumbnail.  Pipelines are loaded lazily on hover-enter and released on
     hover-leave to minimise GStreamer resource use.
+
+    Pagination: at most _PAGE_SIZE cards are built and shown at once.  The pager
+    bar at the bottom lets the user navigate pages.  All records are kept in
+    self._cards; only the current page slice is appended to the FlowBox.
     """
 
+    _PAGE_SIZE = 48  # cards per page — ~4 rows of 4 at comfortable density
+
     def __init__(self, select_cb, delete_cb, media_type: str = "video",
-                 remix_cb=None, star_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
@@ -3262,8 +3405,10 @@ class GalleryWidget(Gtk.Box):
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
         self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
         self._star_cb = star_cb            # callable(record, starred: bool) or None
+        self._transform_cb = transform_cb  # callable(record, key) or None — forge transforms
         self._media_type = media_type
         self._active_filter: str = "all"   # "all" | "starred"
+        self._page: int = 0                # 0-indexed current page
 
         # ── Filter bar ────────────────────────────────────────────────────────
         filter_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -3311,6 +3456,28 @@ class GalleryWidget(Gtk.Box):
         self._flow.set_valign(Gtk.Align.START)
         self._scroll.set_child(self._flow)
         self.append(self._scroll)
+
+        # ── Pager bar (hidden until there are multiple pages) ──────────────────
+        self._pager_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._pager_bar.set_halign(Gtk.Align.CENTER)
+        self._pager_bar.set_margin_top(6)
+        self._pager_bar.set_margin_bottom(8)
+
+        self._pager_prev = Gtk.Button(label="◀ Prev")
+        self._pager_prev.add_css_class("flat")
+        self._pager_prev.connect("clicked", lambda _b: self._set_page(self._page - 1))
+        self._pager_bar.append(self._pager_prev)
+
+        self._pager_label = Gtk.Label(label="")
+        self._pager_label.add_css_class("gallery-page-label")
+        self._pager_bar.append(self._pager_label)
+
+        self._pager_next = Gtk.Button(label="Next ▶")
+        self._pager_next.add_css_class("flat")
+        self._pager_next.connect("clicked", lambda _b: self._set_page(self._page + 1))
+        self._pager_bar.append(self._pager_next)
+
+        self.append(self._pager_bar)
 
         self._cards: list = []                       # all card widgets, index 0 = top-left
         self._pending: Optional[PendingCard] = None
@@ -3374,6 +3541,8 @@ class GalleryWidget(Gtk.Box):
         else:
             self._cards.insert(0, card)
         self._pending = None
+        # New generations always land on page 1 so they're immediately visible.
+        self._page = 0
         self._relayout()
         # Auto-select the freshly completed card so the detail panel updates immediately
         self.select_card(card)
@@ -3395,6 +3564,7 @@ class GalleryWidget(Gtk.Box):
         # Preserve in-flight pending card so active generations survive a refresh.
         preserved = [c for c in self._cards if isinstance(c, PendingCard)]
         self._cards = preserved  # clear all GenerationCards
+        self._page = 0           # reset to first page on every history reload
 
         seen: set = set()
         for record in records:
@@ -3411,6 +3581,7 @@ class GalleryWidget(Gtk.Box):
             delete_cb=self._delete_cb,
             remix_cb=self._remix_cb,
             star_cb=self._star_cb,
+            transform_cb=self._transform_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -3467,36 +3638,84 @@ class GalleryWidget(Gtk.Box):
         # Deactivate the other chip (manual radio group).
         other = self._filter_star_btn if filt == "all" else self._filter_all_btn
         other.set_active(False)
+        self._page = 0  # reset to first page when filter changes
         self._relayout()
 
-    def visible_cards(self) -> list:
-        """Return the currently visible (filtered) GenerationCards in display order."""
+    def _filtered_cards(self) -> list:
+        """All GenerationCards (and any PendingCard) that pass the active filter."""
         if self._active_filter == "starred":
             return [c for c in self._cards
-                    if isinstance(c, GenerationCard) and c._record.starred]
-        return [c for c in self._cards if isinstance(c, GenerationCard)]
+                    if isinstance(c, PendingCard) or
+                    (isinstance(c, GenerationCard) and c._record.starred)]
+        return list(self._cards)
+
+    def _set_page(self, page: int) -> None:
+        """Navigate to page *page* (0-indexed), clamped to valid range."""
+        filtered = self._filtered_cards()
+        # PendingCards are always on page 0; exclude them for page-count math.
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+        n_pages = max(1, -(-len(gen_cards) // self._PAGE_SIZE))  # ceil division
+        self._page = max(0, min(page, n_pages - 1))
+        self._relayout()
+        # Scroll back to the top when the page changes.
+        adj = self._scroll.get_vadjustment()
+        if adj:
+            adj.set_value(0)
+
+    def visible_cards(self) -> list:
+        """Return the GenerationCards currently shown on the active page."""
+        filtered = self._filtered_cards()
+        pending = [c for c in filtered if isinstance(c, PendingCard)]
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+        start = self._page * self._PAGE_SIZE
+        return pending + gen_cards[start: start + self._PAGE_SIZE]
+
+    def all_cards(self) -> list:
+        """Return all filtered cards across all pages — used for detail-panel navigation."""
+        return self._filtered_cards()
 
     def _relayout(self) -> None:
-        """Re-populate the FlowBox from self._cards, applying the active filter."""
-        visible = self._cards if self._active_filter == "all" else (
-            [c for c in self._cards
-             if isinstance(c, PendingCard) or
-             (isinstance(c, GenerationCard) and c._record.starred)]
-        )
-        # Remove all FlowBoxChild wrappers; our card widgets remain alive in self._cards.
+        """Re-populate the FlowBox with the current page slice, update pager."""
+        filtered = self._filtered_cards()
+        pending = [c for c in filtered if isinstance(c, PendingCard)]
+        gen_cards = [c for c in filtered if isinstance(c, GenerationCard)]
+
+        n_pages = max(1, -(-len(gen_cards) // self._PAGE_SIZE))  # ceil division
+        # Clamp page in case records were deleted.
+        self._page = max(0, min(self._page, n_pages - 1))
+
+        start = self._page * self._PAGE_SIZE
+        page_cards = pending + gen_cards[start: start + self._PAGE_SIZE]
+
+        # Remove all FlowBoxChild wrappers; card widgets remain alive in self._cards.
         child = self._flow.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self._flow.remove(child)
             child = nxt
-        # Re-add filtered cards; FlowBox automatically wraps each in a FlowBoxChild.
-        for card in visible:
+        # Add only the current page.
+        for card in page_cards:
             self._flow.append(card)
-        # Re-apply selection mode checkboxes to any newly added cards.
+
+        # Re-apply selection mode checkboxes to newly visible cards.
         if self._selection_mode and self._active_playlist_id:
-            for card in visible:
+            for card in page_cards:
                 if isinstance(card, GenerationCard) and not card.is_checked():
                     card.set_selection_visible(True)
+
+        # Update pager bar visibility and state.
+        if n_pages <= 1:
+            self._pager_bar.set_visible(False)
+        else:
+            self._pager_bar.set_visible(True)
+            total = len(gen_cards)
+            page_start = start + 1
+            page_end = min(start + self._PAGE_SIZE, total)
+            self._pager_label.set_label(
+                f"{page_start}–{page_end} of {total}  ·  page {self._page + 1}/{n_pages}"
+            )
+            self._pager_prev.set_sensitive(self._page > 0)
+            self._pager_next.set_sensitive(self._page < n_pages - 1)
 
 
 # ── Control panel ──────────────────────────────────────────────────────────────
@@ -3511,7 +3730,7 @@ _MODEL_TO_SOURCE: dict = {
     "SkyReels-V2-I2V-14B-540P": "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":    "animate",
-    "flux.1-dev":            "image",
+    "flux.1-schnell":            "image",
 }
 # Maps server model ID → internal video-model key used by ControlPanel
 _MODEL_TO_VIDEO_KEY: dict = {
@@ -3530,7 +3749,7 @@ _MODEL_DISPLAY_SERVER: dict = {
     "SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "Skywork/SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "wan2.2-animate-14b":    "Animate-14B online",
-    "flux.1-dev":            "FLUX online",
+    "flux.1-schnell":            "FLUX online",
 }
 # Maps server model ID (from /tt-liveness) → server_manager key ("wan2.2", "flux", …)
 _MODEL_TO_SERVER_KEY: dict = {
@@ -3540,7 +3759,9 @@ _MODEL_TO_SERVER_KEY: dict = {
     "SkyReels-V2-I2V-14B-540P":          "skyreels",
     "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
     "wan2.2-animate-14b":                "animate",
-    "flux.1-dev":                        "flux",
+    "flux.1-schnell":                        "flux",
+    "tt-sdxl-trace":                         "sdxl",
+    "stable-diffusion-xl-base-1.0":          "sdxl",
 }
 # Maps server key → (source_tab, video_model_key) for startup pre-selection
 _SERVER_KEY_TO_SOURCE_MODEL: dict = {
@@ -3548,6 +3769,7 @@ _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "mochi":    ("video",   "mochi"),
     "skyreels": ("video",   "skyreels"),
     "flux":     ("image",   ""),
+    "sdxl":     ("image",   ""),
     "animate":  ("animate", ""),
 }
 # Maps server model ID → capability key (for capability-centric status labels)
@@ -3558,7 +3780,7 @@ _MODEL_TO_CAP: dict = {
     "SkyReels-V2-I2V-14B-540P":         "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":               "animate",
-    "flux.1-dev":                       "image",
+    "flux.1-schnell":                       "image",
 }
 # Maps source tab key → capability key
 _SOURCE_TO_CAP: dict = {
@@ -3633,7 +3855,7 @@ class ControlPanel(Gtk.Box):
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
         self._video_model: str = "wan2"   # "wan2" | "mochi"
-        self._image_model: str = "flux"   # "flux" | future models
+        self._image_model: str = "flux"   # "flux" | "sdxl"
         self.set_margin_top(12)
         self.set_margin_bottom(12)
         self.set_margin_start(12)
@@ -3696,12 +3918,12 @@ class ControlPanel(Gtk.Box):
         self._src_image_btn.add_css_class("source-btn")
         self._src_image_btn.add_css_class("source-btn-mid")
         self._src_image_btn.set_tooltip_text(
-            "FLUX.1-dev  ·  Synchronous request  ·  ~1024×1024 JPEG\n"
+            "FLUX.1-schnell (~3s) or SDXL/cpp_server (~2s)  ·  1024×1024 JPEG\n"
             "Blocks until image is ready (~15–90 s)"
         )
         self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
         self._src_art_btn.add_css_class("source-btn")
-        self._src_art_btn.add_css_class("source-btn-right")
+        self._src_art_btn.add_css_class("source-btn-mid")
         self._src_art_btn.set_tooltip_text(
             "Generative art via LLM  ·  SVG / ANSI / verse / palette\n"
             "Requires a chat model on port 8002 (not the diffusion server)"
@@ -3968,9 +4190,13 @@ class ControlPanel(Gtk.Box):
         self._server_model_lbl.add_css_class("server-model-lbl")
         self._server_model_lbl.add_css_class("server-model-offline")
         self._server_model_lbl.set_xalign(0)
+        self._server_model_lbl.set_max_width_chars(1)
+        self._server_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         self._server_sub_lbl = Gtk.Label(label="localhost:8000 unreachable")
         self._server_sub_lbl.add_css_class("server-sub-lbl")
         self._server_sub_lbl.set_xalign(0)
+        self._server_sub_lbl.set_max_width_chars(1)
+        self._server_sub_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         text_col.append(self._server_model_lbl)
         text_col.append(self._server_sub_lbl)
         self._server_status_box.append(text_col)
@@ -4043,6 +4269,8 @@ class ControlPanel(Gtk.Box):
         self._srv_phase_lbl = Gtk.Label(label="Starting…")
         self._srv_phase_lbl.set_xalign(0)
         self._srv_phase_lbl.add_css_class("server-phase-lbl")
+        self._srv_phase_lbl.set_max_width_chars(1)
+        self._srv_phase_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         srv_launch_box.append(self._srv_phase_lbl)
 
         # Row 3: raw log text — hidden by default, toggled by the button above
@@ -4101,9 +4329,10 @@ class ControlPanel(Gtk.Box):
 
     # ── QUALITY named button row ───────────────────────────────────────────────
 
-    # Ordered list of (key, display_label) for the video model dropdown.
-    # Index 0 is the placeholder shown when no model is running/available.
-    _VIDEO_MODEL_ENTRIES = [
+    # All available video model entries (key, display_label).
+    # Index 0 is always the placeholder; hidden models are filtered out at
+    # build time based on the "hidden_video_models" setting.
+    _ALL_VIDEO_MODEL_ENTRIES = [
         ("",            "— not running —"),
         ("wan2",        "Wan2.2  —  720p video"),
         ("mochi",       "Mochi-1  —  480×848 video"),
@@ -4128,6 +4357,12 @@ class ControlPanel(Gtk.Box):
         lbl.set_xalign(0)
         lbl.set_valign(Gtk.Align.CENTER)
         row.append(lbl)
+
+        hidden = set(_settings.get("hidden_plugins") or [])
+        self._VIDEO_MODEL_ENTRIES = [
+            (k, d) for k, d in self._ALL_VIDEO_MODEL_ENTRIES
+            if k == "" or k not in hidden  # always keep the placeholder
+        ]
 
         string_list = Gtk.StringList()
         for _, display in self._VIDEO_MODEL_ENTRIES:
@@ -4414,11 +4649,15 @@ class ControlPanel(Gtk.Box):
         self._shot_model_lbl = Gtk.Label()
         self._shot_model_lbl.add_css_class("model-badge-label")
         self._shot_model_lbl.set_xalign(0)
+        self._shot_model_lbl.set_max_width_chars(1)
+        self._shot_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         model_row.append(self._shot_model_lbl)
 
         self._shot_model_sub = Gtk.Label()
         self._shot_model_sub.add_css_class("model-badge-sub")
         self._shot_model_sub.set_xalign(0)
+        self._shot_model_sub.set_max_width_chars(1)
+        self._shot_model_sub.set_ellipsize(Pango.EllipsizeMode.END)
         model_row.append(self._shot_model_sub)
 
         _spacer = Gtk.Box()
@@ -4675,6 +4914,8 @@ class ControlPanel(Gtk.Box):
             name_lbl = Gtk.Label(label=sdef.label)
             name_lbl.add_css_class("servers-popover-key")
             name_lbl.set_xalign(0)
+            name_lbl.set_max_width_chars(1)
+            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             text_col.append(name_lbl)
             row.append(text_col)
 
@@ -4703,7 +4944,7 @@ class ControlPanel(Gtk.Box):
             if key == last_dep:
                 star = Gtk.Label(label="★")
                 star.add_css_class("servers-popover-last-star")
-                star.set_tooltip_text("Last successfully deployed")
+                star.set_tooltip_text("Most recently started server")
                 row.append(star)
 
             outer.append(row)
@@ -4832,7 +5073,7 @@ class ControlPanel(Gtk.Box):
         elif is_image:
             self._title_lbl.set_label("TT Local Generator")
             self._source_desc_lbl.set_label(
-                "synchronous  ·  FLUX.1-dev  ·  ~15–90 s  ·  1024×1024 JPEG"
+                "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG"
             )
         elif is_animate:
             self._title_lbl.set_label("TT Local Generator")
@@ -4977,7 +5218,7 @@ class ControlPanel(Gtk.Box):
         return self._video_model
 
     def get_image_model(self) -> str:
-        """Return the currently selected image model key ('flux' or future)."""
+        """Return the currently selected image model key ('flux' or 'sdxl')."""
         return self._image_model
 
     def set_server_state(self, ready: bool, running_model: "str | None") -> None:
@@ -5887,6 +6128,8 @@ class _StatusBar(Gtk.Box):
         self._srv_dot.add_css_class("tt-statusbar-dot-offline")
         self._srv_lbl = Gtk.Label(label="offline")
         self._srv_lbl.add_css_class("tt-statusbar-seg")
+        self._srv_lbl.set_max_width_chars(1)
+        self._srv_lbl.set_ellipsize(Pango.EllipsizeMode.END)
 
         srv_btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         srv_btn_content.append(self._srv_dot)
@@ -5938,6 +6181,8 @@ class _StatusBar(Gtk.Box):
             status_lbl = Gtk.Label(label="○ checking…")
             status_lbl.add_css_class("cap-row-offline")
             status_lbl.set_xalign(1)
+            status_lbl.set_max_width_chars(1)
+            status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             row.append(status_lbl)
             self._cap_rows[cap] = status_lbl
             pop_box.append(row)
@@ -6219,6 +6464,38 @@ class _StatusBar(Gtk.Box):
 
         cls._tt_smi_path = cls._TT_SMI_SKIP
         return None
+
+    def _count_blackhole_chips(self) -> int:
+        """Return the number of Blackhole devices visible to tt-smi, or 0 on failure.
+
+        Used to decide whether AnimateDiff and a running server would compete
+        for the same chip. Counts only live (non-sentinel) chips.
+        """
+        import json as _json
+        tt_smi = self._resolve_tt_smi()
+        if not tt_smi:
+            return 0
+        try:
+            result = __import__("subprocess").run(
+                [tt_smi, "-s"], capture_output=True, text=True, timeout=10
+            )
+            data = _json.loads(result.stdout)
+            count = 0
+            for dev in data.get("device_info", []):
+                arch = dev.get("board_info", {}).get("board_type", "").lower()
+                telem = dev.get("telemetry", {})
+                temp = telem.get("asic_temperature", 0)
+                # Skip ARC-dead chips (sentinel temp > 1000°C)
+                try:
+                    if float(temp) > 1000:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                if any(k in arch for k in ("blackhole", "p100", "p150", "p300")):
+                    count += 1
+            return count
+        except Exception:
+            return 0
 
     @staticmethod
     def _read_sysfs_clocks() -> list[int]:
@@ -6524,6 +6801,66 @@ class PreferencesDialog(Gtk.Window):
         box.set_margin_end(16)
         scroll.set_child(box)
         self.set_child(scroll)
+
+        # ── Plugins ───────────────────────────────────────────────────────────
+        box.append(self._section("Plugins"))
+        plugins_note = Gtk.Label(
+            label="Uncheck a plugin or model to hide it from the UI. "
+                  "Nothing is removed — you can re-enable at any time."
+        )
+        plugins_note.set_xalign(0)
+        plugins_note.set_wrap(True)
+        plugins_note.add_css_class("muted")
+        plugins_note.set_margin_bottom(4)
+        box.append(plugins_note)
+
+        hidden = set(_settings.get("hidden_plugins") or [])
+
+        # Video models
+        video_entries = [
+            ("wan2",        "Wan2.2-T2V  —  720p video"),
+            ("mochi",       "Mochi-1  —  480×848 video"),
+            ("skyreels",    "SkyReels I2V  —  960×544"),
+            ("animatediff", "AnimateDiff  —  local Blackhole GIF"),
+        ]
+        for key, label in video_entries:
+            cb = Gtk.CheckButton(label=label)
+            cb.set_active(key not in hidden)
+            cb.set_tooltip_text(f"Video model key: {key!r}")
+            def _on_plugin_toggle(widget, k=key):
+                h = set(_settings.get("hidden_plugins") or [])
+                if widget.get_active():
+                    h.discard(k)
+                else:
+                    h.add(k)
+                _settings.set("hidden_plugins", sorted(h))
+            cb.connect("toggled", _on_plugin_toggle)
+            box.append(cb)
+
+        # Artgen generators (from plugin loader)
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        try:
+            import plugin_loader as _pl
+            _pl.load_plugins()
+            artgen_names = sorted(
+                n for n in _pl.all_names()
+                if _pl.get(n).runnable
+            )
+        except Exception:
+            artgen_names = []
+        for name in artgen_names:
+            cb = Gtk.CheckButton(label=f"Artgen: {name}")
+            cb.set_active(name not in hidden)
+            cb.set_tooltip_text(f"Artgen plugin key: {name!r}")
+            def _on_artgen_toggle(widget, k=name):
+                h = set(_settings.get("hidden_plugins") or [])
+                if widget.get_active():
+                    h.discard(k)
+                else:
+                    h.add(k)
+                _settings.set("hidden_plugins", sorted(h))
+            cb.connect("toggled", _on_artgen_toggle)
+            box.append(cb)
 
         # ── Generation ────────────────────────────────────────────────────────
         box.append(self._section("Generation"))
@@ -6921,6 +7258,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._start_health_worker()
         self._start_prompt_gen_health_worker()
         self._start_artgen_health_worker()
+        # Pre-warm transform availability cache off the main thread so the first
+        # right-click doesn't block while importing plugin modules (torch etc.).
+        threading.Thread(
+            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth")],
+            daemon=True,
+        ).start()
         if self._inventory_url:
             self._start_inventory_fetch()
 
@@ -6986,10 +7329,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.set_sensitive(False)
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
+
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
+        self._context_menu_source: str = ""   # last source built; skip rebuild if unchanged
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
@@ -7005,6 +7350,8 @@ class MainWindow(Gtk.ApplicationWindow):
         ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ctrl_scroll.set_vexpand(True)
         ctrl_scroll.set_child(self._controls)
+        # Keep a reference so _on_source_change can swap it out for pipeline mode
+        self._ctrl_scroll_inner = ctrl_scroll
 
         self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._ctrl_wrapper.append(ctrl_scroll)
@@ -7018,6 +7365,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Inner paned splits gallery (left) from detail panel (right)
         inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         inner_paned.set_position(480)   # default gallery width before detail panel
+        self._inner_paned = inner_paned  # stored so _on_source_change can adjust split
 
         gallery_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
@@ -7039,6 +7387,7 @@ class MainWindow(Gtk.ApplicationWindow):
             delete_cb=self._on_delete_card,
             remix_cb=self._on_remix_card,
             star_cb=self._on_star,
+            transform_cb=self._on_transform_card,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
@@ -7049,6 +7398,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
+
         self._gallery_stack.set_visible_child_name("video")
 
         # Apply saved gallery density preference on startup.  The default
@@ -7141,6 +7491,27 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_margin_bottom(6)
 
         self._detail_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # Thin dismiss bar at the top of the detail pane — ← collapses it.
+        # Visible universally (not just Pipeline) so users can always reclaim space.
+        _detail_close_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        _detail_close_bar.add_css_class("detail-close-bar")
+        _detail_close_spacer = Gtk.Box()
+        _detail_close_spacer.set_hexpand(True)
+        _detail_close_bar.append(_detail_close_spacer)
+        _detail_close_btn = Gtk.Button(label="✕")
+        _detail_close_btn.add_css_class("flat")
+        _detail_close_btn.set_tooltip_text("Close detail pane")
+        _detail_close_btn.connect("clicked", lambda _: (
+            self._detail_wrap.set_visible(False),
+            setattr(self, "_detail_visible", False),
+            self._inner_paned.set_position(
+                self._inner_paned.get_allocation().width
+            ) if hasattr(self, "_inner_paned") else None,
+        ))
+        _detail_close_bar.append(_detail_close_btn)
+        self._detail_wrap.append(_detail_close_bar)
+
         self._detail_wrap.append(self._detail)
         self._detail_wrap.append(self._queue_section_lbl)
         self._detail_wrap.append(self._queue_box)
@@ -7411,6 +7782,9 @@ class MainWindow(Gtk.ApplicationWindow):
         replaces the submenu title by remove+insert_submenu on self._menumodel.
         The PopoverMenuBar reflects the change immediately.
         """
+        if getattr(self, "_context_menu_source", None) == source:
+            return   # nothing changed — skip the relayout
+        self._context_menu_source = source
         _TITLES = {
             "video":   "\U0001f3a5 Video",
             "animate": "\U0001f483 Animate",
@@ -7461,6 +7835,12 @@ class MainWindow(Gtk.ApplicationWindow):
         counts: dict[str, int] = {}
         for r in records:
             mid = getattr(r, "model", "") or ""
+            # Skip workflow-runner records — their model_id is "workflow" (or a
+            # workflow-prefixed variant like "workflow-v2").  These are pipeline
+            # artifacts, not direct inference generations, so they should not
+            # appear as standalone model entries in the By Model menu.
+            if mid.startswith("workflow"):
+                continue
             if mid and getattr(r, "media_type", "video") != "image":
                 counts[mid] = counts.get(mid, 0) + 1
         for mid, cnt in sorted(counts.items()):
@@ -7728,24 +8108,30 @@ class MainWindow(Gtk.ApplicationWindow):
         """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
         self._gallery_stack.set_visible_child_name(source)
         is_artgen = source == "artgen"
+
         # Hide the left ControlPanel and right DetailPanel in artgen mode so
         # the ArtgenPanel can use the full window width for its own layout.
         self._ctrl_wrapper.set_visible(not is_artgen)
-        self._detail_wrap.set_visible(not is_artgen)
+        if not is_artgen:
+            self._detail_wrap.set_visible(True)
         self._rebuild_context_menu(source)
-        # Grey out Detail Panel toggle on Art tab (no detail panel there)
+        # Grey out Detail Panel toggle / gallery density on Art tab (no detail panel there)
         toggle_act = self.lookup_action("toggle-detail")
         if toggle_act:
             toggle_act.set_enabled(source != "artgen")
+        density_act = self.lookup_action("gallery-density")
+        if density_act:
+            density_act.set_enabled(source != "artgen")
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
     def _on_card_selected(self, record: GenerationRecord) -> None:
         """Called when the user clicks a gallery card. Populates the detail panel."""
         gallery = self._gallery_for_type(record.media_type)
-        visible = gallery.visible_cards()
-        idx = next((i for i, c in enumerate(visible) if c._record.id == record.id), 0)
-        self._detail.set_context([c._record for c in visible], idx)
+        # Use all_cards() so prev/next navigation crosses page boundaries.
+        all_cards = gallery.all_cards()
+        idx = next((i for i, c in enumerate(all_cards) if c._record.id == record.id), 0)
+        self._detail.set_context([c._record for c in all_cards], idx)
         self._detail.show_record(record, self._dispatch_remix)
 
     # ── Remix routing ──────────────────────────────────────────────────────────
@@ -7780,6 +8166,125 @@ class MainWindow(Gtk.ApplicationWindow):
             artgen_panel=self._artgen_panel,
             flash_fn=self._flash_status,
         )
+
+    # ── Forge transform pipeline ───────────────────────────────────────────────
+
+    def _on_transform_card(self, record: GenerationRecord, key: str) -> None:
+        """Dispatch a forge plugin transform in a background thread.
+
+        Called by GenerationCard right-click menu on the GTK main thread.
+        The transform runs in a daemon thread to avoid blocking the UI.
+        Result is posted back via GLib.idle_add.
+        """
+        self._flash_status(f"Applying transform: {key}…")
+
+        def _worker():
+            try:
+                result = self._run_transform(record, key)
+                GLib.idle_add(self._on_transform_finished, result)
+            except Exception as e:
+                GLib.idle_add(self._on_error, f"Transform '{key}' failed: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_transform(self, record: GenerationRecord, key: str) -> GenerationRecord:
+        """Run a forge plugin transform and return a new GenerationRecord for the result."""
+        import importlib.util as _ilu
+        import uuid
+        from datetime import datetime, timezone
+        from history_store import IMAGES_DIR, THUMBNAILS_DIR
+        from log_viewer import _TRANSFORMS_LOG_DIR
+
+        plugins_dir = Path(__file__).parent.parent / "plugins"
+        spec = _ilu.spec_from_file_location(f"ttlg_transform_{key}",
+                                             plugins_dir / key / "plugin.py")
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        src = record.media_file_path
+        job_id = str(uuid.uuid4())
+        ts = datetime.now(timezone.utc)
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+        _TRANSFORMS_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Log file: YYYYMMDD_HHMMSS_<plugin>_<source_stem>.log
+        src_stem = Path(src).stem[:32]
+        log_path = _TRANSFORMS_LOG_DIR / f"{ts_str}_{key}_{src_stem}.log"
+        t_start = datetime.now(timezone.utc)
+
+        def _writelog(msg: str) -> None:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}\n")
+
+        _writelog(f"transform: {key}")
+        _writelog(f"source:    {src}")
+        _writelog(f"plugin:    {plugins_dir / key / 'plugin.py'}")
+        _writelog(f"record_id: {record.id}")
+
+        # (fn_name, output_ext_or_None, display_label)
+        _META = {
+            "rmbg":  ("remove_background", ".png", "Background removed"),
+            "blip":  ("caption_image",     None,   "Described"),
+            "depth": ("estimate_depth",    ".png", "Depth map"),
+        }
+        fn_name, ext, label = _META[key]
+        fn = getattr(mod, fn_name)
+
+        try:
+            if ext:
+                dest = str(IMAGES_DIR / f"{ts_str}_{job_id[:8]}{ext}")
+                fn(src, dest)
+                image_path = dest
+                prompt = f"{label}: {record.prompt[:100]}"
+                _writelog(f"output:    {dest}")
+            else:
+                # blip: returns text, use original image for the card display
+                caption = fn(src)
+                image_path = src
+                prompt = caption
+                (IMAGES_DIR / f"{ts_str}_{job_id[:8]}.txt").write_text(caption)
+                _writelog(f"caption:   {caption[:200]}")
+        except Exception as e:
+            _writelog(f"ERROR:     {e}")
+            raise
+
+        elapsed = (datetime.now(timezone.utc) - t_start).total_seconds()
+        _writelog(f"elapsed:   {elapsed:.1f}s")
+        _writelog("status:    ok")
+
+        thumb = str(THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg")
+        _make_thumbnail_for(image_path, thumb)
+
+        return GenerationRecord(
+            id=job_id,
+            prompt=prompt,
+            negative_prompt="",
+            num_inference_steps=0,
+            seed=-1,
+            video_path="",
+            thumbnail_path=thumb,
+            created_at=ts.isoformat(),
+            media_type="image",
+            image_path=image_path,
+            model="",
+            extra_meta={
+                "_source_id": record.id,
+                "_transform": key,
+                "_transform_label": label,
+                "_log_path": str(log_path),
+            },
+        )
+
+    def _on_transform_finished(self, record: GenerationRecord) -> bool:
+        """Add the transform result to the store and refresh the image gallery."""
+        self._store.append(record)
+        self._image_gallery.load_history(
+            [r for r in self._store.all_records() if r.media_type == "image"]
+        )
+        self._flash_status(f"Transform complete — new card in Image gallery")
+        return False
 
     def _on_delete_card(self, record: GenerationRecord) -> None:
         """
@@ -8747,18 +9252,25 @@ class MainWindow(Gtk.ApplicationWindow):
         # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
 
         if model_source == "image":
-            model_name = _IMAGE_MODEL_IDS.get(
-                model_id or self._controls.get_image_model(), "flux.1-dev"
-            )
+            img_model_key = model_id or self._controls.get_image_model()
+            model_name = _IMAGE_MODEL_IDS.get(img_model_key, "flux.1-schnell")
             self._set_status(f"Generating image with {model_name}…")
+            # SDXL (cpp_server) uses a different default guidance scale and
+            # a dedicated service_key for correct auth token resolution.
+            is_sdxl = img_model_key == "sdxl" or "sdxl" in model_name.lower()
+            effective_guidance = guidance_scale if guidance_scale != 3.5 else (5.0 if is_sdxl else 3.5)
+            image_client = APIClient(
+                self._client.base_url,
+                service_key="sdxl" if is_sdxl else "flux",
+            ) if is_sdxl else self._client
             gen = ImageGenerationWorker(
-                client=self._client,
+                client=image_client,
                 store=self._store,
                 prompt=prompt,
                 negative_prompt=neg,
                 num_inference_steps=steps,
                 seed=seed,
-                guidance_scale=guidance_scale,
+                guidance_scale=effective_guidance,
                 model=model_name,
             )
         elif model_source == "animate":
@@ -8781,6 +9293,18 @@ class MainWindow(Gtk.ApplicationWindow):
             video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
+                # Guard: if only 1 chip is present and a server model is loaded on it,
+                # AnimateDiff can't run — both want exclusive access to the same device.
+                if self._controls._server_ready and self._count_blackhole_chips() == 1:
+                    model_lbl = self._running_model or "a model"
+                    self._gen_gallery.remove_pending()
+                    self._gen_gallery = None
+                    self._controls.set_busy(False)
+                    self._set_status(
+                        f"Can't run AnimateDiff while {model_lbl} is loaded — "
+                        "your Blackhole chip is busy. Stop the server first, then try again."
+                    )
+                    return
                 self._set_status("Starting AnimateDiff generation on Blackhole…")
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,
@@ -8831,11 +9355,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._worker_gen = gen
 
         def run():
-            gen.run_with_callbacks(
-                on_progress=lambda msg: GLib.idle_add(self._on_progress, msg, pending),
-                on_finished=lambda rec: GLib.idle_add(self._on_finished, rec),
-                on_error=lambda msg: GLib.idle_add(self._on_error, msg),
-            )
+            try:
+                gen.run_with_callbacks(
+                    on_progress=lambda msg: GLib.idle_add(self._on_progress, msg, pending),
+                    on_finished=lambda rec: GLib.idle_add(self._on_finished, rec),
+                    on_error=lambda msg: GLib.idle_add(self._on_error, msg),
+                )
+            except Exception as _exc:
+                import traceback as _tb
+                GLib.idle_add(self._on_error, f"Worker crashed: {_exc}\n{_tb.format_exc()}")
 
         self._worker = threading.Thread(target=run, daemon=True)
         self._worker.start()
@@ -9501,6 +10029,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._set_status(f"Error: {short}{suffix}")
         self._start_next_queued()
         return False
+
 
     def do_close_request(self) -> bool:
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets

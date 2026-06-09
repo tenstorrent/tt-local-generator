@@ -41,6 +41,7 @@ except Exception:
 
 import artgen
 from media_store import media_store as _media_store, MediaRecord, make_artgen_path, make_thumbnail
+from app_settings import settings as _settings
 from server_config import server_config
 
 
@@ -198,7 +199,10 @@ class ArtgenPanel(Gtk.Box):
         self._sub_stack.add_named(self._watch, "watch")
 
         self._sub_stack.set_visible_child_name("gallery")
-        self._gallery.refresh()
+        # Defer the initial gallery refresh so it runs after the window paints.
+        # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously,
+        # which delays the first frame.
+        GLib.idle_add(self._gallery.refresh)
         body.append(self._sub_stack)
         self.append(body)
 
@@ -215,7 +219,7 @@ class ArtgenPanel(Gtk.Box):
         type_lbl = _section_lbl("type")
         type_lbl.set_size_request(44, -1)
         type_bar.append(type_lbl)
-        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS and n not in (set(_settings.get("hidden_plugins") or []))]
         self._type_dd = _dd(gen_names, "landscape")
         self._type_dd.set_hexpand(True)
         self._type_dd.connect("notify::selected", self._on_type_changed)
@@ -1643,10 +1647,9 @@ class ArtgenPanel(Gtk.Box):
         so the correct parameter widgets are visible.
         """
         import artgen
-        # Use the same filtered list the dropdown was built from so the index
-        # matches the dropdown model — unfiltered all_names() would be off-by-N
-        # whenever hidden generators (e.g. animatediff) appear earlier in the list.
-        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS]
+        # Use the same filtered list the dropdown was built from so index
+        # matches the actual dropdown row (hidden generators are excluded).
+        gen_names = [n for n in artgen.all_names() if n not in self._HIDDEN_GENERATORS and n not in (set(_settings.get("hidden_plugins") or []))]
         if name in gen_names:
             self._type_dd.set_selected(gen_names.index(name))
             self._controls_stack.set_visible_child_name(name)

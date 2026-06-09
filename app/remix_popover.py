@@ -32,9 +32,20 @@ _THUMB_H = 40
 
 
 def _source_type_from_record(record) -> str:
-    """Derive a canonical source_type string from whatever record type we have."""
-    mt = getattr(record, "media_type", None) or getattr(record, "generator_type", None) or "video"
-    return str(mt)
+    """Derive a canonical source_type string from whatever record type we have.
+
+    For artgen MediaRecords, media_type is always "artgen" but the actual generator
+    (palette, verse, landscape, etc.) lives in generator_type. Remix ingredient
+    tables and plugin targets are keyed by generator type, not "artgen", so we
+    prefer generator_type when present.
+    """
+    gt = getattr(record, "generator_type", None)
+    if gt:
+        return str(gt)
+    mt = getattr(record, "media_type", None)
+    if mt and mt != "artgen":
+        return str(mt)
+    return str(mt or "video")
 
 
 def _prompt_from_record(record) -> str:
@@ -78,9 +89,8 @@ def _build_hint(record, source_type: str, target_type: str, active_keys: set) ->
     if "text" in active_keys:
         # For text-output generators (verse, haiku) read the artifact file so
         # the full generated text is used, not just the generation prompt.
-        media = _media_path(record)
         try:
-            artifact_text = Path(media).read_text(encoding="utf-8").strip()
+            artifact_text = Path(_media_path(record)).read_text(encoding="utf-8").strip()
         except Exception:
             artifact_text = ""
         content = artifact_text or _prompt_from_record(record)
@@ -110,7 +120,7 @@ def _build_hint(record, source_type: str, target_type: str, active_keys: set) ->
             pass
     if "vibe" in active_keys:
         # vibe is the short descriptive phrase stored in the prompt field,
-        # distinct from "prompt" — but dedup if already added via "prompt".
+        # distinct from "prompt" — dedup if already added via "prompt".
         p = _prompt_from_record(record)
         if p and p not in parts:
             parts.append(p)
@@ -176,11 +186,18 @@ class RemixPopover(Gtk.Popover):
         outer.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # ── Build target list from plugin registry + "New variation" always last ──
+        # _target_media_types maps plugin name → media_type for ingredients_for()
+        # lookup. The ingredient table is keyed by media type ("video", "image",
+        # "text"), not by plugin/generator name ("landscape", "verse"), so we
+        # must translate before querying ingredients.
         plugin_targets = remix_targets_for(self._source_type)
         _built_targets: list = []
+        self._target_media_types: dict = {}
         for pdef in plugin_targets:
             key = pdef.name
             label = getattr(pdef, "label", None) or key.title()
+            mt = pdef.manifest.get("x-ttlg", {}).get("media_type") or key
+            self._target_media_types[key] = mt
             _built_targets.append((key, label))
         _built_targets.append(("same", "✨ New variation"))
 
@@ -189,9 +206,10 @@ class RemixPopover(Gtk.Popover):
             (k for k, _ in _built_targets if k != "same"),
             "video",
         )
+        default_media_type = self._target_media_types.get(default_target, default_target)
 
         # ── Ingredient section (only if >1 ingredient for default target) ─────
-        specs = ingredients_for(self._source_type, default_target)
+        specs = ingredients_for(self._source_type, default_media_type)
         if len(specs) > 1:
             carry_lbl = Gtk.Label(label="CARRY INTO REMIX")
             carry_lbl.set_xalign(0)
@@ -249,9 +267,17 @@ class RemixPopover(Gtk.Popover):
     # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _compute_hint(self, target_type: str) -> str:
-        specs = ingredients_for(self._source_type, target_type)
+        # "New variation" re-uses the source prompt directly — no ingredient
+        # table entry exists for (source, "same"), and we want the existing
+        # prompt, not "(no text hint)" placeholder text.
+        if target_type == "same":
+            return _prompt_from_record(self._record) or "(no prompt)"
+        # Translate plugin name to media_type for ingredient table lookup.
+        # e.g. "landscape" plugin → media_type "image" → ("palette","image") table entry.
+        media_type = getattr(self, "_target_media_types", {}).get(target_type, target_type)
+        specs = ingredients_for(self._source_type, media_type)
         active = {s.key for s in specs if s.key in self._active_keys}
-        return _build_hint(self._record, self._source_type, target_type, active) or "(no text hint)"
+        return _build_hint(self._record, self._source_type, media_type, active) or "(no text hint)"
 
     def _on_ingredient_toggled(self, cb: Gtk.CheckButton, key: str) -> None:
         if cb.get_active():
@@ -287,8 +313,27 @@ class RemixPopover(Gtk.Popover):
             # Silent format conversions — spec §3 resolution rules
             if source_type in ("video", "gif", "animatediff"):
                 if target_key == "animate":
-                    if media_path and Path(media_path).exists():
-                        ref_video_path = media_path
+                    # Animate tab uses a seed image (thumbnail), not a motion
+                    # reference video — dispatch ignores ref_video_path since
+                    # the motion-reference picker was removed from the UI.
+                    if thumb_path and Path(thumb_path).exists():
+                        seed_image_path = thumb_path
+                    elif media_path and Path(media_path).exists():
+                        # Extract first frame as seed image
+                        try:
+                            import importlib.util as _ilu
+                            _spec = _ilu.spec_from_file_location(
+                                "ffmpeg_plugin",
+                                Path(__file__).parent.parent / "plugins" / "ffmpeg" / "plugin.py",
+                            )
+                            _ffmpeg = _ilu.module_from_spec(_spec)
+                            _spec.loader.exec_module(_ffmpeg)
+                            tmp2 = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+                            tmp2.close()
+                            _ffmpeg.extract_frame(media_path, tmp2.name, timestamp=0.0)
+                            seed_image_path = tmp2.name
+                        except Exception:
+                            pass
                 elif target_key in ("video", "image", "same"):
                     if thumb_path and Path(thumb_path).exists():
                         seed_image_path = thumb_path

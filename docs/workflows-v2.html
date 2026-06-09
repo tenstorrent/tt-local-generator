@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Five World's Fairs — tt-local-generator Workflows</title>
+  <meta name="description" content="Five world's fairs, five historically-specific prompts, five SkyReels I2V videos — all generated on Tenstorrent Blackhole hardware.">
+  <link rel="icon" href="assets/tenstorrent.png" type="image/png">
+  <style>
+    :root {
+      --bg0: #080f14; --bg1: #0d1b24; --bg2: #122130; --card: #162838; --card2: #1a3040;
+      --teal: #4fd1c5; --teal-dim: #3aada2; --teal-glow: rgba(79,209,197,.15);
+      --pink: #ec96b8; --gold: #f4c471; --green: #27ae60; --red: #e05555;
+      --text: #e8f0f2; --text2: #b0c4d0; --muted: #607d8b;
+      --border: rgba(79,209,197,.18); --radius: 12px; --radius-sm: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg0); color: var(--text); font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+    img { display: block; max-width: 100%; }
+    a { color: var(--teal); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(1.25rem, 5vw, 4rem); }
+    section { padding: 5rem 0; }
+    section:nth-child(even) { background: var(--bg1); }
+
+    /* ── Nav ── */
+    nav { background: var(--bg1); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+    nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+    .nav-logo { display: flex; align-items: center; gap: .6rem; font-weight: 700; color: var(--teal); font-size: .95rem; }
+    .nav-logo img { width: 24px; height: 24px; }
+    .nav-links { display: flex; align-items: center; gap: .25rem; list-style: none; }
+    .nav-links a { color: var(--text2); font-size: .85rem; padding: .3rem .7rem; border-radius: 6px; }
+    .nav-links a:hover { color: var(--teal); text-decoration: none; }
+    .nav-cta { background: var(--teal-glow); border: 1px solid var(--border); color: var(--teal) !important; }
+
+    /* ── Hero ── */
+    .hero { padding: 6rem 0 5rem; }
+    .hero-label { font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); margin-bottom: 1rem; }
+    .hero-title { font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 800; line-height: 1.1; letter-spacing: -.02em; margin-bottom: 1.25rem; }
+    .hero-title span { color: var(--teal); }
+    .hero-sub { font-size: 1.1rem; color: var(--text2); max-width: 640px; margin-bottom: 2rem; line-height: 1.7; }
+    .hero-meta { display: flex; gap: 2rem; flex-wrap: wrap; }
+    .hero-stat-val { font-size: 1.6rem; font-weight: 800; color: var(--teal); line-height: 1; }
+    .hero-stat-lbl { font-size: .75rem; color: var(--muted); margin-top: .2rem; }
+
+    /* ── Fair cards ── */
+    .section-label { font-size: .75rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); margin-bottom: .75rem; }
+    .section-title { font-size: clamp(1.8rem, 3.5vw, 2.6rem); font-weight: 800; letter-spacing: -.02em; margin-bottom: 1rem; }
+    .section-sub { font-size: 1.05rem; color: var(--text2); max-width: 680px; line-height: 1.7; margin-bottom: 1.5rem; }
+
+    .fairs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 2.5rem; margin-top: 3rem; }
+    @media (max-width: 520px) { .fairs-grid { grid-template-columns: 1fr; } }
+
+    .fair-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+    .fair-card-header { padding: 1.25rem 1.5rem 1rem; border-bottom: 1px solid var(--border); }
+    .fair-year { font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--teal); margin-bottom: .3rem; }
+    .fair-name { font-size: 1.1rem; font-weight: 700; color: var(--text); line-height: 1.3; }
+    .fair-location { font-size: .82rem; color: var(--muted); margin-top: .15rem; }
+
+    /* Seed image */
+    .fair-seed { position: relative; }
+    .fair-seed img { width: 100%; aspect-ratio: 1/1; object-fit: cover; display: block; }
+    .fair-seed-label { position: absolute; bottom: 0; left: 0; right: 0; padding: .4rem .75rem; background: linear-gradient(transparent, rgba(8,15,20,.85)); font-size: .72rem; color: var(--text2); letter-spacing: .04em; }
+
+    /* Video — correct native ratio, no squish */
+    .fair-video-wrap { background: #000; position: relative; width: 100%; }
+    .fair-video-wrap video {
+      width: 100%;
+      display: block;
+      /* 960×544 = SkyReels native — preserve exactly, no cropping */
+      aspect-ratio: 960 / 544;
+      object-fit: contain;
+    }
+    .fair-video-badge { position: absolute; top: .5rem; right: .5rem; background: rgba(8,15,20,.8); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: .65rem; color: var(--teal); letter-spacing: .06em; font-weight: 700; }
+
+    /* Poem */
+    .fair-poem { padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+    .fair-poem-label { font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: .6rem; }
+    .fair-poem-text { font-size: .85rem; color: var(--text2); line-height: 1.75; font-style: italic; border-left: 2px solid var(--teal-dim); padding-left: .9rem; }
+
+    /* Poem image */
+    .fair-poem-img { position: relative; }
+    .fair-poem-img img { width: 100%; aspect-ratio: 1/1; object-fit: cover; display: block; }
+    .fair-poem-img-label { position: absolute; bottom: 0; left: 0; right: 0; padding: .4rem .75rem; background: linear-gradient(transparent, rgba(8,15,20,.85)); font-size: .7rem; color: var(--muted); }
+
+    /* Hardware table */
+    .hw-table { width: 100%; border-collapse: collapse; font-size: .88rem; margin: 1.5rem 0; }
+    .hw-table th { text-align: left; padding: .6rem .75rem; font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
+    .hw-table td { padding: .6rem .75rem; border-bottom: 1px solid rgba(79,209,197,.07); color: var(--text2); }
+    .hw-table td:first-child { color: var(--text); font-weight: 600; }
+    .val-teal { color: var(--teal); font-weight: 700; }
+
+    @media (max-width: 600px) { .hero-meta { gap: 1.25rem; } .nav-links { display: none; } }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/tenstorrent.png" alt="">
+      tt-local-generator
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="workflows.html">Workflows</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="#fairs">Results</a></li>
+      <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section class="hero" style="background:var(--bg0);">
+  <div class="wrap">
+    <div class="hero-label">Workflow showcase · June 2026</div>
+    <h1 class="hero-title">Five World's Fairs.<br><span>One pipeline.</span></h1>
+    <p class="hero-sub">Each fair got a historically-specific seed prompt — IBM's hydraulic People Wall, Elektro the robot, Tesla's wireless light, Nakaya's fog sculpture, Disney's Circle-Vision theatre. All generated on Tenstorrent Blackhole hardware, end-to-end.</p>
+    <div class="hero-meta">
+      <div class="hero-stat"><div class="hero-stat-val">5</div><div class="hero-stat-lbl">seed images · FLUX.1-schnell · ~3s each</div></div>
+      <div class="hero-stat"><div class="hero-stat-val">5</div><div class="hero-stat-lbl">videos · SkyReels V2 I2V · 33–97 frames</div></div>
+      <div class="hero-stat"><div class="hero-stat-val">5</div><div class="hero-stat-lbl">poems · Llama 3.3 70B</div></div>
+      <div class="hero-stat"><div class="hero-stat-val">5</div><div class="hero-stat-lbl">poem images · FLUX.1-schnell</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Results ── -->
+<section id="fairs" style="background:var(--bg0);">
+  <div class="wrap">
+    <div class="section-label">Run results · June 2026</div>
+    <h2 class="section-title">All five fairs</h2>
+    <p class="section-sub">Each card shows the seed image, an inline looping SkyReels video, the Llama poem, and the poem image. All generated on one QB2 machine.</p>
+
+    <div class="fairs-grid">
+
+      <!-- 1964 NY — Gen 1 Unisphere seed, Gen 1 video -->
+      <div class="fair-card">
+        <div class="fair-card-header">
+          <div class="fair-year">1964 · New York</div>
+          <div class="fair-name">World's Fair — Unisphere</div>
+          <div class="fair-location">Flushing Meadows, Queens · "Peace Through Understanding"</div>
+        </div>
+        <div class="fair-seed">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-9ca3c7de.jpg" alt="1964 NY seed" loading="lazy">
+          <div class="fair-seed-label">FLUX.1-schnell · seed image</div>
+        </div>
+        <div class="fair-video-wrap">
+          <video autoplay muted loop playsinline poster="assets/workflow-examples/compare/1964-gen1-ima-9ca3c7de.jpg">
+            <source src="assets/workflow-examples/compare/1964-gen1-vid-9c16a0bb.mp4" type="video/mp4">
+          </video>
+          <div class="fair-video-badge">SkyReels V2 I2V</div>
+        </div>
+        <div class="fair-poem">
+          <div class="fair-poem-label">Poem — Llama 3.3 70B</div>
+          <div class="fair-poem-text">
+            The Unisphere gleams in silver light,<br>
+            Tomorrow's promise etched in steel.<br>
+            In this fleeting moment, wonder and disillusion entwine.
+          </div>
+        </div>
+        <div class="fair-poem-img">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-ee76e006.jpg" alt="1964 poem image" loading="lazy">
+          <div class="fair-poem-img-label">FLUX.1-schnell · poem image</div>
+        </div>
+      </div>
+
+      <!-- 1939 NY — Gen 2 Elektro -->
+      <div class="fair-card">
+        <div class="fair-card-header">
+          <div class="fair-year">1939 · New York</div>
+          <div class="fair-name">World's Fair — Elektro the Robot</div>
+          <div class="fair-location">Flushing Meadows, Queens · "The World of Tomorrow"</div>
+        </div>
+        <div class="fair-seed">
+          <img src="assets/workflow-examples/compare/1939-gen2-ima-873620f7.png" alt="1939 NY seed" loading="lazy">
+          <div class="fair-seed-label">FLUX.1-schnell · seed image</div>
+        </div>
+        <div class="fair-video-wrap">
+          <video autoplay muted loop playsinline>
+            <source src="assets/workflow-examples/compare/1939-gen2-vid-2b08e5d1.mp4" type="video/mp4">
+          </video>
+          <div class="fair-video-badge">SkyReels V2 I2V</div>
+        </div>
+        <div class="fair-poem">
+          <div class="fair-poem-label">Poem — Llama 3.3 70B</div>
+          <div class="fair-poem-text">
+            Behind glass, Elektro's metal form gleams bright,<br>
+            A marvel of 1939's futuristic light,<br>
+            As Depression-weary crowds press in to see,<br>
+            The seven-foot robot count with mechanical glee.
+          </div>
+        </div>
+        <div class="fair-poem-img">
+          <img src="assets/workflow-examples/compare/1939-gen2-ima-96a8f3cb.png" alt="1939 poem image" loading="lazy">
+          <div class="fair-poem-img-label">FLUX.1-schnell · poem image</div>
+        </div>
+      </div>
+
+      <!-- 1893 Chicago — Gen 1 seed, Gen 2 poem image -->
+      <div class="fair-card">
+        <div class="fair-card-header">
+          <div class="fair-year">1893 · Chicago</div>
+          <div class="fair-name">World's Columbian Exposition — Tesla's Light</div>
+          <div class="fair-location">Jackson Park · "The White City"</div>
+        </div>
+        <div class="fair-seed">
+          <img src="assets/workflow-examples/compare/1893-gen1-ima-seed.jpg" alt="1893 Chicago seed" loading="lazy">
+          <div class="fair-seed-label">FLUX.1-schnell · seed image</div>
+        </div>
+        <div class="fair-video-wrap">
+          <video autoplay muted loop playsinline>
+            <source src="assets/workflow-examples/compare/1893-gen2-vid-8efcd0ce.mp4" type="video/mp4">
+          </video>
+          <div class="fair-video-badge">SkyReels V2 I2V</div>
+        </div>
+        <div class="fair-poem">
+          <div class="fair-poem-label">Poem — Llama 3.3 70B</div>
+          <div class="fair-poem-text">
+            In the Electricity Building's hallowed space,<br>
+            Tesla's glass tube shines with eerie, blue-lit pace,<br>
+            Their gasps and whispers weave a spell of awe and fright,<br>
+            As the future, like a specter, takes its first, flickering light.
+          </div>
+        </div>
+        <div class="fair-poem-img">
+          <img src="assets/workflow-examples/compare/1893-gen2-ima-b5e584cd.png" alt="1893 poem image" loading="lazy">
+          <div class="fair-poem-img-label">FLUX.1-schnell · poem image</div>
+        </div>
+      </div>
+
+      <!-- 1970 Osaka — Gen 2 seed + video, old illustrated poem -->
+      <div class="fair-card">
+        <div class="fair-card-header">
+          <div class="fair-year">1970 · Osaka</div>
+          <div class="fair-name">Expo 70 — Nakaya's Fog Pavilion</div>
+          <div class="fair-location">Suita, Osaka Prefecture · "Progress and Harmony for Mankind"</div>
+        </div>
+        <div class="fair-seed">
+          <img src="assets/workflow-examples/compare/1970-gen2-ima-319a2101.png" alt="1970 Osaka seed" loading="lazy">
+          <div class="fair-seed-label">FLUX.1-schnell · seed image</div>
+        </div>
+        <div class="fair-video-wrap">
+          <video autoplay muted loop playsinline>
+            <source src="assets/workflow-examples/compare/1970-gen2-vid-97287ba5.mp4" type="video/mp4">
+          </video>
+          <div class="fair-video-badge">SkyReels V2 I2V · depth skipped (fog)</div>
+        </div>
+        <div class="fair-poem">
+          <div class="fair-poem-label">Poem — Llama 3.3 70B</div>
+          <div class="fair-poem-text">
+            At Expo 70's Pepsi Pavilion, Nakaya's mist<br>
+            Envelops the crowd, a luminous, xenon-lit kiss,<br>
+            A dream of tomorrow, born of fog and light, fades to grey,<br>
+            Leaving us with wonder, at the future's unkept promise of the day.
+          </div>
+        </div>
+        <div class="fair-poem-img">
+          <img src="assets/workflow-examples/compare/1970-old-ima-poem.jpg" alt="1970 Osaka poem image" loading="lazy">
+          <div class="fair-poem-img-label">FLUX.1-schnell · poem image</div>
+        </div>
+      </div>
+
+      <!-- 1967 Montreal — Gen 2 seed, Gen 2 video, Gen 2 poem image -->
+      <div class="fair-card">
+        <div class="fair-card-header">
+          <div class="fair-year">1967 · Montreal</div>
+          <div class="fair-name">Expo 67 — Disney's Circle-Vision</div>
+          <div class="fair-location">Île Sainte-Hélène · "Man and His World"</div>
+        </div>
+        <div class="fair-seed">
+          <img src="assets/workflow-examples/compare/1967-gen2-ima-3ad8978c.png" alt="1967 Montreal seed" loading="lazy">
+          <div class="fair-seed-label">FLUX.1-schnell · seed image</div>
+        </div>
+        <div class="fair-video-wrap">
+          <video autoplay muted loop playsinline>
+            <source src="assets/workflow-examples/compare/1967-gen2-vid-7235ff7c.mp4" type="video/mp4">
+          </video>
+          <div class="fair-video-badge">SkyReels V2 I2V</div>
+        </div>
+        <div class="fair-poem">
+          <div class="fair-poem-label">Poem — Llama 3.3 70B</div>
+          <div class="fair-poem-text">
+            In Expo 67's futuristic sphere,<br>
+            Disney's Circle-Vision casts a dizzying spell,<br>
+            Niagara's torrent cascades above, a watery shroud,<br>
+            A last glimpse of Walt's promised tomorrow, now a relic of a bygone dream.
+          </div>
+        </div>
+        <div class="fair-poem-img">
+          <img src="assets/workflow-examples/compare/1967-gen2-ima-ba5baf42.png" alt="1967 Montreal poem image" loading="lazy">
+          <div class="fair-poem-img-label">FLUX.1-schnell · poem image</div>
+        </div>
+      </div>
+
+    </div><!-- /fairs-grid -->
+
+    <p style="text-align:center;color:var(--muted);font-size:.85rem;margin-top:3rem;">
+      Total wall time: ~3 hrs · Pure inference: ~55 min · 30 artifacts · 5 playlists · QB2 (P300X2 Blackhole)
+    </p>
+  </div>
+</section>
+
+<!-- ── Hardware ── -->
+<section style="background:var(--bg1);">
+  <div class="wrap">
+    <div class="section-label">Hardware</div>
+    <h2 class="section-title">Generated on Tenstorrent Blackhole</h2>
+    <table class="hw-table">
+      <thead><tr><th>Model</th><th>Task</th><th>Hardware</th><th>Time</th></tr></thead>
+      <tbody>
+        <tr><td>FLUX.1-schnell</td><td>Seed image generation</td><td>P300X2 Blackhole</td><td class="val-teal">~3s / image</td></tr>
+        <tr><td>SkyReels V2 I2V 14B</td><td>Image-to-video (33–97 frames)</td><td>P300X2 · 2×2 mesh</td><td class="val-teal">~10 min / video</td></tr>
+        <tr><td>Llama 3.3 70B</td><td>Poem generation</td><td>P300X2 Blackhole</td><td class="val-teal">~5s / poem</td></tr>
+        <tr><td>FLUX.1-schnell</td><td>Poem image generation</td><td>P300X2 Blackhole</td><td class="val-teal">~3s / image</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<section style="padding:3rem 0;background:var(--bg1);border-top:1px solid var(--border);">
+  <div class="wrap" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;">
+    <div style="font-size:.85rem;color:var(--muted);">
+      tt-local-generator · <a href="workflows.html">Workflow docs</a> · <a href="https://github.com/tenstorrent/tt-local-generator">GitHub</a>
+    </div>
+    <div style="font-size:.82rem;color:var(--muted);">Generated on Tenstorrent Blackhole P300X2 · June 2026</div>
+  </div>
+</section>
+
+</body>
+</html>

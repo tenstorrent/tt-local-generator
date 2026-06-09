@@ -411,11 +411,21 @@ _INSTRUCTION_LEAK_PATTERNS = [
     _re.compile(r'\bno\s+camera\s+moves?\b', _re.I),
     _re.compile(r'\bunder\s+\d+\s+words?\b', _re.I),
     _re.compile(r'\bdescribe\s+(?:what|only\s+the)\s+loop', _re.I),
-    # Screenplay-format headers that Qwen sometimes emits in guided mode:
-    # e.g. "[INT. LUXURY APARTMENT]  A man walks in" or "[ONE ACTION]  She runs"
-    # Only strip if there is actual text content after the closing bracket —
-    # keeps prompts that are entirely bracket-wrapped (edge case).
-    _re.compile(r'^\s*(?:\[[^\]]{0,80}\]\s*)+(?=\S)', _re.I),
+    # Screenplay-format headers that Qwen sometimes emits in guided mode.
+    # Matches only clear screenplay markers: INT./EXT. location slugs,
+    # all-caps single-word action labels (ONE ACTION, CAMERA CUE), or
+    # common script metadata. Does NOT match mixed-case style phrases like
+    # "[blue neon palette]" which are valid prompt content.
+    _re.compile(
+        r'^\s*'
+        r'(?:'
+        r'\[(?:INT|EXT)\.[^\]]{0,80}\]'            # [INT. ROOM] or [EXT. STREET]
+        r'|'
+        r'\[(?:[A-Z][A-Z0-9 _\-:]{0,60})\]'       # [ONE ACTION] [CAMERA CUE: TIGHT] — all-caps/colon
+        r')'
+        r'\s*'
+        r'(?=\S)',                                   # only strip if content follows
+    ),
 ]
 
 

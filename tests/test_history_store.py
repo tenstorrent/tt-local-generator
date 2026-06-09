@@ -113,3 +113,75 @@ def test_len_excludes_artgen(monkeypatch, tmp_path):
 
     # len() must only count the video record, not the artgen one
     assert len(store) == 1
+
+
+def _make_workflow_record(rid, model_id="workflow"):
+    """Return a MediaRecord whose model_id looks like a workflow-runner artifact."""
+    from media_store import MediaRecord
+    import json
+    return MediaRecord(
+        id=rid,
+        media_type="video",
+        created_at="2025-06-01T00:00:00",
+        file_path="",
+        thumbnail_path="",
+        prompt="1964 World's Fair workflow output",
+        model_id=model_id,
+        generator_type=None,
+        params=json.dumps({"workflow": "1964-worlds-fair"}),
+        starred=0,
+    )
+
+
+def _by_model_counts(records):
+    """
+    Replicate the By Model grouping logic from main_window._rebuild_playlists_menu
+    without importing GTK.  Returns {model_id: count} for non-image, non-workflow
+    records so tests can assert on it independently of the GTK widget layer.
+    """
+    counts: dict[str, int] = {}
+    for r in records:
+        mid = getattr(r, "model", "") or ""
+        # Mirror the filter added in main_window.py: skip workflow-runner records.
+        if mid.startswith("workflow"):
+            continue
+        if mid and getattr(r, "media_type", "video") != "image":
+            counts[mid] = counts.get(mid, 0) + 1
+    return counts
+
+
+def test_by_model_excludes_workflow_records(monkeypatch, tmp_path):
+    """
+    Workflow-runner records (model_id starts with "workflow") must not appear in
+    the By Model playlist section.
+
+    This test exercises the same filter logic that lives in
+    main_window._rebuild_playlists_menu without importing GTK.
+    """
+    import media_store as ms_mod
+
+    _patch_store(monkeypatch, tmp_path)
+    store = HistoryStore()
+
+    # Normal inference record — should appear in By Model.
+    normal_rec = _sample_record()           # model="wan2.2-t2v"
+    store.append(normal_rec)
+
+    # Workflow artifact with the canonical model_id written by run_workflow.sh.
+    ms_mod._media_store_singleton.add(_make_workflow_record("wf-001", "workflow"))
+
+    # Workflow artifact with a versioned variant (future-proof guard).
+    ms_mod._media_store_singleton.add(_make_workflow_record("wf-002", "workflow-v2"))
+
+    records = store.all_records()
+
+    # all_records() must return all three (workflow records are in the DB).
+    assert len(records) == 3
+
+    counts = _by_model_counts(records)
+
+    # Only the normal model must appear; workflow variants must be absent.
+    assert "wan2.2-t2v" in counts,        "normal record missing from By Model counts"
+    assert counts["wan2.2-t2v"] == 1,     "wrong count for wan2.2-t2v"
+    assert "workflow" not in counts,       "bare 'workflow' model_id leaked into By Model"
+    assert "workflow-v2" not in counts,    "versioned workflow model_id leaked into By Model"

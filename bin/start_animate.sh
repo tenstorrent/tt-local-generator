@@ -1,24 +1,16 @@
 #!/usr/bin/env bash
-# start_animate.sh — Start the Wan2.2-Animate-14B character animation server on P300x2 (QB2).
+# start_animate.sh — Start the Wan2.2-I2V-A14B image-to-video server on P300x2 (QB2).
 #
-# Uses the same Docker image as Wan2.2 T2V (0.11.1-bac8b34) which already contains the
-# WAN I2V pipeline.  The --dev-mode flag triggers two mechanisms:
+# NOTE (v0.15.0): The original Wan2.2-Animate-14B-Diffusers model name is not present
+# in v0.15.0's run.py model enum.  This script now uses Wan2.2-I2V-A14B-Diffusers,
+# the standard I2V model, which supports image+prompt → video generation.
 #
-#   1. tt-media-server bind-mount:
-#      tt-inference-server/tt-media-server/ is mounted over the container's server
-#      directory, supplying the updated TTWan22AnimateRunner (TT hardware path).
+# Required weights (not shipped): Wan-AI/Wan2.2-I2V-A14B-Diffusers (~118 GB)
+#   huggingface-cli download Wan-AI/Wan2.2-I2V-A14B-Diffusers --exclude 'original/**'
 #
-#   2. tt_dit hotpatch bind-mount:
-#      patches/tt_dit/pipelines/wan/pipeline_wan_animate.py is mounted into the
-#      container at ~/tt-metal/models/tt_dit/pipelines/wan/ so that the runner can
-#      import WanPipelineAnimate at pipeline-creation time.
-#
-# The Animate model's motion transfer emerges from the Animate-14B fine-tuned
-# weights; the character image is supplied as the I2V conditioning reference frame.
-#
-# Generation: 81-frame (≈3.4s) 480×832 video from a character image + prompt.
-# API endpoint: POST /v1/videos/generations  (note: "videos" plural, same as Mochi)
-# Auth: Bearer your-secret-key  (API_KEY env not set → container default)
+# Generation: image + prompt → video (I2V pipeline).
+# API endpoint: POST /v1/videos/generations/i2v  (or /v1/videos/generations with image field)
+# Auth: disabled (--no-auth)
 #
 # Usage:
 #   ./start_animate.sh             # start server and tail its log
@@ -37,7 +29,7 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
 MODEL="Wan2.2-Animate-14B-Diffusers"
 DEVICE="p300x2"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"

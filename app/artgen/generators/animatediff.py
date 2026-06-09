@@ -36,12 +36,7 @@ from artgen import ArtGenerator, register
 # Structured log for every animatediff run — written alongside generated GIFs
 # so failures are self-contained and don't require a running GUI to diagnose.
 # Log level: DEBUG captures all subprocess output; INFO captures run summaries.
-#
-# Use the XDG user state directory (~/.local/share/tt-video-gen/logs/animatediff)
-# rather than a repo-relative path so the installed .deb package (which lives
-# under /usr/lib/tt-local-generator, not writable by the user) does not crash
-# at import time with a PermissionError.
-_LOG_DIR = Path.home() / ".local" / "share" / "tt-video-gen" / "logs" / "animatediff"
+_LOG_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "logs" / "animatediff"
 
 _log = logging.getLogger("animatediff")
 _log.setLevel(logging.DEBUG)
@@ -56,9 +51,18 @@ def _ensure_log_handler() -> None:
     """
     if _log.handlers:
         return
+    log_dir = _LOG_DIR
     try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        _fh = logging.FileHandler(_LOG_DIR / "animatediff.log")
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log_dir = Path("/tmp/tt-local-generator/logs/animatediff")
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            _log.addHandler(logging.NullHandler())
+            return
+    try:
+        _fh = logging.FileHandler(log_dir / "animatediff.log")
         _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
         _log.addHandler(_fh)
     except OSError:

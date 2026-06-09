@@ -98,8 +98,7 @@ def test_collect_log_files_animatediff(tmp_path):
     (logs_dir / "run_20260529_081148_20260529_151148_70059cab.log").write_text("Saved 4 frames")
     (logs_dir / "animatediff.log").write_text("module log")
 
-    files = collect_log_files(repo_root=tmp_path, prompt_log=None,
-                              animatediff_log_dir=logs_dir)
+    files = collect_log_files(repo_root=tmp_path, prompt_log=None, animatediff_log_dir=logs_dir)
     ad_section = next(s for s in files if s["section"] == "ANIMATEDIFF")
     assert len(ad_section["files"]) == 2   # run logs only, not animatediff.log
     names = [f["name"] for f in ad_section["files"]]

@@ -1,0 +1,34 @@
+{
+  "x-ttlg": {
+    "output_ext": ".png",
+    "media_type": null,
+    "tab": null,
+    "hardware": null,
+    "utility": true,
+    "accepts_remix_from": [],
+    "can_remix_to": []
+  },
+  "tools": [
+    {
+      "name": "rmbg_remove_background",
+      "description": "Remove the background from an image using RMBG-1.4 (public model; RMBG-2.0 is gated), returning a PNG with a transparent background. Works on photos, illustrations, and screenshots. Ideal for compositing subjects onto new backgrounds before image-to-video generation.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["src"],
+        "properties": {
+          "src":  {"type": "string", "description": "Path to the input image (JPEG, PNG, WebP, etc.)"},
+          "dest": {"type": "string", "description": "Output PNG path (optional — a temp file is used if omitted)"}
+        }
+      },
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "rmbg_is_available",
+      "description": "Return true if the rmbg plugin's required packages (torch, torchvision, transformers) are installed",
+      "inputSchema": {"type": "object", "properties": {}},
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    }
+  ]
+}

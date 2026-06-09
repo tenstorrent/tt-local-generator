@@ -50,7 +50,7 @@ Description: GTK4 frontend for Tenstorrent AI media generation
   - Log viewer: Debug menu with browsable per-run logs and error highlighting
   - Context-aware menu bar: settings surface per active tab
  .
- Optional: fastapi + uvicorn for the MCP server (tt-ctl mcp-server start),
+ Optional: fastapi + uvicorn for the MCP server (python3 app/mcp_server.py),
  which exposes all generators as MCP tools to Claude Code and other clients.
  .
  Requires: Docker CE, Tenstorrent firmware + kernel module (via tt-installer),

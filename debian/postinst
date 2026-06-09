@@ -192,12 +192,8 @@ else
     || echo "WARNING: markovify install failed. Prompt generator will fall back to algo mode."
 fi
 
-# MCP server dependencies (fastapi + uvicorn) — optional, only needed to run
-# the MCP server directly.  The main GUI works without them.
-# To start the MCP server manually:
-#   python3 /usr/lib/tt-local-generator/app/mcp_server.py
-# To generate the Claude Code MCP config snippet:
-#   tt-ctl mcp-config
+# MCP server dependencies (fastapi + uvicorn) — optional, only needed for
+# python3 app/mcp_server.py. The main GUI works without them.
 if "$PYTHON3" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
     echo "fastapi/uvicorn already installed — skipping."
 else
@@ -207,8 +203,7 @@ else
         "fastapi>=0.100.0" \
         "uvicorn[standard]>=0.23.0" \
     && echo "fastapi/uvicorn installed." \
-    || echo "WARNING: fastapi/uvicorn install failed. MCP server will not work." \
-       "Start manually: python3 /usr/lib/tt-local-generator/app/mcp_server.py"
+    || echo "WARNING: fastapi/uvicorn install failed. MCP server (python3 app/mcp_server.py) will not work."
 fi
 
 # =============================================================================
@@ -284,25 +279,29 @@ fi
 _section "Pulling Docker inference image"
 
 if _have docker && docker info &>/dev/null 2>&1; then
-    echo "Pulling pinned image: $DOCKER_IMAGE"
-    if docker pull "$DOCKER_IMAGE" 2>/dev/null; then
-        echo "Pulled: $DOCKER_IMAGE"
+    if docker image inspect "$DOCKER_IMAGE" &>/dev/null 2>&1; then
+        echo "Image already present locally: $DOCKER_IMAGE — skipping pull."
     else
-        echo "WARNING: Pinned image not found ($DOCKER_IMAGE)."
-        echo "Falling back to :latest…"
-        if docker pull "$DOCKER_IMAGE_LATEST"; then
-            echo "Pulled: $DOCKER_IMAGE_LATEST"
-            # Tag it with the pinned name so start_wan_qb2.sh finds it by the
-            # exact ancestor filter string without code changes.
-            docker tag "$DOCKER_IMAGE_LATEST" "$DOCKER_IMAGE"
-            echo "Tagged :latest as $DOCKER_IMAGE"
-            echo "NOTE: Verify compatibility with your tt-inference-server version."
-            echo "      See: https://github.com/tenstorrent/tt-inference-server/releases"
+        echo "Pulling pinned image: $DOCKER_IMAGE"
+        if docker pull "$DOCKER_IMAGE" 2>/dev/null; then
+            echo "Pulled: $DOCKER_IMAGE"
         else
-            echo ""
-            echo "ERROR: Could not pull Docker inference image."
-            echo "The application will not start inference until you manually run:"
-            echo "  docker pull $DOCKER_IMAGE_LATEST"
+            echo "WARNING: Pinned image not found ($DOCKER_IMAGE)."
+            echo "Falling back to :latest…"
+            if docker pull "$DOCKER_IMAGE_LATEST"; then
+                echo "Pulled: $DOCKER_IMAGE_LATEST"
+                # Tag it with the pinned name so start_wan_qb2.sh finds it by the
+                # exact ancestor filter string without code changes.
+                docker tag "$DOCKER_IMAGE_LATEST" "$DOCKER_IMAGE"
+                echo "Tagged :latest as $DOCKER_IMAGE"
+                echo "NOTE: Verify compatibility with your tt-inference-server version."
+                echo "      See: https://github.com/tenstorrent/tt-inference-server/releases"
+            else
+                echo ""
+                echo "ERROR: Could not pull Docker inference image."
+                echo "The application will not start inference until you manually run:"
+                echo "  docker pull $DOCKER_IMAGE_LATEST"
+            fi
         fi
     fi
 else

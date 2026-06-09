@@ -1,3 +1,96 @@
+tt-local-generator (0.7.4) noble; urgency=medium
+
+  * Remove WorkflowPopover from toolbar (workflows moved to tt-ctl only).
+  * Fix gallery scroll/tab-switch lag: ArtgenGallery GIF cards now show static
+    thumbnails at rest; animated widget only on hover — eliminates 62 concurrent
+    GLib.timeout_add timers saturating the GTK main loop.
+  * Add context menu rebuild guard: skip PopoverMenuBar relayout when tab source
+    unchanged.
+  * Hide GTK 4.14 built-in video mediacontrols overlay (eject button on hover).
+  * CI: add xvfb so @gtk_required tests run instead of silently skipping.
+  * Merge Pipeline tab, PipelinePortfolioView, and all retry/compat fixes from
+    feat/remix — now includes animated GIF Pipeline phase grid, portfolio view
+    for completed runs, and per-job retry buttons.
+  * Vendor tt-animatediff as git submodule (removes bundled app/animatediff/ copy).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 09 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.7.3) noble; urgency=medium
+
+  * Fix startup latency: defer ArtgenGallery.refresh() in ArtgenPanel._build()
+    via GLib.idle_add so it runs after the window paints. With 161 artgen records,
+    _rebuild_grid() was taking ~250 ms synchronously, making app startup feel slow
+    even with an empty video/image history. ArtgenPanel init drops from 302 ms
+    to 64 ms (5x improvement); window appears instantly.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.7.2) noble; urgency=medium
+
+  * Gallery pagination: show at most 48 cards per page in each gallery
+    (video / image / animate) with a prev/next pager bar showing
+    "1–48 of 310 · page 1/7". Reduces startup widget-realization cost
+    from 417 cards to 48, fixing the seconds-long startup delay and
+    sluggish tab switching that grew with the history size.
+  * Fix _on_transform_finished: called non-existent .rebuild(); changed
+    to .load_history() so transform results actually appear in gallery.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.7.1) noble; urgency=medium
+
+  * Fix scroll sluggishness: GLib.io_add_watch dead-pipe spin loop in
+    workflow_popover.py._on_run_stdout. When readline() returned "" at pipe
+    EOF, the old code returned SOURCE_CONTINUE before reaching the IO_HUP
+    handler, leaving the dead fd in GLib's watch table and spinning the main
+    loop on every idle iteration. Fixed by falling through to the IO_HUP
+    check on empty reads so SOURCE_REMOVE is returned and the watch removed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.7.0) noble; urgency=medium
+
+  * Full v0.15.0 model validation on QB2 (P300X2). Validated models:
+    Wan2.2-T2V (360s), SkyReels-V2-I2V (90s), FLUX.1-schnell (3s),
+    SDXL/cpp_server (2s — fastest), Mochi-1 (19 min @ 64 steps, HQ),
+    Artgen Qwen3-8B / Llama-3.1-8B / Llama-3.3-70B / Qwen3-32B.
+  * FLUX.1-schnell promoted to default image model (no noise, 3s/image).
+  * SDXL via cpp_server: new start_sdxl.sh, fastest image generation (2s),
+    first test of the C++ inference backend on QB2.
+  * Mochi: request_processing_timeout bumped to 7200s (was 1000s);
+    full 64-step 97-frame generation now works end-to-end.
+  * Right-click transform menu on gallery cards (intent-first, forge-powered):
+    Remove background, Describe this, Show depth — powered by rmbg/blip/depth
+    plugins; results flow into Remix as seed images.
+  * Plugin transform logging: every transform writes a structured log visible
+    in Debug → Open Log Viewer under TRANSFORMS section.
+  * tt-ctl workflow subcommand: run/list ComfyUI-compatible workflow JSON specs.
+    1964 World's Fair example pipeline included.
+  * hidden_plugins setting: Preferences → Plugins lets users hide any video
+    model or artgen plugin from the UI without removing it.
+  * forge utility plugins: rmbg (background removal), blip (captioning),
+    depth (GLPN depth map) — all run via tenstorrent venv subprocess.
+  * Documentation: PERFORMANCE.md with validated timings, README and CLAUDE.md
+    accuracy pass for v0.15.0 reality, UPGRADE.md for 0.5→0.6 migration.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 01 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.6.0) noble; urgency=medium
+
+  * Upgrade tt-inference-server vendor pin to v0.15.0 (image 0.15.0-25891d3).
+    Patches rebased for new VLLMForge API, WAN_2_2_I2V variants, updated runner
+    and domain model patterns.
+  * Fix: /mnt/bonus bind-mount added to apply_patches.sh so Docker containers
+    can follow HuggingFace cache symlinks to non-standard storage locations.
+  * Fix: --no-auth flag added to all start scripts (v0.15.0 enables auth by
+    default; clients would receive 401 without this flag).
+  * Fix: Prometheus multiproc directory permissions corrected automatically on
+    container start (v0.15.0 creates /tmp/prometheus_multiproc as root, causing
+    PermissionError on first generation request).
+  * Validated on QB2 (P300x2): Wan2.2-T2V-A14B-Diffusers generates successfully.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 29 May 2026 00:00:00 +0000
+
 tt-local-generator (0.5.0) noble; urgency=medium
 
   * Unified Remix UI: single "Remix" entry point on every card hover bar and
@@ -14,7 +107,8 @@ tt-local-generator (0.5.0) noble; urgency=medium
     device_ids=[0] — UNet2D permute_conv_weights crashes on MeshShape([1,4]).
   * ffmpeg utility plugin (plugins/ffmpeg/) provides extract_frame,
     get_metadata, convert_to_gif, convert_to_mp4, resize as in-process
-    callables for the remix engine (not exposed as MCP tools — utility plugin).
+    callables for the remix engine (utility plugins are not exposed via the
+    MCP server).
   * Gallery density: View menu adds Comfortable/Compact card size toggle.
   * PendingCard layout fix: fixed-size thumbnail placeholder prevents FlowBox
     cell expansion during generation.

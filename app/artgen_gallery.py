@@ -419,8 +419,15 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
         except Exception:
             pass
 
-    # Animated GIF: self-animating widget (no GStreamer needed)
+    # Animated GIF: show static thumbnail in gallery to avoid running 60+ timers
+    # simultaneously.  The ArtgenCard hover handler swaps in an _AnimatedGifWidget
+    # on enter and restores the thumbnail on leave.
+    if ext == ".gif" and rec.thumbnail_path and Path(rec.thumbnail_path).exists():
+        img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
+        img.set_content_fit(Gtk.ContentFit.COVER)
+        return img
     if ext == ".gif" and fp.exists():
+        # No thumbnail — fall back to first frame via animation widget (static).
         return _AnimatedGifWidget(str(fp))
 
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
@@ -684,10 +691,38 @@ class ArtgenGallery(Gtk.Box):
         hover_rev.set_child(actions)
         overlay.add_overlay(hover_rev)
 
-        # Show/hide hover actions via motion controller
+        # Show/hide hover actions via motion controller.
+        # For GIF cards: swap in animated widget on enter, restore thumb on leave.
+        fp = Path(rec.file_path) if rec.file_path else Path()
+        _is_gif = fp.suffix.lower() == ".gif" and fp.exists()
+        _thumb_path = rec.thumbnail_path if (rec.thumbnail_path and Path(rec.thumbnail_path).exists()) else None
+
+        def _enter_card(*_):
+            hover_rev.set_reveal_child(True)
+            if _is_gif and _thumb_path:
+                anim = _AnimatedGifWidget(str(fp))
+                anim.set_hexpand(True)
+                anim.set_vexpand(True)
+                old = base.get_first_child()
+                if old is not None:
+                    base.remove(old)
+                base.prepend(anim)
+
+        def _leave_card(*_):
+            hover_rev.set_reveal_child(False)
+            if _is_gif and _thumb_path:
+                first = base.get_first_child()
+                if first is not None:
+                    base.remove(first)
+                still = Gtk.Picture.new_for_filename(_thumb_path)
+                still.set_content_fit(Gtk.ContentFit.COVER)
+                still.set_hexpand(True)
+                still.set_vexpand(True)
+                base.prepend(still)
+
         motion = Gtk.EventControllerMotion()
-        motion.connect("enter", lambda *_: hover_rev.set_reveal_child(True))
-        motion.connect("leave", lambda *_: hover_rev.set_reveal_child(False))
+        motion.connect("enter", _enter_card)
+        motion.connect("leave", _leave_card)
         overlay.add_controller(motion)
 
         return overlay

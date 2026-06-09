@@ -10,7 +10,7 @@
 #   Output: 540P video (960×544 native), default 97 frames (≈4 s @ 24fps)
 #
 # Uses:
-#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3
 #   - --dev-mode: required to bind-mount the tt_dit hotpatch (pipeline_skyreels_i2v.py)
 #   - --host-hf-cache: mounts host HF cache (weights in HF cache, not a diffusers checkpoint)
 #
@@ -49,7 +49,7 @@ else
 fi
 
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
@@ -198,7 +198,8 @@ MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --docker-server \
     --dev-mode \
     --override-docker-image "$DOCKER_IMAGE" \
-    --host-hf-cache "$HF_CACHE" &
+    --host-hf-cache "$HF_CACHE" \
+    --no-auth &
 WORKFLOW_PID=$!
 
 echo "Workflow PID: $WORKFLOW_PID"

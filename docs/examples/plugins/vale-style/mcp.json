@@ -1,0 +1,51 @@
+{
+  "x-ttlg": {
+    "output_ext": ".txt",
+    "media_type": "text",
+    "accepts_remix_from": ["verse", "freeform"],
+    "can_remix_to": ["video", "image", "verse"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [
+    {
+      "name": "vale-style",
+      "description": "Apply a Vale prose style guide to text artifacts — tighten, lint, or reformat for downstream use",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input text to process"
+          },
+          "style": {
+            "type": "string",
+            "enum": ["Chicago", "Microsoft", "Google"],
+            "default": "Chicago",
+            "description": "Vale style guide to apply"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["annotate", "suggest", "rewrite"],
+            "default": "annotate",
+            "description": "annotate = show issues inline; suggest = Vale suggestions only; rewrite = LLM applies suggestions"
+          }
+        },
+        "required": ["text"]
+      },
+      "examples": [
+        {
+          "text": "The very unique thing about this is that it's very special.",
+          "style": "Microsoft",
+          "mode": "rewrite"
+        },
+        {
+          "text": "He walked slowly to the end of the pier.",
+          "style": "Chicago",
+          "mode": "annotate"
+        }
+      ],
+      "x-ttlg": {"streaming": null, "artifact_tool": true}
+    }
+  ]
+}

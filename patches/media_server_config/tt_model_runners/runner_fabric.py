@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
-# Hotpatch: runner_fabric.py — adds TTSkyReelsRunner to AVAILABLE_RUNNERS.
-#
-# This file is a full replacement of the upstream runner_fabric.py.  Keep it
-# in sync with the upstream version when upgrading the tt-media-inference-server
-# image, then re-add the SkyReels entry.
-#
-# Mount path (via apply_patches.sh + run_docker_server.py media_server_config):
-#   patches/media_server_config/tt_model_runners/runner_fabric.py
-#   → ~/tt-metal/server/tt_model_runners/runner_fabric.py
-#
-# Changes vs upstream:
-#   • ModelRunners.TT_SKYREELS_V2 → TTSkyReelsRunner (from skyreels_runner.py hotpatch)
+# Hotpatch: runner_fabric.py — adds TTSkyReelsRunner entries to AVAILABLE_RUNNERS.
 
 from config.constants import ModelRunners
 from config.settings import settings
@@ -56,11 +44,25 @@ AVAILABLE_RUNNERS = {
     ModelRunners.TT_WAN_2_2: lambda wid: __import__(
         "tt_model_runners.dit_runners", fromlist=["TTWan22Runner"]
     ).TTWan22Runner(wid),
+    ModelRunners.TT_WAN_2_2_I2V: lambda wid: __import__(
+        "tt_model_runners.dit_runners", fromlist=["TTWan22I2VRunner"]
+    ).TTWan22I2VRunner(wid),
+    ModelRunners.TT_WAN_2_2_I2V_PRODIA: lambda wid: __import__(
+        "tt_model_runners.dit_runners", fromlist=["TTWan22I2VProdiaRunner"]
+    ).TTWan22I2VProdiaRunner(wid),
+    ModelRunners.TT_WAN_2_2_I2V_ANISORA: lambda wid: __import__(
+        "tt_model_runners.dit_runners", fromlist=["TTWan22I2VAniSoraRunner"]
+    ).TTWan22I2VAniSoraRunner(wid),
+    ModelRunners.TT_WAN_2_2_I2V_DISTILL: lambda wid: __import__(
+        "tt_model_runners.dit_runners", fromlist=["TTWan22I2VDistillRunner"]
+    ).TTWan22I2VDistillRunner(wid),
+    ModelRunners.TT_WAN_2_2_I2V_LORA: lambda wid: __import__(
+        "tt_model_runners.dit_runners", fromlist=["TTWan22I2VLoRARunner"]
+    ).TTWan22I2VLoRARunner(wid),
     ModelRunners.TT_WAN_2_2_ANIMATE: lambda wid: __import__(
         "tt_model_runners.dit_runners", fromlist=["TTWan22AnimateRunner"]
     ).TTWan22AnimateRunner(wid),
-    # SkyReels-V2-DF-1.3B-540P — standalone runner, not in dit_runners to avoid
-    # the dit_runner_log_map KeyError when MODEL_RUNNER=tt-skyreels-v2.
+    # SkyReels-V2-DF-1.3B-540P — standalone runner in skyreels_runner.py hotpatch
     ModelRunners.TT_SKYREELS_V2: lambda wid: __import__(
         "tt_model_runners.skyreels_runner", fromlist=["TTSkyReelsRunner"]
     ).TTSkyReelsRunner(wid),
@@ -71,12 +73,15 @@ AVAILABLE_RUNNERS = {
     ModelRunners.TT_WHISPER: lambda wid: __import__(
         "tt_model_runners.whisper_runner", fromlist=["TTWhisperRunner"]
     ).TTWhisperRunner(wid),
-    ModelRunners.VLLM: lambda wid: __import__(
-        "tt_model_runners.vllm_runner", fromlist=["VLLMRunner"]
-    ).VLLMRunner(wid),
+    ModelRunners.VLLMForge: lambda wid: __import__(
+        "tt_model_runners.vllm_runner", fromlist=["VLLMForgeRunner"]
+    ).VLLMForgeRunner(wid),
     ModelRunners.BGELargeEN_V1_5: lambda wid: __import__(
         "tt_model_runners.embedding_runner", fromlist=["BGELargeENRunner"]
     ).BGELargeENRunner(wid),
+    ModelRunners.BGEM3: lambda wid: __import__(
+        "tt_model_runners.embedding_runner", fromlist=["BGEM3Runner"]
+    ).BGEM3Runner(wid),
     ModelRunners.LLM_TEST: lambda wid: __import__(
         "tt_model_runners.llm_test_runner", fromlist=["LLMTestRunner"]
     ).LLMTestRunner(wid),
@@ -84,6 +89,9 @@ AVAILABLE_RUNNERS = {
         "tt_model_runners.embedding_runner",
         fromlist=["Qwen3Embedding8BRunner"],
     ).Qwen3Embedding8BRunner(wid),
+    ModelRunners.TT_YOLOV4: lambda wid: __import__(
+        "tt_model_runners.yolov4_runner", fromlist=["TTYolov4Runner"]
+    ).TTYolov4Runner(wid),
     ModelRunners.VLLMForge_QWEN_EMBEDDING: lambda wid: __import__(
         "tt_model_runners.vllm_forge_qwen_embedding_runner",
         fromlist=["VLLMForgeEmbeddingQwenRunner"],
@@ -92,6 +100,10 @@ AVAILABLE_RUNNERS = {
         "tt_model_runners.vllm_forge_llama_70b",
         fromlist=["VLLMForgeLlama70BRunner"],
     ).VLLMForgeLlama70BRunner(wid),
+    ModelRunners.VLLMForge_GEMMA4_31B: lambda wid: __import__(
+        "tt_model_runners.vllm_forge_gemma4_31b",
+        fromlist=["VLLMForgeGemma4_31BRunner"],
+    ).VLLMForgeGemma4_31BRunner(wid),
     ModelRunners.TT_XLA_RESNET: lambda wid: __import__(
         "tt_model_runners.forge_runners.runners", fromlist=["ForgeResnetRunner"]
     ).ForgeResnetRunner(wid),
@@ -117,18 +129,31 @@ AVAILABLE_RUNNERS = {
         "tt_model_runners.forge_training_runners.training_gemma_lora_runner",
         fromlist=["TrainingGemmaLoraRunner"],
     ).TrainingGemmaLoraRunner(wid),
+    ModelRunners.LORA_SINGLE_CHIP: lambda wid: __import__(
+        "tt_model_runners.forge_runners.lora_single_chip_runner",
+        fromlist=["LoraSingleChipRunner"],
+    ).LoraSingleChipRunner(wid),
+    ModelRunners.TRAINING_LORA: lambda wid: __import__(
+        "tt_model_runners.forge_training_runners.training_lora_runner",
+        fromlist=["TrainingLoraRunner"],
+    ).TrainingLoraRunner(wid),
     ModelRunners.MOCK: lambda wid: __import__(
         "tt_model_runners.mock_runner", fromlist=["MockRunner"]
     ).MockRunner(wid),
-    ModelRunners.MOCK_VIDEO: lambda wid: __import__(
-        "tt_model_runners.mock_video_runner", fromlist=["MockVideoRunner"]
-    ).MockVideoRunner(wid),
     ModelRunners.SP_RUNNER: lambda wid: __import__(
         "tt_model_runners.sp_runner", fromlist=["SPRunner"]
     ).SPRunner(wid),
     ModelRunners.TT_SPEECHT5_TTS: lambda wid: __import__(
         "tt_model_runners.speecht5_runner", fromlist=["TTSpeechT5Runner"]
     ).TTSpeechT5Runner(wid),
+    ModelRunners.TT_XLA_SDXL: lambda wid: __import__(
+        "tt_model_runners.forge_runners.sdxl_forge_runner",
+        fromlist=["SDXLForgeRunner"],
+    ).SDXLForgeRunner(wid),
+    ModelRunners.TT_Z_IMAGE_TURBO: lambda wid: __import__(
+        "tt_model_runners.z_image_turbo_runner",
+        fromlist=["ZImageTurboRunner"],
+    ).ZImageTurboRunner(wid),
 }
 
 

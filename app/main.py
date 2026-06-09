@@ -198,6 +198,14 @@ def main():
         )
         win.present()
 
+        # NON_UNIQUE mode keeps the GLib main loop alive after the window closes
+        # because the application itself has no window-count logic.  Quit the
+        # process when the last window is removed so the PID doesn't linger.
+        def _on_window_removed(app, _win):
+            if not app.get_windows():
+                app.quit()
+        application.connect("window-removed", _on_window_removed)
+
     # Update persisted server config so Preferences shows the right host/port
     # and the prompt-server health check hits the correct address.
     _apply_server_host_to_config(args.server)

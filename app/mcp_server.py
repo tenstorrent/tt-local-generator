@@ -4,11 +4,12 @@ MCP server — exposes all loaded plugins as MCP tools over HTTP (JSON-RPC 2.0).
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
 Port: 8003 (configurable via TTLG_MCP_PORT env var).
 
-Start standalone:
+Start:
     python3 app/mcp_server.py
+    python3 app/mcp_server.py --port 8003 --host 0.0.0.0
 
 Claude Code integration:
-    tt-ctl mcp-config >> ~/.claude/mcp.json
+    tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)
 
 Endpoints:
     GET  /mcp   — server manifest listing all available tools
@@ -34,13 +35,11 @@ import plugin_loader
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """Load plugins at server startup, unload on shutdown.
+    """Load plugins at server startup.
 
     Using a lifespan handler (rather than module-level load_plugins()) means
     that importlib.reload(mcp_server) in tests does NOT trigger a real plugin
-    scan — the scan only runs when the ASGI server actually starts up.  Tests
-    can safely inject fake plugins into plugin_loader._PLUGINS before creating
-    a TestClient without having them overwritten.
+    scan — the scan only runs when the ASGI server actually starts up.
     """
     plugin_loader.load_plugins()
     yield
@@ -71,6 +70,8 @@ def _all_tools() -> list[dict]:
     """
     tools: list[dict] = []
     for pdef in plugin_loader.all_plugins():
+        if not pdef.runnable:
+            continue  # skip MCP-server stubs not yet delegating
         for tool in pdef.tools:
             tools.append({
                 "name": tool["name"],
@@ -82,21 +83,54 @@ def _all_tools() -> list[dict]:
     return tools
 
 
-def _noop_call_fn(prompt: str, system: str | None = None,
-                  max_tokens: int | None = None) -> str:
-    """
-    Placeholder call_fn passed to generate_artifact() via the MCP route.
+def _make_call_fn(base_url: str | None = None):
+    """Return a call_fn that routes to the best available LLM endpoint.
 
-    Real invocations that need an LLM should wire in the artgen endpoint
-    (prompt-server on port 8001, or a remote model server on port 8000).
-    Until that wiring is in place, any plugin that tries to call the LLM
-    will receive a descriptive RuntimeError rather than a silent hang.
+    Resolution order:
+      1. base_url if provided (from TTLG_LLM_URL environment variable)
+      2. artgen server on port 8002
+      3. prompt-gen server on port 8001
+      4. RuntimeError with clear instructions
+
+    This makes MCP tool invocations for art generators fully functional when
+    a server is running, without requiring any extra configuration.
     """
-    raise RuntimeError(
-        "This plugin requires a live LLM server. "
-        "Start the artgen server first (bin/start_artgen.sh) or the prompt server "
-        "(bin/start_prompt_gen.sh), then retry the tools/call request."
-    )
+    import urllib.request
+    import json as _json
+
+    candidates = []
+    if base_url:
+        candidates.append(base_url)
+    candidates += ["http://localhost:8002/v1/chat/completions",
+                   "http://localhost:8001/v1/chat/completions"]
+
+    def _call_fn(prompt: str, system: str | None = None,
+                 max_tokens: int | None = None) -> str:
+        payload = _json.dumps({
+            "model": "default",
+            "messages": [
+                *([] if not system else [{"role": "system", "content": system}]),
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens or 2048,
+        }).encode()
+        for url in candidates:
+            try:
+                req = urllib.request.Request(
+                    url, data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    data = _json.loads(r.read())
+                return data["choices"][0]["message"]["content"]
+            except Exception:
+                continue
+        raise RuntimeError(
+            "No LLM server reachable. Start one first: "
+            "tt-ctl start artgen-qwen3-8b  or  tt-ctl start prompt-server"
+        )
+
+    return _call_fn
 
 
 # ── HTTP routes ───────────────────────────────────────────────────────────────
@@ -158,18 +192,14 @@ async def handle_rpc(body: dict) -> JSONResponse:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
-        # Resolve the plugin by searching all tools in all plugins.
-        # plugin_loader.get() only looks up by PluginDef.name (the primary
-        # artifact tool), so multi-tool plugins would be advertised via
-        # tools/list but unreachable here.  Instead we walk every plugin and
-        # every tool entry to find the matching name.
+        # Resolve the plugin by scanning all tool lists, not just primary names.
+        # Multi-tool plugins (e.g. midi with generate_midi + stream_midi) are
+        # keyed by their primary tool name, so a direct get(tool_name) would
+        # miss non-primary tool names like stream_midi.
         pdef = None
-        for _pdef in plugin_loader.all_plugins():
-            for _tool in _pdef.tools:
-                if _tool.get("name") == tool_name:
-                    pdef = _pdef
-                    break
-            if pdef:
+        for candidate in plugin_loader.all_plugins():
+            if candidate.runnable and any(t["name"] == tool_name for t in candidate.tools):
+                pdef = candidate
                 break
         if pdef is None:
             return JSONResponse({
@@ -181,14 +211,50 @@ async def handle_rpc(body: dict) -> JSONResponse:
                 },
             })
 
+        # Find the matching tool definition so we can validate arguments against
+        # its inputSchema before constructing the Namespace.
+        tool_def = next(
+            (t for t in pdef.tools if t["name"] == tool_name), {}
+        )
+
         # Invoke the generator.  generate_artifact() receives an argparse
-        # Namespace built from the MCP arguments dict, plus our no-op call_fn.
+        # Namespace built from the MCP arguments dict, plus a call_fn that
+        # routes to the best available LLM server (artgen on 8002 → prompt-gen
+        # on 8001, or the URL from TTLG_LLM_URL env var).
         # Errors are surfaced as isError=True content (not JSON-RPC errors) so
         # MCP clients receive a structured response rather than a hard failure.
         try:
             import argparse as _ap
-            args = _ap.Namespace(**arguments)
-            result = pdef.generator.generate_artifact(args, _noop_call_fn)
+
+            # Validate argument keys against the tool's inputSchema.  Reject
+            # unknown keys outright (they would silently land in the Namespace
+            # and could shadow plugin attributes or trigger unexpected behaviour).
+            # Only validate when the schema actually declares properties; tools
+            # with an empty/absent schema accept any arguments (legacy compat).
+            allowed_keys = set(
+                tool_def.get("inputSchema", {}).get("properties", {}).keys()
+            )
+            if allowed_keys:
+                bad_keys = set(arguments.keys()) - allowed_keys
+                if bad_keys:
+                    return JSONResponse({
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "result": {
+                            "content": [{"type": "text",
+                                         "text": f"Unknown argument(s): {sorted(bad_keys)}"}],
+                            "isError": True,
+                        },
+                    })
+
+            # Strip any keys that are not valid Python identifiers as a second
+            # safety layer — argparse.Namespace(**kw) raises if a key is not a
+            # valid attribute name (e.g. "my-arg" with a hyphen).
+            safe_args = {k: v for k, v in arguments.items() if k.isidentifier()}
+            args = _ap.Namespace(**safe_args)
+            llm_url = os.environ.get("TTLG_LLM_URL")
+            call_fn = _make_call_fn(llm_url)
+            result = pdef.generator.generate_artifact(args, call_fn)
             return JSONResponse({
                 "jsonrpc": "2.0",
                 "id": rpc_id,
@@ -231,8 +297,8 @@ if __name__ == "__main__":
         help="Port to listen on (default: %(default)s, env: TTLG_MCP_PORT)",
     )
     parser.add_argument(
-        "--host", default="0.0.0.0",
-        help="Bind address (default: %(default)s)",
+        "--host", default="127.0.0.1",
+        help="Bind address (default: %(default)s). Use 0.0.0.0 to expose on LAN.",
     )
     cli_args = parser.parse_args()
     uvicorn.run(app, host=cli_args.host, port=cli_args.port)

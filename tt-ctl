@@ -11,7 +11,9 @@ Usage:
     tt-ctl status                   Server health, queue depth, history summary
     tt-ctl servers                  Live status of every managed service
     tt-ctl start <service>          Start a service (wan2.2 | mochi | flux | animate |
-                                    prompt-server | all)
+                                    skyreels | artgen-qwen3-8b | prompt-server | all)
+    tt-ctl start --single-chip      Start artgen + prompt-server only
+                                    (single Blackhole card or CPU-only)
     tt-ctl stop  <service>          Stop a service (same keys as start)
     tt-ctl restart <service>        Stop then re-start a service
     tt-ctl queue                    List pending queue items
@@ -107,16 +109,65 @@ def _cmd_plugin_list(_args):
         print(f"{p.name:<20} {media:<10} {tab:<16} {hw:<12} {tool_names}")
 
 
+def cmd_workflow(args):
+    """Run or list generative workflow specs."""
+    if not hasattr(args, "workflow_cmd") or args.workflow_cmd is None:
+        print("Usage: tt-ctl workflow run <spec.json> [--dry-run]")
+        print("       tt-ctl workflow list")
+        return
+
+    if args.workflow_cmd == "list":
+        examples_dir = _HERE / "docs" / "examples" / "workflows"
+        if not examples_dir.exists():
+            print("No workflow examples found.")
+            return
+        print("Available workflows:")
+        for f in sorted(examples_dir.glob("*.json")):
+            import json as _json
+            try:
+                meta = _json.loads(f.read_text())
+                desc = meta.get("_description", "")[:80]
+            except Exception:
+                desc = ""
+            print(f"  {f.name}")
+            if desc:
+                print(f"    {desc}")
+        return
+
+    if args.workflow_cmd == "run":
+        spec_path = args.spec
+        dry_run = getattr(args, "dry_run", False)
+        runner = _HERE / "bin" / "run_workflow.sh"
+        if not runner.exists():
+            print(f"ERROR: {runner} not found", file=sys.stderr)
+            sys.exit(1)
+        cmd = ["bash", str(runner), spec_path]
+        if dry_run:
+            cmd.append("--dry-run")
+        import subprocess as _sp
+        result = _sp.run(cmd)
+        sys.exit(result.returncode)
+
+
 def cmd_mcp_config(_args):
     """Emit Claude Code MCP config JSON for tt-local-gen."""
     import json as _json
-    import sys
     port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
     config = {"tt-local-gen": {"url": f"http://localhost:{port}/mcp"}}
     print(_json.dumps(config, indent=2))
-    # Usage hint goes to stderr so stdout stays valid JSON for piping/appending.
-    print("\n# Append to ~/.claude/mcp.json or run:", file=sys.stderr)
-    print("#   tt-ctl mcp-config >> ~/.claude/mcp.json", file=sys.stderr)
+    # Guidance to stderr so stdout stays machine-readable.
+    # WARNING: appending with >> will corrupt an existing JSON file.
+    # Merge the key manually, or use this for a fresh config:
+    mcp_url = f"http://localhost:{port}/mcp"
+    print("\n# To add to Claude Code (merge into existing ~/.claude/mcp.json):", file=sys.stderr)
+    print("# WARNING: do not use >> — that corrupts existing JSON. Merge instead:", file=sys.stderr)
+    print("#   python3 -c '", file=sys.stderr)
+    print("#     import json, pathlib", file=sys.stderr)
+    print("#     p = pathlib.Path.home() / \".claude/mcp.json\"", file=sys.stderr)
+    print("#     cfg = json.loads(p.read_text()) if p.exists() else {}", file=sys.stderr)
+    print(f'#     cfg["tt-local-gen"] = {{"url": "{mcp_url}"}}', file=sys.stderr)
+    print("#     p.write_text(json.dumps(cfg, indent=2))", file=sys.stderr)
+    print("#   '", file=sys.stderr)
 
 
 # ── Colour helpers (plain text when stdout is not a tty) ──────────────────────
@@ -261,8 +312,18 @@ def cmd_servers(args):
     print(dim(f"Services:    {' | '.join(sm.SERVERS)} | all"))
 
 
+def _resolve_service_arg(args) -> str:
+    """Resolve service key from positional arg or --single-chip flag."""
+    if getattr(args, "single_chip", False):
+        return sm.ONE_CHIP_KEY
+    if not args.service:
+        print(red("error: specify a SERVICE or use --single-chip"))
+        sys.exit(1)
+    return args.service
+
+
 def cmd_start(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -288,7 +349,7 @@ def cmd_start(args):
 
 
 def cmd_stop(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -311,7 +372,7 @@ def cmd_stop(args):
 
 
 def cmd_restart(args):
-    key = args.service
+    key = _resolve_service_arg(args)
     try:
         sdefs = sm._resolve(key)
     except KeyError as e:
@@ -989,8 +1050,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for _verb in ("start", "stop", "restart"):
         _sp = sub.add_parser(_verb, help=f"{_verb.capitalize()} a managed service")
-        _sp.add_argument("service", choices=_service_choices, metavar="SERVICE",
+        _sp.add_argument("service", nargs="?", choices=_service_choices, metavar="SERVICE",
                          help=_service_help)
+        _sp.add_argument("--single-chip", action="store_true", dest="single_chip",
+                         help="Start artgen + prompt-server (single Blackhole card or CPU-only)")
         if _verb != "stop":
             _sp.add_argument("--blocking", action="store_true",
                              help="Wait for the script to exit (default: --gui mode)")
@@ -1044,6 +1107,14 @@ def _build_parser() -> argparse.ArgumentParser:
     plugin_p = sub.add_parser("plugin", help="Plugin management")
     plugin_sub = plugin_p.add_subparsers(dest="plugin_cmd")
     plugin_sub.add_parser("list", help="List all loaded plugins")
+
+    # Workflow runner
+    wf_p = sub.add_parser("workflow", help="Run a multi-step generative workflow")
+    wf_sub = wf_p.add_subparsers(dest="workflow_cmd")
+    wf_run = wf_sub.add_parser("run", help="Execute a workflow JSON spec")
+    wf_run.add_argument("spec", help="Path to workflow JSON (e.g. docs/examples/workflows/1964-worlds-fair.json)")
+    wf_run.add_argument("--dry-run", action="store_true", help="Print steps without running inference")
+    wf_sub.add_parser("list", help="List available workflow examples")
 
     # MCP config
     sub.add_parser("mcp-config", help="Emit Claude Code MCP config JSON for tt-local-gen")
@@ -1135,6 +1206,7 @@ def main():
         "artgen":           cmd_artgen,
         "plugin":           cmd_plugin,
         "mcp-config":       cmd_mcp_config,
+        "workflow":         cmd_workflow,
     }
     dispatch[args.cmd](args)
 

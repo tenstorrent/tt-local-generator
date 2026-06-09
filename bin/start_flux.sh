@@ -26,8 +26,8 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
-MODEL="FLUX.1-dev"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
+MODEL="FLUX.1-schnell"  # Default: schnell (3s/image, validated). Use --dev for FLUX.1-dev (not downloaded).
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
@@ -50,6 +50,10 @@ for arg in "$@"; do
             echo "$RUNNING" | xargs docker stop
             echo "Server stopped."
             exit 0
+            ;;
+        --dev)
+            MODEL="FLUX.1-dev"
+            echo "Using FLUX.1-dev (higher quality, ~34 GB weights needed)."
             ;;
         --schnell)
             MODEL="FLUX.1-schnell"
@@ -139,7 +143,8 @@ MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --engine media \
     --docker-server \
     --override-docker-image "$DOCKER_IMAGE" \
-    --host-hf-cache "$HF_CACHE" &
+    --host-hf-cache "$HF_CACHE" \
+    --no-auth &
 WORKFLOW_PID=$!
 
 echo "Workflow PID: $WORKFLOW_PID"

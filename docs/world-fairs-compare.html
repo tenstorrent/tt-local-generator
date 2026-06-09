@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>World's Fairs — Generation Comparison</title>
+  <style>
+    :root {
+      --bg0: #080f14; --bg1: #0d1b24; --bg2: #122130; --card: #162838;
+      --teal: #4fd1c5; --gold: #f4c471; --text: #e8f0f2; --text2: #b0c4d0;
+      --muted: #607d8b; --border: rgba(79,209,197,.18); --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg0); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+    h1 { font-size: 1.8rem; font-weight: 800; color: var(--teal); padding: 2rem 2rem 0.5rem; }
+    .intro { color: var(--text2); padding: 0 2rem 2rem; max-width: 700px; }
+    .era { padding: 0 2rem 3rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .era-title { font-size: 1.2rem; font-weight: 700; color: var(--gold); margin-bottom: 1.2rem; }
+    .era-subtitle { font-size: 0.85rem; color: var(--muted); margin-top: -1rem; margin-bottom: 1.2rem; }
+    .versions { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; }
+    .version { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .version-header { padding: 0.75rem 1rem 0.5rem; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .version-label { font-size: 0.72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--teal); }
+    .version-desc { font-size: 0.75rem; color: var(--muted); }
+    .media-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+    .media-item { position: relative; background: #000; }
+    .media-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+    .media-item video { width: 100%; aspect-ratio: 960/544; object-fit: cover; display: block; background: #000; }
+    .media-item .label { position: absolute; bottom: 0; left: 0; right: 0; padding: 3px 6px; background: rgba(8,15,20,.8); font-size: 0.62rem; color: var(--muted); letter-spacing: .05em; }
+    .media-full { }
+    .media-full video { width: 100%; aspect-ratio: 960/544; object-fit: cover; display: block; }
+    .media-full img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+    .placeholder { background: var(--bg2); aspect-ratio: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 1.5rem; }
+    .vid-placeholder { background: #000; aspect-ratio: 960/544; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 2rem; }
+    .prompt { padding: 0.6rem 1rem; font-size: 0.75rem; color: var(--text2); font-style: italic; border-top: 1px solid var(--border); background: var(--bg1); line-height: 1.5; }
+    .tag { display: inline-block; background: rgba(79,209,197,.1); border: 1px solid rgba(79,209,197,.25); border-radius: 4px; padding: 1px 5px; font-size: 0.65rem; color: var(--teal); font-style: normal; margin-right: 4px; }
+  </style>
+</head>
+<body>
+
+<h1>World's Fairs — All Versions</h1>
+<p class="intro">Two generations of each fair. <span style="color:var(--teal)">Gen 2</span> used historically-specific research-driven prompts (IBM People Wall, Elektro robot, Tesla, Nakaya fog, Circle-Vision). <span style="color:var(--gold)">Gen 1</span> used looser era prompts with the original Unisphere-style seeds. Pick your favorite seed image and video for each era.</p>
+
+<!-- ── 1964 NY ──────────────────────────────────────────────────────── -->
+<div class="era">
+  <div class="era-title">1964 · New York</div>
+  <div class="era-subtitle">World's Fair · "Peace Through Understanding" · Flushing Meadows</div>
+  <div class="versions">
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label">Gen 2 — Research-driven</span>
+        <span class="version-desc">IBM People Wall · hydraulic theater · 97 frames</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen2-ima-48a1e9e1.png" alt="1964 Gen2 seed" loading="lazy">
+          <div class="label">seed · FLUX.1-schnell</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen2-ima-3b7543de.png" alt="1964 Gen2 poem image" loading="lazy">
+          <div class="label">poem image · FLUX</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1964-gen2-vid-5e22df05.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>Kodachrome slide film photograph, 1964. A grandstand of 500 fairgoers in summer clothes rises hydraulically on the IBM People Wall into the interior of a vast white egg-shaped auditorium. The floor is moving upward, and half the crowd is grinning.</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Unisphere era</span>
+        <span class="version-desc">Original runs · SkyReels I2V · multiple takes</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-9ca3c7de.jpg" alt="1964 Gen1 seed A" loading="lazy">
+          <div class="label">seed A</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-a67690b2.jpg" alt="1964 Gen1 seed B" loading="lazy">
+          <div class="label">seed B</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1964-gen1-vid-9c16a0bb.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>1964 New York World's Fair, Unisphere gleaming in the sunlight, futuristic pavilions, optimistic crowds in period clothing, Kodachrome colors, cinematic wide shot</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Alt video</span>
+        <span class="version-desc">Earlier run · different seed · 33 frames</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-ba4fc7fb.jpg" alt="1964 alt seed" loading="lazy">
+          <div class="label">seed</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1964-gen1-ima-ee76e006.jpg" alt="1964 poem image" loading="lazy">
+          <div class="label">poem image</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1964-gen1-vid-e3944142.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>1964 World's Fair: seed_image — original workflow run</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 1939 NY ──────────────────────────────────────────────────────── -->
+<div class="era">
+  <div class="era-title">1939 · New York</div>
+  <div class="era-subtitle">World's Fair · "The World of Tomorrow" · Flushing Meadows</div>
+  <div class="versions">
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label">Gen 2 — Research-driven</span>
+        <span class="version-desc">Elektro robot · Westinghouse · crowd at glass</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1939-gen2-ima-873620f7.png" alt="1939 Gen2 seed" loading="lazy">
+          <div class="label">seed · FLUX.1-schnell</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1939-gen2-ima-96a8f3cb.png" alt="1939 Gen2 poem" loading="lazy">
+          <div class="label">poem image</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1939-gen2-vid-2b08e5d1.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>Kodachrome, 1939. A seven-foot golden aluminum humanoid robot stands on a low stage, aluminum lips parted mid-sentence, one hand raised. A Westinghouse technician holds a lit cigarette near the robot's upper lip. Hundreds press six-deep against the glass.</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Loose era prompt</span>
+        <span class="version-desc">SkyReels I2V · original run</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <div class="placeholder">🖼</div>
+          <div class="label">seed (not saved)</div>
+        </div>
+        <div class="media-item">
+          <div class="placeholder">—</div>
+          <div class="label">poem image (not generated)</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1939-gen1-vid-f82ba9e6.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>SkyReels I2V: 1939 New York World's Fair</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 1893 Chicago ─────────────────────────────────────────────────── -->
+<div class="era">
+  <div class="era-title">1893 · Chicago</div>
+  <div class="era-subtitle">World's Columbian Exposition · "The White City" · Jackson Park</div>
+  <div class="versions">
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label">Gen 2 — Research-driven</span>
+        <span class="version-desc">Tesla wireless demonstration · Electricity Building</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1893-gen2-ima-8d849a31.png" alt="1893 Gen2 seed" loading="lazy">
+          <div class="label">seed · FLUX.1-schnell</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1893-gen2-ima-b5e584cd.png" alt="1893 Gen2 poem" loading="lazy">
+          <div class="label">poem image</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1893-gen2-vid-8efcd0ce.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>Sepia daguerreotype aesthetic, 1893 Chicago. Nikola Tesla in a dark frock coat holds a glass vacuum tube aloft — it blazes with cold blue-white phosphorescent light, lit by no wire. Men's faces glow astonished. The copper Egg of Columbus spins silently in its brass induction ring.</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Loose era prompt</span>
+        <span class="version-desc">SkyReels I2V · original run · 1.2MB</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item"><div class="placeholder">🖼</div><div class="label">seed (not saved)</div></div>
+        <div class="media-item"><div class="placeholder">—</div><div class="label">poem image (not generated)</div></div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1893-gen1-vid-48bf1fc9.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>SkyReels I2V: 1893 Chicago World's Fair</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 1970 Osaka ───────────────────────────────────────────────────── -->
+<div class="era">
+  <div class="era-title">1970 · Osaka</div>
+  <div class="era-subtitle">Expo 70 · "Progress and Harmony for Mankind" · Suita</div>
+  <div class="versions">
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label">Gen 2 — Research-driven</span>
+        <span class="version-desc">Nakaya fog sculpture · Pepsi Pavilion · twilight</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1970-gen2-ima-319a2101.png" alt="1970 Gen2 seed" loading="lazy">
+          <div class="label">seed · FLUX.1-schnell</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1970-gen2-ima-5aebdcd2.png" alt="1970 Gen2 poem" loading="lazy">
+          <div class="label">poem image</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1970-gen2-vid-97287ba5.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>Fujiko Nakaya's artificial fog sculpture engulfs the Pepsi geodesic sphere at twilight, Expo 70 Osaka. Visitors in mod coats dissolve waist-deep into luminous white vapor, lit from below by xenon arc lamps. Fujifilm Velvia grain, deep indigo sky.</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Loose era prompt</span>
+        <span class="version-desc">SkyReels I2V · original run · 1MB</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item"><div class="placeholder">🖼</div><div class="label">seed (not saved)</div></div>
+        <div class="media-item"><div class="placeholder">—</div><div class="label">poem image (not generated)</div></div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1970-gen1-vid-3cc4d0b7.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>SkyReels I2V: 1970 Osaka World Expo</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 1967 Montreal ────────────────────────────────────────────────── -->
+<div class="era">
+  <div class="era-title">1967 · Montreal</div>
+  <div class="era-subtitle">Expo 67 · "Man and His World" · Île Sainte-Hélène</div>
+  <div class="versions">
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label">Gen 2 — Research-driven</span>
+        <span class="version-desc">Disney Circle-Vision 360° · Bell Pavilion · rail grippers</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1967-gen2-ima-3ad8978c.png" alt="1967 Gen2 seed" loading="lazy">
+          <div class="label">seed · FLUX.1-schnell</div>
+        </div>
+        <div class="media-item">
+          <img src="assets/workflow-examples/compare/1967-gen2-ima-ba5baf42.png" alt="1967 Gen2 poem" loading="lazy">
+          <div class="label">poem image</div>
+        </div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1967-gen2-vid-7235ff7c.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>Inside a cylindrical theatre at Expo 67, hundreds of visitors stand gripping steel guide rails as nine giant curved screens fill with aerial footage of Niagara Falls rushing directly overhead. Women in mod wool coats lean into the rails, faces upturned in genuine vertigo. Bold Kodachrome saturation.</div>
+    </div>
+
+    <div class="version">
+      <div class="version-header">
+        <span class="version-label" style="color:var(--gold)">Gen 1 — Loose era prompt</span>
+        <span class="version-desc">SkyReels I2V · original run · 808K</span>
+      </div>
+      <div class="media-row">
+        <div class="media-item"><div class="placeholder">🖼</div><div class="label">seed (not saved)</div></div>
+        <div class="media-item"><div class="placeholder">—</div><div class="label">poem image (not generated)</div></div>
+      </div>
+      <div class="media-full">
+        <video autoplay muted loop playsinline>
+          <source src="assets/workflow-examples/compare/1967-gen1-vid-b55ab96b.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="prompt"><span class="tag">prompt</span>SkyReels I2V: 1967 Montreal Expo</div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

@@ -34,6 +34,16 @@ def _setup_plugins(tmp_path, monkeypatch, specs):
             }],
         }
         (d / "mcp.json").write_text(json.dumps(manifest))
+        # plugin.py required — loader now skips manifest-only plugins that
+        # have neither plugin.py nor mcp_server (they wouldn't be runnable).
+        (d / "plugin.py").write_text(
+            "from artgen import ArtGenerator\n"
+            f"class _Gen(ArtGenerator):\n"
+            f"    name = {name!r}\n"
+            "    description = 'stub'\n"
+            "    output_ext = '.txt'\n"
+            "    def build_prompt(self, args): return 'prompt'\n"
+        )
 
     plugin_loader.load_plugins()
 

@@ -24,10 +24,8 @@ Loading behaviour:
   - Plugins whose mcp.json is missing or unparseable are skipped with a
     warning logged at WARNING level.
   - Plugins with no tools declared are also skipped.
-  - Plugins with x-ttlg.utility set are skipped (internal helpers, not tools).
   - Plugins with neither a plugin.py ArtGenerator subclass nor an
-    mcp_server declaration get a generic placeholder stub (still registered,
-    but generate_artifact() will raise a descriptive error).
+    mcp_server declaration are skipped (no generator to run).
   - Later search paths override earlier ones when names collide, enabling
     user-installed plugins to shadow repo-bundled ones.
 """
@@ -76,6 +74,7 @@ class PluginDef:
     generator: "ArtGenerator"
     accepts_remix_from: tuple[str, ...] = field(default_factory=tuple)
     can_remix_to: tuple[str, ...] = field(default_factory=tuple)
+    runnable: bool = True  # False for MCP-server stubs not yet delegating
 
 
 # Module-level registry populated by load_plugins().
@@ -94,8 +93,9 @@ def load_plugins() -> None:
     when the same plugin name is discovered twice, so user plugins shadow
     repo-bundled plugins.
 
-    Idempotent: clears and rebuilds each time it is called.  Removed or
-    renamed plugins will not linger in the registry across repeated calls.
+    Idempotent: clears and rebuilds each time it is called so that plugins
+    removed from the search paths (or left over from monkeypatched test paths)
+    do not remain registered after a later load.
     """
     _PLUGINS.clear()
     for search_path in _SEARCH_PATHS:
@@ -126,9 +126,11 @@ def load_plugins() -> None:
                 )
                 continue
 
-            # Primary name = first tool with artifact_tool=True, or first tool overall
+            # Primary name = first tool with artifact_tool=True, or first tool overall.
+            # Default is False: tools that don't explicitly declare artifact_tool=True
+            # should not be treated as the primary generator — they must opt in.
             primary = next(
-                (t for t in tools if t.get("x-ttlg", {}).get("artifact_tool", True)),
+                (t for t in tools if t.get("x-ttlg", {}).get("artifact_tool", False)),
                 tools[0],
             )
             name = primary["name"]
@@ -151,6 +153,7 @@ def load_plugins() -> None:
                 generator=generator,
                 accepts_remix_from=tuple(xttlg.get("accepts_remix_from", [])),
                 can_remix_to=tuple(xttlg.get("can_remix_to", [])),
+                runnable=not getattr(generator, "_is_mcp_stub", False),
             )
             _LOG.debug("plugin_loader: loaded plugin %s from %s", name, plugin_dir)
 
@@ -183,18 +186,21 @@ def _load_generator(
       1. plugin.py present → dynamically import and find ArtGenerator subclass
       2. x-ttlg.mcp_server declared → return a lightweight MCP stub
          (full McpDelegateGenerator implemented in Task 8)
-      3. Neither → return a generic placeholder stub so the plugin is still
-         discoverable (e.g. for UI listing, remix graph traversal) even if
-         generate_artifact() raises NotImplementedError at runtime
+      3. Neither → skip (return None); the plugin is not runnable and must
+         not appear in the generator picker or MCP tool list.
     """
     plugin_py = plugin_dir / "plugin.py"
     if plugin_py.exists():
         return _load_local_generator(plugin_py, name)
 
-    # Always return a stub — either an MCP-delegating one (if mcp_server is
-    # declared) or a generic placeholder.  Both raise NotImplementedError
-    # at generation time; the distinction is only meaningful to Task 8.
-    return _make_mcp_stub(manifest, name)
+    xttlg = manifest.get("x-ttlg", {})
+    if xttlg.get("mcp_server"):
+        # Declared MCP-server-backed plugin — stub that delegates at runtime.
+        return _make_mcp_stub(manifest, name)
+
+    # No plugin.py and no mcp_server — not runnable; skip entirely.
+    _LOG.debug("plugin_loader: skipping %s — no plugin.py and no mcp_server", name)
+    return None
 
 
 def _make_mcp_stub(manifest: dict, name: str) -> "ArtGenerator":
@@ -224,6 +230,7 @@ def _make_mcp_stub(manifest: dict, name: str) -> "ArtGenerator":
     stub.name = name
     stub.description = description
     stub.output_ext = output_ext
+    stub._is_mcp_stub = True  # signals PluginDef.runnable = False
     return stub
 
 
@@ -254,6 +261,10 @@ def _load_local_generator(
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:
+        # Remove the poisoned partial module from sys.modules so that a
+        # subsequent load_plugins() call (or test re-import) does not retrieve
+        # the broken module instead of retrying the import from scratch.
+        sys.modules.pop(module_name, None)
         _LOG.warning("plugin_loader: error importing %s: %s", plugin_py, exc)
         return None
 

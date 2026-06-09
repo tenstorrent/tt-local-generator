@@ -2,7 +2,7 @@
 # start_wan_qb2.sh — Start the Wan2.2-T2V-A14B-Diffusers inference server on P300x2 (QB2).
 #
 # Uses the known-working configuration:
-#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3
 #   - Non-dev mode (dev mode breaks device init on this image)
 #   - --host-hf-cache mounts the local HuggingFace cache so the 118 GB weights
 #     are found immediately inside the container (avoids the 1200s download timeout)
@@ -32,7 +32,7 @@ else
 fi
 
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.15.0-25891d3"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 LOG_GLOB="media_*_Wan2.2-T2V-A14B-Diffusers_p300x2_server.log"
 
@@ -143,7 +143,8 @@ MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --engine media \
     --docker-server \
     --override-docker-image "$DOCKER_IMAGE" \
-    --host-hf-cache "$HF_CACHE" &
+    --host-hf-cache "$HF_CACHE" \
+    --no-auth &
 WORKFLOW_PID=$!
 
 echo "Workflow PID: $WORKFLOW_PID"
@@ -176,6 +177,14 @@ if [[ -z "$LOG_FILE" ]]; then
     echo "WARNING: Could not find a new log file in $LOG_DIR"
     echo "  Check manually, or run: docker logs -f \$(docker ps -lq)"
     exit 0
+fi
+
+# ── Fix prometheus multiproc permissions (v0.15.0) ────────────────────────────
+# v0.15.0 creates /tmp/prometheus_multiproc owned by root but workers run as
+# container_app_user, causing PermissionError on first generation request.
+CONTAINER_ID=$(docker ps --filter "ancestor=$DOCKER_IMAGE" --format "{{.ID}}" 2>/dev/null | head -1)
+if [[ -n "$CONTAINER_ID" ]]; then
+    docker exec "$CONTAINER_ID" chmod 777 /tmp/prometheus_multiproc 2>/dev/null || true
 fi
 
 # ── Tail the log ──────────────────────────────────────────────────────────────

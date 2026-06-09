@@ -23,36 +23,59 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 from artgen.generators.animatediff import (
-    AnimateDiffGenerator,  # re-exported so plugin_loader can find the ArtGenerator subclass
     check_hardware,
     run_subprocess,
     make_gif_thumbnail,
 )
+from artgen import ArtGenerator
 
 
-def generate_artifact(
-    prompt: str,
-    out_path: Path,
-    *,
-    negative_prompt: str = "blurry, low quality",
-    frames: int = 16,
-    steps: int = 20,
-    seed: int = 42,
-    temporal_alpha: float = 0.5,
-    on_progress=None,
-) -> tuple[bool, str]:
-    """MCP entry point — delegates to run_subprocess in artgen/generators/animatediff.py."""
-    ok, msg = check_hardware()
-    if not ok:
-        return False, f"AnimateDiff requires Blackhole hardware: {msg}"
+class AnimateDiffGenerator(ArtGenerator):
+    """MCP-accessible AnimateDiff plugin.
 
-    return run_subprocess(
-        prompt=prompt,
-        out_path=Path(out_path),
-        frames=frames,
-        steps=steps,
-        seed=seed,
-        negative_prompt=negative_prompt,
-        temporal_alpha=temporal_alpha,
-        on_progress=on_progress,
-    )
+    plugin_loader picks up this class and uses generate_artifact() for
+    MCP tools/call. build_prompt() is not used (AnimateDiff uses a subprocess
+    pipeline, not an LLM); call_fn is accepted but ignored.
+    """
+
+    name = "animatediff"
+    description = "Animated GIF generation via TTNN on Blackhole hardware"
+    output_ext = ".gif"
+
+    def add_args(self, parser) -> None:
+        parser.add_argument("--prompt", default="a candle flame flickering")
+        parser.add_argument("--negative-prompt", default="blurry, low quality",
+                            dest="negative_prompt")
+        parser.add_argument("--frames", type=int, default=8)
+        parser.add_argument("--steps", type=int, default=25)
+        parser.add_argument("--seed", type=int, default=42)
+        parser.add_argument("--temporal-alpha", type=float, default=0.35,
+                            dest="temporal_alpha")
+
+    def build_prompt(self, args) -> str:
+        raise RuntimeError(
+            "AnimateDiffGenerator does not use build_prompt — "
+            "generation is handled by generate_artifact() via subprocess."
+        )
+
+    def generate_artifact(self, args, call_fn) -> str:  # call_fn unused
+        """Run the AnimateDiff subprocess and return the path to the output GIF."""
+        ok, msg = check_hardware()
+        if not ok:
+            raise RuntimeError(f"AnimateDiff requires Blackhole hardware: {msg}")
+
+        out_path = self.default_output()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        success, err = run_subprocess(
+            prompt=getattr(args, "prompt", "a candle flame flickering"),
+            out_path=out_path,
+            frames=getattr(args, "frames", 8),
+            steps=getattr(args, "steps", 25),
+            seed=getattr(args, "seed", 42),
+            negative_prompt=getattr(args, "negative_prompt", "blurry, low quality"),
+            temporal_alpha=getattr(args, "temporal_alpha", 0.35),
+        )
+        if not success:
+            raise RuntimeError(err)
+        return str(out_path)

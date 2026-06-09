@@ -257,9 +257,18 @@ HF_HOME_BLOCK='    # Mount the full host HF cache as HF_HOME inside the containe
     if setup_config and getattr(setup_config, "host_hf_cache", None):
         _hf_home_dst = f"{user_home_path}/hf_home_cache"
         docker_command += [
-            "--mount", f"type=bind,src={setup_config.host_hf_cache},dst={_hf_home_dst},readonly",
+            "--mount", f"type=bind,src={setup_config.host_hf_cache},dst={_hf_home_dst}",
         ]
         docker_env_vars["HF_HOME"] = _hf_home_dst
+        # Also mount /mnt/bonus so that symlinks in the HF cache that point
+        # to /mnt/bonus (a separate model storage disk) resolve inside the container.
+        import pathlib as _pl
+        _bonus = _pl.Path("/mnt/bonus")
+        if _bonus.is_dir():
+            docker_command += [
+                "--mount", f"type=bind,src={_bonus},dst={_bonus},readonly",
+            ]
+            logger.info(f"Bonus disk mount: {_bonus} -> {_bonus}")
         logger.info(f"HF_HOME mount: {setup_config.host_hf_cache} -> {_hf_home_dst}")'
 
 python3 - "$RDS" "$HF_HOME_BLOCK" <<'PYEOF'
@@ -444,6 +453,202 @@ shutil.copy2(p, backup)
 new_text = text[:insert_pos] + I2V_ENTRY + text[insert_pos:]
 p.write_text(new_text)
 print(f"   inserted SkyReels I2V ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
+PYEOF
+
+# ── Step 8: Inject Wan2.2-Animate-14B-Diffusers into model_spec.py ───────────
+
+echo "8. Patching $MODEL_SPEC (Wan2.2-Animate-14B-Diffusers ModelSpecTemplate)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+MARKER = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
+if MARKER in text:
+    print("   already patched — nothing to do")
+    sys.exit(0)
+
+# Insert after the SkyReels I2V entry (or before image_templates as fallback)
+ANCHOR = "Skywork/SkyReels-V2-I2V-14B-540P"
+FALLBACK = "]\n\n# =============================================================================\n# image_templates"
+
+if ANCHOR in text:
+    idx = text.find(ANCHOR)
+    block_start = text.rfind("ModelSpecTemplate(", 0, idx)
+    depth, pos, insert_pos = 0, block_start, -1
+    while pos < len(text):
+        ch = text[pos]
+        if ch == '(': depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                insert_pos = pos + 1
+                while insert_pos < len(text) and text[insert_pos] in ',\n':
+                    insert_pos += 1
+                break
+        pos += 1
+    anchor_used = "after SkyReels I2V block"
+elif FALLBACK in text:
+    insert_pos = text.find(FALLBACK)
+    anchor_used = "before image_templates"
+else:
+    print(f"ERROR: could not find insertion anchor in {p}")
+    sys.exit(1)
+
+ANIMATE_ENTRY = """\
+    # Wan2.2-Animate-14B-Diffusers — character animation fine-tune on Wan2.2 I2V.
+    # Weights cached locally; same architecture as Wan2.2-I2V-A14B-Diffusers.
+    # Uses the I2V runner via the media server.
+    ModelSpecTemplate(
+        weights=["Wan-AI/Wan2.2-Animate-14B-Diffusers"],
+        version="0.15.0",
+        tt_metal_commit="7fbac63",
+        impl=tt_transformers_impl,
+        min_disk_gb=60,
+        min_ram_gb=32,
+        model_type=ModelType.VIDEO,
+        inference_engine=InferenceEngine.MEDIA.value,
+        device_model_specs=[
+            DeviceModelSpec(
+                device=DeviceTypes.P300X2,
+                max_concurrency=1,
+                max_context=64 * 1024,
+                default_impl=True,
+                override_tt_config={
+                    "trace_region_size": 30000000,
+                },
+            ),
+        ],
+        status=ModelStatusTypes.COMPLETE,
+    ),
+"""
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+new_text = text[:insert_pos] + ANIMATE_ENTRY + text[insert_pos:]
+p.write_text(new_text)
+print(f"   inserted Wan2.2-Animate ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
+PYEOF
+
+# ── Step 9: Bump DeepSeek-R1-Distill-Llama-70B P300X2 version to 0.14.0 ──────
+# The upstream spec pins it at v0.10.0 which the v0.15.0 run.py rejects.
+# The 0.14.0 image works for all Blackhole LLMs.
+
+echo "9. Patching $MODEL_SPEC (DeepSeek-R1-Distill-Llama-70B P300X2 version bump)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib, re
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+TARGET_ID = 'id_tt-transformers_DeepSeek-R1-Distill-Llama-70B_p300x2'
+if TARGET_ID not in text:
+    print("   model spec entry not found — skipping")
+    sys.exit(0)
+
+# Find the ModelSpec for this ID and bump its version
+OLD = "DeepSeek-R1-Distill-Llama-70B_p300x2"
+if '"0.14.0"' in text and OLD in text:
+    # Check if the p300x2 entry already has 0.14.0
+    idx = text.find(OLD)
+    chunk = text[max(0,idx-500):idx+500]
+    if '"0.14.0"' in chunk:
+        print("   already patched — nothing to do")
+        sys.exit(0)
+
+# Inject a new 0.14.0 template for DeepSeek on P300X2 if not already present
+MARKER = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
+if MARKER not in text:
+    print("   insertion anchor not found — skipping")
+    sys.exit(0)
+
+idx = text.find(MARKER)
+block_start = text.rfind("ModelSpecTemplate(", 0, idx)
+depth, pos, insert_pos = 0, block_start, -1
+while pos < len(text):
+    ch = text[pos]
+    if ch == '(': depth += 1
+    elif ch == ')':
+        depth -= 1
+        if depth == 0:
+            insert_pos = pos + 1
+            while insert_pos < len(text) and text[insert_pos] in ',\n':
+                insert_pos += 1
+            break
+    pos += 1
+
+DEEPSEEK_ENTRY = """\
+    # DeepSeek-R1-Distill-Llama-70B — P300X2 at v0.14.0 (upstream is v0.10.0 which run.py rejects).
+    ModelSpecTemplate(
+        weights=["deepseek-ai/DeepSeek-R1-Distill-Llama-70B"],
+        version="0.14.0",
+        tt_metal_commit="80180b9",
+        impl=tt_transformers_impl,
+        min_disk_gb=150,
+        min_ram_gb=64,
+        model_type=ModelType.LLM,
+        inference_engine=InferenceEngine.VLLM.value,
+        device_model_specs=[
+            DeviceModelSpec(
+                device=DeviceTypes.P300X2,
+                max_concurrency=1,
+                max_context=32768,
+                default_impl=True,
+            ),
+        ],
+        status=ModelStatusTypes.COMPLETE,
+    ),
+"""
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+new_text = text[:insert_pos] + DEEPSEEK_ENTRY + text[insert_pos:]
+p.write_text(new_text)
+print(f"   inserted DeepSeek-R1 P300X2 v0.14.0 entry ✓")
+PYEOF
+
+# ── Step 10: Bump SDXL/cpp-server models to v0.15.0 on P300X2 ────────────────
+# stable-diffusion-xl-base-1.0 (and the img2img / inpaint variants) are pinned
+# at v0.11.1 which run.py v0.15.0 rejects.  The cpp_server auto-activates for
+# these models when SERVER_MODE=cpp is set; bumping to v0.15.0 allows run.py
+# to launch them while the cpp binary inside the 0.15.0 image handles serving.
+
+echo "10. Patching $MODEL_SPEC (SDXL cpp-server models version bump)"
+
+python3 - "$MODEL_SPEC" <<'PYEOF'
+import sys, shutil, pathlib
+
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+
+OLD = '''        weights=[
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "stabilityai/stable-diffusion-xl-base-1.0-img-2-img",
+        ],
+        version="0.11.1",
+        tt_metal_commit="bac8b34",'''
+
+NEW = '''        weights=[
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "stabilityai/stable-diffusion-xl-base-1.0-img-2-img",
+        ],
+        version="0.15.0",  # cpp-server path — bumped from 0.11.1 by apply_patches.sh
+        tt_metal_commit="7fbac63",'''
+
+if OLD not in text:
+    if NEW in text:
+        print("   already patched — nothing to do")
+    else:
+        print("   SDXL template not found — skipping")
+    sys.exit(0)
+
+backup = p.with_suffix(".py.bak")
+shutil.copy2(p, backup)
+p.write_text(text.replace(OLD, NEW, 1))
+print("   SDXL template version 0.11.1 → 0.15.0 ✓")
 PYEOF
 
 echo ""

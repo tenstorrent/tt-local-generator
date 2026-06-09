@@ -50,7 +50,6 @@
     /* ── Reset ─────────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
-    body { overflow-x: hidden; }
     body {
       background: var(--bg0);
       color: var(--text);
@@ -500,7 +499,7 @@
 
     .prompt-examples {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
       gap: 1rem;
     }
     .prompt-ex {
@@ -772,8 +771,6 @@
     .install-note-box strong { color: var(--text); }
 
     /* ── Responsive ─────────────────────────────────────────────────── */
-
-    /* Tablet — 900px */
     @media (max-width: 900px) {
       .flow-grid {
         grid-template-columns: 1fr;
@@ -782,58 +779,61 @@
       .flow-arrow { display: none; }
       .tttv-grid { grid-template-columns: 1fr; }
       .prompt-examples { grid-template-columns: 1fr; }
-      .tier-row { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+      .tier-row { grid-template-columns: 1fr; }
     }
-
-    /* Mobile — 640px: collapse most multi-column inline grids */
     @media (max-width: 640px) {
       .nav-links { display: none; }
       h1 { font-size: 2.25rem; }
-      h2 { font-size: 1.5rem; }
 
-      /* Named grid classes */
-      .features-grid    { grid-template-columns: 1fr !important; }
-      .wordbank-grid    { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-      .tier-row         { grid-template-columns: 1fr !important; }
-      .prompt-examples  { grid-template-columns: 1fr !important; }
-
-      /* Inline grids: catch repeat(2–4, 1fr) patterns with attribute selector.
-         Reflows any div whose style attribute contains these grid declarations. */
-      [style*="grid-template-columns:repeat(2"],
-      [style*="grid-template-columns:repeat(3"],
-      [style*="grid-template-columns:repeat(4"],
-      [style*="grid-template-columns: repeat(2"],
-      [style*="grid-template-columns: repeat(3"],
-      [style*="grid-template-columns: repeat(4"] {
+      /* Collapse inline grids on small screens using !important to beat
+         inline style="display:grid;grid-template-columns:..." specificity */
+      [style*="grid-template-columns:repeat(3"] {
+        grid-template-columns: 1fr !important;
+      }
+      [style*="grid-template-columns:repeat(2"] {
+        grid-template-columns: 1fr !important;
+      }
+      [style*="grid-template-columns:repeat(4"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
+      [style*="grid-template-columns:1.75fr"] {
         grid-template-columns: 1fr !important;
       }
 
-      /* Minimum-width auto-fill grids: loosen the min so they don't overflow */
-      [style*="minmax(480px"] { grid-template-columns: 1fr !important; }
-      [style*="minmax(300px"] { grid-template-columns: 1fr !important; }
+      /* Nav: show a compact hamburger-free nav with just key links */
+      .nav-links { display: none !important; }
+      nav { padding: .5rem 0; }
+      .nav-inner { flex-wrap: wrap; gap: .5rem; }
 
-      /* Install tab code blocks — allow horizontal scroll on narrow screens */
-      .install-step pre { font-size: .75rem; }
-      pre { overflow-x: auto; }
+      /* Hero text */
+      .hero-lead { font-size: 1rem; }
+      .hero-actions { flex-direction: column; align-items: flex-start; gap: .75rem; }
+      .hero-actions a { width: 100%; text-align: center; }
 
-      /* Constrain nav so logo and CTA stay on one line */
-      .nav-inner { gap: .5rem; }
-      .nav-cta   { font-size: .8rem; padding: .35rem .7rem; }
+      /* Screenshots */
+      .hero-screenshot-wrap { margin-left: 0; width: 100%; }
 
-      /* Hero tweaks */
-      .hero-ctas { flex-direction: column; align-items: flex-start; }
-      .hero-secondary { flex-direction: column; align-items: flex-start; }
+      /* Model cards */
+      .model-card { min-width: 0; }
 
-      /* Section padding — less breathing room needed on small screens */
+      /* Install tabs */
+      .install-tabs { flex-wrap: wrap; gap: .25rem; }
+      .install-tab { font-size: .8rem; padding: .4rem .8rem; }
+
+      /* Sections */
       section { padding: 3rem 0; }
-      #hero   { padding: 3rem 0 0; }
+      .section-title { font-size: 1.75rem; }
     }
 
-    /* Very narrow — 420px: tighten further */
-    @media (max-width: 420px) {
-      .wrap { padding: 0 1rem; }
-      .wordbank-grid { grid-template-columns: 1fr 1fr; }
-      h1 { font-size: 1.9rem; }
+    @media (max-width: 900px) {
+      /* Artgen SVG gallery: 2 cols not 3 */
+      [style*="grid-template-columns:repeat(3,1fr)"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
+      /* Palette swatches */
+      [style*="grid-template-columns:repeat(4,1fr)"] {
+        grid-template-columns: repeat(2,1fr) !important;
+      }
     }
   </style>
     <script>
@@ -874,6 +874,8 @@
       <li><a href="#demo">Demo</a></li>
       <li><a href="#models">Models</a></li>
       <li><a href="#artgen">Generative Art</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="workflows.html">Workflows</a></li>
       <li><a href="#prompts">Prompts</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
@@ -957,8 +959,10 @@
         <div class="flow-title">Create</div>
         <p class="flow-desc">
           Write a prompt — or let the three-tier generator do it for you.
-          Submit to Wan2.2, Mochi, SkyReels, FLUX, or AnimateDiff.
+          Submit to Wan2.2, Mochi, SkyReels, FLUX.1-schnell, SDXL, or AnimateDiff.
           Server management, queuing, and live progress are built in.
+          Or use the <strong>⚙ Workflow</strong> button to run multi-step pipelines —
+          image → caption → video → poem → image — in one shot.
         </p>
       </div>
 
@@ -971,7 +975,9 @@
         <p class="flow-desc">
           Every generation lands in a persistent gallery with full metadata.
           Hover to preview. Star favorites. Export or share.
-          A growing archive of everything your hardware has ever made.
+          <strong>Right-click any card</strong> to apply transforms: remove background,
+          describe the image, or generate a depth map — powered by on-device forge plugins.
+          Results feed straight into the Remix flow.
         </p>
       </div>
 
@@ -1042,11 +1048,11 @@
 <section id="models">
   <div class="wrap">
     <div class="section-label">Supported models</div>
-    <h2 class="section-title">One app. Six models.</h2>
+    <h2 class="section-title">One app. Many models.</h2>
     <p class="section-sub">
-      Switch between text-to-video, image generation, image-to-video, character animation,
-      and generative art from a single interface. Each model has a dedicated server managed
-      by the app.
+      Switch between text-to-video, image generation, image-to-video, and generative art
+      from a single interface. Start any server from the Servers menu or the
+      <strong>⚙ Workflow</strong> button — no terminal needed.
     </p>
     <p class="section-sub" style="margin-top:.6rem;font-size:.9rem;">
       <strong>Hardware note:</strong> All video and image inference requires
@@ -1075,16 +1081,22 @@
         <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
       </div>
       <div class="model-card">
-        <div class="model-type image">Image</div>
-        <div class="model-name">FLUX.1-dev</div>
-        <p class="model-desc">State-of-the-art text-to-image. Rich detail, accurate text rendering, photorealistic output.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (4× P300c) — Blackhole</div>
+        <div class="model-type image">Image · ~3s</div>
+        <div class="model-name">FLUX.1-schnell</div>
+        <p class="model-desc">Fast, high-quality text-to-image. Rich detail and accurate prompts in about 3 seconds on QB2.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
       </div>
       <div class="model-card">
-        <div class="model-type animate">Character Animate</div>
-        <div class="model-name">Wan2.2 Animate</div>
-        <p class="model-desc">Video-to-video character animation. Give any character a motion — or replace a person in a clip.</p>
-        <div class="model-hw"><span class="model-hw-dot"></span> CPU / CUDA — TT hardware support pending</div>
+        <div class="model-type image">Image · ~2s · C++ backend</div>
+        <div class="model-name">SDXL</div>
+        <p class="model-desc">Stable Diffusion XL via the new C++ inference backend (cpp_server). Fastest image model on QB2 — about 2 seconds per generation.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type artgen">LLM Artgen</div>
+        <div class="model-name">Qwen3-8B · Llama-3.3-70B · Qwen3-32B</div>
+        <p class="model-desc">On-device LLMs power the artgen tab and prompt polish. 8B runs on a single P300 card. 32B and 70B use the full QB2 mesh.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 — single card (8B) or full mesh (32B/70B)</div>
       </div>
       <div class="model-card">
         <div class="model-type artgen">Generative Art · Animated GIF</div>
@@ -1114,6 +1126,23 @@
       shine with a larger model. No configuration needed: start a bigger LLM and every
       subsequent generation upgrades automatically.
     </p>
+    <p style="margin-top:-.5rem;margin-bottom:2rem;">
+      <a href="plugins.html" style="color:var(--teal);font-size:.95rem;">
+        See all plugins + forge transforms — authoring guide — MCP wiring →
+      </a>
+    </p>
+
+    <!-- App screenshots: gallery view + detail view -->
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:2rem;">
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen-gallery.png" alt="Generative Art gallery — all plugin types visible including landscapes, circuits, palettes, verse, and animated GIFs" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Art gallery — all 12 plugin types in one grid</figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border);">
+        <img src="assets/artgen-detail.png" alt="Palette detail view — Cathedral Dust palette with hex swatches, color roles, prose lore, and the LLM prompt that generated it" style="width:100%;display:block;">
+        <figcaption style="padding:.55rem 1rem;font-size:.78rem;color:var(--muted);background:var(--card);">Palette detail — Cathedral Dust · hex values, roles, prose lore</figcaption>
+      </figure>
+    </div>
 
     <!-- SVG gallery: 3 top + 2 bottom -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-top:2rem;">

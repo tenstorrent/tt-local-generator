@@ -1,6 +1,54 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 """
+Architectural boundary: Remix vs. Workflow
+==========================================
+
+Remix — interactive, single-step, immediate
+--------------------------------------------
+Triggered from a card's context menu (right-click) or hover bar (⟳ button).
+The user selects a source type and a target generation type, presses Go, and one
+new generation is submitted.  Result appears as a single output card in the gallery.
+
+Implementation path:
+  RemixContext (artgen/remix_context.py)
+  → dispatch_remix() [this module]
+  → controls.switch_to_source() + controls.populate_prompts()
+    (or artgen_panel.set_generator() for art targets)
+  → normal ControlPanel/ArtgenPanel tab flow, same as a hand-typed prompt
+
+Output record: a standard GenerationRecord.  Remix provenance is optionally
+preserved in extra_meta._source_id (the source card's record id) and
+extra_meta._transform (the remix action label, e.g. "animate", "reimagine").
+
+Workflow — batch, multi-step, persistent
+-----------------------------------------
+Triggered from the Workflow toolbar button (⚙) or via `tt-ctl run <spec>`.
+Runs a JSON node-graph spec with N processing nodes, producing M output
+artifacts that are collected into a named playlist.
+
+Implementation path:
+  WorkflowPopover._run_workflow()
+  → subprocess: bin/run_workflow.sh <spec.json>
+  → GLib.io_add_watch progress listener (_on_run_stdout)
+  → playlist stored in history, browsable in gallery
+
+Output records: GenerationRecord objects with model_id starting with "workflow"
+(e.g. "workflow", "workflow-v2").  This prefix is the sentinel used throughout
+the codebase to exclude these records from per-model video counts.
+
+Could Remix be a 1-node Workflow?
+-----------------------------------
+Architecturally yes — a single TTLGTextToImage node driven by a RemixContext
+would be equivalent.  But the UX intent is different, so they are kept separate:
+
+  Remix    : synchronous-feeling, no board reset, no server switch, stays on
+             the current tab, result appears inline in the gallery immediately.
+  Workflow : async subprocess, produces a playlist, survives app close, may
+             reset the board between nodes to switch models.
+
+They share no code intentionally.  Keeping them separate is correct.
+
 dispatch_remix — pure routing logic for remix actions.
 
 No GTK imports. Tested independently in tests/test_remix_dispatch.py.

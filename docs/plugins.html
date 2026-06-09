@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plugins — tt-local-generator</title>
+  <meta name="description" content="All built-in plugins for tt-local-generator: SVG landscapes, ANSI art, animated GIFs, color palettes, verse, and more. Plugin authoring guide for writing your own.">
+  <link rel="icon" href="assets/tenstorrent.png" type="image/png">
+
+  <style>
+    :root {
+      --bg0: #080f14;
+      --bg1: #0d1b24;
+      --bg2: #122130;
+      --card: #162838;
+      --card2: #1a3040;
+      --teal: #4fd1c5;
+      --teal-dim: #3aada2;
+      --teal-glow: rgba(79,209,197,.15);
+      --pink: #ec96b8;
+      --gold: #f4c471;
+      --green: #27ae60;
+      --red: #e05555;
+      --text: #e8f0f2;
+      --text2: #b0c4d0;
+      --muted: #607d8b;
+      --border: rgba(79,209,197,.18);
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg0);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    img, video { display: block; max-width: 100%; }
+    a { color: var(--teal); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(1.25rem, 5vw, 5rem); }
+    section { padding: 5rem 0; }
+    section:nth-child(even) { background: var(--bg1); }
+
+    .section-label {
+      display: inline-block;
+      font-size: .75rem; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--teal); margin-bottom: .75rem;
+    }
+    .section-title {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 700; line-height: 1.2; color: var(--text); margin-bottom: 1rem;
+    }
+    .section-sub {
+      font-size: 1.05rem; color: var(--text2); max-width: 680px; margin-bottom: 3rem;
+    }
+
+    /* Nav */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(8,15,20,.92); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1200px; margin: 0 auto;
+      padding: .75rem clamp(1.25rem,5vw,5rem);
+      display: flex; align-items: center; gap: 1.5rem;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: .5rem;
+      font-weight: 700; font-size: .95rem; color: var(--teal);
+      text-decoration: none; white-space: nowrap;
+    }
+    .nav-logo span span { color: var(--text2); }
+    .nav-links { display: flex; align-items: center; gap: .25rem; list-style: none; flex: 1; }
+    .nav-links a {
+      padding: .3rem .65rem; border-radius: 6px; font-size: .875rem;
+      color: var(--text2); transition: color .15s;
+    }
+    .nav-links a:hover { color: var(--teal); text-decoration: none; }
+    .nav-cta {
+      margin-left: auto; padding: .35rem .9rem !important;
+      border: 1px solid var(--border); border-radius: 20px;
+      color: var(--teal) !important; font-size: .82rem !important;
+    }
+
+    /* Plugin grid */
+    .plugin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2.5rem;
+    }
+    .plugin-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .plugin-card:hover {
+      border-color: var(--teal);
+      box-shadow: 0 0 24px rgba(79,209,197,.12);
+    }
+    .plugin-card-preview {
+      background: var(--bg2);
+      min-height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+    .plugin-card-preview img, .plugin-card-preview svg {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      display: block;
+    }
+    .plugin-card-preview .preview-placeholder {
+      font-size: 3rem; color: var(--muted);
+    }
+    .plugin-card-body { padding: 1.25rem; }
+    .plugin-card-name {
+      font-size: 1rem; font-weight: 700; color: var(--text);
+      display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem;
+    }
+    .plugin-tag {
+      font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; padding: 2px 7px; border-radius: 4px;
+      background: var(--teal-glow); color: var(--teal); border: 1px solid var(--border);
+    }
+    .plugin-tag.hardware { background: rgba(244,196,113,.12); color: var(--gold); border-color: rgba(244,196,113,.3); }
+    .plugin-tag.mcp { background: rgba(236,150,184,.12); color: var(--pink); border-color: rgba(236,150,184,.3); }
+    .plugin-desc { font-size: .9rem; color: var(--text2); margin-bottom: .75rem; line-height: 1.5; }
+    .plugin-meta { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .plugin-meta-item { font-size: .75rem; color: var(--muted); }
+    .plugin-meta-item strong { color: var(--text2); }
+
+    /* Code blocks */
+    pre, code {
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: .83rem;
+    }
+    pre {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      margin: 1rem 0;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+    code { color: var(--teal); background: rgba(79,209,197,.08); padding: 1px 5px; border-radius: 3px; }
+    pre code { color: inherit; background: none; padding: 0; }
+    .kw { color: var(--pink); }
+    .str { color: var(--gold); }
+    .cm { color: var(--muted); }
+    .fn { color: var(--teal); }
+
+    /* Step callouts */
+    .step-list { list-style: none; margin-top: 1.5rem; }
+    .step-list li {
+      display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0; width: 2rem; height: 2rem;
+      background: var(--teal-glow); border: 1px solid var(--border);
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: .8rem; font-weight: 700; color: var(--teal);
+    }
+    .step-body h4 { font-size: 1rem; color: var(--text); margin-bottom: .25rem; }
+    .step-body p { font-size: .9rem; color: var(--text2); }
+
+    /* File tree */
+    .file-tree {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1rem 1.5rem;
+      font-family: monospace; font-size: .85rem; color: var(--text2);
+      line-height: 1.8; margin: 1rem 0;
+    }
+    .file-tree .dir { color: var(--teal); }
+    .file-tree .req { color: var(--text); }
+    .file-tree .opt { color: var(--muted); }
+
+    /* Remix graph */
+    .remix-row {
+      display: flex; align-items: center; gap: .75rem;
+      margin: .5rem 0; flex-wrap: wrap;
+    }
+    .remix-node {
+      background: var(--card2); border: 1px solid var(--border);
+      border-radius: 6px; padding: .25rem .75rem;
+      font-size: .83rem; color: var(--text2);
+    }
+    .remix-node.source { border-color: var(--teal); color: var(--teal); }
+    .remix-arrow { color: var(--muted); font-size: .9rem; }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; margin: 1.5rem 0; }
+    th { text-align: left; padding: .5rem .75rem; color: var(--muted); font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+    td { padding: .5rem .75rem; border-bottom: 1px solid rgba(79,209,197,.06); vertical-align: top; color: var(--text2); }
+    td:first-child { color: var(--teal); font-family: monospace; }
+
+    /* GIF grid */
+    .gif-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem; margin-top: 2rem;
+    }
+    .gif-grid figure {
+      margin: 0; border-radius: var(--radius-sm);
+      overflow: hidden; border: 1px solid var(--border);
+    }
+    .gif-grid img { width: 100%; display: block; }
+    .gif-grid figcaption {
+      padding: .4rem .75rem; font-size: .75rem; color: var(--muted);
+      background: var(--card);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem 0; text-align: center;
+      color: var(--muted); font-size: .85rem;
+    }
+    footer a { color: var(--teal); }
+
+    /* ── Mobile ──────────────────────────────────────────────────── */
+    @media (max-width: 900px) {
+      .plugin-grid { grid-template-columns: repeat(2, 1fr); }
+      .gif-grid    { grid-template-columns: repeat(3, 1fr); }
+      .remix-row   { flex-wrap: wrap; }
+      table { font-size: .8rem; }
+      th, td { padding: .4rem .5rem; }
+    }
+
+    @media (max-width: 640px) {
+      /* Nav */
+      .nav-links { display: none !important; }
+      .nav-inner  { gap: .5rem; }
+
+      /* Layout */
+      .plugin-grid { grid-template-columns: 1fr; }
+      .gif-grid    { grid-template-columns: repeat(2, 1fr); }
+      .step-list li { flex-direction: column; }
+      .step-num     { width: 1.75rem; height: 1.75rem; }
+
+      /* Typography */
+      .section-title { font-size: 1.75rem; }
+      section { padding: 3rem 0; }
+
+      /* Tables scroll horizontally on phone */
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+
+      /* Code blocks */
+      pre { font-size: .75rem; padding: 1rem; }
+
+      /* Remix rows */
+      .remix-row { gap: .4rem; }
+      .remix-node { font-size: .75rem; padding: .2rem .5rem; }
+
+      /* Hero actions */
+      div[style*="display:flex;gap:1rem"] {
+        flex-direction: column !important;
+      }
+      div[style*="display:flex;gap:1rem"] a {
+        width: 100% !important;
+        text-align: center;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .gif-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/tenstorrent.png" width="24" height="24" alt="Tenstorrent" style="border-radius:4px;">
+      <span style="white-space:nowrap;">tt-local-<span>generator</span></span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="workflows.html">Workflows</a></li>
+      <li><a href="#plugins">Plugins</a></li>
+      <li><a href="#remix">Remix graph</a></li>
+      <li><a href="#authoring">Write a plugin</a></li>
+      <li><a href="#mcp">MCP wiring</a></li>
+      <li><a href="https://github.com/tenstorrent/tt-local-generator" class="nav-cta">GitHub ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ── Hero ──────────────────────────────────────────────────────── -->
+<section style="padding:5rem 0 4rem;">
+  <div class="wrap">
+    <div class="section-label">Plugin system</div>
+    <h1 class="section-title" style="max-width:800px;">
+      Every generator is a plugin.<br>Every plugin is an MCP tool.
+    </h1>
+    <p class="section-sub">
+      tt-local-generator's Generative Art tab is powered by a discoverable plugin
+      system. Twelve built-in plugins ship with the app — SVG art, ANSI, animated GIFs,
+      color palettes, verse, circuits, constellations, and more. Each one is also exposed
+      as a Claude Code MCP tool, so you can call any generator directly from a conversation.
+      Drop a new directory into <code>~/.config/tt-local-gen/plugins/</code> to add your own.
+    </p>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+      <a href="#authoring" style="display:inline-flex;align-items:center;gap:.5rem;background:var(--teal);color:#080f14;padding:.65rem 1.4rem;border-radius:24px;font-weight:700;font-size:.9rem;">
+        Write a plugin →
+      </a>
+      <a href="#plugins" style="display:inline-flex;align-items:center;gap:.5rem;border:1px solid var(--border);color:var(--text2);padding:.65rem 1.4rem;border-radius:24px;font-size:.9rem;">
+        Browse built-ins ↓
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Built-in plugins ───────────────────────────────────────────── -->
+<section id="plugins">
+  <div class="wrap">
+    <div class="section-label">Built-in generators</div>
+    <h2 class="section-title">Plugins &amp; transforms</h2>
+    <p class="section-sub">
+      All built-in plugins live in <code>plugins/</code> at the repo root. Each one has an
+      <code>mcp.json</code> manifest declaring its tool schema, output type, and remix graph edges,
+      plus a <code>plugin.py</code> with an <code>ArtGenerator</code> subclass that runs the generation.
+    </p>
+
+    <div class="plugin-grid">
+
+      <!-- Landscape -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview">
+          <img src="assets/artgen/landscape-violet.svg" alt="Violet SVG landscape">
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            landscape <span class="plugin-tag">SVG</span>
+          </div>
+          <p class="plugin-desc">
+            Layered SVG landscape scenes — sky gradients, terrain silhouettes, atmospheric
+            effects. Eleven named palettes (volcanic, arctic, toxic, midnight…). The LLM
+            receives a structured prompt specifying horizon divisions, color zones, and
+            decorative elements; outputs raw SVG that the app renders and archives.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .svg</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> any size</span>
+            <span class="plugin-meta-item"><strong>Remix from:</strong> verse, palette</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Skyline -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview">
+          <img src="assets/artgen/skyline-metro-night.svg" alt="Metro night skyline SVG">
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            skyline <span class="plugin-tag">SVG</span>
+          </div>
+          <p class="plugin-desc">
+            Urban skyline silhouettes against atmospheric skies. Era selector spans
+            Victorian to brutalist to sci-fi; sky presets cover dawn through storm.
+            Each generation produces a unique building density, bridge configuration,
+            and light scatter pattern. Good source material for image-to-video remixing.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .svg</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> medium+</span>
+            <span class="plugin-meta-item"><strong>Remix from:</strong> verse</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Constellation -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview">
+          <img src="assets/artgen/constellation.svg" alt="Invented constellation star chart">
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            constellation <span class="plugin-tag">SVG</span>
+          </div>
+          <p class="plugin-desc">
+            Invented star charts with mythological lore. The LLM designs a
+            constellation shape as a sequence of star coordinates, names the
+            figure, and writes accompanying mythology. The SVG renderer draws
+            the connecting lines, star glyphs at varying magnitudes, and
+            decorative star-field scatter.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .svg</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> any size</span>
+            <span class="plugin-meta-item"><strong>Remix from:</strong> verse</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Geometric -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview">
+          <img src="assets/artgen/geometric-teal.svg" alt="Geometric line grid SVG">
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            geometric <span class="plugin-tag">SVG</span>
+          </div>
+          <p class="plugin-desc">
+            Abstract geometric compositions: line grids, triangle fields, hexagonal
+            tilings, and rectangle decompositions. Three complexity levels (minimal,
+            balanced, dense) and six named palettes. The LLM decides element placement,
+            opacity layering, and accent color use within the palette constraints.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .svg</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> medium+</span>
+            <span class="plugin-meta-item"><strong>Remix from:</strong> palette</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Circuit -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="background:#050d10;">
+          <div class="preview-placeholder">⬡</div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            circuit <span class="plugin-tag">SVG</span>
+          </div>
+          <p class="plugin-desc">
+            PCB-style circuit diagram art. The LLM places logic gates, trace routes,
+            pad arrays, and chip outlines in a fixed-grid SVG coordinate system.
+            Gate shapes are selectable (ANSI, IEC, or symbolic). Output looks like
+            a functional schematic but is purely decorative — good for backgrounds
+            and poster art.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .svg</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> large (14B+)</span>
+            <span class="plugin-meta-item"><strong>Remix from:</strong> palette</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Palette -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="display:block;padding:0;overflow:hidden;min-height:180px;">
+          <!-- Swatch row: explicit height, no flex trickery needed -->
+          <div style="display:flex;height:148px;">
+            <div style="flex:1;background:#2c3e50;"></div>
+            <div style="flex:1;background:#8e9eab;"></div>
+            <div style="flex:1;background:#c0392b;"></div>
+            <div style="flex:1;background:#f39c12;"></div>
+            <div style="flex:1;background:#ecf0f1;"></div>
+          </div>
+          <!-- Palette name label -->
+          <div style="background:#0f1d28;padding:.5rem .75rem;font-size:.75rem;font-family:monospace;color:#e8f0f2;letter-spacing:.04em;">
+            Drowned Ironwork &nbsp;<span style="color:#8e9eab;">· 5 colors</span>
+          </div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            palette <span class="plugin-tag">JSON</span>
+          </div>
+          <p class="plugin-desc">
+            Named color palettes with evocative prose lore. The LLM invents a 4–8
+            color set, names the palette ("Drowned Ironwork", "Fever Season"), and
+            writes 2–3 sentences of sensory description — what the palette <em>feels like</em>,
+            not what it looks like. Output is JSON with hex values, role labels, and lore text.
+            Optionally exports CSS custom properties.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .json</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> any size</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> video, image, landscape</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Verse -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="padding:1.5rem;background:var(--bg2);align-items:flex-start;">
+          <div style="font-size:.85rem;color:var(--text2);line-height:1.9;font-style:italic;">
+            the last train runs empty<br>
+            through stations that no longer<br>
+            need to be named
+          </div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            verse <span class="plugin-tag">text</span>
+          </div>
+          <p class="plugin-desc">
+            Structured text art in four forms: haiku sequences (5-7-5), world-building
+            lore fragments (codex-style, under 80 words), epitaphs (solemn, compressed),
+            and rhyming couplets. Each form has a strict system prompt tuned for that
+            register. Haiku shine at small model sizes; lore and epitaphs benefit from larger.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .txt</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> any size</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> video, image</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Freeform -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="padding:1.5rem;background:var(--bg2);align-items:flex-start;">
+          <div style="font-size:.83rem;color:var(--muted);line-height:1.8;">
+            Write anything. The LLM follows<br>
+            a single instruction with no<br>
+            structural constraints.
+          </div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            freeform <span class="plugin-tag">text</span>
+          </div>
+          <p class="plugin-desc">
+            Open-ended text generation with a single user-supplied instruction.
+            No form constraints — the LLM writes whatever the instruction says.
+            Useful for generating custom prompts, short prose, lists, or any
+            text that doesn't fit a structured form. The instruction is the entire
+            prompt; no post-processing.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .txt</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> any size</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> video, image</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ANSI -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="background:#000;padding:.5rem;font-family:monospace;font-size:9px;line-height:1.2;overflow:hidden;">
+          <div style="color:#00ff87;">&#9608;&#9608;&#9608;&#9608;&#9600;&#9600;&#9608;&#9608;</div>
+          <div style="color:#5f00ff;">&#9608;&#9600;&#9600;&#9600;&#9600;&#9600;&#9600;&#9608;</div>
+          <div style="color:#ff5faf;">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</div>
+          <div style="color:#00d7ff;">&#9612;&#9612;&#9612;&#9612;&#9612;&#9612;&#9612;&#9612;</div>
+          <div style="color:#ff8700;">&#9616;&#9616;&#9617;&#9618;&#9619;&#9619;&#9618;&#9617;</div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            ansi <span class="plugin-tag">ANSI</span>
+          </div>
+          <p class="plugin-desc">
+            xterm-256 color ANSI art on a 40×20 character canvas via a three-pass
+            LLM pipeline: (1) ASCII structure — spatial composition with plain text;
+            (2) block refinement — replace dense chars with ░▒▓█▀▄; (3) colorization —
+            wrap each character with <code>\033[38;5;Nm</code> escape sequences.
+            BBS style uses neon-on-void palette rules; scene/landscape use naturalistic colors.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .ans</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> large (8B+)</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> image</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- AnimateDiff -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview">
+          <img src="assets/artgen/animatediff-phosphor-mountains.gif" alt="AnimateDiff — phosphor mountains animated GIF">
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            animatediff <span class="plugin-tag">GIF</span>
+            <span class="plugin-tag hardware">Blackhole</span>
+          </div>
+          <p class="plugin-desc">
+            Animated GIF generation using the SD 1.4 TTNN UNet pipeline on Blackhole
+            hardware. No server, no Docker — runs directly on the Blackhole chip via
+            the TTNN runtime. Uses cross-frame temporal attention for motion continuity.
+            Best subjects: natural cyclical motion — fire, water, wind, breath, foliage.
+            ~5 min/frame on a single P300c.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .gif</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> none (diffusion)</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> video</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ffmpeg (utility) -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="padding:1.5rem;align-items:flex-start;background:var(--bg2);">
+          <div style="font-family:monospace;font-size:.8rem;color:var(--muted);line-height:1.8;">
+            <span style="color:var(--teal);">ffmpeg_extract_frame</span><br>
+            <span style="color:var(--teal);">ffmpeg_convert_to_gif</span><br>
+            <span style="color:var(--teal);">ffmpeg_convert_to_mp4</span><br>
+            <span style="color:var(--teal);">ffmpeg_get_metadata</span><br>
+            <span style="color:var(--teal);">ffmpeg_resize</span>
+          </div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            ffmpeg <span class="plugin-tag">utility</span>
+          </div>
+          <p class="plugin-desc">
+            Utility plugin exposing five ffmpeg operations as MCP tools. Used
+            internally by the Remix engine for silent format conversions (e.g.
+            video → I2V seed frame). Also callable from Claude Code sessions for
+            media manipulation tasks. Utility plugins don't appear in the Art tab
+            generator picker — they're infrastructure.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Type:</strong> utility (no generator)</span>
+            <span class="plugin-meta-item"><strong>MCP tools:</strong> 5</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- midi (MCP stub) -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="padding:1.5rem;align-items:flex-start;background:var(--bg2);">
+          <div style="font-size:.83rem;color:var(--muted);line-height:1.8;">
+            Coming soon — MIDI generation<br>
+            via tt-midi-maker MCP server.<br>
+            <span style="color:var(--pink);">Remix target: verse → midi</span>
+          </div>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            midi <span class="plugin-tag mcp">MCP server</span>
+          </div>
+          <p class="plugin-desc">
+            Delegate plugin for the tt-midi-maker MCP server. When the server is
+            running, <code>generate_midi</code> produces MIDI files from text prompts,
+            verse, or palette hints. The manifest also declares a <code>stream_midi</code>
+            tool for continuous generative MIDI output. This plugin demonstrates the
+            MCP-server-backed pattern — no <code>plugin.py</code> required.
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Type:</strong> MCP delegate</span>
+            <span class="plugin-meta-item"><strong>Accepts from:</strong> verse, palette</span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /plugin-grid -->
+
+    <!-- Forge transform plugins -->
+    <h3 style="font-size:1.2rem;font-weight:700;margin-top:4rem;margin-bottom:.5rem;">Right-click transforms</h3>
+    <p style="color:var(--text2);font-size:.9rem;margin-bottom:1.5rem;">
+      Right-click any gallery card to apply a forge-powered transform. Results appear as new cards
+      and feed straight into the <strong>Remix</strong> flow — use a background-removed image as a
+      SkyReels I2V seed, or a depth map as compositing reference.
+    </p>
+    <div class="plugin-grid" style="margin-top:0;">
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Remove background <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Isolates the foreground subject into a transparent PNG using RMBG-1.4. No hardware needed — runs in the tenstorrent Python venv in ~15–30 seconds.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> briaai/RMBG-1.4</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> transparent PNG</span>
+          </div>
+        </div>
+      </div>
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Describe this <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Generates a natural-language caption for any image using BLIP. The caption populates the prompt field — useful as a starting point for variations or as a video prompt.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> Salesforce/blip-image-captioning-base</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> text caption</span>
+          </div>
+        </div>
+      </div>
+      <div class="plugin-card">
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">Show depth <span class="plugin-tag">forge</span> <span class="plugin-tag">CPU</span></div>
+          <p class="plugin-desc">Produces a grayscale depth map from any image using GLPN-KITTI. Brighter = closer to camera. Useful as a compositing hint or ControlNet conditioning reference.</p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Model:</strong> vinvino02/glpn-kitti</span>
+            <span class="plugin-meta-item"><strong>Output:</strong> grayscale PNG</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AnimateDiff GIF gallery -->
+    <h3 style="font-size:1.2rem;font-weight:700;margin-top:4rem;margin-bottom:.5rem;">AnimateDiff examples</h3>
+    <p style="color:var(--text2);font-size:.9rem;margin-bottom:0;">All generated on a single Blackhole P300c, no cloud, no server.</p>
+    <div class="gif-grid">
+      <figure>
+        <img src="assets/artgen/animatediff-phosphor-mountains.gif" alt="Phosphor mountains — purple phosphor glow across distant mountains at 2am">
+        <figcaption>purple phosphor glow · mountains · 2am</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/artgen/animatediff-kipple.gif" alt="Kipple — scattered objects forming and dissolving">
+        <figcaption>kipple · objects forming and dissolving</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/artgen/animatediff-cherry-theremin.gif" alt="Cherry theremin — bioluminescent wave motion">
+        <figcaption>cherry theremin · bioluminescent wave</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/artgen/animatediff-aleph-cellar.gif" alt="Aleph cellar — candle flame in stone alcove">
+        <figcaption>aleph cellar · candle flame cycling</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/artgen/animatediff-feathers-bedsit.gif" alt="Feathers bedsit — fabric rippling in wind">
+        <figcaption>feathers bedsit · fabric in wind</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/artgen/animatediff-forking-paths.gif" alt="Forking paths — water branching over stone">
+        <figcaption>forking paths · water over stone</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ── Remix graph ─────────────────────────────────────────────────── -->
+<section id="remix">
+  <div class="wrap">
+    <div class="section-label">Cross-plugin remixing</div>
+    <h2 class="section-title">The Remix graph</h2>
+    <p class="section-sub">
+      Every artifact can be remixed into another type. Click <strong>🔀 Remix</strong> on any
+      card or in the detail panel to see valid targets. The app derives this list from each
+      plugin's <code>accepts_remix_from</code> and <code>can_remix_to</code> declarations —
+      no hardcoded routing tables.
+    </p>
+
+    <h3 style="font-size:1rem;font-weight:700;color:var(--teal);margin-bottom:1rem;">Example flows</h3>
+
+    <div style="display:flex;flex-direction:column;gap:.75rem;margin-bottom:2.5rem;">
+      <div class="remix-row">
+        <div class="remix-node source">palette</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node">video</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">image</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">landscape</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">geometric</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-left:.25rem;">carry: hex colors · lore prose · mood prompt</div>
+      </div>
+      <div class="remix-row">
+        <div class="remix-node source">verse</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node">video</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">image</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-left:.25rem;">carry: full text · theme prompt</div>
+      </div>
+      <div class="remix-row">
+        <div class="remix-node source">landscape SVG</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node">video (I2V)</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">image</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-left:.25rem;">carry: thumbnail · vibe phrase · source prompt</div>
+      </div>
+      <div class="remix-row">
+        <div class="remix-node source">video / GIF</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node">animate (motion ref)</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">video (I2V seed)</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-left:.25rem;">carry: full video OR first frame, silently extracted</div>
+      </div>
+      <div class="remix-row">
+        <div class="remix-node source">image</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node">video (SkyReels I2V)</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-left:.25rem;">carry: image file · prompt text</div>
+      </div>
+    </div>
+
+    <p style="font-size:.9rem;color:var(--text2);">
+      Ingredients are target-aware — the popover shows different checkboxes depending on which
+      target you're remixing toward. Technical conversions (video → frame, SVG → PNG) happen
+      silently via the ffmpeg plugin; you never see a dialog for them.
+    </p>
+  </div>
+</section>
+
+<!-- ── Write a plugin ─────────────────────────────────────────────── -->
+<section id="authoring">
+  <div class="wrap">
+    <div class="section-label">Plugin authoring</div>
+    <h2 class="section-title">Write your own plugin</h2>
+    <p class="section-sub">
+      A plugin is a directory with two files. The app discovers it automatically.
+      You don't need to touch the app's source code.
+    </p>
+
+    <!-- Directory structure -->
+    <h3 style="font-size:1rem;font-weight:700;margin-bottom:.75rem;color:var(--text);">Directory structure</h3>
+    <div class="file-tree">
+      <span class="dir">~/.config/tt-local-gen/plugins/my-plugin/</span><br>
+      &nbsp;&nbsp;<span class="req">mcp.json</span>&nbsp;&nbsp;&nbsp;<span style="color:var(--muted);"># required — tool schema + app metadata</span><br>
+      &nbsp;&nbsp;<span class="req">plugin.py</span>&nbsp;&nbsp;<span style="color:var(--muted);"># required for local generators (omit for MCP-server-backed)</span>
+    </div>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:2rem;">
+      Built-in plugins live in <code>plugins/</code> at the repo root and ship with the app.
+      User-installed plugins in <code>~/.config/tt-local-gen/plugins/</code> override built-ins with the same name.
+    </p>
+
+    <!-- Steps -->
+    <h3 style="font-size:1rem;font-weight:700;margin-bottom:1.25rem;color:var(--text);">How to write one</h3>
+    <ol class="step-list">
+      <li>
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Write <code>mcp.json</code></h4>
+          <p>Declare the tool schema (name, description, input parameters), output type,
+          which tab the plugin appears on, and which remix graph edges it participates in.</p>
+        </div>
+      </li>
+      <li>
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Write <code>plugin.py</code></h4>
+          <p>Extend <code>ArtGenerator</code> from <code>artgen</code>. Implement
+          <code>build_prompt(args)</code> and <code>parse_output(raw, args)</code>.
+          Override <code>generate_artifact(args, call_fn)</code> for multi-pass pipelines.</p>
+        </div>
+      </li>
+      <li>
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>Test via <code>tt-ctl</code></h4>
+          <p>Run <code>tt-ctl artgen my-plugin --theme "test" --simulate</code> to see the
+          generated prompt without calling the LLM. Then run with a real LLM to verify output.</p>
+        </div>
+      </li>
+      <li>
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h4>Launch the app — it appears automatically</h4>
+          <p>The plugin loader scans both directories at startup. Your plugin appears in the
+          Art tab generator picker, the Remix popover, and the MCP tool manifest with no
+          additional configuration.</p>
+        </div>
+      </li>
+    </ol>
+
+    <!-- mcp.json example -->
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 .75rem;color:var(--text);">Minimal <code>mcp.json</code></h3>
+<pre><code>{
+  <span class="str">"x-ttlg"</span>: {
+    <span class="str">"output_ext"</span>: <span class="str">".txt"</span>,
+    <span class="str">"media_type"</span>: <span class="str">"text"</span>,
+    <span class="str">"accepts_remix_from"</span>: [<span class="str">"palette"</span>, <span class="str">"verse"</span>],
+    <span class="str">"can_remix_to"</span>:       [<span class="str">"video"</span>, <span class="str">"image"</span>],
+    <span class="str">"tab"</span>: <span class="str">"generative-art"</span>,
+    <span class="str">"hardware"</span>: <span class="kw">null</span>
+  },
+  <span class="str">"tools"</span>: [{
+    <span class="str">"name"</span>: <span class="str">"my-generator"</span>,
+    <span class="str">"description"</span>: <span class="str">"One-sentence description shown in the UI and to MCP clients"</span>,
+    <span class="str">"inputSchema"</span>: {
+      <span class="str">"type"</span>: <span class="str">"object"</span>,
+      <span class="str">"properties"</span>: {
+        <span class="str">"theme"</span>: { <span class="str">"type"</span>: <span class="str">"string"</span>, <span class="str">"default"</span>: <span class="str">"the void"</span> },
+        <span class="str">"count"</span>: { <span class="str">"type"</span>: <span class="str">"integer"</span>, <span class="str">"default"</span>: 1 }
+      }
+    },
+    <span class="str">"examples"</span>: [{ <span class="str">"theme"</span>: <span class="str">"volcanic winter"</span> }],
+    <span class="str">"x-ttlg"</span>: { <span class="str">"streaming"</span>: <span class="kw">null</span>, <span class="str">"artifact_tool"</span>: <span class="kw">true</span> }
+  }]
+}</code></pre>
+
+    <!-- plugin.py example -->
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 .75rem;color:var(--text);">Minimal <code>plugin.py</code></h3>
+<pre><code><span class="kw">from</span> artgen <span class="kw">import</span> ArtGenerator, register
+
+<span class="fn">@register</span>
+<span class="kw">class</span> <span class="fn">MyGenerator</span>(ArtGenerator):
+    name        = <span class="str">"my-generator"</span>   <span class="cm"># must match tool name in mcp.json</span>
+    description = <span class="str">"One-line description"</span>
+    output_ext  = <span class="str">".txt"</span>
+
+    <span class="kw">def</span> <span class="fn">add_args</span>(self, parser):
+        parser.add_argument(<span class="str">"--theme"</span>, default=<span class="str">"the void"</span>)
+        parser.add_argument(<span class="str">"--count"</span>, type=int, default=1)
+
+    <span class="kw">def</span> <span class="fn">build_prompt</span>(self, args) -> str:
+        <span class="kw">return</span> <span class="fn">f</span><span class="str">"Write {args.count} piece(s) about: {args.theme}"</span>
+
+    <span class="kw">def</span> <span class="fn">parse_output</span>(self, raw: str, args) -> str:
+        <span class="kw">import</span> re
+        cleaned = re.sub(<span class="str">r"&lt;think&gt;.*?&lt;/think&gt;"</span>, <span class="str">""</span>, raw, flags=re.DOTALL)
+        <span class="kw">return</span> cleaned.strip()</code></pre>
+
+    <!-- Worked example: Vale -->
+    <h3 style="font-size:1rem;font-weight:700;margin:2.5rem 0 .75rem;color:var(--text);">
+      Worked example: Vale prose-style plugin
+    </h3>
+    <p style="font-size:.9rem;color:var(--text2);margin-bottom:1rem;">
+      A concrete end-to-end example: a plugin that runs the
+      <a href="https://vale.sh" target="_blank" rel="noopener">Vale prose linter</a>
+      on text artifacts. Demonstrates subprocess execution, LLM rewrite mode, and
+      how the plugin chains into the remix graph as a <em>verse → tighten → video seed</em> pipeline.
+    </p>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:1rem 1.5rem;margin-bottom:1rem;">
+      <div style="font-size:.8rem;color:var(--muted);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.06em;font-weight:700;">Remix graph position</div>
+      <div class="remix-row" style="margin:0;">
+        <div class="remix-node source">verse</div>
+        <div class="remix-arrow">→</div>
+        <div class="remix-node source">freeform</div>
+        <div class="remix-arrow">→ vale-style →</div>
+        <div class="remix-node">video</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">image</div>
+        <div class="remix-arrow">·</div>
+        <div class="remix-node">verse (iterate)</div>
+      </div>
+    </div>
+    <p style="font-size:.85rem;color:var(--text2);">
+      Three modes: <strong>annotate</strong> (inline Vale suggestions),
+      <strong>suggest</strong> (list of issues only), and
+      <strong>rewrite</strong> (LLM applies the suggestions automatically).
+      Full runnable source in
+      <a href="https://github.com/tenstorrent/tt-local-generator/tree/main/docs/examples/plugins/vale-style">docs/examples/plugins/vale-style/</a>
+      — copy it to <code>~/.config/tt-local-gen/plugins/</code> to install.
+      Narrative walkthrough in <a href="PLUGIN_AUTHORING.md">PLUGIN_AUTHORING.md</a>.
+    </p>
+  </div>
+</section>
+
+<!-- ── MCP wiring ─────────────────────────────────────────────────── -->
+<section id="mcp">
+  <div class="wrap">
+    <div class="section-label">Claude Code integration</div>
+    <h2 class="section-title">Every plugin is an MCP tool</h2>
+    <p class="section-sub">
+      The built-in MCP server exposes all loaded plugins as MCP tools on port 8003.
+      Once registered, you can call any generator — landscape, verse, animatediff,
+      your own custom plugin — directly from a Claude Code conversation.
+    </p>
+
+    <h3 style="font-size:1rem;font-weight:700;margin-bottom:1rem;color:var(--text);">Setup (one-time)</h3>
+<pre><code><span class="cm"># Start the MCP server</span>
+python3 app/mcp_server.py
+
+<span class="cm"># Print the Claude Code configuration snippet</span>
+tt-ctl mcp-config
+<span class="cm"># → {"tt-local-gen": {"url": "http://localhost:8003/mcp"}}</span>
+
+<span class="cm"># Add it to Claude Code's MCP config</span>
+tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)</code></pre>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 1rem;color:var(--text);">Calling a plugin from Claude Code</h3>
+    <p style="font-size:.9rem;color:var(--text2);margin-bottom:1rem;">
+      After registration, all plugins appear as <code>tt-local-gen:&lt;tool-name&gt;</code>.
+    </p>
+<pre><code><span class="cm"># Ask Claude to generate a palette and use it as a video prompt seed</span>
+> Generate a color palette for "abandoned carnival" and then use it
+  to make a video prompt
+
+<span class="cm"># Claude calls: tt-local-gen:palette {"mood": "abandoned carnival"}</span>
+<span class="cm"># Then remixes the palette JSON into a video prompt via the ingredient model</span></code></pre>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 .75rem;color:var(--text);">MCP-server-backed plugin</h3>
+    <p style="font-size:.9rem;color:var(--text2);margin-bottom:1rem;">
+      If your generator runs in a separate process (Node.js, a remote API, another language),
+      declare <code>mcp_server</code> in <code>mcp.json</code> instead of writing <code>plugin.py</code>:
+    </p>
+<pre><code>{
+  <span class="str">"x-ttlg"</span>: {
+    <span class="cm">/* ... standard fields ... */</span>
+    <span class="str">"mcp_server"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"my-mcp-generator"</span>]
+    }
+  },
+  <span class="str">"tools"</span>: [{ <span class="cm">/* standard MCP tool schema */</span> }]
+}</code></pre>
+    <p style="font-size:.85rem;color:var(--text2);">
+      The app launches your server process and communicates via JSON-RPC 2.0 over stdio
+      (standard MCP wire protocol). See <code>plugins/midi/mcp.json</code> for a complete example.
+    </p>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:2rem 0 .75rem;color:var(--text);">x-ttlg field reference</h3>
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>output_ext</td><td>string</td><td>File extension for the generated artifact (<code>.txt</code>, <code>.svg</code>, <code>.gif</code>, <code>.json</code>)</td></tr>
+        <tr><td>media_type</td><td>string</td><td>How the app classifies this artifact (<code>text</code>, <code>image</code>, <code>video</code>, <code>midi</code>)</td></tr>
+        <tr><td>accepts_remix_from</td><td>string[]</td><td>Source artifact types this generator accepts as remix input</td></tr>
+        <tr><td>can_remix_to</td><td>string[]</td><td>Target types this generator's output can be remixed into</td></tr>
+        <tr><td>tab</td><td>string</td><td>App tab — use <code>generative-art</code> for the Art tab</td></tr>
+        <tr><td>hardware</td><td>string|null</td><td><code>blackhole</code>, <code>wormhole</code>, or <code>null</code> (CPU)</td></tr>
+        <tr><td>utility</td><td>bool</td><td><code>true</code> for non-generator utility plugins (ffmpeg etc.) — hidden from Art tab picker</td></tr>
+        <tr><td>mcp_server</td><td>object</td><td>Present only for MCP-server-backed plugins: <code>{command, args}</code></td></tr>
+        <tr><td>streaming (tool)</td><td>null|"progress"|"continuous"</td><td>null = one-shot; progress = SSE progress events; continuous = runs until cancelled</td></tr>
+        <tr><td>artifact_tool (tool)</td><td>bool</td><td>true if this tool produces the primary artifact</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top:2rem;font-size:.9rem;color:var(--text2);">
+      For the full authoring guide including the complete Vale example, multi-pass pipeline
+      patterns, and the <code>ArtGenerator</code> API reference, see
+      <a href="PLUGIN_AUTHORING.md">PLUGIN_AUTHORING.md</a> in the repository.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="index.html">tt-local-generator</a> ·
+      <a href="https://github.com/tenstorrent/tt-local-generator">GitHub</a> ·
+      <a href="PLUGIN_AUTHORING.md">Plugin authoring guide</a> ·
+      <a href="https://tenstorrent.com">Tenstorrent</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -416,18 +416,22 @@ class APIClient:
         image_return_format: str = "JPEG",
     ) -> Tuple[bytes, dict]:
         """
-        Generate an image synchronously via the FLUX.1-dev image API.
+        Generate an image synchronously via the image generation API.
 
-        This call blocks until the image is ready (typically 15–90 seconds).
+        Supports FLUX.1-schnell (Python/uvicorn), SDXL (C++ cpp_server),
+        and other models registered at the /v1/images/generations endpoint.
+
+        This call blocks until the image is ready (2–5 seconds for FLUX/SDXL
+        on QB2; up to ~90 seconds for slower configs).
         The server returns the image inline as a base64-encoded string.
 
         Args:
             prompt: Text description of the image to generate.
             negative_prompt: Optional text describing what to avoid.
-            num_inference_steps: Denoising steps, 4–50 (FLUX min is 4).
+            num_inference_steps: Denoising steps (4 works well for FLUX/SDXL).
             seed: Random seed for reproducibility. None means random.
             guidance_scale: Classifier-free guidance strength, 1.0–20.0.
-                            FLUX default is ~3.5; higher = more prompt adherence.
+                            FLUX default ~3.5; SDXL ~5.0; higher = more adherence.
             image_return_format: "JPEG" or "PNG".
 
         Returns:
