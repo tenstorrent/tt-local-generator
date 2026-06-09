@@ -1,3 +1,15 @@
+tt-local-generator (0.7.2) noble; urgency=medium
+
+  * Gallery pagination: show at most 48 cards per page in each gallery
+    (video / image / animate) with a prev/next pager bar showing
+    "1–48 of 310 · page 1/7". Reduces startup widget-realization cost
+    from 417 cards to 48, fixing the seconds-long startup delay and
+    sluggish tab switching that grew with the history size.
+  * Fix _on_transform_finished: called non-existent .rebuild(); changed
+    to .load_history() so transform results actually appear in gallery.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.7.1) noble; urgency=medium
 
   * Fix scroll sluggishness: GLib.io_add_watch dead-pipe spin loop in
