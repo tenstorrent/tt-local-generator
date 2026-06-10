@@ -6,9 +6,9 @@
 Output docs/assets/demo-quickstart.gif
 
 Set Shell "bash"
-Set FontSize 13
-Set FontFamily "JetBrains Mono"
-Set Width 1000
+Set FontSize 14
+Set FontFamily "Hack"
+Set Width 1200
 Set Height 680
 Set Theme "Dracula"
 Set Padding 12
