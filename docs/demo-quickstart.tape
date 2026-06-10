@@ -5,15 +5,8 @@
 
 Output docs/assets/demo-quickstart.gif
 
+Source vhs-defaults.tape
 Set Shell "bash"
-Set FontSize 14
-Set FontFamily "Hack"
-Set Width 1200
-Set Height 680
-Set Theme "Dracula"
-Set Padding 12
-Set TypingSpeed 45ms
-Set PlaybackSpeed 1.0
 
 # ── Scene 1: Fresh clone ─────────────────────────────────────────────────────
 Hide
