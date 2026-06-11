@@ -1,0 +1,37 @@
+[package]
+name = "tt-gen-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust/GTK4 proof-of-concept for tt-local-generator UI"
+# Build requirement: sudo apt install libgtk-4-dev libglib2.0-dev
+# Then: cargo build   (debug)  or  cargo build --release
+
+[dependencies]
+# GTK4 + GLib Rust bindings (gtk-rs project)
+gtk4       = { version = "0.9", features = ["v4_14"] }
+glib       = "0.20"
+gio        = "0.20"
+
+# HTTP for server health checks (async, zero-overhead when not polling)
+reqwest    = { version = "0.12", features = ["json", "blocking"] }
+
+# JSON for server responses
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# SQLite — reads the same media.db that the Python app writes
+rusqlite   = { version = "0.31", features = ["bundled"] }
+
+# Async runtime (tokio keeps health-bus off the GTK thread)
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# Time
+chrono     = { version = "0.4", features = ["serde"] }
+
+# XDG data dirs (for history.json path)
+dirs-next  = "2"
+
+[profile.release]
+lto            = true
+codegen-units  = 1
+strip          = "symbols"
