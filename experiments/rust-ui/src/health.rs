@@ -1,108 +1,203 @@
-//! health.rs — HealthBus for Rust/GTK4
+//! health.rs — HealthBus for tt-gen-rs
 //!
-//! Mirrors health_bus.py. HealthSnapshot is Send (plain data), so it
-//! crosses threads via std::sync::mpsc.  The GTK main thread polls
-//! the receiver with glib::timeout_add_local — equivalent to Python's
-//! GLib.idle_add but without the Send requirement.
+//! Shells out to `tt-ctl status --json` on a background thread, parses the
+//! result, and sends a HealthSnapshot to the GTK main thread via
+//! std::sync::mpsc.  The main thread drains it with glib::timeout_add_local.
 //!
-//! Poll cycle: 15 s when any server is up, 30 s otherwise.
-//! Three unique URLs (ports 8000/8001/8002), fetched concurrently.
+//! Using tt-ctl means we get queue depth, per-service status, and model name
+//! all in one call — and we automatically benefit from tt-ctl's port-scan
+//! logic (compatible vLLM / llama.cpp servers are treated the same as ours).
+//!
+//! Poll cycle: 10 s when any service is running, 30 s otherwise.
 
+use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
-use tokio::time::sleep;
+
+// ── Public types ─────────────────────────────────────────────────────────────
 
 /// Snapshot of all server health at one point in time.
 #[derive(Debug, Clone, Default)]
 pub struct HealthSnapshot {
-    pub port8000:      bool,
-    pub port8001:      bool,
-    pub port8002:      bool,
-    pub any_up:        bool,
-    pub running_model: Option<String>,
-    pub artgen_model:  Option<String>,
+    pub server_alive:   bool,
+    pub server_ready:   bool,
+    pub model:          Option<String>,
+    pub queue_depth:    usize,
+    pub any_service_up: bool,
+    /// Per-service running flags, e.g. "wan2.2" → true
+    pub services:       Vec<(String, bool)>,
 }
 
-/// Start the health-bus background task.
-///
-/// Spawns a Tokio runtime on a dedicated OS thread so it never touches the
-/// GTK main thread.  Results are sent to `tx` which the GTK main loop drains
-/// via glib::Receiver<HealthSnapshot>.
-/// Opaque handle — keeps API symmetric with the Python HealthBus.
+/// Opaque handle — keeps the API symmetric with Python's HealthBus.
 pub struct HealthBus;
 
 pub fn start_bus(tx: Sender<HealthSnapshot>) -> HealthBus {
     std::thread::Builder::new()
         .name("health-bus".into())
-        .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime");
-            rt.block_on(bus_loop(tx));
-        })
+        .spawn(move || bus_loop(tx))
         .expect("health-bus thread");
     HealthBus
 }
 
-async fn bus_loop(tx: Sender<HealthSnapshot>) {
+// ── Internal ──────────────────────────────────────────────────────────────────
+
+fn bus_loop(tx: Sender<HealthSnapshot>) {
     loop {
-        let snap = poll_once().await;
-        let interval = if snap.any_up { 15 } else { 30 };
-        // Send to GTK main thread; ignore if window is closed.
-        if tx.send(snap).is_err() { break; }
-        sleep(Duration::from_secs(interval)).await;
+        let snap = poll_once();
+        let interval = if snap.any_service_up { 10 } else { 30 };
+        if tx.send(snap).is_err() {
+            break; // receiver dropped — window closed
+        }
+        std::thread::sleep(Duration::from_secs(interval));
     }
 }
 
-async fn poll_once() -> HealthSnapshot {
-    // Fire three URL checks concurrently.
-    let (r8000, r8001, r8002) = tokio::join!(
-        check_url("http://localhost:8000/tt-liveness", 2),
-        check_url("http://localhost:8001/health",      2),
-        check_url("http://localhost:8002/v1/models",   2),
-    );
+fn poll_once() -> HealthSnapshot {
+    match run_tt_ctl_status() {
+        Ok(raw) => parse_status_json(&raw),
+        Err(_)  => HealthSnapshot::default(),
+    }
+}
 
-    // Parse running model from port 8000 liveness response.
-    let running_model = r8000.as_ref().ok().and_then(|body| {
-        serde_json::from_str::<serde_json::Value>(body).ok()
-            .and_then(|v| v["runner_in_use"].as_str().map(str::to_string))
-    });
+/// Run `tt-ctl status --json` and return stdout.
+/// Searches for tt-ctl starting from the binary's own directory, walking up.
+pub fn run_tt_ctl_status() -> Result<String, String> {
+    let tt_ctl = find_tt_ctl().ok_or_else(|| "tt-ctl not found".to_string())?;
+    let output = std::process::Command::new(&tt_ctl)
+        .args(["status", "--json"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned())
+    }
+}
 
-    // Parse artgen model from port 8002 /v1/models response.
-    let artgen_model = r8002.as_ref().ok().and_then(|body| {
-        serde_json::from_str::<serde_json::Value>(body).ok()
-            .and_then(|v| {
-                v["data"].as_array()
-                    .and_then(|arr| arr.first())
-                    .and_then(|m| m["id"].as_str().map(str::to_string))
-            })
-    });
+/// Parse the JSON emitted by `tt-ctl status --json` into a HealthSnapshot.
+pub fn parse_status_json(raw: &str) -> HealthSnapshot {
+    let Ok(v) = serde_json::from_str::<TtCtlStatus>(raw) else {
+        return HealthSnapshot::default();
+    };
 
-    let up8000 = r8000.is_ok();
-    let up8001 = r8001.is_ok();
-    let up8002 = r8002.is_ok();
+    let services: Vec<(String, bool)> = v.services
+        .as_object()
+        .map(|obj| obj.iter().map(|(k, val)| (k.clone(), val.as_bool().unwrap_or(false))).collect())
+        .unwrap_or_default();
+
+    let any_service_up = services.iter().any(|(_, up)| *up);
 
     HealthSnapshot {
-        port8000:      up8000,
-        port8001:      up8001,
-        port8002:      up8002,
-        any_up:        up8000 || up8001 || up8002,
-        running_model,
-        artgen_model,
+        server_alive:   v.server.alive,
+        server_ready:   v.server.ready,
+        model:          v.server.model.filter(|s| !s.is_empty()),
+        queue_depth:    v.queue.depth,
+        any_service_up,
+        services,
     }
 }
 
-/// Fetch a URL with a timeout.  Returns the response body on success.
-async fn check_url(url: &str, timeout_s: u64) -> Result<String, ()> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_s))
-        .build()
-        .map_err(|_| ())?;
-    let resp = client.get(url).send().await.map_err(|_| ())?;
-    if resp.status().is_success() {
-        resp.text().await.map_err(|_| ())
-    } else {
-        Err(())
+// ── Serde shapes matching tt-ctl status --json output ─────────────────────
+
+#[derive(Deserialize)]
+struct TtCtlStatus {
+    server:   TtCtlServer,
+    services: serde_json::Value,
+    queue:    TtCtlQueue,
+}
+
+#[derive(Deserialize)]
+struct TtCtlServer {
+    alive: bool,
+    ready: bool,
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TtCtlQueue {
+    depth: usize,
+}
+
+// ── Path resolution ───────────────────────────────────────────────────────────
+
+pub fn find_tt_ctl() -> Option<PathBuf> {
+    // Walk up from the binary's location to find tt-ctl at the repo root.
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent()?;
+    for _ in 0..8 {
+        let candidate = dir.join("tt-ctl");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        dir = dir.parent()?;
+    }
+    // Fallback: check the current working directory (useful in tests / dev)
+    let cwd = std::env::current_dir().ok()?;
+    let candidate = cwd.join("tt-ctl");
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    None
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_json(alive: bool, model: Option<&str>, queue_depth: usize, wan_up: bool) -> String {
+        let model_str = model.map(|m| format!("\"{}\"", m)).unwrap_or("null".into());
+        format!(r#"{{
+            "server": {{"url":"http://localhost:8000","alive":{alive},"ready":{alive},"model":{model_str}}},
+            "services": {{"wan2.2":{wan_up},"mochi":false,"flux":false,"prompt-server":false}},
+            "queue": {{"depth":{queue_depth},"items":[]}},
+            "history": {{"total":10,"by_type":{{}},"newest_at":null,"oldest_at":null}}
+        }}"#)
+    }
+
+    #[test]
+    fn parse_server_alive() {
+        let snap = parse_status_json(&sample_json(true, Some("Wan2.2"), 0, true));
+        assert!(snap.server_alive);
+        assert!(snap.server_ready);
+        assert_eq!(snap.model.as_deref(), Some("Wan2.2"));
+    }
+
+    #[test]
+    fn parse_server_offline() {
+        let snap = parse_status_json(&sample_json(false, None, 0, false));
+        assert!(!snap.server_alive);
+        assert!(snap.model.is_none());
+        assert!(!snap.any_service_up);
+    }
+
+    #[test]
+    fn parse_queue_depth() {
+        let snap = parse_status_json(&sample_json(true, None, 3, false));
+        assert_eq!(snap.queue_depth, 3);
+    }
+
+    #[test]
+    fn parse_service_flags() {
+        let snap = parse_status_json(&sample_json(false, None, 0, true));
+        let wan = snap.services.iter().find(|(k, _)| k == "wan2.2");
+        assert_eq!(wan.map(|(_, v)| *v), Some(true));
+        assert!(snap.any_service_up);
+    }
+
+    #[test]
+    fn parse_invalid_json_returns_default() {
+        let snap = parse_status_json("not json at all");
+        assert!(!snap.server_alive);
+        assert_eq!(snap.queue_depth, 0);
+        assert!(snap.services.is_empty());
+    }
+
+    #[test]
+    fn parse_empty_model_filtered() {
+        let snap = parse_status_json(&sample_json(true, Some(""), 0, false));
+        assert!(snap.model.is_none(), "empty string model should become None");
     }
 }

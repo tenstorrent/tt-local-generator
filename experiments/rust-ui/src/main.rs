@@ -178,7 +178,7 @@ fn build_ui(app: &Application) {
         }
         if let Some(snap) = latest {
             statusbar_lbl.set_label(&health_summary(&snap));
-            statusbar_lbl.set_css_classes(if snap.any_up {
+            statusbar_lbl.set_css_classes(if snap.any_service_up || snap.server_alive {
                 &["statusbar", "statusbar-ready"]
             } else {
                 &["statusbar", "statusbar-offline"]
@@ -402,14 +402,23 @@ fn build_statusbar() -> Label {
 }
 
 fn health_summary(snap: &HealthSnapshot) -> String {
-    let server = if snap.port8000 {
-        format!("● {}", snap.running_model.as_deref().unwrap_or("server ready"))
+    let server = if snap.server_alive {
+        format!("● {}", snap.model.as_deref().unwrap_or("server ready"))
     } else {
         "○ Server offline".to_string()
     };
-    let prompt = if snap.port8001 { "  ● prompt" } else { "  ○ prompt" };
-    let artgen = if snap.port8002 { "  ● artgen" } else { "" };
-    format!("{server}{prompt}{artgen}")
+    // Show any service that's up from the services vec
+    let extras: String = snap.services.iter()
+        .filter(|(k, up)| *up && k != "wan2.2")
+        .map(|(k, _)| format!("  ● {k}"))
+        .collect::<Vec<_>>()
+        .join("");
+    let queue = if snap.queue_depth > 0 {
+        format!("  [{} queued]", snap.queue_depth)
+    } else {
+        String::new()
+    };
+    format!("{server}{extras}{queue}")
 }
 
 // ── CSS ──────────────────────────────────────────────────────────────────────
