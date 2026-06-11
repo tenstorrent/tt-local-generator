@@ -19,6 +19,7 @@ Falls back to the server's compiled-in default when the key is not found.
 """
 import base64
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -469,3 +470,106 @@ class APIClient:
         image_bytes = base64.b64decode(images[0])
         meta = {k: v for k, v in data.items() if k != "images"}
         return image_bytes, meta
+
+
+# ── Port discovery ────────────────────────────────────────────────────────────
+
+# Model ID substrings we recognise as compatible inference servers.
+# Both our own tt-inference-server deployments and third-party vLLM / llama.cpp
+# servers that happen to be serving the same model are usable.
+_KNOWN_COMPATIBLE_MODELS = [
+    "Wan2.2", "Wan-AI", "Wan2.1", "Wan",
+    "mochi", "mochi-1",
+    "FLUX", "flux",
+    "SkyReels",
+    "stable-diffusion", "sdxl",
+]
+
+# Ports to probe when the configured URL is not responding.
+# Covers our own defaults plus common vLLM / llama.cpp / text-generation-webui ports.
+_SCAN_PORTS = [8000, 8001, 8002, 8003, 8080, 8888, 11434]
+
+
+def _probe_port(host: str, port: int, timeout: float = 2.0) -> "dict | None":
+    """
+    Probe a single port.  Returns a dict with discovered info, or None.
+
+    Tries /tt-liveness (our server) then /v1/models (OpenAI-compatible).
+    Never raises.
+    """
+    base = f"http://{host}:{port}"
+    try:
+        # Our own inference server — richer liveness body
+        r = requests.get(f"{base}/tt-liveness", timeout=timeout)
+        if r.status_code == 200:
+            body = {}
+            try:
+                body = r.json()
+            except Exception:
+                pass
+            return {
+                "url":   base,
+                "port":  port,
+                "type":  "tt-inference-server",
+                "model": body.get("runner_in_use") or body.get("model_id"),
+                "alive": True,
+            }
+    except requests.RequestException:
+        pass
+
+    try:
+        # OpenAI-compatible endpoint (vLLM, llama.cpp, text-generation-webui, etc.)
+        r = requests.get(f"{base}/v1/models", timeout=timeout)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            model_id = data[0].get("id") if data else None
+            return {
+                "url":   base,
+                "port":  port,
+                "type":  "openai-compatible",
+                "model": model_id,
+                "alive": True,
+            }
+    except requests.RequestException:
+        pass
+
+    return None
+
+
+def scan_for_servers(
+    host: str = "localhost",
+    ports: "list[int] | None" = None,
+    timeout: float = 2.0,
+) -> "list[dict]":
+    """
+    Scan candidate ports concurrently; return all responding servers.
+
+    Sorted: tt-inference-server first, then ports with a recognised model
+    name (compatible with our client), then everything else.
+
+    Each result dict: {"url", "port", "type", "model", "alive", "compatible"}
+    """
+    if ports is None:
+        ports = _SCAN_PORTS
+
+    found: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(ports)) as pool:
+        futures = {pool.submit(_probe_port, host, p, timeout): p for p in ports}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                model = result.get("model") or ""
+                result["compatible"] = (
+                    result["type"] == "tt-inference-server"
+                    or any(kw in model for kw in _KNOWN_COMPATIBLE_MODELS)
+                )
+                found.append(result)
+
+    # Sort: our server first, compatible second, unknown third; ties broken by port.
+    found.sort(key=lambda r: (
+        0 if r["type"] == "tt-inference-server" else
+        1 if r["compatible"]                    else
+        2,
+        r["port"],
+    ))
+    return found

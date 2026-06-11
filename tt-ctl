@@ -68,7 +68,7 @@ try:
 except FileNotFoundError:
     _VERSION = "unknown"
 
-from api_client import APIClient          # noqa: E402
+from api_client import APIClient, scan_for_servers   # noqa: E402
 from history_store import HistoryStore    # noqa: E402
 from worker import (                                                    # noqa: E402
     GenerationWorker,
@@ -301,6 +301,13 @@ def _make_worker_for_item(client: "APIClient", store: "HistoryStore", item: dict
 def cmd_servers(args):
     """Print live status of every managed service."""
     statuses = sm.status_all(timeout=2.0)
+    if getattr(args, "json", False):
+        out = [
+            {"service": key, "running": statuses.get(key, False), "label": sdef.label}
+            for key, sdef in sm.SERVERS.items()
+        ]
+        print(json.dumps(out))
+        return
     print(bold("Managed services"))
     for key, sdef in sm.SERVERS.items():
         alive = statuses.get(key, False)
@@ -399,19 +406,50 @@ def cmd_status(args):
     queue  = store.load_queue()
     recs   = store.all_records()
 
-    # Server
-    print(bold("Server"))
     alive = client.health_check()
+    model = client.detect_running_model() if alive else None
+    ready = client.model_ready()          if alive else False
+
+    services = sm.status_all(timeout=2.0)
+
+    by_type: dict[str, int] = {}
+    for r in recs:
+        by_type[r.media_type] = by_type.get(r.media_type, 0) + 1
+
+    newest = recs[0]  if recs else None
+    oldest = recs[-1] if recs else None
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "server": {
+                "url":     client.base_url,
+                "alive":   alive,
+                "ready":   ready,
+                "model":   model,
+            },
+            "services": {k: v for k, v in services.items()},
+            "queue": {
+                "depth": len(queue),
+                "items": queue,
+            },
+            "history": {
+                "total":    len(recs),
+                "by_type":  by_type,
+                "newest_at": newest.created_at if newest else None,
+                "oldest_at": oldest.created_at if oldest else None,
+            },
+        }))
+        return
+
+    # Human-readable output (unchanged)
+    print(bold("Server"))
     if alive:
-        model = client.detect_running_model()
-        ready = client.model_ready()
         dot   = green("●") if ready else yellow("●")
         label = model if model else ("ready" if ready else "up, model loading")
         print(f"  {dot}  {client.base_url}  —  {label}")
     else:
         print(f"  {red('●')}  {client.base_url}  —  offline")
 
-    # Queue
     print()
     print(bold("Queue"))
     if not queue:
@@ -419,21 +457,15 @@ def cmd_status(args):
     else:
         for i, item in enumerate(queue):
             tag   = teal(f"[{i}]")
-            model = item.get("model_source", "video")
+            msrc  = item.get("model_source", "video")
             short = item.get("prompt", "")[:80]
             if len(item.get("prompt", "")) > 80:
                 short += "…"
-            print(f"  {tag} {dim(model)}  {short}")
+            print(f"  {tag} {dim(msrc)}  {short}")
 
-    # History summary
-    videos = [r for r in recs if r.media_type == "video"]
-    images = [r for r in recs if r.media_type == "image"]
-    # all_records() is newest-first: recs[0] = most recent, recs[-1] = oldest
-    newest = recs[0]  if recs else None
-    oldest = recs[-1] if recs else None
     print()
     print(bold("History"))
-    print(f"  {len(recs)} records  ({len(videos)} video, {len(images)} image)")
+    print(f"  {len(recs)} records  ({by_type.get('video',0)} video, {by_type.get('image',0)} image)")
     if newest:
         age   = _age(newest.created_at)
         short = newest.prompt[:70] + ("…" if len(newest.prompt) > 70 else "")
@@ -695,6 +727,23 @@ def cmd_history(args):
     n     = getattr(args, "n", 10)
     shown = recs[:n]          # all_records() is already newest-first
 
+    if getattr(args, "json", False):
+        out = []
+        for r in shown:
+            out.append({
+                "id":           r.id,
+                "media_type":   r.media_type,
+                "created_at":   r.created_at,
+                "prompt":       r.prompt,
+                "model":        r.model or "",
+                "duration_s":   r.duration_s,
+                "file_path":    r.media_file_path,
+                "file_exists":  r.media_exists,
+                "starred":      getattr(r, "starred", 0),
+            })
+        print(json.dumps(out))
+        return
+
     if not shown:
         print(dim("No history yet."))
         return
@@ -887,7 +936,10 @@ def cmd_recover(args):
 
     alive = client.health_check()
     if not alive:
-        print(red("Server offline — cannot scan jobs."))
+        if getattr(args, "json", False):
+            print(json.dumps({"error": "server_offline", "unknown_jobs": []}))
+        else:
+            print(red("Server offline — cannot scan jobs."))
         sys.exit(1)
 
     known_ids = {r.id for r in store.all_records()}
@@ -895,10 +947,17 @@ def cmd_recover(args):
     try:
         jobs = client.list_jobs()
     except Exception as exc:
-        print(red(f"Failed to list jobs: {exc}"))
+        if getattr(args, "json", False):
+            print(json.dumps({"error": str(exc), "unknown_jobs": []}))
+        else:
+            print(red(f"Failed to list jobs: {exc}"))
         sys.exit(1)
 
     unknown = [j for j in jobs if j.get("id") not in known_ids]
+
+    if getattr(args, "json", False):
+        print(json.dumps({"unknown_jobs": unknown}))
+        return
 
     if not unknown:
         print(green("✓") + "  All server jobs are in local history.")
@@ -989,14 +1048,60 @@ def cmd_run(args):
         sys.exit(1)
 
     if "error" in result:
-        print(red(f"\nError: {result['error']}"))
+        if getattr(args, "json", False):
+            print(json.dumps({"status": "error", "error": result["error"]}))
+        else:
+            print(red(f"\nError: {result['error']}"))
         sys.exit(1)
 
     record = result["record"]
     # worker already called store.append(record) internally
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "status":     "done",
+            "id":         record.id,
+            "file_path":  record.media_file_path,
+            "duration_s": record.duration_s,
+            "model":      record.model or "",
+            "prompt":     record.prompt,
+            "created_at": record.created_at,
+        }))
+        return
+
     print(green("\n✓ Done"))
     print(f"  {record.media_file_path}")
     print(dim(f"  gen time: {record.duration_s:.0f}s  |  model: {record.model}"))
+
+
+# ── scan ─────────────────────────────────────────────────────────────────────
+
+def cmd_scan(args):
+    """Probe candidate ports and report every responding inference server."""
+    host    = getattr(args, "host", "localhost")
+    timeout = getattr(args, "timeout", 2.0)
+    results = scan_for_servers(host=host, timeout=timeout)
+
+    if getattr(args, "json", False):
+        print(json.dumps(results))
+        return
+
+    if not results:
+        print(dim("No inference servers found on candidate ports."))
+        print(dim(f"Probed: {', '.join(str(p) for p in [8000,8001,8002,8003,8080,8888,11434])}"))
+        return
+
+    print(bold(f"Found {len(results)} server(s)"))
+    for r in results:
+        compat = green("✓ compatible") if r["compatible"] else dim("? unknown")
+        model  = teal(r["model"]) if r["model"] else dim("(model unknown)")
+        stype  = dim(f"[{r['type']}]")
+        print(f"  {green('●')}  {r['url']:<30s}  {model:<40s}  {compat}  {stype}")
+
+    print()
+    compatible = [r for r in results if r["compatible"]]
+    if compatible:
+        best = compatible[0]
+        print(dim(f"Suggested:  tt-ctl --server {best['url']} status"))
 
 
 # ── serve-inventory ───────────────────────────────────────────────────────────
@@ -1039,10 +1144,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
 
     # status
-    sub.add_parser("status", help="Server health, queue depth, history summary")
+    _st = sub.add_parser("status", help="Server health, queue depth, history summary")
+    _st.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     # servers
-    sub.add_parser("servers", help="Live status of every managed service")
+    _sv = sub.add_parser("servers", help="Live status of every managed service")
+    _sv.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     # start / stop / restart
     _service_choices = sorted(sm.SERVERS.keys()) + [sm.ALL_KEY]
@@ -1078,6 +1185,7 @@ def _build_parser() -> argparse.ArgumentParser:
     h = sub.add_parser("history", help="Show recent completed generations")
     h.add_argument("n", nargs="?", type=int, default=10,
                    metavar="N", help="How many to show (default 10)")
+    h.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     # server
     sub.add_parser("server", help="Server detail and job list")
@@ -1098,7 +1206,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Number of lines to show (default 50)")
 
     # recover
-    sub.add_parser("recover", help="List server jobs not in local history")
+    _rc = sub.add_parser("recover", help="List server jobs not in local history")
+    _rc.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     # artgen
     _build_artgen_parser(sub)
@@ -1115,6 +1224,13 @@ def _build_parser() -> argparse.ArgumentParser:
     wf_run.add_argument("spec", help="Path to workflow JSON (e.g. docs/examples/workflows/1964-worlds-fair.json)")
     wf_run.add_argument("--dry-run", action="store_true", help="Print steps without running inference")
     wf_sub.add_parser("list", help="List available workflow examples")
+
+    # scan
+    sc = sub.add_parser("scan", help="Probe candidate ports for compatible inference servers")
+    sc.add_argument("--host",    default="localhost", help="Host to scan (default: localhost)")
+    sc.add_argument("--timeout", type=float, default=2.0, metavar="SEC",
+                    help="Per-port probe timeout in seconds (default: 2.0)")
+    sc.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     # MCP config
     sub.add_parser("mcp-config", help="Emit Claude Code MCP config JSON for tt-local-gen")
@@ -1141,6 +1257,8 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--neg",   default="", metavar="NEG_PROMPT")
     r.add_argument("--model", default="video",
                    choices=["video", "image", "animate", "skyreels", "mochi"])
+    r.add_argument("--json", action="store_true",
+                   help="Emit machine-readable JSON on completion")
 
     # generate
     gen = sub.add_parser(
@@ -1203,6 +1321,7 @@ def main():
         "run":              cmd_run,
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,
+        "scan":             cmd_scan,
         "artgen":           cmd_artgen,
         "plugin":           cmd_plugin,
         "mcp-config":       cmd_mcp_config,
