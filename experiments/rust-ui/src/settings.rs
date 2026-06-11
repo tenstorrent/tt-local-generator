@@ -32,6 +32,8 @@ pub struct Settings {
     pub hidden_plugins:          Vec<String>,
     pub last_successful_deployment: String,
     pub dismissed_job_ids:       Vec<String>,
+    pub server_url:              String,
+    pub gallery_density:         String,   // "comfortable" | "compact"
 }
 
 impl Default for Settings {
@@ -55,6 +57,8 @@ impl Default for Settings {
             hidden_plugins:             vec![],
             last_successful_deployment: String::new(),
             dismissed_job_ids:          vec![],
+            server_url:                 "http://localhost:8000".into(),
+            gallery_density:            "comfortable".into(),
         }
     }
 }
