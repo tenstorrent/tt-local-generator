@@ -103,7 +103,6 @@ pub fn build_card(
     let star_btn = Button::new();
     star_btn.add_css_class("hover-action-btn");
     star_btn.set_label(if rec.starred { "★" } else { "☆" });
-    let star_label = star_btn.clone();
     {
         let tx2    = tx.clone();
         let id     = rec.id.clone();
@@ -248,13 +247,14 @@ fn start_hover_anim(stack: &Stack, media_widget: &Rc<std::cell::RefCell<Option<W
         stack.add_named(&pic, Some("anim"));
         *mw = Some(pic.upcast::<Widget>());
 
-        // Connect loop restart — MediaFile IS the stream (extends MediaStream)
-        mf.connect_ended_notify(glib::clone!(#[weak] mf, move |s| {
+        // Connect loop restart: `s` is the MediaFile itself (passed by GObject
+        // signal machinery), so we don't need to capture `mf` as a weak ref.
+        mf.connect_ended_notify(move |s| {
             if s.is_ended() {
                 s.seek(0);
                 s.play();
             }
-        }));
+        });
 
         mf.play();
     } else {
@@ -305,10 +305,7 @@ fn show_context_popover(parent: &Widget, x: f64, y: f64, prompt: &str, tx: &Send
 // ── DB write ──────────────────────────────────────────────────────────────────
 
 fn update_starred_in_db(id: &str, starred: bool) {
-    let path = dirs_next::data_local_dir()
-        .unwrap_or_default()
-        .join("tt-video-gen")
-        .join("media.db");
+    let path = crate::history::media_db_path();
     if let Ok(conn) = rusqlite::Connection::open(&path) {
         let _ = conn.execute(
             "UPDATE media SET starred = ?1 WHERE id = ?2",

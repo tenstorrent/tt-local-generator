@@ -7,8 +7,88 @@
 //! DB location: ~/.local/share/tt-video-gen/media.db
 //! No Python interop needed — pure SQL.
 
-use rusqlite::{Connection, Result as SqlResult};
-use std::path::PathBuf;
+use rusqlite::{Connection, OpenFlags, Result as SqlResult};
+use std::path::{Path, PathBuf};
+
+// ── MediaType ─────────────────────────────────────────────────────────────────
+
+/// Typed media kind. Centralises the string literals that previously appeared
+/// in match arms across card.rs, detail.rs, gallery.rs, worker.rs, and main.rs.
+/// Adding a new variant makes all incomplete match arms a compiler error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaType {
+    Video,
+    Animate,
+    AnimateDiff,
+    Image,
+    Artgen,
+    SkyReels,
+    Unknown(String),
+}
+
+impl MediaType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            MediaType::Video        => "video",
+            MediaType::Animate      => "animate",
+            MediaType::AnimateDiff  => "animatediff",
+            MediaType::Image        => "image",
+            MediaType::Artgen       => "artgen",
+            MediaType::SkyReels     => "skyreels",
+            MediaType::Unknown(s)   => s.as_str(),
+        }
+    }
+
+    /// Emoji icon used in card / detail placeholders.
+    pub fn placeholder_icon(&self) -> &'static str {
+        match self {
+            MediaType::Video | MediaType::Animate | MediaType::SkyReels => "🎬",
+            MediaType::AnimateDiff => "✨",
+            MediaType::Image       => "🖼",
+            MediaType::Artgen      => "🎨",
+            MediaType::Unknown(_)  => "▪",
+        }
+    }
+
+    pub fn is_video_like(&self) -> bool {
+        matches!(self, MediaType::Video | MediaType::Animate | MediaType::AnimateDiff | MediaType::SkyReels)
+    }
+}
+
+impl From<&str> for MediaType {
+    fn from(s: &str) -> Self {
+        match s {
+            "video"       => MediaType::Video,
+            "animate"     => MediaType::Animate,
+            "animatediff" => MediaType::AnimateDiff,
+            "image"       => MediaType::Image,
+            "artgen"      => MediaType::Artgen,
+            "skyreels"    => MediaType::SkyReels,
+            other         => MediaType::Unknown(other.to_owned()),
+        }
+    }
+}
+
+impl std::fmt::Display for MediaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ── Shared path helpers ───────────────────────────────────────────────────────
+
+/// Canonical path to the media SQLite database.
+/// Single source of truth — used by history, worker, card, and main.
+pub fn media_db_path() -> PathBuf {
+    data_dir().join("media.db")
+}
+
+/// Base data directory: `~/.local/share/tt-video-gen/`.
+pub fn data_dir() -> PathBuf {
+    dirs_next::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()))
+        .join("tt-video-gen")
+}
 
 /// Mirrors the columns we actually use from the media table.
 #[derive(Debug, Clone, Default)]
@@ -40,14 +120,19 @@ fn load_inner() -> SqlResult<Vec<Record>> {
 }
 
 /// Testable variant that accepts an explicit path.
-pub(crate) fn load_inner_from_path(path: &PathBuf) -> SqlResult<Vec<Record>> {
+/// Takes `&Path` (not `&PathBuf`) so callers can pass any path-like value.
+pub(crate) fn load_inner_from_path(path: &Path) -> SqlResult<Vec<Record>> {
     if !path.exists() {
         eprintln!("[history] media.db not found at {}", path.display());
         return Ok(vec![]);
     }
 
-    // Open read-only — we never write from the Rust UI.
-    let conn = Connection::open(path)?;
+    // SQLITE_OPEN_READ_ONLY enforces the "no writes from Rust UI" invariant at the
+    // OS level. Without it, a bug elsewhere could corrupt the DB the Python app owns.
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
 
     let mut stmt = conn.prepare(
         "SELECT id, media_type, created_at, file_path, thumbnail_path,
@@ -70,21 +155,17 @@ pub(crate) fn load_inner_from_path(path: &PathBuf) -> SqlResult<Vec<Record>> {
         })
     })?;
 
-    let mut records = Vec::new();
-    for row in rows {
-        if let Ok(rec) = row {
-            records.push(rec);
-        }
-    }
+    // Log per-row errors rather than silently dropping records; collect the rest.
+    let records = rows
+        .filter_map(|row| {
+            row.map_err(|e| eprintln!("[history] row error: {e}")).ok()
+        })
+        .collect();
     Ok(records)
 }
 
 fn db_path() -> PathBuf {
-    // Mirrors media_store.py: ~/.local/share/tt-video-gen/media.db
-    dirs_next::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()))
-        .join("tt-video-gen")
-        .join("media.db")
+    media_db_path()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

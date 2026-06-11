@@ -60,10 +60,10 @@ pub fn build_control_panel(
     let inspire_btn = Button::with_label("✨ Inspire");
     inspire_btn.add_css_class("flat");
     inspire_btn.add_css_class("inspire-btn");
-    // Internal mpsc channel: background thread posts the generated prompt text
-    // back to the main thread without GTK widget captures.
+    // Background thread → mpsc → main-thread pump. The Receiver has exactly
+    // one consumer (the timeout_add_local below), so it moves directly into
+    // the closure — no Arc<Mutex> needed.
     let (inspire_tx, inspire_rx) = std::sync::mpsc::channel::<Option<String>>();
-    let inspire_rx = std::sync::Arc::new(std::sync::Mutex::new(inspire_rx));
     {
         let inspire_tx2 = inspire_tx.clone();
         inspire_btn.connect_clicked(move |btn| {
@@ -78,13 +78,11 @@ pub fn build_control_panel(
     }
     // Drain inspire_rx every 200 ms on the main thread
     {
-        let prompt4  = prompt.clone();
-        let btn4     = inspire_btn.clone();
-        let tx4      = tx.clone();
-        let irx4     = inspire_rx.clone();
+        let prompt4 = prompt.clone();
+        let btn4    = inspire_btn.clone();
+        let tx4     = tx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-            let rx = irx4.lock().unwrap();
-            if let Ok(result) = rx.try_recv() {
+            if let Ok(result) = inspire_rx.try_recv() {
                 if let Some(p) = result {
                     prompt4.set_text(&p);
                 }
@@ -253,7 +251,9 @@ fn build_source_tabs(
         ("🎬 Video",   &["source-btn", "source-btn-left"],  ModelSource::Video),
         ("💃 Animate", &["source-btn"],                     ModelSource::Animate),
         ("🖼 Image",   &["source-btn"],                     ModelSource::Image),
-        ("🎨 Artgen",  &["source-btn", "source-btn-right"], ModelSource::Animate), // placeholder
+        // Artgen uses SkyReels as a placeholder until a dedicated ModelSource::Artgen
+        // variant is added. At least it doesn't collide with the Animate gallery.
+        ("🎨 Artgen",  &["source-btn", "source-btn-right"], ModelSource::SkyReels),
     ];
 
     let mut first: Option<ToggleButton> = None;

@@ -11,9 +11,9 @@
 //!   4. INSERT record into media.db
 //!   5. Send CompletedRecord over `on_finished` channel
 
-use crate::history::Record;
+use crate::history::{self, Record};
 use rusqlite::Connection;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -88,6 +88,16 @@ impl GenerationWorker {
         self.cancelled.clone()
     }
 
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    fn progress(&self, msg: &str) {
+        let _ = self.tx.send(WorkerMsg::Progress(msg.to_owned()));
+    }
+
+    fn error(&self, msg: &str) {
+        let _ = self.tx.send(WorkerMsg::Error(msg.to_owned()));
+    }
+
     /// Spawn on a background thread and return immediately.
     pub fn spawn(self) {
         std::thread::Builder::new()
@@ -97,31 +107,25 @@ impl GenerationWorker {
     }
 
     fn run(self) {
-        let req  = &self.request;
-        let prog = |msg: &str| { let _ = self.tx.send(WorkerMsg::Progress(msg.to_string())); };
-        let err  = |msg: &str| { let _ = self.tx.send(WorkerMsg::Error(msg.to_string())); };
-
         // Build the HTTP client with a generous timeout for slow TT hardware.
         let client = match reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(600))
             .build()
         {
             Ok(c)  => c,
-            Err(e) => { err(&format!("HTTP client error: {e}")); return; }
+            Err(e) => { self.error(&format!("HTTP client error: {e}")); return; }
         };
 
-        prog("Submitting job…");
+        self.progress("Submitting job…");
 
-        match req.model_source {
+        match self.request.model_source {
             ModelSource::Image => self.run_image(&client),
             _                  => self.run_video(&client),
         }
     }
 
     fn run_video(&self, client: &reqwest::blocking::Client) {
-        let req  = &self.request;
-        let prog = |msg: &str| { let _ = self.tx.send(WorkerMsg::Progress(msg.to_string())); };
-        let err  = |msg: &str| { let _ = self.tx.send(WorkerMsg::Error(msg.to_string())); };
+        let req = &self.request;
 
         // 1. Submit
         let body = serde_json::json!({
@@ -133,30 +137,29 @@ impl GenerationWorker {
 
         let resp = match client
             .post(format!("{}/v1/videos/generations", req.server_url))
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
+            .json(&body)
             .send()
         {
             Ok(r)  => r,
-            Err(e) => { err(&format!("Submit failed: {e}")); return; }
+            Err(e) => { self.error(&format!("Submit failed: {e}")); return; }
         };
 
         if resp.status().as_u16() != 202 {
-            err(&format!("Submit rejected: HTTP {}", resp.status()));
+            self.error(&format!("Submit rejected: HTTP {}", resp.status()));
             return;
         }
 
         let submit_resp: serde_json::Value = match resp.json() {
             Ok(v)  => v,
-            Err(e) => { err(&format!("Submit response parse error: {e}")); return; }
+            Err(e) => { self.error(&format!("Submit response parse error: {e}")); return; }
         };
 
         let job_id = match submit_resp["id"].as_str() {
             Some(id) => id.to_string(),
-            None     => { err("Submit response missing 'id'"); return; }
+            None     => { self.error("Submit response missing 'id'"); return; }
         };
 
-        prog(&format!("Job queued ({:.8}…)", job_id));
+        self.progress(&format!("Job queued ({:.8}…)", job_id));
 
         // 2. Poll
         let t0 = Instant::now();
@@ -164,19 +167,19 @@ impl GenerationWorker {
 
         loop {
             if self.cancelled.load(Ordering::Relaxed) {
-                err("Cancelled by user");
+                self.error("Cancelled by user");
                 return;
             }
             std::thread::sleep(Duration::from_secs(3));
 
             let resp = match client.get(&poll_url).send() {
                 Ok(r)  => r,
-                Err(e) => { err(&format!("Poll error: {e}")); return; }
+                Err(e) => { self.error(&format!("Poll error: {e}")); return; }
             };
 
             let val: serde_json::Value = match resp.json() {
                 Ok(v)  => v,
-                Err(e) => { err(&format!("Poll parse error: {e}")); return; }
+                Err(e) => { self.error(&format!("Poll parse error: {e}")); return; }
             };
 
             let status = val["status"].as_str().unwrap_or("unknown").to_string();
@@ -184,17 +187,17 @@ impl GenerationWorker {
 
             match status.as_str() {
                 "completed" | "succeeded" => {
-                    prog(&format!("Generating… {elapsed}s — done, downloading…"));
+                    self.progress(&format!("Generating… {elapsed}s — done, downloading…"));
                     self.download_and_finish(client, &job_id, elapsed);
                     return;
                 }
                 "failed" | "error" => {
                     let detail = val["error"].as_str().unwrap_or("no details");
-                    err(&format!("Job {status}: {detail}"));
+                    self.error(&format!("Job {status}: {detail}"));
                     return;
                 }
                 _ => {
-                    prog(&format!("Generating… {elapsed}s ({status})"));
+                    self.progress(&format!("Generating… {elapsed}s ({status})"));
                 }
             }
         }
@@ -207,65 +210,63 @@ impl GenerationWorker {
         elapsed_s: u64,
     ) {
         let req = &self.request;
-        let err = |msg: &str| { let _ = self.tx.send(WorkerMsg::Error(msg.to_string())); };
 
         let dl_url = format!("{}/v1/videos/generations/{}/download", req.server_url, job_id);
         let resp   = match client.get(&dl_url).send() {
             Ok(r)  => r,
-            Err(e) => { err(&format!("Download failed: {e}")); return; }
+            Err(e) => { self.error(&format!("Download failed: {e}")); return; }
         };
 
         let bytes = match resp.bytes() {
             Ok(b)  => b,
-            Err(e) => { err(&format!("Download read error: {e}")); return; }
+            Err(e) => { self.error(&format!("Download read error: {e}")); return; }
         };
 
         let record = match write_record(&bytes, req, elapsed_s, "video") {
             Ok(r)  => r,
-            Err(e) => { err(&format!("Save failed: {e}")); return; }
+            Err(e) => { self.error(&format!("Save failed: {e}")); return; }
         };
 
         let _ = self.tx.send(WorkerMsg::Finished(record));
     }
 
     fn run_image(&self, client: &reqwest::blocking::Client) {
-        let req  = &self.request;
-        let err  = |msg: &str| { let _ = self.tx.send(WorkerMsg::Error(msg.to_string())); };
+        let req = &self.request;
 
         let body = serde_json::json!({
-            "prompt":          req.prompt,
-            "negative_prompt": req.negative_prompt,
+            "prompt":              req.prompt,
+            "negative_prompt":     req.negative_prompt,
             "num_inference_steps": req.steps,
+            "seed":                req.seed,
         });
 
         let resp = match client
             .post(format!("{}/v1/images/generations", req.server_url))
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
+            .json(&body)
             .send()
         {
             Ok(r)  => r,
-            Err(e) => { err(&format!("Image submit failed: {e}")); return; }
+            Err(e) => { self.error(&format!("Image submit failed: {e}")); return; }
         };
 
         let val: serde_json::Value = match resp.json() {
             Ok(v)  => v,
-            Err(e) => { err(&format!("Image response parse error: {e}")); return; }
+            Err(e) => { self.error(&format!("Image response parse error: {e}")); return; }
         };
 
         let b64 = match val["images"].as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None    => { err("Image response missing 'images[0]'"); return; }
+            None    => { self.error("Image response missing 'images[0]'"); return; }
         };
 
         let bytes = match base64_decode(&b64) {
             Ok(b)  => b,
-            Err(e) => { err(&format!("Base64 decode error: {e}")); return; }
+            Err(e) => { self.error(&format!("Base64 decode error: {e}")); return; }
         };
 
         let record = match write_record(&bytes, req, 0, "image") {
             Ok(r)  => r,
-            Err(e) => { err(&format!("Save failed: {e}")); return; }
+            Err(e) => { self.error(&format!("Save failed: {e}")); return; }
         };
 
         let _ = self.tx.send(WorkerMsg::Finished(record));
@@ -324,8 +325,7 @@ fn write_record(
 }
 
 fn insert_record(rec: &Record, duration_s: u64) -> rusqlite::Result<()> {
-    let path = storage_dir().join("media.db");
-    let conn = Connection::open(&path)?;
+    let conn = Connection::open(history::media_db_path())?;
     conn.execute(
         "INSERT OR IGNORE INTO media
             (id, media_type, created_at, file_path, thumbnail_path, prompt,
@@ -341,7 +341,7 @@ fn insert_record(rec: &Record, duration_s: u64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn extract_thumbnail(src: &PathBuf, dst: &PathBuf) {
+fn extract_thumbnail(src: &Path, dst: &Path) {
     // Best-effort — silently skip if ffmpeg is absent.
     let _ = std::process::Command::new("ffmpeg")
         .args([
@@ -357,29 +357,33 @@ fn extract_thumbnail(src: &PathBuf, dst: &PathBuf) {
 }
 
 fn storage_dir() -> PathBuf {
-    dirs_next::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()))
-        .join("tt-video-gen")
+    history::data_dir()
 }
 
 fn uuid_v4() -> String {
-    // Simple UUID v4 without the uuid crate: read 16 random bytes from /dev/urandom.
+    // Read 16 cryptographically random bytes from the OS. Propagate the error
+    // rather than silently producing all-zero "UUIDs" (which would generate
+    // duplicate filenames and corrupt the media DB).
     let mut buf = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+    {
         use std::io::Read;
-        let _ = f.read_exact(&mut buf);
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut buf))
+            .expect("/dev/urandom unavailable — cannot generate UUID");
     }
     buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
-    buf[8] = (buf[8] & 0x3f) | 0x80; // variant
+    buf[8] = (buf[8] & 0x3f) | 0x80; // variant 1
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        buf[0],buf[1],buf[2],buf[3], buf[4],buf[5], buf[6],buf[7],
-        buf[8],buf[9], buf[10],buf[11],buf[12],buf[13],buf[14],buf[15]
+        buf[0],  buf[1],  buf[2],  buf[3],
+        buf[4],  buf[5],
+        buf[6],  buf[7],
+        buf[8],  buf[9],
+        buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
     )
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
-    use std::io::Read;
     // Use openssl / base64 via std — avoids adding the base64 crate.
     // Simple decoder: strip whitespace, process 4-char groups.
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();

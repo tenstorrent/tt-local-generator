@@ -11,8 +11,7 @@
 use crate::history::Record;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Label, Orientation, Picture, ScrolledWindow, Video,
-    Widget, Window,
+    Box as GtkBox, Button, Label, Orientation, Picture, ScrolledWindow, Video, Widget,
 };
 use std::sync::mpsc::Sender;
 
@@ -265,15 +264,6 @@ fn format_date(iso: &str) -> String {
     iso.get(..16)
        .map(|s| s.replace('T', " "))
        .unwrap_or_else(|| iso.to_string())
-}
-
-/// Open a file with the system default application.
-pub fn open_externally(path: &str, window: &impl IsA<Window>) {
-    let uri = format!("file://{path}");
-    let _ = gtk4::gio::AppInfo::launch_default_for_uri(
-        &uri,
-        Some(&gtk4::gio::AppLaunchContext::new()),
-    );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

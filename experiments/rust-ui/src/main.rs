@@ -159,24 +159,16 @@ fn build_ui(app: &Application) {
     // ── Health bus ────────────────────────────────────────────────────────────
     // Background thread → mpsc → main thread polls every 1 s.
     let (health_tx, health_rx) = std::sync::mpsc::channel::<HealthSnapshot>();
-    let health_rx = std::sync::Arc::new(std::sync::Mutex::new(health_rx));
     health::start_bus(health_tx);
 
     // ── Card / gallery event channel ──────────────────────────────────────────
-    let (card_tx, card_rx) = std::sync::mpsc::channel::<CardEvent>();
-    let card_rx = std::sync::Arc::new(std::sync::Mutex::new(card_rx));
-
-    // ── Control event channel ─────────────────────────────────────────────────
-    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<ControlEvent>();
-    let ctrl_rx = std::sync::Arc::new(std::sync::Mutex::new(ctrl_rx));
-
-    // ── Detail event channel ──────────────────────────────────────────────────
+    // Each Receiver has exactly one consumer — move directly into the pump
+    // closure via `move ||`. No Arc<Mutex> needed; that pattern is only
+    // appropriate when a Receiver must be shared across multiple consumers.
+    let (card_tx, card_rx)     = std::sync::mpsc::channel::<CardEvent>();
+    let (ctrl_tx, ctrl_rx)     = std::sync::mpsc::channel::<ControlEvent>();
     let (detail_tx, detail_rx) = std::sync::mpsc::channel::<DetailEvent>();
-    let detail_rx = std::sync::Arc::new(std::sync::Mutex::new(detail_rx));
-
-    // ── Worker message channel ────────────────────────────────────────────────
     let (worker_tx, worker_rx) = std::sync::mpsc::channel::<WorkerMsg>();
-    let worker_rx = std::sync::Arc::new(std::sync::Mutex::new(worker_rx));
 
     // ── Window ────────────────────────────────────────────────────────────────
     let window = ApplicationWindow::builder()
@@ -265,11 +257,9 @@ fn build_ui(app: &Application) {
     {
         let sh = statusbar_handle.clone();
         let ch = control_handle.clone();
-        let hrx = health_rx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(1000), move || {
-            let rx = hrx.lock().unwrap();
             let mut latest: Option<HealthSnapshot> = None;
-            while let Ok(snap) = rx.try_recv() { latest = Some(snap); }
+            while let Ok(snap) = health_rx.try_recv() { latest = Some(snap); }
             if let Some(snap) = latest {
                 sh.update(&snap);
                 ch.update_health(&snap);
@@ -285,10 +275,8 @@ fn build_ui(app: &Application) {
         let ctrl_prompt    = control_handle.prompt.clone();
         let crecs          = current_records.clone();
         let cidx           = current_index.clone();
-        let crx            = card_rx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            let rx = crx.lock().unwrap();
-            while let Ok(ev) = rx.try_recv() {
+            while let Ok(ev) = card_rx.try_recv() {
                 match ev {
                     CardEvent::Selected(id) => {
                         let recs = crecs.borrow();
@@ -334,10 +322,8 @@ fn build_ui(app: &Application) {
         let ir2        = image_ref.clone();
         let xr2        = artgen_ref.clone();
         let gs         = gallery_stack.clone();
-        let crx2       = ctrl_rx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            let rx = crx2.lock().unwrap();
-            while let Ok(ev) = rx.try_recv() {
+            while let Ok(ev) = ctrl_rx.try_recv() {
                 match ev {
                     ControlEvent::Generate(req) => {
                         ch2.set_generating(true);
@@ -376,10 +362,8 @@ fn build_ui(app: &Application) {
         let cidx3         = current_index.clone();
         let ctrl_prompt2  = control_handle.prompt.clone();
         let vr3           = video_ref.clone();
-        let drx           = detail_rx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            let rx = drx.lock().unwrap();
-            while let Ok(ev) = rx.try_recv() {
+            while let Ok(ev) = detail_rx.try_recv() {
                 match ev {
                     DetailEvent::Back => {
                         detail_stack3.set_visible_child_name("placeholder");
@@ -432,15 +416,13 @@ fn build_ui(app: &Application) {
 
     // ── Event pump: WorkerMsg ─────────────────────────────────────────────────
     {
-        let ch3  = control_handle.clone();
-        let vr4  = video_ref.clone();
-        let ar4  = animate_ref.clone();
-        let ir4  = image_ref.clone();
+        let ch3    = control_handle.clone();
+        let vr4    = video_ref.clone();
+        let ar4    = animate_ref.clone();
+        let ir4    = image_ref.clone();
         let crecs4 = current_records.clone();
-        let wrx  = worker_rx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-            let rx = wrx.lock().unwrap();
-            while let Ok(msg) = rx.try_recv() {
+            while let Ok(msg) = worker_rx.try_recv() {
                 match msg {
                     WorkerMsg::Progress(text) => {
                         eprintln!("[worker] {text}");
@@ -532,10 +514,7 @@ fn stop_server(key: &str) {
 // ── DB delete ─────────────────────────────────────────────────────────────────
 
 fn delete_record_from_db(id: &str) {
-    let path = dirs_next::data_local_dir()
-        .unwrap_or_default()
-        .join("tt-video-gen")
-        .join("media.db");
+    let path = history::media_db_path();
     if let Ok(conn) = rusqlite::Connection::open(&path) {
         let _ = conn.execute("DELETE FROM media WHERE id = ?1", rusqlite::params![id]);
     }
