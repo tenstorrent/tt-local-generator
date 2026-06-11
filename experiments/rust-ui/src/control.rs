@@ -18,6 +18,8 @@ use gtk4::{
     Box as GtkBox, Button, Entry, Label, Orientation, Revealer,
     RevealerTransitionType, SpinButton, ToggleButton, Widget,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -28,7 +30,20 @@ pub enum ControlEvent {
     TabChanged(ModelSource),
     ServerStart(String),    // service key
     ServerStop(String),
+    ServerRestart(String),
     InspireRequested,
+    /// User clicked Apply in Preferences dialog — persist + apply new settings.
+    PrefsChanged(Box<crate::settings::Settings>),
+    /// Open the media storage folder in the system file manager.
+    OpenMediaFolder,
+    /// Open the log viewer window.
+    OpenLogViewer,
+    /// Toggle detail panel visibility.
+    ToggleDetailPanel,
+    /// Change gallery density ("comfortable" | "compact").
+    SetGalleryDensity(String),
+    /// Prompt-gen server health changed (true = LLM ready, false = algo-only).
+    PromptGenHealthChanged(bool),
 }
 
 // ── Build function ────────────────────────────────────────────────────────────
@@ -57,21 +72,31 @@ pub fn build_control_panel(
 
     // ── Inspire row ───────────────────────────────────────────────────────────
     let inspire_row = GtkBox::new(Orientation::Horizontal, 4);
-    let inspire_btn = Button::with_label("✨ Inspire");
-    inspire_btn.add_css_class("flat");
+    let inspire_btn = Button::with_label("✨ Inspire me");
     inspire_btn.add_css_class("inspire-btn");
-    // Background thread → mpsc → main-thread pump. The Receiver has exactly
-    // one consumer (the timeout_add_local below), so it moves directly into
-    // the closure — no Arc<Mutex> needed.
+
+    // Dot: ⬤ algo only  (yellow) | ⬤ starting… (orange) | ⬤ ready (teal)
+    let inspire_dot = Label::new(Some("⬤ algo only"));
+    inspire_dot.add_css_class("inspire-dot");
+    inspire_dot.add_css_class("muted");
+
+    // Track whether LLM prompt server is ready — updated by main.rs health pump.
+    let pg_ready: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
+    // Background thread → mpsc → main-thread pump.
     let (inspire_tx, inspire_rx) = std::sync::mpsc::channel::<Option<String>>();
     {
         let inspire_tx2 = inspire_tx.clone();
+        let pg_ready2   = pg_ready.clone();
         inspire_btn.connect_clicked(move |btn| {
             btn.set_sensitive(false);
-            btn.set_label("✨…");
-            let itx = inspire_tx2.clone();
+            btn.set_label("⏳ Generating…");
+            btn.remove_css_class("inspire-btn");
+            btn.add_css_class("inspire-btn-loading");
+            let itx     = inspire_tx2.clone();
+            let use_llm = pg_ready2.get();
             std::thread::spawn(move || {
-                let result = run_generate_prompt();
+                let result = run_generate_prompt(use_llm);
                 let _ = itx.send(result);
             });
         });
@@ -86,7 +111,9 @@ pub fn build_control_panel(
                 if let Some(p) = result {
                     prompt4.set_text(&p);
                 }
-                btn4.set_label("✨ Inspire");
+                btn4.set_label("✨ Inspire me");
+                btn4.remove_css_class("inspire-btn-loading");
+                btn4.add_css_class("inspire-btn");
                 btn4.set_sensitive(true);
                 let _ = tx4.send(ControlEvent::InspireRequested);
             }
@@ -94,6 +121,12 @@ pub fn build_control_panel(
         });
     }
     inspire_row.append(&inspire_btn);
+
+    // Spacer
+    let sp = gtk4::Box::new(Orientation::Horizontal, 0);
+    sp.set_hexpand(true);
+    inspire_row.append(&sp);
+    inspire_row.append(&inspire_dot);
     panel.append(&inspire_row);
 
     // ── Negative prompt (collapsed by default) ────────────────────────────────
@@ -176,11 +209,12 @@ pub fn build_control_panel(
     let gen_btn = Button::with_label("▶ Generate");
     gen_btn.add_css_class("generate-btn");
     {
-        let tx2        = tx.clone();
-        let prompt2    = prompt.clone();
-        let neg2       = neg_entry.clone();
-        let steps2     = steps_spin.clone();
-        let tab_state2 = tab_state.clone();
+        let tx2         = tx.clone();
+        let prompt2     = prompt.clone();
+        let neg2        = neg_entry.clone();
+        let steps2      = steps_spin.clone();
+        let tab_state2  = tab_state.clone();
+        let server_url2 = settings.server_url.clone();
         gen_btn.connect_clicked(move |_| {
             let text = prompt2.text().to_string();
             if text.trim().is_empty() { return; }
@@ -190,7 +224,7 @@ pub fn build_control_panel(
                 steps:           steps2.value() as u32,
                 seed:            -1,
                 model_source:    tab_state2.borrow().clone(),
-                server_url:      "http://localhost:8000".into(),
+                server_url:      server_url2.clone(),
             };
             let _ = tx2.send(ControlEvent::Generate(req));
         });
@@ -198,10 +232,12 @@ pub fn build_control_panel(
     panel.append(&gen_btn);
 
     let handle = ControlHandle {
-        srv_dot:   srv_dot.clone(),
-        srv_label: srv_label.clone(),
-        gen_btn:   gen_btn.clone(),
-        prompt:    prompt.clone(),
+        srv_dot:    srv_dot.clone(),
+        srv_label:  srv_label.clone(),
+        gen_btn:    gen_btn.clone(),
+        prompt:     prompt.clone(),
+        inspire_dot: inspire_dot.clone(),
+        pg_ready,
     };
 
     (panel.upcast::<Widget>(), handle)
@@ -212,10 +248,12 @@ pub fn build_control_panel(
 /// Lets the main window push health updates into the control panel.
 #[derive(Clone)]
 pub struct ControlHandle {
-    srv_dot:   Label,
-    srv_label: Label,
-    gen_btn:   Button,
-    pub prompt:    Entry,
+    srv_dot:     Label,
+    srv_label:   Label,
+    gen_btn:     Button,
+    pub prompt:  Entry,
+    inspire_dot: Label,
+    pg_ready:    Rc<Cell<bool>>,
 }
 
 impl ControlHandle {
@@ -236,6 +274,18 @@ impl ControlHandle {
     pub fn set_generating(&self, generating: bool) {
         self.gen_btn.set_sensitive(!generating);
         self.gen_btn.set_label(if generating { "⌛ Generating…" } else { "▶ Generate" });
+    }
+
+    /// Update the ⬤ dot in the inspire row to reflect prompt-server health.
+    pub fn set_prompt_gen_state(&self, ready: bool) {
+        self.pg_ready.set(ready);
+        if ready {
+            self.inspire_dot.set_label("⬤ LLM ready");
+            self.inspire_dot.set_css_classes(&["inspire-dot-ready"]);
+        } else {
+            self.inspire_dot.set_label("⬤ algo only");
+            self.inspire_dot.set_css_classes(&["inspire-dot", "muted"]);
+        }
     }
 }
 
@@ -283,21 +333,25 @@ fn build_source_tabs(
 
 // ── Inspire subprocess ────────────────────────────────────────────────────────
 
-fn run_generate_prompt() -> Option<String> {
-    // Find generate_prompt.py relative to the tt-ctl location
+/// Run `generate_prompt.py` to produce a prompt.
+///
+/// When `use_llm` is true (prompt-gen server is ready on port 8001), the
+/// script hits Qwen3-0.6B for LLM polish.  Otherwise it runs in algo-only
+/// mode (`--no-enhance`), which works without any server.
+fn run_generate_prompt(use_llm: bool) -> Option<String> {
     let script = crate::health::find_tt_ctl()
         .and_then(|p| p.parent().map(|d| d.join("app").join("generate_prompt.py")))?;
     if !script.exists() { return None; }
 
-    let output = std::process::Command::new("python3")
-        .arg(&script)
-        .args(["--raw", "--no-enhance"])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg(&script).arg("--raw");
+    if !use_llm {
+        cmd.arg("--no-enhance");
+    }
 
+    let output = cmd.output().ok()?;
     if !output.status.success() { return None; }
 
-    // --raw emits the prompt directly; strip trailing newline
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if text.is_empty() { None } else { Some(text) }
 }
