@@ -3810,6 +3810,7 @@ class ControlPanel(Gtk.Box):
         on_open_playlist = None,       # (playlist_id: str | None) -> None — open TT-TV for a playlist
         on_open_model_playlist = None, # (model_id: str) -> None — open TT-TV filtered by model
         on_enter_selection_mode = None,  # (playlist_id: str) -> None — enter grid selection mode
+        on_open_attractor = None,      # () -> None — launch TT-TV (used by animatediff endless btn)
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._on_generate = on_generate
@@ -3824,6 +3825,7 @@ class ControlPanel(Gtk.Box):
         self._on_open_playlist = on_open_playlist or (lambda pid: None)
         self._on_open_model_playlist = on_open_model_playlist or (lambda mid: None)
         self._on_enter_selection_mode = on_enter_selection_mode or (lambda pid: None)
+        self._on_open_attractor = on_open_attractor or (lambda: None)
         self._theme_generating: bool = False  # True while theme generation is in progress
         # ── Prompt gen server state ───────────────────────────────────────────
         self._prompt_gen_ready: bool = False      # True when port 8001 health check passes
@@ -4313,6 +4315,18 @@ class ControlPanel(Gtk.Box):
         self._cancel_btn.set_visible(False)
         self._cancel_btn.connect("clicked", lambda _: self._on_cancel())
         self._footer_box.append(self._cancel_btn)
+
+        # Endless mode button: visible only when AnimateDiff is the active model.
+        # Launches TT-TV with model_source="animatediff" for serverless endless generation.
+        self._endless_btn = Gtk.Button(label="📺 Start Endless")
+        self._endless_btn.add_css_class("attractor-launch-btn")
+        self._endless_btn.set_visible(False)
+        self._endless_btn.set_tooltip_text(
+            "Launch TT-TV in endless AnimateDiff mode.\n"
+            "Continuously generates GIFs without a server."
+        )
+        self._endless_btn.connect("clicked", lambda _: self._on_open_attractor())
+        self._footer_box.append(self._endless_btn)
 
         # Recover Jobs moved to File menu — no button here.
 
@@ -5198,6 +5212,9 @@ class ControlPanel(Gtk.Box):
             # Hide CLIP LENGTH row for animatediff (no frame count picker).
             if hasattr(self, "_clip_length_row_widget"):
                 self._clip_length_row_widget.set_visible(model != "animatediff")
+            # Show Endless button only for animatediff (serverless, can always generate).
+            if hasattr(self, "_endless_btn"):
+                self._endless_btn.set_visible(model == "animatediff")
         elif self._model_source == "image":
             self._image_model = model
 
@@ -7307,6 +7324,7 @@ class MainWindow(Gtk.ApplicationWindow):
             on_open_playlist=self._on_open_attractor_for_playlist,
             on_open_model_playlist=self._on_open_attractor_for_model,
             on_enter_selection_mode=self._on_enter_selection_mode,
+            on_open_attractor=self._on_open_attractor,
         )
         # Wire the history store so the SHOT panel seed buttons can read history.
         # (ControlPanel._get_history_records uses self._store via this attribute.)
@@ -9072,6 +9090,11 @@ class MainWindow(Gtk.ApplicationWindow):
             auto_generate = True
 
         current_source = self._controls.get_model_source()
+        # AnimateDiff is a video-tab model but needs its own model_source so the
+        # generation loop uses the "animatediff" prompt vocabulary and the server
+        # health check is bypassed (AnimateDiff runs locally, no server needed).
+        if current_source == "video" and self._controls.get_video_model() == "animatediff":
+            current_source = "animatediff"
 
         try:
             win = attractor.AttractorWindow(
@@ -9199,9 +9222,17 @@ class MainWindow(Gtk.ApplicationWindow):
                               ref_char_path, animate_mode, model_id)
 
     def _update_attractor_btn(self) -> None:
-        """Enable/disable the Attractor button based on whether any media exists."""
+        """Enable/disable the Attractor button based on whether any media exists.
+
+        AnimateDiff generates locally without a server and can seed TT-TV from
+        scratch, so we enable the button even when no prior records exist.
+        """
         has_media = len(self._store.all_records()) > 0
-        self._attractor_btn.set_sensitive(has_media)
+        is_animatediff = (
+            self._controls.get_model_source() == "video"
+            and self._controls.get_video_model() == "animatediff"
+        )
+        self._attractor_btn.set_sensitive(has_media or is_animatediff)
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
