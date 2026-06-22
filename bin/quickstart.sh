@@ -8,8 +8,10 @@
 #   4. Patches       (hotpatches injected into vendor tree)
 #   5. GTK4/PyGObject (informational — GUI only)
 #   6. Prompt server  (Qwen3-0.6B on CPU, port 8001)
+#   7. End-to-end validation (send a test prompt, verify inference works)
 #
 # "CPU-only" means: prompt server (port 8001) running + GUI launchable.
+# Validation proves the model actually responds — not just that the server started.
 # Everything else (video, image, artgen LLM) needs TT hardware + Docker.
 #
 # Usage:
@@ -273,6 +275,96 @@ else
         tail -5 /tmp/tt_prompt_gen.log 2>/dev/null | sed 's/^/    /'
         info "Retry: ./bin/start_prompt_gen.sh"
         FAILED+=("Prompt server")
+    fi
+fi
+
+# ── Step 7: End-to-end model validation ──────────────────────────────────────
+step 7 "End-to-end validation  (test prompt → Qwen3-0.6B → response)"
+
+_validate_model() {
+    # Sends a minimal chat completion request and checks for a non-empty reply.
+    # Returns 0 (success) if a non-empty content string comes back.
+    python3 - <<'PYEOF'
+import urllib.request, json, sys
+
+payload = json.dumps({
+    "model": "Qwen3-0.6B",
+    "messages": [
+        {
+            "role": "user",
+            "content": (
+                "You are a creative prompt generator for AI video models. "
+                "Write exactly ONE short text-to-video prompt (max 30 words) "
+                "depicting a serene natural scene. Reply with the prompt only, "
+                "no labels, no explanation. /no_think"
+            ),
+        }
+    ],
+    "max_tokens": 60,
+    "temperature": 0.7,
+}).encode()
+
+req = urllib.request.Request(
+    "http://127.0.0.1:8001/v1/chat/completions",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.loads(r.read())
+    content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    if content:
+        print(content)
+        sys.exit(0)
+    else:
+        print("ERROR: empty response", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+# Only validate if the server is actually up and model-ready
+_can_validate=0
+if _health_check; then
+    if python3 -c "
+import urllib.request, json, sys
+try:
+    r = urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)
+    ready = json.loads(r.read()).get('model_ready', False)
+    sys.exit(0 if ready else 1)
+except: sys.exit(1)
+" 2>/dev/null; then
+        _can_validate=1
+    fi
+fi
+
+if [[ $STATUS_ONLY -eq 1 ]]; then
+    if [[ $_can_validate -eq 1 ]]; then
+        info "Server is up — skipping live inference test in --status mode"
+        pass "Model ready (validation skipped in status mode)"
+    else
+        warn_s "Server not ready — cannot validate"
+    fi
+elif [[ $_can_validate -eq 0 ]]; then
+    warn_s "Skipping validation — prompt server not ready"
+    WARNED+=("Model validation skipped")
+else
+    info "Sending test prompt to Qwen3-0.6B…"
+    _val_out=$(_validate_model 2>/tmp/tt-quickstart-val.err)
+    _val_rc=$?
+    if [[ $_val_rc -eq 0 && -n "$_val_out" ]]; then
+        pass "Model responded successfully"
+        info "Sample output: ${_CYN}${_val_out}${_RST}"
+    else
+        _val_err=$(cat /tmp/tt-quickstart-val.err 2>/dev/null | head -3)
+        fail_s "Model validation failed"
+        [[ -n "$_val_err" ]] && info "Error: $_val_err"
+        info "The server is running but inference returned an error."
+        info "Check: curl -s http://localhost:8001/health"
+        FAILED+=("Model validation")
     fi
 fi
 
