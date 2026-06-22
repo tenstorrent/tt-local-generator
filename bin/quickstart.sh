@@ -18,7 +18,11 @@
 #   ./bin/quickstart.sh                    # full check-and-fix + start server
 #   ./bin/quickstart.sh --status           # checks only, no installs
 #   ./bin/quickstart.sh --non-interactive  # no prompts; uses $HF_TOKEN env
+#   ./bin/quickstart.sh --no-assist        # skip Qwen remediation advice on failure
 #   ./bin/quickstart.sh --help
+#
+# When steps fail and the prompt server is running, Qwen3-0.6B automatically
+# provides targeted remediation advice. Pass --no-assist to disable.
 
 set -uo pipefail
 
@@ -42,6 +46,7 @@ hr()   { echo -e "${_CYN}──────────────────�
 
 STATUS_ONLY=0
 NON_INTERACTIVE=0
+ASSIST=1       # auto-assist on failure; --no-assist disables
 LOG_FILE="/tmp/tt-quickstart.log"
 
 # Auto non-interactive when stdin is not a terminal (ssh, CI, pipe)
@@ -51,8 +56,9 @@ while [[ ${1:-} != "" ]]; do
     case "$1" in
         --status)           STATUS_ONLY=1 ;;
         --non-interactive)  NON_INTERACTIVE=1 ;;
+        --no-assist)        ASSIST=0 ;;
         --help|-h)
-            sed -n '2,20p' "$0" | sed 's/^# \?//'
+            sed -n '2,24p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)  echo "Unknown flag: $1  (try --help)"; exit 1 ;;
@@ -399,3 +405,147 @@ else
 fi
 hr
 echo ""
+
+# ── Qwen remediation assist ───────────────────────────────────────────────────
+# If any steps failed and the prompt server is available, ask Qwen3-0.6B to
+# interpret the failure context and suggest specific remediation steps.
+
+_qwen_assist() {
+    # Build a compact failure context: failed step names + last 40 lines of log
+    local failed_list
+    failed_list=$(printf '  • %s\n' "${FAILED[@]}")
+    local log_tail
+    log_tail=$(tail -40 "$LOG_FILE" 2>/dev/null || echo "(log unavailable)")
+
+    python3 - "$failed_list" "$log_tail" <<'PYEOF'
+import sys, json, urllib.request, textwrap
+
+SYSTEM_PROMPT = textwrap.dedent("""\
+    You are a setup assistant for tt-local-generator, a GTK4 Python application
+    that drives Tenstorrent AI hardware. You help users fix installation problems.
+
+    THE SETUP STEPS AND WHAT CAN GO WRONG:
+
+    Step 1 — Python deps (torch, transformers, fastapi, uvicorn, markovify)
+      Fix: pip3 install --break-system-packages torch transformers \\
+               'fastapi>=0.100.0' 'uvicorn[standard]>=0.23.0' markovify
+      Common failure: externally-managed-environment error → must use
+        --break-system-packages (Ubuntu 24.04 blocks pip without it)
+      Common failure: torch not found after install → python3 -c 'import torch'
+        to verify; if venv is active, deactivate first.
+
+    Step 2 — Vendor clone (vendor/tt-inference-server at pinned SHA)
+      Fix: ./bin/setup_vendor.sh
+      Common failure: git clone auth error → needs SSH key or HTTPS token for
+        github.com/tenstorrent/tt-inference-server (private repo)
+      Common failure: wrong SHA → run setup_vendor.sh again to re-checkout
+      Common failure: disk full → needs ~2 GB for clone
+
+    Step 3 — Vendor .env (vendor/tt-inference-server/.env)
+      Fix: edit vendor/tt-inference-server/.env and set JWT_SECRET to any
+        random string (e.g. openssl rand -hex 32)
+      Common failure: .env missing despite clone → run ./bin/setup_vendor.sh again
+      Common failure: JWT_SECRET is placeholder "changeme" → replace it
+
+    Step 4 — Patches (hotpatches applied to vendor tree)
+      Fix: ./bin/apply_patches.sh
+      Common failure: run_docker_server.py not found → vendor clone failed or at
+        wrong path; ensure vendor/tt-inference-server exists first
+      Common failure: patch already applied (idempotent, not a real error) →
+        apply_patches.sh self-guards; re-running is safe
+      Common failure: permission denied on vendor files → chmod -R u+w vendor/
+
+    Step 5 — GTK4/PyGObject (informational — not blocking)
+      Fix: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0
+      Note: the GUI (./tt-gen) needs this but the prompt server does not.
+
+    Step 6 — Prompt server (Qwen3-0.6B on CPU, port 8001)
+      Fix: ./bin/start_prompt_gen.sh
+      Common failure: port 8001 already in use → kill existing process:
+        lsof -ti:8001 | xargs kill -9
+      Common failure: model download fails → set HF_TOKEN env var and retry
+      Common failure: out of memory → needs ~2.9 GB RAM free
+      Log file: /tmp/tt_prompt_gen.log
+
+    Step 7 — Model validation (live inference test)
+      Fix: if server is running but validation failed, check /tmp/tt_prompt_gen.log
+      Common failure: 503 model still loading → wait 30s and retry
+      Common failure: inference hangs → server may be OOM; check free memory
+
+    RULES FOR YOUR RESPONSE:
+    - Be specific and actionable. Give exact commands to run, not vague advice.
+    - Focus only on the failed steps listed by the user.
+    - If the log excerpt shows a clear error, explain what caused it.
+    - Keep your answer under 200 words.
+    - Format as a short numbered list of actions.
+    - Do not repeat the problem back to the user — jump straight to fixes.
+    - Do not mention steps that passed.
+""")
+
+failed_list = sys.argv[1]
+log_tail = sys.argv[2]
+
+user_msg = (
+    f"These setup steps failed:\n{failed_list}\n\n"
+    f"Last lines from the setup log:\n```\n{log_tail}\n```\n\n"
+    "What went wrong and what should I run to fix it?"
+)
+
+payload = json.dumps({
+    "model": "Qwen3-0.6B",
+    "messages": [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user",   "content": user_msg},
+    ],
+    "max_tokens": 400,
+    "temperature": 0.3,
+}).encode()
+
+req = urllib.request.Request(
+    "http://127.0.0.1:8001/v1/chat/completions",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=90) as r:
+        data = json.loads(r.read())
+    content = data["choices"][0]["message"]["content"].strip()
+    print(content)
+    sys.exit(0)
+except Exception as e:
+    print(f"(could not reach prompt server: {e})", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+if [[ ${#FAILED[@]} -gt 0 && $ASSIST -eq 1 && $STATUS_ONLY -eq 0 ]]; then
+    # Check if prompt server is available (may have been started in step 6, or
+    # was already running before quickstart ran)
+    if curl -sf "http://127.0.0.1:8001/health" -o /dev/null --max-time 2 2>/dev/null; then
+        _model_up=$(python3 -c "
+import urllib.request, json, sys
+try:
+    r = urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)
+    sys.exit(0 if json.loads(r.read()).get('model_ready') else 1)
+except: sys.exit(1)
+" 2>/dev/null && echo yes || echo no)
+        if [[ "$_model_up" == "yes" ]]; then
+            echo ""
+            hr
+            echo -e "  ${_BLD}${_CYN}Qwen suggests:${_RST}"
+            hr
+            _advice=$(_qwen_assist 2>/tmp/tt-quickstart-assist.err)
+            _rc=$?
+            if [[ $_rc -eq 0 && -n "$_advice" ]]; then
+                # Word-wrap and indent each line for terminal readability
+                echo "$_advice" | fold -s -w 72 | sed 's/^/  /'
+            else
+                echo -e "  ${_YLW}(Qwen assist unavailable — could not get a response)${_RST}"
+                cat /tmp/tt-quickstart-assist.err 2>/dev/null | head -3 | sed 's/^/  /'
+            fi
+            hr
+            echo ""
+        fi
+    fi
+fi
