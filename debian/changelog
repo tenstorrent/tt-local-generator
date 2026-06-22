@@ -1,3 +1,22 @@
+tt-local-generator (0.8.0) noble; urgency=medium
+
+  * Upgrade vendor/tt-animatediff submodule from v0.1.0 to v0.9.0.
+  * Expose AnimateDiff v0.9 config panel in video tab: mode, negative prompt,
+    temporal alpha, lightning mode, chain continuity, MotionAdapter.
+  * Wire AnimateDiff into TT-TV endless mode: correct model_source, serverless
+    health check bypass, queue depth capped to 1 for slow generation.
+  * Add "📺 Start Endless" button in video tab when AnimateDiff is selected.
+  * Add ⊞ Grid / ▶ Player toggle in TT-TV sidebar for live GIF grid view.
+  * Fix TT-TV AnimateDiff playlist: GIFs now advance via dwell timer (15 s
+    default) since GStreamer loops GIFs without emitting notify::ended.
+  * Add AnimateDiff GIF dwell setting to Preferences → TT-TV.
+  * Add 🔀 Pipeline button in main toolbar to launch standalone pipeline app.
+  * Fix Theme Set mode: Qwen3-0.6B no longer echoes [prompt] placeholder.
+  * Fix missing .pipeline-run-job-failed CSS class.
+  * Fix PipelineTemplateCard showing grey placeholder boxes with no prior runs.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 22 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.7.4) noble; urgency=medium
 
   * Remove WorkflowPopover from toolbar (workflows moved to tt-ctl only).
