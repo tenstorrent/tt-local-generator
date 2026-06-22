@@ -4169,6 +4169,11 @@ class ControlPanel(Gtk.Box):
         # Appended here (after construction) so self._animate_box is ready.
         self.append(self._animate_box)
 
+        # ── AnimateDiff v0.9 config — visible only when animatediff is selected ─
+        self._animatediff_box = self._build_animatediff_box()
+        self._animatediff_box.set_visible(False)
+        self.append(self._animatediff_box)
+
         # ── Pinned footer — always visible, NOT inside the scroll ─────────────
         # MainWindow places self._footer_box below ctrl_scroll so these widgets
         # remain visible regardless of how short the window is.
@@ -4815,6 +4820,210 @@ class ControlPanel(Gtk.Box):
             _settings.set("preferred_video_model", alt)
             self.update_shot_panel()
 
+    def _build_animatediff_box(self) -> Gtk.Box:
+        """Build the AnimateDiff v0.9 config panel shown when animatediff is selected."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_top(6)
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_bottom(4)
+        box.append(sep)
+        box.append(self._section("AnimateDiff Options"))
+
+        def _lbl(text):
+            l = Gtk.Label(label=text)
+            l.set_xalign(0)
+            l.add_css_class("hint")
+            return l
+
+        def _row(lbl_text, widget):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            lbl = Gtk.Label(label=lbl_text)
+            lbl.set_xalign(0)
+            lbl.set_hexpand(True)
+            lbl.add_css_class("hint")
+            row.append(lbl)
+            row.append(widget)
+            return row
+
+        def _dd(items, default):
+            sl = Gtk.StringList()
+            for item in items:
+                sl.append(item)
+            dd = Gtk.DropDown(model=sl)
+            try:
+                dd.set_selected(items.index(default))
+            except ValueError:
+                pass
+            return dd
+
+        def _dd_val(dd):
+            idx = dd.get_selected()
+            m = dd.get_model()
+            if m and idx < m.get_n_items():
+                return m.get_string(idx)
+            return ""
+
+        def _spin(lo, hi, step, val):
+            adj = Gtk.Adjustment(value=val, lower=lo, upper=hi, step_increment=step)
+            sb = Gtk.SpinButton(adjustment=adj)
+            sb.set_digits(2 if step < 1 else 0)
+            sb.set_size_request(70, -1)
+            return sb
+
+        # Mode
+        self._ad_mode = _dd(["blackhole", "cpu", "sim"], "blackhole")
+        box.append(_row("Mode", self._ad_mode))
+
+        # Negative prompt
+        self._ad_neg_prompt = Gtk.Entry()
+        self._ad_neg_prompt.set_placeholder_text("blurry, low quality")
+        self._ad_neg_prompt.set_hexpand(True)
+        neg_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        neg_lbl = Gtk.Label(label="Negative prompt")
+        neg_lbl.set_xalign(0)
+        neg_lbl.add_css_class("hint")
+        neg_row.append(neg_lbl)
+        neg_row.append(self._ad_neg_prompt)
+        box.append(neg_row)
+
+        # Temporal alpha
+        self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
+        box.append(_row("Temporal α", self._ad_temporal_alpha))
+
+        # ── Performance (collapsible) ──────────────────────────────────────
+        perf_exp = Gtk.Expander(label="Performance")
+        perf_exp.add_css_class("hint")
+        perf_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        perf_box.set_margin_start(8)
+        perf_box.set_margin_top(4)
+
+        self._ad_lightning = Gtk.CheckButton(label="Lightning mode (Euler scheduler)")
+        self._ad_lightning.add_css_class("hint")
+        perf_box.append(self._ad_lightning)
+
+        self._ad_lightning_steps = _dd(["2", "4", "8"], "4")
+        self._ad_lightning_steps_row = _row("Distill steps", self._ad_lightning_steps)
+        self._ad_lightning_steps_row.set_visible(False)
+        perf_box.append(self._ad_lightning_steps_row)
+
+        def _on_ad_lightning_toggled(_cb):
+            on = self._ad_lightning.get_active()
+            cpu = _dd_val(self._ad_mode) == "cpu"
+            self._ad_lightning_steps_row.set_visible(on and cpu)
+        self._ad_lightning.connect("toggled", _on_ad_lightning_toggled)
+        self._ad_mode.connect("notify::selected", lambda *_: _on_ad_lightning_toggled(None))
+
+        self._ad_device_id = _spin(-1, 7, 1, -1)
+        self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
+        perf_box.append(_row("Device ID", self._ad_device_id))
+
+        perf_exp.set_child(perf_box)
+        box.append(perf_exp)
+
+        # ── Chain continuity (collapsible) ─────────────────────────────────
+        chain_exp = Gtk.Expander(label="Chain continuity")
+        chain_exp.add_css_class("hint")
+        chain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        chain_box.set_margin_start(8)
+        chain_box.set_margin_top(4)
+
+        self._ad_chain_from = Gtk.Entry()
+        self._ad_chain_from.set_placeholder_text("path/to/latents.chain.pt")
+        self._ad_chain_from.set_hexpand(True)
+        pick_btn = Gtk.Button(label="…")
+        pick_btn.add_css_class("hint")
+        pick_btn.connect("clicked", self._on_ad_chain_from_pick)
+        chain_from_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        chain_from_row.append(self._ad_chain_from)
+        chain_from_row.append(pick_btn)
+        chain_box.append(_lbl("Chain from (.pt):"))
+        chain_box.append(chain_from_row)
+
+        self._ad_chain_save = Gtk.CheckButton(label="Save latents for chaining")
+        self._ad_chain_save.add_css_class("hint")
+        chain_box.append(self._ad_chain_save)
+
+        self._ad_chain_alpha = _spin(0.0, 1.0, 0.05, 0.6)
+        chain_box.append(_row("Chain α", self._ad_chain_alpha))
+
+        chain_exp.set_child(chain_box)
+        box.append(chain_exp)
+
+        # ── MotionAdapter (collapsible) ────────────────────────────────────
+        motion_exp = Gtk.Expander(label="MotionAdapter (Blackhole only)")
+        motion_exp.add_css_class("hint")
+        motion_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        motion_box.set_margin_start(8)
+        motion_box.set_margin_top(4)
+
+        self._ad_motion_adapter = Gtk.CheckButton(label="Enable MotionAdapter")
+        self._ad_motion_adapter.add_css_class("hint")
+        motion_box.append(self._ad_motion_adapter)
+
+        self._ad_motion_skip = _dd(
+            ["None (full quality)", "Fast (skip up1 up2)", "Balanced (skip up2)"],
+            "None (full quality)"
+        )
+        motion_box.append(_row("Skip preset", self._ad_motion_skip))
+
+        self._ad_injection_alpha = _spin(0.0, 1.0, 0.05, 1.0)
+        motion_box.append(_row("Injection α", self._ad_injection_alpha))
+
+        motion_exp.set_child(motion_box)
+        box.append(motion_exp)
+
+        return box
+
+    def _on_ad_chain_from_pick(self, _btn) -> None:
+        """Open a file-chooser to pick a .chain.pt latents file."""
+        dlg = Gtk.FileDialog()
+        dlg.set_title("Select chain latents (.pt)")
+        dlg.open(self.get_root(), None, self._on_ad_chain_from_finish)
+
+    def _on_ad_chain_from_finish(self, dlg, result) -> None:
+        try:
+            gfile = dlg.open_finish(result)
+        except Exception:
+            return
+        if gfile:
+            self._ad_chain_from.set_text(gfile.get_path())
+
+    def get_animatediff_args(self) -> dict:
+        """Collect current AnimateDiff v0.9 config values (main thread only)."""
+
+        def _dd_val(dd):
+            idx = dd.get_selected()
+            m = dd.get_model()
+            if m and idx < m.get_n_items():
+                return m.get_string(idx)
+            return ""
+
+        skip_preset = _dd_val(self._ad_motion_skip)
+        if skip_preset == "Fast (skip up1 up2)":
+            motion_skip = ["up1", "up2"]
+        elif skip_preset == "Balanced (skip up2)":
+            motion_skip = ["up2"]
+        else:
+            motion_skip = None
+
+        raw_device_id = int(self._ad_device_id.get_value())
+
+        return dict(
+            mode=_dd_val(self._ad_mode) or "blackhole",
+            negative_prompt=self._ad_neg_prompt.get_text() or "blurry, low quality",
+            temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
+            lightning=self._ad_lightning.get_active(),
+            lightning_steps=int(_dd_val(self._ad_lightning_steps) or "4"),
+            device_id=raw_device_id if raw_device_id >= 0 else None,
+            chain_from=self._ad_chain_from.get_text().strip() or None,
+            chain_save=self._ad_chain_save.get_active(),
+            chain_alpha=round(self._ad_chain_alpha.get_value(), 2),
+            motion_adapter="" if self._ad_motion_adapter.get_active() else None,
+            motion_adapter_alpha=round(self._ad_injection_alpha.get_value(), 2),
+            motion_adapter_skip=motion_skip,
+        )
+
     def update_shot_panel(self) -> None:
         """Refresh the model badge label and switcher hint button.
 
@@ -5129,6 +5338,12 @@ class ControlPanel(Gtk.Box):
         # Animate inputs: visible only in animate mode
         self._animate_box.set_visible(is_animate)
 
+        # AnimateDiff config: visible only when video tab + animatediff selected
+        if hasattr(self, "_animatediff_box"):
+            self._animatediff_box.set_visible(
+                is_video and self._video_model == "animatediff"
+            )
+
         # VIDEO MODEL row: only shown in video source (animate/image/artgen pick
         # their model elsewhere).
         if hasattr(self, "_video_model_row_widget"):
@@ -5212,9 +5427,11 @@ class ControlPanel(Gtk.Box):
             # Hide CLIP LENGTH row for animatediff (no frame count picker).
             if hasattr(self, "_clip_length_row_widget"):
                 self._clip_length_row_widget.set_visible(model != "animatediff")
-            # Show Endless button only for animatediff (serverless, can always generate).
+            # Show Endless button and v0.9 config only for animatediff.
             if hasattr(self, "_endless_btn"):
                 self._endless_btn.set_visible(model == "animatediff")
+            if hasattr(self, "_animatediff_box"):
+                self._animatediff_box.set_visible(model == "animatediff")
         elif self._model_source == "image":
             self._image_model = model
 
@@ -9349,15 +9566,33 @@ class MainWindow(Gtk.ApplicationWindow):
                     )
                     return
                 self._set_status("Starting AnimateDiff generation on Blackhole…")
+                ad = self._controls.get_animatediff_args()
+                # Auto-derive chain_save path from a session temp file when requested.
+                chain_save_path = None
+                if ad["chain_save"]:
+                    import tempfile, os
+                    chain_save_path = os.path.join(
+                        tempfile.gettempdir(), f"tt_ad_chain_{seed if seed >= 0 else 'auto'}.pt"
+                    )
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,
                     prompt=prompt,
-                    negative_prompt=neg or "blurry, low quality",
+                    negative_prompt=ad["negative_prompt"],
                     steps=steps,
                     seed=seed if seed >= 0 else 42,
                     frames=int(_settings.get("animatediff_frames") or 8),
-                    temporal_alpha=0.35,
+                    temporal_alpha=ad["temporal_alpha"],
                     model="animatediff-blackhole",
+                    mode=ad["mode"],
+                    lightning=ad["lightning"],
+                    lightning_steps=ad["lightning_steps"],
+                    device_id=ad["device_id"],
+                    chain_from=ad["chain_from"],
+                    chain_save=chain_save_path,
+                    chain_alpha=ad["chain_alpha"],
+                    motion_adapter=ad["motion_adapter"],
+                    motion_adapter_alpha=ad["motion_adapter_alpha"],
+                    motion_adapter_skip=ad["motion_adapter_skip"],
                 )
             else:
                 model_name = _VIDEO_MODEL_IDS.get(
