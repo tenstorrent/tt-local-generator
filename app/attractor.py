@@ -1654,6 +1654,14 @@ class AttractorWindow(Gtk.Window):
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
             )
+        elif getattr(record, "media_type", "video") == "animatediff":
+            # Animated GIFs: GStreamer loops them indefinitely instead of emitting
+            # notify::ended, so use a fixed dwell timer to advance after one loop.
+            # Default: 15 s (enough to see the full loop at least once for 8-frame GIFs).
+            gif_dwell_ms = int(_settings.get("tttv_gif_dwell_s") * 1000)
+            self._pending_advance_source = GLib.timeout_add(
+                gif_dwell_ms, self._on_advance_timer
+            )
         elif _USE_SYSTEM_PLAYER:
             # macOS video: wire the GstPlayer EOS callback to advance.
             # Also arm a fallback timer in case EOS never fires (corrupt file, etc.).

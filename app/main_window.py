@@ -6965,6 +6965,18 @@ class PreferencesDialog(Gtk.Window):
         self._tttv_box.append(self._row("Image dwell time (seconds):", dwell_spin,
                                         "How long each still image is shown before advancing."))
 
+        gif_dwell_spin = Gtk.SpinButton()
+        gif_dwell_spin.set_adjustment(Gtk.Adjustment(
+            value=_settings.get("tttv_gif_dwell_s"),
+            lower=3, upper=300, step_increment=1, page_increment=5,
+        ))
+        gif_dwell_spin.set_digits(0)
+        gif_dwell_spin.connect("value-changed", lambda w: _settings.set(
+            "tttv_gif_dwell_s", int(w.get_value())
+        ))
+        self._tttv_box.append(self._row("AnimateDiff GIF dwell (seconds):", gif_dwell_spin,
+                                        "How long each AnimateDiff GIF is shown before advancing."))
+
         fallback_spin = Gtk.SpinButton()
         fallback_spin.set_adjustment(Gtk.Adjustment(
             value=_settings.get("tttv_video_fallback_s"),
