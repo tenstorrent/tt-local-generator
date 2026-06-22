@@ -446,7 +446,7 @@ class ArtgenPanel(Gtk.Box):
             box.append(free_scroll)
 
         elif name == "animatediff":
-            # Prompt row with inline inspire button
+            # ── Prompt row ────────────────────────────────────────────────────
             prompt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             self._ad_prompt = Gtk.Entry()
             self._ad_prompt.set_hexpand(True)
@@ -459,26 +459,156 @@ class ArtgenPanel(Gtk.Box):
             inspire_btn.connect("clicked", lambda _: self._on_inspire("animatediff", self._ad_prompt))
             prompt_row.append(self._ad_prompt)
             prompt_row.append(inspire_btn)
-            self._ad_frames = _dd(["8", "16"], "8")
+
+            self._ad_neg_prompt = Gtk.Entry()
+            self._ad_neg_prompt.set_placeholder_text("negative prompt…")
+            self._ad_neg_prompt.set_text("blurry, low quality")
+
+            # ── Core params ───────────────────────────────────────────────────
+            self._ad_frames = _dd(["8", "16", "24", "32"], "8")
             self._ad_steps = _spin(4, 50, 1, 25)
             self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
             self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
             self._ad_temporal_alpha.set_digits(2)
+
             box.append(_section_lbl("Prompt"))
             box.append(prompt_row)
+            box.append(_row("Negative", self._ad_neg_prompt))
             box.append(_row("Frames", self._ad_frames))
             box.append(_row("Steps", self._ad_steps))
             box.append(_row("Seed", self._ad_seed))
             box.append(_row("Temporal α", self._ad_temporal_alpha))
+
+            # ── Performance expander ──────────────────────────────────────────
+            perf_exp = Gtk.Expander(label="⚡ Performance & Mode")
+            perf_exp.set_margin_top(6)
+            perf_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            perf_box.set_margin_start(8)
+            perf_box.set_margin_top(4)
+
+            self._ad_mode = _dd(["blackhole", "cpu", "sim"], "blackhole")
+            self._ad_lightning = Gtk.CheckButton(label="Lightning (Euler scheduler)")
+            self._ad_lightning.set_tooltip_text(
+                "Blackhole: uses Euler solver with cosine temporal decay.\n"
+                "CPU: loads AnimateDiff-Lightning distilled weights (CFG=1.0)."
+            )
+            self._ad_lightning_steps = _dd(["2", "4", "8"], "4")
+            self._ad_device_id = _spin(-1, 7, 1, -1)
+            self._ad_device_id.set_tooltip_text("-1 = all chips (default)")
+
+            # Only show lightning-steps when both cpu mode and lightning are active
+            self._ad_lightning_steps_row = _row("Distill steps", self._ad_lightning_steps)
+            self._ad_lightning_steps_row.set_visible(False)
+
+            def _update_lightning_steps_vis(*_):
+                cpu = _dd_val(self._ad_mode) == "cpu"
+                lit = self._ad_lightning.get_active()
+                self._ad_lightning_steps_row.set_visible(cpu and lit)
+
+            self._ad_mode.connect("notify::selected", _update_lightning_steps_vis)
+            self._ad_lightning.connect("toggled", _update_lightning_steps_vis)
+
+            perf_box.append(_row("Mode", self._ad_mode))
+            perf_box.append(self._ad_lightning)
+            perf_box.append(self._ad_lightning_steps_row)
+            perf_box.append(_row("Device ID", self._ad_device_id))
+            perf_exp.set_child(perf_box)
+            box.append(perf_exp)
+
+            # ── Chain continuity expander ─────────────────────────────────────
+            chain_exp = Gtk.Expander(label="🔗 Chain Continuity")
+            chain_exp.set_margin_top(4)
+            chain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            chain_box.set_margin_start(8)
+            chain_box.set_margin_top(4)
+
+            chain_hint = Gtk.Label(
+                label="Thread visual DNA across separately-prompted generations.\n"
+                      "chain-from blends the previous run's latents into seed noise."
+            )
+            chain_hint.set_xalign(0)
+            chain_hint.set_wrap(True)
+            chain_hint.add_css_class("hint")
+            chain_box.append(chain_hint)
+
+            # chain-from path (file picker)
+            self._ad_chain_from = Gtk.Entry()
+            self._ad_chain_from.set_placeholder_text("path to .pt latents (optional)…")
+            chain_from_btn = Gtk.Button(label="…")
+            chain_from_btn.set_tooltip_text("Pick a .pt latents file from a previous --chain-save run")
+            chain_from_btn.connect("clicked", self._on_ad_chain_from_pick)
+            chain_from_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            self._ad_chain_from.set_hexpand(True)
+            chain_from_row.append(self._ad_chain_from)
+            chain_from_row.append(chain_from_btn)
+
+            # chain-save: auto path derived from output, enabled by checkbox
+            self._ad_chain_save = Gtk.CheckButton(label="Save latents for next chain run")
+            self._ad_chain_save.set_tooltip_text(
+                "Saves this run's final latents as <output>.chain.pt next to the GIF."
+            )
+
+            self._ad_chain_alpha = _spin(0.0, 1.0, 0.05, 0.6)
+            self._ad_chain_alpha.set_digits(2)
+            self._ad_chain_alpha.set_tooltip_text(
+                "0 = ignore previous run, 1 = fully replace seed noise with previous latents.\n"
+                "Effective range: 0.2–0.55. Values above 0.6 suppress prompt guidance."
+            )
+
+            chain_box.append(_row("From (.pt)", chain_from_row))
+            chain_box.append(self._ad_chain_save)
+            chain_box.append(_row("Chain α", self._ad_chain_alpha))
+            chain_exp.set_child(chain_box)
+            box.append(chain_exp)
+
+            # ── Phase 3 MotionAdapter expander ────────────────────────────────
+            motion_exp = Gtk.Expander(label="🎞 Phase 3: MotionAdapter")
+            motion_exp.set_margin_top(4)
+            motion_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            motion_box.set_margin_start(8)
+            motion_box.set_margin_top(4)
+
+            motion_hint = Gtk.Label(
+                label="Phase 3 runs the full AnimateDiff MotionAdapter on Blackhole.\n"
+                      "~52 s/frame full; ~7.7 s/frame with 'Fast (skip up1 up2)' preset."
+            )
+            motion_hint.set_xalign(0)
+            motion_hint.set_wrap(True)
+            motion_hint.add_css_class("hint")
+            motion_box.append(motion_hint)
+
+            self._ad_motion_adapter = Gtk.CheckButton(label="Enable MotionAdapter (Blackhole only)")
+            self._ad_injection_alpha = _spin(0.0, 1.0, 0.05, 1.0)
+            self._ad_injection_alpha.set_digits(2)
+            self._ad_injection_alpha.set_tooltip_text(
+                "1.0 = full injection (default). 0.0 = bypass (debug). Values in 0.5–1.0 are useful."
+            )
+
+            # Skip-keys preset: None, Fast (up1+up2), or Custom
+            self._ad_motion_skip = _dd(
+                ["None (full quality)", "Fast (skip up1 up2)", "Balanced (skip up2)"],
+                "None (full quality)"
+            )
+            self._ad_motion_skip.set_tooltip_text(
+                "Injection points to skip.\n"
+                "Fast: skips up1+up2 (~7.7 s/frame, minimal quality loss).\n"
+                "Balanced: skips only up2 (~25 s/frame)."
+            )
+
+            motion_box.append(self._ad_motion_adapter)
+            motion_box.append(_row("Skip preset", self._ad_motion_skip))
+            motion_box.append(_row("Injection α", self._ad_injection_alpha))
+            motion_exp.set_child(motion_box)
+            box.append(motion_exp)
+
             hint = Gtk.Label(
-                label=(
-                    "Requires Blackhole hardware. ~2 min on P300C (8 frames × 25 steps).\n"
-                    "Temporal α: cross-frame coherence blend (0 = shared-noise only, 1 = full attention)."
-                )
+                label="Requires Blackhole hardware (blackhole mode).\n"
+                      "~2 min on P300C for 8 frames × 25 steps (standard mode)."
             )
             hint.set_xalign(0)
             hint.set_wrap(True)
             hint.add_css_class("hint")
+            hint.set_margin_top(6)
             box.append(hint)
             # No separate Theme Inspiration section — inspire is inline with prompt
             return box
@@ -672,6 +802,10 @@ class ArtgenPanel(Gtk.Box):
         elif gen_name == "animatediff":
             if "prompt" in params:
                 self._ad_prompt.set_text(params["prompt"])
+            if "negative_prompt" in params:
+                self._ad_neg_prompt.set_text(params["negative_prompt"])
+            if "mode" in params:
+                self._set_dd(self._ad_mode, params["mode"])
             if "frames" in params:
                 self._set_dd(self._ad_frames, str(params["frames"]))
             if "steps" in params:
@@ -680,6 +814,8 @@ class ArtgenPanel(Gtk.Box):
                 self._ad_seed.set_value(int(params["seed"]))
             if "temporal_alpha" in params:
                 self._ad_temporal_alpha.set_value(float(params["temporal_alpha"]))
+            if "lightning" in params:
+                self._ad_lightning.set_active(bool(params["lightning"]))
 
     # ── Signal handlers ───────────────────────────────────────────────────────
 
@@ -957,8 +1093,33 @@ class ArtgenPanel(Gtk.Box):
         except Exception as e:
             GLib.idle_add(self._finish_error, f"Unexpected error: {e}")
 
+    def _on_ad_chain_from_pick(self, _btn) -> None:
+        """Open a FileDialog to pick a .pt latents file for chain-from."""
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gio as _Gio
+        dlg = Gtk.FileDialog()
+        dlg.set_title("Select chain latents (.pt)")
+        ffilter = Gtk.FileFilter()
+        ffilter.set_name("PyTorch latents (*.pt)")
+        ffilter.add_pattern("*.pt")
+        filters = _Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(ffilter)
+        dlg.set_filters(filters)
+        # Find the top-level window
+        win = self.get_root()
+        dlg.open(win, None, self._on_ad_chain_from_finish)
+
+    def _on_ad_chain_from_finish(self, dlg, result) -> None:
+        try:
+            gfile = dlg.open_finish(result)
+        except Exception:
+            return
+        if gfile:
+            self._ad_chain_from.set_text(gfile.get_path())
+
     def _run_animatediff(self, args) -> None:
-        """Background thread: run generate_blackhole.py subprocess → GIF → MediaRecord."""
+        """Background thread: run generate.py subprocess → GIF → MediaRecord."""
         import os
         import uuid as _uuid
         from datetime import datetime, timezone
@@ -983,13 +1144,29 @@ class ArtgenPanel(Gtk.Box):
         def _on_progress(line: str) -> None:
             GLib.idle_add(self._set_status, line[:80])
 
+        # Chain-save: auto-derive path from out_path if checkbox is checked
+        chain_save_path = None
+        if args.ad_chain_save:
+            chain_save_path = str(out_path.with_suffix(".chain.pt"))
+
         success, err = run_subprocess(
             prompt=args.ad_prompt,
             out_path=out_path,
+            mode=args.ad_mode,
             frames=args.ad_frames,
             steps=args.ad_steps,
             seed=args.ad_seed,
+            negative_prompt=args.ad_neg_prompt,
             temporal_alpha=args.ad_temporal_alpha,
+            lightning=args.ad_lightning,
+            lightning_steps=args.ad_lightning_steps,
+            device_id=args.ad_device_id,
+            chain_from=args.ad_chain_from or None,
+            chain_save=chain_save_path,
+            chain_alpha=args.ad_chain_alpha,
+            motion_adapter=args.ad_motion_adapter,
+            motion_adapter_alpha=args.ad_injection_alpha,
+            motion_adapter_skip=args.ad_motion_skip_keys,
             on_progress=_on_progress,
         )
 
@@ -999,16 +1176,21 @@ class ArtgenPanel(Gtk.Box):
 
         elapsed_s = int(time.monotonic() - t0)
 
-        # Thumbnail: first frame of the GIF as JPEG (make_gif_thumbnail writes JPEG data)
         thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".jpg")
         make_gif_thumbnail(out_path, thumb_path)
 
         params_d = {
             "prompt": args.ad_prompt,
+            "negative_prompt": args.ad_neg_prompt,
+            "mode": args.ad_mode,
             "frames": args.ad_frames,
             "steps": args.ad_steps,
             "seed": args.ad_seed,
             "temporal_alpha": args.ad_temporal_alpha,
+            "lightning": args.ad_lightning,
+            "motion_adapter": bool(args.ad_motion_adapter),
+            "chain_from": args.ad_chain_from or None,
+            "chain_save": chain_save_path,
             "generation_seconds": elapsed_s,
         }
         rec = MediaRecord(
@@ -1092,10 +1274,32 @@ class ArtgenPanel(Gtk.Box):
 
         elif gen_name == "animatediff":
             args.ad_prompt = self._ad_prompt.get_text() or "purple phosphor glow across distant mountains at 2am"
+            args.ad_neg_prompt = self._ad_neg_prompt.get_text() or "blurry, low quality"
+            args.ad_mode = _dd_val(self._ad_mode) or "blackhole"
             args.ad_frames = int(_dd_val(self._ad_frames) or "8")
             args.ad_steps = int(self._ad_steps.get_value())
             args.ad_seed = int(self._ad_seed.get_value())
             args.ad_temporal_alpha = round(self._ad_temporal_alpha.get_value(), 2)
+            # Performance
+            args.ad_lightning = self._ad_lightning.get_active()
+            args.ad_lightning_steps = int(_dd_val(self._ad_lightning_steps) or "4")
+            raw_device_id = int(self._ad_device_id.get_value())
+            args.ad_device_id = raw_device_id if raw_device_id >= 0 else None
+            # Chain
+            args.ad_chain_from = self._ad_chain_from.get_text().strip()
+            args.ad_chain_save = self._ad_chain_save.get_active()
+            args.ad_chain_alpha = round(self._ad_chain_alpha.get_value(), 2)
+            # MotionAdapter
+            motion_on = self._ad_motion_adapter.get_active()
+            args.ad_motion_adapter = "" if motion_on else None  # "" = use HF default
+            args.ad_injection_alpha = round(self._ad_injection_alpha.get_value(), 2)
+            skip_preset = _dd_val(self._ad_motion_skip) or "None (full quality)"
+            if skip_preset == "Fast (skip up1 up2)":
+                args.ad_motion_skip_keys = ["up1", "up2"]
+            elif skip_preset == "Balanced (skip up2)":
+                args.ad_motion_skip_keys = ["up2"]
+            else:
+                args.ad_motion_skip_keys = None
 
         return args
 
