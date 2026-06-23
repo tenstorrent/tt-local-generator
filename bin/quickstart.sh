@@ -332,19 +332,27 @@ except Exception as e:
 PYEOF
 }
 
-# Only validate if the server is actually up and model-ready
+# Only validate if the server is actually up and model-ready.
+# If the server just started (step 6), model_ready may briefly be false while
+# the background load thread finishes — wait up to 30s for it to flip.
 _can_validate=0
 if _health_check; then
-    if python3 -c "
+    _wait_ready=0
+    while [[ $_wait_ready -lt 30 ]]; do
+        _mr=$(python3 -c "
 import urllib.request, json, sys
 try:
     r = urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)
-    ready = json.loads(r.read()).get('model_ready', False)
-    sys.exit(0 if ready else 1)
-except: sys.exit(1)
-" 2>/dev/null; then
-        _can_validate=1
-    fi
+    print(json.loads(r.read()).get('model_ready', False))
+except: print(False)
+" 2>/dev/null)
+        if [[ "$_mr" == "True" ]]; then
+            _can_validate=1
+            break
+        fi
+        sleep 2
+        _wait_ready=$(( _wait_ready + 2 ))
+    done
 fi
 
 if [[ $STATUS_ONLY -eq 1 ]]; then
