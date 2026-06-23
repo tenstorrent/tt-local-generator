@@ -207,11 +207,58 @@ fi
 # ── Step 5: GTK4 / PyGObject (informational) ─────────────────────────────────
 step 5 "GTK4 / PyGObject  (GUI only — prompt server works without this)"
 
+_GTK_APT_CMD="sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0"
+
+_gtk_install_hint() {
+    # Ask Qwen3-0.6B for a one-line install recommendation.
+    # Falls back to the known apt command if the server isn't up yet.
+    python3 - <<'PYEOF'
+import urllib.request, json, sys
+
+FALLBACK = "sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0"
+
+payload = json.dumps({
+    "model": "Qwen3-0.6B",
+    "messages": [{
+        "role": "user",
+        "content": (
+            "I'm on Ubuntu 24.04 and the GTK4 Python bindings (python3-gi) are missing. "
+            "Give me the single apt install command to fix it. "
+            "Reply with only the command — no explanation, no markdown. /no_think"
+        ),
+    }],
+    "max_tokens": 40,
+    "temperature": 0.1,
+}).encode()
+
+req = urllib.request.Request(
+    "http://127.0.0.1:8001/v1/chat/completions",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read())
+    content = data["choices"][0]["message"]["content"].strip()
+    # Sanity-check: must look like a shell command, not prose
+    if content.startswith("sudo ") or content.startswith("apt "):
+        print(content)
+        sys.exit(0)
+except Exception:
+    pass
+
+print(FALLBACK)
+PYEOF
+}
+
 if python3 -c "import gi; gi.require_version('Gtk','4.0'); from gi.repository import Gtk" 2>/dev/null; then
     pass "GTK4 + PyGObject available"
 else
     warn_s "GTK4 bindings not found — GUI (./tt-gen) will not open"
-    info "Fix: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0"
+    # Try Qwen for a tailored install hint; fall back to known apt command
+    _gtk_hint=$(_gtk_install_hint 2>/dev/null || echo "$_GTK_APT_CMD")
+    info "Fix: ${_gtk_hint}"
 fi
 
 # ── Step 6: Prompt server (port 8001) ─────────────────────────────────────────
