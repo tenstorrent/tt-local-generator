@@ -1126,18 +1126,21 @@ class ArtgenPanel(Gtk.Box):
 
         from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
 
-        GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
-
-        ok, hw_msg = check_hardware()
-        if not ok:
-            GLib.idle_add(self._finish_error,
-                f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
-            return
+        # Hardware check is only meaningful for blackhole mode; cpu/sim run without TT hardware.
+        if args.ad_mode == "blackhole":
+            GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
+            ok, hw_msg = check_hardware()
+            if not ok:
+                GLib.idle_add(self._finish_error,
+                    f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
+                return
+        else:
+            hw_msg = args.ad_mode
 
         short_id = str(_uuid.uuid4())[:8]
         out_path = make_artgen_path(short_id, ".gif")
 
-        GLib.idle_add(self._set_status, f"Starting AnimateDiff on Blackhole ({hw_msg})…")
+        GLib.idle_add(self._set_status, f"Starting AnimateDiff ({hw_msg})…")
 
         t0 = time.monotonic()
 
@@ -1188,7 +1191,7 @@ class ArtgenPanel(Gtk.Box):
             "seed": args.ad_seed,
             "temporal_alpha": args.ad_temporal_alpha,
             "lightning": args.ad_lightning,
-            "motion_adapter": bool(args.ad_motion_adapter),
+            "motion_adapter": args.ad_motion_adapter is not None,
             "chain_from": args.ad_chain_from or None,
             "chain_save": chain_save_path,
             "generation_seconds": elapsed_s,

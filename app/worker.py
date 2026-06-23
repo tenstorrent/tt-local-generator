@@ -806,11 +806,15 @@ class AnimateDiffGenerationWorker:
         job_id = str(uuid.uuid4())
 
         # ── 1. Hardware check ─────────────────────────────────────────────────
-        on_progress("Checking hardware…")
-        ok, hw_msg = check_hardware()
-        if not ok:
-            on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
-            return
+        # Only required for blackhole mode; cpu/sim run without TT hardware.
+        if self._mode == "blackhole":
+            on_progress("Checking hardware…")
+            ok, hw_msg = check_hardware()
+            if not ok:
+                on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
+                return
+        else:
+            hw_msg = self._mode
 
         if self._is_cancelled():
             on_error("Cancelled by user")
@@ -824,7 +828,7 @@ class AnimateDiffGenerationWorker:
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
         # ── 3. Run subprocess ─────────────────────────────────────────────────
-        on_progress(f"Loading AnimateDiff model… ({hw_msg})")
+        on_progress(f"Loading AnimateDiff model ({hw_msg})…")
 
         def _progress_fwd(msg: str) -> None:
             if not self._is_cancelled():
