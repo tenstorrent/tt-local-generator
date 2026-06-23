@@ -107,7 +107,7 @@ class AnimateDiffGenerator(ArtGenerator):
                        choices=["blackhole", "cpu", "sim"],
                        help="Execution backend (default: blackhole)")
         p.add_argument("--frames", type=int, default=8,
-                       help="Frames to generate (default: 8 blackhole, 16 cpu)")
+                       help="Frames to generate (default: 8)")
         p.add_argument("--steps", type=int, default=25,
                        help="Denoising steps (default: 25)")
         p.add_argument("--seed", type=int, default=42,

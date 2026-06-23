@@ -15,10 +15,10 @@ Enter
 Sleep 500ms
 Show
 
-Type "# Fresh clone of feat/quickstart branch"
+Type "# Fresh clone"
 Enter
 Sleep 300ms
-Type "git clone --branch feat/quickstart --depth 1 file:///home/ttuser/code/tt-local-generator tt-quickstart-demo 2>&1 | tail -3"
+Type "git clone --depth 1 file:///home/ttuser/code/tt-local-generator tt-quickstart-demo 2>&1 | tail -3"
 Enter
 Sleep 4s
 

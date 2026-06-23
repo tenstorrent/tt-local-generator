@@ -21,7 +21,7 @@ Show
 Ctrl+L
 
 # ── Clone ─────────────────────────────────────────────────────────────────────
-Type "mkdir -p ~/code && git clone --depth 1 --branch feat/animatediff-v0.9 https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator"
+Type "mkdir -p ~/code && git clone --depth 1 https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator"
 Enter
 Sleep 10s
 

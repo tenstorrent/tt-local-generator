@@ -9553,20 +9553,20 @@ class MainWindow(Gtk.ApplicationWindow):
             video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
-                # Guard: if only 1 chip is present and a server model is loaded on it,
-                # AnimateDiff can't run — both want exclusive access to the same device.
-                if self._controls._server_ready and self._count_blackhole_chips() == 1:
+                ad = self._controls.get_animatediff_args()
+                # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
+                # exclusive Blackhole access and should not be blocked by a running server.
+                if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:
                     model_lbl = self._running_model or "a model"
                     self._gen_gallery.remove_pending()
                     self._gen_gallery = None
                     self._controls.set_busy(False)
                     self._set_status(
-                        f"Can't run AnimateDiff while {model_lbl} is loaded — "
+                        f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
                         "your Blackhole chip is busy. Stop the server first, then try again."
                     )
                     return
-                self._set_status("Starting AnimateDiff generation on Blackhole…")
-                ad = self._controls.get_animatediff_args()
+                self._set_status(f"Starting AnimateDiff generation ({ad['mode']})…")
                 # Auto-derive chain_save path from a session temp file when requested.
                 chain_save_path = None
                 if ad["chain_save"]:

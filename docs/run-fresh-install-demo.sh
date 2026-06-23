@@ -54,7 +54,7 @@ case "${1:-help}" in
 
   clone)
     _exec 'mkdir -p /home/ttuser/code && \
-      git clone --depth 1 --branch feat/animatediff-v0.9 \
+      git clone --depth 1 \
         https://github.com/tenstorrent/tt-local-generator.git \
         /home/ttuser/code/tt-local-generator 2>&1 | tail -5'
     ;;

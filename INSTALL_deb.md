@@ -52,12 +52,12 @@ Click **Servers ▸ Start** in the app. The status bar tracks startup progress
 live (~5 min on first run after weights are cached). The prompt server starts
 automatically in the background.
 
-> **Note:** `bin/quickstart.sh` is not needed for `.deb` installs. The
-> `postinst` script already handles everything quickstart does — Python deps,
-> vendor clone, patches, `.env`, and model download. Running quickstart on a
-> deb install would attempt to re-clone and re-patch files that are already
-> managed by the package. If you hit post-install problems, check
-> `/tmp/tt_prompt_gen.log` and re-run `tt-local-gen-download-model` instead.
+> **Note:** `bin/quickstart.sh` is not needed for `.deb` installs and should
+> not be run on a package-managed install — it would attempt to re-clone and
+> re-patch files already managed by the package. The `postinst` script handles
+> the `.env` seed and a small pip extra (`markovify`); model weights are **not**
+> downloaded automatically and must be fetched with `tt-local-gen-download-model`
+> (see above). If you hit post-install problems, check `/tmp/tt_prompt_gen.log`.
 
 ---
 
