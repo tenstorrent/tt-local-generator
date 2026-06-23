@@ -89,17 +89,17 @@ hr
 step 1 "Python dependencies (torch, transformers, fastapi, uvicorn, markovify)"
 
 _PYTHON_DEPS_OK=1
-if python3 -c "import torch, transformers, fastapi, uvicorn, markovify" 2>/dev/null; then
+if python3 -c "import torch, transformers, fastapi, uvicorn, markovify, accelerate" 2>/dev/null; then
     pass "Python deps already installed"
 else
     if [[ $STATUS_ONLY -eq 1 ]]; then
         fail_s "Python deps missing"
-        info "Fix: pip3 install --break-system-packages torch transformers 'fastapi>=0.100.0' 'uvicorn[standard]>=0.23.0' markovify"
+        info "Fix: pip3 install --break-system-packages torch transformers accelerate 'fastapi>=0.100.0' 'uvicorn[standard]>=0.23.0' markovify"
         _PYTHON_DEPS_OK=0
     else
         info "Installing missing packages (pip3 --break-system-packages)…"
         if pip3 install --break-system-packages \
-               torch transformers \
+               torch transformers accelerate \
                "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" \
                markovify \
                >> "$LOG_FILE" 2>&1; then
@@ -250,9 +250,9 @@ else
     info "Starting prompt server (first run downloads ~1.2 GB model)…"
     "$SCRIPT_DIR/start_prompt_gen.sh" --gui >> "$LOG_FILE" 2>&1 || true
 
-    info "Waiting for model to load (up to 3 min on first run)…"
+    info "Waiting for model to load (up to 5 min on first run)…"
     _waited=0
-    _max=180
+    _max=300
     _dot_count=0
     while [[ $_waited -lt $_max ]]; do
         sleep 5
