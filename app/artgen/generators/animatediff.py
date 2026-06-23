@@ -6,20 +6,21 @@ AnimateDiff generator — Blackhole-accelerated GIF generation.
 
 Registered as generator name "animatediff". Unlike LLM-based generators,
 this one skips the build_prompt/call_llm pipeline entirely; artgen_panel.py
-routes "animatediff" to _run_animatediff() which runs generate_blackhole_v2.py
+routes "animatediff" to _run_animatediff() which runs the unified generate.py
 as a subprocess on the tt-metal Python env.
 
-Phase 2.5 architecture (generate_blackhole_v2.py):
-  - TTNN UNet denoising on Blackhole (SD 1.4 spatial denoising, ~15 s/frame P300C)
-  - Cross-frame self-attention applied to stacked noise predictions at each step
-    (gives genuine temporal coherence without the MotionAdapter TemporalTransformer)
-  - temporal_alpha blends pure shared-noise (0.0) towards full cross-frame attention (1.0)
-  - VAE decode on CPU (TTNN VAE conv_out OOMs on Blackhole due to L1 grid mismatch)
+Modes (--mode):
+  blackhole  — TTNN UNet on Blackhole hardware (Phase 2.5 cross-frame temporal
+               attention; Phase 3 with --motion-adapter). Default.
+  cpu        — Diffusers AnimateDiff pipeline on CPU/CUDA. Supports Lightning
+               distilled weights (--lightning).
+  sim        — Software simulator (libttsim_bh.so). For development only.
 
-Hardware requirement: Blackhole device (P100/P150/P300c/QB2). No CPU fallback.
+Hardware requirement for blackhole mode: Blackhole device (P100/P150/P300c/QB2).
+
 Script resolution order:
-  1. vendor/tt-animatediff/examples/generate_blackhole_v2.py  (git submodule, v0.1.0+)
-  2. ~/code/tt-animatediff/examples/generate_blackhole_v2.py  (developer checkout)
+  1. vendor/tt-animatediff/examples/generate.py   (git submodule, v0.9.0+)
+  2. ~/code/tt-animatediff/examples/generate.py   (developer checkout)
 """
 
 from __future__ import annotations
@@ -82,7 +83,7 @@ _SUBMODULE_DIR = _REPO_ROOT / "vendor" / "tt-animatediff"
 _CANONICAL_DIR = Path.home() / "code" / "tt-animatediff"
 _SCRIPT_DIR = (
     _SUBMODULE_DIR
-    if (_SUBMODULE_DIR / "examples" / "generate_blackhole_v2.py").exists()
+    if (_SUBMODULE_DIR / "examples" / "generate.py").exists()
     else _CANONICAL_DIR
 )
 
@@ -102,6 +103,9 @@ class AnimateDiffGenerator(ArtGenerator):
                        help="Prompt text (auto-generated via prompt engine if omitted)")
         p.add_argument("--negative-prompt", default="blurry, low quality",
                        dest="negative_prompt", metavar="TEXT")
+        p.add_argument("--mode", default="blackhole",
+                       choices=["blackhole", "cpu", "sim"],
+                       help="Execution backend (default: blackhole)")
         p.add_argument("--frames", type=int, default=8,
                        help="Frames to generate (default: 8)")
         p.add_argument("--steps", type=int, default=25,
@@ -111,6 +115,36 @@ class AnimateDiffGenerator(ArtGenerator):
         p.add_argument("--temporal-alpha", type=float, default=0.35,
                        dest="temporal_alpha",
                        help="Cross-frame attention blend 0–1 (default: 0.35)")
+        # Performance / scheduler
+        p.add_argument("--lightning", action="store_true",
+                       help="Use Euler scheduler (cpu: loads distilled weights; blackhole: solver only)")
+        p.add_argument("--lightning-steps", type=int, default=4, choices=[2, 4, 8],
+                       dest="lightning_steps",
+                       help="Distillation step count for cpu Lightning mode (default: 4)")
+        p.add_argument("--device-id", type=int, default=None,
+                       dest="device_id",
+                       help="Blackhole chip index to pin this run to (default: all chips)")
+        # Chain continuity
+        p.add_argument("--chain-from", default=None, dest="chain_from", metavar="PATH",
+                       help="Load latents from a previous --chain-save run for visual continuity")
+        p.add_argument("--chain-save", default=None, dest="chain_save", metavar="PATH",
+                       help="Save this run's final latents for use by --chain-from")
+        p.add_argument("--chain-alpha", type=float, default=0.6, dest="chain_alpha",
+                       help="Chain blend weight 0–1 (default: 0.6)")
+        # Phase 3 MotionAdapter
+        p.add_argument("--motion-adapter", default=None, dest="motion_adapter",
+                       nargs="?", const="guoyww/animatediff-motion-adapter-v1-5-2",
+                       metavar="PATH",
+                       help="Enable Phase 3 MotionAdapter (blackhole only). "
+                            "PATH defaults to HuggingFace cache if omitted.")
+        p.add_argument("--motion-adapter-alpha", type=float, default=1.0,
+                       dest="motion_adapter_alpha",
+                       help="MotionAdapter injection blend 0–1 (default: 1.0, 0=bypass)")
+        p.add_argument("--motion-adapter-skip", nargs="*", default=None,
+                       dest="motion_adapter_skip",
+                       metavar="KEY",
+                       help="Injection-point keys to skip (down0..down2 mid up0..up2). "
+                            "Skipping up1 up2 is fastest with minimal quality loss.")
         p.add_argument("--count", type=int, default=1,
                        help="Number of GIFs to generate in sequence (default: 1)")
 
@@ -191,36 +225,42 @@ def check_hardware() -> tuple[bool, str]:
 def run_subprocess(
     prompt: str,
     out_path: Path,
+    mode: str = "blackhole",
     frames: int = 8,
     steps: int = 25,
     seed: int = 42,
     negative_prompt: str = "blurry, low quality",
     temporal_alpha: float = 0.35,
+    lightning: bool = False,
+    lightning_steps: int = 4,
+    device_id: int | None = None,
+    chain_from: str | None = None,
+    chain_save: str | None = None,
+    chain_alpha: float = 0.6,
+    motion_adapter: str | None = None,
+    motion_adapter_alpha: float = 1.0,
+    motion_adapter_skip: list[str] | None = None,
     on_progress: Callable[[str], None] | None = None,
     timeout: int = 1800,
 ) -> tuple[bool, str]:
-    """Run generate_blackhole_v2.py as a subprocess.
+    """Run the unified generate.py as a subprocess.
 
-    Streams stdout line-by-line, calling on_progress(line) for each line that
-    contains "Frame", "Step", "Generating", or "Loading".
+    Streams stdout line-by-line, calling on_progress(line) for each progress
+    line. generate.py emits \\r-terminated step progress and \\n-terminated
+    frame/load events; PYTHONUNBUFFERED=1 ensures real-time streaming.
 
-    generate_blackhole_v2.py emits step progress with \\r (carriage return) and
-    frame-decode progress with \\n. PYTHONUNBUFFERED=1 ensures both come through
-    in real-time; Python's universal-newlines mode (text=True) normalises \\r → \\n.
-
-    timeout: maximum wall-clock seconds before the subprocess is killed (default
-    1800 = 30 minutes). Raise for very long multi-frame runs; lower for CI.
+    timeout: maximum wall-clock seconds (default 1800 = 30 min).
 
     Returns (success, error_message). error_message is "" on success.
     """
     _ensure_log_handler()
     import threading
 
-    script = _SCRIPT_DIR / "examples" / "generate_blackhole_v2.py"
+    script = _SCRIPT_DIR / "examples" / "generate.py"
     if not script.exists():
         return False, (
-            f"AnimateDiff script not found: {script}\n"
-            "Run the AnimateDiff lesson in the Tenstorrent walkthrough to install it."
+            f"AnimateDiff generate.py not found: {script}\n"
+            "Ensure the vendor/tt-animatediff submodule is initialised (git submodule update --init)."
         )
 
     if not _PYTHON.exists():
@@ -233,7 +273,6 @@ def run_subprocess(
     env = os.environ.copy()
     env["TT_METAL_ARCH_NAME"] = "blackhole"
     env["TT_METAL_HOME"] = str(_TT_METAL)
-    # Disable Python output buffering so \r-terminated step lines stream immediately
     env["PYTHONUNBUFFERED"] = "1"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +280,7 @@ def run_subprocess(
     cmd = [
         str(_PYTHON),
         str(script),
+        "--mode", mode,
         "--prompt", prompt,
         "--negative-prompt", negative_prompt,
         "--frames", str(frames),
@@ -250,19 +290,43 @@ def run_subprocess(
         "--output", str(out_path),
     ]
 
+    if lightning:
+        cmd.append("--lightning")
+        # --lightning-steps only matters for cpu mode (distilled weights)
+        if mode == "cpu":
+            cmd += ["--lightning-steps", str(lightning_steps)]
+
+    if device_id is not None:
+        cmd += ["--device-id", str(device_id)]
+
+    if chain_from:
+        cmd += ["--chain-from", chain_from]
+    if chain_save:
+        cmd += ["--chain-save", chain_save]
+    if chain_from or chain_save:
+        cmd += ["--chain-alpha", str(chain_alpha)]
+
+    if motion_adapter is not None:
+        # Pass as flag + optional path; empty string means use HF default
+        if motion_adapter:
+            cmd += ["--motion-adapter", motion_adapter]
+        else:
+            cmd.append("--motion-adapter")
+        cmd += ["--motion-adapter-alpha", str(motion_adapter_alpha)]
+        if motion_adapter_skip:
+            cmd += ["--motion-adapter-skip"] + list(motion_adapter_skip)
+
     import datetime as _dt
     run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Per-run log file captures complete subprocess output for post-mortem analysis.
     run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
-    _log.info("run_start run_id=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
-              run_id, out_path, prompt, frames, steps, seed)
+    _log.info("run_start run_id=%s mode=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
+              run_id, mode, out_path, prompt, frames, steps, seed)
     _log.info("cmd: %s", " ".join(str(c) for c in cmd))
 
-    timed_out = threading.Event()
-    all_output: list[str] = []   # accumulate every line for run_log and error reporting
+    all_output: list[str] = []
 
     def _drain(proc):
-        """Read stdout+stderr in a thread; log every line, forward progress lines to caller."""
+        """Read stdout+stderr; log every line, forward progress lines to caller."""
         with open(run_log_path, "w") as run_log:
             run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
             for raw_line in proc.stdout:
@@ -271,10 +335,14 @@ def run_subprocess(
                 run_log.write(line + "\n")
                 run_log.flush()
                 _log.debug("[subprocess] %s", line)
-                if on_progress and ("Frame" in line or "Step" in line
-                                    or "Generating" in line or "Loading" in line
-                                    or "Error" in line or "Traceback" in line
-                                    or "fatal" in line.lower() or "ARC" in line):
+                if on_progress and (
+                    "Frame" in line or "Step" in line
+                    or "Generating" in line or "Loading" in line
+                    or "chain" in line.lower() or "adapter" in line.lower()
+                    or "lightning" in line.lower()
+                    or "Error" in line or "Traceback" in line
+                    or "fatal" in line.lower() or "ARC" in line
+                ):
                     on_progress(line.strip())
 
     try:
@@ -292,18 +360,15 @@ def run_subprocess(
 
     drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
     drain_thread.start()
-
     drain_thread.join(timeout=timeout)
 
     if drain_thread.is_alive():
-        timed_out.set()
         proc.kill()
         proc.wait()
         drain_thread.join(timeout=5)
         minutes = timeout // 60
-        msg = f"AnimateDiff timed out after {minutes} minutes and was stopped"
         _log.error("run_timeout run_id=%s after %ds", run_id, timeout)
-        return False, msg
+        return False, f"AnimateDiff timed out after {minutes} minutes and was stopped"
 
     try:
         proc.wait(timeout=5)
@@ -313,12 +378,9 @@ def run_subprocess(
 
     rc = proc.returncode
     if rc != 0:
-        # Surface the last 20 lines of output in the error message so the caller
-        # (and the UI) can show the actual TTNN/ARC error without opening the log.
         tail = "\n".join(all_output[-20:]) if all_output else "(no output captured)"
-        msg = f"generate_blackhole_v2.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
+        msg = f"generate.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
         _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
-        _log.error("last output:\n%s", tail)
         return False, msg
 
     if not out_path.exists():

@@ -41,6 +41,7 @@ DEFAULTS: dict = {
     "max_disk_gb": 0,               # 0 = use hardcoded 18 GB floor; N = stop when less than N GB free
     # TT-TV timing
     "tttv_image_dwell_s": 10,       # seconds to display each image in TT-TV
+    "tttv_gif_dwell_s": 15,         # seconds to display each AnimateDiff GIF in TT-TV
     "tttv_video_fallback_s": 90,    # fallback timer (s) if GStreamer never fires the 'ended' signal
     # Prompt director style
     "director_style_prob": 0.33,    # probability a video prompt draws a named director aesthetic

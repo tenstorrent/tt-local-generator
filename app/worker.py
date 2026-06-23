@@ -738,6 +738,17 @@ class AnimateDiffGenerationWorker:
         frames: int = 8,
         temporal_alpha: float = 0.35,
         model: str = "animatediff-blackhole",
+        # v0.9 params
+        mode: str = "blackhole",
+        lightning: bool = False,
+        lightning_steps: int = 4,
+        device_id: "int | None" = None,
+        chain_from: "str | None" = None,
+        chain_save: "str | None" = None,
+        chain_alpha: float = 0.6,
+        motion_adapter: "str | None" = None,
+        motion_adapter_alpha: float = 1.0,
+        motion_adapter_skip: "list | None" = None,
     ):
         self._store = store
         self._prompt = prompt
@@ -747,6 +758,16 @@ class AnimateDiffGenerationWorker:
         self._frames = frames
         self._temporal_alpha = temporal_alpha
         self._model = model
+        self._mode = mode
+        self._lightning = lightning
+        self._lightning_steps = lightning_steps
+        self._device_id = device_id
+        self._chain_from = chain_from
+        self._chain_save = chain_save
+        self._chain_alpha = chain_alpha
+        self._motion_adapter = motion_adapter
+        self._motion_adapter_alpha = motion_adapter_alpha
+        self._motion_adapter_skip = motion_adapter_skip
         self._cancelled = False
         self._lock = threading.Lock()
 
@@ -785,11 +806,15 @@ class AnimateDiffGenerationWorker:
         job_id = str(uuid.uuid4())
 
         # ── 1. Hardware check ─────────────────────────────────────────────────
-        on_progress("Checking hardware…")
-        ok, hw_msg = check_hardware()
-        if not ok:
-            on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
-            return
+        # Only required for blackhole mode; cpu/sim run without TT hardware.
+        if self._mode == "blackhole":
+            on_progress("Checking hardware…")
+            ok, hw_msg = check_hardware()
+            if not ok:
+                on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
+                return
+        else:
+            hw_msg = self._mode
 
         if self._is_cancelled():
             on_error("Cancelled by user")
@@ -803,7 +828,7 @@ class AnimateDiffGenerationWorker:
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
         # ── 3. Run subprocess ─────────────────────────────────────────────────
-        on_progress(f"Loading AnimateDiff model… ({hw_msg})")
+        on_progress(f"Loading AnimateDiff model ({hw_msg})…")
 
         def _progress_fwd(msg: str) -> None:
             if not self._is_cancelled():
@@ -813,11 +838,21 @@ class AnimateDiffGenerationWorker:
         ok, err = run_subprocess(
             prompt=self._prompt,
             out_path=out_path,
+            mode=self._mode,
             frames=self._frames,
             steps=self._steps,
             seed=self._seed,
             negative_prompt=self._negative_prompt,
             temporal_alpha=self._temporal_alpha,
+            lightning=self._lightning,
+            lightning_steps=self._lightning_steps,
+            device_id=self._device_id,
+            chain_from=self._chain_from,
+            chain_save=self._chain_save,
+            chain_alpha=self._chain_alpha,
+            motion_adapter=self._motion_adapter,
+            motion_adapter_alpha=self._motion_adapter_alpha,
+            motion_adapter_skip=self._motion_adapter_skip,
             on_progress=_progress_fwd,
         )
 

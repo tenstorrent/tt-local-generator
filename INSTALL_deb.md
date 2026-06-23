@@ -52,11 +52,53 @@ Click **Servers ▸ Start** in the app. The status bar tracks startup progress
 live (~5 min on first run after weights are cached). The prompt server starts
 automatically in the background.
 
+> **Note:** `bin/quickstart.sh` is not needed for `.deb` installs and should
+> not be run on a package-managed install — it would attempt to re-clone and
+> re-patch files already managed by the package. The `postinst` script handles
+> the `.env` seed and a small pip extra (`markovify`); model weights are **not**
+> downloaded automatically and must be fetched with `tt-local-gen-download-model`
+> (see above). If you hit post-install problems, check `/tmp/tt_prompt_gen.log`.
+
 ---
 
 ## Path B — git clone (any platform / dev use)
 
 Clone destination `~/code/tt-local-generator` is expected by all scripts.
+
+### Recommended: single-command setup
+
+```bash
+git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
+cd ~/code/tt-local-generator
+./bin/quickstart.sh
+```
+
+`quickstart.sh` runs and validates every setup step in order:
+
+| Step | What it does |
+|------|-------------|
+| 1 | Python deps — `torch`, `transformers`, `fastapi`, `uvicorn`, `markovify` |
+| 2 | Vendor clone — `vendor/tt-inference-server` at the pinned SHA |
+| 3 | Vendor `.env` — seeds `JWT_SECRET`; warns if it looks like a placeholder |
+| 4 | Patches — hotpatches applied to the vendor tree (idempotent) |
+| 5 | GTK4/PyGObject — informational check; GUI won't open without it |
+| 6 | Prompt server — starts Qwen3-0.6B on CPU (port 8001) |
+| 7 | Validation — sends a live inference request to confirm the model responds |
+
+If any step fails and the prompt server is running, a **"Qwen suggests:"** box
+prints targeted fix commands automatically. Pass `--no-assist` to skip it.
+
+```bash
+./bin/quickstart.sh            # full check-and-fix + start + validate
+./bin/quickstart.sh --status   # checks only, no side effects
+./bin/quickstart.sh --no-assist  # no Qwen remediation advice on failure
+```
+
+Steps 2 and 4 must be re-run any time `vendor/VENDOR_SHA` changes (after
+pulling a commit that bumps the pinned server version). Re-running
+`quickstart.sh` handles both automatically.
+
+### Manual step-by-step
 
 ```bash
 # 1. Clone
@@ -76,10 +118,6 @@ cd ~/code/tt-local-generator
 # 5. Launch
 ./tt-gen
 ```
-
-Steps 3 and 4 must be re-run any time `vendor/VENDOR_SHA` changes (i.e. after
-pulling a new commit that updates the pinned server version). The `start_*.sh`
-scripts check that patches are applied and print an error if they are not.
 
 Model weights are not downloaded automatically in clone mode. Pre-download with:
 ```bash

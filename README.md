@@ -124,8 +124,38 @@ tt-local-generator/
 
 ## Quick start
 
+### Single-command setup (recommended)
+
 ```bash
-# 1. Clone and set up
+git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
+cd ~/code/tt-local-generator
+./bin/quickstart.sh
+```
+
+`quickstart.sh` runs all setup steps in order — Python deps, vendor clone,
+`.env`, patches, GTK4 check — then starts the Qwen3-0.6B prompt server and
+sends it a test prompt to confirm the full CPU stack is working. Each step is
+idempotent; re-running is safe. If any step fails, the script prints a
+**"Qwen suggests:"** box with targeted remediation commands (requires the
+prompt server to be running; skipped if it isn't up yet).
+
+```
+./bin/quickstart.sh            # full check-and-fix + start prompt server
+./bin/quickstart.sh --status   # checks only, no installs or server start
+./bin/quickstart.sh --no-assist  # suppress Qwen remediation advice on failure
+```
+
+Once quickstart passes, start the video inference server and the GUI:
+
+```bash
+./bin/start_wan_qb2.sh         # Wan2.2 on QB2 (P300x2) — ~5 min to ready
+./tt-gen
+```
+
+### Manual setup (step-by-step)
+
+```bash
+# 1. Clone and set up system deps
 git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
 cd ~/code/tt-local-generator
 ./bin/setup_ubuntu.sh
@@ -134,7 +164,7 @@ cd ~/code/tt-local-generator
 ./bin/apply_patches.sh
 
 # 3. Start the inference server (QB2 / P300x2)
-./bin/start_wan_qb2.sh         # Wan2.2 — wait ~5 min for "Application startup complete"
+./bin/start_wan_qb2.sh         # wait ~5 min for "Application startup complete"
 
 # 4. Launch the UI
 ./tt-gen

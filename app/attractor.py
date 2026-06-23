@@ -62,6 +62,7 @@ _MODEL_LABELS: dict[str, str] = {
     "flux.1-schnell":           "FLUX",
     "wan2.2-animate-14b":       "Animate-14B",
     "skyreels-v2-i2v-14b-540p": "SkyReels I2V",
+    "animatediff-blackhole":    "AnimateDiff",
 }
 
 # Sentinel prefix used to encode model-virtual channels in _channel_ids.
@@ -351,6 +352,29 @@ _CSS = b"""
     font-size: 22px;
     font-style: italic;
     line-height: 1.7;
+}
+
+/* Grid view */
+.att-grid {
+    background-color: @tt_bg_darkest;
+}
+.att-grid-cell {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
+    border-radius: 4px;
+    overflow: hidden;
+    min-width: 140px;
+    min-height: 100px;
+}
+.att-grid-prompt {
+    color: @tt_text_muted;
+    font-size: 8px;
+    font-style: italic;
+    padding: 2px 4px;
+}
+.att-grid-placeholder {
+    color: @tt_text_muted;
+    font-size: 28px;
 }
 
 /* User prompt entry at bottom of sidebar */
@@ -1080,6 +1104,22 @@ class AttractorWindow(Gtk.Window):
         self._user_entry.connect("activate", self._on_user_prompt_activate)
         sidebar.append(self._user_entry)
 
+        # ── View toggle (player ↔ grid) ───────────────────────────────────
+        view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._view_player_btn = Gtk.ToggleButton(label="▶ Player")
+        self._view_player_btn.add_css_class("attractor-stat-lbl")
+        self._view_player_btn.set_active(True)
+        self._view_player_btn.set_hexpand(True)
+        self._view_grid_btn = Gtk.ToggleButton(label="⊞ Grid")
+        self._view_grid_btn.add_css_class("attractor-stat-lbl")
+        self._view_grid_btn.set_hexpand(True)
+        # Link toggle buttons so only one is active at a time.
+        self._view_grid_btn.set_group(self._view_player_btn)
+        self._view_player_btn.connect("toggled", self._on_view_toggle)
+        view_row.append(self._view_player_btn)
+        view_row.append(self._view_grid_btn)
+        sidebar.append(view_row)
+
         stop_btn = Gtk.Button(label="■  Stop TT-TV")
         stop_btn.add_css_class("attractor-stop-btn")
         stop_btn.connect("clicked", lambda _: self.close())
@@ -1162,7 +1202,43 @@ class AttractorWindow(Gtk.Window):
         media_area.append(player_overlay)
         media_area.append(hud)
 
-        outer.set_end_child(media_area)
+        # ── Grid view ─────────────────────────────────────────────────────
+        # Thumbnail grid that fills with cells as GIFs are generated.
+        # Shown when the user toggles to Grid mode via the sidebar toggle.
+        grid_scroll = Gtk.ScrolledWindow()
+        grid_scroll.set_hexpand(True)
+        grid_scroll.set_vexpand(True)
+        grid_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self._grid_box = Gtk.FlowBox()
+        self._grid_box.set_valign(Gtk.Align.START)
+        self._grid_box.set_max_children_per_line(6)
+        self._grid_box.set_min_children_per_line(2)
+        self._grid_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._grid_box.set_column_spacing(4)
+        self._grid_box.set_row_spacing(4)
+        self._grid_box.set_margin_top(4)
+        self._grid_box.set_margin_bottom(4)
+        self._grid_box.set_margin_start(4)
+        self._grid_box.set_margin_end(4)
+        self._grid_box.add_css_class("att-grid")
+        grid_scroll.set_child(self._grid_box)
+
+        # Populate grid with existing pool records at open time.
+        for rec in reversed(self._pool._records):
+            self._grid_add_record(rec)
+
+        # ── View stack: player mode | grid mode ───────────────────────────
+        self._view_stack = Gtk.Stack()
+        self._view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._view_stack.set_transition_duration(150)
+        self._view_stack.set_hexpand(True)
+        self._view_stack.set_vexpand(True)
+        self._view_stack.add_named(media_area, "player")
+        self._view_stack.add_named(grid_scroll, "grid")
+        self._view_stack.set_visible_child_name("player")
+
+        outer.set_end_child(self._view_stack)
         root_vbox.append(outer)
         root_vbox.append(self._build_att_status_bar())
 
@@ -1578,6 +1654,14 @@ class AttractorWindow(Gtk.Window):
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
             )
+        elif getattr(record, "media_type", "video") == "animatediff":
+            # Animated GIFs: GStreamer loops them indefinitely instead of emitting
+            # notify::ended, so use a fixed dwell timer to advance after one loop.
+            # Default: 15 s (enough to see the full loop at least once for 8-frame GIFs).
+            gif_dwell_ms = int(_settings.get("tttv_gif_dwell_s") * 1000)
+            self._pending_advance_source = GLib.timeout_add(
+                gif_dwell_ms, self._on_advance_timer
+            )
         elif _USE_SYSTEM_PLAYER:
             # macOS video: wire the GstPlayer EOS callback to advance.
             # Also arm a fallback timer in case EOS never fires (corrupt file, etc.).
@@ -1667,14 +1751,18 @@ class AttractorWindow(Gtk.Window):
         Back-pressure: if queue depth >= 3, waits 30 s before retrying (server
         isn't consuming jobs fast enough). Stops when _gen_stop is set.
         """
+        # AnimateDiff is slow (~5 min/frame); cap ahead-of-time queuing to 1 job.
+        # Server-based models can queue up to 3 because jobs are seconds apart.
+        _max_queue = 1 if self._model_source == "animatediff" else 3
+
         while not self._gen_stop.wait(0.0) and self._auto_generate:
             depth = self._get_queue_depth()
             generating = self._get_is_generating()
             GLib.idle_add(self._update_work_lbl, depth, generating)
             GLib.idle_add(self._update_coming_soon_ui)
 
-            if depth >= 3:
-                _log.debug("queue full (depth=%d) - waiting 30 s", depth)
+            if depth >= _max_queue:
+                _log.debug("queue full (depth=%d, max=%d) - waiting 30 s", depth, _max_queue)
                 GLib.idle_add(self._set_gen_status, "⏸  queue full…")
                 if self._gen_stop.wait(30.0):
                     break
@@ -1693,14 +1781,16 @@ class AttractorWindow(Gtk.Window):
                     break
                 continue
 
-            # Don't attempt generation when the server is known to be offline —
-            # show a single clean status line instead of raw connection errors.
-            server_ready, _ = self._get_server_status()
-            if not server_ready:
-                GLib.idle_add(self._set_gen_status, "⏸  server offline")
-                if self._gen_stop.wait(30.0):
-                    break
-                continue
+            # AnimateDiff runs locally on Blackhole — no inference server required.
+            # get_server_status() already returns True for animatediff, but be
+            # explicit here so the intent is clear.
+            if self._model_source != "animatediff":
+                server_ready, _ = self._get_server_status()
+                if not server_ready:
+                    GLib.idle_add(self._set_gen_status, "⏸  server offline")
+                    if self._gen_stop.wait(30.0):
+                        break
+                    continue
 
             try:
                 GLib.idle_add(self._set_gen_status, "✦  writing prompt…")
@@ -1934,6 +2024,10 @@ class AttractorWindow(Gtk.Window):
         self._update_coming_soon_ui()
         # Also refresh the "Next on TT-TV" thumbnail since the pool just grew.
         self._update_next_thumb()
+        # Add to the grid view so it pops in live when Grid mode is active.
+        if hasattr(self, "_grid_box"):
+            self._grid_add_record(record)
+
         if was_empty and self._started:
             # First item arrived after start() - begin playback now.
             # If start() hasn't fired yet (add_record raced ahead via idle_add),
@@ -1960,6 +2054,50 @@ class AttractorWindow(Gtk.Window):
             self._update_next_thumb()
             _log.info("record removed from pool: %s  (pool now %d)",
                       record_id, self._pool.size)
+
+    # ── View toggle (player ↔ grid) ───────────────────────────────────────
+
+    def _on_view_toggle(self, btn: Gtk.ToggleButton) -> None:
+        """Switch between player view and grid view via the sidebar toggle."""
+        if not self._alive:
+            return
+        if self._view_player_btn.get_active():
+            self._view_stack.set_visible_child_name("player")
+        else:
+            self._view_stack.set_visible_child_name("grid")
+
+    def _grid_add_record(self, record) -> None:
+        """Add a thumbnail cell for *record* to the grid view (main thread only)."""
+        thumb = getattr(record, "thumbnail_path", "") or ""
+        cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        cell.set_size_request(160, 120)
+        cell.add_css_class("att-grid-cell")
+
+        if thumb and Path(thumb).exists():
+            pic = Gtk.Picture()
+            pic.set_filename(thumb)
+            pic.set_content_fit(Gtk.ContentFit.COVER)
+            pic.set_hexpand(True)
+            pic.set_vexpand(True)
+            cell.append(pic)
+        else:
+            # Placeholder when no thumbnail available yet (e.g. GIF mid-generation)
+            lbl = Gtk.Label(label="🎬")
+            lbl.set_hexpand(True)
+            lbl.set_vexpand(True)
+            lbl.add_css_class("att-grid-placeholder")
+            cell.append(lbl)
+
+        prompt = getattr(record, "prompt", "") or ""
+        if prompt:
+            plbl = Gtk.Label(label=prompt[:60])
+            plbl.add_css_class("att-grid-prompt")
+            plbl.set_max_width_chars(20)
+            plbl.set_ellipsize(Pango.EllipsizeMode.END)
+            plbl.set_xalign(0)
+            cell.append(plbl)
+
+        self._grid_box.prepend(cell)
 
     # ── Channel / playlist switching ──────────────────────────────────────
 
