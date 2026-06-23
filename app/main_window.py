@@ -3856,7 +3856,7 @@ class ControlPanel(Gtk.Box):
         self._server_launching = False   # True while start/stop script is running
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
-        self._video_model: str = "wan2"   # "wan2" | "mochi"
+        self._video_model: str = "animatediff"   # default; overridden by last_successful_deployment or server health check
         self._image_model: str = "flux"   # "flux" | "sdxl"
         self.set_margin_top(12)
         self.set_margin_bottom(12)
@@ -5409,7 +5409,7 @@ class ControlPanel(Gtk.Box):
                 self._server_stop_btn.set_sensitive(True)
             elif model == "animatediff":
                 self._source_desc_lbl.set_label(
-                    "local TTNN  ·  AnimateDiff  ·  ~5 min/frame  ·  animated GIF  ·  no server needed"
+                    "local TTNN  ·  AnimateDiff  ·  ~15–20s (4-chip Lightning)  ·  animated GIF  ·  no server needed"
                 )
                 # AnimateDiff runs locally on Blackhole — no server to start/stop.
                 self._server_start_btn.set_sensitive(False)
@@ -8715,6 +8715,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 if ready and video_key is None:
                     pref = str(_settings.get("preferred_video_model") or "wan2")
                     video_key = pref if pref in ("wan2", "mochi", "skyreels") else "wan2"
+                    # animatediff doesn't use a server — server-ready path always
+                    # means a network model is running, so wan2 is a safe fallback here.
                 self._controls._shot_server_ready = bool(ready and video_key)
                 if video_key and ready:
                     # Honour the user's preferred model setting; auto-switch to

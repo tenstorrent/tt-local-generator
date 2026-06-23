@@ -807,9 +807,10 @@ class AnimateDiffGenerationWorker:
 
         # ── 1. Hardware check ─────────────────────────────────────────────────
         # Only required for blackhole mode; cpu/sim run without TT hardware.
+        num_chips = 1
         if self._mode == "blackhole":
             on_progress("Checking hardware…")
-            ok, hw_msg = check_hardware()
+            ok, hw_msg, num_chips = check_hardware()
             if not ok:
                 on_error(f"AnimateDiff requires Blackhole hardware: {hw_msg}")
                 return
@@ -828,7 +829,8 @@ class AnimateDiffGenerationWorker:
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
         # ── 3. Run subprocess ─────────────────────────────────────────────────
-        on_progress(f"Loading AnimateDiff model ({hw_msg})…")
+        chip_info = f"{num_chips} chip{'s' if num_chips != 1 else ''}" if self._mode == "blackhole" else hw_msg
+        on_progress(f"Loading AnimateDiff model ({chip_info})…")
 
         def _progress_fwd(msg: str) -> None:
             if not self._is_cancelled():
@@ -854,6 +856,7 @@ class AnimateDiffGenerationWorker:
             motion_adapter_alpha=self._motion_adapter_alpha,
             motion_adapter_skip=self._motion_adapter_skip,
             on_progress=_progress_fwd,
+            num_chips=num_chips if self._device_id is None else 1,
         )
 
         if not ok:

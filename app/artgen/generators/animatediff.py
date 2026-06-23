@@ -168,10 +168,12 @@ def _find_tt_smi() -> str | None:
     return shutil.which("tt-smi")
 
 
-def check_hardware() -> tuple[bool, str]:
+def check_hardware() -> tuple[bool, str, int]:
     """Check whether a Blackhole device is available and log per-chip health.
 
-    Returns (ok, message). ok=True means at least one Blackhole device detected.
+    Returns (ok, message, num_chips).
+      ok=True means at least one Blackhole device detected.
+      num_chips is the count of healthy Blackhole chips (0 on failure).
     Uses tt-smi -s (snapshot mode) to avoid launching the TUI.
 
     Also logs per-chip temperature and power so ARC hangs (sentinel 65536°C /
@@ -182,14 +184,14 @@ def check_hardware() -> tuple[bool, str]:
     tt_smi = _find_tt_smi()
     if tt_smi is None:
         _log.warning("tt-smi not found")
-        return False, "tt-smi not found (expected at ~/.tenstorrent-venv/bin/tt-smi)"
+        return False, "tt-smi not found (expected at ~/.tenstorrent-venv/bin/tt-smi)", 0
     try:
         result = subprocess.run(
             [tt_smi, "-s"], capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
         devices = data.get("device_info", [])
-        found_blackhole = False
+        blackhole_ids: list[int] = []
         arch_str = "unknown"
         for i, dev in enumerate(devices):
             bi = dev.get("board_info", {})
@@ -206,20 +208,127 @@ def check_hardware() -> tuple[bool, str]:
             if arc_dead:
                 _log.warning("chip%d ARC appears hung — sentinel temp/power values. "
                              "AC power cycle required to recover.", i)
+                continue  # exclude dead chips from the usable count
             if "blackhole" in arch or "p100" in arch or "p300" in arch or "p150" in arch:
-                found_blackhole = True
+                blackhole_ids.append(i)
                 arch_str = arch
-        if found_blackhole:
-            return True, arch_str
+        if blackhole_ids:
+            num = len(blackhole_ids)
+            _log.info("found %d healthy Blackhole chip(s): %s", num, blackhole_ids)
+            return True, f"{arch_str} ×{num}", num
         if devices:
             arch = devices[0].get("board_info", {}).get("board_type", "unknown")
             _log.warning("No Blackhole device (detected: %s)", arch)
-            return False, f"No Blackhole device found (detected: {arch})"
+            return False, f"No Blackhole device found (detected: {arch})", 0
         _log.warning("No TT hardware detected by tt-smi")
-        return False, "No TT hardware detected"
+        return False, "No TT hardware detected", 0
     except Exception as e:
         _log.exception("tt-smi check failed")
-        return False, f"tt-smi check failed: {e}"
+        return False, f"tt-smi check failed: {e}", 0
+
+
+def _build_cmd(
+    script: Path,
+    out_path: Path,
+    mode: str,
+    prompt: str,
+    negative_prompt: str,
+    frames: int,
+    steps: int,
+    seed: int,
+    temporal_alpha: float,
+    lightning: bool,
+    lightning_steps: int,
+    device_id: int | None,
+    chain_from: str | None,
+    chain_save: str | None,
+    chain_alpha: float,
+    motion_adapter: str | None,
+    motion_adapter_alpha: float,
+    motion_adapter_skip: list[str] | None,
+) -> list[str]:
+    """Assemble the generate.py command list for a single-chip invocation."""
+    cmd = [
+        str(_PYTHON),
+        str(script),
+        "--mode", mode,
+        "--prompt", prompt,
+        "--negative-prompt", negative_prompt,
+        "--frames", str(frames),
+        "--steps", str(steps),
+        "--seed", str(seed),
+        "--temporal-alpha", str(temporal_alpha),
+        "--output", str(out_path),
+    ]
+    if lightning:
+        cmd.append("--lightning")
+        if mode == "cpu":
+            cmd += ["--lightning-steps", str(lightning_steps)]
+    if device_id is not None:
+        cmd += ["--device-id", str(device_id)]
+    if chain_from:
+        cmd += ["--chain-from", chain_from]
+    if chain_save:
+        cmd += ["--chain-save", chain_save]
+    if chain_from or chain_save:
+        cmd += ["--chain-alpha", str(chain_alpha)]
+    if motion_adapter is not None:
+        if motion_adapter:
+            cmd += ["--motion-adapter", motion_adapter]
+        else:
+            cmd.append("--motion-adapter")
+        cmd += ["--motion-adapter-alpha", str(motion_adapter_alpha)]
+        if motion_adapter_skip:
+            cmd += ["--motion-adapter-skip"] + list(motion_adapter_skip)
+    return cmd
+
+
+def _stitch_gifs(shard_paths: list[Path], out_path: Path) -> bool:
+    """Concatenate GIF frames from multiple shard files into a single output GIF.
+
+    Each shard contains frames/N frames from one chip. They are interleaved in
+    chip order (shard 0 frame 0, shard 1 frame 0, … shard N frame 0, shard 0
+    frame 1, …) so the temporal sequence is preserved across the full run.
+
+    Returns True on success. Leaves out_path untouched on failure.
+    """
+    try:
+        from PIL import Image
+
+        # Collect all frames from each shard in order
+        shard_frames: list[list[Image.Image]] = []
+        for p in shard_paths:
+            frames_list: list[Image.Image] = []
+            with Image.open(p) as img:
+                for i in range(getattr(img, "n_frames", 1)):
+                    img.seek(i)
+                    frames_list.append(img.copy().convert("RGBA"))
+            shard_frames.append(frames_list)
+
+        # Interleave: shard0[0], shard1[0], … shardN[0], shard0[1], …
+        # (preserves temporal order when each chip renders its own temporal slice)
+        num_per_shard = len(shard_frames[0])
+        interleaved: list[Image.Image] = []
+        for fi in range(num_per_shard):
+            for shard in shard_frames:
+                if fi < len(shard):
+                    interleaved.append(shard[fi])
+
+        if not interleaved:
+            return False
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        interleaved[0].save(
+            out_path,
+            save_all=True,
+            append_images=interleaved[1:],
+            loop=0,
+            format="GIF",
+        )
+        return True
+    except Exception:
+        _log.exception("GIF stitch failed")
+        return False
 
 
 def run_subprocess(
@@ -242,19 +351,27 @@ def run_subprocess(
     motion_adapter_skip: list[str] | None = None,
     on_progress: Callable[[str], None] | None = None,
     timeout: int = 1800,
+    num_chips: int | None = None,
 ) -> tuple[bool, str]:
-    """Run the unified generate.py as a subprocess.
+    """Run the unified generate.py, using all available Blackhole chips in parallel.
 
-    Streams stdout line-by-line, calling on_progress(line) for each progress
-    line. generate.py emits \\r-terminated step progress and \\n-terminated
-    frame/load events; PYTHONUNBUFFERED=1 ensures real-time streaming.
+    When mode=="blackhole", device_id is None (all chips), and num_chips > 1:
+      - Spawns one generate.py process per chip, each pinned via --device-id.
+      - Distributes frames evenly across chips (frames must be divisible by num_chips).
+        If not evenly divisible, falls back to single-chip on chip 0.
+      - Each chip writes a shard GIF to a temp file; shards are interleaved and
+        stitched into out_path at the end.
+      - All processes run concurrently; wall-clock time ≈ single-chip time.
 
-    timeout: maximum wall-clock seconds (default 1800 = 30 min).
+    For single-chip runs, cpu/sim modes, or explicit device_id pins: runs a
+    single subprocess as before.
+
+    timeout applies to the slowest chip (all processes must finish within it).
 
     Returns (success, error_message). error_message is "" on success.
     """
     _ensure_log_handler()
-    import threading
+    import threading, tempfile, datetime as _dt
 
     script = _SCRIPT_DIR / "examples" / "generate.py"
     if not script.exists():
@@ -275,58 +392,77 @@ def run_subprocess(
     env["TT_METAL_HOME"] = str(_TT_METAL)
     env["PYTHONUNBUFFERED"] = "1"
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        str(_PYTHON),
-        str(script),
-        "--mode", mode,
-        "--prompt", prompt,
-        "--negative-prompt", negative_prompt,
-        "--frames", str(frames),
-        "--steps", str(steps),
-        "--seed", str(seed),
-        "--temporal-alpha", str(temporal_alpha),
-        "--output", str(out_path),
-    ]
-
-    if lightning:
-        cmd.append("--lightning")
-        # --lightning-steps only matters for cpu mode (distilled weights)
-        if mode == "cpu":
-            cmd += ["--lightning-steps", str(lightning_steps)]
-
-    if device_id is not None:
-        cmd += ["--device-id", str(device_id)]
-
-    if chain_from:
-        cmd += ["--chain-from", chain_from]
-    if chain_save:
-        cmd += ["--chain-save", chain_save]
-    if chain_from or chain_save:
-        cmd += ["--chain-alpha", str(chain_alpha)]
-
-    if motion_adapter is not None:
-        # Pass as flag + optional path; empty string means use HF default
-        if motion_adapter:
-            cmd += ["--motion-adapter", motion_adapter]
-        else:
-            cmd.append("--motion-adapter")
-        cmd += ["--motion-adapter-alpha", str(motion_adapter_alpha)]
-        if motion_adapter_skip:
-            cmd += ["--motion-adapter-skip"] + list(motion_adapter_skip)
-
-    import datetime as _dt
     run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
     _log.info("run_start run_id=%s mode=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
               run_id, mode, out_path, prompt, frames, steps, seed)
-    _log.info("cmd: %s", " ".join(str(c) for c in cmd))
+
+    # ── Decide: multi-chip parallel or single-chip ────────────────────────────
+    effective_chips = num_chips if (num_chips and num_chips > 1) else 1
+    use_multi = (
+        mode == "blackhole"
+        and device_id is None
+        and effective_chips > 1
+        and frames % effective_chips == 0
+        # chain continuity only makes sense on a single chip for now
+        and chain_from is None
+        and chain_save is None
+    )
+
+    if mode == "blackhole" and device_id is None and effective_chips > 1 and frames % effective_chips != 0:
+        _log.warning(
+            "frames=%d is not divisible by num_chips=%d — falling back to single chip. "
+            "Choose a frame count divisible by %d for multi-chip: %s",
+            frames, effective_chips, effective_chips,
+            [effective_chips * k for k in range(1, 9)],
+        )
+        if on_progress:
+            on_progress(
+                f"Note: {frames} frames not divisible by {effective_chips} chips — "
+                f"running on chip 0 only. Use a multiple of {effective_chips} for full parallelism."
+            )
+
+    if use_multi:
+        return _run_multi_chip(
+            script=script,
+            out_path=out_path,
+            mode=mode,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            frames=frames,
+            steps=steps,
+            seed=seed,
+            temporal_alpha=temporal_alpha,
+            lightning=lightning,
+            lightning_steps=lightning_steps,
+            num_chips=effective_chips,
+            motion_adapter=motion_adapter,
+            motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+            on_progress=on_progress,
+            timeout=timeout,
+            run_id=run_id,
+            env=env,
+        )
+
+    # ── Single-chip path ──────────────────────────────────────────────────────
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = _build_cmd(
+        script=script, out_path=out_path, mode=mode,
+        prompt=prompt, negative_prompt=negative_prompt,
+        frames=frames, steps=steps, seed=seed, temporal_alpha=temporal_alpha,
+        lightning=lightning, lightning_steps=lightning_steps,
+        device_id=device_id,
+        chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
+        motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+        motion_adapter_skip=motion_adapter_skip,
+    )
+
+    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
+    _log.info("single-chip cmd: %s", " ".join(str(c) for c in cmd))
 
     all_output: list[str] = []
 
     def _drain(proc):
-        """Read stdout+stderr; log every line, forward progress lines to caller."""
         with open(run_log_path, "w") as run_log:
             run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
             for raw_line in proc.stdout:
@@ -347,12 +483,8 @@ def run_subprocess(
 
     try:
         proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            cwd=str(_SCRIPT_DIR),
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env, cwd=str(_SCRIPT_DIR),
         )
     except Exception as e:
         _log.exception("Subprocess launch failed")
@@ -389,6 +521,172 @@ def run_subprocess(
         return False, msg
 
     _log.info("run_success run_id=%s out=%s", run_id, out_path)
+    return True, ""
+
+
+def _run_multi_chip(
+    script: Path,
+    out_path: Path,
+    mode: str,
+    prompt: str,
+    negative_prompt: str,
+    frames: int,
+    steps: int,
+    seed: int,
+    temporal_alpha: float,
+    lightning: bool,
+    lightning_steps: int,
+    num_chips: int,
+    motion_adapter: str | None,
+    motion_adapter_alpha: float,
+    motion_adapter_skip: list[str] | None,
+    on_progress: Callable[[str], None] | None,
+    timeout: int,
+    run_id: str,
+    env: dict,
+) -> tuple[bool, str]:
+    """Spawn one generate.py process per chip in parallel, stitch results.
+
+    Frame distribution: chip i renders frames in temporal positions
+    [i, i+num_chips, i+2*num_chips, …] by giving each chip frames//num_chips
+    frames and a chip-specific seed offset. Shards are interleaved back into
+    temporal order by _stitch_gifs().
+
+    Each chip gets its own temp output path and log file. All processes are
+    launched simultaneously and joined with the shared timeout.
+    """
+    import threading, tempfile
+
+    frames_per_chip = frames // num_chips
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_multi_"))
+    shard_paths = [tmp_dir / f"shard_{i}.gif" for i in range(num_chips)]
+
+    _log.info(
+        "multi-chip run_id=%s chips=%d frames=%d (%d/chip) tmp=%s",
+        run_id, num_chips, frames, frames_per_chip, tmp_dir,
+    )
+    if on_progress:
+        on_progress(f"Starting AnimateDiff on {num_chips} chips in parallel ({frames_per_chip} frames each)…")
+
+    procs: list[subprocess.Popen] = []
+    drain_threads: list[threading.Thread] = []
+    chip_outputs: list[list[str]] = [[] for _ in range(num_chips)]
+
+    for chip_idx in range(num_chips):
+        chip_log = _LOG_DIR / f"run_{run_id}_chip{chip_idx}.log"
+        cmd = _build_cmd(
+            script=script, out_path=shard_paths[chip_idx], mode=mode,
+            prompt=prompt, negative_prompt=negative_prompt,
+            frames=frames_per_chip, steps=steps,
+            # Stagger seeds so chips don't produce identical noise patterns
+            seed=seed + chip_idx,
+            temporal_alpha=temporal_alpha,
+            lightning=lightning, lightning_steps=lightning_steps,
+            device_id=chip_idx,
+            chain_from=None, chain_save=None, chain_alpha=0.6,
+            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+        )
+        _log.info("chip%d cmd: %s", chip_idx, " ".join(str(c) for c in cmd))
+
+        output_buf = chip_outputs[chip_idx]
+
+        def _make_drain(proc, buf, chip_i, log_path, cmd_ref):
+            def _drain():
+                with open(log_path, "w") as lf:
+                    lf.write(f"# chip {chip_i} run {run_id}\n# cmd: {' '.join(str(c) for c in cmd_ref)}\n\n")
+                    for raw_line in proc.stdout:
+                        line = raw_line.rstrip()
+                        buf.append(line)
+                        lf.write(line + "\n")
+                        lf.flush()
+                        _log.debug("[chip%d] %s", chip_i, line)
+                        if on_progress and (
+                            "Frame" in line or "Step" in line
+                            or "Generating" in line or "Loading" in line
+                            or "Error" in line or "Traceback" in line
+                            or "fatal" in line.lower() or "ARC" in line
+                        ):
+                            on_progress(f"chip{chip_i}: {line.strip()}")
+            return _drain
+
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, env=env, cwd=str(_SCRIPT_DIR),
+            )
+        except Exception as e:
+            # Kill any already-launched procs before returning
+            for p in procs:
+                try: p.kill()
+                except Exception: pass
+            _log.exception("chip%d launch failed", chip_idx)
+            return False, f"chip{chip_idx} launch error: {e}"
+
+        procs.append(proc)
+        t = threading.Thread(
+            target=_make_drain(proc, output_buf, chip_idx, chip_log, cmd),
+            daemon=True,
+        )
+        t.start()
+        drain_threads.append(t)
+
+    # Wait for all chips concurrently — each has up to `timeout` seconds.
+    for t in drain_threads:
+        t.join(timeout=timeout)
+
+    # Collect exit codes; kill any stragglers.
+    failed_chips: list[int] = []
+    for chip_idx, (proc, t) in enumerate(zip(procs, drain_threads)):
+        if t.is_alive():
+            proc.kill()
+            proc.wait()
+            t.join(timeout=5)
+            _log.error("chip%d timed out after %ds", chip_idx, timeout)
+            failed_chips.append(chip_idx)
+            continue
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        if proc.returncode != 0:
+            _log.error("chip%d rc=%d", chip_idx, proc.returncode)
+            failed_chips.append(chip_idx)
+
+    if failed_chips:
+        minutes = timeout // 60
+        msgs = []
+        for ci in failed_chips:
+            tail = "\n".join(chip_outputs[ci][-10:]) if chip_outputs[ci] else "(no output)"
+            msgs.append(f"chip{ci}:\n{tail}")
+        return False, (
+            f"Multi-chip run failed on chip(s) {failed_chips} "
+            f"(timeout={minutes}min):\n\n" + "\n\n".join(msgs)
+        )
+
+    # Stitch shard GIFs into final output
+    if on_progress:
+        on_progress(f"All {num_chips} chips done — stitching {frames} frames…")
+
+    ok = _stitch_gifs(shard_paths, out_path)
+
+    # Clean up temp shard files
+    for p in shard_paths:
+        try: p.unlink(missing_ok=True)
+        except Exception: pass
+    try: tmp_dir.rmdir()
+    except Exception: pass
+
+    if not ok:
+        return False, f"GIF stitch failed — shard logs at {_LOG_DIR}"
+
+    if not out_path.exists():
+        return False, "Stitch reported success but output file missing"
+
+    _log.info("multi-chip run_success run_id=%s chips=%d out=%s", run_id, num_chips, out_path)
+    if on_progress:
+        on_progress(f"Done — {frames} frames from {num_chips} chips → {out_path.name}")
     return True, ""
 
 

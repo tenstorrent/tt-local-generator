@@ -466,7 +466,7 @@ class ArtgenPanel(Gtk.Box):
 
             # ── Core params ───────────────────────────────────────────────────
             self._ad_frames = _dd(["8", "16", "24", "32"], "8")
-            self._ad_steps = _spin(4, 50, 1, 25)
+            self._ad_steps = _spin(4, 50, 1, 4)
             self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
             self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
             self._ad_temporal_alpha.set_digits(2)
@@ -488,6 +488,7 @@ class ArtgenPanel(Gtk.Box):
 
             self._ad_mode = _dd(["blackhole", "cpu", "sim"], "blackhole")
             self._ad_lightning = Gtk.CheckButton(label="Lightning (Euler scheduler)")
+            self._ad_lightning.set_active(True)  # default: fastest path
             self._ad_lightning.set_tooltip_text(
                 "Blackhole: uses Euler solver with cosine temporal decay.\n"
                 "CPU: loads AnimateDiff-Lightning distilled weights (CFG=1.0)."
@@ -1127,9 +1128,10 @@ class ArtgenPanel(Gtk.Box):
         from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
 
         # Hardware check is only meaningful for blackhole mode; cpu/sim run without TT hardware.
+        num_chips = 1
         if args.ad_mode == "blackhole":
             GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
-            ok, hw_msg = check_hardware()
+            ok, hw_msg, num_chips = check_hardware()
             if not ok:
                 GLib.idle_add(self._finish_error,
                     f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
@@ -1140,7 +1142,8 @@ class ArtgenPanel(Gtk.Box):
         short_id = str(_uuid.uuid4())[:8]
         out_path = make_artgen_path(short_id, ".gif")
 
-        GLib.idle_add(self._set_status, f"Starting AnimateDiff ({hw_msg})…")
+        chip_info = f"{num_chips} chip{'s' if num_chips != 1 else ''}" if args.ad_mode == "blackhole" else hw_msg
+        GLib.idle_add(self._set_status, f"Starting AnimateDiff ({chip_info})…")
 
         t0 = time.monotonic()
 
@@ -1171,6 +1174,7 @@ class ArtgenPanel(Gtk.Box):
             motion_adapter_alpha=args.ad_injection_alpha,
             motion_adapter_skip=args.ad_motion_skip_keys,
             on_progress=_on_progress,
+            num_chips=num_chips if args.ad_device_id is None else 1,
         )
 
         if not success:
@@ -1812,7 +1816,8 @@ class ArtgenPanel(Gtk.Box):
 
         elif gen_name == "animatediff":
             self._set_dd(self._ad_frames, "8")
-            self._ad_steps.set_value(25)
+            self._ad_steps.set_value(4)
+            self._ad_lightning.set_active(True)
             self._ad_seed.set_value(random.randint(0, 9999))
             # prompt written by _auto_fire_with_theme after Inspire
 
