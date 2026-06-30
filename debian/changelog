@@ -1,3 +1,16 @@
+tt-local-generator (0.9.0) noble; urgency=medium
+
+  * Upgrade to tt-inference-server v0.17.0 (image 0.17.0-8c48a10).
+    Update DOCKER_IMAGE in start_wan_qb2.sh, start_flux.sh, start_animate.sh,
+    start_sdxl.sh; vendor/VENDOR_SHA → 48055de3d1b444e0dbce23cc378590eb6abc2ca5.
+  * Fix breaking API change in patches/media_server_config/tt_model_runners/dit_runners.py:
+    _wan22_pipeline_args: "prompt" → "prompts": [...], "negative_prompt" →
+    "negative_prompts": [...]; resolution param made optional; seed default 0.
+    TTWan22I2VDistillRunner.run: same prompt change, remove height/width/num_frames,
+    hardcode num_inference_steps=4, remove negative_prompt handling.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 30 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.8.2) noble; urgency=medium
 
   * Add "Use all chips in parallel" checkbox to AnimateDiff Performance panel.
