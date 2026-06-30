@@ -1,3 +1,20 @@
+tt-local-generator (0.8.2) noble; urgency=medium
+
+  * Add "Use all chips in parallel" checkbox to AnimateDiff Performance panel.
+    On by default; unchecking forces single-chip (chip 0) regardless of how
+    many Blackhole devices are detected. Ignored when Device ID is pinned.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 23 Jun 2026 00:00:00 +0000
+
+tt-local-generator (0.8.1) noble; urgency=medium
+
+  * Fix multi-chip AnimateDiff: use same seed on all chips (consistent base
+    composition), concatenate shard GIFs in chip order instead of interleaving.
+  * Clarify animatediff.py docs: multi-chip uses N separate processes (not
+    ShardTensorToMesh) because SD demo UNet weight loading is single-device only.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 23 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.8.0) noble; urgency=medium
 
   * Upgrade vendor/tt-animatediff submodule from v0.1.0 to v0.9.0.

@@ -742,6 +742,7 @@ class AnimateDiffGenerationWorker:
         mode: str = "blackhole",
         lightning: bool = False,
         lightning_steps: int = 4,
+        multi_chip: bool = True,
         device_id: "int | None" = None,
         chain_from: "str | None" = None,
         chain_save: "str | None" = None,
@@ -761,6 +762,7 @@ class AnimateDiffGenerationWorker:
         self._mode = mode
         self._lightning = lightning
         self._lightning_steps = lightning_steps
+        self._multi_chip = multi_chip
         self._device_id = device_id
         self._chain_from = chain_from
         self._chain_save = chain_save
@@ -829,7 +831,11 @@ class AnimateDiffGenerationWorker:
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
         # ── 3. Run subprocess ─────────────────────────────────────────────────
-        chip_info = f"{num_chips} chip{'s' if num_chips != 1 else ''}" if self._mode == "blackhole" else hw_msg
+        effective_chips = num_chips if (self._multi_chip and self._device_id is None) else 1
+        chip_info = (
+            f"{effective_chips} chip{'s' if effective_chips != 1 else ''}"
+            if self._mode == "blackhole" else hw_msg
+        )
         on_progress(f"Loading AnimateDiff model ({chip_info})…")
 
         def _progress_fwd(msg: str) -> None:
@@ -856,7 +862,7 @@ class AnimateDiffGenerationWorker:
             motion_adapter_alpha=self._motion_adapter_alpha,
             motion_adapter_skip=self._motion_adapter_skip,
             on_progress=_progress_fwd,
-            num_chips=num_chips if self._device_id is None else 1,
+            num_chips=effective_chips,
         )
 
         if not ok:

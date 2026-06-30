@@ -4914,6 +4914,16 @@ class ControlPanel(Gtk.Box):
         self._ad_lightning.connect("toggled", _on_ad_lightning_toggled)
         self._ad_mode.connect("notify::selected", lambda *_: _on_ad_lightning_toggled(None))
 
+        self._ad_multi_chip = Gtk.CheckButton(label="Use all chips in parallel")
+        self._ad_multi_chip.set_active(True)
+        self._ad_multi_chip.add_css_class("hint")
+        self._ad_multi_chip.set_tooltip_text(
+            "Spawn one process per Blackhole chip, each rendering a consecutive frame slice.\n"
+            "Frame count must be divisible by the chip count (e.g. 4, 8, 12 for 4 chips).\n"
+            "Ignored when Device ID is pinned to a specific chip."
+        )
+        perf_box.append(self._ad_multi_chip)
+
         self._ad_device_id = _spin(-1, 7, 1, -1)
         self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
         perf_box.append(_row("Device ID", self._ad_device_id))
@@ -5015,6 +5025,7 @@ class ControlPanel(Gtk.Box):
             temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
             lightning=self._ad_lightning.get_active(),
             lightning_steps=int(_dd_val(self._ad_lightning_steps) or "4"),
+            multi_chip=self._ad_multi_chip.get_active(),
             device_id=raw_device_id if raw_device_id >= 0 else None,
             chain_from=self._ad_chain_from.get_text().strip() or None,
             chain_save=self._ad_chain_save.get_active(),
@@ -9588,6 +9599,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     mode=ad["mode"],
                     lightning=ad["lightning"],
                     lightning_steps=ad["lightning_steps"],
+                    multi_chip=ad["multi_chip"],
                     device_id=ad["device_id"],
                     chain_from=ad["chain_from"],
                     chain_save=chain_save_path,

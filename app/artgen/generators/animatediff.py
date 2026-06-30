@@ -10,8 +10,12 @@ routes "animatediff" to _run_animatediff() which runs the unified generate.py
 as a subprocess on the tt-metal Python env.
 
 Modes (--mode):
-  blackhole  — TTNN UNet on Blackhole hardware (Phase 2.5 cross-frame temporal
-               attention; Phase 3 with --motion-adapter). Default.
+  blackhole  — TTNN UNet on Blackhole hardware (Phase 2.5 temporal attention).
+               Multi-chip: N parallel processes, one per chip, frame slices
+               concatenated. The SD demo UNet loads weights with to_torch()
+               (no mesh_composer), so ShardTensorToMesh is not viable; N
+               separate single-chip processes is the correct parallelism model.
+               Phase 3 with --motion-adapter (single-chip only).
   cpu        — Diffusers AnimateDiff pipeline on CPU/CUDA. Supports Lightning
                distilled weights (--lightning).
   sim        — Software simulator (libttsim_bh.so). For development only.
@@ -284,35 +288,26 @@ def _build_cmd(
 
 
 def _stitch_gifs(shard_paths: list[Path], out_path: Path) -> bool:
-    """Concatenate GIF frames from multiple shard files into a single output GIF.
+    """Concatenate GIF frames from multiple chip shards into a single output GIF.
 
-    Each shard contains frames/N frames from one chip. They are interleaved in
-    chip order (shard 0 frame 0, shard 1 frame 0, … shard N frame 0, shard 0
-    frame 1, …) so the temporal sequence is preserved across the full run.
+    Each shard contains consecutive frames from one chip (chip 0 → frames 0..K-1,
+    chip 1 → frames K..2K-1, etc.). Correct stitching is simple concatenation in
+    chip order, NOT interleaving.
 
     Returns True on success. Leaves out_path untouched on failure.
     """
     try:
         from PIL import Image
 
-        # Collect all frames from each shard in order
-        shard_frames: list[list[Image.Image]] = []
+        # Collect all frames from each shard in chip order
+        all_frames: list[Image.Image] = []
         for p in shard_paths:
-            frames_list: list[Image.Image] = []
             with Image.open(p) as img:
                 for i in range(getattr(img, "n_frames", 1)):
                     img.seek(i)
-                    frames_list.append(img.copy().convert("RGBA"))
-            shard_frames.append(frames_list)
+                    all_frames.append(img.copy().convert("RGBA"))
 
-        # Interleave: shard0[0], shard1[0], … shardN[0], shard0[1], …
-        # (preserves temporal order when each chip renders its own temporal slice)
-        num_per_shard = len(shard_frames[0])
-        interleaved: list[Image.Image] = []
-        for fi in range(num_per_shard):
-            for shard in shard_frames:
-                if fi < len(shard):
-                    interleaved.append(shard[fi])
+        interleaved = all_frames
 
         if not interleaved:
             return False
@@ -355,12 +350,22 @@ def run_subprocess(
 ) -> tuple[bool, str]:
     """Run the unified generate.py, using all available Blackhole chips in parallel.
 
-    When mode=="blackhole", device_id is None (all chips), and num_chips > 1:
-      - Spawns one generate.py process per chip, each pinned via --device-id.
-      - Distributes frames evenly across chips (frames must be divisible by num_chips).
-        If not evenly divisible, falls back to single-chip on chip 0.
-      - Each chip writes a shard GIF to a temp file; shards are interleaved and
-        stitched into out_path at the end.
+    Multi-chip strategy: N separate processes, one per chip (--device-id 0..N-1).
+    Each process generates frames//N consecutive frames from the same prompt and
+    seed, then their GIF shards are concatenated in order.  This is frame-level
+    data parallelism — each chip runs a full independent denoising run on its
+    slice, not tensor-parallelism within a single UNet call.
+
+    Background: the SD demo UNet (wormhole) calls ttnn.to_torch() without a
+    mesh_composer in its weight-loading path, so ShardTensorToMesh across a
+    multi-chip MeshDevice crashes at model-load time.  The correct multi-chip
+    approach is N independent 1×1 MeshDevice processes.  TTNN is also not
+    thread-safe, so even the create_submeshes path must run chips sequentially.
+    Separate processes are the only way to get true concurrent chip utilisation.
+
+    When mode=="blackhole", device_id is None, and num_chips > 1:
+      - frames must be divisible by num_chips (falls back to single-chip if not)
+      - chain_from/chain_save are single-chip only (fall back to single-chip)
       - All processes run concurrently; wall-clock time ≈ single-chip time.
 
     For single-chip runs, cpu/sim modes, or explicit device_id pins: runs a
@@ -545,12 +550,11 @@ def _run_multi_chip(
     run_id: str,
     env: dict,
 ) -> tuple[bool, str]:
-    """Spawn one generate.py process per chip in parallel, stitch results.
+    """Spawn one generate.py process per chip in parallel, concatenate results.
 
-    Frame distribution: chip i renders frames in temporal positions
-    [i, i+num_chips, i+2*num_chips, …] by giving each chip frames//num_chips
-    frames and a chip-specific seed offset. Shards are interleaved back into
-    temporal order by _stitch_gifs().
+    Frame distribution: chip 0 → frames 0..K-1, chip 1 → frames K..2K-1, etc.
+    All chips use the same seed so the base noise composition is consistent across
+    the full animation.  Shard GIFs are concatenated in chip order by _stitch_gifs().
 
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
@@ -578,8 +582,9 @@ def _run_multi_chip(
             script=script, out_path=shard_paths[chip_idx], mode=mode,
             prompt=prompt, negative_prompt=negative_prompt,
             frames=frames_per_chip, steps=steps,
-            # Stagger seeds so chips don't produce identical noise patterns
-            seed=seed + chip_idx,
+            # Same seed on every chip — each chip generates a different temporal
+            # slice but they should share the same base composition/colour palette.
+            seed=seed,
             temporal_alpha=temporal_alpha,
             lightning=lightning, lightning_steps=lightning_steps,
             device_id=chip_idx,
