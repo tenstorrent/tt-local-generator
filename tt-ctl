@@ -750,11 +750,13 @@ def cmd_server(args):
 
 # Maps service key → glob pattern under workflow_logs/docker_server/
 _LOG_GLOBS: dict[str, str] = {
-    "wan2.2":       "media_*_Wan2.2-T2V-A14B-Diffusers_p300x2_server.log",
-    "mochi":        "media_*_mochi-1-preview_p300x2_server.log",
-    "flux":         "media_*_FLUX.1-dev_p300x2_server.log",
-    "animate":      "media_*_Wan2.2-Animate-14B-Diffusers_p300x2_server.log",
-    "skyreels":     "media_*_SkyReels-V2-I2V-14B-540P_*_server.log",
+    "wan2.2":         "media_*_Wan2.2-T2V-A14B-Diffusers_p300x2_server.log",
+    "mochi":          "media_*_mochi-1-preview_p300x2_server.log",
+    "flux":           "media_*_FLUX.1-dev_p300x2_server.log",
+    "animate":        "media_*_Wan2.2-Animate-14B-Diffusers_p300x2_server.log",
+    "skyreels":       "media_*_SkyReels-V2-I2V-14B-540P_*_server.log",
+    "z-image-turbo":  "media_*_Z-Image-Turbo_p300x2_server.log",
+    "motif":          "media_*_Motif-Image-6B-Preview_p300x2_server.log",
 }
 _LOG_DIR = _HERE / "workflow_logs" / "docker_server"
 _PROMPT_LOG = Path("/tmp/tt_prompt_gen.log")

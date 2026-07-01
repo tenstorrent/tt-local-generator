@@ -1,3 +1,17 @@
+tt-local-generator (0.9.1) noble; urgency=medium
+
+  * Add Z-Image-Turbo (P300X2, functional) and Motif-Image-6B-Preview
+    (P300X2, complete) image generation models.
+  * New start scripts: bin/start_z_image_turbo.sh, bin/start_motif.sh.
+  * Image tab gains a MODEL dropdown (FLUX / SDXL / Z-Image-Turbo / Motif)
+    with health-check auto-sync and preference persistence.
+  * server_manager.py: add z-image-turbo and motif ServerDef entries.
+  * tt-ctl: add log glob patterns for both new models.
+  * debian/control: add tt-model-z-image and tt-model-motif packages;
+    update tt-local-generator-models-all meta-package total (~360 GB).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 30 Jun 2026 00:00:00 +0000
+
 tt-local-generator (0.9.0) noble; urgency=medium
 
   * Upgrade to tt-inference-server v0.17.0 (image 0.17.0-8c48a10).

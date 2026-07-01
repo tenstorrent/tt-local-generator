@@ -125,6 +125,28 @@ Description: SkyReels-V2-I2V-14B-540P model weights (~58 GB) for tt-local-genera
  .
  The model is publicly available; a HuggingFace token is optional.
 
+Package: tt-model-z-image
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: Z-Image-Turbo model weights for tt-local-generator
+ Downloads Tongyi-MAI/Z-Image-Turbo from HuggingFace. Required for the
+ Z-Image-Turbo image generation mode (P300X2 hardware). Status: functional
+ in tt-inference-server v0.17.0.
+ .
+ The model is publicly available; a HuggingFace account is not required,
+ though providing a token avoids API rate limits.
+
+Package: tt-model-motif
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: Motif-Image-6B-Preview model weights for tt-local-generator
+ Downloads Motif-Technologies/Motif-Image-6B-Preview from HuggingFace.
+ Required for the Motif image generation mode (P300X2 hardware, 2×2 mesh).
+ Status: complete in tt-inference-server v0.17.0.
+ .
+ The model is publicly available; a HuggingFace account is not required,
+ though providing a token avoids API rate limits.
+
 Package: tt-local-generator-models-all
 Architecture: all
 Depends:
@@ -134,10 +156,12 @@ Depends:
  tt-model-qwen3,
  tt-model-animate,
  tt-model-skyreels-t2v,
- tt-model-skyreels-i2v
+ tt-model-skyreels-i2v,
+ tt-model-z-image,
+ tt-model-motif
 Description: Meta-package: all model weights for tt-local-generator
  Installs all model weight packages for tt-local-generator in a single
  command. This is a convenience package with no files of its own.
  .
- Total download size: ~333 GB. Only install this if you want every model.
+ Total download size: ~360 GB. Only install this if you want every model.
  For a minimal setup, install tt-model-wan2-t2v and tt-model-qwen3 only.
