@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# start_z_image_turbo.sh — Start the Z-Image-Turbo image generation server on P300X2.
+# start_z_image_turbo.sh — Start the Z-Image-Turbo image generation server on P150X4.
 #
 # Hardware note:
-#   4× Wormhole p300c PCIe cards = 2 logical p300 boards (L/R dies) = DeviceTypes.P300X2
-#   Z-Image-Turbo uses a 1×4 device mesh (all four chips in a row).
+#   4× BH p150 PCIe cards = DeviceTypes.P150X4 (1,4) linear mesh.
+#   Z-Image-Turbo only supports P150X4 — not P300X2 or any Wormhole device.
 #
-# Status: FUNCTIONAL (validated on P300X2 in tt-inference-server v0.17.0).
+# Model note:
+#   Demo code lives inside the Docker image at:
+#     /home/container_app_user/tt-metal/models/demos/z_image_turbo/tt/
+#   Weights (~30.6 GB) come from HuggingFace: Tongyi-MAI/Z-Image-Turbo
+#   Z_IMAGE_TURBO_MODEL_DIR is set automatically via the model spec's env_vars.
 #
 # The API is synchronous: POST /v1/images/generations returns a base64 JPEG.
 # Default steps: 9 (hardcoded in the runner — num_inference_steps is ignored).
@@ -31,7 +35,7 @@ DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
 MODEL="Z-Image-Turbo"
 HF_REPO="Tongyi-MAI/Z-Image-Turbo"
 HF_CACHE_DIR="$HF_CACHE/hub/models--Tongyi-MAI--Z-Image-Turbo"
-LOG_GLOB="media_*_${MODEL}_p300x2_server.log"
+LOG_GLOB="media_*_${MODEL}_p150x4_server.log"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
@@ -71,7 +75,7 @@ if [[ ! -d "$HF_CACHE_DIR" ]]; then
     echo "WARNING: Z-Image-Turbo weights not found at $HF_CACHE_DIR"
     echo "         Pre-download with:"
     echo "           huggingface-cli download ${HF_REPO}"
-    echo "         (~5–10 GB)"
+    echo "         (~30.6 GB)"
     if [[ $GUI_MODE -eq 1 ]]; then
         echo "         Continuing in GUI mode (weights will download inside container)."
     else
@@ -105,12 +109,12 @@ fi
 
 # ── Launch ────────────────────────────────────────────────────────────────────
 
-echo "Starting ${MODEL} on 4× p300c (p300x2)…"
+echo "Starting ${MODEL} on 4× BH p150 (p150x4, mesh (1,4))…"
 echo "  Image:     $DOCKER_IMAGE"
 echo "  HF cache:  $HF_CACHE  (bind-mounted read-only)"
 echo "  Port:      8000"
 echo "  API:       POST /v1/images/generations  (synchronous — returns base64 JPEG)"
-echo "  Steps:     9  (hardcoded in the runner)"
+echo "  Steps:     9  (hardcoded in runner; num_inference_steps ignored)"
 echo ""
 
 mkdir -p "$LOG_DIR"
@@ -126,7 +130,7 @@ cd "$REPO_DIR"
 MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --model "$MODEL" \
     --workflow server \
-    --tt-device p300x2 \
+    --tt-device p150x4 \
     --engine media \
     --docker-server \
     --override-docker-image "$DOCKER_IMAGE" \
@@ -162,7 +166,8 @@ fi
 
 echo "Log file: $LOG_FILE"
 echo ""
-echo "Tip: the server prints 'Application startup complete' when ready (~5–10 min first run)."
+echo "Tip: first-run TTNN compilation ~60–90 min; warm cache restarts ~6 min."
+echo "     Server prints 'Application startup complete' when ready."
 echo ""
 
 if [[ $GUI_MODE -eq 1 ]]; then

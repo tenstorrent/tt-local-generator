@@ -121,7 +121,10 @@ class APIClient:
                 timeout=20,
                 headers=self._headers(),
             )
-            return resp.status_code == 200
+            # 200 = ready; 405 = model still loading (v0.17.0+ raises HTTPException
+            # from check_is_model_ready() while the model warms up). Both mean the
+            # process is alive. Only 5xx or an unexpected code means broken.
+            return resp.status_code in (200, 405)
         except requests.exceptions.Timeout:
             # Server is listening but too busy to reply — treat as alive.
             return True
@@ -453,12 +456,21 @@ class APIClient:
         if seed is not None and seed >= 0:
             payload["seed"] = seed
 
+        # 0.17.0+ images (FLUX, Z-Image-Turbo): /v1/images/generations
+        # 0.9.0 images (Motif): /image/generations  (no v1 prefix)
         resp = requests.post(
             f"{self.base_url}/v1/images/generations",
             json=payload,
             headers=self._headers(),
             timeout=300,   # FLUX generation can take up to ~90 s; 300 s is safe
         )
+        if resp.status_code == 404:
+            resp = requests.post(
+                f"{self.base_url}/image/generations",
+                json=payload,
+                headers=self._headers(),
+                timeout=300,
+            )
         resp.raise_for_status()
 
         data = resp.json()

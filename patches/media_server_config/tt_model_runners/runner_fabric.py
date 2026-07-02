@@ -157,7 +157,8 @@ AVAILABLE_RUNNERS = {
 }
 
 
-def get_device_runner(worker_id: str) -> BaseDeviceRunner:
+def get_device_runner(worker_id: str, num_torch_threads=None) -> BaseDeviceRunner:
+    # num_torch_threads: accepted for 0.9.0 compat (worker_utils passes it); unused here.
     _logger = TTLogger()
     model_runner = settings.model_runner
     _logger.info(

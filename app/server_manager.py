@@ -128,7 +128,7 @@ SERVERS: dict[str, ServerDef] = {
         ),
         ServerDef(
             key="z-image-turbo",
-            label="Z-Image-Turbo  (P300X2)",
+            label="Z-Image-Turbo  (P150X4)",
             script="start_z_image_turbo.sh",
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-z-image-turbo",

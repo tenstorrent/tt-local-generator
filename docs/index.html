@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tt-local-generator — AI video & image generation on Tenstorrent hardware</title>
-  <meta name="description" content="Run Wan2.2, SkyReels, FLUX, Mochi, and AnimateDiff on your own Tenstorrent Quietbox 2. Local AI generation — no cloud, no API key. Video, images, animation, and generative art.">
+  <meta name="description" content="Run Wan2.2, SkyReels, FLUX, Motif, Z-Image-Turbo, Mochi, and AnimateDiff on your own Tenstorrent Quietbox 2. Local AI generation — no cloud, no API key. Video, images, animation, and generative art.">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="tt-local-generator">
   <meta property="og:url" content="https://docs.tenstorrent.com/tt-local-generator/">
   <meta property="og:title" content="Local AI video &amp; image generation on Tenstorrent hardware">
-  <meta property="og:description" content="Run Wan2.2, SkyReels, FLUX, and AnimateDiff on your own QB2 — no cloud costs, no API key. On-device prompt AI, SVG art, ANSI art, and animated GIFs included.">
+  <meta property="og:description" content="Run Wan2.2, SkyReels, FLUX, Motif, Z-Image-Turbo, and AnimateDiff on your own QB2 — no cloud costs, no API key. On-device prompt AI, SVG art, ANSI art, and animated GIFs included.">
   <meta property="og:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/tt-local-generator-main.png">
   <meta property="og:image:width" content="1920">
   <meta property="og:image:height" content="1080">
@@ -20,7 +20,7 @@
   <!-- Twitter / X card — animated GIF autoplays in feed -->
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Local AI video &amp; image generation on Tenstorrent hardware">
-  <meta name="twitter:description" content="Run Wan2.2, SkyReels, FLUX, and AnimateDiff locally on your QB2 — no cloud costs, no API key. Generate videos, images, animations, and generative art on-device.">
+  <meta name="twitter:description" content="Run Wan2.2, SkyReels, FLUX, Motif, Z-Image-Turbo, and AnimateDiff locally on your QB2 — no cloud costs, no API key. Generate videos, images, animations, and generative art on-device.">
   <meta name="twitter:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/artgen/animatediff-132-years.gif">
   <meta name="twitter:image:alt" content="AnimateDiff output — misty harbour scene generated on Tenstorrent Blackhole hardware">
 
@@ -959,7 +959,7 @@
         <div class="flow-title">Create</div>
         <p class="flow-desc">
           Write a prompt — or let the three-tier generator do it for you.
-          Submit to Wan2.2, Mochi, SkyReels, FLUX.1-schnell, SDXL, or AnimateDiff.
+          Submit to Wan2.2, Mochi, SkyReels, FLUX.1-schnell, Motif, Z-Image-Turbo, SDXL, or AnimateDiff.
           Server management, queuing, and live progress are built in.
           Or use the <strong>⚙ Workflow</strong> button to run multi-step pipelines —
           image → caption → video → poem → image — in one shot.
@@ -1085,6 +1085,18 @@
         <div class="model-name">FLUX.1-schnell</div>
         <p class="model-desc">Fast, high-quality text-to-image. Rich detail and accurate prompts in about 3 seconds on QB2.</p>
         <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type image">Image · 6B DiT</div>
+        <div class="model-name">Motif-Image-6B-Preview</div>
+        <p class="model-desc">6B diffusion transformer from Motif Technologies. High-fidelity 1024×1024 generation with strong prompt adherence and fine-grained detail.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P300X2) — Blackhole</div>
+      </div>
+      <div class="model-card">
+        <div class="model-type image">Image · Turbo</div>
+        <div class="model-name">Z-Image-Turbo</div>
+        <p class="model-desc">Distilled turbo image model from Tongyi-MAI. 9-step generation on the P150X4 linear mesh (4 Blackhole chips in a row). Demo TTNN code ships inside the Docker image.</p>
+        <div class="model-hw"><span class="model-hw-dot"></span> QB2 (P150X4) — 4-chip linear mesh</div>
       </div>
       <div class="model-card">
         <div class="model-type image">Image · ~2s · C++ backend</div>

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# tt-pipeline — launcher for the standalone Pipeline UI window.
+# Usage: ./tt-pipeline [args]
+#
+# Mirrors tt-gen's pattern: use the system python3 (/usr/bin/python3) so that
+# GTK4 bindings (python3-gi, installed as system packages) are visible.
+# Do NOT run inside a venv — python3-gi is not available there.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+cd "$SCRIPT_DIR"
+exec /usr/bin/python3 app/pipeline_window.py "$@"

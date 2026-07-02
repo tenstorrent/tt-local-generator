@@ -354,8 +354,30 @@ The `.env` file at `vendor/tt-inference-server/.env` is passed to Docker contain
 - `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` — prevents HF network access during startup (weights are bind-mounted from host cache)
 
 The `patches/` directory contains:
-- `patches/media_server_config/config/constants.py` — overrides P300X2 device config, request timeouts
+- `patches/media_server_config/config/constants.py` — overrides P300X2 device config, request timeouts, adds missing v0.17.0 symbols (CANARY_TASK_IDS etc.)
+- `patches/media_server_config/tt_model_runners/dit_runners.py` — adds TTWan22AnimateRunner, SkyReels log-map entries, Mochi cache-dir env, Flux trace-region bump
+- `patches/media_server_config/tt_model_runners/runner_fabric.py` — routes SkyReels and Animate model runners
+- `patches/media_server_config/tt_model_runners/skyreels_runner.py` / `skyreels_i2v_runner.py` — SkyReels T2V and I2V runners
+- `patches/media_server_config/domain/video_generate_request.py` — request-model extensions
 - `patches/tt_dit/` — pipeline fixes (bind-mounted only in dev_mode)
+
+### Patch philosophy — minimize divergence from upstream
+
+**Goal: always use the latest and greatest features in each tt-inference-server release.**
+Patches are a compatibility shim, not a fork. Keep the surface area as small as possible:
+
+- **Rebase patches onto each new image version.** When upgrading the Docker image,
+  diff the new image's files against the current patch and drop any lines that are
+  now in upstream. `docker create <new-image> && docker cp … /tmp/` to extract files.
+- **Never copy-and-modify upstream runners whole-cloth.** Add only what is missing
+  (new runner class, log-map entry, env var, constant override). Everything else
+  stays as the image shipped it.
+- **The canonical check:** `diff <image-extracted-file> patches/…/<file>` should
+  show only the lines we intentionally added. Anything else is drift that should be
+  removed.
+- **Sync patches/ → vendor/ after every edit.** `apply_patches.sh` does this, but
+  if you edit a patch file by hand, also `cp patches/… vendor/tt-inference-server/patches/…`
+  immediately — the bind-mount uses the *vendor* copy, not the *patches/* copy.
 
 ## Prompt generator
 
