@@ -98,3 +98,32 @@ def test_auto_fire_waits_when_at_cap():
         p._auto_fire()
         th.Thread.assert_not_called()             # no inspire thread while full
     p._auto_status_lbl.set_label.assert_called_with("Waiting for generation…")
+
+
+class TestAutoScheduleGuard:
+    def test_no_double_timer_when_countdown_pending(self):
+        p = _panel(active=0)
+        p._auto_gen = True
+        p._auto_type_checks = {"verse": MagicMock(get_active=lambda: True)}
+        p._auto_delay_spin = MagicMock(get_value=lambda: 5.0)
+        p._auto_delay_row = MagicMock(); p._auto_countdown_row = MagicMock()
+        p._auto_status_lbl = MagicMock(); p._auto_progress = MagicMock()
+        p._auto_gen_timer_id = 99   # a countdown is already pending
+        with patch.object(artgen_panel, "GLib") as glib:
+            p._auto_maybe_schedule()
+            glib.timeout_add.assert_not_called()   # guard: no second timer
+        assert p._auto_gen_timer_id == 99          # unchanged
+
+    def test_schedules_when_no_timer_pending(self):
+        p = _panel(active=0)
+        p._auto_gen = True
+        p._auto_type_checks = {"verse": MagicMock(get_active=lambda: True)}
+        p._auto_delay_spin = MagicMock(get_value=lambda: 5.0)
+        p._auto_delay_row = MagicMock(); p._auto_countdown_row = MagicMock()
+        p._auto_status_lbl = MagicMock(); p._auto_progress = MagicMock()
+        p._auto_gen_timer_id = None
+        with patch.object(artgen_panel, "GLib") as glib:
+            glib.timeout_add.return_value = 7
+            p._auto_maybe_schedule()
+            glib.timeout_add.assert_called_once()
+        assert p._auto_gen_timer_id == 7

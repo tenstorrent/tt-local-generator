@@ -59,8 +59,8 @@ _COMMON_ARGS = [
                           help="Max tokens for LLM response (default: 4096)")),
     ("--temperature", dict(type=float, default=0.7, metavar="T",
                            help="LLM temperature 0.0-1.0 (default: 0.7)")),
-    ("--timeout", dict(type=int, default=300, metavar="S",
-                       help="HTTP read timeout in seconds (default: 300; raise for slow/large models)")),
+    ("--timeout", dict(type=int, default=600, metavar="S",
+                       help="HTTP read timeout in seconds (default: 600; raise for slow/large models)")),
     ("--simulate", dict(action="store_true",
                         help="Print the prompt without calling the LLM")),
 ]
@@ -220,7 +220,7 @@ def _make_call_fn(model_id: str, base_url: str, args):
             prompt, model_id, base_url,
             max_tokens=max_tokens or getattr(args, "max_tokens", 4096),
             temperature=getattr(args, "temperature", 0.7),
-            timeout=getattr(args, "timeout", 300),
+            timeout=getattr(args, "timeout", 600),
             system=system,
         )
         return raw

@@ -1649,6 +1649,8 @@ class ArtgenPanel(Gtk.Box):
         """Start the countdown for the next auto-fire. Runs on the GTK main thread."""
         if not self._auto_gen:
             return
+        if self._auto_gen_timer_id is not None:
+            return  # a countdown is already in progress; don't stack another timer
         checked = [n for n, cb in self._auto_type_checks.items() if cb.get_active()]
         if not checked:
             self._auto_stop("No types selected — auto-generate off")
