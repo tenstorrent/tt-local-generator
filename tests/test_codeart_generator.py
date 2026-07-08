@@ -1,6 +1,7 @@
 """Unit tests for the codeart (code-as-art) artgen plugin."""
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -138,3 +139,37 @@ class TestCodeArtGenerator:
         # cleaned + validated
         assert "```" not in artifact
         assert args._codeart_compiles is True
+
+
+class TestManifestAndDiscovery:
+    _MANIFEST = Path(__file__).parent.parent / "plugins" / "codeart" / "mcp.json"
+
+    def test_manifest_is_valid_generator_manifest(self):
+        m = json.loads(self._MANIFEST.read_text())
+        assert m["x-ttlg"]["output_ext"] == ".py"
+        assert m["x-ttlg"]["media_type"] == "text"
+        assert m["x-ttlg"]["tab"] == "generative-art"
+        tool = m["tools"][0]
+        assert tool["name"] == "codeart"
+        assert tool["x-ttlg"]["artifact_tool"] is True
+        props = tool["inputSchema"]["properties"]
+        assert set(props) == {"language", "inspiration", "style", "should_compile"}
+        assert props["style"]["enum"] == [
+            "auto", "quine", "ascii", "poem", "oneliner",
+            "glitch", "unusually_verbose", "function_oriented",
+        ]
+        assert props["should_compile"]["default"] is True
+
+    def test_loader_discovers_codeart(self):
+        import plugin_loader
+        # Load from the real repo plugins/ dir only.
+        repo_plugins = Path(__file__).parent.parent / "plugins"
+        plugin_loader._SEARCH_PATHS[:] = [repo_plugins]
+        try:
+            plugin_loader.load_plugins()
+            assert "codeart" in plugin_loader._PLUGINS
+            pdef = plugin_loader._PLUGINS["codeart"]
+            assert pdef.generator.name == "codeart"
+            assert pdef.runnable is True
+        finally:
+            plugin_loader._PLUGINS.clear()

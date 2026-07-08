@@ -1,0 +1,49 @@
+{
+  "x-ttlg": {
+    "output_ext": ".py",
+    "media_type": "text",
+    "accepts_remix_from": [],
+    "can_remix_to": ["image", "video"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [
+    {
+      "name": "codeart",
+      "description": "Source code as art: quines, code-poems, ascii-shaped source, verbose or function-oriented compositions",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "language": {
+            "type": "string",
+            "default": "python",
+            "description": "Target language (validation is Python-only)"
+          },
+          "inspiration": {
+            "type": "string",
+            "default": "the nature of recursion",
+            "description": "Thematic seed"
+          },
+          "style": {
+            "type": "string",
+            "enum": ["auto", "quine", "ascii", "poem", "oneliner", "glitch", "unusually_verbose", "function_oriented"],
+            "default": "auto",
+            "description": "Art style bias"
+          },
+          "should_compile": {
+            "type": "boolean",
+            "default": true,
+            "description": "Directive: ask for code that compiles/runs"
+          }
+        },
+        "required": []
+      },
+      "examples": [
+        {"style": "quine", "inspiration": "a mirror"},
+        {"style": "poem", "language": "python", "inspiration": "the tide"},
+        {"style": "function_oriented", "inspiration": "making a pot of tea"}
+      ],
+      "x-ttlg": {"artifact_tool": true}
+    }
+  ]
+}
