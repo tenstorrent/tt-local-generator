@@ -5192,6 +5192,35 @@ class ControlPanel(Gtk.Box):
         # dismisses it by clicking outside or pressing Escape.
         popover.set_autohide(False)
 
+        # autohide=False keeps this popover non-modal, so the streaming
+        # server-start log stays interactive while a service boots.  The
+        # downside is that a non-autohide popover surface is not tied to window
+        # focus — on its own it lingers on top of *other* applications' windows
+        # when you switch away from the app.  Dismiss it whenever the main
+        # window loses activation (Alt-Tab / clicking another app).  Clicking
+        # the popover's own buttons keeps the toplevel active, so it stays open.
+        # The handler is attached on show and removed on hide so it never
+        # double-connects across open/close cycles and never leaks.
+        def _watch_activation(_pop):
+            win = self.get_root()
+            if win is None:
+                return
+            handler_id = win.connect(
+                "notify::is-active",
+                lambda w, _param: self._servers_popover_on_active(w, popover),
+            )
+            popover._activation_watch = (win, handler_id)
+
+        def _unwatch_activation(_pop):
+            watch = getattr(popover, "_activation_watch", None)
+            if watch is not None:
+                win, handler_id = watch
+                win.disconnect(handler_id)
+                popover._activation_watch = None
+
+        popover.connect("show", _watch_activation)
+        popover.connect("hide", _unwatch_activation)
+
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         outer.set_margin_top(8)
         outer.set_margin_bottom(8)
@@ -5297,6 +5326,18 @@ class ControlPanel(Gtk.Box):
         popover.set_child(outer)
         return popover
 
+    def _servers_popover_on_active(self, win, popover) -> None:
+        """Dismiss the non-autohide Servers popover when the toplevel loses
+        activation (e.g. the user switched to another application).
+
+        Because the popover uses ``set_autohide(False)`` it does not close on
+        focus loss by itself and would otherwise linger on top of other apps'
+        windows.  Clicking the popover's own buttons keeps the toplevel active,
+        so this only fires on a genuine app switch.
+        """
+        if not win.get_property("is-active") and popover.get_visible():
+            popover.popdown()
+
     def _on_servers_popover_show(self, _popover) -> None:
         """Kick off an async status refresh when the popover opens."""
         threading.Thread(target=self._refresh_servers_popover, daemon=True).start()
@@ -5304,7 +5345,42 @@ class ControlPanel(Gtk.Box):
     def _refresh_servers_popover(self) -> None:
         """Fetch health for all servers in a background thread, update dots on main thread."""
         statuses = _sm.status_all(timeout=2.0)
+        # Every artgen row shares the fixed health port (8002), so status_all()
+        # lights all of them whenever anything is on 8002 and lights none when a
+        # model is started on another port (e.g. a vLLM Llama on 8003).
+        # Reconcile the artgen rows against the router's discovery so the row for
+        # the model that is actually loaded lights up, wherever it lives.
+        try:
+            import artgen
+            base, model_id = artgen.detect_artgen_endpoint()
+        except Exception:
+            base, model_id = None, None
+        self._reconcile_artgen_statuses(statuses, base, model_id)
         GLib.idle_add(self._apply_servers_status, statuses)
+
+    @staticmethod
+    def _reconcile_artgen_statuses(statuses: dict, base, model_id) -> dict:
+        """Override each artgen row's status from endpoint discovery.
+
+        Only the row whose model matches the discovered/loaded model reads "on",
+        regardless of which port it is served from.  Matching is case-insensitive
+        against both the row's display label and its ``--model`` argument (the
+        discovered id's ``org/`` prefix is dropped first).  Mutates and returns
+        *statuses*.
+        """
+        loaded = (model_id or "").split("/")[-1].lower()
+        for key, sdef in _sm.SERVERS.items():
+            if "artgen" not in (sdef.capabilities or ()):
+                continue
+            names = set()
+            if sdef.label:
+                names.add(sdef.label.lower())
+            ea = sdef.extra_args or ()
+            for i, arg in enumerate(ea):
+                if arg == "--model" and i + 1 < len(ea):
+                    names.add(ea[i + 1].lower())
+            statuses[key] = bool(base) and loaded in names
+        return statuses
 
     def _apply_servers_status(self, statuses: dict[str, bool]) -> bool:
         for key, dot in self._servers_popover_dots.items():

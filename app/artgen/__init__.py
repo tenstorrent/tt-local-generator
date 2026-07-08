@@ -121,7 +121,7 @@ def all_generators() -> list[ArtGenerator]:
 # Uses server_config for the endpoint, same pattern as the rest of the app.
 
 
-def detect_model(base_url: str) -> str | None:
+def detect_model(base_url: str, timeout: float = 5.0) -> str | None:
     """Return the model ID currently loaded on the server, or None."""
     # Normalize: accept both http://host:port and http://host:port/v1 as base_url.
     base = base_url.rstrip("/")
@@ -130,11 +130,41 @@ def detect_model(base_url: str) -> str | None:
     # Try OpenAI-compatible /v1/models first; fall back to bare /models.
     for url in (f"{base}/v1/models", f"{base}/models"):
         try:
-            with urllib.request.urlopen(url, timeout=5) as r:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
                 return json.loads(r.read())["data"][0]["id"]
         except Exception:
             continue
     return None
+
+
+# Ports the app manages that are NOT chat models — never route artgen chat here.
+# The diffusion media server (Wan2.2 / Mochi / FLUX / Animate / SkyReels) all
+# share port 8000; it speaks a custom media API, not OpenAI /v1/chat/completions.
+_NON_CHAT_SERVICE_KEYS = ("wan2.2", "mochi", "flux", "animate", "skyreels")
+
+# Local port window swept to discover chat servers started outside the app.
+# We don't want to be precious about *which* port a manually-launched model
+# lands on — if it answers /v1/models on the LLM host, we use it.
+_SCAN_PORT_RANGE = range(8000, 8021)
+
+
+def _scan_ports() -> "list[int]":
+    """Ports to sweep for externally-started chat servers.
+
+    Override with TTLG_ARTGEN_SCAN_PORTS (comma-separated) to widen/narrow the
+    sweep without a code change.
+    """
+    import os
+    override = os.environ.get("TTLG_ARTGEN_SCAN_PORTS")
+    if override:
+        out = []
+        for tok in override.split(","):
+            tok = tok.strip()
+            if tok.isdigit():
+                out.append(int(tok))
+        if out:
+            return out
+    return list(_SCAN_PORT_RANGE)
 
 
 def detect_artgen_endpoint(
@@ -144,28 +174,55 @@ def detect_artgen_endpoint(
 
     Resolution order:
       1. preferred_url  — explicit CLI/UI override
-      2. port 8002      — dedicated artgen LLM (Qwen3-8B, Llama, etc.)
-      3. port 8001      — prompt-gen server (Qwen3-0.6B; limited but functional)
+      2. dedicated artgen port (8002) — a model the app started itself
+      3. any OpenAI-compatible chat server discovered by sweeping local ports —
+         picks up models started outside the app on non-standard ports
+      4. prompt-gen server (8001, Qwen3-0.6B) — last-resort fallback
 
-    Returning port 8001 as fallback means the tool has day-one value even before
-    a full artgen server is configured, and automatically upgrades to the best
-    model once one is started — no configuration required.
+    The port sweep (step 3) means the app isn't precious about port numbers:
+    hardcoded ports matter only for servers *it* launches; a model started any
+    other way is found wherever it happens to be listening. The tiny prompt-gen
+    server is deliberately ranked last so a real chat model always wins over it
+    (this was the original bug — a 70B Llama on 8003 lost to Qwen3-0.6B on 8001).
 
     Returns (None, None) if nothing responds.
     """
     from server_config import server_config as _sc
-    seen: set = set()
+    from urllib.parse import urlparse
+
+    artgen_url = _sc.base_url("artgen")          # http://localhost:8002
+    prompt_url = _sc.base_url("prompt-server")   # http://localhost:8001
+    host = _sc.get("artgen", "host") or "localhost"
+
+    # Ports we must never treat as chat endpoints, plus the two probed explicitly.
+    exclude_ports = {urlparse(prompt_url).port, urlparse(artgen_url).port}
+    for key in _NON_CHAT_SERVICE_KEYS:
+        try:
+            exclude_ports.add(int(_sc.get(key, "port")))
+        except (TypeError, ValueError):
+            continue
+
+    # Build the ordered candidate list, de-duplicated, preserving priority.
     candidates: list = []
-    for url in filter(None, [
-        preferred_url,
-        _sc.base_url("artgen"),         # http://localhost:8002
-        _sc.base_url("prompt-server"),  # http://localhost:8001
-    ]):
-        if url not in seen:
+    seen: set = set()
+
+    def _add(url: str | None) -> None:
+        if url and url not in seen:
             seen.add(url)
             candidates.append(url)
+
+    _add(preferred_url)                                  # 1. explicit override
+    _add(artgen_url)                                     # 2. dedicated artgen port
+    for port in _scan_ports():                           # 3. discovered chat servers
+        if port not in exclude_ports:
+            _add(f"http://{host}:{port}")
+    _add(prompt_url)                                     # 4. tiny fallback, last
+
+    # The explicit endpoints get the full timeout; the sweep uses a short one so
+    # a run of closed/filtered ports can't stall generation for many seconds.
     for url in candidates:
-        m = detect_model(url)
+        is_sweep = url not in (preferred_url, artgen_url, prompt_url)
+        m = detect_model(url, timeout=1.5 if is_sweep else 5.0)
         if m:
             return url, m
     return None, None

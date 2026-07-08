@@ -948,7 +948,7 @@
     <div class="section-label">Claude Code integration</div>
     <h2 class="section-title">Every plugin is an MCP tool</h2>
     <p class="section-sub">
-      The built-in MCP server exposes all loaded plugins as MCP tools on port 8003.
+      The built-in MCP server exposes all loaded plugins as MCP tools on port 8120.
       Once registered, you can call any generator — landscape, verse, animatediff,
       your own custom plugin — directly from a Claude Code conversation.
     </p>
@@ -959,7 +959,7 @@ python3 app/mcp_server.py
 
 <span class="cm"># Print the Claude Code configuration snippet</span>
 tt-ctl mcp-config
-<span class="cm"># → {"tt-local-gen": {"url": "http://localhost:8003/mcp"}}</span>
+<span class="cm"># → {"tt-local-gen": {"url": "http://localhost:8120/mcp"}}</span>
 
 <span class="cm"># Add it to Claude Code's MCP config</span>
 tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)</code></pre>

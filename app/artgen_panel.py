@@ -952,23 +952,58 @@ class ArtgenPanel(Gtk.Box):
         return True  # GLib.SOURCE_CONTINUE — keep the timeout alive
 
     def _check_health_bg(self) -> None:
-        from server_manager import is_healthy
+        # Use the SAME discovery the generation router uses
+        # (artgen.detect_artgen_endpoint) so the "on" indicator can never
+        # disagree with where requests actually go.  The old path pinged the
+        # fixed configured port (8002) for the dropdown's model key, so a model
+        # started on any other port (e.g. a vLLM Llama on 8003) showed as
+        # offline even though generation would have found and used it.
+        #
+        # Steady-state optimisation: once an endpoint is found, re-ping just
+        # that URL on each 5 s poll instead of re-sweeping every port — the
+        # full sweep only runs again when the known endpoint goes away.
+        import artgen
+        ok = False
+        model_id = None
         try:
-            model = _dd_val(self._srv_model_dd)
-            key = _MODEL_TO_KEY.get(model, "artgen-qwen3-8b")
-            ok = is_healthy(key)
+            last = getattr(self, "_last_artgen_base", None)
+            if last:
+                model_id = artgen.detect_model(last, timeout=1.0)
+            if model_id:
+                ok = True
+            else:
+                base, model_id = artgen.detect_artgen_endpoint()
+                ok = base is not None
+                self._last_artgen_base = base  # may be None; cleared until next hit
         except Exception:
-            ok = False
-        GLib.idle_add(self._set_health, ok)
+            ok, model_id = False, None
+        GLib.idle_add(self._set_health, ok, model_id)
 
-    def _set_health(self, ok: bool) -> None:
+    def _set_health(self, ok: bool, model_id: str | None = None) -> None:
+        # Short display name: drop the HF "org/" prefix (meta-llama/Llama-3.3-70B
+        # -> Llama-3.3-70B-Instruct) so the status label stays compact.
+        short = model_id.split("/")[-1] if model_id else None
         for dot in (self._health_dot, self._srv_btn_dot):
             dot.remove_css_class("artgen-health-ok")
             dot.remove_css_class("artgen-health-bad")
             dot.remove_css_class("artgen-health-unknown")
             dot.add_css_class("artgen-health-ok" if ok else "artgen-health-bad")
-        if self._srv_status_lbl.get_label() in ("unknown", "running", "offline"):
-            self._srv_status_lbl.set_label("running" if ok else "offline")
+            dot.set_tooltip_text(
+                f"Generative-art model detected: {model_id}" if (ok and model_id)
+                else "No generative-art model detected"
+            )
+        # Only touch the status label while it is showing a health-owned value
+        # (never clobber a transient message like "launched — waiting for
+        # health").  The set grows as new model names are displayed so later
+        # polls keep it current.
+        prev = self._srv_status_lbl.get_label()
+        health_labels = getattr(
+            self, "_health_status_labels", {"unknown", "running", "offline"}
+        )
+        if prev in health_labels:
+            new_label = short if (ok and short) else ("running" if ok else "offline")
+            self._srv_status_lbl.set_label(new_label)
+            self._health_status_labels = health_labels | {new_label}
 
     def _set_srv_status(self, text: str) -> None:
         self._srv_status_lbl.set_label(text)

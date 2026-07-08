@@ -152,7 +152,7 @@ def cmd_workflow(args):
 def cmd_mcp_config(_args):
     """Emit Claude Code MCP config JSON for tt-local-gen."""
     import json as _json
-    port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
+    port = int(os.environ.get("TTLG_MCP_PORT", "8120"))
     config = {"tt-local-gen": {"url": f"http://localhost:{port}/mcp"}}
     print(_json.dumps(config, indent=2))
     # Guidance to stderr so stdout stays machine-readable.

@@ -1,3 +1,32 @@
+tt-local-generator (0.9.2) noble; urgency=medium
+
+  * artgen: auto-discover externally-started chat servers. Endpoint detection
+    now sweeps local ports for any OpenAI-compatible chat model instead of only
+    probing the app's own artgen (8002) and prompt-gen (8001) ports. A model
+    launched outside the app on a non-standard port (e.g. a vLLM Llama-3.3-70B
+    on 8003) is now found and used, and the tiny prompt-gen fallback is ranked
+    last so a real chat model always wins over it.
+  * mcp_server: route _make_call_fn through the same discovery for consistency.
+  * TTLG_ARTGEN_SCAN_PORTS env var overrides the swept port list.
+  * mcp_server: move default port 8003 -> 8120 (still TTLG_MCP_PORT-overridable)
+    so it no longer collides with a chat model started on 8003 and stays outside
+    the artgen port sweep. tt-ctl mcp-config and plugin docs updated to match.
+  * UI: the Servers popover (non-autohide, so it stays open while a service
+    boots) now dismisses when the main window loses focus, instead of lingering
+    on top of other applications' windows after an app switch.
+  * artgen: the panel's health indicator now uses the same endpoint discovery
+    as the generation router, so a model started on a non-standard port shows
+    as "on" (and its name is displayed) instead of falsely reading offline.
+    The 5s poll re-pings the cached endpoint and only re-sweeps when it drops.
+  * UI: the Servers popover reconciles its artgen rows against discovery, so the
+    row for the actually-loaded model lights up wherever it is served (and only
+    that row, fixing the prior quirk where all artgen rows lit whenever 8002 was
+    up).
+  * tests: fix stale test_worker_animatediff mocks (check_hardware now returns
+    a 3-tuple (ok, msg, num_chips) after the multi-chip change).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 07 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.9.1) noble; urgency=medium
 
   * Add Z-Image-Turbo (P300X2, functional) and Motif-Image-6B-Preview

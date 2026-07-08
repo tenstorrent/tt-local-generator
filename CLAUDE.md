@@ -1,5 +1,29 @@
 # tt-local-generator — developer notes
 
+## artgen LLM endpoint discovery
+
+`artgen.detect_artgen_endpoint()` (`app/artgen/__init__.py`) picks the chat
+server for generative art. Hardcoded ports (artgen=8002, prompt-server=8001)
+matter only for servers the *app* starts. For models started any other way it
+sweeps local ports (`_SCAN_PORT_RANGE`, override via `TTLG_ARTGEN_SCAN_PORTS`)
+for any OpenAI-compatible `/v1/models` responder.
+
+Resolution order: `preferred_url` → artgen (8002) → swept ports → prompt-gen
+(8001, tiny Qwen3-0.6B) **last**. The prompt-gen fallback is deliberately last
+so a real chat model always beats it — the original bug was a vLLM Llama-3.3-70B
+on 8003 losing to Qwen3-0.6B on 8001 because 8003 was never probed. The known
+diffusion port (8000) and the two explicit ports are excluded from the sweep.
+`mcp_server._make_call_fn` routes through the same function for consistency.
+
+**Single source of truth for "is a model on".** The artgen panel's health dot
+(`ArtgenPanel._check_health_bg`) also calls `detect_artgen_endpoint()`, so the
+indicator can never disagree with where generation requests actually go. It
+caches the last-found base URL and re-pings only that on each 5 s poll (via
+`detect_model`), re-sweeping the full port range only when the endpoint drops.
+Regression: previously the dot pinged the fixed configured port (8002) for the
+dropdown's model key, so a model on any other port read "offline" while
+generation worked fine.
+
 ## ANSI art — 3-pass pipeline
 
 `AnsiGenerator` in `app/artgen/generators/ansi.py` overrides `generate_artifact`
