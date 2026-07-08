@@ -164,6 +164,7 @@ class TestManifestAndDiscovery:
         import plugin_loader
         # Load from the real repo plugins/ dir only.
         repo_plugins = Path(__file__).parent.parent / "plugins"
+        orig_paths = plugin_loader._SEARCH_PATHS[:]
         plugin_loader._SEARCH_PATHS[:] = [repo_plugins]
         try:
             plugin_loader.load_plugins()
@@ -172,4 +173,5 @@ class TestManifestAndDiscovery:
             assert pdef.generator.name == "codeart"
             assert pdef.runnable is True
         finally:
+            plugin_loader._SEARCH_PATHS[:] = orig_paths
             plugin_loader._PLUGINS.clear()

@@ -43,7 +43,7 @@
         {"style": "poem", "language": "python", "inspiration": "the tide"},
         {"style": "function_oriented", "inspiration": "making a pot of tea"}
       ],
-      "x-ttlg": {"artifact_tool": true}
+      "x-ttlg": {"streaming": null, "artifact_tool": true}
     }
   ]
 }
