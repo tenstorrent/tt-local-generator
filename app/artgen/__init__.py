@@ -236,7 +236,7 @@ def call_llm(
     temperature: float = 0.7,
     on_token=None,  # unused — kept for API compatibility
     system: str | None = None,
-    timeout: int = 300,
+    timeout: int = 600,
 ) -> tuple[str, dict]:
     """
     Send *prompt* to an OpenAI-compatible chat endpoint.
