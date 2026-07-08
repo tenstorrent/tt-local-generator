@@ -117,10 +117,12 @@ system prompt is built alongside it in `generate_artifact`.
 - Results stashed on `args`:
   - `args._codeart_compiles` = `True` / `False` / `None` (non-Python / unvalidated)
   - `args._codeart_error` = the SyntaxError message when `False`, else `None`
-  These persist into the saved record params (via `vars(args)`).
-- GUI: after generation the status line shows a compile note (e.g. `✓ compiles` /
-  `✗ SyntaxError: …`) derived from the stashed flags. (Small addition in the panel's
-  post-generation status handling; details deferred to the plan.)
+- These persist into the saved record params automatically: the panel builds
+  `params = vars(args)` and serializes every primitive-typed value (str/int/float/bool/
+  None), so both fields are stored and shown wherever the artifact's params are displayed
+  (the detail view). **No panel code change is required.**
+- Future work: a dedicated inline status-line/badge showing the compile result at
+  generation time (would require threading the flag into the panel's finish handler).
 
 ## Output artifact
 
