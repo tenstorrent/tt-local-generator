@@ -19,6 +19,34 @@ from pathlib import Path
 import artgen
 from server_config import server_config
 
+# Args that are scaffolding / not meaningful to store in a record's params.
+_PARAMS_SKIP = {
+    "output", "max_tokens", "temperature", "timeout",
+    "artgen_type", "func", "base_url", "model", "simulate",
+    "no_save", "raw", "enhance",
+}
+
+
+def _build_record_params(args) -> dict:
+    """Build the params dict stored on an artgen MediaRecord.
+
+    Keeps only primitive-typed, non-scaffolding public args. Generators may
+    stash results on underscore-prefixed attrs (dropped by the public filter);
+    codeart's safe parse-check result is surfaced explicitly so it is recorded
+    on the CLI path for parity with the GUI panel.
+    """
+    params = {
+        k: v for k, v in vars(args).items()
+        if isinstance(v, (str, int, float, bool, type(None)))
+        and k not in _PARAMS_SKIP
+        and not k.startswith("_")
+    }
+    for key in ("_codeart_compiles", "_codeart_error"):
+        if hasattr(args, key):
+            params[key] = getattr(args, key)
+    return params
+
+
 # Common flags shared by all generator subcommands
 _COMMON_ARGS = [
     ("--output", dict(default=None, metavar="PATH",
@@ -287,16 +315,7 @@ def cmd_artgen(args) -> None:
             except Exception:
                 thumb_path = None
 
-            _PARAMS_SKIP = {
-                "output", "max_tokens", "temperature", "timeout",
-                # internal argparse / generator scaffolding — not meaningful to store
-                "artgen_type", "func", "base_url", "model", "simulate",
-                "no_save", "raw", "enhance",
-            }
-            params = {k: v for k, v in vars(args).items()
-                      if isinstance(v, (str, int, float, bool, type(None)))
-                      and k not in _PARAMS_SKIP
-                      and not k.startswith("_")}
+            params = _build_record_params(args)
 
             from media_store import MediaRecord
             rec = MediaRecord(

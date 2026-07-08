@@ -175,3 +175,38 @@ class TestManifestAndDiscovery:
         finally:
             plugin_loader._SEARCH_PATHS[:] = orig_paths
             plugin_loader._PLUGINS.clear()
+
+
+class TestCliParams:
+    def test_build_record_params_surfaces_codeart_flags(self):
+        import importlib.util as _u
+        cli_path = Path(__file__).parent.parent / "app" / "artgen" / "cli.py"
+        spec = _u.spec_from_file_location("artgen_cli", cli_path)
+        cli = _u.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+
+        ns = argparse.Namespace(
+            language="python", inspiration="x", style="auto", should_compile=True,
+            output="/tmp/x.py", max_tokens=4096, temperature=0.7,  # skipped keys
+        )
+        ns._codeart_compiles = False
+        ns._codeart_error = "invalid syntax"
+
+        params = cli._build_record_params(ns)
+        # public args kept, scaffolding dropped
+        assert params["language"] == "python"
+        assert "output" not in params and "max_tokens" not in params
+        # codeart flags surfaced despite underscore prefix
+        assert params["_codeart_compiles"] is False
+        assert params["_codeart_error"] == "invalid syntax"
+
+    def test_build_record_params_omits_absent_codeart_flags(self):
+        import importlib.util as _u
+        cli_path = Path(__file__).parent.parent / "app" / "artgen" / "cli.py"
+        spec = _u.spec_from_file_location("artgen_cli2", cli_path)
+        cli = _u.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        ns = argparse.Namespace(mood="volcanic", count=6)  # a non-codeart generator
+        params = cli._build_record_params(ns)
+        assert "_codeart_compiles" not in params
+        assert params["mood"] == "volcanic"

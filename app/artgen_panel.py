@@ -397,6 +397,25 @@ class ArtgenPanel(Gtk.Box):
             box.append(_row("Theme", self._verse_theme))
             box.append(_row("Count", self._verse_count))
 
+        elif name == "codeart":
+            # Styles mirror plugins/codeart/plugin.py _STYLES ("auto" = open prompt).
+            self._code_language = Gtk.Entry()
+            self._code_language.set_text("python")
+            self._code_language.set_placeholder_text("target language")
+            self._code_inspiration = Gtk.Entry()
+            self._code_inspiration.set_text("the nature of recursion")
+            self._code_inspiration.set_placeholder_text("thematic seed")
+            self._code_style = _dd(
+                ["auto", "quine", "ascii", "poem", "oneliner", "glitch",
+                 "unusually_verbose", "function_oriented"],
+                "auto",
+            )
+            self._code_should_compile = _check("Should compile (prompt directive)", True)
+            box.append(_row("Language", self._code_language))
+            box.append(_row("Inspiration", self._code_inspiration))
+            box.append(_row("Style", self._code_style))
+            box.append(self._code_should_compile)
+
         elif name == "palette":
             self._pal_mood = Gtk.Entry()
             self._pal_mood.set_text("volcanic")
@@ -1297,6 +1316,12 @@ class ArtgenPanel(Gtk.Box):
             args.theme = self._verse_theme.get_text() or "the passage of time"
             args.count = int(self._verse_count.get_value())
 
+        elif gen_name == "codeart":
+            args.language = self._code_language.get_text() or "python"
+            args.inspiration = self._code_inspiration.get_text() or "the nature of recursion"
+            args.style = _dd_val(self._code_style)
+            args.should_compile = self._code_should_compile.get_active()
+
         elif gen_name == "palette":
             args.mood = self._pal_mood.get_text() or "volcanic"
             args.count = int(self._pal_count.get_value())
@@ -1719,7 +1744,7 @@ class ArtgenPanel(Gtk.Box):
             return
 
         # Types that accept free-form text from Inspire
-        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff"}
+        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff", "codeart"}
         if gen_name == "verse":
             self._verse_theme.set_text(theme)
         elif gen_name == "palette":
@@ -1730,6 +1755,8 @@ class ArtgenPanel(Gtk.Box):
             self._free_tv.get_buffer().set_text(theme)
         elif gen_name == "animatediff":
             self._ad_prompt.set_text(theme)
+        elif gen_name == "codeart":
+            self._code_inspiration.set_text(theme)
         else:
             # Visual types: show the inspiration in the status bar
             self._set_status(f"Inspired: {theme[:60]}")
