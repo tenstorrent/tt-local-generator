@@ -99,3 +99,62 @@ def validate_python(src: str) -> "tuple[bool, str | None]":
         return False, str(e)
     except Exception as e:  # pragma: no cover - defensive; never fail generation
         return False, str(e)
+
+
+class CodeArtGenerator(ArtGenerator):
+    name = "codeart"
+    description = (
+        "Source code as art: quines, code-poems, ascii-shaped source, and more"
+    )
+    output_ext = ".py"
+
+    def add_args(self, parser: "argparse.ArgumentParser") -> None:
+        parser.add_argument(
+            "--language", default=_DEFAULT_LANGUAGE,
+            help=f"Target language (default: {_DEFAULT_LANGUAGE}). "
+                 "Validation is Python-only.",
+        )
+        parser.add_argument(
+            "--inspiration", default=_DEFAULT_INSPIRATION,
+            help=f'Thematic seed (default: "{_DEFAULT_INSPIRATION}")',
+        )
+        parser.add_argument(
+            "--style", choices=list(_STYLES), default="auto",
+            help="Art style bias (default: auto = open prompt)",
+        )
+        parser.add_argument(
+            "--should-compile", dest="should_compile",
+            action=argparse.BooleanOptionalAction, default=True,
+            help="Directive: ask for code that compiles/runs (default: on)",
+        )
+
+    def build_prompt(self, args: "argparse.Namespace") -> str:
+        """Return the user message (also used by --simulate)."""
+        _, user = _build_messages(args)
+        return user
+
+    def parse_output(self, raw: str, args: "argparse.Namespace") -> str:
+        cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        cleaned = re.sub(r"```\w*\s*|```", "", cleaned).strip()
+        return cleaned
+
+    def post_process(self, artifact: str, args: "argparse.Namespace") -> str:
+        """Validate Python output (parse-only) and stash the result on args.
+
+        Non-Python languages are left unvalidated (None). Never raises, never
+        executes the code. Returns the artifact unchanged.
+        """
+        language = (getattr(args, "language", _DEFAULT_LANGUAGE) or "").strip().lower()
+        if language.startswith("python"):
+            ok, err = validate_python(artifact)
+            args._codeart_compiles = ok
+            args._codeart_error = err
+        else:
+            args._codeart_compiles = None
+            args._codeart_error = None
+        return artifact
+
+    def generate_artifact(self, args: "argparse.Namespace", call_fn) -> str:
+        system, user = _build_messages(args)
+        raw = call_fn(user, system=system)
+        return self.post_process(self.parse_output(raw, args), args)
