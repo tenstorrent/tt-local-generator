@@ -1,3 +1,16 @@
+tt-local-generator (0.11.0) noble; urgency=medium
+
+  * artgen: run up to 3 generations concurrently (manual queue + auto-gen)
+    instead of strictly serial — chat backends batch requests, so this improves
+    throughput. Aggregate progress ("Generating N job(s)… Xs"); cap is the
+    _MAX_CONCURRENT_ARTGEN constant.
+  * artgen: raise the LLM call timeout 300s -> 600s so large code generations on
+    a 70B don't hit the client ceiling.
+  * codeart: add a plugins.html card and ship two starred example outputs
+    (recursion-tree.py, markov-poem.pl) under docs/assets/artgen/.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 08 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.10.0) noble; urgency=medium
 
   * artgen: new "codeart" generator — source code as art. Args: --language,
