@@ -72,7 +72,7 @@ system prompt is built alongside it in `generate_artifact`.
 |---|---|---|
 | `--language` | str, default `python` | Target language. Free-form; the model attempts it. Validation is Python-only in v1. |
 | `--inspiration` | str, default `"the nature of recursion"` | Free-text theme / seed that steers the content. |
-| `--style` | choice, default `auto` | `auto` = open prompt (no bias). Optional biases: `quine`, `ascii`, `poem`, `oneliner`, `glitch`. |
+| `--style` | choice, default `auto` | `auto` = open prompt (no bias). Optional biases: `quine`, `ascii`, `poem`, `oneliner`, `glitch`, `unusually_verbose`, `function_oriented`. |
 | `--should-compile` | bool, default `True` | `argparse.BooleanOptionalAction` → `--should-compile` / `--no-should-compile`. Prompt directive only; never enforced. |
 
 ### Style presets
@@ -83,6 +83,12 @@ system prompt is built alongside it in `generate_artifact`.
 - `poem` — code that reads like a poem (identifiers, strings, structure) yet is valid.
 - `oneliner` — a single dense, elegant line.
 - `glitch` — obfuscated-but-beautiful / cryptic yet valid.
+- `unusually_verbose` — deliberately, expressively over-verbose: long descriptive
+  identifiers, explicit intermediate variables, narrative comments — verbosity as the
+  aesthetic, while remaining valid.
+- `function_oriented` — decompose into many tiny, well-named functions so that the
+  top-level *sequence of calls* reads as the art (the composition/invocation is the
+  poem); each function is small and single-purpose.
 
 ## Prompt construction
 
