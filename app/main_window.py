@@ -1464,7 +1464,7 @@ _SERVER_SCRIPTS: dict = {
     ("video",   "skyreels"):       ("start_skyreels_i2v.sh",    "SkyReels-V2-I2V video (Blackhole)"),
     ("image",   "flux"):           ("start_flux.sh",            "FLUX image"),
     ("image",   "sdxl"):           ("start_sdxl.sh",            "SDXL image (cpp_server)"),
-    ("image",   "z-image-turbo"):  ("start_z_image_turbo.sh",   "Z-Image-Turbo image (P300X2)"),
+    ("image",   "z-image-turbo"):  ("start_z_image_turbo.sh",   "Z-Image-Turbo image (P150X4)"),
     ("image",   "motif"):          ("start_motif.sh",           "Motif image (P300X2)"),
     ("animate", ""):               ("start_animate.sh",         "Wan2.2-Animate"),
 }
@@ -4400,7 +4400,7 @@ class ControlPanel(Gtk.Box):
         ("",              "— not running —"),
         ("flux",          "FLUX.1-schnell  —  1024×1024"),
         ("sdxl",          "SDXL  —  cpp_server"),
-        ("z-image-turbo", "Z-Image-Turbo  —  P300X2  (functional)"),
+        ("z-image-turbo", "Z-Image-Turbo  —  P150X4  (functional)"),
         ("motif",         "Motif-6B-Preview  —  P300X2"),
     ]
 
@@ -5485,7 +5485,7 @@ class ControlPanel(Gtk.Box):
             _img_descs = {
                 "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
                 "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
-                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P300X2  (functional)",
+                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
                 "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
             }
             self._source_desc_lbl.set_label(
@@ -5633,7 +5633,7 @@ class ControlPanel(Gtk.Box):
             _img_descs = {
                 "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
                 "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
-                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P300X2  (functional)",
+                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
                 "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
             }
             if hasattr(self, "_source_desc_lbl"):

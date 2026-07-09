@@ -130,7 +130,7 @@ Architecture: all
 Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: Z-Image-Turbo model weights for tt-local-generator
  Downloads Tongyi-MAI/Z-Image-Turbo from HuggingFace. Required for the
- Z-Image-Turbo image generation mode (P300X2 hardware). Status: functional
+ Z-Image-Turbo image generation mode (P150X4 hardware). Status: functional
  in tt-inference-server v0.17.0.
  .
  The model is publicly available; a HuggingFace account is not required,

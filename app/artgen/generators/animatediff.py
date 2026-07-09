@@ -636,9 +636,13 @@ def _run_multi_chip(
         t.start()
         drain_threads.append(t)
 
-    # Wait for all chips concurrently — each has up to `timeout` seconds.
+    # Wait for all chips concurrently against a single shared deadline, so the
+    # total wall-clock wait is bounded by `timeout` regardless of chip count
+    # (joining each with the full `timeout` would compound to timeout*N when
+    # multiple chips hang).
+    _deadline = time.monotonic() + timeout
     for t in drain_threads:
-        t.join(timeout=timeout)
+        t.join(timeout=max(0.0, _deadline - time.monotonic()))
 
     # Collect exit codes; kill any stragglers.
     failed_chips: list[int] = []
