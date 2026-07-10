@@ -1,3 +1,20 @@
+tt-local-generator (0.12.0) noble; urgency=medium
+
+  * animatediff: multi-chip modes — Off / Remix / Coherent, in a new "🎛
+    Multi-chip" panel expander. Remix turns the multi-chip effect into a
+    controllable feature (per-chip prompts, seed spread, temporal/motion ramps,
+    ✦ LLM auto-vary, interleave or concatenate stitch) stitched into a morphing
+    animation; Coherent renders a continuous N×-longer clip via sequential
+    latent-chaining. Verified on QB2 (4× P300c).
+  * animatediff: fix _stitch_gifs — preserve per-frame duration + shared palette
+    + add interleave; resolves issue #21 (dupe frames / stitch bugs) and adds
+    plan-builder / stitch / routing test coverage.
+  * animatediff: multi-chip is now opt-in via mode selection (the old always-on
+    multi-chip produced duplicated frames). The main-window "use all chips"
+    checkbox now maps to Remix.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 09 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.11.0) noble; urgency=medium
 
   * artgen: run up to 3 generations concurrently (manual queue + auto-gen)
