@@ -95,6 +95,11 @@ def _section_lbl(text: str) -> Gtk.Label:
 
 # ── ArtgenPanel ───────────────────────────────────────────────────────────────
 
+# Max artgen generations allowed to run at once. Chat backends (vLLM etc.)
+# batch concurrent requests, so a small cap improves throughput without
+# overwhelming the server or flooding the gallery.
+_MAX_CONCURRENT_ARTGEN = 3
+
 _MODEL_TO_KEY: dict[str, str] = {
     "Qwen3-8B":               "artgen-qwen3-8b",
     "Llama-3.1-8B-Instruct":  "artgen-llama-3.1-8b",
@@ -123,7 +128,7 @@ class ArtgenPanel(Gtk.Box):
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_remix: "Optional[Callable[['MediaRecord'], None]]" = None
-        self._generating: bool = False
+        self._active_count: int = 0            # artgen jobs currently in flight (0.._MAX_CONCURRENT_ARTGEN)
         self._gen_queue: deque = deque()  # (gen_name, args) tuples pending manual generation
         self._last_out_path: Path | None = None
         self._tmp_svg: Path | None = None
@@ -397,6 +402,25 @@ class ArtgenPanel(Gtk.Box):
             box.append(_row("Theme", self._verse_theme))
             box.append(_row("Count", self._verse_count))
 
+        elif name == "codeart":
+            # Styles mirror plugins/codeart/plugin.py _STYLES ("auto" = open prompt).
+            self._code_language = Gtk.Entry()
+            self._code_language.set_text("python")
+            self._code_language.set_placeholder_text("target language")
+            self._code_inspiration = Gtk.Entry()
+            self._code_inspiration.set_text("the nature of recursion")
+            self._code_inspiration.set_placeholder_text("thematic seed")
+            self._code_style = _dd(
+                ["auto", "quine", "ascii", "poem", "oneliner", "glitch",
+                 "unusually_verbose", "function_oriented"],
+                "auto",
+            )
+            self._code_should_compile = _check("Should compile (prompt directive)", True)
+            box.append(_row("Language", self._code_language))
+            box.append(_row("Inspiration", self._code_inspiration))
+            box.append(_row("Style", self._code_style))
+            box.append(self._code_should_compile)
+
         elif name == "palette":
             self._pal_mood = Gtk.Entry()
             self._pal_mood.set_text("volcanic")
@@ -466,7 +490,7 @@ class ArtgenPanel(Gtk.Box):
 
             # ── Core params ───────────────────────────────────────────────────
             self._ad_frames = _dd(["8", "16", "24", "32"], "8")
-            self._ad_steps = _spin(4, 50, 1, 25)
+            self._ad_steps = _spin(4, 50, 1, 4)
             self._ad_seed = _spin(0, 2**31 - 1, 1, 42)
             self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
             self._ad_temporal_alpha.set_digits(2)
@@ -488,6 +512,7 @@ class ArtgenPanel(Gtk.Box):
 
             self._ad_mode = _dd(["blackhole", "cpu", "sim"], "blackhole")
             self._ad_lightning = Gtk.CheckButton(label="Lightning (Euler scheduler)")
+            self._ad_lightning.set_active(True)  # default: fastest path
             self._ad_lightning.set_tooltip_text(
                 "Blackhole: uses Euler solver with cosine temporal decay.\n"
                 "CPU: loads AnimateDiff-Lightning distilled weights (CFG=1.0)."
@@ -838,24 +863,31 @@ class ArtgenPanel(Gtk.Box):
         self._drain_queue()
 
     def _drain_queue(self) -> None:
-        """Start the next queued generation if none is running; update button label."""
-        if self._generating:
-            n = len(self._gen_queue)
-            self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
-            return
-        if not self._gen_queue:
-            self._gen_btn.set_label("✦ Generate")
-            return
-        gen_name, args = self._gen_queue.popleft()
-        n = len(self._gen_queue)
-        self._generating = True
-        self._gen_btn.set_label(f"Generating… (+{n})" if n else "Generating…")
-        self._set_status("Detecting model…")
-        threading.Thread(
-            target=self._run_generation,
-            args=(gen_name, args),
-            daemon=True,
-        ).start()
+        """Launch queued generations up to the concurrency cap; update the button."""
+        while self._active_count < _MAX_CONCURRENT_ARTGEN and self._gen_queue:
+            gen_name, args = self._gen_queue.popleft()
+            self._active_count += 1
+            self._ensure_ticker()
+            threading.Thread(
+                target=self._run_generation,
+                args=(gen_name, args),
+                daemon=True,
+            ).start()
+        self._update_gen_button()
+
+    @staticmethod
+    def _gen_button_label(active: int, queued: int) -> str:
+        """Label for the Generate button given active + queued job counts."""
+        if active == 0:
+            return "✦ Generate"
+        if queued == 0:
+            return f"Generating… ({active} running)"
+        return f"Generating… ({active} running, +{queued})"
+
+    def _update_gen_button(self) -> None:
+        self._gen_btn.set_label(
+            self._gen_button_label(self._active_count, len(self._gen_queue))
+        )
 
     # Map artgen generator names to prompt_client source types so the prompt
     # engine pulls from the right word banks and LLM polishing style.
@@ -951,23 +983,58 @@ class ArtgenPanel(Gtk.Box):
         return True  # GLib.SOURCE_CONTINUE — keep the timeout alive
 
     def _check_health_bg(self) -> None:
-        from server_manager import is_healthy
+        # Use the SAME discovery the generation router uses
+        # (artgen.detect_artgen_endpoint) so the "on" indicator can never
+        # disagree with where requests actually go.  The old path pinged the
+        # fixed configured port (8002) for the dropdown's model key, so a model
+        # started on any other port (e.g. a vLLM Llama on 8003) showed as
+        # offline even though generation would have found and used it.
+        #
+        # Steady-state optimisation: once an endpoint is found, re-ping just
+        # that URL on each 5 s poll instead of re-sweeping every port — the
+        # full sweep only runs again when the known endpoint goes away.
+        import artgen
+        ok = False
+        model_id = None
         try:
-            model = _dd_val(self._srv_model_dd)
-            key = _MODEL_TO_KEY.get(model, "artgen-qwen3-8b")
-            ok = is_healthy(key)
+            last = getattr(self, "_last_artgen_base", None)
+            if last:
+                model_id = artgen.detect_model(last, timeout=1.0)
+            if model_id:
+                ok = True
+            else:
+                base, model_id = artgen.detect_artgen_endpoint()
+                ok = base is not None
+                self._last_artgen_base = base  # may be None; cleared until next hit
         except Exception:
-            ok = False
-        GLib.idle_add(self._set_health, ok)
+            ok, model_id = False, None
+        GLib.idle_add(self._set_health, ok, model_id)
 
-    def _set_health(self, ok: bool) -> None:
+    def _set_health(self, ok: bool, model_id: str | None = None) -> None:
+        # Short display name: drop the HF "org/" prefix (meta-llama/Llama-3.3-70B
+        # -> Llama-3.3-70B-Instruct) so the status label stays compact.
+        short = model_id.split("/")[-1] if model_id else None
         for dot in (self._health_dot, self._srv_btn_dot):
             dot.remove_css_class("artgen-health-ok")
             dot.remove_css_class("artgen-health-bad")
             dot.remove_css_class("artgen-health-unknown")
             dot.add_css_class("artgen-health-ok" if ok else "artgen-health-bad")
-        if self._srv_status_lbl.get_label() in ("unknown", "running", "offline"):
-            self._srv_status_lbl.set_label("running" if ok else "offline")
+            dot.set_tooltip_text(
+                f"Generative-art model detected: {model_id}" if (ok and model_id)
+                else "No generative-art model detected"
+            )
+        # Only touch the status label while it is showing a health-owned value
+        # (never clobber a transient message like "launched — waiting for
+        # health").  The set grows as new model names are displayed so later
+        # polls keep it current.
+        prev = self._srv_status_lbl.get_label()
+        health_labels = getattr(
+            self, "_health_status_labels", {"unknown", "running", "offline"}
+        )
+        if prev in health_labels:
+            new_label = short if (ok and short) else ("running" if ok else "offline")
+            self._srv_status_lbl.set_label(new_label)
+            self._health_status_labels = health_labels | {new_label}
 
     def _set_srv_status(self, text: str) -> None:
         self._srv_status_lbl.set_label(text)
@@ -1016,7 +1083,6 @@ class ArtgenPanel(Gtk.Box):
                 return
 
             t0 = time.monotonic()
-            GLib.idle_add(self._begin_llm_timer, t0)
 
             # Accumulate token usage across all LLM calls (multi-pass generators
             # call call_fn more than once; single-pass generators call it once).
@@ -1127,9 +1193,10 @@ class ArtgenPanel(Gtk.Box):
         from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
 
         # Hardware check is only meaningful for blackhole mode; cpu/sim run without TT hardware.
+        num_chips = 1
         if args.ad_mode == "blackhole":
             GLib.idle_add(self._set_status, "Checking Blackhole hardware…")
-            ok, hw_msg = check_hardware()
+            ok, hw_msg, num_chips = check_hardware()
             if not ok:
                 GLib.idle_add(self._finish_error,
                     f"AnimateDiff requires Blackhole hardware.\n{hw_msg}")
@@ -1140,7 +1207,8 @@ class ArtgenPanel(Gtk.Box):
         short_id = str(_uuid.uuid4())[:8]
         out_path = make_artgen_path(short_id, ".gif")
 
-        GLib.idle_add(self._set_status, f"Starting AnimateDiff ({hw_msg})…")
+        chip_info = f"{num_chips} chip{'s' if num_chips != 1 else ''}" if args.ad_mode == "blackhole" else hw_msg
+        GLib.idle_add(self._set_status, f"Starting AnimateDiff ({chip_info})…")
 
         t0 = time.monotonic()
 
@@ -1171,6 +1239,7 @@ class ArtgenPanel(Gtk.Box):
             motion_adapter_alpha=args.ad_injection_alpha,
             motion_adapter_skip=args.ad_motion_skip_keys,
             on_progress=_on_progress,
+            num_chips=num_chips if args.ad_device_id is None else 1,
         )
 
         if not success:
@@ -1258,6 +1327,12 @@ class ArtgenPanel(Gtk.Box):
             args.theme = self._verse_theme.get_text() or "the passage of time"
             args.count = int(self._verse_count.get_value())
 
+        elif gen_name == "codeart":
+            args.language = self._code_language.get_text() or "python"
+            args.inspiration = self._code_inspiration.get_text() or "the nature of recursion"
+            args.style = _dd_val(self._code_style)
+            args.should_compile = self._code_should_compile.get_active()
+
         elif gen_name == "palette":
             args.mood = self._pal_mood.get_text() or "volcanic"
             args.count = int(self._pal_count.get_value())
@@ -1308,18 +1383,20 @@ class ArtgenPanel(Gtk.Box):
 
     # ── LLM elapsed-time ticker (main-thread only) ────────────────────────────
 
-    def _begin_llm_timer(self, t0: float) -> None:
-        self._llm_t0 = t0
-        self._set_status("Calling LLM… 0s")
-        self._llm_timer_id = GLib.timeout_add(500, self._tick_llm_timer)
+    def _ensure_ticker(self) -> None:
+        """Start the shared aggregate ticker if not already running (main thread)."""
+        if self._llm_timer_id is None:
+            self._llm_t0 = time.monotonic()
+            self._llm_timer_id = GLib.timeout_add(500, self._tick_llm_timer)
+            self._tick_llm_timer()
 
     def _tick_llm_timer(self) -> bool:
         elapsed = int(time.monotonic() - self._llm_t0)
-        self._set_status(f"Calling LLM… {elapsed}s")
+        self._set_status(f"Generating {self._active_count} job(s)… {elapsed}s")
         return GLib.SOURCE_CONTINUE
 
-    def _cancel_llm_timer(self) -> int | None:
-        """Stop the ticker and return elapsed seconds (or None if never started)."""
+    def _stop_ticker(self) -> "int | None":
+        """Stop the ticker if running; return elapsed seconds (or None)."""
         elapsed = None
         if self._llm_timer_id is not None:
             GLib.source_remove(self._llm_timer_id)
@@ -1330,38 +1407,38 @@ class ArtgenPanel(Gtk.Box):
     # ── UI update callbacks (must only run on the GTK main thread) ────────────
 
     def _finish_success(self, artifact: str, out_path_str: str, rec: "MediaRecord | None" = None) -> None:
-        elapsed = self._cancel_llm_timer()
-        self._generating = False
+        self._active_count = max(0, self._active_count - 1)
         self._last_out_path = Path(out_path_str)
-        suffix = f"  ({elapsed}s)" if elapsed is not None else ""
-        self._set_status(f"Done  ({elapsed}s)" if elapsed is not None else "Done")
 
-        # Push the new record into every live view that holds a record list.
         if rec is not None:
             self._gallery.prepend_record(rec)
             if self._watch._records:
                 self._watch._records.insert(0, rec)
         else:
             self._gallery.refresh()
-        # Switch to Gallery so the new item is immediately visible at the top.
         self._gallery_tab_btn.set_active(True)
         self._sub_stack.set_visible_child_name("gallery")
         self._gallery.scroll_to_top()
 
-        # Drain any manually queued generations before auto-scheduling the next one.
-        self._drain_queue()
+        self._drain_queue()                        # refill freed slot(s)
+        if self._active_count == 0:
+            elapsed = self._stop_ticker()
+            self._set_status(f"Done  ({elapsed}s)" if elapsed is not None else "Done")
+
         if self._auto_gen:
             self._auto_gen_error_streak = 0
-            if not self._generating:  # don't schedule auto if a manual item just started
+            if self._active_count < _MAX_CONCURRENT_ARTGEN:
                 self._auto_maybe_schedule()
 
     def _finish_error(self, msg: str) -> None:
-        self._cancel_llm_timer()
-        self._generating = False
+        self._active_count = max(0, self._active_count - 1)
         self._set_status(f"Error: {msg[:80]}")
-        # Drain any manually queued generations first.
-        self._drain_queue()
-        if self._auto_gen and not self._generating:
+
+        self._drain_queue()                        # refill freed slot(s)
+        if self._active_count == 0:
+            self._stop_ticker()
+
+        if self._auto_gen:
             self._auto_gen_error_streak += 1
             if self._auto_gen_error_streak >= 3:
                 self._auto_stop("3 errors in a row — auto-generate paused")
@@ -1373,7 +1450,7 @@ class ArtgenPanel(Gtk.Box):
                     dlg.show(self.get_root())
                 except AttributeError:
                     pass  # GTK < 4.10; status bar message is sufficient
-            else:
+            elif self._active_count < _MAX_CONCURRENT_ARTGEN:
                 self._auto_maybe_schedule()
 
     def _set_status(self, text: str) -> None:
@@ -1551,7 +1628,7 @@ class ArtgenPanel(Gtk.Box):
         self._auto_revealer.set_reveal_child(active)
         if active:
             self._auto_gen = True
-            if not self._generating:
+            if self._active_count < _MAX_CONCURRENT_ARTGEN:
                 self._auto_maybe_schedule()
         else:
             self._auto_stop()
@@ -1572,6 +1649,8 @@ class ArtgenPanel(Gtk.Box):
         """Start the countdown for the next auto-fire. Runs on the GTK main thread."""
         if not self._auto_gen:
             return
+        if self._auto_gen_timer_id is not None:
+            return  # a countdown is already in progress; don't stack another timer
         checked = [n for n, cb in self._auto_type_checks.items() if cb.get_active()]
         if not checked:
             self._auto_stop("No types selected — auto-generate off")
@@ -1607,8 +1686,8 @@ class ArtgenPanel(Gtk.Box):
         """Kick off one auto-generation cycle. Runs on the GTK main thread."""
         if not self._auto_gen:
             return
-        if self._generating:
-            # Previous generation still running — check again in 1s
+        if self._active_count >= _MAX_CONCURRENT_ARTGEN:
+            # All concurrency slots busy — check again shortly
             self._auto_gen_countdown = 1.0
             self._auto_status_lbl.set_label("Waiting for generation…")
             self._auto_gen_timer_id = GLib.timeout_add(100, self._auto_tick)
@@ -1674,13 +1753,13 @@ class ArtgenPanel(Gtk.Box):
         self._auto_restore_controls()
         if not self._auto_gen:
             return
-        # If the user started a manual generation while we were inspiring, drop this
+        # If the user started manual generation(s) while we were inspiring, drop this
         # auto cycle — _finish_success will call _auto_maybe_schedule for the next one.
-        if self._generating:
+        if self._active_count >= _MAX_CONCURRENT_ARTGEN:
             return
 
         # Types that accept free-form text from Inspire
-        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff"}
+        _TEXT_TYPES = {"verse", "palette", "ansi", "freeform", "animatediff", "codeart"}
         if gen_name == "verse":
             self._verse_theme.set_text(theme)
         elif gen_name == "palette":
@@ -1691,14 +1770,17 @@ class ArtgenPanel(Gtk.Box):
             self._free_tv.get_buffer().set_text(theme)
         elif gen_name == "animatediff":
             self._ad_prompt.set_text(theme)
+        elif gen_name == "codeart":
+            self._code_inspiration.set_text(theme)
         else:
             # Visual types: show the inspiration in the status bar
             self._set_status(f"Inspired: {theme[:60]}")
 
         # Collect widget state before handing off to the background thread
         args = self._build_args(gen_name)
-        self._generating = True
-        self._gen_btn.set_label("Generating…")
+        self._active_count += 1
+        self._ensure_ticker()
+        self._update_gen_button()
         if gen_name not in _TEXT_TYPES:
             self._set_status("Detecting model…")
         threading.Thread(
@@ -1812,7 +1894,8 @@ class ArtgenPanel(Gtk.Box):
 
         elif gen_name == "animatediff":
             self._set_dd(self._ad_frames, "8")
-            self._ad_steps.set_value(25)
+            self._ad_steps.set_value(4)
+            self._ad_lightning.set_active(True)
             self._ad_seed.set_value(random.randint(0, 9999))
             # prompt written by _auto_fire_with_theme after Inspire
 

@@ -12,7 +12,9 @@ Most inference models require a QB2 or equivalent Blackhole system; see the hard
 | Video | [SkyReels-V2-I2V-14B-540P](https://huggingface.co/Skywork/SkyReels-V2-I2V-14B-540P) | **QB2** (P300X2) — image-to-video | ✅ Validated |
 | Video | [Wan2.2-Animate-14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B-Diffusers) | **QB2** (P300X2) | 🔄 In validation |
 | Video | [Mochi-1-preview](https://huggingface.co/genmo/mochi-1-preview) | **QB2** (P300X2) | ⏳ Pending validation |
-| Image | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell) | **QB2** (P300X2) | ⏳ Pending validation |
+| Image | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell) | **QB2** (P300X2) | 🔄 In validation |
+| Image | [Motif-Image-6B-Preview](https://huggingface.co/Motif-Technologies/Motif-Image-6B-Preview) | **QB2** (P300X2) | 🔄 In validation |
+| Image | [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) | **QB2** (P150X4) — 4-chip linear mesh | ⏳ Pending validation |
 | Image | [stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) | **QB2** (P300X2) — cpp_server backend | ⏳ Pending validation |
 | Artgen LLM | Qwen3-8B, Llama-3.1-8B-Instruct | **QB2** single P300 card (2 chips) | ✅ Validated |
 | Artgen LLM | Qwen3-32B, Llama-3.3-70B-Instruct | **QB2** (P300X2, all 4 chips) | ✅ Validated |
@@ -28,6 +30,34 @@ All video/image inference runs via a local [tt-inference-server](https://github.
 **[Documentation](https://docs.tenstorrent.com/tt-local-generator)** · **[GitHub](https://github.com/tenstorrent/tt-local-generator)**
 
 ![tt-local-generator — video gallery with detail panel](assets/tt-local-generator-main.png)
+
+---
+
+## Image Generation
+
+Two image models are in active validation on QB2.
+
+**Motif-Image-6B-Preview** ([HuggingFace](https://huggingface.co/Motif-Technologies/Motif-Image-6B-Preview)) — A 6B diffusion transformer from Motif Technologies. Generates high-fidelity 1024×1024 images from text prompts on P300X2.
+
+> *Example image coming soon — validation run in progress.*
+
+**Z-Image-Turbo** ([HuggingFace](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)) — A distilled turbo image model from Tongyi-MAI. Runs on the P150X4 (4-chip linear Blackhole mesh). 9 denoising steps hardcoded; demo code ships inside the Docker image.
+
+> *Example image coming soon — first validation run pending.*
+
+Start an image server:
+```bash
+./bin/start_motif.sh          # Motif-Image-6B-Preview on P300X2
+./bin/start_flux.sh           # FLUX.1-schnell on P300X2
+./bin/start_z_image_turbo.sh  # Z-Image-Turbo on P150X4
+```
+
+Or via `tt-ctl`:
+```bash
+./tt-ctl start motif
+./tt-ctl start flux
+./tt-ctl start z-image-turbo
+```
 
 ---
 

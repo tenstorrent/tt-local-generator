@@ -50,7 +50,7 @@ class TestHardwareFailure:
         worker = _make_worker()
         with (
             patch("artgen.generators.animatediff.check_hardware",
-                  return_value=(False, "no Blackhole device found")),
+                  return_value=(False, "no Blackhole device found", 0)),
             patch("artgen.generators.animatediff.run_subprocess") as mock_run,
         ):
             finished, errors = _run(worker)
@@ -67,7 +67,7 @@ class TestSubprocessFailure:
         worker = _make_worker()
         with (
             patch("artgen.generators.animatediff.check_hardware",
-                  return_value=(True, "Blackhole P300c")),
+                  return_value=(True, "Blackhole P300c", 1)),
             patch("artgen.generators.animatediff.run_subprocess",
                   return_value=(False, "TTNN kernel crashed")),
             patch("artgen.generators.animatediff.make_gif_thumbnail") as mock_thumb,
@@ -93,7 +93,7 @@ class TestHappyPath:
 
         with (
             patch("artgen.generators.animatediff.check_hardware",
-                  return_value=(True, "Blackhole P300c")),
+                  return_value=(True, "Blackhole P300c", 1)),
             patch("artgen.generators.animatediff.run_subprocess",
                   return_value=(True, None)),
             patch("artgen.generators.animatediff.make_gif_thumbnail"),
@@ -125,7 +125,7 @@ class TestHappyPath:
 
         with (
             patch("artgen.generators.animatediff.check_hardware",
-                  return_value=(True, "Blackhole")),
+                  return_value=(True, "Blackhole", 1)),
             patch("artgen.generators.animatediff.run_subprocess", run_sub),
             patch("artgen.generators.animatediff.make_gif_thumbnail"),
             patch("worker.VIDEOS_DIR", new=Path("/tmp/tt-gen-test/videos")),
@@ -155,7 +155,7 @@ class TestCancellation:
         def hw_check():
             # Cancel mid-execution, between hw-check and subprocess
             worker.cancel()
-            return True, "Blackhole"
+            return True, "Blackhole", 1
 
         with (
             patch("artgen.generators.animatediff.check_hardware",

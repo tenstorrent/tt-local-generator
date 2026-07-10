@@ -1417,9 +1417,11 @@ _DETAIL_VIDEO_H = 225
 _MODEL_DISPLAY: dict = {
     "wan2.2-t2v":            "Wan2.2",
     "mochi-1-preview":       "Mochi-1",
-    "flux.1-schnell":            "FLUX",
+    "flux.1-schnell":        "FLUX",
     "wan2.2-animate-14b":    "Animate-14B",
     "skyreels-v2-i2v-14b-540p": "SkyReels I2V",
+    "z-image-turbo":         "Z-Image",
+    "motif-image-6b-preview": "Motif",
 }
 
 # Short director names shown in the menu + Preferences dialog, mapped to the
@@ -1457,12 +1459,14 @@ _SKIP_META_KEYS: frozenset = frozenset({
 
 # Maps (model_source, model_key) to (script_filename, display_label) for server launch.
 _SERVER_SCRIPTS: dict = {
-    ("video",   "wan2"):      ("start_wan_qb2.sh",  "Wan2.2 video (P300X2)"),
-    ("video",   "mochi"):     ("start_mochi.sh",    "Mochi-1 video"),
-    ("video",   "skyreels"):  ("start_skyreels_i2v.sh", "SkyReels-V2-I2V video (Blackhole)"),
-    ("image",   "flux"):      ("start_flux.sh",     "FLUX image"),
-    ("image",   "sdxl"):      ("start_sdxl.sh",     "SDXL image (cpp_server)"),
-    ("animate", ""):          ("start_animate.sh",  "Wan2.2-Animate"),
+    ("video",   "wan2"):           ("start_wan_qb2.sh",         "Wan2.2 video (P300X2)"),
+    ("video",   "mochi"):          ("start_mochi.sh",           "Mochi-1 video"),
+    ("video",   "skyreels"):       ("start_skyreels_i2v.sh",    "SkyReels-V2-I2V video (Blackhole)"),
+    ("image",   "flux"):           ("start_flux.sh",            "FLUX image"),
+    ("image",   "sdxl"):           ("start_sdxl.sh",            "SDXL image (cpp_server)"),
+    ("image",   "z-image-turbo"):  ("start_z_image_turbo.sh",   "Z-Image-Turbo image (P150X4)"),
+    ("image",   "motif"):          ("start_motif.sh",           "Motif image (P300X2)"),
+    ("animate", ""):               ("start_animate.sh",         "Wan2.2-Animate"),
 }
 
 # Maps short model keys to canonical model ID strings used in GenerationRecord.
@@ -1473,8 +1477,10 @@ _VIDEO_MODEL_IDS: dict = {
     "animatediff":  "animatediff-blackhole",
 }
 _IMAGE_MODEL_IDS: dict = {
-    "flux": "flux.1-schnell",
-    "sdxl": "stable-diffusion-xl-base-1.0",
+    "flux":           "flux.1-schnell",
+    "sdxl":           "stable-diffusion-xl-base-1.0",
+    "z-image-turbo":  "z-image-turbo",
+    "motif":          "motif-image-6b-preview",
 }
 
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
@@ -3730,7 +3736,11 @@ _MODEL_TO_SOURCE: dict = {
     "SkyReels-V2-I2V-14B-540P": "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":    "animate",
-    "flux.1-schnell":            "image",
+    "flux.1-schnell":        "image",
+    "z-image-turbo":         "image",
+    "Z-Image-Turbo":         "image",
+    "motif-image-6b-preview": "image",
+    "Motif-Image-6B-Preview": "image",
 }
 # Maps server model ID → internal video-model key used by ControlPanel
 _MODEL_TO_VIDEO_KEY: dict = {
@@ -3749,7 +3759,11 @@ _MODEL_DISPLAY_SERVER: dict = {
     "SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "Skywork/SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
     "wan2.2-animate-14b":    "Animate-14B online",
-    "flux.1-schnell":            "FLUX online",
+    "flux.1-schnell":        "FLUX online",
+    "z-image-turbo":         "Z-Image-Turbo online",
+    "Z-Image-Turbo":         "Z-Image-Turbo online",
+    "motif-image-6b-preview": "Motif online",
+    "Motif-Image-6B-Preview": "Motif online",
 }
 # Maps server model ID (from /tt-liveness) → server_manager key ("wan2.2", "flux", …)
 _MODEL_TO_SERVER_KEY: dict = {
@@ -3759,18 +3773,24 @@ _MODEL_TO_SERVER_KEY: dict = {
     "SkyReels-V2-I2V-14B-540P":          "skyreels",
     "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
     "wan2.2-animate-14b":                "animate",
-    "flux.1-schnell":                        "flux",
-    "tt-sdxl-trace":                         "sdxl",
-    "stable-diffusion-xl-base-1.0":          "sdxl",
+    "flux.1-schnell":                    "flux",
+    "tt-sdxl-trace":                     "sdxl",
+    "stable-diffusion-xl-base-1.0":      "sdxl",
+    "z-image-turbo":                     "z-image-turbo",
+    "Z-Image-Turbo":                     "z-image-turbo",
+    "motif-image-6b-preview":            "motif",
+    "Motif-Image-6B-Preview":            "motif",
 }
-# Maps server key → (source_tab, video_model_key) for startup pre-selection
+# Maps server key → (source_tab, image_model_key or video_model_key) for startup pre-selection
 _SERVER_KEY_TO_SOURCE_MODEL: dict = {
-    "wan2.2":   ("video",   "wan2"),
-    "mochi":    ("video",   "mochi"),
-    "skyreels": ("video",   "skyreels"),
-    "flux":     ("image",   ""),
-    "sdxl":     ("image",   ""),
-    "animate":  ("animate", ""),
+    "wan2.2":         ("video",   "wan2"),
+    "mochi":          ("video",   "mochi"),
+    "skyreels":       ("video",   "skyreels"),
+    "flux":           ("image",   "flux"),
+    "sdxl":           ("image",   "sdxl"),
+    "z-image-turbo":  ("image",   "z-image-turbo"),
+    "motif":          ("image",   "motif"),
+    "animate":        ("animate", ""),
 }
 # Maps server model ID → capability key (for capability-centric status labels)
 _MODEL_TO_CAP: dict = {
@@ -3780,7 +3800,19 @@ _MODEL_TO_CAP: dict = {
     "SkyReels-V2-I2V-14B-540P":         "video",
     "Skywork/SkyReels-V2-I2V-14B-540P": "video",
     "wan2.2-animate-14b":               "animate",
-    "flux.1-schnell":                       "image",
+    "flux.1-schnell":                   "image",
+    "z-image-turbo":                    "image",
+    "Z-Image-Turbo":                    "image",
+    "motif-image-6b-preview":           "image",
+    "Motif-Image-6B-Preview":           "image",
+}
+# Maps server model ID → internal image-model key used by ControlPanel
+_MODEL_TO_IMAGE_KEY: dict = {
+    "flux.1-schnell":         "flux",
+    "z-image-turbo":          "z-image-turbo",
+    "Z-Image-Turbo":          "z-image-turbo",
+    "motif-image-6b-preview": "motif",
+    "Motif-Image-6B-Preview": "motif",
 }
 # Maps source tab key → capability key
 _SOURCE_TO_CAP: dict = {
@@ -3856,8 +3888,8 @@ class ControlPanel(Gtk.Box):
         self._server_launching = False   # True while start/stop script is running
         self._busy = False
         self._model_source = "video"   # "video", "image", or "animate"
-        self._video_model: str = "wan2"   # "wan2" | "mochi"
-        self._image_model: str = "flux"   # "flux" | "sdxl"
+        self._video_model: str = "animatediff"   # default; overridden by last_successful_deployment or server health check
+        self._image_model: str = "flux"   # "flux" | "sdxl" | "z-image-turbo" | "motif"
         self.set_margin_top(12)
         self.set_margin_bottom(12)
         self.set_margin_start(12)
@@ -3976,6 +4008,11 @@ class ControlPanel(Gtk.Box):
         # model they are writing for before composing.  Hidden for non-video sources.
         self._video_model_row_widget = self._build_video_model_row()
         self.append(self._video_model_row_widget)
+
+        # IMAGE MODEL row — same position, shown only when image tab is active.
+        self._image_model_row_widget = self._build_image_model_row()
+        self._image_model_row_widget.set_visible(False)
+        self.append(self._image_model_row_widget)
 
         scroll1 = Gtk.ScrolledWindow()
         self._prompt_scroll = scroll1   # kept for inline-validation error styling
@@ -4359,6 +4396,14 @@ class ControlPanel(Gtk.Box):
         ("animatediff", "AnimateDiff  —  GIF, local Blackhole"),
     ]
 
+    _ALL_IMAGE_MODEL_ENTRIES = [
+        ("",              "— not running —"),
+        ("flux",          "FLUX.1-schnell  —  1024×1024"),
+        ("sdxl",          "SDXL  —  cpp_server"),
+        ("z-image-turbo", "Z-Image-Turbo  —  P150X4  (functional)"),
+        ("motif",         "Motif-6B-Preview  —  P300X2"),
+    ]
+
     def _build_video_model_row(self) -> Gtk.Box:
         """VIDEO MODEL row: compact dropdown for Wan2.2 / Mochi-1 / SkyReels / AnimateDiff.
 
@@ -4427,6 +4472,61 @@ class ControlPanel(Gtk.Box):
             self._set_model(key)
             _settings.set("preferred_video_model", key)
             self.update_shot_panel()
+
+    def _build_image_model_row(self) -> Gtk.Box:
+        """IMAGE MODEL row: dropdown for FLUX / SDXL / Z-Image-Turbo / Motif.
+
+        Starts at index 0 ("— not running —").  _sync_image_model_dd() auto-selects
+        the matching entry when a server comes online.  Hidden when not on the image tab.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_margin_top(4)
+        row.set_margin_bottom(2)
+
+        lbl = Gtk.Label(label="MODEL")
+        lbl.add_css_class("create-zone-label")
+        lbl.set_xalign(0)
+        lbl.set_valign(Gtk.Align.CENTER)
+        row.append(lbl)
+
+        string_list = Gtk.StringList()
+        for _, display in self._ALL_IMAGE_MODEL_ENTRIES:
+            string_list.append(display)
+
+        self._image_model_dd = Gtk.DropDown(model=string_list)
+        self._image_model_dd.set_hexpand(True)
+        self._image_model_dd.set_selected(0)
+        self._image_model_dd_syncing = False
+        self._image_model_dd.connect("notify::selected", self._on_image_model_dd_changed)
+        row.append(self._image_model_dd)
+        return row
+
+    def _sync_image_model_dd(self, key: "str | None") -> None:
+        """Programmatically update the IMAGE MODEL dropdown without triggering the handler."""
+        if not hasattr(self, "_image_model_dd"):
+            return
+        if key is None:
+            idx = 0
+        else:
+            idx = next(
+                (i for i, (k, _) in enumerate(self._ALL_IMAGE_MODEL_ENTRIES) if k == key),
+                0,
+            )
+        self._image_model_dd_syncing = True
+        self._image_model_dd.set_selected(idx)
+        self._image_model_dd_syncing = False
+
+    def _on_image_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
+        """Handle user-initiated IMAGE MODEL dropdown change."""
+        if getattr(self, "_image_model_dd_syncing", False):
+            return
+        idx = dd.get_selected()
+        if 0 <= idx < len(self._ALL_IMAGE_MODEL_ENTRIES):
+            key = self._ALL_IMAGE_MODEL_ENTRIES[idx][0]
+            if not key:
+                return
+            self._set_model(key)
+            _settings.set("preferred_image_model", key)
 
     def _build_quality_row(self) -> Gtk.Box:
         """QUALITY row: Fast / Standard / Cinematic named toggle buttons.
@@ -4914,6 +5014,16 @@ class ControlPanel(Gtk.Box):
         self._ad_lightning.connect("toggled", _on_ad_lightning_toggled)
         self._ad_mode.connect("notify::selected", lambda *_: _on_ad_lightning_toggled(None))
 
+        self._ad_multi_chip = Gtk.CheckButton(label="Use all chips in parallel")
+        self._ad_multi_chip.set_active(True)
+        self._ad_multi_chip.add_css_class("hint")
+        self._ad_multi_chip.set_tooltip_text(
+            "Spawn one process per Blackhole chip, each rendering a consecutive frame slice.\n"
+            "Frame count must be divisible by the chip count (e.g. 4, 8, 12 for 4 chips).\n"
+            "Ignored when Device ID is pinned to a specific chip."
+        )
+        perf_box.append(self._ad_multi_chip)
+
         self._ad_device_id = _spin(-1, 7, 1, -1)
         self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
         perf_box.append(_row("Device ID", self._ad_device_id))
@@ -5015,6 +5125,7 @@ class ControlPanel(Gtk.Box):
             temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
             lightning=self._ad_lightning.get_active(),
             lightning_steps=int(_dd_val(self._ad_lightning_steps) or "4"),
+            multi_chip=self._ad_multi_chip.get_active(),
             device_id=raw_device_id if raw_device_id >= 0 else None,
             chain_from=self._ad_chain_from.get_text().strip() or None,
             chain_save=self._ad_chain_save.get_active(),
@@ -5080,6 +5191,35 @@ class ControlPanel(Gtk.Box):
         # green dot updates are visible while the server starts.  The user
         # dismisses it by clicking outside or pressing Escape.
         popover.set_autohide(False)
+
+        # autohide=False keeps this popover non-modal, so the streaming
+        # server-start log stays interactive while a service boots.  The
+        # downside is that a non-autohide popover surface is not tied to window
+        # focus — on its own it lingers on top of *other* applications' windows
+        # when you switch away from the app.  Dismiss it whenever the main
+        # window loses activation (Alt-Tab / clicking another app).  Clicking
+        # the popover's own buttons keeps the toplevel active, so it stays open.
+        # The handler is attached on show and removed on hide so it never
+        # double-connects across open/close cycles and never leaks.
+        def _watch_activation(_pop):
+            win = self.get_root()
+            if win is None:
+                return
+            handler_id = win.connect(
+                "notify::is-active",
+                lambda w, _param: self._servers_popover_on_active(w, popover),
+            )
+            popover._activation_watch = (win, handler_id)
+
+        def _unwatch_activation(_pop):
+            watch = getattr(popover, "_activation_watch", None)
+            if watch is not None:
+                win, handler_id = watch
+                win.disconnect(handler_id)
+                popover._activation_watch = None
+
+        popover.connect("show", _watch_activation)
+        popover.connect("hide", _unwatch_activation)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         outer.set_margin_top(8)
@@ -5186,6 +5326,18 @@ class ControlPanel(Gtk.Box):
         popover.set_child(outer)
         return popover
 
+    def _servers_popover_on_active(self, win, popover) -> None:
+        """Dismiss the non-autohide Servers popover when the toplevel loses
+        activation (e.g. the user switched to another application).
+
+        Because the popover uses ``set_autohide(False)`` it does not close on
+        focus loss by itself and would otherwise linger on top of other apps'
+        windows.  Clicking the popover's own buttons keeps the toplevel active,
+        so this only fires on a genuine app switch.
+        """
+        if not win.get_property("is-active") and popover.get_visible():
+            popover.popdown()
+
     def _on_servers_popover_show(self, _popover) -> None:
         """Kick off an async status refresh when the popover opens."""
         threading.Thread(target=self._refresh_servers_popover, daemon=True).start()
@@ -5193,7 +5345,42 @@ class ControlPanel(Gtk.Box):
     def _refresh_servers_popover(self) -> None:
         """Fetch health for all servers in a background thread, update dots on main thread."""
         statuses = _sm.status_all(timeout=2.0)
+        # Every artgen row shares the fixed health port (8002), so status_all()
+        # lights all of them whenever anything is on 8002 and lights none when a
+        # model is started on another port (e.g. a vLLM Llama on 8003).
+        # Reconcile the artgen rows against the router's discovery so the row for
+        # the model that is actually loaded lights up, wherever it lives.
+        try:
+            import artgen
+            base, model_id = artgen.detect_artgen_endpoint()
+        except Exception:
+            base, model_id = None, None
+        self._reconcile_artgen_statuses(statuses, base, model_id)
         GLib.idle_add(self._apply_servers_status, statuses)
+
+    @staticmethod
+    def _reconcile_artgen_statuses(statuses: dict, base, model_id) -> dict:
+        """Override each artgen row's status from endpoint discovery.
+
+        Only the row whose model matches the discovered/loaded model reads "on",
+        regardless of which port it is served from.  Matching is case-insensitive
+        against both the row's display label and its ``--model`` argument (the
+        discovered id's ``org/`` prefix is dropped first).  Mutates and returns
+        *statuses*.
+        """
+        loaded = (model_id or "").split("/")[-1].lower()
+        for key, sdef in _sm.SERVERS.items():
+            if "artgen" not in (sdef.capabilities or ()):
+                continue
+            names = set()
+            if sdef.label:
+                names.add(sdef.label.lower())
+            ea = sdef.extra_args or ()
+            for i, arg in enumerate(ea):
+                if arg == "--model" and i + 1 < len(ea):
+                    names.add(ea[i + 1].lower())
+            statuses[key] = bool(base) and loaded in names
+        return statuses
 
     def _apply_servers_status(self, statuses: dict[str, bool]) -> bool:
         for key, dot in self._servers_popover_dots.items():
@@ -5295,8 +5482,14 @@ class ControlPanel(Gtk.Box):
             return
         elif is_image:
             self._title_lbl.set_label("TT Local Generator")
+            _img_descs = {
+                "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
+                "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
+                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
+                "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
+            }
             self._source_desc_lbl.set_label(
-                "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG"
+                _img_descs.get(self._image_model, "synchronous  ·  image generation  ·  P300X2")
             )
         elif is_animate:
             self._title_lbl.set_label("TT Local Generator")
@@ -5344,10 +5537,13 @@ class ControlPanel(Gtk.Box):
                 is_video and self._video_model == "animatediff"
             )
 
-        # VIDEO MODEL row: only shown in video source (animate/image/artgen pick
-        # their model elsewhere).
+        # VIDEO MODEL row: only shown in video source.
         if hasattr(self, "_video_model_row_widget"):
             self._video_model_row_widget.set_visible(is_video)
+
+        # IMAGE MODEL row: only shown in image source.
+        if hasattr(self, "_image_model_row_widget"):
+            self._image_model_row_widget.set_visible(is_image)
 
         # CLIP LENGTH row: hidden for image source and animatediff (which has no
         # frame-count picker). Shown for video (wan2/mochi/skyreels) and animate.
@@ -5409,7 +5605,7 @@ class ControlPanel(Gtk.Box):
                 self._server_stop_btn.set_sensitive(True)
             elif model == "animatediff":
                 self._source_desc_lbl.set_label(
-                    "local TTNN  ·  AnimateDiff  ·  ~5 min/frame  ·  animated GIF  ·  no server needed"
+                    "local TTNN  ·  AnimateDiff  ·  ~15–20s (4-chip Lightning)  ·  animated GIF  ·  no server needed"
                 )
                 # AnimateDiff runs locally on Blackhole — no server to start/stop.
                 self._server_start_btn.set_sensitive(False)
@@ -5434,6 +5630,16 @@ class ControlPanel(Gtk.Box):
                 self._animatediff_box.set_visible(model == "animatediff")
         elif self._model_source == "image":
             self._image_model = model
+            _img_descs = {
+                "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
+                "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
+                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
+                "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
+            }
+            if hasattr(self, "_source_desc_lbl"):
+                self._source_desc_lbl.set_label(
+                    _img_descs.get(model, "synchronous  ·  image generation  ·  P300X2")
+                )
 
         # Refresh CLIP LENGTH button labels whenever the active model changes so
         # durations shown reflect the newly selected model (wan2 vs skyreels fps/frames).
@@ -5452,7 +5658,7 @@ class ControlPanel(Gtk.Box):
         return self._video_model
 
     def get_image_model(self) -> str:
-        """Return the currently selected image model key ('flux' or 'sdxl')."""
+        """Return the currently selected image model key ('flux', 'sdxl', 'z-image-turbo', or 'motif')."""
         return self._image_model
 
     def set_server_state(self, ready: bool, running_model: "str | None") -> None:
@@ -5517,11 +5723,15 @@ class ControlPanel(Gtk.Box):
                 # Collapse startup log once server confirmed ready
                 if self._server_launching:
                     self.set_server_launching(False)
-                # Sync the internal video model state to match what's actually running.
-                # e.g. when Mochi is running, update _video_model to "mochi".
+                # Sync internal model state to match what's actually running.
                 video_key = _MODEL_TO_VIDEO_KEY.get(running_model) if running_model else None
                 if video_key and self._video_model != video_key:
                     self._set_model(video_key)
+                    self._sync_video_model_dd(video_key)
+                image_key = _MODEL_TO_IMAGE_KEY.get(running_model) if running_model else None
+                if image_key and self._image_model != image_key:
+                    self._set_model(image_key)
+                    self._sync_image_model_dd(image_key)
 
         self._update_btns()
 
@@ -8715,6 +8925,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 if ready and video_key is None:
                     pref = str(_settings.get("preferred_video_model") or "wan2")
                     video_key = pref if pref in ("wan2", "mochi", "skyreels") else "wan2"
+                    # animatediff doesn't use a server — server-ready path always
+                    # means a network model is running, so wan2 is a safe fallback here.
                 self._controls._shot_server_ready = bool(ready and video_key)
                 if video_key and ready:
                     # Honour the user's preferred model setting; auto-switch to
@@ -9586,6 +9798,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     mode=ad["mode"],
                     lightning=ad["lightning"],
                     lightning_steps=ad["lightning_steps"],
+                    multi_chip=ad["multi_chip"],
                     device_id=ad["device_id"],
                     chain_from=ad["chain_from"],
                     chain_save=chain_save_path,

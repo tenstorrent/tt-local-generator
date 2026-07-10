@@ -50,3 +50,9 @@ media_*.log
 vendor/tt-animatediff/weights/
 vendor/tt-animatediff/output/
 vendor/tt-animatediff/.claude/
+
+# Local-only working dirs (build caches, scratch generation output, doc builds).
+# experiments/rust-ui/target alone is ~1.8 GB of Rust build artifacts — never commit.
+experiments/
+generated/
+docs/docs/

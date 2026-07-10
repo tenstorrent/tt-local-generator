@@ -2,11 +2,13 @@
 MCP server — exposes all loaded plugins as MCP tools over HTTP (JSON-RPC 2.0).
 
 Protocol: MCP over HTTP (JSON-RPC 2.0) — standard MCP client compatible.
-Port: 8003 (configurable via TTLG_MCP_PORT env var).
+Port: 8120 (configurable via TTLG_MCP_PORT env var). Kept clear of the inference
+      port cluster (8000 diffusion, 8001 prompt-gen, 8002 artgen) and outside the
+      artgen port sweep so it is never mistaken for a chat endpoint.
 
 Start:
     python3 app/mcp_server.py
-    python3 app/mcp_server.py --port 8003 --host 0.0.0.0
+    python3 app/mcp_server.py --port 8120 --host 0.0.0.0
 
 Claude Code integration:
     tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)
@@ -86,49 +88,42 @@ def _all_tools() -> list[dict]:
 def _make_call_fn(base_url: str | None = None):
     """Return a call_fn that routes to the best available LLM endpoint.
 
-    Resolution order:
-      1. base_url if provided (from TTLG_LLM_URL environment variable)
-      2. artgen server on port 8002
-      3. prompt-gen server on port 8001
-      4. RuntimeError with clear instructions
+    Routing is delegated to artgen.detect_artgen_endpoint(), so MCP tool
+    invocations use the same discovery as the GUI: an explicit override first
+    (TTLG_LLM_URL), then the dedicated artgen port, then any OpenAI-compatible
+    chat server found by sweeping local ports, and finally the tiny prompt-gen
+    fallback. This means a model started outside the app on a non-standard port
+    is picked up automatically — no configuration required.
 
-    This makes MCP tool invocations for art generators fully functional when
-    a server is running, without requiring any extra configuration.
+    Discovery runs per-call so a server started after the MCP server is already
+    running is found on the next tool invocation.
     """
-    import urllib.request
-    import json as _json
+    import artgen
 
-    candidates = []
-    if base_url:
-        candidates.append(base_url)
-    candidates += ["http://localhost:8002/v1/chat/completions",
-                   "http://localhost:8001/v1/chat/completions"]
+    # TTLG_LLM_URL may be a full .../v1/chat/completions URL; detect_artgen_endpoint
+    # wants a base (http://host:port). Strip the known chat suffixes so the
+    # override still works as a preferred endpoint.
+    preferred = base_url
+    if preferred:
+        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if preferred.rstrip("/").endswith(suffix):
+                preferred = preferred.rstrip("/")[: -len(suffix)]
+                break
 
     def _call_fn(prompt: str, system: str | None = None,
                  max_tokens: int | None = None) -> str:
-        payload = _json.dumps({
-            "model": "default",
-            "messages": [
-                *([] if not system else [{"role": "system", "content": system}]),
-                {"role": "user", "content": prompt},
-            ],
-            "max_tokens": max_tokens or 2048,
-        }).encode()
-        for url in candidates:
-            try:
-                req = urllib.request.Request(
-                    url, data=payload,
-                    headers={"Content-Type": "application/json"}, method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    data = _json.loads(r.read())
-                return data["choices"][0]["message"]["content"]
-            except Exception:
-                continue
-        raise RuntimeError(
-            "No LLM server reachable. Start one first: "
-            "tt-ctl start artgen-qwen3-8b  or  tt-ctl start prompt-server"
+        endpoint, model = artgen.detect_artgen_endpoint(preferred_url=preferred)
+        if not endpoint:
+            raise RuntimeError(
+                "No LLM server reachable. Start one first: "
+                "tt-ctl start artgen-qwen3-8b  or  tt-ctl start prompt-server"
+            )
+        text, _usage = artgen.call_llm(
+            prompt, model, endpoint,
+            max_tokens=max_tokens or 2048,
+            system=system,
         )
+        return text
 
     return _call_fn
 
@@ -290,7 +285,7 @@ async def handle_rpc(body: dict) -> JSONResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    default_port = int(os.environ.get("TTLG_MCP_PORT", "8003"))
+    default_port = int(os.environ.get("TTLG_MCP_PORT", "8120"))
     parser = argparse.ArgumentParser(description="tt-local-gen MCP server")
     parser.add_argument(
         "--port", type=int, default=default_port,

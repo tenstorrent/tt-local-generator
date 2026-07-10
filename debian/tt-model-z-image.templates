@@ -1,0 +1,12 @@
+Template: tt-local-generator/hf-token
+Type: password
+Default:
+Description: HuggingFace access token (optional for Z-Image-Turbo)
+ Z-Image-Turbo (Tongyi-MAI/Z-Image-Turbo) is a publicly available model.
+ A HuggingFace account is not required, though providing a token helps
+ avoid API rate limits for large downloads.
+ .
+ You can re-run the download later with:
+   tt-local-gen-download-model --repo Tongyi-MAI/Z-Image-Turbo
+ .
+ Your token is used once and immediately discarded — it is not stored.

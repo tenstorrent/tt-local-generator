@@ -248,7 +248,7 @@ input, add `"verse"` to `accepts_remix_from`.
 
 ## Part 5: Exposing your plugin to Claude Code (MCP)
 
-The app's built-in MCP server (port 8003) automatically exposes all loaded
+The app's built-in MCP server (port 8120) automatically exposes all loaded
 plugins as MCP tools. After installing your plugin:
 
 ```bash
@@ -257,7 +257,7 @@ python3 app/mcp_server.py
 
 # Print the Claude Code configuration snippet
 tt-ctl mcp-config
-# → {"tt-local-gen": {"url": "http://localhost:8003/mcp"}}
+# → {"tt-local-gen": {"url": "http://localhost:8120/mcp"}}
 
 # Add it to Claude Code
 tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)

@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Gallery — tt-local-generator history</title>
+<style>
+  :root {
+    --bg: #092221; --bg2: #0d2a28; --bg3: #1a3a38;
+    --accent: #1B8EB1; --accent2: #74C5DF;
+    --text: #C7D9D8; --text2: #3A5452;
+    --mono: 'Berkeley Mono', 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+    font-family: 'Neue Haas Unica Pro', 'Inter', system-ui, sans-serif;
+    padding: 2rem; min-height: 100vh; }
+  header { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin-bottom: 2rem; }
+  header h1 { font-size: 1.5rem; color: #F1F8F8; font-weight: 600; }
+  header p { color: var(--text2); font-size: 0.85rem; margin-top: 0.3rem; }
+  .perf-bar { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 2rem;
+    background: var(--bg2); border: 1px solid var(--bg3); padding: 1rem 1.5rem; border-radius: 6px; }
+  .perf-stat { display: flex; flex-direction: column; gap: 0.2rem; }
+  .perf-stat .label { font-size: 0.72rem; color: var(--text2); text-transform: uppercase; letter-spacing: 0.06em; }
+  .perf-stat .value { font-size: 1.35rem; font-weight: 700; color: var(--accent2); font-family: var(--mono); }
+  .perf-stat .sub { font-size: 0.72rem; color: var(--text2); }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.2rem; }
+  .card { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 8px; overflow: hidden; }
+  .img-wrap { aspect-ratio: 1; overflow: hidden; background: #050f0e; }
+  .img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s; }
+  .img-wrap img:hover { transform: scale(1.04); }
+  .meta { display: flex; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.7rem 0.3rem;
+    border-bottom: 1px solid var(--bg3); }
+  .meta span { font-family: var(--mono); font-size: 0.7rem; padding: 0.1rem 0.35rem;
+    border-radius: 3px; background: var(--bg3); color: var(--text2); }
+  .meta .model { color: var(--accent2); background: rgba(27,142,177,.15); }
+  .meta .time { color: #6FABA0; background: rgba(111,171,160,.12); }
+  .prompt { padding: 0.5rem 0.7rem 0.7rem; font-size: 0.8rem; color: var(--text); line-height: 1.45; }
+  footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--bg3);
+    font-size: 0.75rem; color: var(--text2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Image Gallery — from history</h1>
+  <p>All 61 image generations in the local history store · P300X2 Blackhole</p>
+</header>
+
+<div class="gallery">
+
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_225809_78bb81f9.jpg" alt="A walk-in closet stretching impossibly deep, a dark studio, " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">106 KB</span>
+        <span class="date">2026-07-02 22:58</span>
+      </div>
+      <p class="prompt">A walk-in closet stretching impossibly deep, a dark studio, one overhead bulb, photorealistic, ultra-detailed, 35mm film grain, masterpiece.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_200542_7734f234.jpg" alt="a man who meets himself emerging from a house he has never e" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">767 KB</span>
+        <span class="date">2026-07-02 20:05</span>
+      </div>
+      <p class="prompt">a man who meets himself emerging from a house he has never entered, the basement of a church at 3am, a single folding chair in the center, golden hour backlight, matte painting, 8K, shallow depth of field</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_195711_ce732253.jpg" alt="an elder teaching survival skills to a circle of frightened " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">764 KB</span>
+        <span class="date">2026-07-02 19:57</span>
+      </div>
+      <p class="prompt">an elder teaching survival skills to a circle of frightened teenagers, a door marked EXIT that opens onto another waiting room, one chair moved, direct noon sun, no relief, Ansel Adams zone system, professional photography, wide aperture</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_193610_f26de7a5.jpg" alt="a young man with beautiful ideas and no practical sense visi" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">765 KB</span>
+        <span class="date">2026-07-02 19:36</span>
+      </div>
+      <p class="prompt">a young man with beautiful ideas and no practical sense visiting a dying man, a two-headed monster arguing with itself in a public library, the flat dead light of an overcast November, shadows nonexistent, Fellini — carnival dreamscape, baroque crowd, memory dissolve, masterpiece, shallow depth of field</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_154718_b04d3cac.jpg" alt="a woman buying canned goods in a supermarket that smells fai" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">70 KB</span>
+        <span class="date">2026-07-02 15:47</span>
+      </div>
+      <p class="prompt">a woman buying canned goods in a supermarket that smells faintly wrong, an Aboriginal sacred site in the Kimberley: a rock painting 40,000 years old, no railing, sodium yellow of a freeway overpass at night, Larisa Shepitko — Soviet spiritual intensity, white light, female heroism in snow, long exposure, professional photography</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_154706_5ebbc06d.jpg" alt="an old temple gate, mossy and open, no one coming through si" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">50 KB</span>
+        <span class="date">2026-07-02 15:47</span>
+      </div>
+      <p class="prompt">an old temple gate, mossy and open, no one coming through since morning, a Dunkirk beach in June 1940: small boats arriving, soldiers in the surf, a grey English sky, diffuse overcast, no shadows at all, Ansel Adams zone system, long exposure, bokeh</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_154654_e30d7aed.jpg" alt="a clerk given Christmas morning off for the first time in ni" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">28 KB</span>
+        <span class="date">2026-07-02 15:46</span>
+      </div>
+      <p class="prompt">a clerk given Christmas morning off for the first time in nineteen years, the parking lot of a closed Woolworths on a Sunday morning, moonlight on water, Dardenne Brothers — tight handheld behind neck, moral urgency, photorealistic, award-winning</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_154642_00faef14.jpg" alt="a man who arrived for an appointment no one will explain, a " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">34 KB</span>
+        <span class="date">2026-07-02 15:46</span>
+      </div>
+      <p class="prompt">a man who arrived for an appointment no one will explain, a grain elevator standing alone in a flat Kansas prairie, sodium yellow of a freeway overpass at night, George Tice documentary, sharp focus, shallow depth of field</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_154239_6eb7dae8.jpg" alt="Mrs. Dalloway buying flowers herself, because Scrope Purvis " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">48 KB</span>
+        <span class="date">2026-07-02 15:42</span>
+      </div>
+      <p class="prompt">Mrs. Dalloway buying flowers herself, because Scrope Purvis thought she looked so young, a 7-Eleven at 1am in a suburb you grew up in, strobe at 5fps, Kelly Reichardt — quiet Pacific Northwest, working-class women, long empty pause, award-winning, wide aperture</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_132913_0d33adcf.jpg" alt="a wrestler nobody has thrown in seven years lifting his hand" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">103 KB</span>
+        <span class="date">2026-07-02 13:29</span>
+      </div>
+      <p class="prompt">a wrestler nobody has thrown in seven years lifting his hands before the match, a Hellenistic library at Alexandria — scrolls floor to ceiling, one scholar looking for one line, cool blue of pre-dawn, oil painting, 8K, bokeh</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_132856_200e0539.jpg" alt="a Ronco dehydrator running on a kitchen counter in the dark," loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">108 KB</span>
+        <span class="date">2026-07-02 13:28</span>
+      </div>
+      <p class="prompt">a Ronco dehydrator running on a kitchen counter in the dark, LED blinking, a market cross at midsummer: a fair, a juggler, livestock, a man in the stocks, a single 60-watt bulb in a large room, Orson Welles — deep focus, low angle, expressionist shadow, photorealistic, long exposure</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_132839_f13a43c7.jpg" alt="a Ronco dehydrator running on a kitchen counter in the dark," loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">108 KB</span>
+        <span class="date">2026-07-02 13:28</span>
+      </div>
+      <p class="prompt">a Ronco dehydrator running on a kitchen counter in the dark, LED blinking, a market cross at midsummer: a fair, a juggler, livestock, a man in the stocks, a single 60-watt bulb in a large room, Orson Welles — deep focus, low angle, expressionist shadow, photorealistic, long exposure</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260702_131214_336e4296.jpg" alt="a talking beet sitting upright in a folding chair, a Tang dy" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">132 KB</span>
+        <span class="date">2026-07-02 13:12</span>
+      </div>
+      <p class="prompt">a talking beet sitting upright in a folding chair, a Tang dynasty scholar's garden: bamboo, a rock, a pavilion, a man who has nowhere to be, the pale blue of a phone screen in total darkness, Powell & Pressburger — color as emotion, dance, Technicolor myth, wide aperture, masterpiece</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260616_173106_810d608d.jpg" alt="A Klein bottle on a face fractured into layers, day-glo pale" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">109 KB</span>
+        <span class="date">2026-06-16 17:31</span>
+      </div>
+      <p class="prompt">A Klein bottle on a face fractured into layers, day-glo palette, ultra-detailed, 35mm film grain</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260612_233546_28331355.jpg" alt="A bunkhouse door swings open, a TV blinks, and a foreman's t" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">93 KB</span>
+        <span class="date">2026-06-12 23:35</span>
+      </div>
+      <p class="prompt">A bunkhouse door swings open, a TV blinks, and a foreman's truck rises, a woman writes in a notebook, Tarkovsky — slow-burn long take, transcendent water and fire.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260612_233502_bd331427.jpg" alt="A lone ranch hand mends wire in heat, writes a word in conde" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">66 KB</span>
+        <span class="date">2026-06-12 23:35</span>
+      </div>
+      <p class="prompt">A lone ranch hand mends wire in heat, writes a word in condensation on a window, long lens, shallow focus, Tarkovsky — slow-burn long take, transcendent water and fire.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260612_233327_4ad0467f.jpg" alt="Image of Harryhausen skeletons in a long shadows, ultra-deta" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">97 KB</span>
+        <span class="date">2026-06-12 23:33</span>
+      </div>
+      <p class="prompt">Image of Harryhausen skeletons in a long shadows, ultra-detailed oil painting, 35mm film grain, shallow depth of field</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260612_233042_107acddd.jpg" alt="Big Bird alone in a sine wave oscilloscope, ultra-detailed, " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-schnell</span>
+        <span class="time">—</span>
+        <span class="size">130 KB</span>
+        <span class="date">2026-06-12 23:30</span>
+      </div>
+      <p class="prompt">Big Bird alone in a sine wave oscilloscope, ultra-detailed, 35mm grain</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260611_221157_fca4e39d.jpg" alt="decorated logo" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">workflow</span>
+        <span class="time">—</span>
+        <span class="size">0 KB</span>
+        <span class="date">2026-06-11 22:11</span>
+      </div>
+      <p class="prompt">decorated logo</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_810ddd01.jpg" alt="Poem image 5: As sunset's golden light descends on Expo's gr" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">95 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 5: As sunset's golden light descends on Expo's ground,
+The geod</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_8e66594c.jpg" alt="Poem image 4: Amidst the whirl of wonder, a giant red orb gl" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">227 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 4: Amidst the whirl of wonder, a giant red orb glows,
+Yellow ac</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_1d026adf.jpg" alt="Poem image 3: Ripples dance upon the lake's bright face,
+As " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">166 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 3: Ripples dance upon the lake's bright face,
+As sunset's warmt</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_de2f0eb5.jpg" alt="Poem image 2: As twilight falls, the Trylon's peak ascends,
+" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">87 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 2: As twilight falls, the Trylon's peak ascends,
+A shining spir</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_7a00099a.jpg" alt="Poem image 1: Under sun-kissed skies, the Unisphere shines b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">184 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 1: Under sun-kissed skies, the Unisphere shines bright,
+A stain</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_1554597a.jpg" alt="Seed image 4: the red and yellow building is a giant red obj" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">205 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Seed image 4: the red and yellow building is a giant red object</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145150_03525d66.jpg" alt="Seed image 3: a large body of water" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">226 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Seed image 3: a large body of water</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_5de41ff5.jpg" alt="Poem image 5: As sunset's golden light descends on Expo's gr" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">95 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 5: As sunset's golden light descends on Expo's ground,
+The geod</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_a271ea10.jpg" alt="Poem image 4: Amidst the whirl of wonder, a giant red orb gl" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">227 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 4: Amidst the whirl of wonder, a giant red orb glows,
+Yellow ac</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_6f41fea8.jpg" alt="Poem image 3: Ripples dance upon the lake's bright face,
+As " loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">166 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 3: Ripples dance upon the lake's bright face,
+As sunset's warmt</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_dde1ae08.jpg" alt="Poem image 2: As twilight falls, the Trylon's peak ascends,
+" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">87 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 2: As twilight falls, the Trylon's peak ascends,
+A shining spir</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_09701940.jpg" alt="Poem image 1: Under sun-kissed skies, the Unisphere shines b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">184 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Poem image 1: Under sun-kissed skies, the Unisphere shines bright,
+A stain</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_705fae78.jpg" alt="Seed image 4: the red and yellow building is a giant red obj" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">205 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Seed image 4: the red and yellow building is a giant red object</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_145132_7333f218.jpg" alt="Seed image 3: a large body of water" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">226 KB</span>
+        <span class="date">2026-06-01 14:51</span>
+      </div>
+      <p class="prompt">Seed image 3: a large body of water</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140312_52fe494a.jpg" alt="Seed image 5: a train traveling across a bridge with a sunse" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">149 KB</span>
+        <span class="date">2026-06-01 14:03</span>
+      </div>
+      <p class="prompt">Seed image 5: a train traveling across a bridge with a sunset in the backg</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140312_fc3152b5.jpg" alt="Seed image 4: the red and yellow building is a giant red bal" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">207 KB</span>
+        <span class="date">2026-06-01 14:03</span>
+      </div>
+      <p class="prompt">Seed image 4: the red and yellow building is a giant red ball</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140312_70fbdf9f.jpg" alt="Seed image 2: a ferris at night with a ferris wheel in the b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">128 KB</span>
+        <span class="date">2026-06-01 14:03</span>
+      </div>
+      <p class="prompt">Seed image 2: a ferris at night with a ferris wheel in the background</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140250_9fe3d823.jpg" alt="Seed image 5: a train traveling across a bridge with a sunse" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">149 KB</span>
+        <span class="date">2026-06-01 14:02</span>
+      </div>
+      <p class="prompt">Seed image 5: a train traveling across a bridge with a sunset in the backg</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140250_f812978e.jpg" alt="Seed image 4: the red and yellow building is a giant red bal" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">207 KB</span>
+        <span class="date">2026-06-01 14:02</span>
+      </div>
+      <p class="prompt">Seed image 4: the red and yellow building is a giant red ball</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_140250_7c765938.jpg" alt="Seed image 2: a ferris at night with a ferris wheel in the b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">128 KB</span>
+        <span class="date">2026-06-01 14:02</span>
+      </div>
+      <p class="prompt">Seed image 2: a ferris at night with a ferris wheel in the background</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135555_c1b4f221.jpg" alt="Poem image 5: As sunset's golden light descends on Expo's gr" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">88 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 5: As sunset's golden light descends on Expo's grounds,
+The geo</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135555_486c396c.jpg" alt="Poem image 4: Under neon skies, the Tower of the Sun preside" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">112 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 4: Under neon skies, the Tower of the Sun presides,
+A beacon of</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135555_7037953d.jpg" alt="Poem image 3: Amidst the twilight's hush, where gaslit dream" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">217 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 3: Amidst the twilight's hush, where gaslit dreams unfold,
+The </p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135555_380e328e.jpg" alt="Poem image 1: Under sun-kissed skies, the Unisphere shines b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">168 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 1: Under sun-kissed skies, the Unisphere shines bright,
+A symbo</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135538_636ba979.jpg" alt="Poem image 5: As sunset's golden light descends on Expo's gr" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">88 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 5: As sunset's golden light descends on Expo's grounds,
+The geo</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135538_8bc0b021.jpg" alt="Poem image 4: Under neon skies, the Tower of the Sun preside" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">112 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 4: Under neon skies, the Tower of the Sun presides,
+A beacon of</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135538_77c41d72.jpg" alt="Poem image 3: Amidst the twilight's hush, where gaslit dream" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">217 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 3: Amidst the twilight's hush, where gaslit dreams unfold,
+The </p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_135538_c4e1b131.jpg" alt="Poem image 1: Under sun-kissed skies, the Unisphere shines b" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow-v2</span>
+        <span class="time">—</span>
+        <span class="size">168 KB</span>
+        <span class="date">2026-06-01 13:55</span>
+      </div>
+      <p class="prompt">Poem image 1: Under sun-kissed skies, the Unisphere shines bright,
+A symbo</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_125851_ee76e006.jpg" alt="1964 World's Fair: poem_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">112 KB</span>
+        <span class="date">2026-06-01 12:58</span>
+      </div>
+      <p class="prompt">1964 World's Fair: poem_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_125851_ba4fc7fb.jpg" alt="1964 World's Fair: seed_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">221 KB</span>
+        <span class="date">2026-06-01 12:58</span>
+      </div>
+      <p class="prompt">1964 World's Fair: seed_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_125837_82869033.jpg" alt="1964 World's Fair: poem_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">112 KB</span>
+        <span class="date">2026-06-01 12:58</span>
+      </div>
+      <p class="prompt">1964 World's Fair: poem_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_125837_a67690b2.jpg" alt="1964 World's Fair: seed_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">221 KB</span>
+        <span class="date">2026-06-01 12:58</span>
+      </div>
+      <p class="prompt">1964 World's Fair: seed_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_043336_fdf44d9f.jpg" alt="1964 World's Fair: poem_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">112 KB</span>
+        <span class="date">2026-06-01 04:33</span>
+      </div>
+      <p class="prompt">1964 World's Fair: poem_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-local-generator/images/20260601_043336_9ca3c7de.jpg" alt="1964 World's Fair: seed_image" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">1964-workflow</span>
+        <span class="time">—</span>
+        <span class="size">221 KB</span>
+        <span class="date">2026-06-01 04:33</span>
+      </div>
+      <p class="prompt">1964 World's Fair: seed_image</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111853_a9eac6a4.jpg" alt="A pet cemetery at the end of a Maine wood at dusk, ultra-det" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">189 KB</span>
+        <span class="date">2026-04-09 11:18</span>
+      </div>
+      <p class="prompt">A pet cemetery at the end of a Maine wood at dusk, ultra-detailed, 8K. no rainbow aritfacts</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111734_031a3e25.jpg" alt="A Moog Minimoog on a dock at dawn, fog on the carpet, ultra-" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">153 KB</span>
+        <span class="date">2026-04-09 11:17</span>
+      </div>
+      <p class="prompt">A Moog Minimoog on a dock at dawn, fog on the carpet, ultra-detailed, shallow depth of field. 35mm grain, sharp focus.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111712_1576055b.jpg" alt="A pet cemetery at the end of a Maine wood at dusk, long shad" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">212 KB</span>
+        <span class="date">2026-04-09 11:17</span>
+      </div>
+      <p class="prompt">A pet cemetery at the end of a Maine wood at dusk, long shadows, ultra-detailed, photorealistic, 35mm grain, sharp focus.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111603_2d25e421.jpg" alt="Two identical girls at the end of a Maine wood at dusk, long" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">161 KB</span>
+        <span class="date">2026-04-09 11:16</span>
+      </div>
+      <p class="prompt">Two identical girls at the end of a Maine wood at dusk, long shadows, ultra-detailed, 35mm film grain, cinematic color grading.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111426_fe14bf2c.jpg" alt="A Klein bottle on a dock at dawn, fog on the carpet, ultra-d" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">158 KB</span>
+        <span class="date">2026-04-09 11:14</span>
+      </div>
+      <p class="prompt">A Klein bottle on a dock at dawn, fog on the carpet, ultra-detailed, 35mm film grain.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260409_111029_7ef93ebf.jpg" alt="A Moog Minimoog on a dock at dawn, fog on the carpet, ultra-" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model">flux.1-dev</span>
+        <span class="time">—</span>
+        <span class="size">162 KB</span>
+        <span class="date">2026-04-09 11:10</span>
+      </div>
+      <p class="prompt">A Moog Minimoog on a dock at dawn, fog on the carpet, ultra-detailed, 35mm film grain.</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260331_153713_58568012.jpg" alt="newspaper taxis arrive at your door" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model"></span>
+        <span class="time">—</span>
+        <span class="size">212 KB</span>
+        <span class="date">2026-03-31 15:37</span>
+      </div>
+      <p class="prompt">newspaper taxis arrive at your door</p>
+    </div>
+    <div class="card">
+      <div class="img-wrap">
+        <img src="file:///home/ttuser/.local/share/tt-video-gen/images/20260331_153624_d507e187.jpg" alt="Text from an old Gertrude Stein book" loading="lazy">
+      </div>
+      <div class="meta">
+        <span class="model"></span>
+        <span class="time">—</span>
+        <span class="size">210 KB</span>
+        <span class="date">2026-03-31 15:36</span>
+      </div>
+      <p class="prompt">Text from an old Gertrude Stein book</p>
+    </div>
+</div>
+<footer>61 images · sourced from history store · tt-local-generator</footer>
+</body>
+</html>

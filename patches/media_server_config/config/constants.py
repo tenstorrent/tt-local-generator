@@ -2,6 +2,7 @@
 #
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import NamedTuple, Tuple
 
@@ -127,6 +128,8 @@ class ModelRunners(Enum):
     VLLMForge_GEMMA4_31B = "vllm_forge_gemma4_31b"
     QWEN_EMBEDDING_8B = "qwen_embedding_8b"
     BGELargeEN_V1_5 = "bge_large_en_v1_5"
+    VLLMBGELargeEN_V1_5 = "vllm_bge_large_en_v1_5"  # backward-compat for 0.9.0 image
+    LORA_TRAINER = "lora_trainer"                     # backward-compat for 0.9.0 image
     BGEM3 = "bge-m3"
     TT_XLA_RESNET = "tt-xla-resnet"
     TT_XLA_VOVNET = "tt-xla-vovnet"
@@ -281,6 +284,9 @@ INFERENCE_MODEL_RUNNER_TO_MODEL_NAMES_MAP = {
     ModelRunners.TT_Z_IMAGE_TURBO: {ModelNames.Z_IMAGE_TURBO},
     ModelRunners.LORA_SINGLE_CHIP: {ModelNames.GEMMA_1_1_2B_IT},
 }
+# Backward-compat alias for older image versions (pre-0.17) whose settings.py
+# still imports the un-prefixed name.
+MODEL_RUNNER_TO_MODEL_NAMES_MAP = INFERENCE_MODEL_RUNNER_TO_MODEL_NAMES_MAP
 
 
 # DEVICE environment variable
@@ -1454,3 +1460,19 @@ _DEFAULT_SAMPLING_PARAMS = {
 
 # Sentinel object for worker shutdown signaling
 SHUTDOWN_SIGNAL = {"__shutdown__": True}
+
+
+# Reserved task_ids for canary-monitor probes (see health_monitoring/).
+# Must not contain "_chunk_", must be <= 36 bytes, and must not collide with UUID4 task_ids.
+CANARY_TASK_ID = "__canary__"        # shallow: bare host-collective probe
+CANARY_DEEP_TASK_ID = "__canary_deep__"  # deep: replays compiled warmup forward
+CANARY_TASK_IDS = frozenset({CANARY_TASK_ID, CANARY_DEEP_TASK_ID})
+
+
+@dataclass(frozen=True)
+class CanaryProbeRequest:
+    """Sentinel put on the scheduler task_queue by the canary monitor."""
+
+    _task_id: str = field(default=CANARY_TASK_ID)
+    stream: bool = field(default=False)
+    deep: bool = field(default=False)

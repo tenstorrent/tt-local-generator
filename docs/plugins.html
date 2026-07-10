@@ -575,6 +575,45 @@
         </div>
       </div>
 
+      <!-- Codeart -->
+      <div class="plugin-card">
+        <div class="plugin-card-preview" style="background:#0d1117;padding:.75rem;font-family:'Berkeley Mono',ui-monospace,monospace;font-size:9.5px;line-height:1.5;overflow:hidden;align-items:flex-start;color:#c9d1d9;">
+          <pre style="margin:0;white-space:pre;">def draw_tree(t, branch_length, angle, shrink_factor, min_length):
+    if branch_length &gt; min_length:
+        t.forward(branch_length)
+        t.left(angle)
+        draw_tree(t, branch_length * shrink_factor, angle, ...)
+        t.right(2 * angle)
+        draw_tree(t, branch_length * shrink_factor, angle, ...)
+        t.left(angle)
+        t.backward(branch_length)</pre>
+        </div>
+        <div class="plugin-card-body">
+          <div class="plugin-card-name">
+            codeart <span class="plugin-tag">code</span>
+          </div>
+          <p class="plugin-desc">
+            Source code <em>as</em> art. Given a language and an inspiration, the LLM
+            writes code that is aesthetically striking yet real, with optional styles:
+            <code>quine</code>, <code>ascii</code> (source shaped into a picture),
+            <code>poem</code>, <code>oneliner</code>, <code>glitch</code>,
+            <code>unusually_verbose</code>, and <code>function_oriented</code> (where the
+            sequence of calls is the art). A <code>should_compile</code> directive asks for
+            runnable code; Python output is checked by a safe parse-only validator (never
+            executed) and the result is recorded on the artifact. Sample outputs: a recursive
+            fractal tree that actually runs
+            (<a href="assets/artgen/codeart-recursion-tree.py">codeart-recursion-tree.py</a>),
+            and a Perl "poem" rendering a Markov chain as a graph of feelings
+            (<a href="assets/artgen/codeart-markov-poem.pl">codeart-markov-poem.pl</a>).
+          </p>
+          <div class="plugin-meta">
+            <span class="plugin-meta-item"><strong>Output:</strong> .py</span>
+            <span class="plugin-meta-item"><strong>LLM:</strong> large (8B+)</span>
+            <span class="plugin-meta-item"><strong>Remix to:</strong> image, video</span>
+          </div>
+        </div>
+      </div>
+
       <!-- AnimateDiff -->
       <div class="plugin-card">
         <div class="plugin-card-preview">
@@ -948,7 +987,7 @@
     <div class="section-label">Claude Code integration</div>
     <h2 class="section-title">Every plugin is an MCP tool</h2>
     <p class="section-sub">
-      The built-in MCP server exposes all loaded plugins as MCP tools on port 8003.
+      The built-in MCP server exposes all loaded plugins as MCP tools on port 8120.
       Once registered, you can call any generator — landscape, verse, animatediff,
       your own custom plugin — directly from a Claude Code conversation.
     </p>
@@ -959,7 +998,7 @@ python3 app/mcp_server.py
 
 <span class="cm"># Print the Claude Code configuration snippet</span>
 tt-ctl mcp-config
-<span class="cm"># → {"tt-local-gen": {"url": "http://localhost:8003/mcp"}}</span>
+<span class="cm"># → {"tt-local-gen": {"url": "http://localhost:8120/mcp"}}</span>
 
 <span class="cm"># Add it to Claude Code's MCP config</span>
 tt-ctl mcp-config   # outputs JSON; merge into ~/.claude/mcp.json (don't use >>)</code></pre>

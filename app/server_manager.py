@@ -127,6 +127,22 @@ SERVERS: dict[str, ServerDef] = {
             capabilities=("image",),
         ),
         ServerDef(
+            key="z-image-turbo",
+            label="Z-Image-Turbo  (P150X4)",
+            script="start_z_image_turbo.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-z-image-turbo",
+            capabilities=("image",),
+        ),
+        ServerDef(
+            key="motif",
+            label="Motif-Image-6B-Preview  (P300X2)",
+            script="start_motif.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-motif-image-6b-preview",
+            capabilities=("image",),
+        ),
+        ServerDef(
             key="animate",
             label="Wan2.2-Animate-14B",
             script="start_animate.sh",

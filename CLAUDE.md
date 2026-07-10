@@ -1,5 +1,29 @@
 # tt-local-generator — developer notes
 
+## artgen LLM endpoint discovery
+
+`artgen.detect_artgen_endpoint()` (`app/artgen/__init__.py`) picks the chat
+server for generative art. Hardcoded ports (artgen=8002, prompt-server=8001)
+matter only for servers the *app* starts. For models started any other way it
+sweeps local ports (`_SCAN_PORT_RANGE`, override via `TTLG_ARTGEN_SCAN_PORTS`)
+for any OpenAI-compatible `/v1/models` responder.
+
+Resolution order: `preferred_url` → artgen (8002) → swept ports → prompt-gen
+(8001, tiny Qwen3-0.6B) **last**. The prompt-gen fallback is deliberately last
+so a real chat model always beats it — the original bug was a vLLM Llama-3.3-70B
+on 8003 losing to Qwen3-0.6B on 8001 because 8003 was never probed. The known
+diffusion port (8000) and the two explicit ports are excluded from the sweep.
+`mcp_server._make_call_fn` routes through the same function for consistency.
+
+**Single source of truth for "is a model on".** The artgen panel's health dot
+(`ArtgenPanel._check_health_bg`) also calls `detect_artgen_endpoint()`, so the
+indicator can never disagree with where generation requests actually go. It
+caches the last-found base URL and re-pings only that on each 5 s poll (via
+`detect_model`), re-sweeping the full port range only when the endpoint drops.
+Regression: previously the dot pinged the fixed configured port (8002) for the
+dropdown's model key, so a model on any other port read "offline" while
+generation worked fine.
+
 ## ANSI art — 3-pass pipeline
 
 `AnsiGenerator` in `app/artgen/generators/ansi.py` overrides `generate_artifact`
@@ -354,8 +378,30 @@ The `.env` file at `vendor/tt-inference-server/.env` is passed to Docker contain
 - `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` — prevents HF network access during startup (weights are bind-mounted from host cache)
 
 The `patches/` directory contains:
-- `patches/media_server_config/config/constants.py` — overrides P300X2 device config, request timeouts
+- `patches/media_server_config/config/constants.py` — overrides P300X2 device config, request timeouts, adds missing v0.17.0 symbols (CANARY_TASK_IDS etc.)
+- `patches/media_server_config/tt_model_runners/dit_runners.py` — adds TTWan22AnimateRunner, SkyReels log-map entries, Mochi cache-dir env, Flux trace-region bump
+- `patches/media_server_config/tt_model_runners/runner_fabric.py` — routes SkyReels and Animate model runners
+- `patches/media_server_config/tt_model_runners/skyreels_runner.py` / `skyreels_i2v_runner.py` — SkyReels T2V and I2V runners
+- `patches/media_server_config/domain/video_generate_request.py` — request-model extensions
 - `patches/tt_dit/` — pipeline fixes (bind-mounted only in dev_mode)
+
+### Patch philosophy — minimize divergence from upstream
+
+**Goal: always use the latest and greatest features in each tt-inference-server release.**
+Patches are a compatibility shim, not a fork. Keep the surface area as small as possible:
+
+- **Rebase patches onto each new image version.** When upgrading the Docker image,
+  diff the new image's files against the current patch and drop any lines that are
+  now in upstream. `docker create <new-image> && docker cp … /tmp/` to extract files.
+- **Never copy-and-modify upstream runners whole-cloth.** Add only what is missing
+  (new runner class, log-map entry, env var, constant override). Everything else
+  stays as the image shipped it.
+- **The canonical check:** `diff <image-extracted-file> patches/…/<file>` should
+  show only the lines we intentionally added. Anything else is drift that should be
+  removed.
+- **Sync patches/ → vendor/ after every edit.** `apply_patches.sh` does this, but
+  if you edit a patch file by hand, also `cp patches/… vendor/tt-inference-server/patches/…`
+  immediately — the bind-mount uses the *vendor* copy, not the *patches/* copy.
 
 ## Prompt generator
 
