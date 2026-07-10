@@ -526,10 +526,25 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
     return results
 
 
-if __name__ == "__main__":
+def main(argv: "list[str] | None" = None) -> dict:
+    """CLI entry point: parse args, load the spec, and run the engine.
+
+    Split out from the ``if __name__ == "__main__"`` guard so it is directly
+    unit-testable (monkeypatch ``run`` and call ``main([...])``) without
+    spawning a subprocess. ``--output-dir`` lets bin/run_workflow.sh (the thin
+    shim) forward its timestamped output directory through to the engine so
+    node artifacts land next to the run's log/results files instead of the
+    engine's own default (``/tmp/tt-pipeline-dryrun``).
+    """
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("spec")
     ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-    run(load_spec(a.spec), dry_run=a.dry_run, emit=lambda s: print(s, flush=True))
+    ap.add_argument("--output-dir", default=None)
+    a = ap.parse_args(argv)
+    return run(load_spec(a.spec), dry_run=a.dry_run,
+               emit=lambda s: print(s, flush=True), output_dir=a.output_dir)
+
+
+if __name__ == "__main__":
+    main()

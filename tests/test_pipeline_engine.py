@@ -336,3 +336,41 @@ def test_add_to_playlist_calls_helper(monkeypatch):
 def test_run_plugin_loads_and_calls_real_module():
     res = eng._run_plugin("svg_render", "is_available")
     assert isinstance(res, bool)
+
+
+# ---- bin/run_workflow.sh is a thin shim over the engine (Task 3) ----
+
+def test_run_workflow_is_a_shim():
+    sh = (Path(__file__).parent.parent / "bin" / "run_workflow.sh").read_text()
+    assert "pipeline_engine.py" in sh
+    assert "SEED_PROMPT_PLACEHOLDER" not in sh   # the stub is gone
+
+
+# ---- engine __main__ --output-dir wiring (Task 3) ----
+
+def test_main_parses_output_dir_and_forwards_to_run(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_run(spec, *, dry_run=False, emit=print, output_dir=None):
+        captured["spec"] = spec
+        captured["dry_run"] = dry_run
+        captured["output_dir"] = output_dir
+        return {}
+
+    monkeypatch.setattr(eng, "run", fake_run)
+    eng.main([str(_FIX), "--output-dir", str(tmp_path / "out"), "--dry-run"])
+    assert captured["output_dir"] == str(tmp_path / "out")
+    assert captured["dry_run"] is True
+    assert set(captured["spec"]) == {"1", "2", "3"}
+
+
+def test_main_output_dir_defaults_to_none(monkeypatch):
+    captured = {}
+
+    def fake_run(spec, *, dry_run=False, emit=print, output_dir=None):
+        captured["output_dir"] = output_dir
+        return {}
+
+    monkeypatch.setattr(eng, "run", fake_run)
+    eng.main([str(_FIX)])
+    assert captured["output_dir"] is None
