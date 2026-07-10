@@ -32,11 +32,60 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 
 from artgen import ArtGenerator, register
+
+
+@dataclass
+class ChipParams:
+    """Per-chip generation parameters for a multi-chip run."""
+    prompt: str
+    seed: int
+    temporal_alpha: float
+    motion_adapter_alpha: float
+
+
+def _linspace(lo: float, hi: float, n: int) -> "list[float]":
+    """n evenly spaced values from lo to hi inclusive (n>=1)."""
+    if n <= 1:
+        return [lo]
+    return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+
+
+def build_remix_plan(
+    *,
+    base_prompt: str,
+    base_seed: int,
+    base_temporal_alpha: float,
+    base_motion_alpha: float,
+    num_chips: int,
+    per_chip_prompts: "list[str] | None" = None,
+    seed_spread: int = 1,
+    ramp: str = "none",
+    ramp_lo: float = 0.0,
+    ramp_hi: float = 1.0,
+) -> "list[ChipParams]":
+    """Build a per-chip plan for Remix mode. See module docstring / spec."""
+    prompts = list(per_chip_prompts or [])
+    temporal = _linspace(ramp_lo, ramp_hi, num_chips) if ramp == "temporal" \
+        else [base_temporal_alpha] * num_chips
+    motion = _linspace(ramp_lo, ramp_hi, num_chips) if ramp == "motion" \
+        else [base_motion_alpha] * num_chips
+    plan: list[ChipParams] = []
+    for i in range(num_chips):
+        p = prompts[i] if i < len(prompts) and prompts[i] else base_prompt
+        plan.append(ChipParams(
+            prompt=p,
+            seed=base_seed + i * seed_spread,
+            temporal_alpha=temporal[i],
+            motion_adapter_alpha=motion[i],
+        ))
+    return plan
+
 
 # Structured log for every animatediff run — written alongside generated GIFs
 # so failures are self-contained and don't require a running GUI to diagnose.
