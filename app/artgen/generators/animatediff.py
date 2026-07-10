@@ -336,6 +336,44 @@ def _build_cmd(
     return cmd
 
 
+def _multichip_cmds(
+    *,
+    script: Path,
+    shard_paths: "list[Path]",
+    mode: str,
+    negative_prompt: str,
+    frames_per_chip: int,
+    steps: int,
+    lightning: bool,
+    lightning_steps: int,
+    motion_adapter: "str | None",
+    motion_adapter_skip: "list[str] | None",
+    chips: "list[ChipParams]",
+) -> "list[list[str]]":
+    """Build one generate.py argv per chip from the per-chip plan.
+
+    Each chip gets its own prompt/seed/temporal_alpha/motion_adapter_alpha
+    (from `chips[i]`) and `--device-id i`; every other flag (mode, negative
+    prompt, frame count, steps, lightning, motion adapter name/skip list) is
+    shared across all chips.
+    """
+    cmds: list[list[str]] = []
+    for i, cp in enumerate(chips):
+        cmds.append(_build_cmd(
+            script=script, out_path=shard_paths[i], mode=mode,
+            prompt=cp.prompt, negative_prompt=negative_prompt,
+            frames=frames_per_chip, steps=steps, seed=cp.seed,
+            temporal_alpha=cp.temporal_alpha,
+            lightning=lightning, lightning_steps=lightning_steps,
+            device_id=i,
+            chain_from=None, chain_save=None, chain_alpha=0.6,
+            motion_adapter=motion_adapter,
+            motion_adapter_alpha=cp.motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+        ))
+    return cmds
+
+
 def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = False) -> bool:
     """Combine GIF frames from multiple chip shards into a single output GIF.
 
@@ -538,26 +576,38 @@ def run_subprocess(
             )
 
     if use_multi:
+        # TODO(Task 7): replace this inline single-seed plan with real mode
+        # routing (Remix mode will build per-chip prompts/seeds/ramps here).
+        # For now, preserve existing single-seed multi-chip behavior: every
+        # chip gets the same prompt/temporal_alpha/motion_alpha and a seed
+        # spread of 1 (base_seed + chip index), no ramp.
+        plan = build_remix_plan(
+            base_prompt=prompt,
+            base_seed=seed,
+            base_temporal_alpha=temporal_alpha,
+            base_motion_alpha=motion_adapter_alpha,
+            num_chips=effective_chips,
+            seed_spread=1,
+            ramp="none",
+        )
         return _run_multi_chip(
             script=script,
             out_path=out_path,
             mode=mode,
-            prompt=prompt,
+            chips=plan,
             negative_prompt=negative_prompt,
             frames=frames,
             steps=steps,
-            seed=seed,
-            temporal_alpha=temporal_alpha,
             lightning=lightning,
             lightning_steps=lightning_steps,
             num_chips=effective_chips,
             motion_adapter=motion_adapter,
-            motion_adapter_alpha=motion_adapter_alpha,
             motion_adapter_skip=motion_adapter_skip,
             on_progress=on_progress,
             timeout=timeout,
             run_id=run_id,
             env=env,
+            interleave=False,
         )
 
     # ── Single-chip path ──────────────────────────────────────────────────────
@@ -644,28 +694,32 @@ def _run_multi_chip(
     script: Path,
     out_path: Path,
     mode: str,
-    prompt: str,
+    chips: "list[ChipParams]",
     negative_prompt: str,
     frames: int,
     steps: int,
-    seed: int,
-    temporal_alpha: float,
     lightning: bool,
     lightning_steps: int,
     num_chips: int,
     motion_adapter: str | None,
-    motion_adapter_alpha: float,
     motion_adapter_skip: list[str] | None,
     on_progress: Callable[[str], None] | None,
     timeout: int,
     run_id: str,
     env: dict,
+    interleave: bool = False,
 ) -> tuple[bool, str]:
-    """Spawn one generate.py process per chip in parallel, concatenate results.
+    """Spawn one generate.py process per chip in parallel, then stitch results.
 
-    Frame distribution: chip 0 → frames 0..K-1, chip 1 → frames K..2K-1, etc.
-    All chips use the same seed so the base noise composition is consistent across
-    the full animation.  Shard GIFs are concatenated in chip order by _stitch_gifs().
+    Each chip renders `frames_per_chip` frames from its OWN ChipParams entry
+    in `chips` (its own prompt, seed, temporal_alpha, motion_adapter_alpha) —
+    chips are NOT temporal slices of one longer clip. `generate.py` has no
+    frame-offset concept and every chip is deterministic (same seed → identical
+    frames), so this is per-chip variation, not frame-range partitioning.
+    The resulting shard GIFs are combined by `_stitch_gifs()`, either
+    concatenated in chip order (interleave=False) or round-robined across
+    shards (interleave=True) — see `_stitch_gifs` docstring for when each
+    ordering is appropriate.
 
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
@@ -687,22 +741,17 @@ def _run_multi_chip(
     drain_threads: list[threading.Thread] = []
     chip_outputs: list[list[str]] = [[] for _ in range(num_chips)]
 
+    cmds = _multichip_cmds(
+        script=script, shard_paths=shard_paths, mode=mode,
+        negative_prompt=negative_prompt, frames_per_chip=frames_per_chip,
+        steps=steps, lightning=lightning, lightning_steps=lightning_steps,
+        motion_adapter=motion_adapter, motion_adapter_skip=motion_adapter_skip,
+        chips=chips,
+    )
+
     for chip_idx in range(num_chips):
         chip_log = _LOG_DIR / f"run_{run_id}_chip{chip_idx}.log"
-        cmd = _build_cmd(
-            script=script, out_path=shard_paths[chip_idx], mode=mode,
-            prompt=prompt, negative_prompt=negative_prompt,
-            frames=frames_per_chip, steps=steps,
-            # Same seed on every chip — each chip generates a different temporal
-            # slice but they should share the same base composition/colour palette.
-            seed=seed,
-            temporal_alpha=temporal_alpha,
-            lightning=lightning, lightning_steps=lightning_steps,
-            device_id=chip_idx,
-            chain_from=None, chain_save=None, chain_alpha=0.6,
-            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip,
-        )
+        cmd = cmds[chip_idx]
         _log.info("chip%d cmd: %s", chip_idx, " ".join(str(c) for c in cmd))
 
         output_buf = chip_outputs[chip_idx]
@@ -789,7 +838,7 @@ def _run_multi_chip(
     if on_progress:
         on_progress(f"All {num_chips} chips done — stitching {frames} frames…")
 
-    ok = _stitch_gifs(shard_paths, out_path)
+    ok = _stitch_gifs(shard_paths, out_path, interleave=interleave)
 
     # Clean up temp shard files
     for p in shard_paths:

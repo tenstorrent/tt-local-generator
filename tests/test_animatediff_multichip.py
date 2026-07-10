@@ -123,3 +123,29 @@ class TestStitch:
                 img.seek(i)
                 px = img.convert("RGB").getpixel((4, 4))
                 assert px == exp, f"frame {i}: expected {exp}, got {px}"
+
+
+class TestMultichipCmds:
+    def test_each_chip_gets_its_own_prompt_seed_and_device(self, tmp_path):
+        chips = [
+            ad.ChipParams(prompt="dawn", seed=42, temporal_alpha=0.1, motion_adapter_alpha=1.0),
+            ad.ChipParams(prompt="storm", seed=43, temporal_alpha=0.9, motion_adapter_alpha=0.5),
+        ]
+        shards = [tmp_path / "s0.gif", tmp_path / "s1.gif"]
+        cmds = ad._multichip_cmds(
+            script=Path("generate.py"), shard_paths=shards, mode="blackhole",
+            negative_prompt="blurry", frames_per_chip=8, steps=4,
+            lightning=True, lightning_steps=4, motion_adapter=None,
+            motion_adapter_skip=None, chips=chips,
+        )
+        assert len(cmds) == 2
+        def val(cmd, flag):
+            return cmd[cmd.index(flag) + 1]
+        assert val(cmds[0], "--prompt") == "dawn"
+        assert val(cmds[1], "--prompt") == "storm"
+        assert val(cmds[0], "--seed") == "42"
+        assert val(cmds[1], "--seed") == "43"
+        assert val(cmds[0], "--device-id") == "0"
+        assert val(cmds[1], "--device-id") == "1"
+        assert val(cmds[0], "--temporal-alpha") == "0.1"
+        assert val(cmds[1], "--temporal-alpha") == "0.9"
