@@ -151,6 +151,20 @@ class TestMultichipCmds:
         assert val(cmds[1], "--temporal-alpha") == "0.9"
 
 
+class TestCoherent:
+    def test_segment_chain_flags(self):
+        segs = ad.build_coherent_segments(num_segments=4, frames_per_segment=8, base_seed=42)
+        assert [s["index"] for s in segs] == [0, 1, 2, 3]
+        assert all(s["frames"] == 8 and s["seed"] == 42 for s in segs)
+        assert segs[0]["chain_from"] is False and segs[0]["chain_save"] is True
+        assert segs[1]["chain_from"] is True and segs[1]["chain_save"] is True
+        assert segs[-1]["chain_from"] is True and segs[-1]["chain_save"] is False
+
+    def test_single_segment_has_no_chaining(self):
+        segs = ad.build_coherent_segments(num_segments=1, frames_per_segment=8, base_seed=1)
+        assert segs[0]["chain_from"] is False and segs[0]["chain_save"] is False
+
+
 class TestAutovary:
     def test_parses_n_lines(self):
         call_fn = lambda *a, **k: "koi at dawn\nkoi in a storm\nkoi at night\nkoi in fog\n"

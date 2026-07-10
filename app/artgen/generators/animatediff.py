@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -499,6 +500,96 @@ def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = Fal
         return False
 
 
+def _run_one(
+    cmd: "list[str]",
+    *,
+    timeout: int,
+    env: dict,
+    run_id: str,
+    on_progress: Callable[[str], None] | None,
+) -> "tuple[bool, str]":
+    """Run one generate.py subprocess to completion, draining its stdout.
+
+    This is the single-process run+drain+timeout block shared by the
+    single-chip path in run_subprocess() and each per-segment invocation in
+    _run_coherent_chain(). Extracted so there is exactly one Popen/drain
+    implementation instead of duplicating it per caller.
+
+    Writes a run log to `_LOG_DIR / f"run_{run_id}.log"` (callers that need
+    the traditional `run_{run_id}_{out_path.stem}.log` naming — the
+    single-chip path — pass a run_id that already has the stem folded in).
+    Streams matching lines to on_progress the same way the original
+    single-chip path did (Frame/Step/Generating/Loading/chain/adapter/
+    lightning/Error/Traceback/fatal/ARC).
+
+    Does NOT check whether the expected output file was produced — that is
+    caller-specific (single-chip checks out_path; the coherent chain relies
+    on _stitch_gifs failing if a segment's GIF is missing) so it stays out
+    of this shared helper.
+
+    Returns (success, error_message). error_message is "" on success.
+    """
+    run_log_path = _LOG_DIR / f"run_{run_id}.log"
+    _log.info("cmd run_id=%s: %s", run_id, " ".join(str(c) for c in cmd))
+
+    all_output: list[str] = []
+
+    def _drain(proc):
+        with open(run_log_path, "w") as run_log:
+            run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                all_output.append(line)
+                run_log.write(line + "\n")
+                run_log.flush()
+                _log.debug("[subprocess] %s", line)
+                if on_progress and (
+                    "Frame" in line or "Step" in line
+                    or "Generating" in line or "Loading" in line
+                    or "chain" in line.lower() or "adapter" in line.lower()
+                    or "lightning" in line.lower()
+                    or "Error" in line or "Traceback" in line
+                    or "fatal" in line.lower() or "ARC" in line
+                ):
+                    on_progress(line.strip())
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env, cwd=str(_SCRIPT_DIR),
+        )
+    except Exception as e:
+        _log.exception("Subprocess launch failed")
+        return False, f"Subprocess error: {e}"
+
+    drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
+    drain_thread.start()
+    drain_thread.join(timeout=timeout)
+
+    if drain_thread.is_alive():
+        proc.kill()
+        proc.wait()
+        drain_thread.join(timeout=5)
+        minutes = timeout // 60
+        _log.error("run_timeout run_id=%s after %ds", run_id, timeout)
+        return False, f"AnimateDiff timed out after {minutes} minutes and was stopped"
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+    rc = proc.returncode
+    if rc != 0:
+        tail = "\n".join(all_output[-20:]) if all_output else "(no output captured)"
+        msg = f"generate.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
+        _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
+        return False, msg
+
+    return True, ""
+
+
 def run_subprocess(
     prompt: str,
     out_path: Path,
@@ -549,7 +640,7 @@ def run_subprocess(
     Returns (success, error_message). error_message is "" on success.
     """
     _ensure_log_handler()
-    import threading, tempfile, datetime as _dt
+    import tempfile, datetime as _dt
 
     script = _SCRIPT_DIR / "examples" / "generate.py"
     if not script.exists():
@@ -647,63 +738,17 @@ def run_subprocess(
         motion_adapter_skip=motion_adapter_skip,
     )
 
-    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
-    _log.info("single-chip cmd: %s", " ".join(str(c) for c in cmd))
+    # run_id passed to _run_one folds in out_path.stem so the per-run log file
+    # keeps its traditional name (run_<run_id>_<stem>.log) — _run_one itself
+    # only knows the run_id string handed to it, not out_path.
+    single_run_id = f"{run_id}_{out_path.stem}"
+    run_log_path = _LOG_DIR / f"run_{single_run_id}.log"
 
-    all_output: list[str] = []
-
-    def _drain(proc):
-        with open(run_log_path, "w") as run_log:
-            run_log.write(f"# animatediff run {run_id}\n# cmd: {' '.join(str(c) for c in cmd)}\n\n")
-            for raw_line in proc.stdout:
-                line = raw_line.rstrip()
-                all_output.append(line)
-                run_log.write(line + "\n")
-                run_log.flush()
-                _log.debug("[subprocess] %s", line)
-                if on_progress and (
-                    "Frame" in line or "Step" in line
-                    or "Generating" in line or "Loading" in line
-                    or "chain" in line.lower() or "adapter" in line.lower()
-                    or "lightning" in line.lower()
-                    or "Error" in line or "Traceback" in line
-                    or "fatal" in line.lower() or "ARC" in line
-                ):
-                    on_progress(line.strip())
-
-    try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, env=env, cwd=str(_SCRIPT_DIR),
-        )
-    except Exception as e:
-        _log.exception("Subprocess launch failed")
-        return False, f"Subprocess error: {e}"
-
-    drain_thread = threading.Thread(target=_drain, args=(proc,), daemon=True)
-    drain_thread.start()
-    drain_thread.join(timeout=timeout)
-
-    if drain_thread.is_alive():
-        proc.kill()
-        proc.wait()
-        drain_thread.join(timeout=5)
-        minutes = timeout // 60
-        _log.error("run_timeout run_id=%s after %ds", run_id, timeout)
-        return False, f"AnimateDiff timed out after {minutes} minutes and was stopped"
-
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-
-    rc = proc.returncode
-    if rc != 0:
-        tail = "\n".join(all_output[-20:]) if all_output else "(no output captured)"
-        msg = f"generate.py exited with rc={rc}\n\nLast output:\n{tail}\n\nFull log: {run_log_path}"
-        _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
-        return False, msg
+    ok, err = _run_one(
+        cmd, timeout=timeout, env=env, run_id=single_run_id, on_progress=on_progress,
+    )
+    if not ok:
+        return False, err
 
     if not out_path.exists():
         msg = f"Script exited 0 but no output file was produced (log: {run_log_path})"
@@ -748,7 +793,7 @@ def _run_multi_chip(
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
     """
-    import threading, tempfile
+    import tempfile
 
     frames_per_chip = frames // num_chips
     tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_multi_"))
@@ -880,6 +925,108 @@ def _run_multi_chip(
     _log.info("multi-chip run_success run_id=%s chips=%d out=%s", run_id, num_chips, out_path)
     if on_progress:
         on_progress(f"Done — {frames} frames from {num_chips} chips → {out_path.name}")
+    return True, ""
+
+
+def build_coherent_segments(*, num_segments: int, frames_per_segment: int, base_seed: int) -> "list[dict]":
+    """Plan sequential latent-chained segments for Coherent mode.
+
+    Segment 0 saves latents; each later segment chains from the previous and
+    (unless last) saves for the next. All segments share base_seed.
+    """
+    segs: list[dict] = []
+    for i in range(num_segments):
+        segs.append({
+            "index": i,
+            "frames": frames_per_segment,
+            "seed": base_seed,
+            "chain_from": i > 0,
+            "chain_save": i < num_segments - 1,
+        })
+    return segs
+
+
+def _run_coherent_chain(
+    *,
+    script: Path,
+    out_path: Path,
+    mode: str,
+    prompt: str,
+    negative_prompt: str,
+    frames: int,
+    steps: int,
+    seed: int,
+    temporal_alpha: float,
+    lightning: bool,
+    lightning_steps: int,
+    num_segments: int,
+    motion_adapter: str | None,
+    motion_adapter_alpha: float,
+    motion_adapter_skip: list[str] | None,
+    on_progress: Callable[[str], None] | None,
+    timeout: int,
+    run_id: str,
+    env: dict,
+) -> "tuple[bool, str]":
+    """Run num_segments generate.py passes sequentially, chaining latents via
+    --chain-save/--chain-from for visual continuity, then concatenate the
+    per-segment GIFs into one continuous animation via _stitch_gifs.
+
+    Unlike the Remix multi-chip path (independent chips, each rendering its
+    own unrelated clip), Coherent mode is inherently sequential: segment N
+    needs segment N-1's saved latents before it can start, so segments run
+    one after another on a single chip rather than in parallel processes.
+    """
+    import tempfile
+
+    frames_per_seg = frames // num_segments
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_coherent_"))
+    segs = build_coherent_segments(num_segments=num_segments,
+                                   frames_per_segment=frames_per_seg, base_seed=seed)
+
+    _log.info(
+        "coherent run_id=%s segments=%d frames=%d (%d/segment) tmp=%s",
+        run_id, num_segments, frames, frames_per_seg, tmp_dir,
+    )
+
+    seg_paths: list[Path] = []
+    prev_latent: "Path | None" = None
+    for s in segs:
+        seg_out = tmp_dir / f"seg_{s['index']}.gif"
+        latent_out = tmp_dir / f"seg_{s['index']}.pt"
+        cmd = _build_cmd(
+            script=script, out_path=seg_out, mode=mode, prompt=prompt,
+            negative_prompt=negative_prompt, frames=s["frames"], steps=steps,
+            seed=s["seed"], temporal_alpha=temporal_alpha,
+            lightning=lightning, lightning_steps=lightning_steps, device_id=0,
+            chain_from=str(prev_latent) if s["chain_from"] and prev_latent else None,
+            chain_save=str(latent_out) if s["chain_save"] else None,
+            chain_alpha=0.6,
+            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+        )
+        if on_progress:
+            on_progress(f"Coherent segment {s['index']+1}/{num_segments}…")
+        ok, err = _run_one(
+            cmd, timeout=timeout, env=env, run_id=f"{run_id}_seg{s['index']}",
+            on_progress=on_progress,
+        )
+        if not ok:
+            return False, f"coherent segment {s['index']} failed: {err}"
+        seg_paths.append(seg_out)
+        if s["chain_save"]:
+            prev_latent = latent_out
+
+    if on_progress:
+        on_progress(f"All {num_segments} segments done — stitching {frames} frames…")
+
+    if not _stitch_gifs(seg_paths, out_path):
+        return False, "coherent stitch failed"
+
+    if not out_path.exists():
+        return False, "Stitch reported success but output file missing"
+
+    _log.info("coherent run_success run_id=%s segments=%d out=%s", run_id, num_segments, out_path)
     return True, ""
 
 
