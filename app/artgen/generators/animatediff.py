@@ -374,6 +374,30 @@ def _multichip_cmds(
     return cmds
 
 
+def _autovary_prompts(base: str, n: int, call_fn) -> "list[str]":
+    """Ask the LLM for n themed one-line variations of *base*.
+
+    Returns exactly n prompts. On any error or shortfall, unfilled slots use
+    *base* — never raises, never blocks generation.
+    """
+    try:
+        system = (
+            "You write short, vivid image/animation prompt variations. "
+            "Given a base prompt, output exactly N variations, one per line, "
+            "no numbering, no commentary — each a single line."
+        )
+        user = f"Base prompt: {base}\nWrite {n} variations, one per line."
+        raw = call_fn(user, system=system, max_tokens=256) or ""
+        lines = [ln.strip(" -\t") for ln in raw.splitlines() if ln.strip()]
+        out = lines[:n]
+    except Exception:
+        _log.exception("auto-vary failed; falling back to base prompt")
+        out = []
+    while len(out) < n:
+        out.append(base)
+    return out
+
+
 def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = False) -> bool:
     """Combine GIF frames from multiple chip shards into a single output GIF.
 

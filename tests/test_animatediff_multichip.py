@@ -149,3 +149,20 @@ class TestMultichipCmds:
         assert val(cmds[1], "--device-id") == "1"
         assert val(cmds[0], "--temporal-alpha") == "0.1"
         assert val(cmds[1], "--temporal-alpha") == "0.9"
+
+
+class TestAutovary:
+    def test_parses_n_lines(self):
+        call_fn = lambda *a, **k: "koi at dawn\nkoi in a storm\nkoi at night\nkoi in fog\n"
+        out = ad._autovary_prompts("koi pond", 4, call_fn)
+        assert out == ["koi at dawn", "koi in a storm", "koi at night", "koi in fog"]
+
+    def test_pads_when_model_returns_too_few(self):
+        call_fn = lambda *a, **k: "only one line"
+        out = ad._autovary_prompts("base", 3, call_fn)
+        assert out == ["only one line", "base", "base"]
+
+    def test_falls_back_to_base_on_error(self):
+        def call_fn(*a, **k):
+            raise RuntimeError("no LLM")
+        assert ad._autovary_prompts("base", 4, call_fn) == ["base"] * 4
