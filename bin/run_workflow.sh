@@ -32,9 +32,9 @@ if [[ ! -f "$WORKFLOW" ]]; then
     exit 1
 fi
 
-PYTHON3="${HOME}/.tenstorrent-venv/bin/python3"
-if [[ ! -f "$PYTHON3" ]]; then
-    PYTHON3=/usr/bin/python3
+if [[ -z "${PYTHON3:-}" ]]; then
+    PYTHON3="${HOME}/.tenstorrent-venv/bin/python3"
+    [[ -f "$PYTHON3" ]] || PYTHON3=/usr/bin/python3
 fi
 
 OUTPUT_DIR="${HOME}/.local/share/tt-local-generator/workflow-runs/$(date +%Y%m%d_%H%M%S)"
@@ -56,5 +56,6 @@ echo "LOG:$LOG_FILE"
 # bash node_*() functions). The engine's stdout flows through the `tee` above,
 # so pipeline_runner.py still sees the LOG: line (already echoed) and every
 # NODE: line unchanged. We exit with the engine's own exit status.
-exec "$PYTHON3" "$REPO_ROOT/app/pipeline_engine.py" "$WORKFLOW" \
-    --output-dir "$OUTPUT_DIR" ${DRY_RUN:+--dry-run}
+ENGINE_ARGS=("$WORKFLOW" --output-dir "$OUTPUT_DIR")
+[[ $DRY_RUN -eq 1 ]] && ENGINE_ARGS+=(--dry-run)
+exec "$PYTHON3" "$REPO_ROOT/app/pipeline_engine.py" "${ENGINE_ARGS[@]}"

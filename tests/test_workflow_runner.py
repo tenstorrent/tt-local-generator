@@ -1000,6 +1000,113 @@ def test_no_records_produces_empty_count():
 
 
 # ===========================================================================
+# Group 7 — --dry-run flag gating (Critical bug regression)
+# ===========================================================================
+#
+# Bug: run_workflow.sh built the final engine invocation with
+# ${DRY_RUN:+--dry-run}. DRY_RUN is initialized unconditionally to "0" or
+# "1", and ${VAR:+word} expands to `word` whenever VAR is set to ANY
+# non-empty value -- including the string "0". So --dry-run was appended on
+# EVERY invocation, real or not. app/pipeline_runner.py launches real runs as
+# ["bash", "bin/run_workflow.sh", spec] (no --dry-run arg), so real pipeline
+# runs silently executed in dry-run mode and no-op'd while reporting success.
+#
+# These tests point PYTHON3 at a fake recorder script (via env var) so we can
+# inspect the exact argv the shim hands to the engine, without touching
+# hardware, Docker, or the network.
+# ===========================================================================
+
+
+def _write_fake_python_recorder(tmp_path: Path, record_file: Path) -> Path:
+    """
+    Write an executable fake "python3" that records its argv (everything
+    after the interpreter itself) as a single space-joined line appended to
+    `record_file`, then exits 0. Used to observe exactly what run_workflow.sh
+    hands to `$PYTHON3 app/pipeline_engine.py ...` without running the real
+    engine.
+    """
+    fake = tmp_path / "fake_python3"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$@" >> "{record_file}"\n'
+        "exit 0\n"
+    )
+    fake.chmod(0o755)
+    return fake
+
+
+@_skip_no_shell
+@_skip_no_spec
+def test_dry_run_flag_only_passed_in_dry_mode(tmp_path):
+    """
+    Regression test for the Critical --dry-run-always-on bug.
+
+    Runs run_workflow.sh twice against a fake PYTHON3 recorder:
+      1. real mode   — no --dry-run arg at all
+      2. dry mode    — "--dry-run" as $2
+
+    Asserts the recorded engine argv reflects each mode correctly: real mode
+    must NOT contain --dry-run, dry mode MUST contain it.
+    """
+    tmp_home = tmp_path / "home"
+    tmp_home.mkdir()
+    record_file = tmp_path / "recorded_args.txt"
+    fake_python = _write_fake_python_recorder(tmp_path, record_file)
+
+    env = {
+        **os.environ,
+        "HOME": str(tmp_home),
+        "PYTHON3": str(fake_python),
+    }
+
+    result_real = subprocess.run(
+        ["bash", str(_RUN_WORKFLOW_SH), str(_EXAMPLE_WORKFLOW)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert result_real.returncode == 0, (
+        f"Real-mode invocation must exit 0 (fake engine always exits 0).\n"
+        f"stdout: {result_real.stdout[:600]}\nstderr: {result_real.stderr[:300]}"
+    )
+
+    result_dry = subprocess.run(
+        ["bash", str(_RUN_WORKFLOW_SH), str(_EXAMPLE_WORKFLOW), "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert result_dry.returncode == 0, (
+        f"Dry-mode invocation must exit 0 (fake engine always exits 0).\n"
+        f"stdout: {result_dry.stdout[:600]}\nstderr: {result_dry.stderr[:300]}"
+    )
+
+    assert record_file.exists(), (
+        "Fake PYTHON3 recorder was never invoked — PYTHON3 env override is "
+        "not being respected by run_workflow.sh"
+    )
+    lines = record_file.read_text().splitlines()
+    assert len(lines) == 2, (
+        f"Expected exactly 2 recorded engine invocations, got {len(lines)}: {lines}"
+    )
+    real_args, dry_args = lines[0], lines[1]
+
+    assert str(_EXAMPLE_WORKFLOW) in real_args
+    assert "--output-dir" in real_args
+    assert "--dry-run" not in real_args, (
+        f"BUG: real-mode invocation (no --dry-run arg passed to the shim) "
+        f"must NOT pass --dry-run to the engine. Recorded args: {real_args!r}"
+    )
+
+    assert "--dry-run" in dry_args, (
+        f"Dry-mode invocation (--dry-run arg passed to the shim) must pass "
+        f"--dry-run through to the engine. Recorded args: {dry_args!r}"
+    )
+
+
+# ===========================================================================
 # Group 6 — Remix vs. Workflow record distinguishability
 # ===========================================================================
 #
