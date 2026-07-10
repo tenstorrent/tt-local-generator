@@ -536,9 +536,54 @@ class ArtgenPanel(Gtk.Box):
             perf_box.append(_row("Mode", self._ad_mode))
             perf_box.append(self._ad_lightning)
             perf_box.append(self._ad_lightning_steps_row)
-            perf_box.append(_row("Device ID", self._ad_device_id))
             perf_exp.set_child(perf_box)
             box.append(perf_exp)
+
+            # ── Multi-chip expander (Option A) ────────────────────────────────
+            # Device ID moves here (was in Performance & Mode) — it is an
+            # advanced/single-chip-pin control subordinate to multi-chip mode.
+            mc_exp = Gtk.Expander(label="🎛 Multi-chip")
+            mc_exp.set_margin_top(4)
+            mc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            mc_box.set_margin_start(8)
+            mc_box.set_margin_top(4)
+            self._ad_mc_mode = _dd(["Off", "Remix", "Coherent"], "Off")
+            mc_box.append(_row("Mode", self._ad_mc_mode))
+
+            # Remix reveal
+            self._ad_mc_remix_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            self._ad_mc_remix_box.append(_section_lbl("Per-chip prompt"))
+            from artgen.generators.animatediff import check_hardware
+            try:
+                _ok, _msg, _n = check_hardware()
+            except Exception:
+                _n = 4
+            n_chips = max(1, min(4, _n or 4))
+            self._ad_mc_prompt_entries = []
+            for ci in range(n_chips):
+                e = Gtk.Entry()
+                e.set_placeholder_text(f"chip {ci} — inherits base…")
+                self._ad_mc_prompt_entries.append(e)
+                self._ad_mc_remix_box.append(_row(f"chip {ci}", e))
+            self._ad_mc_seed_spread = _spin(0, 16, 1, 1)
+            self._ad_mc_ramp = _dd(["none", "temporal", "motion"], "none")
+            self._ad_mc_stitch = _dd(["interleave", "concatenate"], "interleave")
+            self._ad_mc_autovary_btn = Gtk.Button(label="✦ Auto-vary from base")
+            self._ad_mc_autovary_btn.connect("clicked", lambda _b: self._on_ad_autovary())
+            self._ad_mc_remix_box.append(_row("Seed spread", self._ad_mc_seed_spread))
+            self._ad_mc_remix_box.append(_row("Ramp", self._ad_mc_ramp))
+            self._ad_mc_remix_box.append(_row("Stitch", self._ad_mc_stitch))
+            self._ad_mc_remix_box.append(self._ad_mc_autovary_btn)
+            mc_box.append(self._ad_mc_remix_box)
+
+            def _mc_mode_changed(*_a):
+                self._ad_mc_remix_box.set_visible(_dd_val(self._ad_mc_mode) == "Remix")
+            self._ad_mc_mode.connect("notify::selected", _mc_mode_changed)
+            _mc_mode_changed()
+
+            mc_box.append(_row("Device ID (−1=all)", self._ad_device_id))
+            mc_exp.set_child(mc_box)
+            box.append(mc_exp)
 
             # ── Chain continuity expander ─────────────────────────────────────
             chain_exp = Gtk.Expander(label="🔗 Chain Continuity")
@@ -1240,6 +1285,11 @@ class ArtgenPanel(Gtk.Box):
             motion_adapter_skip=args.ad_motion_skip_keys,
             on_progress=_on_progress,
             num_chips=num_chips if args.ad_device_id is None else 1,
+            multichip_mode=args.multichip_mode,
+            per_chip_prompts=args.per_chip_prompts,
+            seed_spread=args.seed_spread,
+            ramp=args.ramp,
+            stitch_order=args.stitch_order,
         )
 
         if not success:
@@ -1263,6 +1313,7 @@ class ArtgenPanel(Gtk.Box):
             "motion_adapter": args.ad_motion_adapter is not None,
             "chain_from": args.ad_chain_from or None,
             "chain_save": chain_save_path,
+            "multichip_mode": args.multichip_mode,
             "generation_seconds": elapsed_s,
         }
         rec = MediaRecord(
@@ -1281,6 +1332,41 @@ class ArtgenPanel(Gtk.Box):
         _media_store.ensure_auto_playlists()
 
         GLib.idle_add(self._finish_success, "", str(out_path), rec)
+
+    def _on_ad_autovary(self) -> None:
+        """Fill per-chip prompt entries with LLM variations of the base prompt.
+
+        Runs the LLM call on a background thread (network I/O) and posts the
+        result back via GLib.idle_add — never touch GTK widgets from a
+        worker thread (see GTK threading discipline in CLAUDE.md).
+        """
+        import threading
+        base = self._ad_prompt.get_text().strip() or "a mysterious vision"
+        n = len(self._ad_mc_prompt_entries)
+
+        def _bg():
+            import artgen
+            try:
+                base_url, model_id = artgen.detect_artgen_endpoint()
+                if not model_id:
+                    variations = [base] * n
+                else:
+                    def call_fn(prompt, system=None, max_tokens=None):
+                        text, _ = artgen.call_llm(prompt, model_id, base_url + "/v1",
+                                                  max_tokens=max_tokens or 256, system=system)
+                        return text
+                    from artgen.generators.animatediff import _autovary_prompts
+                    variations = _autovary_prompts(base, n, call_fn)
+            except Exception:
+                variations = [base] * n
+
+            def _apply():
+                for e, v in zip(self._ad_mc_prompt_entries, variations):
+                    e.set_text(v)
+                return False
+            GLib.idle_add(_apply)
+
+        threading.Thread(target=_bg, daemon=True).start()
 
     def _build_args(self, gen_name: str) -> types.SimpleNamespace:
         """Build an argparse-Namespace-compatible object from the current UI state."""
@@ -1378,6 +1464,12 @@ class ArtgenPanel(Gtk.Box):
                 args.ad_motion_skip_keys = ["up2"]
             else:
                 args.ad_motion_skip_keys = None
+            # Multi-chip (Option A panel)
+            args.multichip_mode = _dd_val(self._ad_mc_mode).lower()   # off/remix/coherent
+            args.per_chip_prompts = [e.get_text() for e in self._ad_mc_prompt_entries]
+            args.seed_spread = int(self._ad_mc_seed_spread.get_value())
+            args.ramp = _dd_val(self._ad_mc_ramp)
+            args.stitch_order = _dd_val(self._ad_mc_stitch)
 
         return args
 
