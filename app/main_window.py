@@ -1520,10 +1520,16 @@ def _apply_css() -> None:
 
 
 def _load_pixbuf(path: str, width: int, height: int) -> Optional[GdkPixbuf.Pixbuf]:
-    """Load and scale an image file; returns None on failure."""
+    """Load an image scaled to fit within width×height, preserving aspect ratio.
+
+    Uses new_from_file_at_scale(..., preserve_aspect_ratio=True) so the image is
+    fit (letterboxed) inside the box rather than force-stretched to it. The old
+    scale_simple(width, height) baked non-uniform distortion into the pixels for
+    any source whose aspect ratio didn't match the box (e.g. square 1024×1024
+    FLUX output in a 16:9 slot). Returns None on failure.
+    """
     try:
-        pb = GdkPixbuf.Pixbuf.new_from_file(path)
-        return pb.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, True)
     except Exception:
         return None
 
@@ -7675,7 +7681,15 @@ class MainWindow(Gtk.ApplicationWindow):
                  prompt_server_url: str = "http://127.0.0.1:8001",
                  inventory_url: str = ""):
         super().__init__(application=app, title="TT Local Generator")
+        # Default size is the un-maximized fallback (used if the user restores
+        # the window down). The app should open maximized every launch — but
+        # calling maximize() before the surface is realized/mapped is racy on
+        # Wayland (GTK4 only queues the request and may drop it), which is why
+        # it was inconsistent. Defer to a one-shot "map" handler so the request
+        # is issued once the toplevel actually exists.
         self.set_default_size(1280, 800)
+        self._did_initial_maximize = False
+        self.connect("map", self._maximize_on_first_map)
 
         self._alive: bool = True   # set False in do_close_request; guards idle_add callbacks
         self._flash_restore_id: int = 0   # GLib timer id for pending _flash_status restore
@@ -10522,6 +10536,17 @@ class MainWindow(Gtk.ApplicationWindow):
         self._start_next_queued()
         return False
 
+
+    def _maximize_on_first_map(self, _win) -> None:
+        """Maximize the window the first time it's mapped (reliable on Wayland).
+
+        Guarded so later maps (e.g. un-minimize) don't re-force maximize and
+        override a user who deliberately restored the window down.
+        """
+        if self._did_initial_maximize:
+            return
+        self._did_initial_maximize = True
+        self.maximize()
 
     def do_close_request(self) -> bool:
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets

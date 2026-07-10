@@ -18,8 +18,14 @@ tt-local-generator (0.12.0) noble; urgency=medium
     device config), now folded into our override; all other patches (dit_runners,
     runner_fabric, video_generate_request, tt_dit pipelines) are unchanged
     upstream 0.17.0→0.18.0, so nothing new is overridden.
+  * UI: open the main window maximized reliably on every launch. maximize() now
+    fires from a one-shot "map" handler (after the surface is realized) instead
+    of not being requested at all — fixes the intermittent non-fullscreen start.
+  * UI: detail-pane media no longer stretches. _load_pixbuf now preserves aspect
+    ratio (new_from_file_at_scale, preserve_aspect_ratio=True) so square/portrait
+    images letterbox to fit their slot instead of being force-scaled to 16:9.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 09 Jul 2026 00:00:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 11 Jul 2026 00:00:00 +0000
 
 tt-local-generator (0.11.0) noble; urgency=medium
 
