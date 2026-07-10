@@ -400,21 +400,21 @@ def _autovary_prompts(base: str, n: int, call_fn) -> "list[str]":
 
 
 def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = False) -> bool:
-    """Combine GIF frames from multiple chip shards into a single output GIF.
+    """Combine GIF frames from multiple chip/segment shards into a single output GIF.
 
-    Each shard contains consecutive frames from one chip (chip 0 → frames 0..K-1,
-    chip 1 → frames K..2K-1, etc.).
-
-    Ordering:
-      - interleave=False (default): frames are concatenated in chip order —
-        shard 0's frames, then shard 1's, etc. This is correct when every chip
-        renders the *same* seed (deterministic chips produce identical frames
-        for identical seeds, so chip order == temporal order of the full clip).
+    Shards are combined in one of two orderings — this makes no assumption
+    about temporal frame-slicing. Each shard is an independent render (its
+    own chip's clip in Remix mode, or its own segment in Coherent mode), not
+    a contiguous slice of one longer clip:
+      - interleave=False (default): shards are concatenated in the given
+        order — shard 0's frames in full, then shard 1's, etc. Used by
+        Coherent mode (segments play back-to-back to form one continuous
+        clip) and by Remix mode when `stitch_order="concatenate"`.
       - interleave=True: frames are round-robined across shards (shard0[0],
         shard1[0], shard2[0], ..., shard0[1], shard1[1], ...), skipping shards
-        once they run out of frames. This reproduces the "glitchy" look from
-        the original (buggy) stitcher when chips are seeded differently on
-        purpose — each output frame hops between distinct per-chip renders.
+        once they run out of frames. This produces the "glitchy" look Remix
+        mode is named for (`stitch_order="interleave"`, the default there) —
+        each output frame hops between distinct per-chip renders.
 
     Frames are preserved as RGB (not palette-native) so all shards can share a
     single output palette (quantized from a composite sample of every frame),
@@ -611,6 +611,14 @@ def run_subprocess(
     on_progress: Callable[[str], None] | None = None,
     timeout: int = 1800,
     num_chips: int | None = None,
+    script: Path | None = None,
+    multichip_mode: str = "off",
+    per_chip_prompts: list[str] | None = None,
+    seed_spread: int = 1,
+    ramp: str = "none",
+    ramp_lo: float = 0.0,
+    ramp_hi: float = 1.0,
+    stitch_order: str = "interleave",
 ) -> tuple[bool, str]:
     """Run the unified generate.py, using all available Blackhole chips in parallel.
 
@@ -627,10 +635,28 @@ def run_subprocess(
     thread-safe, so even the create_submeshes path must run chips sequentially.
     Separate processes are the only way to get true concurrent chip utilisation.
 
-    When mode=="blackhole", device_id is None, and num_chips > 1:
+    When mode=="blackhole", device_id is None, and num_chips > 1, `multichip_mode`
+    picks WHAT the chips do (guards below must all hold; otherwise this always
+    falls back to single-chip regardless of `multichip_mode`):
+      - "off"      — ignore num_chips; run the classic single-chip path.
+      - "remix"    — each chip renders an independent clip from its own plan
+                     entry (see `build_remix_plan`: per_chip_prompts, seed_spread,
+                     ramp/ramp_lo/ramp_hi control how chips diverge), then the
+                     shard GIFs are combined per `stitch_order` ("interleave"
+                     round-robins frames for the classic glitch look;
+                     "concatenate" plays each chip's clip back-to-back).
+      - "coherent" — chips are NOT used in parallel; instead num_chips becomes
+                     the segment count for `_run_coherent_chain`, which runs
+                     segments sequentially on one chip, latent-chaining each
+                     from the previous for visual continuity.
+    Guards (all required for "remix"/"coherent" to engage; same as the old
+    `use_multi` gate):
       - frames must be divisible by num_chips (falls back to single-chip if not)
       - chain_from/chain_save are single-chip only (fall back to single-chip)
-      - All processes run concurrently; wall-clock time ≈ single-chip time.
+
+    `script`, if given, overrides the auto-resolved generate.py path and skips
+    the existence check below (caller's responsibility) — used by tests to
+    inject a fake path without touching the filesystem.
 
     For single-chip runs, cpu/sim modes, or explicit device_id pins: runs a
     single subprocess as before.
@@ -642,12 +668,13 @@ def run_subprocess(
     _ensure_log_handler()
     import tempfile, datetime as _dt
 
-    script = _SCRIPT_DIR / "examples" / "generate.py"
-    if not script.exists():
-        return False, (
-            f"AnimateDiff generate.py not found: {script}\n"
-            "Ensure the vendor/tt-animatediff submodule is initialised (git submodule update --init)."
-        )
+    if script is None:
+        script = _SCRIPT_DIR / "examples" / "generate.py"
+        if not script.exists():
+            return False, (
+                f"AnimateDiff generate.py not found: {script}\n"
+                "Ensure the vendor/tt-animatediff submodule is initialised (git submodule update --init)."
+            )
 
     if not _PYTHON.exists():
         return False, (
@@ -665,9 +692,13 @@ def run_subprocess(
     _log.info("run_start run_id=%s mode=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
               run_id, mode, out_path, prompt, frames, steps, seed)
 
-    # ── Decide: multi-chip parallel or single-chip ────────────────────────────
+    # ── Decide: multi-chip (remix/coherent) or single-chip ────────────────────
+    # Replaces the old `use_multi` gate. Multi-chip requires blackhole + no pin
+    # + >1 chip + divisible frames + no chain continuity; `multichip_mode` then
+    # chooses remix (independent per-chip clips, stitched) vs coherent
+    # (sequential latent-chained segments) vs off (ignore num_chips entirely).
     effective_chips = num_chips if (num_chips and num_chips > 1) else 1
-    use_multi = (
+    _multi_ok = (
         mode == "blackhole"
         and device_id is None
         and effective_chips > 1
@@ -690,26 +721,24 @@ def run_subprocess(
                 f"running on chip 0 only. Use a multiple of {effective_chips} for full parallelism."
             )
 
-    if use_multi:
-        # TODO(Task 7): replace this inline single-seed plan with real mode
-        # routing (Remix mode will build per-chip prompts/seeds/ramps here).
-        # For now, preserve existing single-seed multi-chip behavior: every
-        # chip gets the same prompt/temporal_alpha/motion_alpha and a seed
-        # spread of 1 (base_seed + chip index), no ramp.
-        plan = build_remix_plan(
+    if _multi_ok and multichip_mode == "remix":
+        chips = build_remix_plan(
             base_prompt=prompt,
             base_seed=seed,
             base_temporal_alpha=temporal_alpha,
             base_motion_alpha=motion_adapter_alpha,
             num_chips=effective_chips,
-            seed_spread=1,
-            ramp="none",
+            per_chip_prompts=per_chip_prompts,
+            seed_spread=seed_spread,
+            ramp=ramp,
+            ramp_lo=ramp_lo,
+            ramp_hi=ramp_hi,
         )
         return _run_multi_chip(
             script=script,
             out_path=out_path,
             mode=mode,
-            chips=plan,
+            chips=chips,
             negative_prompt=negative_prompt,
             frames=frames,
             steps=steps,
@@ -722,8 +751,35 @@ def run_subprocess(
             timeout=timeout,
             run_id=run_id,
             env=env,
-            interleave=False,
+            interleave=(stitch_order == "interleave"),
         )
+
+    if _multi_ok and multichip_mode == "coherent":
+        return _run_coherent_chain(
+            script=script,
+            out_path=out_path,
+            mode=mode,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            frames=frames,
+            steps=steps,
+            seed=seed,
+            temporal_alpha=temporal_alpha,
+            lightning=lightning,
+            lightning_steps=lightning_steps,
+            num_segments=effective_chips,
+            motion_adapter=motion_adapter,
+            motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+            on_progress=on_progress,
+            timeout=timeout,
+            run_id=run_id,
+            env=env,
+        )
+
+    # else: fall through to single-chip path (multichip_mode=="off", or the
+    # _multi_ok guards weren't met — e.g. non-divisible frames, a device_id
+    # pin, cpu/sim mode, or an active chain_from/chain_save).
 
     # ── Single-chip path ──────────────────────────────────────────────────────
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -793,6 +849,10 @@ def _run_multi_chip(
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
     """
+    assert len(chips) == num_chips, (
+        f"caller/plan mismatch: got {len(chips)} ChipParams for num_chips={num_chips}"
+    )
+
     import tempfile
 
     frames_per_chip = frames // num_chips
@@ -983,51 +1043,71 @@ def _run_coherent_chain(
     tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_coherent_"))
     segs = build_coherent_segments(num_segments=num_segments,
                                    frames_per_segment=frames_per_seg, base_seed=seed)
+    # Precompute every segment's GIF/latent path up front (mirrors
+    # _run_multi_chip's shard_paths) so the finally-block cleanup below can
+    # remove them all regardless of which segment (if any) fails partway
+    # through the loop — not just the ones that finished successfully.
+    seg_paths = [tmp_dir / f"seg_{s['index']}.gif" for s in segs]
+    latent_paths = [tmp_dir / f"seg_{s['index']}.pt" for s in segs]
 
     _log.info(
         "coherent run_id=%s segments=%d frames=%d (%d/segment) tmp=%s",
         run_id, num_segments, frames, frames_per_seg, tmp_dir,
     )
 
-    seg_paths: list[Path] = []
-    prev_latent: "Path | None" = None
-    for s in segs:
-        seg_out = tmp_dir / f"seg_{s['index']}.gif"
-        latent_out = tmp_dir / f"seg_{s['index']}.pt"
-        cmd = _build_cmd(
-            script=script, out_path=seg_out, mode=mode, prompt=prompt,
-            negative_prompt=negative_prompt, frames=s["frames"], steps=steps,
-            seed=s["seed"], temporal_alpha=temporal_alpha,
-            lightning=lightning, lightning_steps=lightning_steps, device_id=0,
-            chain_from=str(prev_latent) if s["chain_from"] and prev_latent else None,
-            chain_save=str(latent_out) if s["chain_save"] else None,
-            chain_alpha=0.6,
-            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip,
-        )
+    try:
+        prev_latent: "Path | None" = None
+        for s in segs:
+            seg_out = seg_paths[s["index"]]
+            latent_out = latent_paths[s["index"]]
+            cmd = _build_cmd(
+                script=script, out_path=seg_out, mode=mode, prompt=prompt,
+                negative_prompt=negative_prompt, frames=s["frames"], steps=steps,
+                seed=s["seed"], temporal_alpha=temporal_alpha,
+                lightning=lightning, lightning_steps=lightning_steps, device_id=0,
+                chain_from=str(prev_latent) if s["chain_from"] and prev_latent else None,
+                chain_save=str(latent_out) if s["chain_save"] else None,
+                chain_alpha=0.6,
+                motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+                motion_adapter_skip=motion_adapter_skip,
+            )
+            if on_progress:
+                on_progress(f"Coherent segment {s['index']+1}/{num_segments}…")
+            ok, err = _run_one(
+                cmd, timeout=timeout, env=env, run_id=f"{run_id}_seg{s['index']}",
+                on_progress=on_progress,
+            )
+            if not ok:
+                return False, f"coherent segment {s['index']} failed: {err}"
+            if s["chain_save"]:
+                prev_latent = latent_out
+
         if on_progress:
-            on_progress(f"Coherent segment {s['index']+1}/{num_segments}…")
-        ok, err = _run_one(
-            cmd, timeout=timeout, env=env, run_id=f"{run_id}_seg{s['index']}",
-            on_progress=on_progress,
-        )
-        if not ok:
-            return False, f"coherent segment {s['index']} failed: {err}"
-        seg_paths.append(seg_out)
-        if s["chain_save"]:
-            prev_latent = latent_out
+            on_progress(f"All {num_segments} segments done — stitching {frames} frames…")
 
-    if on_progress:
-        on_progress(f"All {num_segments} segments done — stitching {frames} frames…")
+        if not _stitch_gifs(seg_paths, out_path):
+            return False, "coherent stitch failed"
 
-    if not _stitch_gifs(seg_paths, out_path):
-        return False, "coherent stitch failed"
+        if not out_path.exists():
+            return False, "Stitch reported success but output file missing"
 
-    if not out_path.exists():
-        return False, "Stitch reported success but output file missing"
-
-    _log.info("coherent run_success run_id=%s segments=%d out=%s", run_id, num_segments, out_path)
-    return True, ""
+        _log.info("coherent run_success run_id=%s segments=%d out=%s", run_id, num_segments, out_path)
+        return True, ""
+    finally:
+        # Best-effort cleanup of per-segment shard GIFs and chained latent
+        # (.pt) files, mirroring _run_multi_chip's shard cleanup. This is a
+        # finally (not post-loop code) so it runs on BOTH the success path
+        # and every early `return False, ...` above — previously this temp
+        # dir and its contents were never removed on any path, leaking a
+        # `tt_ad_coherent_*` directory of segment GIFs + latents per run.
+        for p in seg_paths:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+        for p in latent_paths:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+        try: tmp_dir.rmdir()
+        except Exception: pass
 
 
 def make_gif_thumbnail(gif_path: Path, thumb_path: Path) -> bool:

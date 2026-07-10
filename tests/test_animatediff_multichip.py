@@ -180,3 +180,65 @@ class TestAutovary:
         def call_fn(*a, **k):
             raise RuntimeError("no LLM")
         assert ad._autovary_prompts("base", 4, call_fn) == ["base"] * 4
+
+
+class TestModeRouting:
+    def _common(self, monkeypatch):
+        calls = {}
+        monkeypatch.setattr(ad, "_run_multi_chip", lambda **k: calls.setdefault("remix", k) or (True, ""))
+        monkeypatch.setattr(ad, "_run_coherent_chain", lambda **k: calls.setdefault("coherent", k) or (True, ""))
+        monkeypatch.setattr(ad, "check_hardware", lambda: (True, "bh", 4))
+        return calls
+
+    def test_remix_routes_to_multi_chip_with_plan(self, monkeypatch, tmp_path):
+        calls = self._common(monkeypatch)
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="remix", per_chip_prompts=["a", "b", "", ""], seed_spread=1,
+        )
+        assert "remix" in calls
+        chips = calls["remix"]["chips"]
+        assert [c.prompt for c in chips] == ["a", "b", "koi", "koi"]
+        assert [c.seed for c in chips] == [42, 43, 44, 45]
+
+    def test_remix_passes_interleave_from_stitch_order(self, monkeypatch, tmp_path):
+        calls = self._common(monkeypatch)
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="remix", stitch_order="concatenate",
+        )
+        assert calls["remix"]["interleave"] is False
+
+        calls2 = self._common(monkeypatch)
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o2.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="remix", stitch_order="interleave",
+        )
+        assert calls2["remix"]["interleave"] is True
+
+    def test_coherent_routes_to_chain(self, monkeypatch, tmp_path):
+        calls = self._common(monkeypatch)
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="coherent",
+        )
+        assert "coherent" in calls
+        assert calls["coherent"]["num_segments"] == 4
+
+    def test_off_does_not_route_multichip(self, monkeypatch, tmp_path):
+        calls = self._common(monkeypatch)
+        # single-chip path will try to Popen; patch _run_one to avoid real exec
+        monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (True, ""))
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="off",
+        )
+        assert "remix" not in calls and "coherent" not in calls
