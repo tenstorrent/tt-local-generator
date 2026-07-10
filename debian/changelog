@@ -12,6 +12,12 @@ tt-local-generator (0.12.0) noble; urgency=medium
   * animatediff: multi-chip is now opt-in via mode selection (the old always-on
     multi-chip produced duplicated frames). The main-window "use all chips"
     checkbox now maps to Remix.
+  * Upgrade to tt-inference-server v0.18.0 (image 0.18.0-c49bb76, vendor SHA
+    d5913e8). Bumps DOCKER_IMAGE in the media-server start scripts. Patch audit:
+    of our patched files only constants.py had an upstream delta (a new N150-SDXL
+    device config), now folded into our override; all other patches (dit_runners,
+    runner_fabric, video_generate_request, tt_dit pipelines) are unchanged
+    upstream 0.17.0→0.18.0, so nothing new is overridden.
 
  -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 09 Jul 2026 00:00:00 +0000
 

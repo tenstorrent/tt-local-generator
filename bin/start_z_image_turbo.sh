@@ -31,7 +31,7 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76"
 MODEL="Z-Image-Turbo"
 HF_REPO="Tongyi-MAI/Z-Image-Turbo"
 HF_CACHE_DIR="$HF_CACHE/hub/models--Tongyi-MAI--Z-Image-Turbo"

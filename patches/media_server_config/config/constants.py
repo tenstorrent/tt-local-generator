@@ -1349,6 +1349,15 @@ ModelConfigs = {
         "device_ids": DeviceIds.DEVICE_IDS_4.value,
         "max_batch_size": 1,
     },
+    # Added upstream in tt-inference-server v0.18.0 — kept here so our whole-file
+    # override doesn't drop it (N150 SDXL; unused on our QB2/P300X2 setup).
+    (ModelRunners.TT_XLA_SDXL, DeviceTypes.N150): {
+        "device_mesh_shape": (1, 1),
+        "is_galaxy": False,
+        "device_ids": DeviceIds.DEVICE_IDS_1.value,
+        "max_batch_size": 1,
+        "request_processing_timeout_seconds": 3000,
+    },
     (ModelRunners.TT_XLA_SDXL, DeviceTypes.P150X4): {
         "device_mesh_shape": (1, 1),
         "is_galaxy": False,

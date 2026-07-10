@@ -137,7 +137,7 @@ else:
 PYEOF
 
         # Append timing to the new-model-support log
-        DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
+        DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76"
         TIMESTAMP=$(date '+%Y-%m-%d')
         VIDEO_PATH=$(
             /usr/bin/python3 - "$AFTER" <<'PYEOF' 2>/dev/null || true

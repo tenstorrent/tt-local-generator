@@ -26,7 +26,7 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76"
 MODEL="FLUX.1-schnell"  # Default: schnell (3s/image, validated). Use --dev for FLUX.1-dev (not downloaded).
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 

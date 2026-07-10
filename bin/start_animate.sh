@@ -29,7 +29,7 @@ else
     REPO_DIR="$HOME/code/tt-inference-server"
 fi
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76"
 MODEL="Wan2.2-Animate-14B-Diffusers"
 DEVICE="p300x2"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"

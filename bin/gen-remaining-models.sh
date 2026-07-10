@@ -210,7 +210,7 @@ if run_model \
     "flux" \
     "FLUX.1-schnell (Tenstorrent)" \
     "QB2 — P300X2 (4× Wormhole p300c, mesh (2,2))" \
-    "ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10" \
+    "ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76" \
     "./tt-ctl start flux" \
     18000; then   # 5-hour budget for first-run TTNN compilation
     FLUX_OK=1
@@ -236,13 +236,13 @@ else
 fi
 
 # ── 3. Z-Image-Turbo ──────────────────────────────────────────────────────────
-# Uses 0.17.0-8c48a10 image. P150X4 (QB2 4× BH p150 chips, mesh (1,4)).
+# Uses 0.18.0-c49bb76 image. P150X4 (QB2 4× BH p150 chips, mesh (1,4)).
 # Z_IMAGE_TURBO_MODEL_DIR set via model_spec.py DeviceModelSpec env_vars.
 if run_model \
     "z-image-turbo" \
     "Z-Image-Turbo (Tongyi-MAI)" \
     "QB2 — P150X4 (4× Blackhole p150, mesh (1,4))" \
-    "ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10" \
+    "ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76" \
     "./tt-ctl start z-image-turbo" \
     18000; then   # 5-hour budget for first run
     ZIT_OK=1
