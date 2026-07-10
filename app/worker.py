@@ -843,6 +843,16 @@ class AnimateDiffGenerationWorker:
                 elapsed = int(time.monotonic() - start_time)
                 on_progress(f"{msg}  ({elapsed}s)")
 
+        # The main-window "Use all chips in parallel" checkbox only sets
+        # self._multi_chip (a bool) — it has no concept of remix vs coherent.
+        # run_subprocess() defaults multichip_mode to "off", so without this
+        # mapping the checkbox was a silent no-op: effective_chips could be
+        # >1 but multichip_mode stayed "off" and every run fell through to
+        # the single-chip path. Map the boolean to "remix" (seed-spread
+        # glitch across chips using default ramp/stitch settings), which is
+        # the intended "use all chips" behaviour for this simple checkbox.
+        multichip_mode = "remix" if (self._multi_chip and effective_chips > 1) else "off"
+
         ok, err = run_subprocess(
             prompt=self._prompt,
             out_path=out_path,
@@ -863,6 +873,7 @@ class AnimateDiffGenerationWorker:
             motion_adapter_skip=self._motion_adapter_skip,
             on_progress=_progress_fwd,
             num_chips=effective_chips,
+            multichip_mode=multichip_mode,
         )
 
         if not ok:

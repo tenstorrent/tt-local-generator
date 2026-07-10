@@ -5018,7 +5018,8 @@ class ControlPanel(Gtk.Box):
         self._ad_multi_chip.set_active(True)
         self._ad_multi_chip.add_css_class("hint")
         self._ad_multi_chip.set_tooltip_text(
-            "Spawn one process per Blackhole chip, each rendering a consecutive frame slice.\n"
+            "Spawn one process per Blackhole chip, each rendering its own seed-varied clip\n"
+            "(Remix mode), then stitch the results into one glitchy multi-chip GIF.\n"
             "Frame count must be divisible by the chip count (e.g. 4, 8, 12 for 4 chips).\n"
             "Ignored when Device ID is pinned to a specific chip."
         )

@@ -576,9 +576,39 @@ class ArtgenPanel(Gtk.Box):
             self._ad_mc_remix_box.append(self._ad_mc_autovary_btn)
             mc_box.append(self._ad_mc_remix_box)
 
+            # Coherent reveal — read-only readout of the resulting animation
+            # length. Coherent chains `n_chips` sequential segments, each a
+            # FULL render of the selected frame count (see
+            # `_run_coherent_chain` / build_coherent_segments), so the total
+            # output is n_chips × frames, not the same length divided up.
+            self._ad_mc_coherent_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            self._ad_mc_coherent_lbl = Gtk.Label()
+            self._ad_mc_coherent_lbl.set_xalign(0)
+            self._ad_mc_coherent_lbl.set_wrap(True)
+            self._ad_mc_coherent_lbl.add_css_class("hint")
+            self._ad_mc_coherent_box.append(self._ad_mc_coherent_lbl)
+            mc_box.append(self._ad_mc_coherent_box)
+
+            def _update_coherent_label(*_a):
+                try:
+                    frames_val = int(_dd_val(self._ad_frames) or "8")
+                except Exception:
+                    frames_val = 8
+                total = n_chips * frames_val
+                self._ad_mc_coherent_lbl.set_text(
+                    f"{n_chips} chips → each renders {frames_val} frames, chained "
+                    f"continuously = {total} frames total"
+                )
+
             def _mc_mode_changed(*_a):
-                self._ad_mc_remix_box.set_visible(_dd_val(self._ad_mc_mode) == "Remix")
+                mode = _dd_val(self._ad_mc_mode)
+                self._ad_mc_remix_box.set_visible(mode == "Remix")
+                self._ad_mc_coherent_box.set_visible(mode == "Coherent")
+                if mode == "Coherent":
+                    _update_coherent_label()
             self._ad_mc_mode.connect("notify::selected", _mc_mode_changed)
+            self._ad_frames.connect("notify::selected", _update_coherent_label)
+            _update_coherent_label()
             _mc_mode_changed()
 
             mc_box.append(_row("Device ID (−1=all)", self._ad_device_id))
@@ -1289,6 +1319,13 @@ class ArtgenPanel(Gtk.Box):
             per_chip_prompts=args.per_chip_prompts,
             seed_spread=args.seed_spread,
             ramp=args.ramp,
+            # The panel UI has no controls for ramp_lo/ramp_hi, so without an
+            # explicit value here run_subprocess()'s defaults (0.0, 1.0) would
+            # apply — giving chip 0 a temporal/motion alpha of exactly 0.0
+            # (fully disabled attention/adapter blend), a degenerate render.
+            # Forward sensible non-zero bounds so every chip gets some effect.
+            ramp_lo=0.2,
+            ramp_hi=0.9,
             stitch_order=args.stitch_order,
         )
 

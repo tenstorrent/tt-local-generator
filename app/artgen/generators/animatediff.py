@@ -620,13 +620,18 @@ def run_subprocess(
     ramp_hi: float = 1.0,
     stitch_order: str = "interleave",
 ) -> tuple[bool, str]:
-    """Run the unified generate.py, using all available Blackhole chips in parallel.
+    """Run the unified generate.py, optionally spreading work across Blackhole chips.
 
-    Multi-chip strategy: N separate processes, one per chip (--device-id 0..N-1).
-    Each process generates frames//N consecutive frames from the same prompt and
-    seed, then their GIF shards are concatenated in order.  This is frame-level
-    data parallelism — each chip runs a full independent denoising run on its
-    slice, not tensor-parallelism within a single UNet call.
+    Multi-chip strategy: N separate processes, one per chip (--device-id 0..N-1),
+    coordinated per `multichip_mode` — there is no single "consecutive frame
+    slice" model. Off runs one chip; Remix has each chip render its OWN
+    independent clip (different seed/prompt/alpha) which are then stitched
+    together (interleaved or concatenated); Coherent runs chips sequentially,
+    each rendering the full frame count and latent-chaining from the previous
+    segment, producing one continuous animation N segments longer. See the
+    `multichip_mode` breakdown below for details. In every case this is
+    process-level parallelism/sequencing — each chip runs a full independent
+    denoising run, never tensor-parallelism within a single UNet call.
 
     Background: the SD demo UNet (wormhole) calls ttnn.to_torch() without a
     mesh_composer in its weight-loading path, so ShardTensorToMesh across a
@@ -648,10 +653,17 @@ def run_subprocess(
       - "coherent" — chips are NOT used in parallel; instead num_chips becomes
                      the segment count for `_run_coherent_chain`, which runs
                      segments sequentially on one chip, latent-chaining each
-                     from the previous for visual continuity.
-    Guards (all required for "remix"/"coherent" to engage; same as the old
-    `use_multi` gate):
-      - frames must be divisible by num_chips (falls back to single-chip if not)
+                     from the previous for visual continuity. Each segment
+                     renders the FULL `frames` count (not frames/num_segments),
+                     so the total output is `num_segments * frames` — Coherent
+                     produces a continuous animation N× LONGER than a single
+                     run, not the same length split into pieces.
+    Guards (required for either mode to engage; same as the old `use_multi`
+    gate, except the divisibility requirement is remix-only — see below):
+      - "remix" additionally requires frames to be divisible by num_chips,
+        since remix splits/stitches shard frames sized frames/num_chips each
+        (falls back to single-chip if not divisible; coherent has no such
+        requirement since every segment renders the full `frames` count)
       - chain_from/chain_save are single-chip only (fall back to single-chip)
 
     `script`, if given, overrides the auto-resolved generate.py path and skips
@@ -694,24 +706,31 @@ def run_subprocess(
 
     # ── Decide: multi-chip (remix/coherent) or single-chip ────────────────────
     # Replaces the old `use_multi` gate. Multi-chip requires blackhole + no pin
-    # + >1 chip + divisible frames + no chain continuity; `multichip_mode` then
-    # chooses remix (independent per-chip clips, stitched) vs coherent
-    # (sequential latent-chained segments) vs off (ignore num_chips entirely).
+    # + >1 chip + no chain continuity; `multichip_mode` then chooses remix
+    # (independent per-chip clips, stitched) vs coherent (sequential
+    # latent-chained segments) vs off (ignore num_chips entirely).
+    #
+    # The frames-divisible-by-chips requirement is REMIX-ONLY: remix splits
+    # `frames` into `frames // num_chips`-sized shards, one per chip, so an
+    # uneven split would silently drop frames. Coherent has no such
+    # constraint — every segment renders the FULL `frames` count (see
+    # `_run_coherent_chain`), so it routes regardless of divisibility.
     effective_chips = num_chips if (num_chips and num_chips > 1) else 1
-    _multi_ok = (
+    _base_ok = (
         mode == "blackhole"
         and device_id is None
         and effective_chips > 1
-        and frames % effective_chips == 0
         # chain continuity only makes sense on a single chip for now
         and chain_from is None
         and chain_save is None
     )
+    _remix_divisible = frames % effective_chips == 0
+    _multi_ok = _base_ok and (multichip_mode != "remix" or _remix_divisible)
 
-    if mode == "blackhole" and device_id is None and effective_chips > 1 and frames % effective_chips != 0:
+    if _base_ok and multichip_mode == "remix" and not _remix_divisible:
         _log.warning(
             "frames=%d is not divisible by num_chips=%d — falling back to single chip. "
-            "Choose a frame count divisible by %d for multi-chip: %s",
+            "Choose a frame count divisible by %d for multi-chip remix: %s",
             frames, effective_chips, effective_chips,
             [effective_chips * k for k in range(1, 9)],
         )
@@ -849,9 +868,8 @@ def _run_multi_chip(
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
     """
-    assert len(chips) == num_chips, (
-        f"caller/plan mismatch: got {len(chips)} ChipParams for num_chips={num_chips}"
-    )
+    if len(chips) != num_chips:
+        raise ValueError(f"chips/num_chips mismatch: {len(chips)} vs {num_chips}")
 
     import tempfile
 
@@ -1036,13 +1054,16 @@ def _run_coherent_chain(
     own unrelated clip), Coherent mode is inherently sequential: segment N
     needs segment N-1's saved latents before it can start, so segments run
     one after another on a single chip rather than in parallel processes.
+
+    Each segment renders the FULL `frames` count — Coherent is a continuous
+    animation N segments LONGER than a single run, not the same length
+    divided into pieces. Total output frame count is `num_segments * frames`.
     """
     import tempfile
 
-    frames_per_seg = frames // num_segments
     tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_coherent_"))
     segs = build_coherent_segments(num_segments=num_segments,
-                                   frames_per_segment=frames_per_seg, base_seed=seed)
+                                   frames_per_segment=frames, base_seed=seed)
     # Precompute every segment's GIF/latent path up front (mirrors
     # _run_multi_chip's shard_paths) so the finally-block cleanup below can
     # remove them all regardless of which segment (if any) fails partway
@@ -1050,9 +1071,10 @@ def _run_coherent_chain(
     seg_paths = [tmp_dir / f"seg_{s['index']}.gif" for s in segs]
     latent_paths = [tmp_dir / f"seg_{s['index']}.pt" for s in segs]
 
+    total_frames = frames * num_segments
     _log.info(
-        "coherent run_id=%s segments=%d frames=%d (%d/segment) tmp=%s",
-        run_id, num_segments, frames, frames_per_seg, tmp_dir,
+        "coherent run_id=%s segments=%d frames=%d/segment (%d total) tmp=%s",
+        run_id, num_segments, frames, total_frames, tmp_dir,
     )
 
     try:
@@ -1083,7 +1105,7 @@ def _run_coherent_chain(
                 prev_latent = latent_out
 
         if on_progress:
-            on_progress(f"All {num_segments} segments done — stitching {frames} frames…")
+            on_progress(f"All {num_segments} segments done — stitching {total_frames} frames…")
 
         if not _stitch_gifs(seg_paths, out_path):
             return False, "coherent stitch failed"
@@ -1091,7 +1113,8 @@ def _run_coherent_chain(
         if not out_path.exists():
             return False, "Stitch reported success but output file missing"
 
-        _log.info("coherent run_success run_id=%s segments=%d out=%s", run_id, num_segments, out_path)
+        _log.info("coherent run_success run_id=%s segments=%d total_frames=%d out=%s",
+                  run_id, num_segments, total_frames, out_path)
         return True, ""
     finally:
         # Best-effort cleanup of per-segment shard GIFs and chained latent

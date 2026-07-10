@@ -231,6 +231,36 @@ class TestModeRouting:
         )
         assert "coherent" in calls
         assert calls["coherent"]["num_segments"] == 4
+        # Coherent must be N×-longer, not the same length divided: each
+        # segment renders the FULL requested frame count, so `frames` must
+        # reach _run_coherent_chain unchanged (not frames // num_segments).
+        assert calls["coherent"]["frames"] == 16
+
+    def test_coherent_routes_even_when_frames_not_divisible_by_chips(self, monkeypatch, tmp_path):
+        # The frames % num_chips == 0 guard is a REMIX-only constraint (remix
+        # splits `frames` into per-chip shards). Coherent renders the full
+        # frame count per segment, so it must route regardless of divisibility.
+        calls = self._common(monkeypatch)
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=15, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="coherent",
+        )
+        assert "coherent" in calls
+        assert calls["coherent"]["num_segments"] == 4
+        assert calls["coherent"]["frames"] == 15
+
+    def test_remix_falls_back_to_single_chip_when_frames_not_divisible(self, monkeypatch, tmp_path):
+        # Remix DOES require divisibility — non-divisible frames must fall
+        # through to the single-chip path instead of routing to _run_multi_chip.
+        calls = self._common(monkeypatch)
+        monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (True, ""))
+        ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=15, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="remix",
+        )
+        assert "remix" not in calls and "coherent" not in calls
 
     def test_off_does_not_route_multichip(self, monkeypatch, tmp_path):
         calls = self._common(monkeypatch)
