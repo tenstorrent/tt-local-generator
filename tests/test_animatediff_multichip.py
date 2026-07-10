@@ -65,6 +65,13 @@ class TestRemixPlan:
 
 
 class TestStitch:
+    @pytest.fixture(autouse=True)
+    def _need_pil(self):
+        # CI runs without Pillow; these stitch tests (and _stitch_gifs itself)
+        # require it. Skip rather than hard-fail — matches the repo convention
+        # for other Pillow-dependent tests (see test_forge_plugins.py).
+        pytest.importorskip("PIL")
+
     def _make_gif(self, path, n, color, duration=80):
         """Build an n-frame GIF where every frame's center pixel is exactly
         `color` (what the tests check), but frames are not pixel-identical to
@@ -188,6 +195,9 @@ class TestModeRouting:
         monkeypatch.setattr(ad, "_run_multi_chip", lambda **k: calls.setdefault("remix", k) or (True, ""))
         monkeypatch.setattr(ad, "_run_coherent_chain", lambda **k: calls.setdefault("coherent", k) or (True, ""))
         monkeypatch.setattr(ad, "check_hardware", lambda: (True, "bh", 4))
+        # run_subprocess early-returns if the tt-metal Python env is missing
+        # (true in CI). Point it at a path that always exists so routing runs.
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
         return calls
 
     def test_remix_routes_to_multi_chip_with_plan(self, monkeypatch, tmp_path):
