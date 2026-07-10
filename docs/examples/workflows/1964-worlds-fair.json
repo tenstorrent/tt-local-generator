@@ -58,7 +58,7 @@
       "template": "{caption}, 1964 World's Fair, Unisphere, retro-futuristic, Kodachrome, cinematic slow push-in",
       "caption":  ["2", "caption"]
     },
-    "outputs": ["video_prompt"]
+    "outputs": ["prompt"]
   },
 
   "6": {
@@ -88,7 +88,7 @@
       "max_tokens": 120,
       "server": "http://localhost:8002"
     },
-    "outputs": ["poem"]
+    "outputs": ["text"]
   },
 
   "8": {
@@ -104,7 +104,7 @@
       "seed":    1965,
       "server":  "http://localhost:8000"
     },
-    "outputs": ["image2_path"]
+    "outputs": ["image_path"]
   },
 
   "9": {
