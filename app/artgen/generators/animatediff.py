@@ -336,36 +336,98 @@ def _build_cmd(
     return cmd
 
 
-def _stitch_gifs(shard_paths: list[Path], out_path: Path) -> bool:
-    """Concatenate GIF frames from multiple chip shards into a single output GIF.
+def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = False) -> bool:
+    """Combine GIF frames from multiple chip shards into a single output GIF.
 
     Each shard contains consecutive frames from one chip (chip 0 → frames 0..K-1,
-    chip 1 → frames K..2K-1, etc.). Correct stitching is simple concatenation in
-    chip order, NOT interleaving.
+    chip 1 → frames K..2K-1, etc.).
+
+    Ordering:
+      - interleave=False (default): frames are concatenated in chip order —
+        shard 0's frames, then shard 1's, etc. This is correct when every chip
+        renders the *same* seed (deterministic chips produce identical frames
+        for identical seeds, so chip order == temporal order of the full clip).
+      - interleave=True: frames are round-robined across shards (shard0[0],
+        shard1[0], shard2[0], ..., shard0[1], shard1[1], ...), skipping shards
+        once they run out of frames. This reproduces the "glitchy" look from
+        the original (buggy) stitcher when chips are seeded differently on
+        purpose — each output frame hops between distinct per-chip renders.
+
+    Frames are preserved as RGB (not palette-native) so all shards can share a
+    single output palette (quantized from a composite sample of every frame),
+    avoiding banding from re-quantizing every frame independently. Per-frame
+    `duration` is preserved from each source frame, in its position in the
+    final ordering.
 
     Returns True on success. Leaves out_path untouched on failure.
     """
     try:
         from PIL import Image
 
-        # Collect all frames from each shard in chip order
-        all_frames: list[Image.Image] = []
+        # Collect each shard's frames + durations separately so both orderings
+        # (concatenate vs interleave) can be built from the same data.
+        per_shard_frames: list[list[Image.Image]] = []
+        per_shard_durs: list[list[int]] = []
         for p in shard_paths:
+            shard_frames: list[Image.Image] = []
+            shard_durs: list[int] = []
             with Image.open(p) as img:
+                default_dur = int(img.info.get("duration", 100) or 100)
                 for i in range(getattr(img, "n_frames", 1)):
                     img.seek(i)
-                    all_frames.append(img.copy().convert("RGBA"))
+                    shard_frames.append(img.copy().convert("RGB"))
+                    shard_durs.append(int(img.info.get("duration", default_dur) or default_dur))
+            per_shard_frames.append(shard_frames)
+            per_shard_durs.append(shard_durs)
 
-        interleaved = all_frames
+        if interleave:
+            import itertools
 
-        if not interleaved:
+            # Pair each shard's frames with their own durations up front, so
+            # zip_longest can walk both in lockstep without any index lookups
+            # back into the per_shard_* lists.
+            per_shard_pairs = [
+                list(zip(frames, durs))
+                for frames, durs in zip(per_shard_frames, per_shard_durs)
+            ]
+            ordered: list[Image.Image] = []
+            ordered_durs: list[int] = []
+            for tup in itertools.zip_longest(*per_shard_pairs):
+                for pair in tup:
+                    if pair is not None:
+                        fr, dur = pair
+                        ordered.append(fr)
+                        ordered_durs.append(dur)
+        else:
+            ordered = [f for shard in per_shard_frames for f in shard]
+            ordered_durs = [d for shard in per_shard_durs for d in shard]
+
+        if not ordered:
             return False
 
+        # Shared palette: quantize a composite sampled from EVERY frame, then
+        # apply that one palette to all frames. This keeps colors consistent
+        # across shard boundaries (avoids per-frame re-quantization banding)
+        # without crushing later frames' colors. Building the palette from
+        # frame 0 alone (as a naive "shared palette" might) is a real trap:
+        # if frame 0 is a narrow-gamut chip render (e.g. mostly one hue),
+        # its quantized palette only contains colors it happened to use, and
+        # every subsequent frame gets remapped to its NEAREST available
+        # color — silently crushing distinct colors from other chips/frames
+        # onto whatever frame 0 contained. Sampling all frames avoids that.
+        thumb = (64, 64)
+        composite = Image.new("RGB", (thumb[0], thumb[1] * len(ordered)))
+        for i, fr in enumerate(ordered):
+            composite.paste(fr.resize(thumb), (0, i * thumb[1]))
+        palette_src = composite.quantize(colors=256)
+        quantized = [f.quantize(palette=palette_src) for f in ordered]
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        interleaved[0].save(
+        quantized[0].save(
             out_path,
             save_all=True,
-            append_images=interleaved[1:],
+            append_images=quantized[1:],
+            duration=ordered_durs,
             loop=0,
             format="GIF",
         )

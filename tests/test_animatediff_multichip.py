@@ -62,3 +62,64 @@ class TestRemixPlan:
         )
         assert [round(c.motion_adapter_alpha, 3) for c in plan] == [0.2, 0.6, 1.0]
         assert all(c.temporal_alpha == 0.3 for c in plan)
+
+
+class TestStitch:
+    def _make_gif(self, path, n, color, duration=80):
+        """Build an n-frame GIF where every frame's center pixel is exactly
+        `color` (what the tests check), but frames are not pixel-identical to
+        each other. Pillow's GIF encoder silently merges consecutive frames
+        that ARE pixel-identical (summing their duration into one frame), so
+        an all-solid-color fixture would collapse to far fewer frames than
+        requested — a stitching would never intentionally produce, but a
+        naive fixture would. A distinct corner-pixel marker per frame index
+        avoids that collapse without affecting the center-pixel assertions.
+        """
+        from PIL import Image
+        frames = []
+        for i in range(n):
+            img = Image.new("RGB", (8, 8), color)
+            img.putpixel((0, 0), (i * 37 % 256, i * 37 % 256, i * 37 % 256))
+            frames.append(img)
+        frames[0].save(path, save_all=True, append_images=frames[1:],
+                       duration=duration, loop=0, format="GIF")
+
+    def test_concatenates_in_order_and_preserves_duration(self, tmp_path):
+        a = tmp_path / "a.gif"; b = tmp_path / "b.gif"; out = tmp_path / "out.gif"
+        self._make_gif(a, 3, (200, 0, 0), duration=80)
+        self._make_gif(b, 2, (0, 0, 200), duration=80)
+        assert ad._stitch_gifs([a, b], out) is True
+        from PIL import Image
+        with Image.open(out) as img:
+            assert img.n_frames == 5                       # 3 + 2, concatenated
+            img.seek(0)
+            assert img.info.get("duration") == 80          # duration preserved
+
+    def test_interleave_round_robins_frames(self, tmp_path):
+        a = tmp_path / "a.gif"; b = tmp_path / "b.gif"; out = tmp_path / "out.gif"
+        self._make_gif(a, 2, (200, 0, 0), duration=80)   # red
+        self._make_gif(b, 2, (0, 0, 200), duration=80)   # blue
+        assert ad._stitch_gifs([a, b], out, interleave=True) is True
+        from PIL import Image
+        with Image.open(out) as img:
+            assert img.n_frames == 4
+            expected = [(200, 0, 0), (0, 0, 200), (200, 0, 0), (0, 0, 200)]
+            for i, exp in enumerate(expected):
+                img.seek(i)
+                px = img.convert("RGB").getpixel((4, 4))
+                assert px == exp, f"frame {i}: expected {exp}, got {px}"
+
+    def test_interleave_unequal_lengths(self, tmp_path):
+        a = tmp_path / "a.gif"; b = tmp_path / "b.gif"; out = tmp_path / "out.gif"
+        self._make_gif(a, 3, (200, 0, 0), duration=80)   # red, 3 frames
+        self._make_gif(b, 1, (0, 0, 200), duration=80)   # blue, 1 frame
+        assert ad._stitch_gifs([a, b], out, interleave=True) is True
+        from PIL import Image
+        with Image.open(out) as img:
+            assert img.n_frames == 4
+            # order: A0, B0, A1, A2 (B exhausted after its single frame)
+            expected = [(200, 0, 0), (0, 0, 200), (200, 0, 0), (200, 0, 0)]
+            for i, exp in enumerate(expected):
+                img.seek(i)
+                px = img.convert("RGB").getpixel((4, 4))
+                assert px == exp, f"frame {i}: expected {exp}, got {px}"
