@@ -374,3 +374,37 @@ def test_main_output_dir_defaults_to_none(monkeypatch):
     monkeypatch.setattr(eng, "run", fake_run)
     eng.main([str(_FIX)])
     assert captured["output_dir"] is None
+
+
+# ---- Task 4: real 1964 World's Fair spec — dry-run + wiring (Milestone-1 gate) ----
+#
+# docs/examples/workflows/1964-worlds-fair.json is the real spec exercised by
+# bin/run_workflow.sh. Unlike the mini fixture, it has 9 nodes and exercises
+# nested-wire resolution (node 9's artifacts[]/metadata). This test loads the
+# actual file (not a fixture copy) so it fails the moment the spec's wire keys
+# drift from the engine's generic per-class-type output contract.
+
+_REAL_SPEC = (Path(__file__).parent.parent / "docs" / "examples" / "workflows"
+              / "1964-worlds-fair.json")
+
+
+@pytest.mark.skipif(not _REAL_SPEC.exists(),
+                     reason="1964-worlds-fair.json not present")
+def test_1964_worlds_fair_dry_run():
+    spec = eng.load_spec(str(_REAL_SPEC))
+    order = eng.topo_order(spec)
+
+    # 1 -> 2 -> 5 -> 6 (image -> caption -> compose -> video)
+    assert order.index("1") < order.index("2") < order.index("5") < order.index("6")
+    # node 9 (TTLGAddToPlaylist) collects from every other node — must run last.
+    for src in ("1", "3", "4", "6", "7", "8", "2"):
+        assert order.index(src) < order.index("9")
+
+    r = eng.run(spec, dry_run=True, emit=lambda s: None)
+
+    assert r["1"]["image_path"]
+    assert r["6"]["video_path"]
+    assert r["8"]["image_path"]
+    assert r["7"]["text"]          # the poem
+    assert r["9"]["playlist_id"]   # nested artifacts[]/metadata wires resolved
+                                    # without KeyError

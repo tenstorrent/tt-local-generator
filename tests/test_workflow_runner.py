@@ -111,20 +111,6 @@ _skip_no_spec = pytest.mark.skipif(
 
 @_skip_no_shell
 @_skip_no_spec
-@pytest.mark.xfail(
-    reason=(
-        "Known Task-4 issue: run_workflow.sh is now a thin shim over "
-        "app/pipeline_engine.py (Task 3), and the engine resolves wires by "
-        "the exact key a handler returns (e.g. TTLGPromptCompose emits "
-        "'prompt'), not by the spec's decorative 'outputs' list (e.g. "
-        "'video_prompt'). docs/examples/workflows/1964-worlds-fair.json still "
-        "uses the old bash script's instance-specific output names "
-        "(video_prompt/poem/image2_path) instead of the engine's generic "
-        "per-class-type contract. Task 4 normalizes the spec's wire keys; "
-        "until then --dry-run fails partway through (currently at node 6)."
-    ),
-    strict=False,
-)
 def test_dry_run_exits_zero(tmp_path):
     """
     run_workflow.sh --dry-run must exit 0 for the builtin example workflow.
@@ -396,7 +382,7 @@ def test_apply_overrides_with_real_spec():
         # Metadata keys preserved
         assert "_description" in data
         # Other nodes untouched
-        assert data["8"]["inputs"]["prompt"] == ["7", "poem"], (
+        assert data["8"]["inputs"]["prompt"] == ["7", "text"], (
             "Node 8's inter-node wire must remain as-is after override"
         )
     finally:

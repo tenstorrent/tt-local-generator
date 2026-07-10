@@ -66,7 +66,7 @@
     "_comment": "SkyReels I2V: animate the seed image with the composed prompt",
     "inputs": {
       "model":   "SkyReels-V2-I2V-14B-540P",
-      "prompt":  ["5", "video_prompt"],
+      "prompt":  ["5", "prompt"],
       "image":   ["1", "image_path"],
       "width":   960,
       "height":  544,
@@ -96,7 +96,7 @@
     "_comment": "FLUX.1-schnell: generate a second image from the poem as prompt",
     "inputs": {
       "model":   "FLUX.1-schnell",
-      "prompt":  ["7", "poem"],
+      "prompt":  ["7", "text"],
       "negative_prompt": "blurry, low quality, digital artifacts",
       "width":   1024,
       "height":  1024,
@@ -117,11 +117,11 @@
         {"label": "Foreground mask", "path": ["3", "fg_path"],     "type": "image"},
         {"label": "Depth map",       "path": ["4", "depth_path"],  "type": "image"},
         {"label": "World's Fair video", "path": ["6", "video_path"], "type": "video"},
-        {"label": "Poem image",      "path": ["8", "image2_path"], "type": "image"}
+        {"label": "Poem image",      "path": ["8", "image_path"], "type": "image"}
       ],
       "metadata": {
         "caption": ["2", "caption"],
-        "poem":    ["7", "poem"]
+        "poem":    ["7", "text"]
       }
     },
     "outputs": ["playlist_id"]
