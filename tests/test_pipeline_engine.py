@@ -38,6 +38,55 @@ def test_resolve_inputs_substitutes_wires():
     out = eng.resolve_inputs({"caption": ["1", "image_path"], "lit": 5}, results)
     assert out == {"caption": "/tmp/x.png", "lit": 5}
 
+
+# ── nested-wire support (Fix 1) ──────────────────────────────────────────────
+# The 1964 spec's TTLGAddToPlaylist node nests wires inside a list-of-dicts
+# ("artifacts") and a dict ("metadata"). These must be detected as deps by
+# topo_order and resolved by resolve_inputs, just like top-level wires.
+
+_NESTED_SPEC = {
+    "1": {"class_type": "TTLGTextToImage", "inputs": {}},
+    "2": {"class_type": "TTLGRemoveBackground", "inputs": {}},
+    "3": {"class_type": "TTLGCaptionImage", "inputs": {}},
+    # Node id "0" sorts alphabetically BEFORE its wired sources ("1", "2", "3").
+    # Kahn's algorithm processes ready nodes in sorted order, so if the nested
+    # wires below are not detected as deps, "0" would (wrongly) run first —
+    # this makes the ordering assertion a genuine regression test rather than
+    # one that happens to pass due to id ordering coincidence.
+    "0": {"class_type": "TTLGAddToPlaylist", "inputs": {
+        "playlist_name": "fair",
+        "artifacts": [
+            {"label": "a", "path": ["1", "image_path"], "type": "image"},
+            {"label": "b", "path": ["2", "fg_path"], "type": "image"},
+        ],
+        "metadata": {"cap": ["3", "caption"]},
+    }},
+}
+
+
+def test_topo_order_detects_nested_wire_deps():
+    order = eng.topo_order(_NESTED_SPEC)
+    for src in ("1", "2", "3"):
+        assert order.index(src) < order.index("0")
+
+
+def test_resolve_inputs_resolves_nested_wires():
+    results = {
+        "1": {"image_path": "/img1.png"},
+        "2": {"fg_path": "/fg2.png"},
+        "3": {"caption": "a caption"},
+    }
+    out = eng.resolve_inputs(_NESTED_SPEC["0"]["inputs"], results)
+    assert out["playlist_name"] == "fair"
+    assert out["artifacts"] == [
+        {"label": "a", "path": "/img1.png", "type": "image"},
+        {"label": "b", "path": "/fg2.png", "type": "image"},
+    ]
+    assert out["metadata"] == {"cap": "a caption"}
+    # original inputs dict must not be mutated
+    assert _NESTED_SPEC["0"]["inputs"]["artifacts"][0]["path"] == ["1", "image_path"]
+    assert _NESTED_SPEC["0"]["inputs"]["metadata"]["cap"] == ["3", "caption"]
+
 def test_dry_run_emits_signals_and_publishes_keys():
     spec = eng.load_spec(str(_FIX))
     lines = []
@@ -58,6 +107,34 @@ def _ctx(tmp="/tmp/out", dry=False, emit=None):
 
 
 # ---- TTLGTextToImage ----
+
+# ── _media_image_request backoff fidelity (Fix 2) ────────────────────────────
+# bin/run_workflow.sh:218-223 backs off 10s on ANY non-success submit outcome
+# (empty response, missing id, HTTP error, exception) — not just exceptions.
+
+def test_media_image_request_backs_off_on_missing_id(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(eng.time, "sleep", lambda s: sleeps.append(s))
+
+    calls = {"post": 0}
+
+    def fake_post(url, payload, timeout=30):
+        calls["post"] += 1
+        if calls["post"] == 1:
+            return {}  # 200 OK but no "id" — should trigger backoff, not immediate retry
+        return {"id": "job1"}
+
+    monkeypatch.setattr(eng, "_post_json", fake_post)
+    monkeypatch.setattr(eng, "_get_json", lambda url, timeout=30: {"status": "completed"})
+    monkeypatch.setattr(eng, "_download", lambda url, out_path, timeout=300: None)
+
+    out = eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                                    steps=4, seed=0, out_path="/tmp/out.png")
+    assert out == "/tmp/out.png"
+    assert calls["post"] == 2
+    # The 10s backoff must have fired even though no exception was raised.
+    assert sleeps.count(10) == 1
+
 
 def test_text_to_image_dry_run_key():
     out = eng.HANDLERS["TTLGTextToImage"]("1", {"prompt": "x"}, _ctx(dry=True))

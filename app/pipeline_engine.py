@@ -26,6 +26,44 @@ def _is_wire(v) -> bool:
     return isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)
 
 
+def _wire_deps(v) -> "set[str]":
+    """Recursively collect source-node ids from wires nested in *v*.
+
+    Some node inputs (e.g. TTLGAddToPlaylist's ``artifacts``/``metadata``)
+    nest wires inside lists/dicts rather than at the top level. Walk the
+    value tree and collect every wire's source id, checking `_is_wire` BEFORE
+    the generic list branch since a wire is itself a 2-element list.
+    """
+    if _is_wire(v):
+        return {v[0]}
+    if isinstance(v, list):
+        deps: "set[str]" = set()
+        for item in v:
+            deps |= _wire_deps(item)
+        return deps
+    if isinstance(v, dict):
+        deps = set()
+        for item in v.values():
+            deps |= _wire_deps(item)
+        return deps
+    return set()
+
+
+def _resolve_value(v, results: dict):
+    """Recursively rebuild *v* with every nested wire replaced by its value.
+
+    Mirrors `_wire_deps`'s traversal order/precedence exactly (wire check
+    before the generic list branch) and never mutates the input structure.
+    """
+    if _is_wire(v):
+        return results[v[0]][v[1]]
+    if isinstance(v, list):
+        return [_resolve_value(item, results) for item in v]
+    if isinstance(v, dict):
+        return {k: _resolve_value(item, results) for k, item in v.items()}
+    return v
+
+
 def load_spec(path: str) -> dict:
     raw = json.loads(Path(path).read_text())
     return {k: v for k, v in raw.items()
@@ -37,8 +75,7 @@ def topo_order(spec: dict) -> "list[str]":
     deps = {nid: set() for nid in spec}
     for nid, node in spec.items():
         for v in node.get("inputs", {}).values():
-            if _is_wire(v):
-                src = v[0]
+            for src in _wire_deps(v):
                 if src not in spec:
                     raise ValueError(f"node {nid} wires to missing node {src}")
                 deps[nid].add(src)
@@ -57,10 +94,7 @@ def topo_order(spec: dict) -> "list[str]":
 
 
 def resolve_inputs(inputs: dict, results: dict) -> dict:
-    out = {}
-    for k, v in inputs.items():
-        out[k] = results[v[0]][v[1]] if _is_wire(v) else v
-    return out
+    return {k: _resolve_value(v, results) for k, v in inputs.items()}
 
 
 class _Ctx:
@@ -130,17 +164,20 @@ def _media_image_request(*, server, prompt, width, height, steps, seed,
     if negative_prompt:
         payload["negative_prompt"] = negative_prompt
 
-    # Fix 4 (bash): retry submission up to 3× with 10 s backoff.
+    # Fix 4 (bash): retry submission up to 3× with 10 s backoff on ANY
+    # non-success outcome — empty response, missing "id", or a raised
+    # exception — not just exceptions (bin/run_workflow.sh:218-223).
     job = None
     for attempt in (1, 2, 3):
         try:
             resp = _post_json(f"{server}/v1/images/generations", payload)
             job = resp.get("id")
-            if job:
-                break
-        except Exception as e:  # noqa: BLE001 — mirror bash's broad catch
-            if attempt < 3:
-                time.sleep(10)
+        except Exception:  # noqa: BLE001 — mirror bash's broad catch
+            job = None
+        if job:
+            break
+        if attempt < 3:
+            time.sleep(10)
     if not job:
         raise RuntimeError("image job submission failed after 3 attempts")
 
