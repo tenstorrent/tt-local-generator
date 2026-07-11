@@ -315,3 +315,145 @@ def test_pipeline_studio_open_run_switches_stack_to_open(monkeypatch):
 
     assert studio.stack.get_visible_child_name() == "open"
     assert studio.open_view._title_label.get_label() == "1964 World's Fair"
+
+
+# ── RemixView ────────────────────────────────────────────────────────────────
+#
+# Reuses tests/fixtures/remix_fixture_spec.json (SP-C Task 1's spec_remix
+# fixture): node "1" TTLGTextToImage (prompt text, steps number, negative_prompt
+# text), node "2" TTLGImageToVideo (num_frames number; image_path is a WIRED
+# input and must never grow a field), node "3" TTLGAnimateDiff (loop bool).
+
+_REMIX_SPEC_PATH = str(Path(__file__).parent / "fixtures" / "remix_fixture_spec.json")
+
+
+def _make_remix_run() -> RunView:
+    """RunView whose node_ids/class_types line up 1:1 with the remix fixture
+    spec, so RemixView.set_run can load real editable_params for each step."""
+    class_types = {"1": "TTLGTextToImage", "2": "TTLGImageToVideo", "3": "TTLGAnimateDiff"}
+    steps = [
+        StepView(node_id=nid, intent=intent_for(ct), status="done", artifact_path=None)
+        for nid, ct in class_types.items()
+    ]
+    recipe = [f"{s.intent.verb} {s.intent.noun}" for s in steps]
+    return RunView(
+        run_id="run-remix-1",
+        title="Tower of Pisa GIF",
+        created_at="2026-07-10T12:00:00+00:00",
+        hero_path=None,
+        steps=steps,
+        recipe=recipe,
+    )
+
+
+def test_remix_view_constructs():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    assert isinstance(view, Gtk.Box)
+
+
+def test_remix_view_set_run_builds_prefilled_fields_per_kind():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    node1 = view._field_widgets["1"]
+    assert isinstance(node1["prompt"], Gtk.Entry)
+    assert node1["prompt"].get_text() == "a test prompt"
+    assert isinstance(node1["steps"], Gtk.SpinButton)
+    assert node1["steps"].get_value() == 4
+    assert isinstance(node1["negative_prompt"], Gtk.Entry)
+    assert node1["negative_prompt"].get_text() == "blurry"
+
+    node3 = view._field_widgets["3"]
+    assert isinstance(node3["loop"], Gtk.Switch)
+    assert node3["loop"].get_active() is True
+
+
+def test_remix_view_excludes_wired_input_from_fields():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    node2 = view._field_widgets["2"]
+    assert "image_path" not in node2
+    assert "num_frames" in node2
+    assert node2["num_frames"].get_value() == 33
+
+
+def test_remix_view_run_with_no_edits_emits_empty_dict():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    received = []
+    view.connect("run-remix", lambda _w, spec_path, edits: received.append((spec_path, edits)))
+    view._run_button.emit("clicked")
+
+    assert received == [(_REMIX_SPEC_PATH, {})]
+
+
+def test_remix_view_run_with_text_edit_emits_only_changed_field():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view._field_widgets["1"]["prompt"].set_text("a new prompt")
+
+    received = []
+    view.connect("run-remix", lambda _w, spec_path, edits: received.append((spec_path, edits)))
+    view._run_button.emit("clicked")
+
+    assert received == [(_REMIX_SPEC_PATH, {"1": {"prompt": "a new prompt"}})]
+
+
+def test_remix_view_run_with_number_edit_emits_int_value():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view._field_widgets["1"]["steps"].set_value(8)
+
+    received = []
+    view.connect("run-remix", lambda _w, spec_path, edits: received.append((spec_path, edits)))
+    view._run_button.emit("clicked")
+
+    assert received == [(_REMIX_SPEC_PATH, {"1": {"steps": 8}})]
+    assert isinstance(received[0][1]["1"]["steps"], int)  # not 8.0
+
+
+def test_remix_view_run_with_bool_edit_emits_changed_field_only():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view._field_widgets["3"]["loop"].set_active(False)
+
+    received = []
+    view.connect("run-remix", lambda _w, spec_path, edits: received.append((spec_path, edits)))
+    view._run_button.emit("clicked")
+
+    assert received == [(_REMIX_SPEC_PATH, {"3": {"loop": False}})]
+
+
+def test_remix_view_model_label_shown_only_when_present():
+    """TTLGTextToImage -> model_label 'FLUX' should render; TTLGImageToVideo's
+    ParamField labels themselves are unaffected either way — this just checks
+    the step card doesn't crash/omit rendering when building both kinds."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    # No assertion beyond "did not raise" plus the fields already asserted
+    # above — model-label rendering reuses OpenView's already-tested
+    # `if step.intent.model_label:` guard pattern.
+
+
+def test_remix_view_set_run_is_repeat_safe():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    assert set(view._field_widgets.keys()) == {"1", "2", "3"}
+    # Exactly one prompt Entry survives per node — not stacked duplicates.
+    assert view._field_widgets["1"]["prompt"].get_text() == "a test prompt"

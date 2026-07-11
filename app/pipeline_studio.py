@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 """
-Pipeline Studio — Discover view + shell (SP-C Phase 1, Task 3).
+Pipeline Studio — Discover/Open views, RemixView, and shell
+(SP-C Phase 1 Tasks 3-4, SP-C Phase 2a Task 2).
 
 Pipeline Studio's "front door": browse already-run pipelines as plain-language
 intent recipes ("Generate an image → Describe it → Film it → ...") instead of
@@ -10,7 +11,7 @@ finished runs. Layout follows the validated mockup at
 `.superpowers/brainstorm/988333-1783804257/content/discover-gallery.html`:
 one big featured "hero" card (the most recent run) + a grid of the rest.
 
-Two pieces:
+Four pieces:
 
 `DiscoverView(Gtk.Box)`
     Renders the hero + grid from a plain `list[RunView]` handed in via
@@ -35,6 +36,19 @@ Two pieces:
     Phase 1 wiring (PipelineStudio, below) treats this as a stub — "coming in
     the editor (Phase 2)" — not an actual editor.
 
+`RemixView(Gtk.Box)`
+    The "change one thing, safely" edit surface (SP-C Phase 2a Task 2): each
+    step renders as an intent card with its `spec_remix.editable_params`
+    fields inline, pre-filled with the run's current values, plus a single
+    "Run this remix →" button. Layout follows the validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/intent-composer.html`.
+    Data arrives ONLY through `set_run(run, spec_path)` — like Discover/
+    OpenView, no `PipelineStore` import here (it does load the spec file
+    itself via `pipeline_engine.load_spec`, which is pure spec-file IO, not a
+    store/history access). Emits `run-remix` (str spec_path, object edits)
+    where `edits` is `{node_id: {key: new_value}}` containing only fields the
+    user actually changed — an unmodified Run reproduces the base run.
+
 `PipelineStudio(Gtk.Box)`
     The shell: a Gtk.Stack with "discover" (DiscoverView) and "open"
     (OpenView, wrapped with a "← Discover" back control) pages. Loads runs
@@ -56,8 +70,10 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
+from pipeline_engine import load_spec  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
+from spec_remix import editable_params  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -232,6 +248,39 @@ _CSS = b"""
 .ps-remix-toast {
     color: #F6BC42;
     font-size: 12px;
+}
+.ps-remix-header {
+    background-color: #0d2b2a;
+    border: 1px solid alpha(#74C5DF, 0.16);
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+.ps-remix-safe {
+    font-size: 11.5px;
+    color: #bfe6d9;
+    background-color: alpha(#6FABA0, 0.16);
+    border: 1px solid alpha(#6FABA0, 0.32);
+    border-radius: 20px;
+    padding: 4px 10px;
+}
+.ps-field-key {
+    font-size: 10.5px;
+    color: #7fb0a8;
+}
+.ps-field-entry {
+    background-color: #071a19;
+    border: 1px solid alpha(#74C5DF, 0.35);
+    border-radius: 8px;
+    color: #eef8f6;
+    padding: 6px 9px;
+}
+.ps-remix-run-btn {
+    background-color: #1B8EB1;
+    color: #fff;
+    border-radius: 9px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 700;
 }
 """
 
@@ -607,6 +656,251 @@ class OpenView(Gtk.Box):
 
     def _on_remix_clicked(self, _button: Gtk.Button, node_id: str) -> None:
         self.emit("remix-request", node_id)
+
+
+class RemixView(Gtk.Box):
+    """Remix page: edit a run's plain-language params and re-run it.
+
+    "Change one thing, safely" (SP-C Phase 2a Task 2): every field is
+    PRE-FILLED with the base run's actual current value, so hitting Run with
+    zero edits reproduces the base run unchanged — the empty edits dict this
+    view emits in that case is a documented no-op for
+    `spec_remix.derive_spec`. Data arrives ONLY through `set_run()`: this
+    widget loads the spec via `pipeline_engine.load_spec` (pure spec-file IO,
+    no store/history) and lists its editable inputs via
+    `spec_remix.editable_params` (pure dict math) — it never imports or
+    touches `PipelineStore` itself, matching Discover/OpenView's rule.
+
+    Layout follows the validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/intent-composer.html`:
+    each step is an intent card (verb + noun, model as a quiet secondary
+    detail) with its editable fields inline, and a single prominent "Run this
+    remix →" button at the bottom.
+    """
+
+    __gsignals__ = {
+        # (spec_path, edits) — edits is {node_id: {key: new_value}}, containing
+        # ONLY fields the user actually changed from their pre-filled value.
+        "run-remix": (GObject.SignalFlags.RUN_FIRST, None, (str, object)),
+    }
+
+    def __init__(self) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add_css_class("ps-discover")  # same dark-teal page background
+        _apply_css()
+
+        self._spec_path: "str | None" = None
+        # Populated by set_run(), keyed by node_id then input key, in step/
+        # field order (Python dicts preserve insertion order). Two parallel
+        # dicts: the live widget (to read back the CURRENT value at Run time)
+        # and (kind, original_value) (to know what "changed" means for that
+        # widget's kind — see _read_widget_value/_collect_edits).
+        self._field_widgets: "dict[str, dict[str, Gtk.Widget]]" = {}
+        self._field_meta: "dict[str, dict[str, tuple]]" = {}
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.add_css_class("ps-remix-header")
+        header.set_margin_top(18)
+        header.set_margin_start(18)
+        header.set_margin_end(18)
+
+        self._title_label = Gtk.Label(label="")
+        self._title_label.set_xalign(0)
+        self._title_label.set_wrap(True)
+        self._title_label.add_css_class("ps-open-title")
+        self._title_label.set_hexpand(True)
+        header.append(self._title_label)
+
+        safe_pill = Gtk.Label(label="change one thing — the rest still runs")
+        safe_pill.add_css_class("ps-remix-safe")
+        header.append(safe_pill)
+        self.append(header)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        scroller.set_hexpand(True)
+        self.append(scroller)
+
+        self._steps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self._steps_box.set_margin_top(10)
+        self._steps_box.set_margin_bottom(10)
+        self._steps_box.set_margin_start(18)
+        self._steps_box.set_margin_end(18)
+        scroller.set_child(self._steps_box)
+
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        footer.set_margin_top(4)
+        footer.set_margin_bottom(18)
+        footer.set_margin_start(18)
+        footer.set_margin_end(18)
+        self._run_button = Gtk.Button(label="Run this remix →")
+        self._run_button.add_css_class("ps-remix-run-btn")
+        self._run_button.connect("clicked", self._on_run_clicked)
+        footer.append(self._run_button)
+        self.append(footer)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def set_run(self, run: RunView, spec_path: str) -> None:
+        """(Re)build the editable step list for *run*'s *spec_path*.
+
+        Main-thread only, repeat-safe (clears any prior children/state before
+        rebuilding, same pattern as DiscoverView.set_runs/OpenView.set_run).
+        """
+        self._spec_path = spec_path
+        self._title_label.set_label(f"Remixing · {run.title}")
+
+        while child := self._steps_box.get_first_child():
+            self._steps_box.remove(child)
+        self._field_widgets = {}
+        self._field_meta = {}
+
+        spec = load_spec(spec_path)
+        params_by_node = editable_params(spec)
+
+        if not run.steps:
+            empty = Gtk.Label(label="This run has no steps to remix.")
+            empty.add_css_class("ps-empty-msg")
+            self._steps_box.append(empty)
+            return
+
+        for index, step in enumerate(run.steps, start=1):
+            fields = params_by_node.get(step.node_id, [])
+            self._steps_box.append(self._build_step_card(index, step, fields))
+
+    # ── Row building ─────────────────────────────────────────────────────────
+
+    def _build_step_card(self, index: int, step: StepView, fields: list) -> Gtk.Widget:
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("ps-step")
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        n_label = Gtk.Label(label=str(index))
+        n_label.add_css_class("ps-step-n")
+        n_label.set_valign(Gtk.Align.START)
+        head.append(n_label)
+
+        verb_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        verb_label = Gtk.Label(label=step.intent.verb)
+        verb_label.set_xalign(0)
+        verb_label.add_css_class("ps-step-verb")
+        verb_col.append(verb_label)
+
+        noun_label = Gtk.Label(label=step.intent.noun)
+        noun_label.set_xalign(0)
+        noun_label.add_css_class("ps-step-noun")
+        verb_col.append(noun_label)
+
+        # model_label is a quiet secondary detail — omitted entirely (not
+        # shown blank) when the intent doesn't name an underlying tool,
+        # mirroring OpenView._build_step_row's identical guard.
+        if step.intent.model_label:
+            model_label = Gtk.Label(label=step.intent.model_label)
+            model_label.set_xalign(0)
+            model_label.add_css_class("ps-step-model")
+            verb_col.append(model_label)
+
+        head.append(verb_col)
+        card.append(head)
+
+        node_widgets: "dict[str, Gtk.Widget]" = {}
+        node_meta: "dict[str, tuple]" = {}
+        for field in fields:
+            row, widget = self._build_field_row(field)
+            card.append(row)
+            node_widgets[field.key] = widget
+            node_meta[field.key] = (field.kind, field.value)
+
+        if node_widgets:
+            self._field_widgets[step.node_id] = node_widgets
+            self._field_meta[step.node_id] = node_meta
+
+        return card
+
+    def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
+        """One label + editable widget row for a single ParamField.
+
+        Returns (row, widget) — the caller keeps the widget reference (keyed
+        by node_id/key) so Run-time diffing can read its current value; the
+        row is just what gets appended to the step card.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        key_label = Gtk.Label(label=field.label)
+        key_label.set_xalign(0)
+        key_label.add_css_class("ps-field-key")
+        key_label.set_size_request(120, -1)
+        row.append(key_label)
+
+        widget = self._build_field_widget(field)
+        widget.set_hexpand(True)
+        row.append(widget)
+        return row, widget
+
+    def _build_field_widget(self, field) -> Gtk.Widget:
+        """Kind -> widget, per the brief: Entry (text), SpinButton (number),
+        Switch (bool). `editable_params` never actually produces "choice"
+        today (it's reserved for a future enum-aware caller — see
+        spec_remix.ParamField's docstring) and a ParamField carries no
+        options list to build a real dropdown from, so "choice" falls back to
+        the same free-text Entry as "text"."""
+        if field.kind == "number":
+            # Wide-open bounds: a ParamField has no min/max metadata, so the
+            # SpinButton must accept whatever numeric value the base spec
+            # already has plus any reasonable adjustment either direction.
+            adjustment = Gtk.Adjustment(
+                value=float(field.value), lower=-1_000_000_000, upper=1_000_000_000,
+                step_increment=1, page_increment=10,
+            )
+            spin = Gtk.SpinButton(adjustment=adjustment)
+            spin.set_digits(0 if isinstance(field.value, int) else 3)
+            spin.set_value(float(field.value))
+            spin.add_css_class("ps-field-entry")
+            return spin
+        if field.kind == "bool":
+            switch = Gtk.Switch()
+            switch.set_active(bool(field.value))
+            switch.set_halign(Gtk.Align.START)
+            return switch
+        entry = Gtk.Entry()
+        entry.set_text(str(field.value))
+        entry.add_css_class("ps-field-entry")
+        return entry
+
+    # ── Run ──────────────────────────────────────────────────────────────────
+
+    def _on_run_clicked(self, _button: Gtk.Button) -> None:
+        if self._spec_path is None:
+            return  # set_run() never called — nothing to run
+        self.emit("run-remix", self._spec_path, self._collect_edits())
+
+    def _collect_edits(self) -> "dict[str, dict]":
+        """Diff every field's current widget value against its pre-filled
+        original. Only genuinely-changed fields make it into the result, so
+        a Run with zero tweaks yields an empty dict — a documented no-op for
+        `spec_remix.derive_spec` (it applies edits over a full copy of the
+        base spec, so "no edits" reproduces the base run exactly)."""
+        edits: "dict[str, dict]" = {}
+        for node_id, widgets in self._field_widgets.items():
+            for key, widget in widgets.items():
+                kind, orig_value = self._field_meta[node_id][key]
+                new_value = self._read_widget_value(kind, orig_value, widget)
+                if new_value != orig_value:
+                    edits.setdefault(node_id, {})[key] = new_value
+        return edits
+
+    def _read_widget_value(self, kind: str, orig_value, widget: Gtk.Widget):
+        """Extract *widget*'s current value, coerced back to *orig_value*'s
+        Python type so the diff in _collect_edits (and any downstream
+        derive_spec call) compares/writes like-for-like — e.g. a SpinButton
+        always reports float, so an int-valued field rounds back to int."""
+        if kind == "number":
+            raw = widget.get_value()
+            return int(round(raw)) if isinstance(orig_value, int) else raw
+        if kind == "bool":
+            return widget.get_active()
+        return widget.get_text()
 
 
 class PipelineStudio(Gtk.Box):
