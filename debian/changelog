@@ -1,3 +1,31 @@
+tt-local-generator (0.13.0) noble; urgency=medium
+
+  * pipeline: real generic execution engine (app/pipeline_engine.py) replacing
+    the run_workflow.sh stub, which ignored the spec and ran a hardcoded
+    1964-World's-Fair sequence with unsubstituted placeholders. The engine loads
+    any ComfyUI-API-v1 spec, topologically orders nodes by wire dependencies
+    (resolving wires nested inside lists/dicts, e.g. playlist artifacts), and
+    dispatches each class_type to a handler; emits the NODE:/LOG:/PLAYLIST:
+    signals pipeline_runner.py parses. run_workflow.sh is now a thin shim over it.
+    --dry-run runs the whole graph offline; proven on the 1964 World's Fair spec.
+  * pipeline: TTLGArtgenGenerate (generic artgen-plugin node) and TTLGAnimateDiff
+    nodes, registered in workflow_compat with an artgen-plugin-name check.
+  * animatediff: CLI parity — tt-ctl artgen animatediff now forwards every
+    run_subprocess parameter it previously dropped (multichip mode, per-chip
+    prompts, seed spread, ramps, stitch order, lightning, chain, motion adapter),
+    and correctly unpacks check_hardware()'s chip count so multi-chip engages
+    from the CLI (previously it silently ran single-chip / crashed on hardware).
+  * animatediff: prompt travel — schedule different prompts across the frame
+    timeline (--prompt-schedule FRAME:PROMPT) for morphing content, via a new
+    per-frame interpolated-conditioning path in tt-animatediff (sister project,
+    re-released for this). Generalises multi-chip Remix's per-chip prompts onto
+    the time axis. (Not yet supported in Coherent mode — warns and ignores.)
+  * animatediff: seamless-loop crossfade (--loop seamless) — blends the tail
+    frames into the head so GIFs loop without a seam; atomic save (temp +
+    os.replace) so a failed post-process never corrupts the base GIF.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 10 Jul 2026 19:45:58 -0700
+
 tt-local-generator (0.12.0) noble; urgency=medium
 
   * animatediff: multi-chip modes — Off / Remix / Coherent, in a new "🎛
