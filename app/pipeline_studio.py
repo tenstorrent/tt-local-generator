@@ -667,6 +667,16 @@ class PipelineStudio(Gtk.Box):
 
         self._load_runs_async()
 
+    def show_discover(self) -> None:
+        """Reset the inner {discover, open} stack to "discover". Main-thread only.
+
+        Called by MainWindow._show_pipelines every time the Pipelines toolbar
+        toggle is re-activated, so leaving and re-entering Pipelines never
+        strands the user on a stale Open page from a previous visit — Discover
+        is always the front door.
+        """
+        self.stack.set_visible_child_name("discover")
+
     def _on_open_run(self, _widget: DiscoverView, run_id: str) -> None:
         self._load_run_async(run_id)
         if self._on_open_run_cb is not None:

@@ -8661,6 +8661,9 @@ class MainWindow(Gtk.ApplicationWindow):
             self._pipeline_studio = PipelineStudio()
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
 
+        # Always land on Discover, never a stale Open page from a previous
+        # visit — Discover is Pipeline Studio's front door every time.
+        self._pipeline_studio.show_discover()
         self._gallery_stack.set_visible_child_name("pipelines")
         # Full-width, same as artgen mode: Pipeline Studio has its own layout
         # and needs neither the prompt-composition panel nor the detail pane.

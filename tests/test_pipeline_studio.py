@@ -214,6 +214,47 @@ def test_open_view_set_run_zero_steps_no_crash():
     assert view._step_remix_buttons == {}
 
 
+def test_open_view_model_detail_row_present_only_when_model_label_set():
+    """A step whose intent.model_label is None (e.g. Describe/CaptionImage)
+    must not render a model detail row; a model-bearing step (e.g.
+    TextToImage -> "FLUX") must render one. See OpenView._build_step_row's
+    `if step.intent.model_label:` guard."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+
+    with_model = StepView(node_id="1", intent=intent_for("TTLGTextToImage"),
+                           status="done", artifact_path=None)
+    without_model = StepView(node_id="2", intent=intent_for("TTLGCaptionImage"),
+                              status="done", artifact_path=None)
+    steps = [with_model, without_model]
+    recipe = [f"{s.intent.verb} {s.intent.noun}" for s in steps]
+    run = RunView(run_id="run-model-label", title="Model label test",
+                  created_at="2026-07-10T12:00:00+00:00", hero_path=None,
+                  steps=steps, recipe=recipe)
+    view.set_run(run)
+
+    def _has_model_row(node_id: str) -> bool:
+        # The step row order mirrors run.steps order; walk steps_box's
+        # children to find this step's row, then walk into its "main"
+        # column (verb_row, noun_label, [model_label]) to check for a third
+        # child. There's no dict keyed by node_id for this column (unlike
+        # _step_remix_buttons/_step_thumb_frames), so this reaches into the
+        # widget tree directly.
+        index = [s.node_id for s in steps].index(node_id)
+        row = view._steps_box.get_first_child()
+        for _ in range(index):
+            row = row.get_next_sibling()
+        n_label = row.get_first_child()
+        main = n_label.get_next_sibling()
+        verb_row = main.get_first_child()
+        noun_label = verb_row.get_next_sibling()
+        model_label = noun_label.get_next_sibling()
+        return model_label is not None
+
+    assert _has_model_row("1") is True   # TTLGTextToImage -> model_label "FLUX"
+    assert _has_model_row("2") is False  # TTLGCaptionImage -> model_label None
+
+
 def test_open_view_remix_from_here_emits_node_id():
     from pipeline_studio import OpenView
     view = OpenView()

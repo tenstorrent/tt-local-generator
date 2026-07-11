@@ -23,6 +23,18 @@ def test_unknown_is_generic_not_crash():
     assert iv.intent_for("TTLGNope").class_type == "TTLGNope"
 
 
+def test_unknown_label_never_leaks_raw_class_type():
+    """The generic fallback label must stay tool-agnostic — a passthrough/
+    non-native node's class_type (e.g. an imported ComfyUI "CLIPTextEncode")
+    must never surface in the user-facing label() string, even though it's
+    still available on Intent.class_type for lookups."""
+    lbl = iv.label("CLIPTextEncode")
+    assert "CLIPTextEncode" not in lbl
+    assert "this step" in lbl
+    # class_type is still preserved on the Intent itself for lookups.
+    assert iv.intent_for("CLIPTextEncode").class_type == "CLIPTextEncode"
+
+
 def test_image_to_video_label_has_motion_word_no_model_name():
     lbl = iv.label("TTLGImageToVideo").lower()
     assert ("film" in lbl) or ("animate" in lbl)

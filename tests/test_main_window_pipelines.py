@@ -130,6 +130,24 @@ def test_pipelines_toggle_button_drives_show_and_hide(tmp_path, monkeypatch):
     assert obj._gallery_stack.get_visible_child_name() == "video"
 
 
+def test_reentering_pipelines_resets_inner_stack_to_discover(tmp_path, monkeypatch):
+    """Re-entering Pipelines must never land on a stale Open page.
+
+    Drives PipelineStudio's inner stack to "open" directly (the seam
+    _show_run/_on_open_run use), leaves Pipelines, then re-enters — the
+    inner stack must be back on "discover".
+    """
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    obj._show_pipelines()
+    obj._pipeline_studio.stack.set_visible_child_name("open")
+    obj._hide_pipelines()
+
+    obj._show_pipelines()
+
+    assert obj._pipeline_studio.stack.get_visible_child_name() == "discover"
+
+
 def test_source_change_unchecks_pipelines_toggle(tmp_path, monkeypatch):
     """Selecting a source tab while Pipelines is showing must visually uncheck
     the Pipelines toggle button, making the two mutually exclusive.

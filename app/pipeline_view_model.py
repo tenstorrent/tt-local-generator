@@ -131,15 +131,22 @@ def _resolve_status(node_id: str, job_states: dict, artifact_path: "str | None")
     return "done" if artifact_path else "pending"
 
 
-def _resolve_artifact(output_dir: Path, node_id: str, intent: Intent) -> "str | None":
+def _resolve_artifact(output_dir: "Path | None", node_id: str, intent: Intent) -> "str | None":
     """Find the on-disk artifact for *node_id*, mirroring the engine's naming.
 
     Handlers write `ctx.output_dir / f"node{nid}_<suffix><ext>"` (e.g.
-    `node1_image.png`) or, for the SVG-render/AnimateDiff cases, plain
-    `node{nid}.<ext>` — so both glob patterns are checked. Output keys with
+    `node1_image.png`) or, for the AnimateDiff case, plain `node{nid}.<ext>`
+    (e.g. `node6.gif`) — so both glob patterns are checked. Output keys with
     no file counterpart (caption/text/prompt/playlist_id/...) always resolve
     to None without touching the filesystem.
+
+    `output_dir` is `None` when the record's `output_dir` was empty/falsy
+    (e.g. an old/partial record) — globbing `Path("")` would silently
+    resolve to "." and scan the process's current working directory, so an
+    absent output_dir short-circuits to "no artifact" instead.
     """
+    if output_dir is None:
+        return None
     if not intent.outputs:
         return None
     kind_info = _OUTPUT_KIND.get(intent.outputs[0])
@@ -175,7 +182,12 @@ def build_run_view(record: dict) -> RunView:
     """
     spec = load_spec(record["spec_path"])
     order = topo_order(spec)
-    output_dir = Path(record["output_dir"])
+    # An empty/falsy output_dir (e.g. an old/partial record) must not become
+    # Path("") — that normalizes to "." and would glob the current working
+    # directory in _resolve_artifact. None short-circuits every step to "no
+    # artifact" instead of scanning cwd. See _resolve_artifact.
+    raw_output_dir = record["output_dir"]
+    output_dir = Path(raw_output_dir) if raw_output_dir else None
     job_states = _merged_job_states(record)
 
     steps: list[StepView] = []

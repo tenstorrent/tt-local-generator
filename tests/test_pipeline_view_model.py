@@ -78,6 +78,32 @@ def test_status_pending_when_neither_job_state_nor_artifact():
     assert by_id["4"].artifact_path is None
 
 
+def test_job_states_running_and_failed_map_through():
+    """job_states statuses other than "done" must reach StepView.status
+    unchanged (running -> running, failed -> failed), not just "done"."""
+    record = _make_record(job_states={
+        "job1": {
+            "2": {"status": "done", "detail": "", "elapsed_s": 1.2},
+            "3": {"status": "running", "detail": "", "elapsed_s": 0.5},
+            "4": {"status": "failed", "detail": "boom", "elapsed_s": 0.1},
+        }
+    })
+    view = pvm.build_run_view(record)
+    by_id = {s.node_id: s for s in view.steps}
+    assert by_id["3"].status == "running"
+    assert by_id["4"].status == "failed"
+
+
+def test_job_states_unknown_status_degrades_to_pending():
+    """A status the engine has never actually emitted (e.g. a hypothetical
+    future "queued") must degrade to "pending" rather than leaking an
+    unrecognized status string into the view."""
+    record = _make_record(job_states={"job1": {"3": {"status": "queued"}}})
+    view = pvm.build_run_view(record)
+    step3 = next(s for s in view.steps if s.node_id == "3")
+    assert step3.status == "pending"
+
+
 def test_hero_is_first_image_or_video_artifact():
     view = pvm.build_run_view(_make_record())
     assert view.hero_path == str(_FIX / "node1_image.png")
@@ -104,6 +130,23 @@ def test_title_falls_back_to_spec_filename_stem():
     record = _make_record(spec_name="")
     view = pvm.build_run_view(record)
     assert view.title == "spec"
+
+
+def test_empty_output_dir_guards_against_cwd_scan(monkeypatch):
+    """An empty output_dir (e.g. an old/partial record) must not glob
+    Path("") — which resolves to "." and scans the current working
+    directory. Assert glob is never even called (not just that it happens
+    to find nothing) and that every step resolves to no artifact."""
+    from pathlib import Path as _Path
+
+    def _boom(self, pattern):
+        raise AssertionError(f"must not glob when output_dir is empty (pattern={pattern!r})")
+
+    monkeypatch.setattr(_Path, "glob", _boom)
+
+    view = pvm.build_run_view(_make_record(output_dir=""))
+    assert all(s.artifact_path is None for s in view.steps)
+    assert view.hero_path is None
 
 
 def test_most_recently_modified_artifact_wins_on_ambiguity(tmp_path):

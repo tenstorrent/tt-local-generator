@@ -163,12 +163,18 @@ def intent_for(class_type: str) -> Intent:
 
     Unknown class_types (not yet in INTENTS — e.g. a brand-new experimental
     node type, or a mapped/skippable ComfyUI class_type that isn't native)
-    get a generic "Run <class_type>" intent rather than raising, so UI code
-    can always render *something* for any node in a loaded spec.
+    get a generic "Run this step" intent rather than raising, so UI code
+    can always render *something* for any node in a loaded spec — without
+    ever leaking the raw class_type into a user-facing label.
     """
     if class_type in INTENTS:
         return INTENTS[class_type]
-    return Intent(class_type, _GENERIC_VERB, class_type, _GENERIC_ICON, (), None)
+    # The label ("Run this step") must never contain the raw class_type —
+    # that's exactly the tool-name leak this vocabulary layer exists to
+    # prevent (reachable when an imported spec has a non-native/optional
+    # passthrough node). class_type is still preserved on the Intent itself
+    # for lookups/detail views; it's only kept out of verb/noun.
+    return Intent(class_type, _GENERIC_VERB, "this step", _GENERIC_ICON, (), None)
 
 
 def label(class_type: str) -> str:
