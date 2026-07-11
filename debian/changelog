@@ -25,6 +25,7 @@ tt-local-generator (0.14.0) noble; urgency=medium
 
  -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 06:14:37 -0700
 
+tt-local-generator (0.13.0) noble; urgency=medium
 
   * pipeline: real generic execution engine (app/pipeline_engine.py) replacing
     the run_workflow.sh stub, which ignored the spec and ran a hardcoded
