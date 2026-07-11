@@ -7,7 +7,11 @@ _ENGINE = Path(__file__).parent.parent / "app" / "pipeline_engine.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("pipeline_engine", _ENGINE)
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
+    m = importlib.util.module_from_spec(spec)
+    # Register in sys.modules before exec so dataclasses defined in the module
+    # (with `from __future__ import annotations`) can resolve their own module.
+    sys.modules["pipeline_engine"] = m
+    spec.loader.exec_module(m); return m
 
 eng = _load()
 _FIX = Path(__file__).parent / "fixtures" / "mini_pipeline.json"
@@ -583,3 +587,257 @@ def test_animatediff_bool_flag_true_emits_bare_flag(monkeypatch):
                          lambda argv, timeout=600: calls.__setitem__("argv", argv))
     eng.HANDLERS["TTLGAnimateDiff"]("24", {"prompt": "p", "lightning": True}, _ctx())
     assert "--lightning" in calls["argv"]
+
+
+# ── Task 4b: backend server-switching, optional-node failures, dry-run parity ──
+#
+# The engine now orchestrates backend switching (Issue 1): before dispatching a
+# node it maps the node's class_type + model to a backend (server_manager key,
+# or a sentinel), and — when that differs from the currently-active backend —
+# stops/resets and starts the right server. In dry-run it only emits log lines.
+
+# ---- _backend_for mapping (deterministic; no hardware) ----
+
+def test_backend_for_text_to_image_flux():
+    spec = eng._backend_for("TTLGTextToImage", {"model": "FLUX.1-schnell"})
+    assert spec.key == "flux"
+    assert spec.health_url == eng.sm.SERVERS["flux"].health_url
+    assert spec.start is True
+
+
+def test_backend_for_text_to_image_sdxl():
+    spec = eng._backend_for("TTLGTextToImage", {"model": "SDXL-base"})
+    assert spec.key == "sdxl"
+
+
+def test_backend_for_text_to_image_default_flux():
+    # No recognizable model → default to flux.
+    spec = eng._backend_for("TTLGTextToImage", {})
+    assert spec.key == "flux"
+
+
+def test_backend_for_image_to_video_maps_model():
+    assert eng._backend_for("TTLGImageToVideo", {"model": "SkyReels-V2-I2V-14B-540P"}).key == "skyreels"
+    assert eng._backend_for("TTLGImageToVideo", {"model": "Wan2.2-T2V"}).key == "wan2.2"
+    assert eng._backend_for("TTLGImageToVideo", {"model": "Mochi-1-preview"}).key == "mochi"
+
+
+def test_backend_for_generate_text_maps_to_artgen_key():
+    spec = eng._backend_for("TTLGGenerateText",
+                            {"model": "meta-llama/Llama-3.3-70B-Instruct"})
+    assert spec.key == "artgen-llama-3.3-70b"
+    assert spec.health_url == eng.sm.SERVERS["artgen-llama-3.3-70b"].health_url
+
+
+def test_backend_for_generate_text_qwen3_8b():
+    spec = eng._backend_for("TTLGGenerateText", {"model": "Qwen3-8B"})
+    assert spec.key == "artgen-qwen3-8b"
+
+
+def test_backend_for_generate_text_unmapped_model_falls_back_to_detect():
+    spec = eng._backend_for("TTLGGenerateText", {"model": "some-unknown-llm"})
+    assert spec.key == eng.ARTGEN_DETECT
+
+
+def test_backend_for_generate_text_no_model_falls_back_to_detect():
+    spec = eng._backend_for("TTLGGenerateText", {})
+    assert spec.key == eng.ARTGEN_DETECT
+
+
+def test_backend_for_cpu_nodes_return_none():
+    for ct in ("TTLGCaptionImage", "TTLGRemoveBackground", "TTLGEstimateDepth",
+               "TTLGPromptCompose", "TTLGSVGRender", "TTLGComposite",
+               "TTLGAddToPlaylist"):
+        assert eng._backend_for(ct, {}) is None, ct
+
+
+def test_backend_for_animatediff_is_chips_free():
+    spec = eng._backend_for("TTLGAnimateDiff", {"prompt": "x"})
+    assert spec.key == eng.CHIPS_FREE
+    assert spec.start is False
+    assert spec.health_url is None
+
+
+def test_backend_for_artgen_non_llm_returns_none(monkeypatch):
+    monkeypatch.setattr(eng, "_artgen_uses_llm", lambda name: False)
+    assert eng._backend_for("TTLGArtgenGenerate", {"plugin": "somealgo"}) is None
+
+
+def test_backend_for_artgen_llm_with_model(monkeypatch):
+    monkeypatch.setattr(eng, "_artgen_uses_llm", lambda name: True)
+    spec = eng._backend_for("TTLGArtgenGenerate",
+                            {"plugin": "verse", "model": "Qwen3-32B"})
+    assert spec.key == "artgen-qwen3-32b"
+
+
+def test_backend_for_artgen_llm_without_model_detects(monkeypatch):
+    monkeypatch.setattr(eng, "_artgen_uses_llm", lambda name: True)
+    spec = eng._backend_for("TTLGArtgenGenerate", {"plugin": "verse"})
+    assert spec.key == eng.ARTGEN_DETECT
+
+
+def test_backend_for_unknown_class_type_returns_none():
+    assert eng._backend_for("SomethingElse", {}) is None
+
+
+# ---- switching inside run() (switch helpers mocked) ----
+
+def _stub_handler_helpers(monkeypatch):
+    """Stub every network/plugin/store helper so run() can exercise real
+    handlers without touching hardware.  Returns nothing; mutates eng."""
+    monkeypatch.setattr(eng, "_media_image_request",
+                        lambda **k: k["out_path"])
+    monkeypatch.setattr(eng, "_media_video_request",
+                        lambda **k: k["out_path"])
+    monkeypatch.setattr(eng, "_call_llm", lambda **k: "a poem")
+    monkeypatch.setattr(eng, "_run_plugin", lambda *a: "a caption")
+    monkeypatch.setattr(eng, "_add_artifacts_to_playlist",
+                        lambda name, arts, meta, emit: "pl-1")
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+
+def test_run_consecutive_same_backend_one_start_no_reset(monkeypatch, tmp_path):
+    starts, resets = [], []
+    monkeypatch.setattr(eng, "_stop_and_reset",
+                        lambda next_key, current, *, dry_run, emit: resets.append((current, next_key)))
+    monkeypatch.setattr(eng, "_start_server",
+                        lambda key, health_url, max_wait, *, dry_run, emit: starts.append(key))
+    _stub_handler_helpers(monkeypatch)
+
+    spec = {
+        "1": {"class_type": "TTLGTextToImage",
+              "inputs": {"model": "FLUX.1-schnell", "prompt": "p"}},
+        "2": {"class_type": "TTLGTextToImage",
+              "inputs": {"model": "FLUX.1-schnell", "prompt": ["1", "image_path"]}},
+    }
+    eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+    assert starts == ["flux"]          # started once
+    assert resets == [("", "flux")]    # reset/switch decided once
+
+
+def test_run_backend_change_triggers_reset_and_start(monkeypatch, tmp_path):
+    starts, resets = [], []
+    monkeypatch.setattr(eng, "_stop_and_reset",
+                        lambda next_key, current, *, dry_run, emit: resets.append((current, next_key)))
+    monkeypatch.setattr(eng, "_start_server",
+                        lambda key, health_url, max_wait, *, dry_run, emit: starts.append(key))
+    _stub_handler_helpers(monkeypatch)
+
+    spec = {
+        "1": {"class_type": "TTLGTextToImage",
+              "inputs": {"model": "FLUX.1-schnell", "prompt": "p"}},
+        "2": {"class_type": "TTLGImageToVideo",
+              "inputs": {"model": "SkyReels-V2-I2V", "prompt": "v",
+                         "image": ["1", "image_path"]}},
+    }
+    eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+    assert starts == ["flux", "skyreels"]
+    assert resets == [("", "flux"), ("flux", "skyreels")]
+
+
+def test_run_1964_real_backend_sequence(monkeypatch, tmp_path):
+    """Milestone-1 gate: the real 1964 spec (non-dry) produces the expected
+    backend call sequence, resetting only when the backend actually changes."""
+    if not _REAL_SPEC.exists():
+        pytest.skip("1964-worlds-fair.json not present")
+
+    starts, resets, docker_stops = [], [], []
+    monkeypatch.setattr(eng, "_docker_stop_all", lambda: docker_stops.append(1))
+    monkeypatch.setattr(eng, "_tt_smi_reset", lambda: resets.append(1))
+    monkeypatch.setattr(eng, "_real_start_server",
+                        lambda key, health_url, max_wait, emit: starts.append(key))
+    _stub_handler_helpers(monkeypatch)
+
+    spec = eng.load_spec(str(_REAL_SPEC))
+    eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+
+    assert starts == ["flux", "skyreels", "artgen-llama-3.3-70b", "flux"]
+    # 4 switches, but the very first (from no backend) does NOT reset boards.
+    assert len(resets) == 3
+
+
+# ---- dry-run stays hardware-free but emits intended-switch log lines ----
+
+def test_run_dry_run_no_hardware_but_emits_switch_lines(monkeypatch, tmp_path):
+    if not _REAL_SPEC.exists():
+        pytest.skip("1964-worlds-fair.json not present")
+
+    def _boom(*a, **k):
+        raise AssertionError("hardware primitive invoked during dry-run")
+
+    monkeypatch.setattr(eng, "_docker_stop_all", _boom)
+    monkeypatch.setattr(eng, "_tt_smi_reset", _boom)
+    monkeypatch.setattr(eng, "_real_start_server", _boom)
+    # detect_artgen_endpoint must never be probed in dry-run either.
+    import artgen as _ag
+    monkeypatch.setattr(_ag, "detect_artgen_endpoint", _boom)
+
+    lines = []
+    spec = eng.load_spec(str(_REAL_SPEC))
+    eng.run(spec, dry_run=True, emit=lines.append, output_dir=str(tmp_path))
+
+    text = "\n".join(lines)
+    assert "[dry-run]" in text
+    # Intended switches for the 1964 spec appear as dry-run start lines.
+    assert any("flux" in l and "[dry-run]" in l for l in lines)
+    assert any("skyreels" in l and "[dry-run]" in l for l in lines)
+    assert any("artgen-llama-3.3-70b" in l and "[dry-run]" in l for l in lines)
+
+
+# ---- Issue 2: honor the optional flag ----
+
+def test_run_optional_node_failure_continues(monkeypatch, tmp_path):
+    monkeypatch.setattr(eng, "_stop_and_reset",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(eng, "_start_server",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(eng, "_media_image_request", lambda **k: k["out_path"])
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    def _boom_plugin(*a):
+        raise RuntimeError("rmbg exploded")
+    monkeypatch.setattr(eng, "_run_plugin", _boom_plugin)
+
+    spec = {
+        "1": {"class_type": "TTLGTextToImage",
+              "inputs": {"model": "FLUX.1-schnell", "prompt": "p"}},
+        # optional per COMPATIBILITY_MAP; its handler raises
+        "2": {"class_type": "TTLGRemoveBackground",
+              "inputs": {"src": ["1", "image_path"]}},
+    }
+    lines = []
+    results = eng.run(spec, dry_run=False, emit=lines.append, output_dir=str(tmp_path))
+    assert "image_path" in results["1"]     # node 1 completed
+    assert results["2"] == {}               # optional node left empty
+    assert any(l.startswith("NODE:2:failed") for l in lines)
+
+
+def test_run_required_node_failure_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(eng, "_stop_and_reset", lambda *a, **k: None)
+    monkeypatch.setattr(eng, "_start_server", lambda *a, **k: None)
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    def _boom(**k):
+        raise RuntimeError("image server down")
+    monkeypatch.setattr(eng, "_media_image_request", _boom)
+
+    spec = {"1": {"class_type": "TTLGTextToImage",
+                  "inputs": {"model": "FLUX.1-schnell", "prompt": "p"}}}
+    with pytest.raises(RuntimeError):
+        eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+
+
+# ---- Nit 5: dry-run/real parity for _h_artgen_generate ----
+
+def test_artgen_generate_dry_run_raster_ext_has_no_text():
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("10",
+        {"plugin": "palette", "ext": "png"}, _ctx(dry=True))
+    assert out["png_path"] == out["artifact_path"]
+    assert "text" not in out          # raster dry-run must mirror the real path
+
+
+def test_artgen_generate_dry_run_text_ext_has_text():
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("10",
+        {"plugin": "verse", "ext": ".txt"}, _ctx(dry=True))
+    assert out["text"] == "placeholder artifact text"
+    assert "png_path" not in out

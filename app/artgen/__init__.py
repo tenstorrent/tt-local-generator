@@ -48,6 +48,12 @@ class ArtGenerator(ABC):
     description: str
     #: Default output extension: ".svg", ".txt", ".ans"
     output_ext: str = ".txt"
+    #: Whether this generator drives an LLM chat backend (the artgen server on
+    #: port 8002).  All built-in generators are LLM-backed.  A purely
+    #: algorithmic plugin generator (no chat model) sets this False so the
+    #: pipeline engine (pipeline_engine._backend_for) knows not to start/switch
+    #: an LLM server for it.
+    uses_llm: bool = True
 
     def add_args(self, parser: "argparse.ArgumentParser") -> None:
         """Add generator-specific flags to the shared artgen argparse parser."""

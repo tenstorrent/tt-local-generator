@@ -7,6 +7,25 @@ nodes by their wire dependencies, dispatches each node's class_type to a handler
 resolves wired inputs from prior outputs, and emits NODE:/LOG:/PLAYLIST: signals
 that app/pipeline_runner.py parses. --dry-run runs the whole graph with placeholder
 outputs (no hardware/API), for CI.
+
+Backend server-switching (mirrors bin/run_worlds_fair.sh)
+---------------------------------------------------------
+Different nodes need different inference backends, and several of them share
+port 8000 (FLUX, SkyReels, Wan2.2, Mochi) so only one can run at a time. Before
+dispatching each node, ``run()`` calls :func:`_backend_for` to decide which
+backend that node needs (a server_manager key, a chips-free sentinel, or None
+for CPU-only nodes). When the required backend differs from the one currently
+active it stops the running containers, resets the boards (only when switching
+*from* a prior backend), and starts the new server — exactly as the bash driver
+did. In ``dry_run`` mode NONE of this touches docker/tt-smi/tt-ctl: it only
+emits ``[dry-run]`` log lines so CI stays 100% hardware-free.
+
+Optional-node failures
+----------------------
+A handler that raises no longer aborts the whole pipeline. The node's
+``optional`` status comes from ``workflow_compat.COMPATIBILITY_MAP`` (the single
+source of truth): optional nodes are logged as failed and skipped (their outputs
+left absent) so the run continues; required nodes still fail-fast.
 """
 from __future__ import annotations
 import base64
@@ -14,8 +33,12 @@ import json
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+import server_manager as sm
+from workflow_compat import COMPATIBILITY_MAP
 
 # Repo root: app/ -> repo root (same resolution as server_manager). Used to
 # locate plugins/<name>/plugin.py exactly as bin/run_workflow.sh does.
@@ -98,7 +121,16 @@ def resolve_inputs(inputs: dict, results: dict) -> dict:
 
 
 class _Ctx:
-    """Runtime context passed to handlers: output dir, dry_run, emit, server switch."""
+    """Runtime context passed to handlers: output dir, dry_run flag, and emit.
+
+    Handlers receive this so they can write artifacts under ``output_dir``,
+    short-circuit to placeholder outputs when ``dry_run`` is set, and emit
+    NODE:/LOG:/PLAYLIST: signal lines via ``emit``. Backend server-switching is
+    NOT a handler concern — ``run()`` orchestrates it around each dispatch (see
+    :func:`_backend_for` / :func:`_stop_and_reset` / :func:`_start_server`), so
+    handlers just POST to the ``server`` URL their inputs carry and can assume
+    the right backend is already up.
+    """
     def __init__(self, output_dir: Path, dry_run: bool, emit: Callable[[str], None]):
         self.output_dir = output_dir
         self.dry_run = dry_run
@@ -596,9 +628,13 @@ def _h_artgen_generate(nid, inp, ctx):
     out = str(ctx.output_dir / f"node{nid}_artifact{ext}")
 
     if ctx.dry_run:
-        result = {"artifact_path": out, "text": "placeholder artifact text"}
+        # Mirror the real branch's key contract exactly (Nit 5): artifact_path
+        # always; png_path only for raster exts; text only for text-like exts.
+        result = {"artifact_path": out}
         if ext_l in _RASTER_EXTS:
             result["png_path"] = out
+        if ext_l in _TEXT_EXTS:
+            result["text"] = "placeholder artifact text"
         return result
 
     argv = ["artgen", plugin, "--output", out]
@@ -669,15 +705,280 @@ def _h_animatediff(nid, inp, ctx):
     return {"gif_path": gif}
 
 
+# ── Backend server-switching (Issue 1) ───────────────────────────────────────
+#
+# Ports the hardware-management logic from bin/run_worlds_fair.sh
+# (stop_and_reset ~L120, start_server ~L139). Node handlers still just POST to
+# the ``server`` URL their inputs carry; run() makes sure the right backend is
+# up *before* dispatching each node, switching servers only when the backend
+# a node needs differs from the one currently active.
+
+# Sentinel backend keys (not real server_manager keys):
+#   CHIPS_FREE    — AnimateDiff: runs generate.py directly on the chips (no
+#                   media server). Stop+reset any running server but start none.
+#   ARTGEN_DETECT — an LLM node whose model we couldn't confidently map to a
+#                   start key. Resolved at runtime by probing for an already-up
+#                   OpenAI-compatible endpoint; only starts a default artgen LLM
+#                   if none is found. (See _real_start_server.)
+CHIPS_FREE = "__chips_free__"
+ARTGEN_DETECT = "__artgen_detect__"
+
+# Default artgen LLM to start when ARTGEN_DETECT finds nothing already running.
+_ARTGEN_DEFAULT_KEY = "artgen-qwen3-8b"
+
+# max_wait (minutes) per backend family. These are NOT stored in
+# server_manager.SERVERS (which only knows health_url/runner_key), so they are
+# chosen here to mirror the values bin/run_worlds_fair.sh passed to start_server
+# (flux 30, skyreels 60, artgen 30).
+_MAX_WAIT_IMAGE = 30
+_MAX_WAIT_VIDEO = 60
+_MAX_WAIT_LLM = 30
+
+
+@dataclass(frozen=True)
+class BackendSpec:
+    """The backend a node needs.
+
+    key         — server_manager start key, or a sentinel (CHIPS_FREE /
+                  ARTGEN_DETECT).
+    health_url  — URL to poll for readiness after start (None when nothing is
+                  started, e.g. CHIPS_FREE).
+    max_wait    — minutes to wait for readiness.
+    start       — whether a server should be started after stop/reset (False for
+                  CHIPS_FREE, which only stops/resets).
+    """
+    key: str
+    health_url: "str | None"
+    max_wait: int = 30
+    start: bool = True
+
+
+def _artgen_uses_llm(plugin_name: "str | None") -> bool:
+    """Return True if the named artgen plugin drives the chat LLM backend.
+
+    Consults the artgen generator registry's ``uses_llm`` flag (all built-in
+    generators are LLM-backed). Defaults to True on any failure — assuming a
+    node needs the LLM is the safe choice (it ensures a backend is up rather
+    than silently running against nothing). Isolated in its own helper so unit
+    tests can monkeypatch it without importing the whole artgen package.
+    """
+    try:
+        import artgen
+        return bool(getattr(artgen.get(plugin_name), "uses_llm", True))
+    except Exception:  # noqa: BLE001 — unknown plugin / import failure → assume LLM
+        return True
+
+
+def _artgen_key_for_model(model: "str | None") -> "str | None":
+    """Map an LLM model string to its artgen server_manager start key.
+
+    Matches the node's model against each artgen ServerDef's ``--model``
+    extra_arg, normalising away any HuggingFace org prefix
+    (``meta-llama/Llama-3.3-70B-Instruct`` → ``llama-3.3-70b-instruct``) and
+    case. Returns None when *model* is empty or matches no artgen server — the
+    caller then falls back to ARTGEN_DETECT.
+    """
+    if not model:
+        return None
+    want = str(model).rsplit("/", 1)[-1].strip().lower()
+    for sdef in sm.SERVERS.values():
+        if "artgen" not in sdef.capabilities:
+            continue
+        extra = sdef.extra_args
+        # extra_args is a flat tuple like ("--model", "Qwen3-8B").
+        for i, tok in enumerate(extra):
+            if tok == "--model" and i + 1 < len(extra):
+                if extra[i + 1].strip().lower() == want:
+                    return sdef.key
+    return None
+
+
+def _artgen_backend(model: "str | None") -> BackendSpec:
+    """BackendSpec for an artgen-LLM node given its (maybe-None) model string."""
+    key = _artgen_key_for_model(model)
+    if key is not None:
+        return BackendSpec(key, sm.SERVERS[key].health_url, _MAX_WAIT_LLM)
+    # Unmapped: resolve at runtime by detecting an already-running endpoint.
+    return BackendSpec(ARTGEN_DETECT, sm.SERVERS[_ARTGEN_DEFAULT_KEY].health_url,
+                       _MAX_WAIT_LLM)
+
+
+def _backend_for(class_type: str, inputs: dict) -> "BackendSpec | None":
+    """Return the backend a node needs, or None when no switch is required.
+
+    None means "CPU-only node — leave whatever backend is currently up alone"
+    (caption/rmbg/depth/prompt-compose/svg/composite/playlist, and non-LLM
+    artgen plugins).
+    """
+    model = inputs.get("model")
+
+    if class_type == "TTLGTextToImage":
+        m = str(model or "").lower()
+        if "flux" in m:
+            key = "flux"
+        elif "sdxl" in m or "sd" in m:
+            key = "sdxl" if "sdxl" in sm.SERVERS else "flux"
+        else:
+            key = "flux"  # default image backend
+        return BackendSpec(key, sm.SERVERS[key].health_url, _MAX_WAIT_IMAGE)
+
+    if class_type == "TTLGImageToVideo":
+        m = str(model or "").lower()
+        if "skyreels" in m:
+            key = "skyreels"
+        elif "wan" in m:
+            key = "wan2.2"
+        elif "mochi" in m:
+            key = "mochi"
+        else:
+            key = "wan2.2"  # default video backend
+        return BackendSpec(key, sm.SERVERS[key].health_url, _MAX_WAIT_VIDEO)
+
+    if class_type == "TTLGGenerateText":
+        return _artgen_backend(model)
+
+    if class_type == "TTLGArtgenGenerate":
+        if not _artgen_uses_llm(inputs.get("plugin")):
+            return None  # purely algorithmic plugin — no LLM backend needed
+        return _artgen_backend(model)
+
+    if class_type == "TTLGAnimateDiff":
+        # Chips-free: stop+reset any media server but start none — AnimateDiff
+        # drives the chips itself via `tt-ctl artgen animatediff`.
+        return BackendSpec(CHIPS_FREE, None, 0, start=False)
+
+    # Everything else (caption/rmbg/depth/prompt-compose/svg/composite/playlist,
+    # unknown types) → no backend switch.
+    return None
+
+
+# ── Low-level side-effecting primitives (mockable by unit tests) ──────────────
+
+def _docker_stop_all() -> None:
+    """Stop every running docker container (bash: ``docker ps -q | xargs docker stop``)."""
+    import subprocess
+    ids = subprocess.run(["docker", "ps", "-q"], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, timeout=30).stdout.split()
+    if ids:
+        subprocess.run(["docker", "stop", *ids], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=120)
+        time.sleep(3)
+
+
+def _tt_smi_reset() -> None:
+    """Reset the TT boards (bash: ``tt-smi -r``)."""
+    import subprocess
+    subprocess.run(["tt-smi", "-r"], stdin=subprocess.DEVNULL,
+                   capture_output=True, text=True, timeout=120)
+    time.sleep(8)
+
+
+def _real_start_server(key: str, health_url: "str | None", max_wait: int,
+                       emit: Callable[[str], None]) -> None:
+    """Start a backend server and poll its health URL until ready.
+
+    Ports start_server() from bin/run_worlds_fair.sh. For the ARTGEN_DETECT
+    sentinel it first probes for an already-running OpenAI-compatible endpoint
+    (any port) via artgen.detect_artgen_endpoint and, only if none is up, starts
+    the default artgen LLM. Raises RuntimeError if the server never becomes
+    ready within *max_wait* minutes.
+    """
+    key_to_start = key
+    if key == ARTGEN_DETECT:
+        try:
+            from artgen import detect_artgen_endpoint
+            base, model = detect_artgen_endpoint()
+        except Exception:  # noqa: BLE001
+            base, model = None, None
+        if base:
+            emit(f"LOG:  LLM already up at {base} ({model}) — no start needed")
+            return
+        key_to_start = _ARTGEN_DEFAULT_KEY
+        emit(f"LOG:  no LLM detected — starting default {key_to_start}")
+
+    emit(f"LOG:  starting server {key_to_start}")
+    sm.start(key_to_start)  # non-blocking --gui start
+
+    if not health_url:
+        return
+    deadline = time.time() + max_wait * 60
+    while time.time() < deadline:
+        time.sleep(30)
+        try:
+            data = _get_json(health_url, timeout=10)
+        except Exception:  # noqa: BLE001
+            continue
+        if data.get("model_ready") or data.get("data"):
+            emit(f"LOG:  ✅ {key_to_start} ready")
+            return
+    raise RuntimeError(f"{key_to_start} did not become ready within {max_wait} min")
+
+
+# ── Switch helpers (mockable by unit tests) ───────────────────────────────────
+
+def _stop_and_reset(next_key: str, current: str, *, dry_run: bool,
+                    emit: Callable[[str], None]) -> None:
+    """Stop running containers and (when switching from a prior backend) reset
+    the boards, in preparation for *next_key*.
+
+    Mirrors bin/run_worlds_fair.sh:stop_and_reset. In dry_run it only emits an
+    intended-switch log line — no docker / tt-smi calls. tt-smi -r runs ONLY
+    when *current* is truthy (i.e. we are switching away from a real backend),
+    matching the bash guard.
+    """
+    if dry_run:
+        note = f" + tt-smi -r (switch {current or 'none'} → {next_key})" if current else ""
+        emit(f"LOG:  [dry-run] docker stop all{note}")
+        return
+    _docker_stop_all()
+    if current:
+        emit(f"LOG:  resetting boards (switch {current} → {next_key})")
+        _tt_smi_reset()
+
+
+def _start_server(key: str, health_url: "str | None", max_wait: int, *,
+                  dry_run: bool, emit: Callable[[str], None]) -> None:
+    """Start backend *key* and wait for readiness.
+
+    In dry_run it only emits an intended-start log line — no tt-ctl / network.
+    """
+    if dry_run:
+        emit(f"LOG:  [dry-run] tt-ctl start {key}")
+        return
+    _real_start_server(key, health_url, max_wait, emit)
+
+
 def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = print,
         output_dir: "str | None" = None) -> dict:
     out_dir = Path(output_dir) if output_dir else Path("/tmp/tt-pipeline-dryrun")
     out_dir.mkdir(parents=True, exist_ok=True)
     ctx = _Ctx(out_dir, dry_run, emit)
     results: dict = {}
+    # Backend currently active across the node loop ("" = none started yet).
+    # ARTGEN_DETECT is handled out-of-band (it never stops/resets — it reuses
+    # whatever LLM happens to be up) so it does not participate in this tracking.
+    current_backend = ""
     for nid in topo_order(spec):
         node = spec[nid]
         ct = node["class_type"]
+
+        # ── Backend switch (before dispatch) ─────────────────────────────────
+        backend = _backend_for(ct, node.get("inputs", {}))
+        if backend is not None:
+            if backend.key == ARTGEN_DETECT:
+                # Reuse any already-running LLM; only start one if none is up.
+                # Deliberately does NOT stop/reset the current backend, so a
+                # live LLM elsewhere is never killed.
+                _start_server(backend.key, backend.health_url, backend.max_wait,
+                              dry_run=dry_run, emit=emit)
+            elif backend.key != current_backend:
+                _stop_and_reset(backend.key, current_backend,
+                                dry_run=dry_run, emit=emit)
+                if backend.start:
+                    _start_server(backend.key, backend.health_url,
+                                  backend.max_wait, dry_run=dry_run, emit=emit)
+                current_backend = backend.key
+
         emit(f"NODE:{nid}:running:{ct}")
         handler = HANDLERS.get(ct)
         if handler is None:
@@ -689,6 +990,13 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
             emit(f"NODE:{nid}:done:{ct}")
         except Exception as e:  # noqa: BLE001
             emit(f"NODE:{nid}:failed:{e}")
+            # Issue 2: honor the optional flag. COMPATIBILITY_MAP is the single
+            # source of truth; unknown class_types are treated as required.
+            entry = COMPATIBILITY_MAP.get(ct)
+            optional = bool(entry and entry.get("optional", False))
+            if optional:
+                results[nid] = {}   # leave outputs absent; continue the run
+                continue
             raise
     return results
 

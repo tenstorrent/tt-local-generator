@@ -1,4 +1,30 @@
-tt-local-generator (0.13.0) noble; urgency=medium
+tt-local-generator (0.14.0) noble; urgency=medium
+
+  * pipeline: backend server-switching in app/pipeline_engine.py. Before each
+    node runs, the engine maps its class_type + model to a backend
+    (_backend_for): FLUX/SDXL for TTLGTextToImage, SkyReels/Wan/Mochi for
+    TTLGImageToVideo, the artgen LLM (:8002) for TTLGGenerateText and LLM-backed
+    TTLGArtgenGenerate, chips-free (stop+reset, no start) for TTLGAnimateDiff,
+    and None (no switch) for CPU-only nodes. When the required backend differs
+    from the active one it stops containers, resets the boards (only when
+    switching from a prior backend), and starts the new server — mirroring
+    bin/run_worlds_fair.sh. This gates the Milestone-1 QB2 run of the 1964 spec,
+    which needs FLUX, SkyReels, and a 70B LLM to take turns on the hardware.
+    Artgen start keys are derived from the model string; an unmappable model
+    falls back to detecting an already-running LLM and only starting a default
+    if none is up.
+  * pipeline: --dry-run now emits intended-switch log lines but performs NO
+    docker/tt-smi/tt-ctl calls, keeping CI 100% hardware-free.
+  * pipeline: handler exceptions on optional nodes (per
+    workflow_compat.COMPATIBILITY_MAP) are logged and skipped so the run
+    continues; required nodes still fail-fast.
+  * pipeline: TTLGArtgenGenerate dry-run output keys now mirror the real path
+    (text only for text exts, png_path only for raster exts).
+  * artgen: ArtGenerator gains a uses_llm flag (default True) so purely
+    algorithmic plugin generators can opt out of LLM backend-switching.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 06:14:37 -0700
+
 
   * pipeline: real generic execution engine (app/pipeline_engine.py) replacing
     the run_workflow.sh stub, which ignored the spec and ran a hardcoded
