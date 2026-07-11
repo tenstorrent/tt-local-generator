@@ -339,6 +339,16 @@ def test_1964_worlds_fair_dry_run():
 
 ---
 
+### Task 4b: Backend server-switching in the engine (final-review Issue 1 — gates Milestone 1)
+
+**Files:** `app/pipeline_engine.py`, `tests/test_pipeline_engine.py`. **Port source:** `bin/run_worlds_fair.sh` `stop_and_reset()`@120, `start_server()`@139. **Reuse:** `app/server_manager.py` `SERVERS` (keys/health_url/runner_key/port — GTK-free) + its `start`/`stop`/`health`.
+
+The engine currently just POSTs to whatever `server` URL a node carries, assuming the backend is up — but the 1964 spec needs FLUX and SkyReels (both :8000) plus the LLM (:8002), which can't coexist. Add backend orchestration:
+- [ ] `_backend_for(class_type, inputs) -> BackendSpec | None`: TTLGTextToImage→`flux`/`sdxl` by model; TTLGImageToVideo→`skyreels`/`wan2.2`/`mochi` by model; TTLGGenerateText & LLM-backed TTLGArtgenGenerate→artgen LLM (derive start key from model — verify valid keys against tt-ctl/start_artgen.sh); CPU-only nodes (caption/rmbg/depth/promptcompose/svg/composite/addtoplaylist, non-LLM artgen plugins)→None; TTLGAnimateDiff→chips-free (stop+reset, no media start — it manages its own via tt-ctl). Pull health_url/runner_key from `server_manager.SERVERS`.
+- [ ] Port `_stop_and_reset(next_key)` (docker stop + `tt-smi -r` only when switching from a prior backend; track `_current_backend`; skip when unchanged) and `_start_server(key, health_url, max_wait)` (`tt-ctl start <key>` + poll health until ready) into the engine. In `run()`, before each node, resolve its backend and switch at boundaries. `dry_run` → log the intended switch, do nothing (mirror bash `[dry-run]` lines) so dry-run stays hardware-free.
+- [ ] Tests (subprocess/curl mocked): `_backend_for` mapping per class_type+model; consecutive same-backend nodes cause ONE start + no reset; a backend change triggers stop+reset+start; dry-run performs no real switching; the 1964 spec's backend sequence is flux→(cpu nodes, no switch)→skyreels→artgen-llm→flux (order per topo).
+- [ ] Update `_Ctx`/module docstrings to reflect real server-switching (final-review nit #3).
+
 ### Task 5: QB2 acceptance run of the 1964 spec (Milestone 1 gate — controller-run)
 
 Not TDD — a hardware validation the controller runs (like earlier QB2 smokes).
