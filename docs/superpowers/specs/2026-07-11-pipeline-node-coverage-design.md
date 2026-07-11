@@ -104,15 +104,48 @@ nodes: DRY, auto-covers every current/future plugin).
 - outputs: `text` (verse/codeart/freeform; for palette a name+hex summary),
   `artifact_path` (.txt/.py/.ans/.json/.svg), `png_path` (raster plugins only).
 
-**`TTLGAnimateDiff`** — AnimateDiff incl. multi-chip Remix/Coherent.
+**`TTLGAnimateDiff`** — AnimateDiff incl. multi-chip Remix/Coherent **and the
+AnimateDiff-Evolved-inspired fold-in** (see below).
 - inputs: `prompt` (or wired), `frames`, `steps`, `seed`, `mode`
-  (off|remix|coherent), `per_chip_prompts`, `seed_spread`, `ramp`, `stitch_order`.
-- dispatch: `app/artgen/cli.py animatediff --output <gif> --mode …`. The CLI's
-  animatediff branch already drives `run_subprocess` but doesn't forward the
-  multichip params yet — so this milestone also adds those flags to the animatediff
-  generator's `add_args` and forwards them in cli.py (bonus: multi-chip Remix
-  becomes runnable from the command line). Runs on Blackhole (no media server).
+  (off|remix|coherent), `per_chip_prompts`, `seed_spread`, `ramp`, `stitch_order`,
+  **`prompt_schedule`** (prompt-travel keyframes), **`loop`** (none|seamless).
+- dispatch: `app/artgen/cli.py animatediff --output <gif> --mode …`. Runs on
+  Blackhole (no media server).
 - output: `gif_path`.
+
+### AnimateDiff-Evolved fold-in (Milestone 2)
+
+An audit of the sister project `~/code/tt-animatediff` (which we own and re-release
+freely — see the animatediff-sister memory) determined which ComfyUI-AnimateDiff-
+Evolved concepts are achievable. Folding in three, deferring one:
+
+1. **CLI parity fix (Task 6).** `app/artgen/cli.py`'s animatediff branch only
+   forwards `prompt/frames/steps/seed/negative_prompt/temporal_alpha` — it drops
+   every advanced param `add_args` already declares (`mode`, `lightning`, chain,
+   `motion_adapter*`, and the multichip `per_chip_prompt`/`seed_spread`/`ramp`/
+   `stitch_order`). Task 6 closes this gap (forward all of them) and adds the two
+   new flags below. Zero pipeline risk; unblocks `tt-ctl`-driven testing.
+
+2. **Prompt travel (Task 6b — headline).** Different prompts across the frame
+   timeline via interpolated conditioning. The tt-animatediff denoise loop is
+   already per-frame (`temporal_attention.py` / `ttnn_motion_pipeline.py`) but
+   broadcasts one text embedding to every frame; the change is a per-frame
+   embedding path: `encode_prompt` accepts keyframe (prompt, frame) pairs and
+   builds N interpolated embeddings; the loop indexes `embeds[i]`. This is a
+   **sister-repo pipeline change** (+`--prompt-schedule` on `generate.py`) that we
+   commit and re-release, then thread through the wrapper. It generalizes multi-chip
+   Remix's per-chip prompts (spatial) onto the time axis (temporal).
+
+3. **Seamless-loop crossfade (Task 6c).** A `loop=seamless` option that crossfades
+   the last K frames into the first K post-hoc — wrapper-only (a helper beside
+   `_stitch_gifs` in `app/artgen/generators/animatediff.py`), no model change.
+
+**Deferred (its own milestone):** sliding **context windows** for long video —
+a multi-day rewrite of the core "all frames every step" denoise loop in two
+tt-animatediff files. Genuinely valuable for long clips but too large to fold in.
+Motion-LoRA support is skipped (no scaffolding exists; low value/effort now).
+`temporal_alpha`/`motion_adapter_alpha` motion-blend knobs already exist and are
+wired end-to-end (incl. per-chip ramp) — no work needed.
 
 Both handlers register in `workflow_compat.py`'s `COMPATIBILITY_MAP` (native tier)
 so `validate_spec` accepts specs using them; the output-key contract is documented

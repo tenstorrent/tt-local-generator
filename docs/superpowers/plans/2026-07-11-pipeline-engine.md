@@ -346,30 +346,40 @@ Not TDD — a hardware validation the controller runs (like earlier QB2 smokes).
 
 ---
 
-## MILESTONE 2 — node coverage (artgen + AnimateDiff)
+## MILESTONE 2 — node coverage (artgen + AnimateDiff) + AnimateDiff-Evolved fold-in
 
-### Task 6: CLI multichip flags (animatediff)
-**Files:** `app/artgen/generators/animatediff.py` (`add_args`), `app/artgen/cli.py` (animatediff branch ~147-169), `tests/test_animatediff_multichip.py`.
-- [ ] TDD: add `--mode`, `--per-chip-prompt` (append, repeatable), `--seed-spread`, `--ramp`, `--stitch-order` to `add_args`; forward them from the cli animatediff branch into `run_subprocess(multichip_mode=…, per_chip_prompts=…, seed_spread=…, ramp=…, stitch_order=…)`. Unit-test the flag→kwarg mapping (run_subprocess mocked). Commit.
+### Task 6: CLI parity fix + new animatediff flags
+**Files:** `app/artgen/generators/animatediff.py` (`add_args` at :155-203; `run_subprocess` signature at :593-622), `app/artgen/cli.py` (`_cmd_animatediff` at :125-205, forwarding at :160-169), `tests/test_animatediff_multichip.py`.
+- [ ] TDD. The CLI currently forwards ONLY `prompt/frames/steps/seed/negative_prompt/temporal_alpha` (`cli.py:160-169`), silently dropping every advanced param `add_args` already declares. Close the gap: forward `mode` (→`multichip_mode`), `per_chip_prompt` (append, repeatable →`per_chip_prompts`), `seed_spread`, `ramp`, `stitch_order`, `lightning`, `motion_adapter`/`motion_adapter_alpha`, `chain_from`/`chain_save`/`chain_alpha` into `run_subprocess`. Add two NEW flags to `add_args`: `--prompt-schedule` (repeatable `FRAME:prompt`, e.g. `--prompt-schedule 0:"spring" --prompt-schedule 16:"winter"`) and `--loop` (`none|seamless`, default `none`); forward as `prompt_schedule=` / `loop=`. Unit-test the full flag→kwarg mapping (run_subprocess mocked) INCLUDING the previously-dropped params. Commit.
+
+### Task 6b: Prompt travel — tt-animatediff pipeline change (SISTER REPO) + wrapper plumbing
+**Files (sister repo `~/code/tt-animatediff`):** `animatediff_ttnn/generation_helpers.py` (`encode_prompt` :55-87), `animatediff_ttnn/temporal_attention.py` (per-frame embed use :353-355,:392; `generate_frames_temporal` :196), `animatediff_ttnn/ttnn_motion_pipeline.py` (`encoder_hidden_states` sites :204,:354,:393; `generate_frames_motion` :523), `examples/generate.py` (`_build_parser` :58-274). **Files (this repo):** `app/artgen/generators/animatediff.py` (`_build_cmd` :284-337, `run_subprocess` :593-622), `tests/`.
+- [ ] TDD in tt-animatediff: extend `encode_prompt` to accept a schedule of `(prompt, frame_index)` keyframes → produce `num_frames` embeddings by linear interpolation in CLIP-embedding space between adjacent keyframes (single-prompt path unchanged: one keyframe → broadcast, preserving current behavior). Index `text_embeddings[i]` in both frame loops (`temporal_attention.py`, `ttnn_motion_pipeline.py`) instead of the shared `ttnn_text_emb`; preserve the CFG-doubled `[uncond,cond]` and mesh-shard tensor shapes. Add `--prompt-schedule` to `generate.py`. Unit-test the interpolation (keyframes → per-frame embeddings; endpoints exact, midpoints blended) with the text encoder mocked. Commit in the sister repo; **cut a new tt-animatediff release** (bump its version).
+- [ ] In this repo: thread `prompt_schedule` through `_build_cmd`→`generate.py --prompt-schedule`; unit-test argv assembly (subprocess mocked). Commit.
+
+### Task 6c: Seamless-loop crossfade (wrapper-only)
+**Files:** `app/artgen/generators/animatediff.py` (new helper beside `_stitch_gifs` :402-500), `tests/`.
+- [ ] TDD: add `_apply_seamless_loop(frames, k)` (or GIF-level crossfade) that blends the last K frames into the first K so playback loops without a seam; wire a `loop="seamless"` param through `run_subprocess` → post-process the stitched output. No model change. Test with synthetic frames (assert last→first continuity and unchanged frame count). Commit.
 
 ### Task 7: `TTLGArtgenGenerate` + `TTLGAnimateDiff` handlers
 **Files:** `app/pipeline_engine.py`, `tests/test_pipeline_engine.py`.
-- [ ] TDD: `HANDLERS["TTLGArtgenGenerate"]` → `app/artgen/cli.py <plugin> … --output <out>`; outputs `text`/`artifact_path`/`png_path` (raster plugins). `HANDLERS["TTLGAnimateDiff"]` → `app/artgen/cli.py animatediff --output <gif> --mode …`; output `gif_path`. Dry-run placeholders. Tests: dry-run keys + that the built CLI argv carries the right plugin/params (subprocess mocked). Commit.
+- [ ] TDD: `HANDLERS["TTLGArtgenGenerate"]` → `app/artgen/cli.py <plugin> … --output <out>`; outputs `text`/`artifact_path`/`png_path` (raster plugins). `HANDLERS["TTLGAnimateDiff"]` → `app/artgen/cli.py animatediff --output <gif> --mode …`, now also forwarding `prompt_schedule` (→ repeated `--prompt-schedule`) and `loop` (→`--loop`) inputs alongside `mode`/`per_chip_prompts`/`seed_spread`/`ramp`/`stitch_order`; output `gif_path`. Dry-run placeholders. Tests: dry-run keys + built CLI argv carries the right plugin/params incl. prompt_schedule/loop (subprocess mocked). Commit.
 
 ### Task 8: workflow_compat registration + validation tests
 **Files:** `app/workflow_compat.py`, `tests/test_workflow_compat.py`.
-- [ ] Add `TTLGArtgenGenerate`, `TTLGAnimateDiff` to `COMPATIBILITY_MAP` (native tier) + document the output-key contract. Tests: `validate_spec` accepts specs using them + each artgen plugin; rejects an unknown plugin. Commit.
+- [ ] Add `TTLGArtgenGenerate`, `TTLGAnimateDiff` to `COMPATIBILITY_MAP` (native tier) + document the output-key contract and the `TTLGAnimateDiff` inputs (incl. `prompt_schedule`, `loop`). Tests: `validate_spec` accepts specs using them + each artgen plugin; rejects an unknown plugin. Commit.
 
-### Task 9: small QB2 run (controller-run)
-- [ ] Author a 3-node throwaway spec (artgen `verse` → PromptCompose → `TTLGAnimateDiff` mode=remix) and run it on QB2; confirm a text artifact + a stitched GIF. Record. (Full funky pipelines are SP-B.)
+### Task 9: QB2 hardware runs (controller-run)
+- [ ] (Milestone-1 gate, deferred) real run of `docs/examples/workflows/1964-worlds-fair.json` — see Task 5.
+- [ ] Author a small spec (artgen `verse` → PromptCompose → `TTLGAnimateDiff`) and run on QB2 exercising: (a) `mode=remix`, (b) a `prompt_schedule` (prompt travel), (c) `loop=seamless`. Confirm a text artifact + a stitched GIF + a visibly morphing/looping clip. Record. (Full funky pipelines are SP-B.)
 
 ### Task 10: Changelog note
-- [ ] Add a bullet to the 0.12.0 changelog stanza: "pipeline: real generic execution engine (app/pipeline_engine.py) replacing the run_workflow.sh stub; artgen + AnimateDiff node coverage; CLI gains multichip flags." No version bump. Commit.
+- [ ] Add a bullet to the 0.12.0 changelog stanza: "pipeline: real generic execution engine (app/pipeline_engine.py) replacing the run_workflow.sh stub; artgen + AnimateDiff node coverage; animatediff CLI parity + prompt-travel + seamless-loop (tt-animatediff re-released for per-frame conditioning)." No version bump here. Commit.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** engine (load/topo/run/dispatch/signals/server-switch) → Tasks 1-3; 10 handlers ported → Task 2; 1964 proof (dry + real) → Tasks 4-5; artgen+animatediff nodes → Tasks 6-8; validation → Task 8; QB2 acceptance → Tasks 5,9; changelog → Task 10. ✓
+**Spec coverage:** engine (load/topo/run/dispatch/signals/server-switch) → Tasks 1-3; 10 handlers ported → Task 2; 1964 proof (dry + real) → Tasks 4-5; artgen+animatediff nodes → Tasks 6,7; AnimateDiff-Evolved fold-in (CLI parity → 6, prompt travel → 6b, seamless loop → 6c; context windows deferred) → Tasks 6-6c; validation → Task 8; QB2 acceptance → Tasks 5,9; changelog → Task 10. ✓
 **Placeholder scan:** engine core is complete code; handler ports cite exact bash source line ranges + give signatures/tests (the bash IS the reference — reproducing 230 lines of bash-with-heredocs as prose would be less accurate than porting from source). Milestone-2 tasks are concrete (design fixed in the spec). No TBD/TODO.
 **Type consistency:** `load_spec`/`topo_order`/`resolve_inputs`/`run`/`HANDLERS`/`register`/`_Ctx`/`_is_wire` names identical across tasks; output keys match the spec's contract table; signal strings match `pipeline_runner.py`.
