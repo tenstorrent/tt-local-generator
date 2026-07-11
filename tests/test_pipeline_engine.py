@@ -1,4 +1,8 @@
-import importlib.util, sys
+import base64
+import importlib.util
+import io
+import sys
+import urllib.error
 from pathlib import Path
 import pytest
 
@@ -138,6 +142,164 @@ def test_media_image_request_backs_off_on_missing_id(monkeypatch):
     assert calls["post"] == 2
     # The 10s backoff must have fired even though no exception was raised.
     assert sleeps.count(10) == 1
+
+
+# ── Task 4b: media image/video endpoints are synchronous in v0.18.0 ─────────
+#
+# Confirmed on QB2 hardware: POST /v1/images/generations is SYNCHRONOUS — it
+# returns {"images": ["<base64 JPEG>"]} inline (HTTP 200). There is no image
+# status/download endpoint. The pre-fix code assumed resp["id"] existed and
+# polled for it; with no "id" present it retried 3x then raised "image job
+# submission failed after 3 attempts" — even though the sync response was a
+# genuine, immediately-usable success. The unit tests that mocked the async
+# contract validated a fiction and never caught this.
+
+# A minimal valid 1x1 PNG, used as "the decoded bytes" for sync-response fixtures.
+_TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY"
+    "42YAAAAASUVORK5CYII="
+)
+
+
+def test_media_image_request_sync_images_response_writes_bytes(monkeypatch, tmp_path):
+    """RED against the pre-fix code: it reads resp.get('id'), finds nothing in
+    a sync {"images": [...]} response, retries 3x, and raises — even though
+    this is the real, successful v0.18.0 shape. No poll/download should occur."""
+    b64 = base64.b64encode(_TINY_PNG).decode()
+    monkeypatch.setattr(eng, "_post_json", lambda url, payload, timeout=30: {"images": [b64]})
+
+    def _boom_get(*a, **k):
+        raise AssertionError("_get_json must not be called for a sync response")
+
+    def _boom_dl(*a, **k):
+        raise AssertionError("_download must not be called for a sync response")
+
+    monkeypatch.setattr(eng, "_get_json", _boom_get)
+    monkeypatch.setattr(eng, "_download", _boom_dl)
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    out_path = str(tmp_path / "out.png")
+    out = eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                                    steps=4, seed=0, out_path=out_path)
+    assert out == out_path
+    assert Path(out_path).read_bytes() == _TINY_PNG
+
+
+def test_media_image_request_sync_strips_data_uri_prefix(monkeypatch, tmp_path):
+    b64 = base64.b64encode(_TINY_PNG).decode()
+    monkeypatch.setattr(
+        eng, "_post_json",
+        lambda url, payload, timeout=30: {"images": [f"data:image/png;base64,{b64}"]},
+    )
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    out_path = str(tmp_path / "out.png")
+    eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                              steps=4, seed=0, out_path=out_path)
+    assert Path(out_path).read_bytes() == _TINY_PNG
+
+
+def test_media_image_request_async_backcompat_still_polls_and_downloads(monkeypatch, tmp_path):
+    """Older/other media servers that return {"id": ...} still poll + download."""
+    monkeypatch.setattr(eng, "_post_json", lambda url, payload, timeout=30: {"id": "job1"})
+    monkeypatch.setattr(eng, "_get_json", lambda url, timeout=30: {"status": "completed"})
+
+    downloaded = {}
+
+    def fake_download(url, out_path, timeout=300):
+        downloaded["url"] = url
+        Path(out_path).write_bytes(b"async-bytes")
+
+    monkeypatch.setattr(eng, "_download", fake_download)
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    out_path = str(tmp_path / "out.png")
+    out = eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                                    steps=4, seed=0, out_path=out_path)
+    assert out == out_path
+    assert Path(out_path).read_bytes() == b"async-bytes"
+    assert downloaded["url"] == "http://x/v1/images/generations/job1/download"
+
+
+def test_media_image_request_neither_images_nor_id_raises_with_response(monkeypatch):
+    monkeypatch.setattr(eng, "_post_json",
+                        lambda url, payload, timeout=30: {"detail": "bad request"})
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError) as exc:
+        eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                                  steps=4, seed=0, out_path="/tmp/out.png")
+    assert "bad request" in str(exc.value)
+
+
+def test_media_image_request_surfaces_http_error_body(monkeypatch):
+    """A 4xx/5xx from the submit POST must not be blanket-swallowed: its body
+    should be visible in the final raised error."""
+    def fake_post(url, payload, timeout=30):
+        raise urllib.error.HTTPError(url, 422, "Unprocessable",
+                                     {}, io.BytesIO(b'{"detail":"bad width"}'))
+
+    monkeypatch.setattr(eng, "_post_json", fake_post)
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError) as exc:
+        eng._media_image_request(server="http://x", prompt="p", width=512, height=512,
+                                  steps=4, seed=0, out_path="/tmp/out.png")
+    assert "bad width" in str(exc.value)
+
+
+# ---- _media_video_request: sync vs async (shape unverified on hardware — see
+# code comment in pipeline_engine.py; will be confirmed once SkyReels runs on
+# QB2). Written defensively to mirror the confirmed image contract. ----
+
+def test_media_video_request_sync_video_key_writes_bytes(monkeypatch, tmp_path):
+    payload_bytes = b"fake-video-bytes"
+    b64 = base64.b64encode(payload_bytes).decode()
+    monkeypatch.setattr(eng, "_post_json", lambda url, payload, timeout=600: {"video": b64})
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    src = tmp_path / "src.png"
+    src.write_bytes(b"\x89PNG\r\n")
+    out_path = str(tmp_path / "out.mp4")
+    out = eng._media_video_request(server="http://x", model="m", prompt="p", image=str(src),
+                                    width=960, height=544, num_frames=33, steps=20, seed=1,
+                                    out_path=out_path)
+    assert out == out_path
+    assert Path(out_path).read_bytes() == payload_bytes
+
+
+def test_media_video_request_async_backcompat_still_polls_and_downloads(monkeypatch, tmp_path):
+    monkeypatch.setattr(eng, "_post_json", lambda url, payload, timeout=600: {"id": "job1"})
+    monkeypatch.setattr(eng, "_get_json", lambda url, timeout=30: {"status": "completed"})
+
+    def fake_download(url, out_path, timeout=300):
+        Path(out_path).write_bytes(b"async-video")
+
+    monkeypatch.setattr(eng, "_download", fake_download)
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    src = tmp_path / "src.png"
+    src.write_bytes(b"\x89PNG\r\n")
+    out_path = str(tmp_path / "out.mp4")
+    out = eng._media_video_request(server="http://x", model="m", prompt="p", image=str(src),
+                                    width=960, height=544, num_frames=33, steps=20, seed=1,
+                                    out_path=out_path)
+    assert out == out_path
+    assert Path(out_path).read_bytes() == b"async-video"
+
+
+def test_media_video_request_neither_shape_raises_with_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(eng, "_post_json",
+                        lambda url, payload, timeout=600: {"detail": "no video for you"})
+    monkeypatch.setattr(eng.time, "sleep", lambda s: None)
+
+    src = tmp_path / "src.png"
+    src.write_bytes(b"\x89PNG\r\n")
+    with pytest.raises(RuntimeError) as exc:
+        eng._media_video_request(server="http://x", model="m", prompt="p", image=str(src),
+                                  width=960, height=544, num_frames=33, steps=20, seed=1,
+                                  out_path=str(tmp_path / "out.mp4"))
+    assert "no video for you" in str(exc.value)
 
 
 def test_text_to_image_dry_run_key():

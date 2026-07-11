@@ -181,12 +181,19 @@ def _download(url: str, out_path: str, timeout: int = 300) -> None:
 
 def _media_image_request(*, server, prompt, width, height, steps, seed,
                          out_path, negative_prompt=None) -> str:
-    """Submit a media-server image job, poll to completion, download the result.
+    """Submit a media-server image job and write the resulting image to *out_path*.
+
+    Confirmed on QB2 hardware (v0.18.0 media server): POST /v1/images/generations
+    is SYNCHRONOUS — it returns ``{"images": ["<base64 JPEG>"]}`` inline (HTTP
+    200). There is no image status/download endpoint at all. This function
+    handles that sync response as the primary success path, but keeps the
+    older async job contract (``{"id": ...}`` + poll + download) as a fallback
+    for any server that still works that way.
 
     Ports node_text_to_image (run_workflow.sh:188-263): 2 s pre-sleep, up to 3
-    submit retries with 10 s backoff, then poll the job (30 s cadence, ≤40 polls)
-    and download the finished image to *out_path*. Returns *out_path* on success;
-    raises RuntimeError otherwise.
+    submit retries with 10 s backoff. Returns *out_path* on success; raises
+    RuntimeError otherwise (with the real response/error attached so failures
+    are diagnosable instead of a generic "submission failed").
     """
     # Fix 1 (bash): brief pre-sleep so back-to-back image nodes don't 429.
     time.sleep(2)
@@ -197,21 +204,45 @@ def _media_image_request(*, server, prompt, width, height, steps, seed,
         payload["negative_prompt"] = negative_prompt
 
     # Fix 4 (bash): retry submission up to 3× with 10 s backoff on ANY
-    # non-success outcome — empty response, missing "id", or a raised
-    # exception — not just exceptions (bin/run_workflow.sh:218-223).
-    job = None
+    # non-success outcome — empty response, missing "id"/"images", HTTP error,
+    # or a raised exception — not just exceptions (bin/run_workflow.sh:218-223).
+    resp = None
+    last_error = None
     for attempt in (1, 2, 3):
         try:
             resp = _post_json(f"{server}/v1/images/generations", payload)
-            job = resp.get("id")
-        except Exception:  # noqa: BLE001 — mirror bash's broad catch
-            job = None
-        if job:
-            break
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode(errors="replace")
+            except Exception:  # noqa: BLE001
+                body = ""
+            last_error = f"HTTP {e.code}: {body}"
+            resp = None
+        except Exception as e:  # noqa: BLE001 — mirror bash's broad catch
+            last_error = str(e)
+            resp = None
+
+        if resp is not None:
+            images = resp.get("images")
+            if images:
+                # Sync path (v0.18.0): image bytes are inline — no job, no poll.
+                data = images[0]
+                if isinstance(data, str) and data.startswith("data:"):
+                    data = data.split(",", 1)[1]
+                Path(out_path).write_bytes(base64.b64decode(data))
+                return out_path
+            if resp.get("id"):
+                break  # async job accepted — fall through to poll/download below
+            last_error = resp  # 200 OK but neither "images" nor a job "id"
+
         if attempt < 3:
             time.sleep(10)
+
+    job = resp.get("id") if resp else None
     if not job:
-        raise RuntimeError("image job submission failed after 3 attempts")
+        raise RuntimeError(
+            f"image job submission failed after 3 attempts: {last_error}"
+        )
 
     status = ""
     for _ in range(40):
@@ -237,11 +268,21 @@ def _media_image_request(*, server, prompt, width, height, steps, seed,
 
 def _media_video_request(*, server, model, prompt, image, width, height,
                          num_frames, steps, seed, out_path) -> str:
-    """Submit a media-server i2v job, poll to completion, download the video.
+    """Submit a media-server i2v job and write the resulting video to *out_path*.
+
+    NOTE: unlike the image endpoint (confirmed synchronous on QB2 hardware,
+    see _media_image_request), the video endpoint's response shape has NOT
+    been verified on hardware yet — it needs a live SkyReels run to confirm.
+    This is written defensively so it works either way: if the server responds
+    synchronously with inline base64 video data (mirroring the image contract)
+    it's handled directly; otherwise the original async job/poll/download
+    contract (``{"id": ...}``) is used as before. Update this comment once
+    confirmed on QB2.
 
     Ports node_image_to_video (run_workflow.sh:265-312): base64-encode the source
-    image, POST the i2v job, poll (30 s cadence, ≤40 polls), download to
-    *out_path*. Returns *out_path*; raises RuntimeError on failure.
+    image, POST the i2v job (long timeout in case it's sync-blocking), poll
+    (30 s cadence, ≤40 polls) and download to *out_path* for the async case.
+    Returns *out_path*; raises RuntimeError on failure.
     """
     b64 = base64.b64encode(Path(image).read_bytes()).decode()
     payload = {
@@ -251,7 +292,21 @@ def _media_video_request(*, server, model, prompt, image, width, height,
         "num_frames": int(num_frames), "num_inference_steps": int(steps),
         "seed": int(seed),
     }
-    resp = _post_json(f"{server}/v1/videos/generations/i2v", payload)
+    # Long timeout: if this server build is sync-blocking like the image
+    # endpoint turned out to be, the POST itself won't return until the video
+    # is fully generated.
+    resp = _post_json(f"{server}/v1/videos/generations/i2v", payload, timeout=600)
+
+    # Sync path (unverified — defensive): plausible inline-data keys, in order.
+    for key in ("video", "videos", "data", "images"):
+        val = resp.get(key)
+        if val:
+            data = val[0] if isinstance(val, list) else val
+            if isinstance(data, str) and data.startswith("data:"):
+                data = data.split(",", 1)[1]
+            Path(out_path).write_bytes(base64.b64decode(data))
+            return out_path
+
     job = resp.get("id")
     if not job:
         raise RuntimeError(f"video job submission failed: {resp}")
