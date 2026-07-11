@@ -952,7 +952,27 @@ def _real_start_server(key: str, health_url: "str | None", max_wait: int,
         emit(f"LOG:  no LLM detected — starting default {key_to_start}")
 
     emit(f"LOG:  starting server {key_to_start}")
-    sm.start(key_to_start)  # non-blocking --gui start
+    start_results = sm.start(key_to_start)  # non-blocking --gui start
+
+    # Fail fast if the start *command itself* failed (e.g. tt-ctl/run.py
+    # exited non-zero because of a bad --model argument, missing script,
+    # etc.) — no container ever launched, so polling the health URL for up
+    # to max_wait (60 min) would just waste an hour before reporting a
+    # generic "did not become ready" error that hides the real cause.
+    # This is distinct from "health not ready yet", which is the *expected*
+    # state for a server that started fine but is still compiling/loading
+    # weights (e.g. SkyReels can take 30-60 min) — that case must still
+    # fall through to the poll loop below unmodified.
+    failed = [r for r in start_results if getattr(r, "returncode", 0) != 0]
+    if failed:
+        r = failed[0]
+        err_tail = (getattr(r, "stderr", "") or getattr(r, "stdout", "") or "").strip()
+        # Keep the tail short — the useful error is usually at the end of
+        # argparse/script output.
+        err_tail = "\n".join(err_tail.splitlines()[-20:])
+        raise RuntimeError(
+            f"failed to start {key_to_start} (exit {r.returncode}): {err_tail}"
+        )
 
     if not health_url:
         return

@@ -897,6 +897,121 @@ def test_run_backend_change_triggers_reset_and_start(monkeypatch, tmp_path):
     assert resets == [("", "flux"), ("flux", "skyreels")]
 
 
+# ── _real_start_server: fail-fast on a failed backend start ─────────────────
+#
+# Bug observed on hardware: `tt-ctl start skyreels` exited non-zero
+# ("run.py: error: argument --model: invalid choice") because no container
+# ever launched, yet _real_start_server ignored sm.start()'s result and
+# polled the (dead) health URL for the full max_wait (up to 60 minutes)
+# before raising a generic "did not become ready" error. The real error was
+# available immediately at start time. Fix: check sm.start()'s returncode
+# and raise immediately (with the captured stderr) on a non-zero exit,
+# without ever touching the poll loop. A server that starts fine but is
+# still warming up (no health response yet, but a *successful* start command)
+# must still poll up to max_wait — that legitimate wait must not shrink.
+
+class _FakeClock:
+    """Deterministic stand-in for the stdlib `time` module so tests run
+    instantly regardless of max_wait. `sleep()` advances a fake clock;
+    `time()` reads it back — matches the two calls _real_start_server makes."""
+    def __init__(self):
+        self.now = 0.0
+        self.sleep_calls = 0
+
+    def sleep(self, seconds):
+        self.sleep_calls += 1
+        self.now += seconds
+
+    def time(self):
+        return self.now
+
+
+def _fake_completed(returncode, stdout="", stderr=""):
+    from types import SimpleNamespace
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_real_start_server_fails_fast_on_nonzero_start_exit(monkeypatch):
+    """RED against pre-fix code: it ignores sm.start()'s return value entirely,
+    so this must currently fail (no RuntimeError raised quickly; _get_json
+    would eventually be polled instead)."""
+    clock = _FakeClock()
+    monkeypatch.setattr(eng, "time", clock)
+
+    monkeypatch.setattr(
+        eng.sm, "start",
+        lambda key, *a, **k: [_fake_completed(
+            2, stdout="", stderr="run.py: error: argument --model: invalid choice"
+        )],
+    )
+
+    get_json_calls = []
+    def _boom_get_json(url, timeout=30):
+        get_json_calls.append(url)
+        return {"model_ready": False}
+    monkeypatch.setattr(eng, "_get_json", _boom_get_json)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        eng._real_start_server("skyreels", "http://localhost:8000/health", 60,
+                               emit=lambda s: None)
+
+    assert "skyreels" in str(exc_info.value)
+    assert "invalid choice" in str(exc_info.value)
+    # Must not have entered the poll loop at all.
+    assert get_json_calls == []
+    assert clock.sleep_calls == 0
+
+
+def test_real_start_server_waits_through_slow_but_valid_warmup(monkeypatch):
+    """A start command that succeeds (exit 0) but whose server is still
+    compiling/loading must keep polling — not-ready responses are normal
+    and must not be treated as a failure."""
+    clock = _FakeClock()
+    monkeypatch.setattr(eng, "time", clock)
+
+    monkeypatch.setattr(eng.sm, "start", lambda key, *a, **k: [_fake_completed(0)])
+
+    responses = iter([
+        {"model_ready": False},
+        {"model_ready": False},
+        {"model_ready": True},
+    ])
+    get_json_calls = []
+    def _fake_get_json(url, timeout=30):
+        get_json_calls.append(url)
+        return next(responses)
+    monkeypatch.setattr(eng, "_get_json", _fake_get_json)
+
+    eng._real_start_server("skyreels", "http://localhost:8000/health", 60,
+                           emit=lambda s: None)
+
+    assert len(get_json_calls) == 3
+    assert clock.sleep_calls == 3
+
+
+def test_real_start_server_still_times_out_when_never_ready(monkeypatch):
+    """A successful start command whose server never reports ready must still
+    raise the "did not become ready" timeout error once max_wait elapses —
+    the fail-fast check must not shorten a legitimate warmup wait."""
+    clock = _FakeClock()
+    monkeypatch.setattr(eng, "time", clock)
+
+    monkeypatch.setattr(eng.sm, "start", lambda key, *a, **k: [_fake_completed(0)])
+
+    get_json_calls = []
+    def _never_ready(url, timeout=30):
+        get_json_calls.append(url)
+        return {"model_ready": False}
+    monkeypatch.setattr(eng, "_get_json", _never_ready)
+
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        eng._real_start_server("skyreels", "http://localhost:8000/health", 1,
+                               emit=lambda s: None)
+
+    # Polled repeatedly (every 30s) up to the 1-minute deadline, not fail-fast.
+    assert len(get_json_calls) >= 2
+
+
 def test_run_1964_real_backend_sequence(monkeypatch, tmp_path):
     """Milestone-1 gate: the real 1964 spec (non-dry) produces the expected
     backend call sequence, resetting only when the backend actually changes."""
