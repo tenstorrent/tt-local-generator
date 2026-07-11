@@ -470,6 +470,32 @@ def test_artgen_generate_builds_argv_with_flag_mapping(monkeypatch, tmp_path):
     assert "png_path" not in out
 
 
+def test_artgen_generate_skips_none_valued_inputs(monkeypatch, tmp_path):
+    # Regression: the input->flag loop only excluded ("plugin", "ext") and had
+    # no `value is None` guard, so a None-valued input (e.g. a spec literal
+    # `null` or an unresolved wire) produced a literal `--flag None` on the
+    # CLI. The sibling TTLGAnimateDiff handler already guards `value is None`;
+    # TTLGArtgenGenerate must do the same.
+    calls = {}
+
+    def fake_run_tt_ctl(argv, timeout=600):
+        calls["argv"] = argv
+        out_path = Path(argv[argv.index("--output") + 1])
+        out_path.write_text("hello verse", encoding="utf-8")
+
+    monkeypatch.setattr(eng, "_run_tt_ctl", fake_run_tt_ctl)
+    eng.HANDLERS["TTLGArtgenGenerate"]("13", {
+        "plugin": "verse",
+        "negative_prompt": None,
+        "theme": "dusk",
+    }, _ctx(tmp=str(tmp_path)))
+
+    argv = calls["argv"]
+    assert argv[argv.index("--theme") + 1] == "dusk"
+    assert "--negative-prompt" not in argv
+    assert "None" not in argv
+
+
 def test_artgen_generate_sets_png_path_for_raster_ext(monkeypatch, tmp_path):
     def fake_run_tt_ctl(argv, timeout=600):
         out_path = Path(argv[argv.index("--output") + 1])

@@ -603,7 +603,7 @@ def _h_artgen_generate(nid, inp, ctx):
 
     argv = ["artgen", plugin, "--output", out]
     for key, value in inp.items():
-        if key in ("plugin", "ext"):
+        if key in ("plugin", "ext") or value is None:
             continue
         _append_flag_value(argv, _flag_from_key(key), value)
     _run_tt_ctl(argv)
