@@ -7725,6 +7725,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # "Pipelines" toolbar toggle (see _show_pipelines) since it scans run
         # history on construction — no need to pay that cost at startup.
         self._pipeline_studio = None  # type: "PipelineStudio | None"
+        # Guards _on_pipelines_toggled against recursing back into
+        # _hide_pipelines when _on_source_change programmatically unchecks
+        # the Pipelines toggle (see _on_source_change / _on_pipelines_toggled).
+        self._pipelines_toggle_syncing = False
 
         self._build_ui()
         self._load_history()
@@ -8598,6 +8602,20 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_source_change(self, source: str) -> None:
         """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
+        # A source-tab click means Pipelines (if it was showing) is no longer
+        # the active view — visually uncheck its toolbar toggle so it doesn't
+        # lag behind reality (previously it stayed "checked" until Pipelines
+        # was clicked again). Guard re-entrancy: set_active(False) fires the
+        # button's "toggled" signal, which would otherwise recurse into
+        # _hide_pipelines -> _on_source_change.
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and pipelines_btn.get_active():
+            self._pipelines_toggle_syncing = True
+            try:
+                pipelines_btn.set_active(False)
+            finally:
+                self._pipelines_toggle_syncing = False
+
         self._gallery_stack.set_visible_child_name(source)
         is_artgen = source == "artgen"
 
@@ -8619,6 +8637,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_pipelines_toggled(self, btn: Gtk.ToggleButton) -> None:
         """Toolbar toggle handler: show Pipeline Studio while active, restore on untoggle."""
+        if getattr(self, "_pipelines_toggle_syncing", False):
+            # _on_source_change is cosmetically unchecking this button because a
+            # source tab was just selected; the gallery/panel switch already
+            # happened there, so don't re-run _hide_pipelines on top of it.
+            return
         if btn.get_active():
             self._show_pipelines()
         else:

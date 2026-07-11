@@ -128,3 +128,29 @@ def test_pipelines_toggle_button_drives_show_and_hide(tmp_path, monkeypatch):
     btn.set_active(False)
     obj._on_pipelines_toggled(btn)
     assert obj._gallery_stack.get_visible_child_name() == "video"
+
+
+def test_source_change_unchecks_pipelines_toggle(tmp_path, monkeypatch):
+    """Selecting a source tab while Pipelines is showing must visually uncheck
+    the Pipelines toggle button, making the two mutually exclusive.
+
+    Regression: previously the toggle stayed "checked" after a source tab was
+    clicked — the gallery correctly switched away from Pipelines, but the
+    toolbar button only self-corrected the next time Pipelines itself was
+    clicked. Wired via the button's real "toggled" signal (not a direct call)
+    so this also proves the fix doesn't recurse back into _hide_pipelines /
+    _on_source_change when the toggle is flipped off programmatically.
+    """
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._pipelines_btn = Gtk.ToggleButton()
+    obj._pipelines_btn.connect("toggled", obj._on_pipelines_toggled)
+
+    obj._pipelines_btn.set_active(True)
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    assert obj._pipelines_btn.get_active() is True
+
+    # Simulate clicking the "video" source tab while Pipelines is showing.
+    obj._on_source_change("video")
+
+    assert obj._gallery_stack.get_visible_child_name() == "video"
+    assert obj._pipelines_btn.get_active() is False
