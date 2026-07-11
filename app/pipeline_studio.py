@@ -22,13 +22,29 @@ Two pieces:
     the caller (PipelineStudio, and eventually MainWindow) decides what that
     means (switch to the "open" stack page, drill into the run, etc).
 
+`OpenView(Gtk.Box)`
+    The "learn from example" page (SP-C Task 4): one run's steps laid out
+    end-to-end, in order, each with its real artifact (or an honest
+    placeholder if the step hasn't produced one yet) and a per-step "Remix
+    from here →" stub, plus a top "Remix whole pipeline →" stub. Layout
+    follows the validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/open-run.html`. Like
+    DiscoverView, data arrives ONLY through `set_run()` — no PipelineStore
+    import here. Both remix controls emit the custom `remix-request` signal
+    (str): the node_id for a per-step remix, or `""` for the whole pipeline.
+    Phase 1 wiring (PipelineStudio, below) treats this as a stub — "coming in
+    the editor (Phase 2)" — not an actual editor.
+
 `PipelineStudio(Gtk.Box)`
-    The shell: a Gtk.Stack with "discover" (DiscoverView) and "open" (a stub
-    for SP-C Task 4) pages. Loads runs off the GTK main thread — via
-    `pipeline_view_model.list_run_views(PipelineStore())` in a daemon thread —
-    then hands them to `DiscoverView.set_runs` through `GLib.idle_add`, per
-    the GTK threading rule in this repo's CLAUDE.md (never touch widgets from
-    a background thread).
+    The shell: a Gtk.Stack with "discover" (DiscoverView) and "open"
+    (OpenView, wrapped with a "← Discover" back control) pages. Loads runs
+    off the GTK main thread — via `pipeline_view_model.list_run_views(PipelineStore())`
+    in a daemon thread — then hands them to `DiscoverView.set_runs` through
+    `GLib.idle_add`, per the GTK threading rule in this repo's CLAUDE.md
+    (never touch widgets from a background thread). `DiscoverView`'s
+    "open-run" signal triggers the same pattern for a single run: build its
+    `RunView` off-thread (`build_run_view(PipelineStore().get_run(run_id))`),
+    then `GLib.idle_add` both `OpenView.set_run` and the stack switch.
 """
 from __future__ import annotations
 
@@ -41,7 +57,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 from pipeline_store import PipelineStore  # noqa: E402
-from pipeline_view_model import RunView, list_run_views  # noqa: E402
+from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +75,34 @@ def _thumb_pixbuf(path: "str | None", width: int, height: int):
         return None
     from main_window import _load_pixbuf
     return _load_pixbuf(path, width, height)
+
+
+def _build_thumb_frame(path: "str | None", width: int, height: int,
+                        css_class: str) -> Gtk.Widget:
+    """A fixed-size box holding either a scaled Gtk.Picture or an honest placeholder.
+
+    Shared by DiscoverView (run/hero cards) and OpenView (per-step artifacts)
+    so there's exactly one "thumbnail or placeholder" rendering rule in this
+    module. A step/run with no artifact yet (still pending, or an intent that
+    never produces a file — e.g. caption/text) renders the placeholder rather
+    than an empty or missing box.
+    """
+    frame = Gtk.Box()
+    frame.set_size_request(width, height)
+    frame.add_css_class(css_class)
+    frame.set_halign(Gtk.Align.CENTER)
+    frame.set_valign(Gtk.Align.CENTER)
+
+    pb = _thumb_pixbuf(path, width, height)
+    if pb is not None:
+        pic = Gtk.Picture.new_for_pixbuf(pb)
+        pic.set_can_shrink(True)
+        frame.append(pic)
+    else:
+        placeholder = Gtk.Label(label="\U0001f5bc️")  # 🖼️
+        placeholder.add_css_class("muted")
+        frame.append(placeholder)
+    return frame
 
 
 # ── Dark forest-teal theme ──────────────────────────────────────────────────
@@ -128,6 +172,66 @@ _CSS = b"""
 .ps-btn-ghost {
     color: #74C5DF;
     border-radius: 9px;
+}
+.ps-open-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #eef8f6;
+}
+.ps-open-back {
+    color: #6f948d;
+    font-size: 13px;
+}
+.ps-step {
+    background-color: #0d2b2a;
+    border: 1px solid alpha(#74C5DF, 0.16);
+    border-radius: 12px;
+    padding: 12px;
+}
+.ps-step-n {
+    font-family: monospace;
+    font-size: 13px;
+    color: #6f948d;
+}
+.ps-step-verb {
+    font-size: 15px;
+    font-weight: 700;
+    color: #eef8f6;
+}
+.ps-step-noun {
+    font-size: 12px;
+    color: #94b8b2;
+}
+.ps-step-model {
+    font-size: 10.5px;
+    color: #6f948d;
+}
+.ps-status-done {
+    color: #6FABA0;
+}
+.ps-status-running {
+    color: #F6BC42;
+}
+.ps-status-failed {
+    color: #FF9E8A;
+}
+.ps-status-pending {
+    color: #6f948d;
+}
+.ps-remix-btn {
+    color: #4FD1C5;
+    font-size: 10.5px;
+}
+.ps-remix-all {
+    background-color: #1B8EB1;
+    color: #fff;
+    border-radius: 8px;
+    padding: 7px 13px;
+    font-size: 12px;
+}
+.ps-remix-toast {
+    color: #F6BC42;
+    font-size: 12px;
 }
 """
 
@@ -350,22 +454,159 @@ class DiscoverView(Gtk.Box):
 
     def _make_thumb(self, path: "str | None", width: int, height: int,
                      css_class: str) -> Gtk.Widget:
-        frame = Gtk.Box()
-        frame.set_size_request(width, height)
-        frame.add_css_class(css_class)
-        frame.set_halign(Gtk.Align.CENTER)
-        frame.set_valign(Gtk.Align.CENTER)
+        return _build_thumb_frame(path, width, height, css_class)
 
-        pb = _thumb_pixbuf(path, width, height)
-        if pb is not None:
-            pic = Gtk.Picture.new_for_pixbuf(pb)
-            pic.set_can_shrink(True)
-            frame.append(pic)
-        else:
-            placeholder = Gtk.Label(label="\U0001f5bc️")  # 🖼️
-            placeholder.add_css_class("muted")
-            frame.append(placeholder)
-        return frame
+
+class OpenView(Gtk.Box):
+    """Open page: one run's steps laid out end-to-end (learn-by-example).
+
+    Data comes ONLY through `set_run()` — same rule as DiscoverView, and for
+    the same reason: this widget must be unit-testable with a hand-built
+    RunView and never reach into PipelineStore/disk itself.
+    """
+
+    __gsignals__ = {
+        "remix-request": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+    }
+
+    STEP_THUMB_W, STEP_THUMB_H = 150, 92
+
+    # status -> (glyph, css class). Anything outside pipeline_view_model's
+    # known statuses (which is already constrained to done/running/pending/
+    # failed — see _resolve_status) falls back to the pending glyph rather
+    # than raising, matching the "always render *something*" rule the rest
+    # of this module follows for unrecognized data.
+    _STATUS_GLYPH = {"done": "✓", "running": "⟳", "pending": "•",
+                      "failed": "✕"}
+    _STATUS_CSS = {"done": "ps-status-done", "running": "ps-status-running",
+                    "pending": "ps-status-pending", "failed": "ps-status-failed"}
+
+    def __init__(self) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add_css_class("ps-discover")  # same dark-teal page background
+        _apply_css()
+
+        # Populated by set_run(); keyed by node_id, in step order (Python
+        # dicts preserve insertion order) so tests/callers can both look up a
+        # specific step's widget and read back the render order.
+        self._step_remix_buttons: dict = {}
+        self._step_thumb_frames: dict = {}
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.set_margin_top(18)
+        header.set_margin_start(18)
+        header.set_margin_end(18)
+
+        self._title_label = Gtk.Label(label="")
+        self._title_label.set_xalign(0)
+        self._title_label.set_wrap(True)
+        self._title_label.add_css_class("ps-open-title")
+        self._title_label.set_hexpand(True)
+        header.append(self._title_label)
+
+        self._remix_all_btn = Gtk.Button(label="Remix whole pipeline →")
+        self._remix_all_btn.add_css_class("ps-remix-all")
+        # Whole-pipeline remix doesn't depend on which run is loaded, so this
+        # is wired once here rather than rebuilt in set_run().
+        self._remix_all_btn.connect("clicked", lambda _b: self.emit("remix-request", ""))
+        header.append(self._remix_all_btn)
+
+        self.append(header)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        scroller.set_hexpand(True)
+        self.append(scroller)
+
+        self._steps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self._steps_box.set_margin_top(10)
+        self._steps_box.set_margin_bottom(18)
+        self._steps_box.set_margin_start(18)
+        self._steps_box.set_margin_end(18)
+        scroller.set_child(self._steps_box)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def set_run(self, run: RunView) -> None:
+        """(Re)build the step list for *run*. Main-thread only, repeat-safe."""
+        self._title_label.set_label(run.title)
+
+        while child := self._steps_box.get_first_child():
+            self._steps_box.remove(child)
+        self._step_remix_buttons = {}
+        self._step_thumb_frames = {}
+
+        if not run.steps:
+            empty = Gtk.Label(label="This run has no steps.")
+            empty.add_css_class("ps-empty-msg")
+            self._steps_box.append(empty)
+            return
+
+        for index, step in enumerate(run.steps, start=1):
+            self._steps_box.append(self._build_step_row(index, step))
+
+    # ── Row building ─────────────────────────────────────────────────────────
+
+    def _build_step_row(self, index: int, step: StepView) -> Gtk.Widget:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        row.add_css_class("ps-step")
+
+        n_label = Gtk.Label(label=str(index))
+        n_label.add_css_class("ps-step-n")
+        n_label.set_valign(Gtk.Align.START)
+        row.append(n_label)
+
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        main.set_hexpand(True)
+        main.set_valign(Gtk.Align.CENTER)
+
+        verb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        verb_label = Gtk.Label(label=step.intent.verb)
+        verb_label.set_xalign(0)
+        verb_label.add_css_class("ps-step-verb")
+        verb_row.append(verb_label)
+
+        status_label = Gtk.Label(label=self._STATUS_GLYPH.get(step.status, "•"))
+        status_label.add_css_class(self._STATUS_CSS.get(step.status, "ps-status-pending"))
+        verb_row.append(status_label)
+        main.append(verb_row)
+
+        noun_label = Gtk.Label(label=step.intent.noun)
+        noun_label.set_xalign(0)
+        noun_label.add_css_class("ps-step-noun")
+        main.append(noun_label)
+
+        # model_label is omitted entirely (not shown as blank) for intents
+        # that don't name an underlying tool/model — e.g. Describe/Cut
+        # out/Read its depth are implementation-agnostic in the mockup.
+        if step.intent.model_label:
+            model_label = Gtk.Label(label=step.intent.model_label)
+            model_label.set_xalign(0)
+            model_label.add_css_class("ps-step-model")
+            main.append(model_label)
+
+        row.append(main)
+
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        right.set_valign(Gtk.Align.CENTER)
+
+        remix_btn = Gtk.Button(label="Remix from here →")
+        remix_btn.add_css_class("ps-remix-btn")
+        remix_btn.connect("clicked", self._on_remix_clicked, step.node_id)
+        right.append(remix_btn)
+        self._step_remix_buttons[step.node_id] = remix_btn
+
+        thumb = _build_thumb_frame(step.artifact_path, self.STEP_THUMB_W, self.STEP_THUMB_H,
+                                    "ps-card-thumb")
+        right.append(thumb)
+        self._step_thumb_frames[step.node_id] = thumb
+
+        row.append(right)
+        return row
+
+    def _on_remix_clicked(self, _button: Gtk.Button, node_id: str) -> None:
+        self.emit("remix-request", node_id)
 
 
 class PipelineStudio(Gtk.Box):
@@ -390,23 +631,60 @@ class PipelineStudio(Gtk.Box):
         self.discover.connect("open-run", self._on_open_run)
         self.stack.add_titled(self.discover, "discover", "Discover")
 
-        # Stub for now — fleshed out into the full step-by-step run view in
-        # SP-C Task 4.
-        open_stub = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        open_stub.set_valign(Gtk.Align.CENTER)
-        open_stub.set_halign(Gtk.Align.CENTER)
-        stub_label = Gtk.Label(label="Open view coming soon")
-        stub_label.add_css_class("ps-empty-msg")
-        open_stub.append(stub_label)
-        self.stack.add_titled(open_stub, "open", "Open")
+        # "open" page: a back-to-discover bar + a remix-stub toast wrapped
+        # around the real OpenView (fleshed out from the Task-3 stub here in
+        # Task 4).
+        open_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        back_bar.set_margin_top(10)
+        back_bar.set_margin_start(18)
+        back_btn = Gtk.Button(label="← Discover")
+        back_btn.add_css_class("ps-open-back")
+        back_btn.add_css_class("ps-btn-ghost")
+        back_btn.connect("clicked", self._on_back_to_discover)
+        back_bar.append(back_btn)
+        open_page.append(back_bar)
+
+        self.open_view = OpenView()
+        self.open_view.connect("remix-request", self._on_remix_request)
+        self.open_view.set_vexpand(True)
+        open_page.append(self.open_view)
+
+        # Phase-2 stub surface: remix-request is wired up here but does NOT
+        # open an editor yet — see module docstring. Hidden until the first
+        # remix click so it doesn't clutter the page on a fresh Open.
+        self._remix_toast = Gtk.Label(label="")
+        self._remix_toast.add_css_class("ps-remix-toast")
+        self._remix_toast.set_margin_start(18)
+        self._remix_toast.set_margin_bottom(10)
+        self._remix_toast.set_visible(False)
+        open_page.append(self._remix_toast)
+
+        self.stack.add_titled(open_page, "open", "Open")
 
         self.stack.set_visible_child_name("discover")
 
         self._load_runs_async()
 
     def _on_open_run(self, _widget: DiscoverView, run_id: str) -> None:
+        self._load_run_async(run_id)
         if self._on_open_run_cb is not None:
             self._on_open_run_cb(run_id)
+
+    def _on_back_to_discover(self, _button: Gtk.Button) -> None:
+        self.stack.set_visible_child_name("discover")
+
+    def _on_remix_request(self, _widget: "OpenView", node_id: str) -> None:
+        """Phase-2 stub: acknowledge the remix intent without opening an editor.
+
+        node_id == "" means "remix whole pipeline"; otherwise it's the
+        specific step's node_id. Real editing lands in SP-C Phase 2 — this
+        just proves the signal is wired end-to-end.
+        """
+        what = "the whole pipeline" if node_id == "" else f"step {node_id}"
+        self._remix_toast.set_label(f"Remixing {what} — coming in the editor (Phase 2)")
+        self._remix_toast.set_visible(True)
 
     def _load_runs_async(self) -> None:
         """Load RunViews off the GTK main thread; hand results back via idle_add.
@@ -424,3 +702,31 @@ class PipelineStudio(Gtk.Box):
             GLib.idle_add(self.discover.set_runs, runs)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _load_run_async(self, run_id: str) -> None:
+        """Build one run's RunView off the GTK main thread; show it via idle_add.
+
+        A missing run (deleted/renamed since Discover last loaded), an
+        unloadable spec, or any other failure logs a warning and leaves the
+        Discover page showing rather than crashing the shell or switching to
+        a half-populated Open page.
+        """
+        def worker() -> None:
+            try:
+                record = PipelineStore().get_run(run_id)
+                if record is None:
+                    log.warning("open-run: no run found for id %s", run_id)
+                    return
+                run_view = build_run_view(record)
+            except Exception:  # noqa: BLE001 — never let a load error crash the shell
+                log.warning("failed to build run view for %s", run_id, exc_info=True)
+                return
+            GLib.idle_add(self._show_run, run_view)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_run(self, run_view: RunView) -> None:
+        """Main-thread only: populate OpenView and switch the stack to it."""
+        self.open_view.set_run(run_view)
+        self.stack.set_visible_child_name("open")
+        return False

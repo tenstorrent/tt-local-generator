@@ -142,3 +142,135 @@ def test_pipeline_studio_shell_stack_children(tmp_path, monkeypatch):
     assert studio.stack.get_child_by_name("discover") is not None
     assert studio.stack.get_child_by_name("open") is not None
     assert studio.stack.get_visible_child_name() == "discover"
+
+
+# ── OpenView ─────────────────────────────────────────────────────────────────
+
+_FIXTURE_PNG = str(Path(__file__).parent / "fixtures" / "sp_c_run" / "node1_image.png")
+
+
+def _make_run_with_artifact() -> RunView:
+    """RunView with one 'done' step carrying a real artifact + one 'pending' step."""
+    done = StepView(node_id="1", intent=intent_for("TTLGTextToImage"), status="done",
+                    artifact_path=_FIXTURE_PNG)
+    pending = StepView(node_id="2", intent=intent_for("TTLGImageToVideo"), status="pending",
+                        artifact_path=None)
+    steps = [done, pending]
+    recipe = [f"{s.intent.verb} {s.intent.noun}" for s in steps]
+    return RunView(
+        run_id="run-open-1",
+        title="1964 World's Fair",
+        created_at="2026-07-10T12:00:00+00:00",
+        hero_path=_FIXTURE_PNG,
+        steps=steps,
+        recipe=recipe,
+    )
+
+
+def test_open_view_constructs():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    assert isinstance(view, Gtk.Box)
+
+
+def test_open_view_set_run_renders_one_row_per_step_in_order():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    run = _make_run_with_artifact()
+    view.set_run(run)
+
+    assert list(view._step_remix_buttons.keys()) == ["1", "2"]
+    assert view._title_label.get_label() == run.title
+
+
+def test_open_view_done_step_has_thumbnail_pending_shows_placeholder():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())
+
+    done_frame = view._step_thumb_frames["1"]
+    assert isinstance(done_frame.get_first_child(), Gtk.Picture)
+
+    pending_frame = view._step_thumb_frames["2"]
+    assert isinstance(pending_frame.get_first_child(), Gtk.Label)
+
+
+def test_open_view_set_run_can_be_called_again_to_refresh():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())
+    view.set_run(_make_run_with_artifact())
+
+    # Repeat-safe: no leftover widgets/handlers from the first call.
+    assert list(view._step_remix_buttons.keys()) == ["1", "2"]
+
+
+def test_open_view_set_run_zero_steps_no_crash():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    run = RunView(run_id="empty", title="Empty run", created_at="2026-07-10T12:00:00+00:00",
+                  hero_path=None, steps=[], recipe=[])
+    view.set_run(run)
+    assert view._step_remix_buttons == {}
+
+
+def test_open_view_remix_from_here_emits_node_id():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())
+
+    received = []
+    view.connect("remix-request", lambda _w, node_id: received.append(node_id))
+    view._step_remix_buttons["2"].emit("clicked")
+
+    assert received == ["2"]
+
+
+def test_open_view_remix_whole_pipeline_emits_empty_string():
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())
+
+    received = []
+    view.connect("remix-request", lambda _w, node_id: received.append(node_id))
+    view._remix_all_btn.emit("clicked")
+
+    assert received == [""]
+
+
+# ── PipelineStudio: open-run wiring ──────────────────────────────────────────
+
+def test_pipeline_studio_open_run_switches_stack_to_open(monkeypatch):
+    """Driving DiscoverView's open-run handler synchronously loads + shows the run.
+
+    Monkeypatches threading.Thread to run its target immediately (no real
+    background thread) and GLib.idle_add to call its callback immediately, so
+    the test doesn't race a daemon thread — per the brief's suggestion to
+    drive the load synchronously instead of depending on thread timing.
+    """
+    import pipeline_studio
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    class _FakeStore:
+        def get_run(self, run_id):
+            return {"id": run_id}  # opaque; build_run_view is stubbed below
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(pipeline_studio, "PipelineStore", _FakeStore)
+    monkeypatch.setattr(pipeline_studio, "build_run_view",
+                         lambda _record: _make_run_with_artifact())
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio._on_open_run(studio.discover, "run-open-1")
+
+    assert studio.stack.get_visible_child_name() == "open"
+    assert studio.open_view._title_label.get_label() == "1964 World's Fair"
