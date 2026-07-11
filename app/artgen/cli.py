@@ -122,6 +122,44 @@ def _generate_animate_prompt() -> str:
     return "a person walking through a moonlit forest, cinematic, atmospheric"
 
 
+def _parse_prompt_schedule(entries: list[str] | None) -> list[tuple[int, str]] | None:
+    """Parse repeatable --prompt-schedule FRAME:PROMPT strings into (frame, prompt)
+    tuples, preserved in declaration order (callers may rely on that order for
+    keyframe sequencing rather than re-sorting by frame index).
+
+    Splits on the FIRST colon only so a prompt containing its own colon (e.g.
+    "a scene: cold and blue") survives intact. Raises ValueError with an
+    actionable message on a malformed entry (missing colon, non-integer frame
+    index, or empty prompt text) — callers should catch this and exit cleanly
+    rather than let a traceback surface.
+    """
+    if not entries:
+        return None
+    schedule: list[tuple[int, str]] = []
+    for entry in entries:
+        if ":" not in entry:
+            raise ValueError(
+                f"Invalid --prompt-schedule entry {entry!r}: expected FRAME:PROMPT "
+                "(e.g. --prompt-schedule 0:'spring meadow')"
+            )
+        frame_str, prompt_str = entry.split(":", 1)
+        frame_str = frame_str.strip()
+        try:
+            frame = int(frame_str)
+        except ValueError:
+            raise ValueError(
+                f"Invalid --prompt-schedule entry {entry!r}: frame index "
+                f"{frame_str!r} is not an integer"
+            )
+        prompt_str = prompt_str.strip()
+        if not prompt_str:
+            raise ValueError(
+                f"Invalid --prompt-schedule entry {entry!r}: prompt text is empty"
+            )
+        schedule.append((frame, prompt_str))
+    return schedule
+
+
 def _cmd_animatediff(args) -> None:
     """Route for 'tt-ctl artgen animatediff' — uses prompt engine, not LLM artgen."""
     from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
@@ -131,6 +169,12 @@ def _cmd_animatediff(args) -> None:
         print(f"ERROR: {hw_msg}", file=sys.stderr)
         sys.exit(1)
     print(f"[hardware: {hw_msg}]", flush=True)
+
+    try:
+        prompt_schedule = _parse_prompt_schedule(getattr(args, "prompt_schedule", None))
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     count = getattr(args, "count", 1)
 
@@ -160,11 +204,30 @@ def _cmd_animatediff(args) -> None:
         ok, err = run_subprocess(
             prompt=prompt,
             out_path=out_path,
+            mode=getattr(args, "mode", "blackhole"),
             frames=getattr(args, "frames", 8),
             steps=getattr(args, "steps", 25),
             seed=seed,
             negative_prompt=getattr(args, "negative_prompt", "blurry, low quality"),
             temporal_alpha=getattr(args, "temporal_alpha", 0.35),
+            lightning=getattr(args, "lightning", False),
+            lightning_steps=getattr(args, "lightning_steps", 4),
+            device_id=getattr(args, "device_id", None),
+            chain_from=getattr(args, "chain_from", None),
+            chain_save=getattr(args, "chain_save", None),
+            chain_alpha=getattr(args, "chain_alpha", 0.6),
+            motion_adapter=getattr(args, "motion_adapter", None),
+            motion_adapter_alpha=getattr(args, "motion_adapter_alpha", 1.0),
+            motion_adapter_skip=getattr(args, "motion_adapter_skip", None),
+            multichip_mode=getattr(args, "multichip_mode", "off"),
+            per_chip_prompts=getattr(args, "per_chip_prompts", None),
+            seed_spread=getattr(args, "seed_spread", 1),
+            ramp=getattr(args, "ramp", "none"),
+            ramp_lo=getattr(args, "ramp_lo", 0.0),
+            ramp_hi=getattr(args, "ramp_hi", 1.0),
+            stitch_order=getattr(args, "stitch_order", "interleave"),
+            prompt_schedule=prompt_schedule,
+            loop=getattr(args, "loop", "none"),
             on_progress=lambda msg: print(f"  {msg}", flush=True),
         )
 

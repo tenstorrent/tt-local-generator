@@ -201,6 +201,43 @@ class AnimateDiffGenerator(ArtGenerator):
                             "Skipping up1 up2 is fastest with minimal quality loss.")
         p.add_argument("--count", type=int, default=1,
                        help="Number of GIFs to generate in sequence (default: 1)")
+        # Multi-chip (run_subprocess already accepts these; flags were missing)
+        p.add_argument("--multichip-mode", default="off", dest="multichip_mode",
+                       choices=["off", "remix", "coherent"],
+                       help="Multi-chip strategy: off (single chip), remix "
+                            "(independent per-chip clips, stitched), coherent "
+                            "(sequential latent-chained segments). Default: off")
+        p.add_argument("--per-chip-prompt", action="append", default=None,
+                       dest="per_chip_prompts", metavar="TEXT",
+                       help="Per-chip prompt override for --multichip-mode remix "
+                            "(repeatable, one per chip in order; falls back to "
+                            "--prompt for chips without an override)")
+        p.add_argument("--seed-spread", type=int, default=1, dest="seed_spread",
+                       help="Per-chip seed increment for remix mode (default: 1)")
+        p.add_argument("--ramp", default="none", choices=["none", "temporal", "motion"],
+                       help="Interpolate a parameter across chips in remix mode: "
+                            "temporal (temporal-alpha) or motion (motion-adapter-alpha). "
+                            "Default: none")
+        p.add_argument("--ramp-lo", type=float, default=0.0, dest="ramp_lo",
+                       help="Ramp low endpoint (default: 0.0)")
+        p.add_argument("--ramp-hi", type=float, default=1.0, dest="ramp_hi",
+                       help="Ramp high endpoint (default: 1.0)")
+        p.add_argument("--stitch-order", default="interleave", dest="stitch_order",
+                       choices=["interleave", "concatenate"],
+                       help="How remix-mode per-chip clips are combined into the "
+                            "final GIF (default: interleave)")
+        # Prompt travel / looping (flags accepted here; behavior lands in later tasks)
+        p.add_argument("--prompt-schedule", action="append", default=None,
+                       dest="prompt_schedule", metavar="FRAME:PROMPT",
+                       help="Keyframe a prompt change at a given frame index "
+                            "(repeatable, e.g. --prompt-schedule 0:'spring meadow' "
+                            "--prompt-schedule 16:'snowfall'). Prompt travel between "
+                            "keyframes is implemented in a later task; this flag is "
+                            "accepted and forwarded now.")
+        p.add_argument("--loop", default="none", choices=["none", "seamless"],
+                       help="Post-process the stitched GIF into a seamless loop "
+                            "(default: none). Crossfade implementation lands in a "
+                            "later task; this flag is accepted and forwarded now.")
 
     def default_output(self) -> Path:
         return Path("animatediff.gif")
@@ -619,6 +656,8 @@ def run_subprocess(
     ramp_lo: float = 0.0,
     ramp_hi: float = 1.0,
     stitch_order: str = "interleave",
+    prompt_schedule: list | None = None,
+    loop: str = "none",
 ) -> tuple[bool, str]:
     """Run the unified generate.py, optionally spreading work across Blackhole chips.
 
@@ -674,6 +713,12 @@ def run_subprocess(
     single subprocess as before.
 
     timeout applies to the slowest chip (all processes must finish within it).
+
+    `prompt_schedule` (list of (frame_index, prompt) tuples) and `loop`
+    ("none"|"seamless") are accepted here for CLI parity but are inert
+    pass-throughs — prompt travel and seamless-loop crossfade are implemented
+    in later tasks (6b/6c). They are not yet forwarded to generate.py or any
+    post-processing step.
 
     Returns (success, error_message). error_message is "" on success.
     """
