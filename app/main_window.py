@@ -7721,6 +7721,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # Remote inventory records fetched from the inventory server (if running).
         # These are shown alongside local records; keyed by record ID to avoid duplicates.
         self._remote_records: dict = {}  # {record.id: GenerationRecord}
+        # Pipeline Studio (SP-C): constructed lazily on first activation of the
+        # "Pipelines" toolbar toggle (see _show_pipelines) since it scans run
+        # history on construction — no need to pay that cost at startup.
+        self._pipeline_studio = None  # type: "PipelineStudio | None"
 
         self._build_ui()
         self._load_history()
@@ -7801,6 +7805,22 @@ class MainWindow(Gtk.ApplicationWindow):
         self._attractor_btn.set_sensitive(False)
         self._attractor_btn.connect("clicked", self._on_open_attractor)
         main_toolbar.append(self._attractor_btn)
+
+        # ── Pipelines nav entry ────────────────────────────────────────────────
+        # Deliberately NOT part of ControlPanel's video/animate/image/artgen
+        # radio group: those buttons drive _set_source's generation-mode state
+        # (_model_source, prompt placeholder, chip vocab, model rows, ...) which
+        # has nothing to do with browsing already-finished runs. Keeping this
+        # button independent means _set_source and the source toggle group are
+        # completely untouched by this feature — see task-5-brief.md.
+        self._pipelines_btn = Gtk.ToggleButton(label="🧩 Pipelines")
+        self._pipelines_btn.add_css_class("attractor-launch-btn")
+        self._pipelines_btn.set_tooltip_text(
+            "Pipeline Studio — browse finished multi-step runs and open one\n"
+            "to see every step (Discover + Open)."
+        )
+        self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
+        main_toolbar.append(self._pipelines_btn)
 
         root_box.append(main_toolbar)
 
@@ -8594,6 +8614,45 @@ class MainWindow(Gtk.ApplicationWindow):
         density_act = self.lookup_action("gallery-density")
         if density_act:
             density_act.set_enabled(source != "artgen")
+
+    # ── Pipeline Studio (Discover + Open) ───────────────────────────────────────
+
+    def _on_pipelines_toggled(self, btn: Gtk.ToggleButton) -> None:
+        """Toolbar toggle handler: show Pipeline Studio while active, restore on untoggle."""
+        if btn.get_active():
+            self._show_pipelines()
+        else:
+            self._hide_pipelines()
+
+    def _show_pipelines(self) -> None:
+        """Mount Pipeline Studio full-width, constructing it lazily on first use.
+
+        `PipelineStudio` scans run history off-thread as soon as it is built
+        (see pipeline_studio.py), so it is deliberately NOT constructed at
+        startup — only here, the first time the "Pipelines" toggle is
+        activated. Subsequent activations reuse the same instance and its
+        already-loaded Discover page.
+        """
+        if self._pipeline_studio is None:
+            from pipeline_studio import PipelineStudio
+            self._pipeline_studio = PipelineStudio()
+            self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
+
+        self._gallery_stack.set_visible_child_name("pipelines")
+        # Full-width, same as artgen mode: Pipeline Studio has its own layout
+        # and needs neither the prompt-composition panel nor the detail pane.
+        self._ctrl_wrapper.set_visible(False)
+        self._detail_wrap.set_visible(False)
+
+    def _hide_pipelines(self) -> None:
+        """Restore whatever the ControlPanel's active generation source was.
+
+        Reuses `_on_source_change` (unchanged by this feature) rather than
+        duplicating its gallery/ctrl-panel/detail-panel visibility rules, so
+        leaving Pipelines always lands back in a state `_on_source_change`
+        already knows how to produce for the current `_model_source`.
+        """
+        self._on_source_change(self._controls.get_model_source())
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
