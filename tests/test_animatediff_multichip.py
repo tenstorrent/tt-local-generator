@@ -282,3 +282,300 @@ class TestModeRouting:
             temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="off",
         )
         assert "remix" not in calls and "coherent" not in calls
+
+
+class TestBuildCmdPromptSchedule:
+    """Task 6c Part A: _build_cmd must forward prompt_schedule keyframes as
+    repeated --prompt-schedule FRAME:PROMPT args, in declaration order."""
+
+    def _base_kwargs(self, tmp_path):
+        return dict(
+            script=Path("generate.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="blurry", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, lightning=False, lightning_steps=4, device_id=None,
+            chain_from=None, chain_save=None, chain_alpha=0.6,
+            motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
+        )
+
+    def test_prompt_schedule_appends_flag_per_keyframe_in_order(self, tmp_path):
+        cmd = ad._build_cmd(
+            **self._base_kwargs(tmp_path),
+            prompt_schedule=[(0, "spring meadow"), (16, "snowfall")],
+        )
+        idxs = [i for i, a in enumerate(cmd) if a == "--prompt-schedule"]
+        assert len(idxs) == 2
+        assert cmd[idxs[0] + 1] == "0:spring meadow"
+        assert cmd[idxs[1] + 1] == "16:snowfall"
+        assert idxs[0] < idxs[1]        # declaration order preserved
+
+    def test_no_prompt_schedule_flag_when_none(self, tmp_path):
+        cmd = ad._build_cmd(**self._base_kwargs(tmp_path), prompt_schedule=None)
+        assert "--prompt-schedule" not in cmd
+
+    def test_prompt_schedule_defaults_to_none(self, tmp_path):
+        # Omitting the kwarg entirely must behave exactly like passing None.
+        cmd = ad._build_cmd(**self._base_kwargs(tmp_path))
+        assert "--prompt-schedule" not in cmd
+
+
+class TestMultichipCmdsPromptSchedule:
+    """Every chip in a remix multi-chip plan gets the SAME prompt_schedule —
+    prompt travel is a time-axis feature within each chip's own frames;
+    per-chip prompts remain the spatial lever and the two coexist."""
+
+    def test_each_chip_gets_same_prompt_schedule(self, tmp_path):
+        chips = [
+            ad.ChipParams(prompt="dawn", seed=42, temporal_alpha=0.1, motion_adapter_alpha=1.0),
+            ad.ChipParams(prompt="storm", seed=43, temporal_alpha=0.9, motion_adapter_alpha=0.5),
+        ]
+        shards = [tmp_path / "s0.gif", tmp_path / "s1.gif"]
+        cmds = ad._multichip_cmds(
+            script=Path("generate.py"), shard_paths=shards, mode="blackhole",
+            negative_prompt="blurry", frames_per_chip=8, steps=4,
+            lightning=False, lightning_steps=4, motion_adapter=None,
+            motion_adapter_skip=None, chips=chips,
+            prompt_schedule=[(0, "a"), (4, "b")],
+        )
+        assert len(cmds) == 2
+        for cmd in cmds:
+            idxs = [i for i, a in enumerate(cmd) if a == "--prompt-schedule"]
+            assert len(idxs) == 2
+            assert cmd[idxs[0] + 1] == "0:a"
+            assert cmd[idxs[1] + 1] == "4:b"
+
+    def test_no_prompt_schedule_flag_when_none(self, tmp_path):
+        chips = [ad.ChipParams(prompt="dawn", seed=42, temporal_alpha=0.1, motion_adapter_alpha=1.0)]
+        shards = [tmp_path / "s0.gif"]
+        cmds = ad._multichip_cmds(
+            script=Path("generate.py"), shard_paths=shards, mode="blackhole",
+            negative_prompt="blurry", frames_per_chip=8, steps=4,
+            lightning=False, lightning_steps=4, motion_adapter=None,
+            motion_adapter_skip=None, chips=chips, prompt_schedule=None,
+        )
+        assert "--prompt-schedule" not in cmds[0]
+
+
+class TestRunSubprocessPromptScheduleWiring:
+    """End-to-end: run_subprocess's prompt_schedule param must reach the
+    generate.py argv, for both the single-chip and remix multi-chip paths."""
+
+    def test_single_chip_forwards_prompt_schedule_to_build_cmd(self, monkeypatch, tmp_path):
+        captured = {}
+        real_build_cmd = ad._build_cmd
+
+        def fake_build_cmd(**kwargs):
+            captured.update(kwargs)
+            return real_build_cmd(**kwargs)
+
+        monkeypatch.setattr(ad, "_build_cmd", fake_build_cmd)
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
+
+        out_path = tmp_path / "o.gif"
+
+        def fake_run_one(cmd, **kwargs):
+            out_path.write_bytes(b"GIF89a")
+            return True, ""
+
+        monkeypatch.setattr(ad, "_run_one", fake_run_one)
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=8, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=1, device_id=None, multichip_mode="off",
+            prompt_schedule=[(0, "a"), (4, "b")],
+        )
+        assert ok, err
+        assert captured["prompt_schedule"] == [(0, "a"), (4, "b")]
+
+    def test_remix_forwards_prompt_schedule_to_multichip_cmds(self, monkeypatch, tmp_path):
+        captured = {}
+        real_multichip_cmds = ad._multichip_cmds
+
+        def fake_multichip_cmds(**kwargs):
+            captured.update(kwargs)
+            return real_multichip_cmds(**kwargs)
+
+        monkeypatch.setattr(ad, "_multichip_cmds", fake_multichip_cmds)
+
+        class FakeProc:
+            stdout = ()
+            returncode = 0
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(ad.subprocess, "Popen", lambda *a, **k: FakeProc())
+        monkeypatch.setattr(ad, "_stitch_gifs", lambda *a, **k: True)
+
+        out_path = tmp_path / "o.gif"
+        out_path.write_bytes(b"GIF89a")  # pretend the stitch already produced this
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=8, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=2, device_id=None, multichip_mode="remix",
+            prompt_schedule=[(0, "spring")],
+        )
+        assert ok, err
+        assert captured["prompt_schedule"] == [(0, "spring")]
+
+
+class TestSeamlessLoopCrossfade:
+    """Task 6c Part B: _apply_seamless_loop crossfades a GIF's tail into its
+    head so playback loops without a visible seam."""
+
+    @pytest.fixture(autouse=True)
+    def _need_pil(self):
+        pytest.importorskip("PIL")
+
+    def _make_gradient_gif(self, path, n, duration=80):
+        """n frames, solid color per frame, red channel increasing linearly
+        with frame index (0, 32, 64, ...) — a stand-in for a smoothly
+        animating clip. Monotonic color lets us assert "moved toward frame 0"
+        deterministically: blending any later frame toward an earlier one
+        can only pull its red value down, never up.
+        """
+        from PIL import Image
+        frames = []
+        for i in range(n):
+            frames.append(Image.new("RGB", (8, 8), (i * 32 % 256, 0, 0)))
+        frames[0].save(path, save_all=True, append_images=frames[1:],
+                       duration=duration, loop=0, format="GIF")
+
+    def test_crossfade_preserves_frame_count_and_moves_tail_toward_head(self, tmp_path):
+        from PIL import Image
+
+        gif_path = tmp_path / "loop.gif"
+        n = 8
+        self._make_gradient_gif(gif_path, n)
+
+        with Image.open(gif_path) as img:
+            img.seek(0)
+            first_before = img.convert("RGB").getpixel((4, 4))
+            img.seek(n - 1)
+            last_before = img.convert("RGB").getpixel((4, 4))
+        diff_before = sum(abs(a - b) for a, b in zip(first_before, last_before))
+
+        assert ad._apply_seamless_loop(gif_path, 2) is True
+
+        with Image.open(gif_path) as img:
+            assert img.n_frames == n           # frame count unchanged
+            img.seek(0)
+            first_after = img.convert("RGB").getpixel((4, 4))
+            img.seek(n - 1)
+            last_after = img.convert("RGB").getpixel((4, 4))
+        diff_after = sum(abs(a - b) for a, b in zip(first_after, last_after))
+
+        assert diff_after < diff_before    # last frame moved toward the first
+
+    def test_returns_false_on_missing_file(self, tmp_path):
+        assert ad._apply_seamless_loop(tmp_path / "does_not_exist.gif", 2) is False
+
+
+class TestSeamlessLoopWiring:
+    """loop="seamless" must trigger _apply_seamless_loop exactly once, right
+    before each of run_subprocess's three success returns (single-chip,
+    remix-stitched, coherent-stitched); loop="none" must not call it at all;
+    and a crossfade failure must not turn a successful run into a failure."""
+
+    def _stub_single_chip(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
+        out_path = tmp_path / "o.gif"
+
+        def fake_run_one(cmd, **kwargs):
+            out_path.write_bytes(b"GIF89a")
+            return True, ""
+
+        monkeypatch.setattr(ad, "_run_one", fake_run_one)
+        return out_path
+
+    def test_single_chip_applies_seamless_loop_with_correct_k(self, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
+        out_path = self._stub_single_chip(monkeypatch, tmp_path)
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=1, device_id=None, multichip_mode="off",
+            loop="seamless",
+        )
+        assert ok, err
+        assert calls == [(out_path, 4)]     # k = max(1, min(4, 16 // 4)) == 4
+
+    def test_single_chip_skips_seamless_loop_when_loop_none(self, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
+        out_path = self._stub_single_chip(monkeypatch, tmp_path)
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=1, device_id=None, multichip_mode="off",
+            loop="none",
+        )
+        assert ok, err
+        assert calls == []
+
+    def test_seamless_loop_failure_is_non_fatal(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: False)
+        out_path = self._stub_single_chip(monkeypatch, tmp_path)
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=1, device_id=None, multichip_mode="off",
+            loop="seamless",
+        )
+        assert ok       # base GIF is still valid even if the crossfade failed
+
+    def test_remix_applies_seamless_loop_on_stitched_output(self, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
+
+        class FakeProc:
+            stdout = ()
+            returncode = 0
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(ad.subprocess, "Popen", lambda *a, **k: FakeProc())
+        monkeypatch.setattr(ad, "_stitch_gifs", lambda *a, **k: True)
+
+        out_path = tmp_path / "o.gif"
+        out_path.write_bytes(b"GIF89a")
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=8, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=2, device_id=None, multichip_mode="remix",
+            loop="seamless",
+        )
+        assert ok, err
+        assert calls == [(out_path, 2)]     # k = max(1, min(4, 8 // 4)) == 2
+
+    def test_coherent_applies_seamless_loop_on_stitched_output(self, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
+        monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (True, ""))
+        monkeypatch.setattr(ad, "_stitch_gifs", lambda *a, **k: True)
+
+        out_path = tmp_path / "o.gif"
+        out_path.write_bytes(b"GIF89a")
+
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=out_path, mode="blackhole",
+            prompt="koi", negative_prompt="", frames=8, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None, multichip_mode="coherent",
+            loop="seamless",
+        )
+        assert ok, err
+        # total stitched frames = frames * num_segments = 8 * 4 = 32
+        assert calls == [(out_path, 4)]     # k = max(1, min(4, 32 // 4)) == 4

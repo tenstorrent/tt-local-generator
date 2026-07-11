@@ -337,6 +337,7 @@ def _build_cmd(
     motion_adapter: str | None,
     motion_adapter_alpha: float,
     motion_adapter_skip: list[str] | None,
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
 ) -> list[str]:
     """Assemble the generate.py command list for a single-chip invocation."""
     cmd = [
@@ -371,6 +372,9 @@ def _build_cmd(
         cmd += ["--motion-adapter-alpha", str(motion_adapter_alpha)]
         if motion_adapter_skip:
             cmd += ["--motion-adapter-skip"] + list(motion_adapter_skip)
+    if prompt_schedule:
+        for frame, keyframe_prompt in prompt_schedule:
+            cmd += ["--prompt-schedule", f"{frame}:{keyframe_prompt}"]
     return cmd
 
 
@@ -387,13 +391,17 @@ def _multichip_cmds(
     motion_adapter: "str | None",
     motion_adapter_skip: "list[str] | None",
     chips: "list[ChipParams]",
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
 ) -> "list[list[str]]":
     """Build one generate.py argv per chip from the per-chip plan.
 
     Each chip gets its own prompt/seed/temporal_alpha/motion_adapter_alpha
     (from `chips[i]`) and `--device-id i`; every other flag (mode, negative
     prompt, frame count, steps, lightning, motion adapter name/skip list) is
-    shared across all chips.
+    shared across all chips. `prompt_schedule`, if given, is likewise the SAME
+    for every chip — prompt travel is a time-axis feature applied within each
+    chip's own frames, while per-chip prompts remain the spatial (across-chip)
+    lever; the two features coexist rather than compete.
     """
     cmds: list[list[str]] = []
     for i, cp in enumerate(chips):
@@ -408,6 +416,7 @@ def _multichip_cmds(
             motion_adapter=motion_adapter,
             motion_adapter_alpha=cp.motion_adapter_alpha,
             motion_adapter_skip=motion_adapter_skip,
+            prompt_schedule=prompt_schedule,
         ))
     return cmds
 
@@ -537,6 +546,108 @@ def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = Fal
         return False
 
 
+def _apply_seamless_loop(gif_path: Path, k: int) -> bool:
+    """Crossfade the last `k` frames of `gif_path` into its first `k` frames,
+    in place, so looped playback (last frame -> first frame on restart)
+    doesn't read as a hard cut.
+
+    For offset j in 0..k-1, the tail frame at index (N-k+j) is alpha-blended
+    toward the head frame at index j:
+
+        frame[N-k+j] = (1-a_j) * frame[N-k+j]  +  a_j * frame[j]
+
+    with a_j = (j+1)/(k+1) ramping from just above 0 (the first tail frame,
+    barely touched) to just below 1 (the very last frame, nearly replaced by
+    its paired head frame) — never hitting either endpoint exactly, so no
+    tail frame becomes a byte-identical duplicate of a head frame.
+
+    Frame count, per-frame duration, and loop=0 are all preserved; only pixel
+    content of the k tail frames changes. Uses the same shared-palette
+    quantization approach as `_stitch_gifs` (composite-sample the whole clip,
+    quantize once, apply to every frame) to avoid re-quantization banding.
+
+    Returns True on success. On any failure (missing file, corrupt GIF, too
+    few frames, etc.) the file is left untouched and False is returned —
+    mirrors `_stitch_gifs`'s defensive style so a failed crossfade never
+    corrupts an otherwise-valid GIF.
+    """
+    try:
+        from PIL import Image
+
+        frames: list[Image.Image] = []
+        durs: list[int] = []
+        with Image.open(gif_path) as img:
+            default_dur = int(img.info.get("duration", 100) or 100)
+            n = getattr(img, "n_frames", 1)
+            for i in range(n):
+                img.seek(i)
+                frames.append(img.copy().convert("RGB"))
+                durs.append(int(img.info.get("duration", default_dur) or default_dur))
+
+        if n < 2:
+            return False
+
+        # Clamp k so the head and tail windows never overlap each other or
+        # themselves (e.g. a caller-supplied k larger than n/2 on a very
+        # short clip) — better to crossfade a smaller window than to blend a
+        # frame into itself or double-blend an already-blended frame.
+        k = max(1, min(k, n // 2))
+
+        for j in range(k):
+            a = (j + 1) / (k + 1)
+            tail_idx = n - k + j
+            frames[tail_idx] = Image.blend(frames[tail_idx], frames[j], a)
+
+        # Shared palette across every frame (same rationale as _stitch_gifs:
+        # a composite sample avoids per-frame re-quantization banding and
+        # avoids crushing colors onto one narrow-gamut frame's palette).
+        thumb = (64, 64)
+        composite = Image.new("RGB", (thumb[0], thumb[1] * len(frames)))
+        for i, fr in enumerate(frames):
+            composite.paste(fr.resize(thumb), (0, i * thumb[1]))
+        palette_src = composite.quantize(colors=256)
+        quantized = [f.quantize(palette=palette_src) for f in frames]
+
+        quantized[0].save(
+            gif_path,
+            save_all=True,
+            append_images=quantized[1:],
+            duration=durs,
+            loop=0,
+            format="GIF",
+        )
+        return True
+    except Exception:
+        _log.exception("seamless-loop crossfade failed for %s", gif_path)
+        return False
+
+
+def _finalize_seamless_loop(
+    out_path: Path,
+    loop: str,
+    frames: int,
+    on_progress: Callable[[str], None] | None = None,
+) -> None:
+    """Apply the seamless-loop crossfade to a just-produced GIF, if requested.
+
+    Called once at each of run_subprocess's three success returns (single-chip,
+    remix-stitched, coherent-stitched) so the post-process isn't duplicated
+    three times. A no-op when loop != "seamless". A crossfade failure is
+    non-fatal — it's logged (and surfaced via on_progress if given) but the
+    base GIF is already valid, so the caller still reports success.
+    """
+    if loop != "seamless":
+        return
+    k = max(1, min(4, frames // 4))
+    if not _apply_seamless_loop(out_path, k):
+        _log.warning(
+            "seamless-loop crossfade failed for %s (k=%d) — GIF remains valid but not loop-blended",
+            out_path, k,
+        )
+        if on_progress:
+            on_progress("Note: seamless-loop post-process failed; GIF is valid but not loop-blended")
+
+
 def _run_one(
     cmd: "list[str]",
     *,
@@ -656,7 +767,7 @@ def run_subprocess(
     ramp_lo: float = 0.0,
     ramp_hi: float = 1.0,
     stitch_order: str = "interleave",
-    prompt_schedule: list | None = None,
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
     loop: str = "none",
 ) -> tuple[bool, str]:
     """Run the unified generate.py, optionally spreading work across Blackhole chips.
@@ -714,11 +825,18 @@ def run_subprocess(
 
     timeout applies to the slowest chip (all processes must finish within it).
 
-    `prompt_schedule` (list of (frame_index, prompt) tuples) and `loop`
-    ("none"|"seamless") are accepted here for CLI parity but are inert
-    pass-throughs — prompt travel and seamless-loop crossfade are implemented
-    in later tasks (6b/6c). They are not yet forwarded to generate.py or any
-    post-processing step.
+    `prompt_schedule` (list of (frame_index, prompt) tuples) is forwarded to
+    generate.py as repeated `--prompt-schedule FRAME:PROMPT` args — on the
+    single-chip path directly, and on the remix multi-chip path identically
+    to every chip (prompt travel is a time-axis feature within each chip's
+    own frames; per-chip prompts remain the spatial lever and the two
+    coexist). It is NOT threaded into the coherent multi-chip path.
+
+    `loop` ("none"|"seamless"): when "seamless", the final stitched/single
+    GIF is crossfaded via `_apply_seamless_loop()` right before every success
+    return (single-chip, remix-stitched, coherent-stitched) so it loops
+    without a visible seam. A crossfade failure only logs a warning — the
+    base GIF is already valid, so the run is still reported as successful.
 
     Returns (success, error_message). error_message is "" on success.
     """
@@ -816,6 +934,8 @@ def run_subprocess(
             run_id=run_id,
             env=env,
             interleave=(stitch_order == "interleave"),
+            prompt_schedule=prompt_schedule,
+            loop=loop,
         )
 
     if _multi_ok and multichip_mode == "coherent":
@@ -839,6 +959,7 @@ def run_subprocess(
             timeout=timeout,
             run_id=run_id,
             env=env,
+            loop=loop,
         )
 
     # else: fall through to single-chip path (multichip_mode=="off", or the
@@ -856,6 +977,7 @@ def run_subprocess(
         chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
         motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
         motion_adapter_skip=motion_adapter_skip,
+        prompt_schedule=prompt_schedule,
     )
 
     # run_id passed to _run_one folds in out_path.stem so the per-run log file
@@ -874,6 +996,8 @@ def run_subprocess(
         msg = f"Script exited 0 but no output file was produced (log: {run_log_path})"
         _log.error("run_no_output run_id=%s", run_id)
         return False, msg
+
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
 
     _log.info("run_success run_id=%s out=%s", run_id, out_path)
     return True, ""
@@ -897,6 +1021,8 @@ def _run_multi_chip(
     run_id: str,
     env: dict,
     interleave: bool = False,
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
+    loop: str = "none",
 ) -> tuple[bool, str]:
     """Spawn one generate.py process per chip in parallel, then stitch results.
 
@@ -938,7 +1064,7 @@ def _run_multi_chip(
         negative_prompt=negative_prompt, frames_per_chip=frames_per_chip,
         steps=steps, lightning=lightning, lightning_steps=lightning_steps,
         motion_adapter=motion_adapter, motion_adapter_skip=motion_adapter_skip,
-        chips=chips,
+        chips=chips, prompt_schedule=prompt_schedule,
     )
 
     for chip_idx in range(num_chips):
@@ -1045,6 +1171,8 @@ def _run_multi_chip(
     if not out_path.exists():
         return False, "Stitch reported success but output file missing"
 
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
+
     _log.info("multi-chip run_success run_id=%s chips=%d out=%s", run_id, num_chips, out_path)
     if on_progress:
         on_progress(f"Done — {frames} frames from {num_chips} chips → {out_path.name}")
@@ -1090,6 +1218,7 @@ def _run_coherent_chain(
     timeout: int,
     run_id: str,
     env: dict,
+    loop: str = "none",
 ) -> "tuple[bool, str]":
     """Run num_segments generate.py passes sequentially, chaining latents via
     --chain-save/--chain-from for visual continuity, then concatenate the
@@ -1157,6 +1286,8 @@ def _run_coherent_chain(
 
         if not out_path.exists():
             return False, "Stitch reported success but output file missing"
+
+        _finalize_seamless_loop(out_path, loop, total_frames, on_progress)
 
         _log.info("coherent run_success run_id=%s segments=%d total_frames=%d out=%s",
                   run_id, num_segments, total_frames, out_path)
