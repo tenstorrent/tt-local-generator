@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # apply_patches.sh — Apply tt-local-generator patches to a tt-inference-server checkout.
 #
-# What this does (7 steps):
+# What this does (9 steps):
 #   1-2. Copies and wires in patches/tt_dit/ DiT pipeline hotfixes (dev_mode).
 #   3-4. Copies and wires in patches/media_server_config/ device config overrides.
 #   5.   Injects HF_HOME bind-mount so the container finds ~/.cache/huggingface.
-#   6-7. Injects SkyReels-V2 T2V and I2V ModelSpecTemplates into model_spec.py.
+#   6.   Registers SkyReels-V2 T2V and I2V as entries in the 0.18.0 YAML model
+#        catalog (workflows/model_specs/dev/video.yaml), the successor to the
+#        old inline-Python ModelSpecTemplate(...) list in model_spec.py.
+#   7.   Injects Wan2.2-Animate-14B-Diffusers ModelSpecTemplate into model_spec.py.
+#   8-9. Version-bump patches for DeepSeek-R1-Distill-Llama-70B and SDXL/cpp-server
+#        entries in model_spec.py.
 #
 # By default this patches vendor/tt-inference-server/ (set up by setup_vendor.sh).
 # Use --dev to patch ~/code/tt-inference-server instead (your dev checkout).
@@ -300,164 +305,116 @@ PYEOF
 
 echo ""
 
-# ── Step 6: Inject SkyReels into model_spec.py ───────────────────────────────
+# ── Step 6: Register SkyReels-V2 in the 0.18.0 YAML model catalog ────────────
+#
+# 0.18.0 migrated the model registry from inline-Python ModelSpecTemplate(...)
+# calls in workflows/model_spec.py to YAML catalogs under
+# workflows/model_specs/{prod,dev}/*.yaml, loaded via load_templates_from_yaml().
+# --dev-mode (used by the SkyReels start scripts) sets MODEL_SPECS_ENV=dev, so
+# the catalog actually read is dev/video.yaml — model_spec.py is no longer the
+# insertion point and the old text-injection anchor there is gone for good.
+# This step appends the same two SkyReels templates (T2V + I2V) as plain YAML
+# entries instead.
+MODEL_SPEC_YAML="$TT_INFER/workflows/model_specs/dev/video.yaml"
+echo "6. Patching $MODEL_SPEC_YAML (SkyReels T2V + I2V YAML entries)"
 
-MODEL_SPEC="$TT_INFER/workflows/model_spec.py"
-echo "6. Patching $MODEL_SPEC (SkyReels ModelSpecTemplate)"
-
-python3 - "$MODEL_SPEC" <<'PYEOF'
+python3 - "$MODEL_SPEC_YAML" <<'PYEOF'
 import sys, shutil, pathlib
 
 p = pathlib.Path(sys.argv[1])
-text = p.read_text()
-
-MARKER = "Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers"
-if MARKER in text:
-    print("   already patched — nothing to do")
-    sys.exit(0)
-
-# Insertion anchor: last entry before image_templates comment.
-ANCHOR = "]\n\n# =============================================================================\n# image_templates"
-if ANCHOR not in text:
-    print(f"ERROR: could not find insertion anchor in {p}")
+if not p.exists():
+    print(f"ERROR: model spec catalog not found at {p}")
     sys.exit(1)
 
-SKYREELS_ENTRY = """\
-    # SkyReels-V2-DF-1.3B-540P — Blackhole (P150X4) only.
-    # Weights: ~12GB.  540P = 480x272 native res.
-    ModelSpecTemplate(
-        weights=["Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers"],
-        tt_metal_commit="555f240",
-        impl=tt_transformers_impl,
-        min_disk_gb=20,
-        min_ram_gb=16,
-        model_type=ModelType.VIDEO,
-        inference_engine=InferenceEngine.MEDIA.value,
-        device_model_specs=[
-            DeviceModelSpec(
-                device=DeviceTypes.P150X4,
-                max_concurrency=1,
-                max_context=64 * 1024,
-                default_impl=True,
-            ),
-            DeviceModelSpec(
-                device=DeviceTypes.P300X2,
-                max_concurrency=1,
-                max_context=64 * 1024,
-                default_impl=True,
-            ),
-        ],
-        status=ModelStatusTypes.COMPLETE,
-    ),
-"""
-
-backup = p.with_suffix(".py.bak")
-shutil.copy2(p, backup)
-new_text = text.replace(ANCHOR, SKYREELS_ENTRY + ANCHOR, 1)
-p.write_text(new_text)
-print(f"   inserted SkyReels ModelSpecTemplate ✓  (backup: {backup.name})")
-PYEOF
-
-# ── Step 7: Inject SkyReels I2V into model_spec.py ───────────────────────────
-
-echo "7. Patching $MODEL_SPEC (SkyReels I2V ModelSpecTemplate)"
-
-python3 - "$MODEL_SPEC" <<'PYEOF'
-import sys, shutil, pathlib
-
-p = pathlib.Path(sys.argv[1])
 text = p.read_text()
 
-MARKER = "Skywork/SkyReels-V2-I2V-14B-540P"
-if MARKER in text:
-    print("   already patched — nothing to do")
-    sys.exit(0)
+T2V_MARKER = "Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers"
+I2V_MARKER = "Skywork/SkyReels-V2-I2V-14B-540P"
 
-# Find the SkyReels T2V template by its weights string, then walk forward
-# counting parenthesis depth to locate the TRUE closing paren of that template.
-# (A naive text.find("),\n") would match a DeviceModelSpec close inside the
-# template, inserting the I2V entry in the middle of device_model_specs.)
-ANCHOR_SR = "Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers"
-ANCHOR_FALLBACK = "]\n\n# =============================================================================\n# image_templates"
+T2V_ENTRY = """
+- weights:
+    - Skywork/SkyReels-V2-DF-1.3B-540P-Diffusers
+  impl: tt_transformers
+  min_disk_gb: 20
+  min_ram_gb: 32
+  model_type: VIDEO
+  inference_engine: MEDIA
+  env_vars:
+    TT_DIT_CACHE_DIR: /home/container_app_user/cache_root/tt_dit_cache
+  device_model_specs:
+    - device: P150X4
+      max_concurrency: 1
+      max_context: 65536  # 64 * 1024
+      default_impl: true
+      override_tt_config:
+        trace_region_size: 30000000
+    - device: P300X2
+      max_concurrency: 1
+      max_context: 65536  # 64 * 1024
+      default_impl: true
+      override_tt_config:
+        trace_region_size: 30000000
+  status: COMPLETE
+"""
 
-if ANCHOR_SR in text:
-    idx = text.find(ANCHOR_SR)
-    # Walk back to find the "ModelSpecTemplate(" that contains ANCHOR_SR
-    block_start = text.rfind("ModelSpecTemplate(", 0, idx)
-    if block_start == -1:
-        print("ERROR: could not locate start of SkyReels T2V block")
-        sys.exit(1)
-    # Walk forward counting paren depth to find the matching close paren
-    depth = 0
-    pos = block_start
-    insert_pos = -1
-    while pos < len(text):
-        ch = text[pos]
-        if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth -= 1
-            if depth == 0:
-                # pos points at the closing ) of ModelSpecTemplate(...)
-                # Insert after the following ",\n"
-                insert_pos = pos + 1
-                while insert_pos < len(text) and text[insert_pos] in ',\n':
-                    insert_pos += 1
-                break
-        pos += 1
-    if insert_pos == -1:
-        print("ERROR: could not locate closing paren of SkyReels T2V block")
-        sys.exit(1)
-    anchor_used = "after SkyReels T2V block"
-elif ANCHOR_FALLBACK in text:
-    insert_pos = text.find(ANCHOR_FALLBACK)
-    anchor_used = "before image_templates"
+I2V_ENTRY = """
+- weights:
+    - Skywork/SkyReels-V2-I2V-14B-540P
+  impl: tt_transformers
+  min_disk_gb: 75
+  min_ram_gb: 32
+  model_type: VIDEO
+  inference_engine: MEDIA
+  env_vars:
+    TT_DIT_CACHE_DIR: /home/container_app_user/cache_root/tt_dit_cache
+  device_model_specs:
+    - device: P150X4
+      max_concurrency: 1
+      max_context: 65536  # 64 * 1024
+      default_impl: true
+      override_tt_config:
+        trace_region_size: 30000000
+    - device: P300X2
+      max_concurrency: 1
+      max_context: 65536  # 64 * 1024
+      default_impl: true
+      override_tt_config:
+        trace_region_size: 30000000
+  status: COMPLETE
+"""
+
+did_anything = False
+backup = p.with_suffix(".yaml.bak")
+
+for marker, entry, label in (
+    (T2V_MARKER, T2V_ENTRY, "SkyReels-V2-DF-1.3B-540P (T2V)"),
+    (I2V_MARKER, I2V_ENTRY, "SkyReels-V2-I2V-14B-540P (I2V)"),
+):
+    if marker in text:
+        print(f"   {label}: already patched — nothing to do")
+        continue
+    if not did_anything:
+        shutil.copy2(p, backup)
+    text += entry
+    did_anything = True
+    print(f"   {label}: appended ✓")
+
+if did_anything:
+    p.write_text(text)
+    print(f"   (backup: {backup.name})")
 else:
-    print(f"ERROR: could not find insertion anchor in {p}")
-    print("  Apply the I2V ModelSpecTemplate block manually.")
-    sys.exit(1)
-
-I2V_ENTRY = """\
-    # SkyReels-V2-I2V-14B-540P — Blackhole (P150X4 / P300X2) only.
-    # Weights: ~58 GB (14 sharded safetensors, raw WAN 2.1 format).
-    # Also requires WAN 2.2 A14B diffusers checkpoint for VAE/T5 architecture.
-    # Input: text prompt + conditioning image.  Output: 960x544 by default.
-    ModelSpecTemplate(
-        weights=["Skywork/SkyReels-V2-I2V-14B-540P"],
-        tt_metal_commit="555f240",
-        impl=tt_transformers_impl,
-        min_disk_gb=75,
-        min_ram_gb=32,
-        model_type=ModelType.VIDEO,
-        inference_engine=InferenceEngine.MEDIA.value,
-        device_model_specs=[
-            DeviceModelSpec(
-                device=DeviceTypes.P150X4,
-                max_concurrency=1,
-                max_context=64 * 1024,
-                default_impl=True,
-            ),
-            DeviceModelSpec(
-                device=DeviceTypes.P300X2,
-                max_concurrency=1,
-                max_context=64 * 1024,
-                default_impl=True,
-            ),
-        ],
-        status=ModelStatusTypes.COMPLETE,
-    ),
-"""
-
-backup = p.with_suffix(".py.bak")
-shutil.copy2(p, backup)
-new_text = text[:insert_pos] + I2V_ENTRY + text[insert_pos:]
-p.write_text(new_text)
-print(f"   inserted SkyReels I2V ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
+    print("   already patched — nothing to do")
 PYEOF
 
-# ── Step 8: Inject Wan2.2-Animate-14B-Diffusers into model_spec.py ───────────
-
-echo "8. Patching $MODEL_SPEC (Wan2.2-Animate-14B-Diffusers ModelSpecTemplate)"
+# ── Step 7: Inject Wan2.2-Animate-14B-Diffusers into model_spec.py ───────────
+#
+# NOTE: this step (and 8-9 below) still target the legacy model_spec.py
+# insertion point, same as before the 0.18.0 YAML-catalog migration handled in
+# Step 6. They are out of scope for that migration and untouched here — if
+# model_spec.py's anchors also go stale on a future vendor bump, they'll need
+# the same YAML-catalog treatment.
+MODEL_SPEC="$TT_INFER/workflows/model_spec.py"
+echo "7. Patching $MODEL_SPEC (Wan2.2-Animate-14B-Diffusers ModelSpecTemplate)"
 
 python3 - "$MODEL_SPEC" <<'PYEOF'
 import sys, shutil, pathlib
@@ -532,11 +489,11 @@ p.write_text(new_text)
 print(f"   inserted Wan2.2-Animate ModelSpecTemplate ✓  ({anchor_used}, backup: {backup.name})")
 PYEOF
 
-# ── Step 9: Bump DeepSeek-R1-Distill-Llama-70B P300X2 version to 0.14.0 ──────
+# ── Step 8: Bump DeepSeek-R1-Distill-Llama-70B P300X2 version to 0.14.0 ──────
 # The upstream spec pins it at v0.10.0 which the v0.15.0 run.py rejects.
 # The 0.14.0 image works for all Blackhole LLMs.
 
-echo "9. Patching $MODEL_SPEC (DeepSeek-R1-Distill-Llama-70B P300X2 version bump)"
+echo "8. Patching $MODEL_SPEC (DeepSeek-R1-Distill-Llama-70B P300X2 version bump)"
 
 python3 - "$MODEL_SPEC" <<'PYEOF'
 import sys, shutil, pathlib, re
@@ -610,13 +567,13 @@ p.write_text(new_text)
 print(f"   inserted DeepSeek-R1 P300X2 v0.14.0 entry ✓")
 PYEOF
 
-# ── Step 10: Bump SDXL/cpp-server models to v0.15.0 on P300X2 ────────────────
+# ── Step 9: Bump SDXL/cpp-server models to v0.15.0 on P300X2 ────────────────
 # stable-diffusion-xl-base-1.0 (and the img2img / inpaint variants) are pinned
 # at v0.11.1 which run.py v0.15.0 rejects.  The cpp_server auto-activates for
 # these models when SERVER_MODE=cpp is set; bumping to v0.15.0 allows run.py
 # to launch them while the cpp binary inside the 0.15.0 image handles serving.
 
-echo "10. Patching $MODEL_SPEC (SDXL cpp-server models version bump)"
+echo "9. Patching $MODEL_SPEC (SDXL cpp-server models version bump)"
 
 python3 - "$MODEL_SPEC" <<'PYEOF'
 import sys, shutil, pathlib

@@ -163,8 +163,12 @@ Key parameters:
   Valid counts follow `(N-1) % 4 == 0`. Default: 33 frames (~1.4 s at 24 fps).
 - **`skyreels_num_frames`** setting in `app_settings.py` / Preferences dialog.
 - `GenerationWorker` accepts `num_frames=` and forwards it to `api_client`.
-- `start_skyreels.sh` requires `apply_patches.sh` to be run first (Step 6 injects
-  the `ModelSpecTemplate` into `model_spec.py` and copies runner patches).
+- `start_skyreels.sh` requires `apply_patches.sh` to be run first (Step 6 appends
+  the SkyReels T2V/I2V entries to the 0.18.0 YAML catalog,
+  `workflows/model_specs/dev/video.yaml`, and copies runner patches). Prior to
+  0.18.0 this injected a `ModelSpecTemplate(...)` into `model_spec.py` directly;
+  that file is no longer the registry's source of truth — see the "Vendored
+  tt-inference-server" section below.
 
 ## Directory layout
 
@@ -384,6 +388,31 @@ The `patches/` directory contains:
 - `patches/media_server_config/tt_model_runners/skyreels_runner.py` / `skyreels_i2v_runner.py` — SkyReels T2V and I2V runners
 - `patches/media_server_config/domain/video_generate_request.py` — request-model extensions
 - `patches/tt_dit/` — pipeline fixes (bind-mounted only in dev_mode)
+
+### Model registry migrated to YAML in 0.18.0
+
+0.18.0 replaced the inline-Python `ModelSpecTemplate(...)` list in
+`workflows/model_spec.py` with YAML catalogs under
+`workflows/model_specs/{prod,dev}/*.yaml`, loaded by `load_templates_from_yaml()`.
+`--dev-mode` (used by all `start_*.sh` scripts) sets `MODEL_SPECS_ENV=dev`, so the
+catalog actually consulted is `dev/*.yaml` (video models → `dev/video.yaml`).
+
+**Consequence:** `apply_patches.sh`'s old text-injection anchor in `model_spec.py`
+(`"]\n\n# ... image_templates"`) no longer exists — `model_spec.py` isn't read
+for video models anymore. This broke SkyReels registration after the 0.18.0
+upgrade: the old Step 6/7 printed "ERROR: could not find insertion anchor" and
+SkyReels never registered, so `run.py --model SkyReels-V2-I2V-14B-540P` said
+"invalid choice". The fix (Step 6 in `apply_patches.sh`) now appends
+the SkyReels T2V/I2V entries directly to `dev/video.yaml` as YAML text — same
+idempotent pattern (skip if the weights string is already present), just a
+different target file and format. `MODEL_SPEC_YAML` points at that file.
+
+**Not yet migrated:** Steps 7-9 (Animate `ModelSpecTemplate` injection, DeepSeek
+and SDXL version bumps) still target the legacy `model_spec.py` anchor. Step 7
+(Animate) is *already* failing with the same "could not find insertion anchor"
+error as of 0.18.0 — it was previously masked because Step 6 died first. If a
+model needs re-registering there, apply the same YAML-catalog treatment used for
+SkyReels rather than trying to fix the `model_spec.py` anchor.
 
 ### Patch philosophy — minimize divergence from upstream
 
