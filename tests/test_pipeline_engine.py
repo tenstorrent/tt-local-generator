@@ -408,3 +408,152 @@ def test_1964_worlds_fair_dry_run():
     assert r["7"]["text"]          # the poem
     assert r["9"]["playlist_id"]   # nested artifacts[]/metadata wires resolved
                                     # without KeyError
+
+
+# ── Task 7: TTLGArtgenGenerate + TTLGAnimateDiff ─────────────────────────────
+#
+# Both handlers shell out to the repo-root tt-ctl CLI via eng._run_tt_ctl,
+# which is mocked here so no subprocess is actually spawned. Real-path tests
+# capture the argv passed to the mock and assert on flag names/values.
+
+def test_task7_handlers_registered():
+    assert "TTLGArtgenGenerate" in eng.HANDLERS
+    assert "TTLGAnimateDiff" in eng.HANDLERS
+
+
+# ---- TTLGArtgenGenerate ----
+
+def test_artgen_generate_dry_run_text_ext():
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("10", {"plugin": "verse"}, _ctx(dry=True))
+    assert out["artifact_path"] == "/tmp/out/node10_artifact.txt"
+    assert out["text"] == "placeholder artifact text"
+    assert "png_path" not in out
+
+
+def test_artgen_generate_dry_run_raster_ext():
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("10",
+        {"plugin": "palette", "ext": "png"}, _ctx(dry=True))
+    assert out["artifact_path"] == "/tmp/out/node10_artifact.png"
+    assert out["png_path"] == out["artifact_path"]
+
+
+def test_artgen_generate_builds_argv_with_flag_mapping(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_run_tt_ctl(argv, timeout=600):
+        calls["argv"] = argv
+        out_path = Path(argv[argv.index("--output") + 1])
+        out_path.write_text("hello verse", encoding="utf-8")
+
+    monkeypatch.setattr(eng, "_run_tt_ctl", fake_run_tt_ctl)
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("11", {
+        "plugin": "verse",
+        "form": "haiku",
+        "theme": "winter forges",
+        "export_css": True,
+        "no_thing": False,
+        "tags": ["a", "b"],
+    }, _ctx(tmp=str(tmp_path)))
+
+    argv = calls["argv"]
+    assert argv[0] == "artgen"
+    assert argv[1] == "verse"
+    assert argv[argv.index("--output") + 1] == str(tmp_path / "node11_artifact.txt")
+    assert argv[argv.index("--form") + 1] == "haiku"
+    assert argv[argv.index("--theme") + 1] == "winter forges"
+    assert "--export-css" in argv
+    assert "--no-thing" not in argv
+    tag_idxs = [i for i, x in enumerate(argv) if x == "--tags"]
+    assert [argv[i + 1] for i in tag_idxs] == ["a", "b"]
+    assert out["artifact_path"] == str(tmp_path / "node11_artifact.txt")
+    assert out["text"] == "hello verse"
+    assert "png_path" not in out
+
+
+def test_artgen_generate_sets_png_path_for_raster_ext(monkeypatch, tmp_path):
+    def fake_run_tt_ctl(argv, timeout=600):
+        out_path = Path(argv[argv.index("--output") + 1])
+        out_path.write_bytes(b"\x89PNG\r\n")
+
+    monkeypatch.setattr(eng, "_run_tt_ctl", fake_run_tt_ctl)
+    out = eng.HANDLERS["TTLGArtgenGenerate"]("12",
+        {"plugin": "palette", "ext": ".png"}, _ctx(tmp=str(tmp_path)))
+    assert out["png_path"] == str(tmp_path / "node12_artifact.png")
+    assert out["artifact_path"] == out["png_path"]
+    assert "text" not in out
+
+
+# ---- TTLGAnimateDiff ----
+
+def test_animatediff_dry_run_key():
+    out = eng.HANDLERS["TTLGAnimateDiff"]("20", {"prompt": "a scene"}, _ctx(dry=True))
+    assert out["gif_path"] == "/tmp/out/node20.gif"
+
+
+def test_animatediff_builds_argv_basic_flags(monkeypatch):
+    calls = {}
+
+    def fake_run_tt_ctl(argv, timeout=600):
+        calls["argv"] = argv
+
+    monkeypatch.setattr(eng, "_run_tt_ctl", fake_run_tt_ctl)
+    out = eng.HANDLERS["TTLGAnimateDiff"]("21", {
+        "prompt": "a walk", "frames": 16, "steps": 30, "seed": 7,
+        "negative_prompt": "blurry", "multichip_mode": "remix", "loop": "seamless",
+        "seed_spread": 2, "ramp": "temporal", "ramp_lo": 0.1, "ramp_hi": 0.9,
+        "stitch_order": "concatenate",
+    }, _ctx())
+
+    argv = calls["argv"]
+
+    def val(flag):
+        return argv[argv.index(flag) + 1]
+
+    assert argv[0:2] == ["artgen", "animatediff"]
+    assert val("--output") == "/tmp/out/node21.gif"
+    assert val("--prompt") == "a walk"
+    assert val("--frames") == "16"
+    assert val("--steps") == "30"
+    assert val("--seed") == "7"
+    assert val("--negative-prompt") == "blurry"
+    assert val("--multichip-mode") == "remix"
+    assert val("--loop") == "seamless"
+    assert val("--seed-spread") == "2"
+    assert val("--ramp") == "temporal"
+    assert val("--ramp-lo") == "0.1"
+    assert val("--ramp-hi") == "0.9"
+    assert val("--stitch-order") == "concatenate"
+    assert out["gif_path"] == "/tmp/out/node21.gif"
+
+
+def test_animatediff_per_chip_prompts_repeated(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(eng, "_run_tt_ctl",
+                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+    eng.HANDLERS["TTLGAnimateDiff"]("22", {
+        "prompt": "p", "per_chip_prompts": ["chip0 scene", "chip1 scene"],
+    }, _ctx())
+    argv = calls["argv"]
+    idxs = [i for i, x in enumerate(argv) if x == "--per-chip-prompt"]
+    assert [argv[i + 1] for i in idxs] == ["chip0 scene", "chip1 scene"]
+
+
+def test_animatediff_prompt_schedule_pairs_and_strings_both_normalize(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(eng, "_run_tt_ctl",
+                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+    eng.HANDLERS["TTLGAnimateDiff"]("23", {
+        "prompt": "p",
+        "prompt_schedule": [[0, "spring meadow"], "16:snowfall"],
+    }, _ctx())
+    argv = calls["argv"]
+    idxs = [i for i, x in enumerate(argv) if x == "--prompt-schedule"]
+    assert [argv[i + 1] for i in idxs] == ["0:spring meadow", "16:snowfall"]
+
+
+def test_animatediff_bool_flag_true_emits_bare_flag(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(eng, "_run_tt_ctl",
+                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+    eng.HANDLERS["TTLGAnimateDiff"]("24", {"prompt": "p", "lightning": True}, _ctx())
+    assert "--lightning" in calls["argv"]

@@ -502,6 +502,173 @@ def _h_add_to_playlist(nid, inp, ctx):
     return {"playlist_id": pid}
 
 
+# ── Task 7: artgen-plugin + AnimateDiff node handlers ────────────────────────
+#
+# Both node types shell out to the repo-root `tt-ctl` CLI (a subprocess call)
+# rather than importing artgen/animatediff internals directly. This keeps the
+# engine decoupled from argparse plumbing and guarantees the node behaves
+# identically to running the same `tt-ctl artgen ...` command by hand.
+
+TT_CTL = _REPO_ROOT / "tt-ctl"
+
+# Output-extension buckets that decide which extra key(s) TTLGArtgenGenerate
+# publishes alongside artifact_path (raster -> png_path, text-like -> text).
+_RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+_TEXT_EXTS = {".txt", ".py", ".ans", ".json", ".svg", ".md"}
+
+
+def _flag_from_key(key: str) -> str:
+    """Node-input key -> CLI flag name: underscores become hyphens.
+
+    e.g. ``negative_prompt`` -> ``--negative-prompt``, matching how every
+    artgen/animatediff `add_args` declares its `dest=` (see app/artgen/cli.py
+    and app/artgen/generators/animatediff.py).
+    """
+    return "--" + key.replace("_", "-")
+
+
+def _append_flag_value(argv: "list[str]", flag: str, value) -> None:
+    """Append *flag* (+ value) to *argv* per the shared node-input convention:
+
+      - ``bool True``  -> bare flag (mirrors an argparse ``store_true`` switch)
+      - ``bool False`` -> omitted entirely (there is no "--no-foo" negation)
+      - ``list``/``tuple`` -> the flag repeated once per item (argparse
+        ``action="append"``, e.g. --per-chip-prompt/--tags-style inputs)
+      - anything else -> ``flag str(value)``
+
+    bool is checked before the generic branch since ``bool`` is an ``int``
+    subclass in Python and would otherwise fall through to ``str(value)``.
+    """
+    if isinstance(value, bool):
+        if value:
+            argv.append(flag)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            argv.append(flag)
+            argv.append(str(item))
+        return
+    argv.append(flag)
+    argv.append(str(value))
+
+
+def _run_tt_ctl(argv: "list[str]", timeout: int = 600):
+    """Run ``tt-ctl <argv...>`` as a subprocess, capturing output.
+
+    Mirrors the subprocess.run pattern already used by `_import_artifact`'s
+    ffmpeg call: `stdin=DEVNULL` so a stalled CLI can never block waiting on
+    terminal input, `capture_output=True` so stdout/stderr are available for
+    a useful error message. Raises RuntimeError on nonzero exit so callers
+    don't have to repeat the check.
+    """
+    import subprocess
+    result = subprocess.run(
+        [str(TT_CTL), *argv],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"tt-ctl {' '.join(argv)} failed (exit {result.returncode}): "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    return result
+
+
+@register("TTLGArtgenGenerate")
+def _h_artgen_generate(nid, inp, ctx):
+    """Generic artgen-plugin node.
+
+    Shells out to ``tt-ctl artgen <plugin> --output <out> [--flag value...]``.
+    Every input except ``plugin`` (the artgen TYPE, e.g. verse/palette/ansi)
+    and ``ext`` (output extension, default ``.txt``) is mapped to a CLI flag
+    via `_flag_from_key`/`_append_flag_value`, so any plugin-specific flag the
+    generator's `add_args` declares can be wired without an engine change.
+
+    Output contract: ``artifact_path`` always; ``png_path`` added when the
+    extension is a raster image; ``text`` added (best-effort file read) when
+    the extension is text-like.
+    """
+    plugin = inp.get("plugin")
+    ext = str(inp.get("ext", ".txt"))
+    if not ext.startswith("."):
+        ext = "." + ext
+    ext_l = ext.lower()
+    out = str(ctx.output_dir / f"node{nid}_artifact{ext}")
+
+    if ctx.dry_run:
+        result = {"artifact_path": out, "text": "placeholder artifact text"}
+        if ext_l in _RASTER_EXTS:
+            result["png_path"] = out
+        return result
+
+    argv = ["artgen", plugin, "--output", out]
+    for key, value in inp.items():
+        if key in ("plugin", "ext"):
+            continue
+        _append_flag_value(argv, _flag_from_key(key), value)
+    _run_tt_ctl(argv)
+
+    result = {"artifact_path": out}
+    if ext_l in _RASTER_EXTS:
+        result["png_path"] = out
+    if ext_l in _TEXT_EXTS:
+        try:
+            result["text"] = Path(out).read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001 — best-effort read-back
+            result["text"] = ""
+    return result
+
+
+def _normalize_prompt_schedule_entry(item) -> str:
+    """Normalize one prompt_schedule entry to a ``FRAME:PROMPT`` string.
+
+    Accepts either an already-formed ``"FRAME:PROMPT"`` string (passed
+    through verbatim — a wired upstream node may already produce this form)
+    or a ``[frame, prompt]``/``(frame, prompt)`` pair (the more natural shape
+    for a spec author to wire by hand).
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, (list, tuple)) and len(item) == 2:
+        frame, prompt = item
+        return f"{frame}:{prompt}"
+    raise ValueError(f"invalid prompt_schedule entry: {item!r}")
+
+
+@register("TTLGAnimateDiff")
+def _h_animatediff(nid, inp, ctx):
+    """AnimateDiff node.
+
+    Shells out to ``tt-ctl artgen animatediff --output <gif> [--flag value...]``.
+    ``per_chip_prompts`` and ``prompt_schedule`` need special serialization
+    (repeated ``--per-chip-prompt``, and ``--prompt-schedule FRAME:PROMPT``
+    respectively) so they're excluded from the generic mapping and handled
+    explicitly; every other provided input (prompt/frames/steps/seed/
+    negative_prompt/multichip_mode/seed_spread/ramp/ramp_lo/ramp_hi/
+    stitch_order/loop/… ) maps generically via `_flag_from_key`/
+    `_append_flag_value`, exactly like TTLGArtgenGenerate.
+    """
+    gif = str(ctx.output_dir / f"node{nid}.gif")
+    if ctx.dry_run:
+        return {"gif_path": gif}
+
+    special = {"per_chip_prompts", "prompt_schedule"}
+    argv = ["artgen", "animatediff", "--output", gif]
+    for key, value in inp.items():
+        if key in special or value is None:
+            continue
+        _append_flag_value(argv, _flag_from_key(key), value)
+
+    for item in inp.get("per_chip_prompts") or []:
+        argv += ["--per-chip-prompt", str(item)]
+
+    for item in inp.get("prompt_schedule") or []:
+        argv += ["--prompt-schedule", _normalize_prompt_schedule_entry(item)]
+
+    _run_tt_ctl(argv, timeout=1800)  # animatediff generation can run long
+    return {"gif_path": gif}
+
+
 def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = print,
         output_dir: "str | None" = None) -> dict:
     out_dir = Path(output_dir) if output_dir else Path("/tmp/tt-pipeline-dryrun")
