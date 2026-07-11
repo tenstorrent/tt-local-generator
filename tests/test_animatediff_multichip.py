@@ -1,6 +1,7 @@
 """Unit tests for multi-chip AnimateDiff plan builders, cmd-builder, autovary,
 stitch, and mode routing. Pure logic — no hardware, no GTK."""
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 
@@ -423,6 +424,82 @@ class TestRunSubprocessPromptScheduleWiring:
         assert captured["prompt_schedule"] == [(0, "spring")]
 
 
+class TestCoherentPromptScheduleWarning:
+    """Review fix: `--multichip-mode coherent --prompt-schedule ...` must not
+    silently drop the schedule. _run_coherent_chain has no prompt_schedule
+    parameter at all (full coherent prompt-travel is a future follow-up), so
+    run_subprocess must log a clear warning — and surface it via on_progress,
+    matching the module's existing warn-then-proceed pattern (see the
+    non-divisible-frames remix fallback above) — right where the coherent
+    path is selected, then proceed with the schedule dropped."""
+
+    def _common(self, monkeypatch):
+        monkeypatch.setattr(ad, "_run_coherent_chain", lambda **k: (True, ""))
+        monkeypatch.setattr(ad, "check_hardware", lambda: (True, "bh", 4))
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
+
+    def test_coherent_with_prompt_schedule_warns_and_still_succeeds(self, monkeypatch, tmp_path, caplog):
+        self._common(monkeypatch)
+        progress_msgs = []
+
+        caplog.set_level(logging.WARNING, logger="animatediff")
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="coherent",
+            prompt_schedule=[(0, "spring meadow"), (8, "snowfall")],
+            on_progress=progress_msgs.append,
+        )
+
+        assert ok, err   # schedule is dropped, but the run still proceeds normally
+        assert any(
+            "prompt_schedule" in r.getMessage() or "prompt-schedule" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+        assert any("coherent" in r.getMessage().lower() for r in caplog.records)
+        assert any("prompt-schedule" in m.lower() and "coherent" in m.lower()
+                   for m in progress_msgs), progress_msgs
+
+    def test_coherent_without_prompt_schedule_does_not_warn(self, monkeypatch, tmp_path, caplog):
+        self._common(monkeypatch)
+
+        caplog.set_level(logging.WARNING, logger="animatediff")
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="coherent", prompt_schedule=None,
+        )
+
+        assert ok, err
+        assert not any(
+            "prompt_schedule" in r.getMessage() or "prompt-schedule" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_remix_with_prompt_schedule_does_not_warn(self, monkeypatch, tmp_path, caplog):
+        # Remix DOES support prompt_schedule (forwarded to every chip's cmd) —
+        # this must not trip the coherent-only warning.
+        monkeypatch.setattr(ad, "_run_multi_chip", lambda **k: (True, ""))
+        monkeypatch.setattr(ad, "check_hardware", lambda: (True, "bh", 4))
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
+
+        caplog.set_level(logging.WARNING, logger="animatediff")
+        ok, err = ad.run_subprocess(
+            script=Path("g.py"), out_path=tmp_path / "o.gif", mode="blackhole",
+            prompt="koi", negative_prompt="", frames=16, steps=4, seed=42,
+            temporal_alpha=0.35, num_chips=4, device_id=None,
+            multichip_mode="remix", prompt_schedule=[(0, "a")],
+        )
+
+        assert ok, err
+        assert not any(
+            "prompt_schedule" in r.getMessage() or "prompt-schedule" in r.getMessage()
+            for r in caplog.records
+        )
+
+
 class TestSeamlessLoopCrossfade:
     """Task 6c Part B: _apply_seamless_loop crossfades a GIF's tail into its
     head so playback loops without a visible seam."""
@@ -473,6 +550,59 @@ class TestSeamlessLoopCrossfade:
 
     def test_returns_false_on_missing_file(self, tmp_path):
         assert ad._apply_seamless_loop(tmp_path / "does_not_exist.gif", 2) is False
+
+
+class TestSeamlessLoopAtomicWrite:
+    """Review fix: a mid-write failure inside _apply_seamless_loop must never
+    corrupt the original GIF. Prior to the fix, `quantized[0].save(gif_path, ...)`
+    handed PIL the REAL destination path — PIL's Image.save() opens that path in
+    "w+b" (truncating it) before the encoder writes a single frame, so an
+    exception partway through the encode left a zero/partial-byte file in place
+    of the original valid GIF, even though the function returned False claiming
+    the file was "left untouched"."""
+
+    @pytest.fixture(autouse=True)
+    def _need_pil(self):
+        pytest.importorskip("PIL")
+
+    def _make_gradient_gif(self, path, n, duration=80):
+        from PIL import Image
+        frames = [Image.new("RGB", (8, 8), (i * 32 % 256, 0, 0)) for i in range(n)]
+        frames[0].save(path, save_all=True, append_images=frames[1:],
+                       duration=duration, loop=0, format="GIF")
+
+    def test_mid_write_failure_leaves_original_gif_untouched(self, tmp_path, monkeypatch):
+        from PIL import Image
+
+        gif_path = tmp_path / "loop.gif"
+        n = 6
+        self._make_gradient_gif(gif_path, n)
+        original_bytes = gif_path.read_bytes()
+
+        def fake_save(self, fp, *args, **kwargs):
+            # Simulate PIL's real Image.save(): opening the destination in a
+            # truncating mode is the very first thing it does, before the
+            # encoder writes any frame data. We reproduce exactly that side
+            # effect, then blow up mid-encode.
+            with open(fp, "wb") as f:
+                f.write(b"CORRUPTED-PARTIAL-WRITE")
+            raise RuntimeError("simulated encoder failure mid-write")
+
+        monkeypatch.setattr(Image.Image, "save", fake_save)
+
+        assert ad._apply_seamless_loop(gif_path, 2) is False
+
+        # The original file's bytes must be completely untouched — not
+        # truncated, not partially overwritten.
+        assert gif_path.read_bytes() == original_bytes
+        with Image.open(gif_path) as img:
+            assert img.n_frames == n
+
+        # No leftover ".seamless_tmp_*" temp file in the same directory
+        # (unrelated fixtures, e.g. conftest's pipeline_store isolation dir,
+        # may also populate tmp_path — only assert about our own temp file).
+        leftovers = list(tmp_path.glob(".seamless_tmp_*"))
+        assert leftovers == [], f"temp file(s) left behind: {leftovers}"
 
 
 class TestSeamlessLoopWiring:

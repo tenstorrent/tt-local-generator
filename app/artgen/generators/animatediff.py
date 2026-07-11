@@ -226,18 +226,21 @@ class AnimateDiffGenerator(ArtGenerator):
                        choices=["interleave", "concatenate"],
                        help="How remix-mode per-chip clips are combined into the "
                             "final GIF (default: interleave)")
-        # Prompt travel / looping (flags accepted here; behavior lands in later tasks)
+        # Prompt travel / looping
         p.add_argument("--prompt-schedule", action="append", default=None,
                        dest="prompt_schedule", metavar="FRAME:PROMPT",
                        help="Keyframe a prompt change at a given frame index "
                             "(repeatable, e.g. --prompt-schedule 0:'spring meadow' "
-                            "--prompt-schedule 16:'snowfall'). Prompt travel between "
-                            "keyframes is implemented in a later task; this flag is "
-                            "accepted and forwarded now.")
+                            "--prompt-schedule 16:'snowfall'), forwarded to generate.py "
+                            "for the single-chip path and for --multichip-mode remix "
+                            "(identically to every chip). NOT yet supported with "
+                            "--multichip-mode coherent — it is dropped (with a "
+                            "warning) for that mode.")
         p.add_argument("--loop", default="none", choices=["none", "seamless"],
-                       help="Post-process the stitched GIF into a seamless loop "
-                            "(default: none). Crossfade implementation lands in a "
-                            "later task; this flag is accepted and forwarded now.")
+                       help="Post-process the final GIF into a seamless loop by "
+                            "crossfading its last few frames into its first few "
+                            "(default: none). Applied once to the single-chip, "
+                            "remix-stitched, or coherent-stitched output.")
 
     def default_output(self) -> Path:
         return Path("animatediff.gif")
@@ -567,10 +570,26 @@ def _apply_seamless_loop(gif_path: Path, k: int) -> bool:
     quantize once, apply to every frame) to avoid re-quantization banding.
 
     Returns True on success. On any failure (missing file, corrupt GIF, too
-    few frames, etc.) the file is left untouched and False is returned —
-    mirrors `_stitch_gifs`'s defensive style so a failed crossfade never
-    corrupts an otherwise-valid GIF.
+    few frames, encode error mid-write, etc.) the file is left untouched and
+    False is returned — mirrors `_stitch_gifs`'s defensive style so a failed
+    crossfade never corrupts an otherwise-valid GIF.
+
+    Implementation note: the final save writes to a temp file in the SAME
+    directory as `gif_path`, then atomically `os.replace()`s it over the
+    original. PIL's `Image.save()` opens its destination in "w+b" — which
+    truncates it — before the encoder writes a single frame. Saving directly
+    to `gif_path` would mean an encode failure partway through (corrupt frame
+    data, OOM, etc.) leaves a truncated/partial file where the valid original
+    used to be, even though the function still returns False claiming the
+    file was untouched. Writing to a sibling temp file confines that risk to
+    the temp file; `os.replace()` on the same filesystem is atomic, so
+    `gif_path` either keeps its original bytes or becomes the fully-written
+    new file — never something in between.
     """
+    import os
+    import tempfile
+
+    tmp_path: "Path | None" = None
     try:
         from PIL import Image
 
@@ -608,18 +627,31 @@ def _apply_seamless_loop(gif_path: Path, k: int) -> bool:
         palette_src = composite.quantize(colors=256)
         quantized = [f.quantize(palette=palette_src) for f in frames]
 
+        fd, tmp_name = tempfile.mkstemp(
+            suffix=".gif", prefix=".seamless_tmp_", dir=str(gif_path.parent)
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         quantized[0].save(
-            gif_path,
+            tmp_path,
             save_all=True,
             append_images=quantized[1:],
             duration=durs,
             loop=0,
             format="GIF",
         )
+        os.replace(tmp_path, gif_path)
+        tmp_path = None  # replaced onto gif_path; nothing left to clean up
         return True
     except Exception:
         _log.exception("seamless-loop crossfade failed for %s", gif_path)
         return False
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def _finalize_seamless_loop(
@@ -939,6 +971,25 @@ def run_subprocess(
         )
 
     if _multi_ok and multichip_mode == "coherent":
+        # Coherent's segment chain is built by _run_coherent_chain, which has
+        # no prompt_schedule parameter at all — full coherent prompt-travel
+        # (cross-segment, frame-offset-aware) is a future follow-up. Without
+        # this check, a caller passing both flags would have the schedule
+        # silently discarded with no indication anything was dropped. Warn
+        # once, here, right where the coherent path is selected, then proceed
+        # with everything else normal (schedule dropped).
+        if prompt_schedule:
+            _log.warning(
+                "prompt_schedule=%r requested with multichip_mode=coherent, but "
+                "coherent mode does not yet support prompt-schedule keyframes — "
+                "ignoring the schedule for this run.",
+                prompt_schedule,
+            )
+            if on_progress:
+                on_progress(
+                    "Note: --prompt-schedule is not yet supported in coherent "
+                    "multichip mode and is being ignored for this run."
+                )
         return _run_coherent_chain(
             script=script,
             out_path=out_path,
