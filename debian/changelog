@@ -1,3 +1,26 @@
+tt-local-generator (0.15.0) noble; urgency=medium
+
+  * Pipeline Studio (Phase 1) — a new "Pipelines" area to browse already-run
+    pipelines and open one end-to-end, spoken in intent language (verb + noun,
+    e.g. "Generate an image" / "Film it") rather than tool/model names, and
+    grounded in each run's real generated artifacts.
+      - Discover: a featured hero + grid of runs, each showing its intent-recipe.
+      - Open: one run step by step — the intent, the model as a quiet detail, the
+        real artifact thumbnail per step, with per-step "Remix from here" hooks
+        (the editor arrives in Phase 2).
+    New pure layers: app/intent_vocab.py (class_type → verb+noun intent, output
+    keys matching the engine contract) and app/pipeline_view_model.py (run record
+    → intent steps + resolved artifacts). GTK views in app/pipeline_studio.py,
+    mounted lazily so startup is unaffected.
+  * skyreels: fixed on tt-inference-server 0.18.0 — the model registration is now
+    injected into the 0.18.0 YAML catalog (workflows/model_specs/dev/video.yaml)
+    instead of the removed inline-Python model_spec.py anchor, so SkyReels-V2-I2V
+    is recognised again and starts. Verified end-to-end on QB2 (real i2v video).
+  * pipeline: the engine's _start_server now fails fast on a failed backend start
+    (surfacing the real error) instead of polling a dead server for 60 minutes.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 16:30:00 -0700
+
 tt-local-generator (0.14.0) noble; urgency=medium
 
   * pipeline: backend server-switching in app/pipeline_engine.py. Before each
