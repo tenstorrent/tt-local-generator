@@ -164,7 +164,7 @@ def _cmd_animatediff(args) -> None:
     """Route for 'tt-ctl artgen animatediff' — uses prompt engine, not LLM artgen."""
     from artgen.generators.animatediff import check_hardware, run_subprocess, make_gif_thumbnail
 
-    ok, hw_msg = check_hardware()
+    ok, hw_msg, num_chips = check_hardware()
     if not ok:
         print(f"ERROR: {hw_msg}", file=sys.stderr)
         sys.exit(1)
@@ -228,6 +228,10 @@ def _cmd_animatediff(args) -> None:
             stitch_order=getattr(args, "stitch_order", "interleave"),
             prompt_schedule=prompt_schedule,
             loop=getattr(args, "loop", "none"),
+            # Mirror the GUI path (artgen_panel.py): an explicit --device-id
+            # pin means "run on this one chip only", so num_chips is forced
+            # to 1 regardless of how many chips check_hardware() detected.
+            num_chips=num_chips if getattr(args, "device_id", None) is None else 1,
             on_progress=lambda msg: print(f"  {msg}", flush=True),
         )
 

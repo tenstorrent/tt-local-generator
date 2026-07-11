@@ -36,7 +36,10 @@ def _parse(argv):
 def mock_run_subprocess(monkeypatch):
     mock = MagicMock(return_value=(True, ""))
     monkeypatch.setattr(ad, "run_subprocess", mock)
-    monkeypatch.setattr(ad, "check_hardware", lambda: (True, "blackhole ok"))
+    # check_hardware() is a 3-tuple: (ok, message, num_chips). A single
+    # healthy chip is the default here so tests that don't care about
+    # multichip forwarding aren't affected.
+    monkeypatch.setattr(ad, "check_hardware", lambda: (True, "blackhole ok", 1))
     monkeypatch.setattr(ad, "make_gif_thumbnail", lambda *a, **k: None)
     return mock
 
@@ -177,3 +180,37 @@ class TestPromptScheduleParsing:
     def test_prompt_with_colon_survives_split_on_first_colon_only(self):
         parsed = artgen_cli._parse_prompt_schedule(["5:a scene: cold and blue"])
         assert parsed == [(5, "a scene: cold and blue")]
+
+
+class TestMultichipNumChipsForwarding:
+    """check_hardware() returns a 3-tuple (ok, message, num_chips). _cmd_animatediff
+    must unpack all three AND forward num_chips to run_subprocess (mirroring
+    artgen_panel.py's GUI path) so --multichip-mode remix|coherent can actually
+    engage from the CLI. Prior to the fix, cli.py did `ok, hw_msg = check_hardware()`
+    which raises ValueError against a real 3-tuple return, and num_chips was never
+    forwarded at all.
+    """
+
+    def test_forwards_num_chips_from_check_hardware(self, mock_run_subprocess, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(ad, "check_hardware", lambda: (True, "ok", 4))
+        args = _parse(["--prompt", "koi pond", "--multichip-mode", "remix"])
+        artgen_cli._cmd_animatediff(args)
+
+        kwargs = mock_run_subprocess.call_args.kwargs
+        assert kwargs["num_chips"] == 4
+
+    def test_explicit_device_id_forces_single_chip(self, mock_run_subprocess, tmp_path, monkeypatch):
+        """An explicit --device-id pin means "run on this one chip only" —
+        num_chips must be forwarded as 1 even though the hardware has 4 chips."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(ad, "check_hardware", lambda: (True, "ok", 4))
+        args = _parse([
+            "--prompt", "koi pond",
+            "--multichip-mode", "remix",
+            "--device-id", "0",
+        ])
+        artgen_cli._cmd_animatediff(args)
+
+        kwargs = mock_run_subprocess.call_args.kwargs
+        assert kwargs["num_chips"] == 1
