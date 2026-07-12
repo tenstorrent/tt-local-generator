@@ -1377,6 +1377,11 @@ class RemixView(Gtk.Box):
         `GLib.idle_add(self._apply_wingit_result, ...)`. A raising
         `wingit_fn` is treated the same as a `None` result (gentle message,
         nothing added) rather than crashing the worker thread.
+
+        Busy-guard: the step's Compose button is disabled synchronously
+        (main thread, before the worker thread is even started) so a second
+        click while a mapping is in flight can't spawn a second worker/add a
+        duplicate step. `_apply_wingit_result` re-enables it — see there.
         """
         entry = self._wingit_entries.get(node_id)
         if entry is None:
@@ -1384,6 +1389,10 @@ class RemixView(Gtk.Box):
         text = entry.get_text().strip()
         if not text:
             return
+
+        compose_btn = self._wingit_compose_buttons.get(node_id)
+        if compose_btn is not None:
+            compose_btn.set_sensitive(False)
 
         class_type = self.working_spec.get(node_id, {}).get("class_type", "")
         output_kind = intent_for(class_type).output_kind
@@ -1409,12 +1418,32 @@ class RemixView(Gtk.Box):
         is added exactly like a capability-picker choice: `add_step_after`
         already commits pending edits, re-renders, and guards a
         kind-incompatible `ValueError` with its own message.
+
+        Re-enables the Compose button `_on_wingit_compose_clicked` disabled
+        before starting the worker — on BOTH the None and the real-result
+        path (`try/finally`, so a `_render()`/`add_step_after` bug can't
+        leave the button stuck disabled). The reference is grabbed *before*
+        either branch runs, because both branches re-render (`_render()`
+        directly, or indirectly via `add_step_after`), which rebuilds
+        `_wingit_compose_buttons` with brand-new (already-sensitive) widgets
+        — looking the button up fresh afterwards would silently re-enable
+        the wrong (new) object and never touch the one this click actually
+        disabled. Re-enabling the old, possibly-detached widget is harmless
+        either way, defensively wrapped so a stale reference can't crash.
         """
-        if result is None:
-            self._show_message("Couldn't turn that into a step — try rephrasing.")
-            self._render()
-            return
-        self.add_step_after(node_id, result.class_type, params=result.params)
+        compose_btn = self._wingit_compose_buttons.get(node_id)
+        try:
+            if result is None:
+                self._show_message("Couldn't turn that into a step — try rephrasing.")
+                self._render()
+                return
+            self.add_step_after(node_id, result.class_type, params=result.params)
+        finally:
+            if compose_btn is not None:
+                try:
+                    compose_btn.set_sensitive(True)
+                except Exception:
+                    pass
 
     def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.

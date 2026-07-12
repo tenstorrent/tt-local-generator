@@ -212,3 +212,42 @@ def test_no_live_compatible_capability_returns_none_even_with_llm_fn():
     )
 
     assert result is None
+
+
+# ── default_llm_fn: real-deps wrapper (SP-C Phase 2b-3 final review Fix 1) ────
+#
+# The wing-it mapping call is a tiny JSON reply, not a full artifact — it
+# must not inherit `call_llm`'s 600s default, or a stalled/slow chat server
+# hangs the compose worker for up to 10 minutes. `default_llm_fn` is a thin
+# wrapper (see its docstring); these tests monkeypatch the `artgen` module it
+# imports internally so no real network/subprocess I/O happens.
+
+
+def test_default_llm_fn_passes_short_timeout_to_call_llm(monkeypatch):
+    import artgen
+    import wingit
+
+    calls = []
+
+    def fake_call_llm(prompt, model, base_url, max_tokens=2048, timeout=600, **kw):
+        calls.append({"timeout": timeout, "max_tokens": max_tokens})
+        return "reply", {}
+
+    monkeypatch.setattr(artgen, "detect_artgen_endpoint", lambda: ("http://x", "some-model"))
+    monkeypatch.setattr(artgen, "call_llm", fake_call_llm)
+
+    result = wingit.default_llm_fn("prompt text")
+
+    assert result == "reply"
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == 45
+    assert calls[0]["timeout"] < 600  # must not fall through to call_llm's default
+
+
+def test_default_llm_fn_returns_none_when_no_endpoint(monkeypatch):
+    import artgen
+    import wingit
+
+    monkeypatch.setattr(artgen, "detect_artgen_endpoint", lambda: (None, None))
+
+    assert wingit.default_llm_fn("prompt text") is None

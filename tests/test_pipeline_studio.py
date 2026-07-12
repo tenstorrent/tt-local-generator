@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading as _threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -917,6 +919,127 @@ def test_default_wingit_fn_wires_map_freeform_to_step_and_capabilities(monkeypat
 
     assert result is not None
     assert result.class_type == "TTLGCaptionImage"
+
+
+def _click_wingit_compose_with_blocking_fn(view, node_id, text, monkeypatch):
+    """Drive the real (unmocked) `_on_wingit_compose_clicked` click path with a
+    `wingit_fn` that blocks on an `Event` until the test releases it, and a
+    `GLib.idle_add` that records the callback instead of running it.
+
+    Used by the busy-guard tests below: real `threading.Thread` actually runs
+    the worker on a background thread (so we can observe the button disabled
+    *while the worker is still in flight*, not just before-and-after), but
+    `GLib.idle_add` is captured rather than executed so the test controls
+    exactly when `_apply_wingit_result` runs (simulating the main-thread hop).
+    Returns `(release_event, idle_calls)` — set the event to unblock the
+    worker, then call `fn(*args)` for the single `idle_calls` entry once it
+    appears to run `_apply_wingit_result` "on the main thread".
+    """
+    import pipeline_studio
+
+    idle_calls: list = []
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: idle_calls.append((fn, a)))
+
+    release = _threading.Event()
+
+    def fake_wingit_fn(_text, _output_kind):
+        release.wait(timeout=5)
+        return None
+
+    view._wingit_fn = fake_wingit_fn
+    view._wingit_entries[node_id].set_text(text)
+    view._wingit_compose_buttons[node_id].emit("clicked")
+    return release, idle_calls
+
+
+def test_wingit_compose_disables_button_while_mapping_in_flight(monkeypatch):
+    """The Compose button for the composing step goes insensitive as soon as
+    Compose is clicked — synchronously, before the background worker even
+    finishes — so a second click can't spawn a second worker/duplicate step."""
+    from pipeline_studio import RemixView
+
+    view = RemixView(wingit_fn=lambda text, output_kind: None)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    btn = view._wingit_compose_buttons["1"]
+    assert btn.get_sensitive() is True
+
+    release, _idle_calls = _click_wingit_compose_with_blocking_fn(
+        view, "1", "describe this image", monkeypatch,
+    )
+    try:
+        assert btn.get_sensitive() is False
+    finally:
+        release.set()  # let the blocked worker thread finish either way
+
+
+def test_wingit_compose_reenables_button_after_none_result(monkeypatch):
+    """`_apply_wingit_result(node_id, None)` re-enables the Compose button
+    on the failure/no-mapping path, not just the success path."""
+    from pipeline_studio import RemixView
+
+    view = RemixView(wingit_fn=lambda text, output_kind: None)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    btn = view._wingit_compose_buttons["1"]
+
+    release, idle_calls = _click_wingit_compose_with_blocking_fn(
+        view, "1", "total gibberish", monkeypatch,
+    )
+    release.set()
+    for _ in range(200):
+        if idle_calls:
+            break
+        time.sleep(0.01)
+    assert idle_calls, "worker never posted its result back via idle_add"
+
+    fn, args = idle_calls[0]
+    fn(*args)  # runs _apply_wingit_result(node_id, None) "on the main thread"
+
+    assert btn.get_sensitive() is True
+
+
+def test_wingit_compose_reenables_button_after_success_result(monkeypatch):
+    """`_apply_wingit_result(node_id, result)` re-enables the Compose button
+    on the success path too."""
+    from pipeline_studio import RemixView
+    from wingit import WingitResult
+
+    view = RemixView(wingit_fn=lambda text, output_kind: None)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    btn = view._wingit_compose_buttons["1"]
+
+    idle_calls: list = []
+    import pipeline_studio
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: idle_calls.append((fn, a)))
+
+    release = _threading.Event()
+
+    def fake_wingit_fn(_text, _output_kind):
+        release.wait(timeout=5)
+        return WingitResult(
+            class_type="TTLGCaptionImage", params={}, capability_id="TTLGCaptionImage",
+            via="fallback",
+        )
+
+    view._wingit_fn = fake_wingit_fn
+    view._wingit_entries["1"].set_text("describe this image")
+    view._wingit_compose_buttons["1"].emit("clicked")
+
+    release.set()
+    for _ in range(200):
+        if idle_calls:
+            break
+        time.sleep(0.01)
+    assert idle_calls, "worker never posted its result back via idle_add"
+
+    fn, args = idle_calls[0]
+    fn(*args)  # runs _apply_wingit_result(node_id, result) "on the main thread"
+
+    # add_step_after -> _render() rebuilds the button dict; the *new* button
+    # for node "1" (which now has a fresh added-after step) must be sensitive.
+    new_btn = view._wingit_compose_buttons.get("1")
+    if new_btn is not None:
+        assert new_btn.get_sensitive() is True
+    assert btn.get_sensitive() is True  # stale reference must not stay stuck disabled either
 
 
 # ── LiveRunView ──────────────────────────────────────────────────────────────

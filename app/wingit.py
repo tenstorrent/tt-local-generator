@@ -283,7 +283,14 @@ def default_llm_fn(prompt: str) -> Optional[str]:
         base_url, model = artgen.detect_artgen_endpoint()
         if not base_url:
             return None
-        text, _usage = artgen.call_llm(prompt, model, base_url=base_url, max_tokens=512)
+        # Wing-it only ever needs a tiny JSON reply (one capability_id + a
+        # handful of params) — `call_llm`'s 600s default is sized for full
+        # artifact generation and would let a stalled/slow chat server hang
+        # the compose worker for up to 10 minutes. A short timeout here means
+        # a bad server fails fast into the deterministic fallback instead.
+        text, _usage = artgen.call_llm(
+            prompt, model, base_url=base_url, max_tokens=512, timeout=45,
+        )
         return text
     except Exception:
         return None
