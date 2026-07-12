@@ -127,6 +127,15 @@ def load_plugin_capabilities(mcp_reader: Callable[[], dict]) -> list[dict]:
     for plugin_name, manifest in raw_map.items():
         try:
             xt = manifest.get("x-ttlg", {}) or {}
+
+            # Utility plugins (blip, depth, ffmpeg, rmbg) are not standalone
+            # generators — their functionality is already exposed as native
+            # intents (TTLGCaptionImage, TTLGEstimateDepth, TTLGRemoveBackground).
+            # Mirror plugin_loader.py's skip so they never surface in the
+            # composer's add-a-step picker as permanently-latent duplicates.
+            if xt.get("utility"):
+                continue
+
             tools = manifest.get("tools") or []
             tool0 = tools[0] if tools else {}
 

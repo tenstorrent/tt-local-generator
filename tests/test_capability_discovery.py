@@ -68,6 +68,53 @@ def _empty_mcp_reader():
     return {}
 
 
+# ── Fixture: normal generator plugin + a utility plugin (ffmpeg-like) ────────
+#
+# Utility plugins (blip, depth, ffmpeg, rmbg) are not standalone generators —
+# their functionality is already exposed as native intents (TTLGCaptionImage,
+# TTLGEstimateDepth, TTLGRemoveBackground). They declare `x-ttlg.utility: true`
+# and must never surface as a Capability.
+
+def _fake_mcp_reader_with_utility():
+    return {
+        "textcpu": {
+            "x-ttlg": {
+                "output_ext": ".txt",
+                "media_type": "text",
+                "accepts_remix_from": [],
+                "can_remix_to": ["image"],
+                "tab": "generative-art",
+                "hardware": None,
+            },
+            "tools": [
+                {
+                    "name": "textcpu",
+                    "description": "CPU text plugin: no hardware required",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                }
+            ],
+        },
+        "ffmpeg": {
+            "x-ttlg": {
+                "utility": True,
+                "output_ext": ".mp4",
+                "media_type": "video",
+                "accepts_remix_from": ["video"],
+                "can_remix_to": [],
+                "tab": "generative-art",
+                "hardware": None,
+            },
+            "tools": [
+                {
+                    "name": "ffmpeg",
+                    "description": "ffmpeg utility: not a standalone generator",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                }
+            ],
+        },
+    }
+
+
 # ── load_plugin_capabilities ──────────────────────────────────────────────────
 
 
@@ -90,6 +137,31 @@ def test_load_plugin_capabilities_raising_reader_returns_empty():
 
 def test_load_plugin_capabilities_empty_reader_returns_empty():
     assert cd.load_plugin_capabilities(_empty_mcp_reader) == []
+
+
+def test_load_plugin_capabilities_skips_utility_plugins():
+    # Utility plugins (x-ttlg.utility: true) are not standalone generators —
+    # their functionality is already exposed as native intents — so they must
+    # never become a plugin-capability dict, mirroring plugin_loader.py's skip.
+    caps = cd.load_plugin_capabilities(_fake_mcp_reader_with_utility)
+    names = {c["plugin"] for c in caps}
+    assert names == {"textcpu"}
+    assert "ffmpeg" not in names
+
+
+def test_discover_capabilities_skips_utility_plugins():
+    # Regression: previously utility plugins (blip/depth/ffmpeg/rmbg) surfaced
+    # in the composer's add-a-step picker as permanently-latent "plugin not
+    # available" duplicates of native intents. They must be filtered out
+    # entirely — never appear as a Capability, live or latent.
+    caps = cd.discover_capabilities(
+        "video",
+        is_plugin_loaded=lambda n: False,   # even "not loaded" must not matter
+        is_backend_up=lambda f: False,
+        mcp_reader=_fake_mcp_reader_with_utility,
+    )
+    plugin_names = {c.plugin for c in caps if c.source == "plugin"}
+    assert "ffmpeg" not in plugin_names
 
 
 # ── discover_capabilities: native intents ─────────────────────────────────────
