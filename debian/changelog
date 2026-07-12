@@ -1,3 +1,22 @@
+tt-local-generator (0.21.0) noble; urgency=medium
+
+  * Pipeline Studio — the Muse: a goal-first "start from scratch" creative
+    wizard ("What do you want to make?") and a main-app "Remix as pipeline"
+    bridge that turns any image/video/poem into a multi-step pipeline ("Make
+    this into..."), both seeding the intent composer with a real starter
+    recipe. Goals are a curated core plus any contributed by MCP prompt
+    collections, with an always-present "tell me your idea" free-text escape
+    hatch (drafts a whole pipeline). New pure layers: spec_remix.seed_spec,
+    app/recipes.py, wingit.map_freeform_to_pipeline; MuseView in
+    pipeline_studio.py. Positions the app as a creative solution, not a
+    technical node editor.
+  * Pipeline Studio visual polish — cohesive intent labels, compact step rows,
+    hero images that fill their frame, intent-icon placeholders for empty
+    steps, a real max-width column (no full-window sprawl), larger per-step
+    previews, and inline text for text-producing steps.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 12 Jul 2026 18:00:00 -0700
+
 tt-local-generator (0.20.0) noble; urgency=medium
 
   * Pipeline Studio Phase 3 — build a showcase. Any completed run can be turned
