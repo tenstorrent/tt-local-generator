@@ -1646,16 +1646,20 @@ class GenerationCard(Gtk.Frame):
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
     remix_cb(record) is called when the Remix button is clicked (opens RemixPopover).
+    remix_as_pipeline_cb(record) is called when "Remix as pipeline…" is clicked
+      (opens Pipeline Studio's Muse scoped to this card's artifact).
     star_cb(record, starred: bool) is called when the star is toggled.
     """
 
     def __init__(self, record: GenerationRecord, select_cb, delete_cb,
-                 remix_cb=None, star_cb=None, transform_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None,
+                 remix_as_pipeline_cb=None):
         super().__init__()
         self._record = record
         self._select_cb = select_cb
         self._delete_cb = delete_cb
         self._remix_cb = remix_cb           # callable(record) or None — opens RemixPopover
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb  # callable(record) or None — opens scoped Muse
         self._star_cb = star_cb             # callable(record, starred: bool) or None
         self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
         self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
@@ -1804,6 +1808,17 @@ class GenerationCard(Gtk.Frame):
         remix_btn.set_tooltip_text("Remix this into a new generation")
         remix_btn.connect("clicked", self._on_remix_clicked)
         action_bar.append(remix_btn)
+
+        # Remix-as-pipeline button — always present, parallel to 🔀 Remix above,
+        # so any card can seed a multi-step Pipeline Studio remix.
+        self._remix_as_pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
+        self._remix_as_pipeline_btn.add_css_class("hover-action-btn")
+        self._remix_as_pipeline_btn.set_can_focus(False)
+        self._remix_as_pipeline_btn.set_tooltip_text(
+            "Remix this into a multi-step pipeline"
+        )
+        self._remix_as_pipeline_btn.connect("clicked", self._on_remix_as_pipeline_clicked)
+        action_bar.append(self._remix_as_pipeline_btn)
 
         # Star toggle — always present so every card type can be starred.
         self._star_btn = Gtk.Button(label="★" if self._record.starred else "☆")
@@ -2234,6 +2249,11 @@ class GenerationCard(Gtk.Frame):
         if self._remix_cb:
             self._remix_cb(self._record)
 
+    def _on_remix_as_pipeline_clicked(self, _btn) -> None:
+        """Open Pipeline Studio's Muse for this card when "🧩 Remix as pipeline…" is clicked."""
+        if self._remix_as_pipeline_cb:
+            self._remix_as_pipeline_cb(self._record)
+
     def _on_trash_clicked(self, btn) -> None:
         """Propagate the delete request upward; prevent the click from selecting the card."""
         # Stop propagation so the card's GestureClick (which selects the card) does
@@ -2267,6 +2287,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         self.set_size_request(420, -1)
         self._record: Optional[GenerationRecord] = None
         self._remix_cb = None
+        self._remix_as_pipeline_cb = None
         self._video_widget: Optional[Gtk.Video] = None
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
@@ -2330,10 +2351,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_gif_pic = None
         self._show_empty()
 
-    def show_record(self, record: GenerationRecord, remix_cb) -> None:
+    def show_record(self, record: GenerationRecord, remix_cb, remix_as_pipeline_cb=None) -> None:
         """Populate the panel with a completed generation record."""
         self._record = record
         self._remix_cb = remix_cb
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb
 
         # Unload the previous video pipeline before replacing it.  Calling
         # set_file(None) starts GStreamer teardown immediately; without it the
@@ -2798,6 +2820,14 @@ class DetailPanel(Gtk.ScrolledWindow):
         remix_btn.set_tooltip_text("Remix this into a new generation")
         remix_btn.connect("clicked", self._on_remix_clicked)
         action_row.append(remix_btn)
+
+        self._remix_as_pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
+        self._remix_as_pipeline_btn.add_css_class("action-btn")
+        self._remix_as_pipeline_btn.set_tooltip_text(
+            "Remix this into a multi-step pipeline"
+        )
+        self._remix_as_pipeline_btn.connect("clicked", self._on_remix_as_pipeline_clicked)
+        action_row.append(self._remix_as_pipeline_btn)
         content.append(action_row)
 
         self.set_child(content)
@@ -2821,7 +2851,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             return
         self._nav_idx = (self._nav_idx + delta) % len(self._nav_records)
         rec = self._nav_records[self._nav_idx]
-        self.show_record(rec, self._remix_cb)
+        self.show_record(rec, self._remix_cb, self._remix_as_pipeline_cb)
 
     def _on_detail_star_clicked(self, _btn) -> None:
         """Toggle the starred state for the currently displayed record."""
@@ -3098,6 +3128,11 @@ class DetailPanel(Gtk.ScrolledWindow):
             pop = RemixPopover(self._record, on_remix=self._remix_cb)
             pop.set_parent(btn)
             pop.popup()
+
+    def _on_remix_as_pipeline_clicked(self, _btn) -> None:
+        """Open Pipeline Studio's Muse scoped to the displayed record."""
+        if self._record and self._remix_as_pipeline_cb:
+            self._remix_as_pipeline_cb(self._record)
 
 
 # ── Full-size video player window ─────────────────────────────────────────────
@@ -3409,13 +3444,15 @@ class GalleryWidget(Gtk.Box):
     _PAGE_SIZE = 48  # cards per page — ~4 rows of 4 at comfortable density
 
     def __init__(self, select_cb, delete_cb, media_type: str = "video",
-                 remix_cb=None, star_cb=None, transform_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None,
+                 remix_as_pipeline_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
         self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb  # callable(record) or None — opens scoped Muse
         self._star_cb = star_cb            # callable(record, starred: bool) or None
         self._transform_cb = transform_cb  # callable(record, key) or None — forge transforms
         self._media_type = media_type
@@ -3594,6 +3631,7 @@ class GalleryWidget(Gtk.Box):
             remix_cb=self._remix_cb,
             star_cb=self._star_cb,
             transform_cb=self._transform_cb,
+            remix_as_pipeline_cb=self._remix_as_pipeline_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -7884,6 +7922,7 @@ class MainWindow(Gtk.ApplicationWindow):
             remix_cb=self._on_remix_card,
             star_cb=self._on_star,
             transform_cb=self._on_transform_card,
+            remix_as_pipeline_cb=self._remix_as_pipeline,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
@@ -8680,6 +8719,45 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._on_source_change(self._controls.get_model_source())
 
+    # Maps GenerationRecord.media_type -> the "kind" vocabulary Pipeline Studio's
+    # Muse expects for a seed_artifact. Anything absent from this table (e.g.
+    # "artgen") has no resolvable kind, so _remix_as_pipeline falls back to a
+    # blank muse rather than guessing.
+    _REMIX_KIND_BY_MEDIA_TYPE = {
+        "image": "image",
+        "video": "video",
+        "animate": "video",
+        "animatediff": "gif",
+    }
+
+    def _remix_as_pipeline(self, record: GenerationRecord) -> None:
+        """Open Pipeline Studio's Muse scoped to this record's primary artifact.
+
+        Wired as `remix_as_pipeline_cb` to every GenerationCard/DetailPanel's
+        "🧩 Remix as pipeline…" button ("Make this image into…"). Resolves
+        (path, kind, thumb_path) from the record, activates the Pipelines area
+        exactly the way the "🧩 Pipelines" toolbar toggle does, then hands the
+        seed artifact to PipelineStudio.show_muse().
+
+        Never fails: if the artifact's file is missing/unreadable, or its
+        media_type doesn't map to a kind Muse understands, falls back to a
+        blank muse (`show_muse()` with no seed_artifact) instead of raising or
+        seeding garbage.
+        """
+        kind = self._REMIX_KIND_BY_MEDIA_TYPE.get(record.media_type)
+        seed_artifact = None
+        if record.media_exists and kind is not None:
+            seed_artifact = (record.media_file_path, kind, record.thumbnail_path)
+
+        # Activate the Pipelines area the same way the toolbar toggle does.
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and not pipelines_btn.get_active():
+            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+        else:
+            self._show_pipelines()
+
+        self._pipeline_studio.show_muse(seed_artifact=seed_artifact)
+
     # ── Card selection ─────────────────────────────────────────────────────────
 
     def _on_card_selected(self, record: GenerationRecord) -> None:
@@ -8689,7 +8767,8 @@ class MainWindow(Gtk.ApplicationWindow):
         all_cards = gallery.all_cards()
         idx = next((i for i, c in enumerate(all_cards) if c._record.id == record.id), 0)
         self._detail.set_context([c._record for c in all_cards], idx)
-        self._detail.show_record(record, self._dispatch_remix)
+        self._detail.show_record(record, self._dispatch_remix,
+                                  remix_as_pipeline_cb=self._remix_as_pipeline)
 
     # ── Remix routing ──────────────────────────────────────────────────────────
 

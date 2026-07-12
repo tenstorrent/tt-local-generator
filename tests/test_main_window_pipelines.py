@@ -172,3 +172,200 @@ def test_source_change_unchecks_pipelines_toggle(tmp_path, monkeypatch):
 
     assert obj._gallery_stack.get_visible_child_name() == "video"
     assert obj._pipelines_btn.get_active() is False
+
+
+# ── Task 5: "Remix as pipeline…" bridge ──────────────────────────────────────
+#
+# GenerationCard's hover action bar and DetailPanel's action row grow a
+# "🧩 Remix as pipeline…" button next to the existing "🔀 Remix" button,
+# wired via a parallel `remix_as_pipeline_cb(record)` seam. MainWindow wires
+# both to `_remix_as_pipeline`, which resolves the record's primary artifact,
+# activates the Pipelines area, and opens Pipeline Studio's Muse scoped to
+# that artifact — falling back to a blank muse if the artifact is missing.
+
+def _make_record(**kwargs):
+    """Minimal GenerationRecord builder (mirrors tests/test_forge_transforms.py)."""
+    from history_store import GenerationRecord
+    import uuid
+    base = dict(
+        id=str(uuid.uuid4()),
+        prompt="test prompt",
+        negative_prompt="",
+        num_inference_steps=20,
+        seed=42,
+        video_path="/nonexistent/video.mp4",
+        thumbnail_path="/nonexistent/thumb.jpg",
+        created_at="2026-01-01T00:00:00+00:00",
+        media_type="video",
+        image_path="",
+        model="wan2",
+        extra_meta={},
+    )
+    base.update(kwargs)
+    return GenerationRecord(**base)
+
+
+def test_generation_card_remix_as_pipeline_button_invokes_callback():
+    """Clicking "🧩 Remix as pipeline…" on a card calls remix_as_pipeline_cb(record)."""
+    from main_window import GenerationCard
+
+    rec = _make_record(media_type="image", image_path="/nonexistent/image.png")
+    calls = []
+    card = GenerationCard(
+        rec,
+        select_cb=lambda c: None,
+        delete_cb=lambda r: None,
+        remix_as_pipeline_cb=lambda r: calls.append(r),
+    )
+
+    card._remix_as_pipeline_btn.emit("clicked")
+
+    assert len(calls) == 1
+    assert calls[0] is rec
+
+
+def test_generation_card_remix_as_pipeline_button_noop_without_callback():
+    """The button is present even when remix_as_pipeline_cb is None, and no-ops safely."""
+    from main_window import GenerationCard
+
+    rec = _make_record()
+    card = GenerationCard(
+        rec,
+        select_cb=lambda c: None,
+        delete_cb=lambda r: None,
+    )
+
+    card._remix_as_pipeline_btn.emit("clicked")  # must not raise
+
+
+def test_gallery_widget_forwards_remix_as_pipeline_cb_to_cards():
+    """GalleryWidget's remix_as_pipeline_cb constructor kwarg reaches each card."""
+    from main_window import GalleryWidget
+
+    calls = []
+    gallery = GalleryWidget(
+        select_cb=lambda r: None,
+        delete_cb=lambda r: None,
+        remix_as_pipeline_cb=lambda r: calls.append(r),
+    )
+    rec = _make_record(media_type="image", image_path="/nonexistent/image.png")
+    gallery.load_history([rec])
+
+    card = gallery._cards[0]
+    card._remix_as_pipeline_btn.emit("clicked")
+
+    assert len(calls) == 1
+    assert calls[0].id == rec.id
+
+
+def test_detail_panel_remix_as_pipeline_button_invokes_callback():
+    """Clicking "🧩 Remix as pipeline…" in the detail panel calls remix_as_pipeline_cb(record)."""
+    from main_window import DetailPanel
+
+    rec = _make_record(media_type="image", image_path="/nonexistent/image.png")
+    calls = []
+    panel = DetailPanel()
+    panel.show_record(rec, remix_cb=lambda r: None,
+                       remix_as_pipeline_cb=lambda r: calls.append(r))
+
+    panel._remix_as_pipeline_btn.emit("clicked")
+
+    assert len(calls) == 1
+    assert calls[0] is rec
+
+
+def _make_mw_for_remix(tmp_path, monkeypatch):
+    """Like _make_mw, but also pre-registers a 'pipelines' stack child and a
+    mocked, already-constructed `_pipeline_studio` — the seam
+    `_remix_as_pipeline` hands off to."""
+    import main_window as mw
+
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._gallery_stack.add_named(Gtk.Box(), "pipelines")
+    obj._pipeline_studio = MagicMock()
+    obj._remix_as_pipeline = mw.MainWindow._remix_as_pipeline.__get__(obj)
+    return obj
+
+
+def test_remix_as_pipeline_resolves_seed_artifact_for_image_record(tmp_path, monkeypatch):
+    """A normal, existing image record resolves to (path, 'image', thumb) and
+    activates Pipelines before opening the scoped muse."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+
+    img_path = tmp_path / "art.png"
+    img_path.write_bytes(b"fake-png")
+    thumb_path = tmp_path / "art_thumb.jpg"
+    thumb_path.write_bytes(b"fake-jpg")
+    rec = _make_record(
+        media_type="image", image_path=str(img_path), thumbnail_path=str(thumb_path),
+    )
+
+    obj._remix_as_pipeline(rec)
+
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(img_path), "image", str(thumb_path))
+    )
+
+
+def test_remix_as_pipeline_falls_back_to_blank_muse_when_media_missing(tmp_path, monkeypatch):
+    """A record whose media file doesn't exist on disk must never crash — it
+    opens a blank muse instead of a seeded one."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+
+    rec = _make_record(
+        media_type="image", image_path=str(tmp_path / "does_not_exist.png"),
+    )
+    assert rec.media_exists is False
+
+    obj._remix_as_pipeline(rec)
+
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+
+
+def test_remix_as_pipeline_video_and_animate_map_to_video_kind(tmp_path, monkeypatch):
+    """Both 'video' and 'animate' media_type records resolve to kind 'video'."""
+    for media_type in ("video", "animate"):
+        obj = _make_mw_for_remix(tmp_path, monkeypatch)
+        vid_path = tmp_path / f"{media_type}.mp4"
+        vid_path.write_bytes(b"fake-mp4")
+        rec = _make_record(media_type=media_type, video_path=str(vid_path))
+
+        obj._remix_as_pipeline(rec)
+
+        obj._pipeline_studio.show_muse.assert_called_once_with(
+            seed_artifact=(str(vid_path), "video", rec.thumbnail_path)
+        )
+
+
+def test_remix_as_pipeline_animatediff_maps_to_gif_kind(tmp_path, monkeypatch):
+    """An animatediff record resolves to kind 'gif'."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    gif_path = tmp_path / "loop.gif"
+    gif_path.write_bytes(b"fake-gif")
+    rec = _make_record(media_type="animatediff", video_path=str(gif_path))
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(gif_path), "gif", rec.thumbnail_path)
+    )
+
+
+def test_remix_as_pipeline_unresolvable_kind_falls_back_to_blank_muse(tmp_path, monkeypatch):
+    """A media_type with no known kind mapping (e.g. 'artgen') falls back to
+    a blank muse even though the file exists on disk."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    vid_path = tmp_path / "art.mp4"
+    vid_path.write_bytes(b"fake-mp4")
+    # media_type "artgen" is not in the kind-mapping table; media_file_path
+    # falls back to video_path (see GenerationRecord.media_file_path), which
+    # does exist on disk — so this exercises the "kind unresolved" branch of
+    # the fallback specifically, not the "file missing" branch.
+    rec = _make_record(media_type="artgen", video_path=str(vid_path))
+    assert rec.media_exists is True
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
