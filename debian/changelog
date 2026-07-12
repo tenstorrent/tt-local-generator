@@ -1,3 +1,16 @@
+tt-local-generator (0.21.3) noble; urgency=medium
+
+  * Pipeline Studio card fix — thumbnails no longer inflate their card. The
+    Picture's hexpand/vexpand was propagating up to the frame and the whole
+    card (GTK auto-computes container expand from children), so grid cards
+    grew oversized with the image drifting and the title falling off, and the
+    hero's missing-artifact placeholder floated tiny in a corner. The thumb
+    frame now pins its own expand off (image still fills the fixed frame), and
+    the placeholder icon centers + enlarges as an intentional "no preview"
+    tile.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 12 Jul 2026 20:30:00 -0700
+
 tt-local-generator (0.21.2) noble; urgency=medium
 
   * Pipeline engine now writes results.json (the {node_id: {output_key:

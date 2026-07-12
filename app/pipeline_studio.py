@@ -347,12 +347,23 @@ def _build_thumb_frame(path: "str | None", width: int, height: int,
     frame.set_halign(Gtk.Align.CENTER)
     frame.set_valign(Gtk.Align.CENTER)
     frame.set_overflow(Gtk.Overflow.HIDDEN)
+    # CRITICAL: pin the frame's expand OFF explicitly. In GTK4 a container's
+    # expand is auto-computed as the OR of its children's expand flags, so a
+    # hexpand/vexpand child (the Picture/placeholder below, which must fill the
+    # frame) would otherwise PROPAGATE that expand up to the frame and then to
+    # the enclosing card — inflating the whole card and drifting the image/
+    # placeholder. An explicit set_*expand(False) overrides the propagation:
+    # the frame stays exactly width×height while its child still fills it.
+    frame.set_hexpand(False)
+    frame.set_vexpand(False)
 
     pb = _thumb_pixbuf(path, width, height)
     if pb is not None:
         pic = Gtk.Picture.new_for_pixbuf(pb)
         pic.set_can_shrink(True)
         pic.set_content_fit(Gtk.ContentFit.COVER)
+        # hexpand/vexpand fill the FIXED frame (the frame's own expand is
+        # pinned False above, so this never escapes to the card).
         pic.set_hexpand(True)
         pic.set_vexpand(True)
         frame.append(pic)
@@ -361,6 +372,12 @@ def _build_thumb_frame(path: "str | None", width: int, height: int,
         icon_text = intent.icon if intent is not None else "\U0001f5bc️"  # 🖼️
         placeholder = Gtk.Label(label=icon_text)
         placeholder.add_css_class("ps-placeholder-icon")
+        # Fill + center within the fixed frame so the icon reads as an
+        # intentional "nothing here yet" tile, not a tiny glyph in a corner.
+        placeholder.set_hexpand(True)
+        placeholder.set_vexpand(True)
+        placeholder.set_halign(Gtk.Align.CENTER)
+        placeholder.set_valign(Gtk.Align.CENTER)
         frame.append(placeholder)
     return frame
 
@@ -577,8 +594,8 @@ _CSS = b"""
     border: 1px dashed alpha(#74C5DF, 0.22);
 }
 .ps-placeholder-icon {
-    font-size: 26px;
-    opacity: 0.55;
+    font-size: 38px;
+    opacity: 0.5;
 }
 .ps-content-column {
     /* Fix #5: centered max-width column wrapper - see _wrap_centered(). No
