@@ -72,15 +72,18 @@ Four pieces:
 
     `current_spec() -> dict` returns `working_spec` with any still-pending
     field edits applied (again via `spec_remix.apply_edits`) — this is the
-    FINAL spec a Run should materialize. `run-remix` itself keeps emitting
+    FINAL spec a Run should materialize. `run-remix` still emits
     `(str spec_path, object edits)` exactly as Phase 2a did (the base
-    spec_path + only-the-param-edits dict) so PipelineStudio's existing
-    `derive_spec(spec_path, edits)` wiring keeps working unchanged; Task 4
-    (which adapts the loop) is expected to call
-    `spec_remix.write_spec(remix_view.current_spec(), ...)` instead so
-    structural add/remove changes actually make it into the derived spec —
-    `derive_spec` alone has no way to see them since it re-reads spec_path
-    from disk.
+    spec_path + only-the-param-edits dict — kept for the base-name lookup and
+    `PipelineStore.create_run`'s `param_overrides` bookkeeping), but
+    PipelineStudio's `_on_run_remix` (Phase 2b-1 Task 4) does NOT feed
+    spec_path/edits into `spec_remix.derive_spec` — it calls
+    `remix_view.current_spec()` (the emitting widget itself) to get the
+    composed graph, re-merges the base spec file's top-level `_`-keys back in
+    (`current_spec()`'s `working_spec` came from `pipeline_engine.load_spec`,
+    which strips them), and writes THAT via `spec_remix.write_spec` — so
+    structural add/remove changes actually make it into the run, which
+    `derive_spec` alone could never see since it re-reads spec_path from disk.
 
 `LiveRunView(Gtk.Box)`
     The "watch it run" page (SP-C Phase 2a Task 3): one row per step
@@ -119,10 +122,18 @@ Four pieces:
 
     - `OpenView`'s "remix-request" → `RemixView.set_run(current_run, spec_path)`
       for whichever run is currently open, then switch to "remix".
-    - `RemixView`'s "run-remix" (spec_path, edits) → derive a new spec file
-      (`spec_remix.derive_spec`) under `REMIXES_DIR`, create a provisional run
-      record for it (`PipelineStore.create_run`) so `LiveRunView.begin()` has
-      a real `RunView` to render (every step PENDING), switch to "run", then
+    - `RemixView`'s "run-remix" (spec_path, edits) → take the emitting
+      `RemixView`'s `current_spec()` (the composed graph — every add/remove
+      structural edit included), re-merge the base spec file's top-level
+      `_`-keys back in (`current_spec()` strips them via
+      `pipeline_engine.load_spec`; see `_with_preserved_top_level_metadata`),
+      and write THAT via
+      `spec_remix.write_spec` under `REMIXES_DIR` (Phase 2b-1 Task 4 — Phase
+      2a's `derive_spec(spec_path, edits)` call is gone: it re-reads spec_path
+      fresh off disk and would silently drop any structural edit). Create a
+      provisional run record for the written path
+      (`PipelineStore.create_run`) so `LiveRunView.begin()` has a real
+      `RunView` to render (every step PENDING), switch to "run", then
       construct a `PipelineRunner` and `.start()` it with the `LiveRunView`'s
       own `on_node_update`/`on_log`/`on_finished` bound directly as its
       callbacks (their signatures already match exactly — see LiveRunView's
@@ -139,6 +150,7 @@ Four pieces:
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from pathlib import Path
@@ -153,14 +165,15 @@ from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
-from spec_remix import add_step, apply_edits, derive_spec, editable_params, remove_step  # noqa: E402
+from spec_remix import add_step, apply_edits, editable_params, remove_step, write_spec  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-# Where derived remix spec files land (SP-C Phase 2a Task 4). A sibling of
-# PipelineStore's own workflow-runs/ dir under the same app data root — see
-# spec_remix.derive_spec's docstring for the naming scheme used inside it
-# (remix_<base_stem>_<n>.json).
+# Where derived/composed remix spec files land (SP-C Phase 2a Task 4; Phase
+# 2b-1 Task 4 pointed the write path at spec_remix.write_spec directly). A
+# sibling of PipelineStore's own workflow-runs/ dir under the same app data
+# root — see spec_remix.write_spec's docstring for the naming scheme used
+# inside it (remix_<base_stem>_<n>.json).
 REMIXES_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "remixes"
 
 
@@ -176,6 +189,27 @@ def _default_remix_jobs() -> "list[dict]":
     playlist_ids dicts.
     """
     return [{"name": "remix", "prompt": ""}]
+
+
+def _with_preserved_top_level_metadata(spec: dict, base_spec_path: str) -> dict:
+    """Copy any top-level ``_``-prefixed key from *base_spec_path* that *spec* lacks.
+
+    `RemixView.current_spec()` is built from `working_spec`, which was loaded
+    via `pipeline_engine.load_spec` — that function STRIPS top-level
+    ``_``-prefixed keys (``_spec_version``, ``_comment``) since they aren't
+    part of the node graph `load_spec`/`topo_order` care about. That means
+    `current_spec()` never carries them either, unlike `spec_remix.derive_spec`
+    (Phase 2a), which reads the RAW base file specifically to keep them. This
+    restores that same guarantee for the composer's write path (Phase 2b-1
+    Task 4) — a composed run preserves ``_spec_version``/``_comment`` exactly
+    like a param-only remix did. Returns a NEW dict; *spec* is never mutated.
+    """
+    raw_base = json.loads(Path(base_spec_path).read_text())
+    merged = dict(spec)
+    for key, value in raw_base.items():
+        if key.startswith("_") and key not in merged:
+            merged[key] = value
+    return merged
 
 
 def _thumb_pixbuf(path: "str | None", width: int, height: int):
@@ -805,7 +839,9 @@ class RemixView(Gtk.Box):
     PRE-FILLED with the base run's actual current value, so hitting Run with
     zero edits reproduces the base run unchanged — the empty edits dict this
     view emits in that case is a documented no-op for
-    `spec_remix.derive_spec`. Data arrives ONLY through `set_run()`: this
+    `spec_remix.apply_edits` (the shared edit-application rule both
+    `spec_remix.derive_spec` and this view's own `current_spec()` use). Data
+    arrives ONLY through `set_run()`: this
     widget loads the spec via `pipeline_engine.load_spec` (pure spec-file IO,
     no store/history) and lists its editable inputs via
     `spec_remix.editable_params` (pure dict math) — it never imports or
@@ -1646,21 +1682,38 @@ class PipelineStudio(Gtk.Box):
         self.remix_view.set_run(self._current_run_view, self._current_spec_path)
         self.stack.set_visible_child_name("remix")
 
-    def _on_run_remix(self, _widget: "RemixView", spec_path: str, edits: dict) -> None:
-        """RemixView's "Run this remix →" → derive, launch, and watch it live.
+    def _on_run_remix(self, remix_view: "RemixView", spec_path: str, edits: dict) -> None:
+        """RemixView's "Run this remix →" → compose, write, launch, and watch it live.
 
-        Deriving the spec and creating the provisional run record are pure/
-        fast JSON I/O (same cost class as RemixView's own load_spec() call in
-        set_run()), so they run synchronously here rather than off-thread —
-        only the actual pipeline subprocess (PipelineRunner.start) does real
-        background work. The provisional record created here IS the run's
-        single PipelineStore record: run_id is passed straight through to
-        PipelineRunner.start(run_id=...), which adopts it (patches in the
-        real subprocess PID via update_pid()) instead of minting a second,
-        divergent record — see PipelineRunner.start's docstring.
+        Phase 2b-1 Task 4: RemixView is now a structural composer (Task 3) —
+        its full edited graph (add/remove steps, plus any pending field edit)
+        lives in `remix_view.current_spec()`, not in *edits* (which is only
+        the param-edit dict `derive_spec` used to consume). Feeding *spec_path*
+        + *edits* into `spec_remix.derive_spec` here — as Phase 2a did — would
+        re-read *spec_path* fresh off disk and silently DROP every add/remove
+        structural edit, since `derive_spec` has no way to see them. So this
+        instead takes `remix_view.current_spec()` (the emitting widget itself
+        — the composed graph), re-merges the base spec file's top-level
+        ``_``-metadata back in (`current_spec()`'s `working_spec` came from
+        `pipeline_engine.load_spec`, which strips it — see
+        `_with_preserved_top_level_metadata`), and writes THAT via
+        `spec_remix.write_spec` under the original spec's stem — so the
+        composed graph is what actually runs.
+
+        Composing/writing the spec and creating the provisional run record
+        are pure/fast JSON I/O (same cost class as RemixView's own
+        load_spec() call in set_run()), so they run synchronously here rather
+        than off-thread — only the actual pipeline subprocess
+        (PipelineRunner.start) does real background work. The provisional
+        record created here IS the run's single PipelineStore record: run_id
+        is passed straight through to PipelineRunner.start(run_id=...), which
+        adopts it (patches in the real subprocess PID via update_pid())
+        instead of minting a second, divergent record — see
+        PipelineRunner.start's docstring.
         """
         REMIXES_DIR.mkdir(parents=True, exist_ok=True)
-        derived_path = derive_spec(spec_path, edits, str(REMIXES_DIR))
+        final_spec = _with_preserved_top_level_metadata(remix_view.current_spec(), spec_path)
+        derived_path = write_spec(final_spec, Path(spec_path).stem, str(REMIXES_DIR))
 
         jobs = _default_remix_jobs()
         store = PipelineStore()

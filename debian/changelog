@@ -1,3 +1,22 @@
+tt-local-generator (0.17.0) noble; urgency=medium
+
+  * Pipeline Studio Phase 2b-1 — compose pipelines by adding/removing steps
+    (contextual, auto-wired, kind-safe) and running the composed result live.
+    RemixView is now a structural composer: each step card gets a "Remove"
+    control and a "＋ add a step after" control offering only intents
+    compatible with that step's output (app/spec_remix.py's add_step/
+    remove_step graph surgery + app/intent_vocab.py's compatible_intents).
+    This release closes the loop so the composed graph actually runs:
+    PipelineStudio's run-remix handler now writes remix_view.current_spec()
+    (the full edited graph — every add/remove included) via
+    spec_remix.write_spec instead of re-deriving from the base spec_path/
+    edits alone, which silently dropped every structural edit from the
+    executed run; the base spec's top-level _spec_version/_comment metadata
+    is re-merged in before writing so a composed run preserves it exactly
+    like a param-only remix does.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 18:40:00 -0700
+
 tt-local-generator (0.16.0) noble; urgency=medium
 
   * Pipeline Studio (Phase 2a) — the Remix → Run loop. From an opened run you can

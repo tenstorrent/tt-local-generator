@@ -12,6 +12,7 @@ thread it starts on construction never touches the real user's history.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -744,12 +745,18 @@ def test_live_run_view_begin_is_repeat_safe():
 
 # ── PipelineStudio: wire the loop (Open → Remix → Run → done) ──────────────
 #
-# SP-C Phase 2a Task 4. PipelineRunner and PipelineStore are both mocked here
-# — this is a wiring test, not a real-subprocess/real-disk integration test
-# (see test_pipeline_runner.py for PipelineRunner's own unit tests). derive_spec
-# is left REAL (it's pure JSON I/O) but pointed at a tmp_path remixes dir via
-# a monkeypatched pipeline_studio.REMIXES_DIR, so no file lands under the
-# actual user's home directory.
+# SP-C Phase 2a Task 4 wired this loop by calling spec_remix.derive_spec(
+# spec_path, edits) directly. SP-C Phase 2b-1 Task 4 replaced that with
+# remix_view.current_spec() + spec_remix.write_spec so RemixView's structural
+# add/remove edits (Phase 2b-1 Task 3) actually reach the executed run
+# instead of being silently dropped -- derive_spec re-reads spec_path fresh
+# off disk and has no way to see edits living only in RemixView.working_spec.
+# write_spec/current_spec are left REAL (pure JSON I/O) — only PipelineRunner
+# and PipelineStore are mocked; this is a wiring test, not a real-subprocess/
+# real-disk integration test (see test_pipeline_runner.py for PipelineRunner's
+# own unit tests). A monkeypatched pipeline_studio.REMIXES_DIR points every
+# written file at a tmp_path remixes dir, so nothing lands under the actual
+# user's home directory.
 
 def test_pipeline_studio_remix_request_shows_remix_page_for_open_run(monkeypatch, tmp_path):
     """OpenView's remix-request (either button) opens RemixView pre-filled
@@ -784,39 +791,36 @@ def test_pipeline_studio_remix_request_noop_when_nothing_open(monkeypatch, tmp_p
     assert studio.stack.get_visible_child_name() == "discover"
 
 
-def test_pipeline_studio_run_remix_derives_creates_run_and_starts_runner(monkeypatch, tmp_path):
-    """RemixView's run-remix must: derive a new spec under REMIXES_DIR, create
-    a provisional PipelineStore run record for the DERIVED path, show it in
-    LiveRunView and switch to "run", then construct a PipelineRunner and
-    start() it with the derived path and LiveRunView's own handlers bound
-    directly as its callbacks."""
+def test_pipeline_studio_run_remix_writes_composed_spec_creates_run_and_starts_runner(
+        monkeypatch, tmp_path):
+    """RemixView's run-remix must: write remix_view.current_spec() (the
+    composed working spec, including any pending field edit) under
+    REMIXES_DIR via spec_remix.write_spec, create a provisional PipelineStore
+    run record for the WRITTEN path, show it in LiveRunView and switch to
+    "run", then construct a PipelineRunner and start() it with the written
+    path and LiveRunView's own handlers bound directly as its callbacks."""
     import pipeline_studio
 
     remixes_dir = tmp_path / "remixes"
-    remixes_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", remixes_dir)
 
-    # derive_spec is mocked (so the assertion below can check its call args
-    # precisely) — but build_run_view (left real) still needs an actual spec
-    # file at the "derived" path it returns, so write one using the same
-    # content as the remix fixture spec.
-    derived_path = str(remixes_dir / "remix_remix_fixture_spec_1.json")
-    Path(derived_path).write_text(Path(_REMIX_SPEC_PATH).read_text())
-    mock_derive_spec = MagicMock(return_value=derived_path)
-    monkeypatch.setattr(pipeline_studio, "derive_spec", mock_derive_spec)
-
     # PipelineStore is fully mocked — create_run/get_run return a provisional
-    # record pointing at the derived spec file above.
+    # record pointing at whatever path create_run was ACTUALLY called with
+    # (the written path), not a hardcoded guess.
     mock_store_instance = MagicMock()
     mock_store_instance.create_run.return_value = "provisional-run-1"
-    mock_store_instance.get_run.return_value = {
-        "id": "provisional-run-1",
-        "spec_path": derived_path,
-        "spec_name": "remix_remix_fixture_spec_1",
-        "output_dir": "",
-        "job_states": {},
-        "started_at": "2026-07-11T00:00:00+00:00",
-    }
+
+    def _fake_get_run(run_id):
+        kwargs = mock_store_instance.create_run.call_args.kwargs
+        return {
+            "id": run_id,
+            "spec_path": kwargs["spec_path"],
+            "spec_name": kwargs["spec_name"],
+            "output_dir": "",
+            "job_states": {},
+            "started_at": "2026-07-11T00:00:00+00:00",
+        }
+    mock_store_instance.get_run.side_effect = _fake_get_run
     mock_store_cls = MagicMock(return_value=mock_store_instance)
     monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
 
@@ -827,28 +831,114 @@ def test_pipeline_studio_run_remix_derives_creates_run_and_starts_runner(monkeyp
     from pipeline_studio import PipelineStudio
     studio = PipelineStudio()
 
+    studio.remix_view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    studio.remix_view._field_widgets["1"]["prompt"].set_text("a new prompt")
+
     edits = {"1": {"prompt": "a new prompt"}}
     studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, edits)
 
-    # derive_spec called with (base_spec_path, edits, remixes_dir).
-    mock_derive_spec.assert_called_once_with(_REMIX_SPEC_PATH, edits, str(remixes_dir))
+    written = list(remixes_dir.glob("remix_remix_fixture_spec_*.json"))
+    assert len(written) == 1, "run-remix must write exactly one derived spec file"
+    written_path = str(written[0])
+    written_spec = json.loads(written[0].read_text())
 
-    # create_run called with the DERIVED path.
+    # The pending field edit (typed but never separately "applied") made it
+    # into the written spec via current_spec().
+    assert written_spec["1"]["inputs"]["prompt"] == "a new prompt"
+
+    # create_run called with the WRITTEN path.
     create_kwargs = mock_store_instance.create_run.call_args.kwargs
-    assert create_kwargs["spec_path"] == derived_path
+    assert create_kwargs["spec_path"] == written_path
     assert create_kwargs["param_overrides"] == edits
 
-    # PipelineRunner constructed with GLib.idle_add, started with the derived
+    # PipelineRunner constructed with GLib.idle_add, started with the written
     # path and LiveRunView's handlers bound directly.
     mock_runner_cls.assert_called_once_with(idle_add=pipeline_studio.GLib.idle_add)
     start_args, start_kwargs = mock_runner_instance.start.call_args
-    assert start_args[0] == derived_path
+    assert start_args[0] == written_path
     assert start_kwargs["on_node_update"] == studio.live_run.on_node_update
     assert start_kwargs["on_log"] == studio.live_run.on_log
     assert start_kwargs["on_run_finished"] == studio.live_run.on_finished
+    assert start_kwargs["run_id"] == "provisional-run-1"
 
     assert studio.stack.get_visible_child_name() == "run"
     assert list(studio.live_run._step_status_labels.keys()) == ["1", "2", "3"]
+
+
+def test_pipeline_studio_run_remix_includes_added_step_and_preserves_metadata(
+        monkeypatch, tmp_path):
+    """Regression guard for the Phase 2b-1 Task 3 -> Task 4 gap: a step ADDED
+    via the composer (RemixView.add_step_after) must reach the ACTUAL run.
+    The old wiring called spec_remix.derive_spec(spec_path, edits), which
+    re-reads spec_path fresh off disk -- it has no way to see a structural
+    add/remove living only in RemixView.working_spec, so the added node was
+    silently dropped from the executed run. Also asserts the written spec
+    preserves the base file's top-level `_`-metadata (current_spec()'s
+    working_spec strips it via pipeline_engine.load_spec, so it must be
+    re-merged before write_spec) and that create_run()/PipelineRunner.start()
+    both receive the WRITTEN path with the single-record run_id preserved.
+    """
+    import pipeline_studio
+
+    remixes_dir = tmp_path / "remixes"
+    monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", remixes_dir)
+
+    mock_store_instance = MagicMock()
+    mock_store_instance.create_run.return_value = "provisional-run-1"
+
+    def _fake_get_run(run_id):
+        kwargs = mock_store_instance.create_run.call_args.kwargs
+        return {
+            "id": run_id,
+            "spec_path": kwargs["spec_path"],
+            "spec_name": kwargs["spec_name"],
+            "output_dir": "",
+            "job_states": {},
+            "started_at": "2026-07-11T00:00:00+00:00",
+        }
+    mock_store_instance.get_run.side_effect = _fake_get_run
+    mock_store_cls = MagicMock(return_value=mock_store_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
+
+    mock_runner_instance = MagicMock()
+    mock_runner_cls = MagicMock(return_value=mock_runner_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineRunner", mock_runner_cls)
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.remix_view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    # Structurally add a step after node "1" (Generate an image, kind
+    # "image") -- TTLGCaptionImage is a valid next step (input_kind "image").
+    studio.remix_view.add_step_after("1", "TTLGCaptionImage")
+
+    studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, {})
+
+    written = list(remixes_dir.glob("remix_remix_fixture_spec_*.json"))
+    assert len(written) == 1, "run-remix must write exactly one derived spec file"
+    written_path = str(written[0])
+    written_spec = json.loads(written[0].read_text())
+
+    # The added node made it into the ACTUAL run -- this is exactly what
+    # derive_spec(spec_path, edits) could never see.
+    assert "4" in written_spec
+    assert written_spec["4"]["class_type"] == "TTLGCaptionImage"
+
+    # Top-level `_`-metadata from the base spec file survives even though
+    # current_spec()'s working_spec (built via load_spec) stripped it.
+    assert written_spec.get("_spec_version") == "comfyui-api-v1"
+    assert "_comment" in written_spec
+
+    # create_run/PipelineRunner.start both target the WRITTEN path, and the
+    # single provisional run_id flows through unchanged.
+    create_kwargs = mock_store_instance.create_run.call_args.kwargs
+    assert create_kwargs["spec_path"] == written_path
+
+    start_args, start_kwargs = mock_runner_instance.start.call_args
+    assert start_args[0] == written_path
+    assert start_kwargs["run_id"] == "provisional-run-1"
+
+    assert studio.stack.get_visible_child_name() == "run"
 
 
 def test_pipeline_studio_run_done_returns_to_open_with_fresh_run(monkeypatch, tmp_path):
@@ -935,6 +1025,7 @@ def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path)
     from pipeline_studio import PipelineStudio
     studio = PipelineStudio()
 
+    studio.remix_view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
     studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, {})
     assert studio.stack.get_visible_child_name() == "run"
 
