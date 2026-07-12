@@ -137,9 +137,8 @@ def editable_params(spec: dict) -> "dict[str, list[ParamField]]":
     return result
 
 
-def derive_spec(base_spec_path: str, edits: "dict[str, dict[str, Any]]",
-                dest_dir: str) -> str:
-    """Apply *edits* over the base spec and write the result to a new file.
+def apply_edits(spec: dict, edits: "dict[str, dict[str, Any]]") -> dict:
+    """Apply *edits* over *spec* and return a NEW dict — *spec* is never mutated.
 
     *edits* is ``{node_id: {input_key: new_value}}``. An edit is applied only
     when the target node exists, has an ``inputs`` dict, the key already
@@ -147,6 +146,32 @@ def derive_spec(base_spec_path: str, edits: "dict[str, dict[str, Any]]",
     edit (unknown node id, unknown key, or a wired input) is silently
     ignored rather than raising, so a stale/partial edits dict from a UI
     never crashes a remix.
+
+    Shared by ``derive_spec`` (file-based remix: base spec read fresh off
+    disk) and the composer's ``RemixView.current_spec()`` (Phase 2b-1 Task 3:
+    edits applied over an in-memory working spec dict that may already carry
+    structural add/remove changes) — one edit-application rule for both.
+    """
+    new_spec = copy.deepcopy(spec)
+    for node_id, node_edits in edits.items():
+        node = new_spec.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for key, new_value in node_edits.items():
+            if key not in inputs:
+                continue  # unknown key — ignore
+            if _is_wire(inputs[key]):
+                continue  # never overwrite a wire
+            inputs[key] = new_value
+    return new_spec
+
+
+def derive_spec(base_spec_path: str, edits: "dict[str, dict[str, Any]]",
+                dest_dir: str) -> str:
+    """Apply *edits* over the base spec and write the result to a new file.
 
     Returns the path written, under
     ``dest_dir/remix_<base_stem>_<n>.json`` where *n* is chosen by counting
@@ -159,22 +184,8 @@ def derive_spec(base_spec_path: str, edits: "dict[str, dict[str, Any]]",
     # Raw json.loads (NOT pipeline_engine.load_spec) so `_`-prefixed metadata
     # keys and every node's wires survive untouched in the derived file.
     raw = json.loads(Path(base_spec_path).read_text())
-
-    for node_id, node_edits in edits.items():
-        node = raw.get(node_id)
-        if not isinstance(node, dict):
-            continue
-        inputs = node.get("inputs")
-        if not isinstance(inputs, dict):
-            continue
-        for key, new_value in node_edits.items():
-            if key not in inputs:
-                continue  # unknown key — ignore
-            if _is_wire(inputs[key]):
-                continue  # never overwrite a wire
-            inputs[key] = new_value
-
-    return write_spec(raw, Path(base_spec_path).stem, dest_dir)
+    new_spec = apply_edits(raw, edits)
+    return write_spec(new_spec, Path(base_spec_path).stem, dest_dir)
 
 
 # ── Structural graph surgery (Phase 2b-1 Task 2) ─────────────────────────────

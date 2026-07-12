@@ -38,17 +38,49 @@ Four pieces:
     docstring) — a future task may use node_id to scroll/focus that step.
 
 `RemixView(Gtk.Box)`
-    The "change one thing, safely" edit surface (SP-C Phase 2a Task 2): each
-    step renders as an intent card with its `spec_remix.editable_params`
-    fields inline, pre-filled with the run's current values, plus a single
-    "Run this remix →" button. Layout follows the validated mockup at
+    The "change one thing, safely" edit surface (SP-C Phase 2a Task 2), now a
+    real STRUCTURAL composer (Phase 2b-1 Task 3): each step renders as an
+    intent card with its `spec_remix.editable_params` fields inline
+    (pre-filled with the working spec's current values), a **Remove**
+    control, and a **＋ add a step after** control that opens a contextual
+    `Gtk.Popover` of `intent_vocab.compatible_intents(<this node's
+    output_kind>)` — only intents that can actually consume what this step
+    produces. Layout follows the validated mockup at
     `.superpowers/brainstorm/988333-1783804257/content/intent-composer.html`.
+
     Data arrives ONLY through `set_run(run, spec_path)` — like Discover/
-    OpenView, no `PipelineStore` import here (it does load the spec file
-    itself via `pipeline_engine.load_spec`, which is pure spec-file IO, not a
-    store/history access). Emits `run-remix` (str spec_path, object edits)
-    where `edits` is `{node_id: {key: new_value}}` containing only fields the
-    user actually changed — an unmodified Run reproduces the base run.
+    OpenView, no `PipelineStore` import here. `set_run` loads a WORKING SPEC
+    DICT via `pipeline_engine.load_spec` (pure spec-file IO, not a store/
+    history access) into `self.working_spec`; every subsequent render walks
+    `pipeline_engine.topo_order(self.working_spec)` and looks up each node's
+    `intent_vocab.intent_for(class_type)` directly — NOT `run.steps` — since
+    add/remove can change the graph's shape (new nodes `run.steps` never
+    knew about) after the very first render.
+
+    `add_step_after(node_id, class_type)` / `remove_step_by_id(node_id)` call
+    `spec_remix.add_step`/`remove_step` on `self.working_spec`, catching
+    `ValueError` (e.g. a kind-incompatible add, or a caller-forced remove of
+    a node that breaks validation) and showing a brief inline message instead
+    of crashing — the composer picker itself only ever offers kind-compatible
+    choices, so the guard is defensive, not the primary UX gate. Either
+    operation first calls `_commit_pending_edits()`, which bakes any
+    already-typed-but-not-yet-run param-field edits into `working_spec` via
+    `spec_remix.apply_edits` BEFORE the structural change re-renders and
+    rebuilds every field widget from scratch — otherwise an in-progress edit
+    in one card would be silently discarded by clicking Remove/Add on
+    another.
+
+    `current_spec() -> dict` returns `working_spec` with any still-pending
+    field edits applied (again via `spec_remix.apply_edits`) — this is the
+    FINAL spec a Run should materialize. `run-remix` itself keeps emitting
+    `(str spec_path, object edits)` exactly as Phase 2a did (the base
+    spec_path + only-the-param-edits dict) so PipelineStudio's existing
+    `derive_spec(spec_path, edits)` wiring keeps working unchanged; Task 4
+    (which adapts the loop) is expected to call
+    `spec_remix.write_spec(remix_view.current_spec(), ...)` instead so
+    structural add/remove changes actually make it into the derived spec —
+    `derive_spec` alone has no way to see them since it re-reads spec_path
+    from disk.
 
 `LiveRunView(Gtk.Box)`
     The "watch it run" page (SP-C Phase 2a Task 3): one row per step
@@ -116,11 +148,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
-from pipeline_engine import load_spec  # noqa: E402
+from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
+from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
-from spec_remix import derive_spec, editable_params  # noqa: E402
+from spec_remix import add_step, apply_edits, derive_spec, editable_params, remove_step  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -344,6 +377,25 @@ _CSS = b"""
     padding: 10px 16px;
     font-size: 13px;
     font-weight: 700;
+}
+.ps-composer-remove {
+    color: #FF9E8A;
+    font-size: 11px;
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+.ps-composer-add {
+    color: #4FD1C5;
+    font-size: 11px;
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+.ps-composer-message {
+    font-size: 11.5px;
+    color: #FF9E8A;
+    background-color: alpha(#FF9E8A, 0.12);
+    border-radius: 8px;
+    padding: 4px 10px;
 }
 .ps-health-note {
     font-size: 11px;
@@ -778,13 +830,27 @@ class RemixView(Gtk.Box):
         _apply_css()
 
         self._spec_path: "str | None" = None
-        # Populated by set_run(), keyed by node_id then input key, in step/
+        # The composer's WORKING SPEC DICT (Phase 2b-1 Task 3) — loaded fresh
+        # by set_run() via pipeline_engine.load_spec, then mutated in place
+        # (well: replaced wholesale — add_step/remove_step never mutate their
+        # input, they return a new dict) by add_step_after/remove_step_by_id.
+        # Every render walks THIS, not run.steps, so structural changes (new
+        # nodes run.steps never knew about) show up immediately.
+        self.working_spec: dict = {}
+        # Populated by _render(), keyed by node_id then input key, in step/
         # field order (Python dicts preserve insertion order). Two parallel
         # dicts: the live widget (to read back the CURRENT value at Run time)
         # and (kind, original_value) (to know what "changed" means for that
         # widget's kind — see _read_widget_value/_collect_edits).
         self._field_widgets: "dict[str, dict[str, Gtk.Widget]]" = {}
         self._field_meta: "dict[str, dict[str, tuple]]" = {}
+        # Composer controls, keyed by node_id — kept around purely so tests
+        # can find/introspect a specific step's Remove button or add-after
+        # popover without walking the widget tree.
+        self._remove_buttons: "dict[str, Gtk.Button]" = {}
+        self._add_after_buttons: "dict[str, Gtk.MenuButton]" = {}
+        self._add_after_popovers: "dict[str, Gtk.Popover]" = {}
+        self._add_after_choice_buttons: "dict[str, dict[str, Gtk.Button]]" = {}
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.add_css_class("ps-remix-header")
@@ -803,6 +869,18 @@ class RemixView(Gtk.Box):
         safe_pill.add_css_class("ps-remix-safe")
         header.append(safe_pill)
         self.append(header)
+
+        # Hidden until an add/remove guard rejects an operation (see
+        # _show_message/_hide_message) — a healthy composer's header stays
+        # clean, matching LiveRunView's __health__ note pattern.
+        self._message_label = Gtk.Label(label="")
+        self._message_label.set_xalign(0)
+        self._message_label.add_css_class("ps-composer-message")
+        self._message_label.set_visible(False)
+        self._message_label.set_margin_top(4)
+        self._message_label.set_margin_start(18)
+        self._message_label.set_margin_end(18)
+        self.append(self._message_label)
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -831,35 +909,134 @@ class RemixView(Gtk.Box):
     # ── Public API ───────────────────────────────────────────────────────────
 
     def set_run(self, run: RunView, spec_path: str) -> None:
-        """(Re)build the editable step list for *run*'s *spec_path*.
+        """Load *spec_path* into a fresh working spec dict and render it.
 
-        Main-thread only, repeat-safe (clears any prior children/state before
-        rebuilding, same pattern as DiscoverView.set_runs/OpenView.set_run).
+        Main-thread only, repeat-safe — a fresh `working_spec` is loaded
+        every call (same pattern as DiscoverView.set_runs/OpenView.set_run),
+        so re-opening the composer for a different run never carries over a
+        previous run's structural edits.
         """
         self._spec_path = spec_path
         self._title_label.set_label(f"Remixing · {run.title}")
+        self.working_spec = load_spec(spec_path)
+        self._hide_message()
+        self._render()
 
+    def current_spec(self) -> dict:
+        """The working spec with any still-pending param-field edits applied.
+
+        This is the FINAL spec a "Run this remix" should materialize —
+        structural add/remove changes are already baked into `working_spec`
+        itself (every add/remove commits pending field edits first — see
+        `_commit_pending_edits`), so this only needs to layer in whatever the
+        user has typed since the last render.
+        """
+        return apply_edits(self.working_spec, self._collect_edits())
+
+    # ── Composer: add / remove steps ────────────────────────────────────────
+
+    def add_step_after(self, node_id: str, class_type: str) -> None:
+        """Add a new *class_type* node after *node_id*, then re-render.
+
+        Commits any pending param-field edits into `working_spec` FIRST (see
+        `_commit_pending_edits`) so a structural change never discards an
+        in-progress edit elsewhere on the page. A `ValueError` from
+        `spec_remix.add_step` (e.g. a kind-incompatible pairing forced past
+        the picker, which only ever offers compatible choices) is caught and
+        shown as a brief message rather than crashing — `working_spec` is
+        left as committed (unchanged by the failed add) and still re-rendered
+        so the committed edit is reflected.
+        """
+        self._commit_pending_edits()
+        try:
+            self.working_spec = add_step(self.working_spec, node_id, class_type)
+        except ValueError as exc:
+            self._show_message(f"Couldn't add that step: {exc}")
+            self._render()
+            return
+        self._hide_message()
+        self._render()
+
+    def remove_step_by_id(self, node_id: str) -> None:
+        """Remove *node_id* (rewiring its consumers), then re-render.
+
+        Same commit-then-guard pattern as `add_step_after` — see its
+        docstring.
+        """
+        self._commit_pending_edits()
+        try:
+            self.working_spec = remove_step(self.working_spec, node_id)
+        except ValueError as exc:
+            self._show_message(f"Couldn't remove that step: {exc}")
+            self._render()
+            return
+        self._hide_message()
+        self._render()
+
+    def _commit_pending_edits(self) -> None:
+        """Bake current param-field widget values into `working_spec`.
+
+        Called before every structural change: `_render()` (invoked right
+        after add/remove) tears down and rebuilds every field widget from
+        `working_spec`'s literal values, so any edit sitting in a widget that
+        hasn't been "Run" yet would otherwise be silently lost.
+        """
+        edits = self._collect_edits()
+        if edits:
+            self.working_spec = apply_edits(self.working_spec, edits)
+
+    def _show_message(self, text: str) -> None:
+        self._message_label.set_label(text)
+        self._message_label.set_visible(True)
+
+    def _hide_message(self) -> None:
+        self._message_label.set_label("")
+        self._message_label.set_visible(False)
+
+    def _add_after_intents_for(self, node_id: str) -> list:
+        """Compatible next-step Intents for *node_id*'s output, or `[]` if it
+        has no `output_kind` (e.g. an unrecognized/generic-fallback intent)."""
+        node = self.working_spec.get(node_id, {})
+        class_type = node.get("class_type", "")
+        output_kind = intent_for(class_type).output_kind
+        if not output_kind:
+            return []
+        return compatible_intents(output_kind)
+
+    # ── Row building ─────────────────────────────────────────────────────────
+
+    def _render(self) -> None:
+        """(Re)build the whole step-card list from `self.working_spec`.
+
+        Walks `pipeline_engine.topo_order(working_spec)` — NOT `run.steps` —
+        so nodes added/removed since the initial `set_run()` render
+        correctly (see class docstring for why `run.steps` can't be trusted
+        after a structural edit).
+        """
         while child := self._steps_box.get_first_child():
             self._steps_box.remove(child)
         self._field_widgets = {}
         self._field_meta = {}
+        self._remove_buttons = {}
+        self._add_after_buttons = {}
+        self._add_after_popovers = {}
+        self._add_after_choice_buttons = {}
 
-        spec = load_spec(spec_path)
-        params_by_node = editable_params(spec)
-
-        if not run.steps:
+        order = topo_order(self.working_spec)
+        if not order:
             empty = Gtk.Label(label="This run has no steps to remix.")
             empty.add_css_class("ps-empty-msg")
             self._steps_box.append(empty)
             return
 
-        for index, step in enumerate(run.steps, start=1):
-            fields = params_by_node.get(step.node_id, [])
-            self._steps_box.append(self._build_step_card(index, step, fields))
+        params_by_node = editable_params(self.working_spec)
+        for index, node_id in enumerate(order, start=1):
+            class_type = self.working_spec[node_id].get("class_type", "")
+            fields = params_by_node.get(node_id, [])
+            self._steps_box.append(self._build_step_card(index, node_id, class_type, fields))
 
-    # ── Row building ─────────────────────────────────────────────────────────
-
-    def _build_step_card(self, index: int, step: StepView, fields: list) -> Gtk.Widget:
+    def _build_step_card(self, index: int, node_id: str, class_type: str,
+                          fields: list) -> Gtk.Widget:
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         card.add_css_class("ps-step")
 
@@ -869,13 +1046,16 @@ class RemixView(Gtk.Box):
         n_label.set_valign(Gtk.Align.START)
         head.append(n_label)
 
+        intent = intent_for(class_type)
+
         verb_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        verb_label = Gtk.Label(label=step.intent.verb)
+        verb_col.set_hexpand(True)
+        verb_label = Gtk.Label(label=intent.verb)
         verb_label.set_xalign(0)
         verb_label.add_css_class("ps-step-verb")
         verb_col.append(verb_label)
 
-        noun_label = Gtk.Label(label=step.intent.noun)
+        noun_label = Gtk.Label(label=intent.noun)
         noun_label.set_xalign(0)
         noun_label.add_css_class("ps-step-noun")
         verb_col.append(noun_label)
@@ -883,13 +1063,28 @@ class RemixView(Gtk.Box):
         # model_label is a quiet secondary detail — omitted entirely (not
         # shown blank) when the intent doesn't name an underlying tool,
         # mirroring OpenView._build_step_row's identical guard.
-        if step.intent.model_label:
-            model_label = Gtk.Label(label=step.intent.model_label)
+        if intent.model_label:
+            model_label = Gtk.Label(label=intent.model_label)
             model_label.set_xalign(0)
             model_label.add_css_class("ps-step-model")
             verb_col.append(model_label)
 
         head.append(verb_col)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        controls.set_valign(Gtk.Align.START)
+
+        remove_btn = Gtk.Button(label="Remove")
+        remove_btn.add_css_class("ps-composer-remove")
+        remove_btn.connect("clicked", lambda _b, nid=node_id: self.remove_step_by_id(nid))
+        controls.append(remove_btn)
+        self._remove_buttons[node_id] = remove_btn
+
+        add_after_btn = self._build_add_after_button(node_id)
+        controls.append(add_after_btn)
+        self._add_after_buttons[node_id] = add_after_btn
+
+        head.append(controls)
         card.append(head)
 
         node_widgets: "dict[str, Gtk.Widget]" = {}
@@ -901,10 +1096,48 @@ class RemixView(Gtk.Box):
             node_meta[field.key] = (field.kind, field.value)
 
         if node_widgets:
-            self._field_widgets[step.node_id] = node_widgets
-            self._field_meta[step.node_id] = node_meta
+            self._field_widgets[node_id] = node_widgets
+            self._field_meta[node_id] = node_meta
 
         return card
+
+    def _build_add_after_button(self, node_id: str) -> Gtk.MenuButton:
+        """A "＋ add a step after" control whose popover lists only intents
+        compatible with *node_id*'s output kind (`_add_after_intents_for`)."""
+        menu_button = Gtk.MenuButton(label="＋ add a step after")  # ＋
+        menu_button.add_css_class("ps-composer-add")
+
+        popover = Gtk.Popover()
+        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        popover_box.set_margin_top(6)
+        popover_box.set_margin_bottom(6)
+        popover_box.set_margin_start(6)
+        popover_box.set_margin_end(6)
+
+        choices = self._add_after_intents_for(node_id)
+        choice_buttons: "dict[str, Gtk.Button]" = {}
+        if not choices:
+            none_label = Gtk.Label(label="No compatible next step")
+            none_label.add_css_class("ps-empty-msg")
+            popover_box.append(none_label)
+        for choice in choices:
+            item = Gtk.Button(label=label(choice.class_type))
+            item.add_css_class("ps-btn-ghost")
+            item.connect("clicked", self._on_add_after_chosen, node_id, choice.class_type, popover)
+            popover_box.append(item)
+            choice_buttons[choice.class_type] = item
+
+        popover.set_child(popover_box)
+        menu_button.set_popover(popover)
+
+        self._add_after_popovers[node_id] = popover
+        self._add_after_choice_buttons[node_id] = choice_buttons
+        return menu_button
+
+    def _on_add_after_chosen(self, _button: Gtk.Button, node_id: str, class_type: str,
+                              popover: Gtk.Popover) -> None:
+        popover.popdown()
+        self.add_step_after(node_id, class_type)
 
     def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.

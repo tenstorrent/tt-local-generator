@@ -473,6 +473,118 @@ def test_remix_view_set_run_is_repeat_safe():
     assert view._field_widgets["1"]["prompt"].get_text() == "a test prompt"
 
 
+# ── RemixView: composer add/remove steps (SP-C Phase 2b-1 Task 3) ───────────
+#
+# Reuses the same remix fixture spec: node "1" TTLGTextToImage (output_kind
+# "image"), node "2" TTLGImageToVideo (wired to node 1, output_kind "video"),
+# node "3" TTLGAnimateDiff (standalone, no wire, output_kind "gif").
+
+def test_remix_view_set_run_shows_remove_and_add_after_per_step():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    assert set(view._remove_buttons.keys()) == {"1", "2", "3"}
+    assert set(view._add_after_buttons.keys()) == {"1", "2", "3"}
+
+
+def test_add_after_picker_lists_only_kind_compatible_intents():
+    """Node '1' produces an image (output_kind 'image'). The add-after picker
+    must list only intents whose input_kind is 'image' — TTLGCaptionImage
+    ('Describe it') yes, TTLGTextToImage ('Generate an image') no (its
+    input_kind is 'text')."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    choice_class_types = {c.class_type for c in view._add_after_intents_for("1")}
+    assert "TTLGCaptionImage" in choice_class_types
+    assert "TTLGTextToImage" not in choice_class_types
+
+    # The rendered popover mirrors the same choice set.
+    assert "TTLGCaptionImage" in view._add_after_choice_buttons["1"]
+    assert "TTLGTextToImage" not in view._add_after_choice_buttons["1"]
+
+
+def test_add_step_after_grows_working_spec_by_one_wired_node():
+    from pipeline_studio import RemixView
+    from pipeline_engine import topo_order
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    before_len = len(topo_order(view.current_spec()))
+
+    view.add_step_after("1", "TTLGCaptionImage")
+
+    after_len = len(topo_order(view.current_spec()))
+    assert after_len == before_len + 1
+
+    new_ids = set(view.working_spec) - before_ids
+    assert len(new_ids) == 1
+    new_id = new_ids.pop()
+    assert view.working_spec[new_id]["class_type"] == "TTLGCaptionImage"
+    # Wired to node "1"'s primary output (image_path).
+    assert view.working_spec[new_id]["inputs"]["src"] == ["1", "image_path"]
+
+    # Re-rendered: the new node now has its own Remove/add-after controls too.
+    assert new_id in view._remove_buttons
+    assert new_id in view._add_after_buttons
+
+
+def test_remove_step_by_id_shrinks_working_spec():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view.remove_step_by_id("3")
+
+    assert "3" not in view.working_spec
+    assert set(view.working_spec) == {"1", "2"}
+    assert "3" not in view._remove_buttons
+    assert "3" not in view._field_widgets
+
+
+def test_incompatible_add_step_after_is_guarded_no_crash():
+    """Node '1' produces 'image'; TTLGGenerateText wants a 'text' input.
+    Forcing this incompatible pairing (bypassing the picker, which would
+    never offer it) must be caught, not crash, and must not mutate the
+    working spec."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+
+    view.add_step_after("1", "TTLGGenerateText")  # must not raise
+
+    assert set(view.working_spec) == before_ids
+    assert view._message_label.get_visible() is True
+    assert view._message_label.get_label() != ""
+
+
+def test_current_spec_reflects_param_edit_and_structural_change():
+    """A pending (not-yet-Run) text-field edit survives a structural add —
+    _commit_pending_edits bakes it into working_spec before add_step_after
+    re-renders and rebuilds the field widgets from scratch."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view._field_widgets["1"]["prompt"].set_text("a new prompt")
+    view.add_step_after("1", "TTLGCaptionImage")
+
+    spec = view.current_spec()
+    assert spec["1"]["inputs"]["prompt"] == "a new prompt"
+    new_ids = set(spec) - {"1", "2", "3"}
+    assert len(new_ids) == 1
+    assert spec[new_ids.pop()]["class_type"] == "TTLGCaptionImage"
+
+    # The rebuilt field widget for node "1" now shows the committed value as
+    # its fresh "original" — the field itself is no longer "changed".
+    assert view._field_widgets["1"]["prompt"].get_text() == "a new prompt"
+
+
 # ── LiveRunView ──────────────────────────────────────────────────────────────
 #
 # begin()/on_node_update()/on_log()/on_finished() are driven directly here —
