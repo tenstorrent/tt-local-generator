@@ -1,3 +1,18 @@
+tt-local-generator (0.19.0) noble; urgency=medium
+
+  * Pipeline Studio Phase 2b-3 — "wing it". The composer's add-a-step area now has
+    a free-form "describe the next step in your own words" box: type something
+    like "set it to a slow piano and read it aloud" and it's mapped to a real,
+    kind-safe pipeline step (a capability + params) and inserted. LLM-assisted via
+    whatever chat model is running (ideally the always-on CPU prompt server),
+    constrained to the live capabilities that can consume the current step's
+    output, with a deterministic heuristic fallback when no model is up or the
+    model misbehaves — so it never fails hard. New app/wingit.py (pure mapper with
+    lenient JSON parsing + fallback; runs off the main thread, result applied via
+    GLib.idle_add). This completes the free-form composer.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 19:45:00 -0700
+
 tt-local-generator (0.18.0) noble; urgency=medium
 
   * Pipeline Studio Phase 2b-2 — the composer's "add a step" list is now dynamic.
