@@ -186,6 +186,24 @@ class PipelineStore:
                     break
             self._save(records)
 
+    def update_pid(self, run_id: str, pid: int) -> None:
+        """Persist a discovered/adopted PID for an existing run record.
+
+        Called by PipelineRunner.start(run_id=...) when the caller supplies
+        an already-created run id (e.g. PipelineStudio._on_run_remix's
+        provisional record) rather than minting a new one via create_run().
+        The subprocess's real PID is only known once Popen() returns, so the
+        record's pid=0 placeholder is patched in here — mirrors
+        update_log_file/update_output_dir's load-find-set-save pattern.
+        """
+        with self._lock:
+            records = self._load()
+            for r in records:
+                if r["id"] == run_id:
+                    r["pid"] = pid
+                    break
+            self._save(records)
+
     def update_output_dir(self, run_id: str, output_dir: str) -> None:
         """Persist the workflow output directory path for an existing run record.
 

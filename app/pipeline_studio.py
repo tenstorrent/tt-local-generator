@@ -94,17 +94,12 @@ Four pieces:
       construct a `PipelineRunner` and `.start()` it with the `LiveRunView`'s
       own `on_node_update`/`on_log`/`on_finished` bound directly as its
       callbacks (their signatures already match exactly — see LiveRunView's
-      docstring).
-
-      Known limitation: `PipelineRunner.start()` creates its OWN run record
-      internally (with the live subprocess's real pid) once the process
-      actually launches — it has no way to reuse an existing run id. So the
-      provisional record created here and the runner's real one are two
-      separate `PipelineStore` entries for the same logical run; only the
-      runner's own record accumulates the real `job_states`/`output_dir` as
-      the run progresses. Reconciling the two ids is left to a follow-up
-      task — for now the provisional record exists purely so `LiveRunView`
-      has a same-shape `RunView` to paint immediately.
+      docstring), passing `run_id=<the provisional id>` so the runner adopts
+      that SAME record (patching in the real subprocess pid via
+      `PipelineStore.update_pid`) instead of minting a second, divergent one
+      — the provisional record IS the run's single live `PipelineStore`
+      entry throughout, so every node/output/finish update lands where
+      `LiveRunView` (and later Open's rebuild) actually look.
     - `LiveRunView`'s "run-done" (run_id) → rebuild the Open page from that
       run id's current record (`build_run_view(PipelineStore().get_run(run_id))`,
       off-thread, same `GLib.idle_add` pattern as `open-run`) and switch back
@@ -1425,9 +1420,11 @@ class PipelineStudio(Gtk.Box):
         fast JSON I/O (same cost class as RemixView's own load_spec() call in
         set_run()), so they run synchronously here rather than off-thread —
         only the actual pipeline subprocess (PipelineRunner.start) does real
-        background work. See the module docstring's "Known limitation" note
-        for why this creates a provisional PipelineStore record distinct from
-        the one PipelineRunner.start() creates for the live subprocess.
+        background work. The provisional record created here IS the run's
+        single PipelineStore record: run_id is passed straight through to
+        PipelineRunner.start(run_id=...), which adopts it (patches in the
+        real subprocess PID via update_pid()) instead of minting a second,
+        divergent record — see PipelineRunner.start's docstring.
         """
         REMIXES_DIR.mkdir(parents=True, exist_ok=True)
         derived_path = derive_spec(spec_path, edits, str(REMIXES_DIR))
@@ -1456,6 +1453,7 @@ class PipelineStudio(Gtk.Box):
             on_node_update=self.live_run.on_node_update,
             on_run_finished=self.live_run.on_finished,
             on_log=self.live_run.on_log,
+            run_id=run_id,
         )
 
     def _on_run_done(self, _widget: "LiveRunView", run_id: str) -> None:

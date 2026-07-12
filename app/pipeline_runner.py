@@ -125,6 +125,7 @@ class PipelineRunner:
         on_node_update: Callable,
         on_run_finished: Callable,
         on_log: Optional[Callable] = None,
+        run_id: Optional[str] = None,
     ) -> None:
         """Launch run_workflow.sh for the given jobs and spec.
 
@@ -133,6 +134,19 @@ class PipelineRunner:
         view can tail the log alongside the parsed NODE:/LOG: signals. It is
         optional and defaults to None so existing callers (and every test that
         predates this parameter) are unaffected.
+
+        run_id, if given, is an ALREADY-CREATED PipelineStore run id (e.g. a
+        provisional record PipelineStudio._on_run_remix created up front so
+        LiveRunView.begin() has a RunView to paint immediately). When
+        provided, start() adopts it — self._run_id = run_id and the store's
+        pid=0 placeholder is patched via update_pid() — instead of minting a
+        brand-new record via create_run(). This is what makes the adopted
+        record the SINGLE record that receives node/output/finish updates;
+        previously start() unconditionally called create_run() itself,
+        producing a second, divergent record the caller's provisional one
+        never shared (the SP-C Remix→Run dual-run-record bug). When run_id is
+        None (every pre-existing caller), behavior is unchanged: a new record
+        is minted here as before.
         """
         self._on_node_update = on_node_update
         self._on_run_finished = on_run_finished
@@ -160,14 +174,20 @@ class PipelineRunner:
                 text=True,
                 env=env,
             )
-            self._run_id = self._store.create_run(
-                spec_path=spec_path,
-                spec_name=Path(spec_path).stem,
-                jobs=jobs,
-                param_overrides=param_overrides,
-                pid=self._proc.pid,   # real PID — no pid=0 patch needed
-                log_file="",
-            )
+            if run_id is not None:
+                # Adopt the caller's existing record rather than minting a
+                # new one — patch in the real PID now that we have it.
+                self._run_id = run_id
+                self._store.update_pid(run_id, self._proc.pid)
+            else:
+                self._run_id = self._store.create_run(
+                    spec_path=spec_path,
+                    spec_name=Path(spec_path).stem,
+                    jobs=jobs,
+                    param_overrides=param_overrides,
+                    pid=self._proc.pid,   # real PID — no pid=0 patch needed
+                    log_file="",
+                )
 
             threading.Thread(
                 target=self._watch_stdout,

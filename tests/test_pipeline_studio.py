@@ -773,7 +773,20 @@ def test_pipeline_studio_run_done_returns_to_open_with_fresh_run(monkeypatch, tm
 
 
 def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path):
-    """End-to-end wiring: run-remix -> (simulated finish) -> run-done -> Open."""
+    """End-to-end wiring: run-remix -> (simulated finish) -> run-done -> Open.
+
+    Regression test for the SP-C dual-run-record bug: PipelineRunner.start()
+    used to unconditionally mint its OWN run id via create_run(), so the
+    provisional record _on_run_remix created (and handed to LiveRunView.begin)
+    was never the record that accumulated node/output/finish updates -- Open's
+    post-finish rebuild would then read the stale, never-updated provisional
+    record. The store here is keyed BY ID (a dict), not a single fixed
+    return_value/side_effect result, precisely so that a query for the WRONG
+    id (the old bug's second, runner-minted id) would come back None instead
+    of silently handing back a plausible-looking fake record. This asserts a
+    single id flows: create_run() mints it -> start(run_id=...) receives it ->
+    get_run() is queried with it (both by _on_run_remix and by _on_run_done).
+    """
     import pipeline_studio
 
     remixes_dir = tmp_path / "remixes"
@@ -781,21 +794,25 @@ def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path)
     monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
 
-    mock_store_instance = MagicMock()
-    mock_store_instance.create_run.return_value = "provisional-run-1"
+    # Records keyed by id -- NOT a single fixed value. A get_run() call with
+    # any id other than the one create_run() minted misses and returns None.
+    records: dict[str, dict] = {}
 
-    def _fake_get_run(run_id):
-        derived_path = str(remixes_dir / "remix_remix_fixture_spec_1.json")
-        return {
+    def _fake_create_run(spec_path, spec_name, jobs, param_overrides, pid, log_file):
+        run_id = "provisional-run-1"
+        records[run_id] = {
             "id": run_id,
-            "spec_path": derived_path,
-            "spec_name": "remix_remix_fixture_spec_1",
+            "spec_path": spec_path,
+            "spec_name": spec_name,
             "output_dir": "",
             "job_states": {},
             "started_at": "2026-07-11T00:00:00+00:00",
         }
+        return run_id
 
-    mock_store_instance.get_run.side_effect = _fake_get_run
+    mock_store_instance = MagicMock()
+    mock_store_instance.create_run.side_effect = _fake_create_run
+    mock_store_instance.get_run.side_effect = lambda run_id: records.get(run_id)
     mock_store_cls = MagicMock(return_value=mock_store_instance)
     monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
 
@@ -809,10 +826,34 @@ def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path)
     studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, {})
     assert studio.stack.get_visible_child_name() == "run"
 
+    # Exactly one id was minted -- pull it out of the fake store's records.
+    assert len(records) == 1
+    created_run_id = next(iter(records))
+
+    # PipelineRunner.start() must have been handed that SAME id via run_id=,
+    # so the real runner (unmocked in production) adopts the existing record
+    # instead of minting a second one.
+    start_kwargs = mock_runner_instance.start.call_args.kwargs
+    assert "run_id" in start_kwargs, (
+        "PipelineStudio._on_run_remix must pass run_id=<provisional id> to "
+        "PipelineRunner.start() so the runner adopts the existing record "
+        "instead of creating a second, divergent one"
+    )
+    assert start_kwargs["run_id"] == created_run_id
+
     # Simulate the runner finishing: call the exact callback it was started
     # with (LiveRunView.on_finished), which resolves running steps and emits
     # run-done — PipelineStudio's handler (real, unmocked) then rebuilds Open.
-    on_run_finished = mock_runner_instance.start.call_args.kwargs["on_run_finished"]
+    on_run_finished = start_kwargs["on_run_finished"]
     on_run_finished(True)
 
     assert studio.stack.get_visible_child_name() == "open"
+
+    # Every get_run() call throughout the whole loop -- both _on_run_remix's
+    # own lookup and _on_run_done's rebuild lookup -- must target the SAME id.
+    get_run_ids = [c.args[0] for c in mock_store_instance.get_run.call_args_list]
+    assert get_run_ids, "expected at least one get_run() call"
+    assert all(rid == created_run_id for rid in get_run_ids), (
+        f"expected only {created_run_id!r} to ever be queried via get_run(), "
+        f"got {get_run_ids} -- a divergent id means dual run records"
+    )

@@ -115,3 +115,21 @@ def test_update_log_file(store):
 def test_update_log_file_unknown_run_is_noop(store):
     """update_log_file() on a non-existent run_id must not raise."""
     store.update_log_file("does-not-exist", "/tmp/x.log")  # must not raise
+
+
+def test_update_pid(store):
+    """update_pid() must persist the new pid so future get_run() calls return
+    it -- used by PipelineRunner.start(run_id=...) to adopt a caller-provided
+    provisional record once the subprocess's real PID is known."""
+    run_id = store.create_run(
+        spec_path="/s", spec_name="s", jobs=[], param_overrides={},
+        pid=0, log_file=""
+    )
+    assert store.get_run(run_id)["pid"] == 0
+    store.update_pid(run_id, 54321)
+    assert store.get_run(run_id)["pid"] == 54321
+
+
+def test_update_pid_unknown_run_is_noop(store):
+    """update_pid() on a non-existent run_id must not raise."""
+    store.update_pid("does-not-exist", 123)  # must not raise

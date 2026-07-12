@@ -147,6 +147,103 @@ def test_start_creates_run_record(monkeypatch, tmp_path):
     assert runs[0]["jobs"][0]["name"] == "test-job"
 
 
+def test_start_without_run_id_calls_create_run_not_update_pid(monkeypatch, tmp_path):
+    """Backward-compat: start() with no run_id= kwarg must behave exactly as
+    before -- mint a new record via create_run() and never touch update_pid
+    (that method only exists to adopt a CALLER-provided id). Regression guard
+    for the SP-C dual-run-record bug fix: existing callers that don't pass
+    run_id= must see zero behavior change."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 12345
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    mock_store.create_run.return_value = "minted-id"
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+    )
+
+    mock_store.create_run.assert_called_once()
+    mock_store.update_pid.assert_not_called()
+    assert runner._run_id == "minted-id"
+
+
+def test_start_with_run_id_adopts_record_instead_of_creating_new(monkeypatch, tmp_path):
+    """start(run_id=...) must ADOPT the given id -- set self._run_id = run_id
+    and call self._store.update_pid(run_id, pid) -- rather than minting a new
+    record via create_run(). This is the fix for the SP-C Remix->Run
+    dual-run-record bug: PipelineStudio._on_run_remix already creates a
+    provisional record and hands its RunView to LiveRunView.begin(); if
+    start() ALSO called create_run() internally (the old behavior), every
+    node/output/finish update from this run would land on a second, different
+    record that LiveRunView never saw -- Open's rebuild-on-finish would then
+    read the never-updated provisional record (all steps pending, no
+    artifacts) instead of the real results."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 55555
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+        run_id="fixed-id",
+    )
+
+    mock_store.create_run.assert_not_called()
+    mock_store.update_pid.assert_called_once_with("fixed-id", 55555)
+    assert runner._run_id == "fixed-id"
+
+
+def test_start_with_run_id_node_updates_target_adopted_id(monkeypatch, tmp_path):
+    """Once start(run_id=...) has adopted the id, node-signal parsing (which
+    reads self._run_id) must write updates to THAT id, not a runner-minted
+    one -- this is what makes the adopted record the single live record."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 55555
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+        run_id="fixed-id",
+    )
+
+    # _watch_stdout/_parse_line dispatch node updates using self._run_id --
+    # confirm it's the adopted id, then confirm a node update actually lands
+    # on that id via the store.
+    runner._parse_line("NODE:1:running:FLUX.1-schnell", "test-job")
+    mock_store.update_node.assert_called_once_with(
+        "fixed-id", "test-job", "1", "running", "FLUX.1-schnell"
+    )
+
+
 # ── Restart recovery ──────────────────────────────────────────────────────────
 
 def test_reattach_marks_interrupted_if_proc_dead(monkeypatch, tmp_path):
