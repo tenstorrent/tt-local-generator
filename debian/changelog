@@ -1,3 +1,16 @@
+tt-local-generator (0.21.1) noble; urgency=medium
+
+  * Muse: scoped wizard (starting from a video/gif artifact, which has no
+    curated scoped goal) now shows a gentle "no ready-made recipes for this
+    yet" message and hides the dead "Surprise me" button, instead of a
+    silent zero-card dead end. The free-text "tell me your idea" escape
+    hatch remains available.
+  * Muse: every curated blank goal's first step now seeds a short, evocative
+    default prompt/caption so the composer always surfaces an editable text
+    field to rewrite, instead of starting from a blank input.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 12 Jul 2026 10:48:37 -0700
+
 tt-local-generator (0.21.0) noble; urgency=medium
 
   * Pipeline Studio — the Muse: a goal-first "start from scratch" creative

@@ -93,16 +93,27 @@ class Goal:
 # (raises ValueError on a real mismatch) so a mistake here would fail loudly
 # in `test_curated_goals_nonempty_and_kind_safe`, not silently.
 _CURATED: "list[Goal]" = [
+    # Every BLANK goal's first step carries a short, evocative default
+    # literal on its intent's canonical input_key (see intent_vocab.intent_for)
+    # so the composer always seeds an editable field — the user rewrites the
+    # placeholder rather than typing into a blank box. Scoped goals below
+    # deliberately have NO such literal: their first step's canonical input is
+    # filled by the seed artifact at build_seed_spec() time instead.
     Goal("poster", "A poster", "🖼", "image", "blank",
-         (("TTLGPromptCompose", {}), ("TTLGTextToImage", {}))),
+         (("TTLGPromptCompose", {"caption": "a striking poster"}),
+          ("TTLGTextToImage", {}))),
     Goal("looping-animation", "A looping animation", "🔁", "gif", "blank",
-         (("TTLGAnimateDiff", {"seamless_loop": True}),)),
+         (("TTLGAnimateDiff", {"seamless_loop": True,
+                               "prompt": "a dreamy, seamlessly looping scene"}),)),
     Goal("illustrated-poem", "An illustrated poem", "📜", "image", "blank",
-         (("TTLGGenerateText", {}), ("TTLGTextToImage", {}), ("TTLGAddToPlaylist", {}))),
+         (("TTLGGenerateText", {"caption": "a short, evocative poem"}),
+          ("TTLGTextToImage", {}), ("TTLGAddToPlaylist", {}))),
     Goal("short-film", "A short film", "🎬", "video", "blank",
-         (("TTLGPromptCompose", {}), ("TTLGTextToImage", {}), ("TTLGImageToVideo", {}))),
+         (("TTLGPromptCompose", {"caption": "a cinematic short film"}),
+          ("TTLGTextToImage", {}), ("TTLGImageToVideo", {}))),
     Goal("explorable-world", "An explorable world", "🌍", "image", "blank",
-         (("TTLGTextToImage", {}), ("TTLGEstimateDepth", {}), ("TTLGAddToPlaylist", {}))),
+         (("TTLGTextToImage", {"prompt": "a vast, explorable world"}),
+          ("TTLGEstimateDepth", {}), ("TTLGAddToPlaylist", {}))),
     # scoped — first step consumes the seed artifact
     Goal("animate-this", "A looping animation", "🔁", "video", "scoped",
          (("TTLGImageToVideo", {}),)),

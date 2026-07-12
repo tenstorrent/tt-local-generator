@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 import recipes
 from recipes import Goal, curated_goals, all_goals, goals_for, build_seed_spec
+from intent_vocab import intent_for
+from spec_remix import editable_params
 
 
 def test_curated_goals_nonempty_and_kind_safe():
@@ -61,3 +63,40 @@ def test_all_goals_curated_wins_on_id_collision():
         "id": "poster"}}, "tools": [{"name": "p"}]}}
     poster = [g for g in all_goals(mcp_reader=fake) if g.id == "poster"]
     assert len(poster) == 1 and poster[0].via == "curated"
+
+
+def test_every_blank_goal_first_step_seeds_an_editable_prompt():
+    """Every curated BLANK goal's first step must carry a default text
+    literal on its intent's input_key, so the composer surfaces something
+    editable on node "1" — the user rewrites it rather than starting from a
+    blank field. Scoped goals must be unchanged: their first step consumes
+    the seed artifact, not a typed-in default."""
+    for g in curated_goals():
+        first_ct, _first_params = g.recipe_steps[0]
+        input_key = intent_for(first_ct).input_key
+        assert input_key, f"{g.id}: first step {first_ct} has no input_key"
+
+        if g.applies_to == "blank":
+            spec = build_seed_spec(g, seed_artifact=None)
+            fields = editable_params(spec)["1"]
+            matching = [f for f in fields if f.key == input_key]
+            assert matching, (
+                f"{g.id}: expected an editable {input_key!r} field on node "
+                f"'1', got {[f.key for f in fields]}"
+            )
+            assert isinstance(matching[0].value, str) and matching[0].value.strip(), (
+                f"{g.id}: default literal for {input_key!r} must be a "
+                "non-empty string"
+            )
+        elif g.applies_to == "scoped":
+            # Scoped goals' first step consumes the seed artifact (wired at
+            # build_seed_spec time via seed_artifact=), not a typed-in
+            # default — the recipe's own declared params must NOT carry a
+            # hardcoded literal on the canonical input_key.
+            first_params = g.recipe_steps[0][1]
+            assert input_key not in first_params, (
+                f"{g.id}: scoped goal's first step should not declare a "
+                f"literal default on {input_key!r} (its param dict is "
+                f"{first_params!r}) — that key is filled by the seed "
+                "artifact, not a hardcoded default"
+            )

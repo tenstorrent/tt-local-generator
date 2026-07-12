@@ -2219,6 +2219,20 @@ class MuseView(Gtk.Box):
         for goal in self._goals:
             self._cards_box.insert(self._build_goal_card(goal), -1)
 
+        # Scoped mode (starting from an existing artifact) has no guaranteed
+        # curated coverage — every curated scoped goal consumes "image", so a
+        # video/gif seed legitimately yields zero cards. Blank mode always has
+        # curated goals (see recipes._CURATED), so this branch is scoped-only.
+        # Degrade gracefully per the design spec: a gentle message, "Surprise
+        # me" hidden (nothing to surprise with), free-text entry untouched.
+        no_scoped_goals = seed_artifact is not None and not self._goals
+        self._surprise_button.set_visible(not no_scoped_goals)
+        if no_scoped_goals:
+            self._show_message(
+                "No ready-made recipes for this yet — describe what you'd "
+                "like below."
+            )
+
     # ── Goal cards / Surprise me ─────────────────────────────────────────────
 
     def _build_goal_card(self, goal: "recipes.Goal") -> Gtk.Widget:

@@ -2070,6 +2070,63 @@ def test_muse_view_surprise_noop_when_no_goals():
     assert received == []
 
 
+def test_muse_view_scoped_empty_goals_shows_gentle_message_and_hides_surprise(tmp_path):
+    """Non-image seeds (video/gif) have no curated scoped goal to offer —
+    goals_fn returns []. The empty state must degrade gracefully: a gentle
+    in-view message, "Surprise me" hidden/disabled (nothing to be surprised
+    with), and the free-text escape hatch still present. Never a dead
+    "Surprise me" button with silent zero cards."""
+    from pipeline_studio import MuseView
+
+    view = MuseView(goals_fn=lambda kind: [])
+    clip_path = str(tmp_path / "clip.mp4")
+    view.set_context((clip_path, "video", None))
+
+    assert view._goal_buttons == {}
+    assert view._message_label.get_visible() is True
+    message = view._message_label.get_label().lower()
+    assert "no ready-made recipes" in message
+
+    surprise_dead = (
+        view._surprise_button.get_visible() is False
+        or view._surprise_button.get_sensitive() is False
+    )
+    assert surprise_dead, "Surprise me must be hidden or disabled when there are no goals"
+
+    # The free-text escape hatch must remain available.
+    assert isinstance(view._freeform_entry, Gtk.Entry)
+    assert view._freeform_entry.get_visible() is True
+    assert isinstance(view._dream_button, Gtk.Button)
+    assert view._dream_button.get_visible() is True
+
+
+def test_muse_view_blank_mode_unaffected_by_scoped_empty_state(tmp_path):
+    """Blank mode always has curated goals — this empty-state handling is
+    scoped-only. Re-entering blank mode after a scoped-empty state must
+    restore normal blank behavior (goal cards + a live Surprise me)."""
+    from pipeline_studio import MuseView
+
+    calls = []
+
+    def fake_goals_fn(seed_output_kind):
+        calls.append(seed_output_kind)
+        if seed_output_kind is None:
+            return [_MUSE_GOAL_A, _MUSE_GOAL_B]
+        return []
+
+    view = MuseView(goals_fn=fake_goals_fn)
+    clip_path = str(tmp_path / "clip.mp4")
+    view.set_context((clip_path, "video", None))
+    assert view._surprise_button.get_visible() is False or view._surprise_button.get_sensitive() is False
+
+    view.set_context(None)
+
+    assert view._message_label.get_visible() is False
+    assert view._surprise_button.get_visible() is True
+    assert view._surprise_button.get_sensitive() is True
+    assert set(view._goal_buttons.keys()) == {"poster-fixture", "verse-fixture"}
+
+
 def test_muse_view_freeform_none_result_shows_gentle_message_no_emit(monkeypatch):
     from pipeline_studio import MuseView
     _run_wingit_inline(monkeypatch)
