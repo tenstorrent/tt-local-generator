@@ -34,6 +34,37 @@ from intent_vocab import intent_for
 from pipeline_view_model import RunView, StepView
 
 
+@pytest.fixture(autouse=True)
+def _isolate_capability_discovery_io(monkeypatch):
+    """Fix 2 (SP-C Phase-2b-2 final review — test isolation).
+
+    ~14 tests below construct `RemixView()` with no `capability_fn`, so
+    `set_run()`'s render falls through to
+    `capability_discovery.default_capabilities` — which reads every
+    `plugins/<name>/mcp.json` off disk and probes real server health/ports
+    (see that module's docstring). Replace it, autouse for every test in this
+    file, with a trivial static Capability list so no test performs real
+    disk/network I/O merely by constructing an un-injected RemixView.
+
+    Tests that inject their own `capability_fn` (e.g. `_fake_capability_fn`
+    below, or the `lambda output_kind: []` fake) are unaffected — RemixView
+    only falls back to `capability_discovery.default_capabilities` when
+    `capability_fn` is `None`, so those tests never reach it regardless.
+    """
+    import capability_discovery as cd
+
+    def _fake_default_capabilities(output_kind):
+        return [
+            cd.Capability(
+                id="TTLGCaptionImage", label="Describe it", kind_out="text",
+                kind_in=output_kind, source="native", class_type="TTLGCaptionImage",
+                plugin=None, hardware=None, live=True, reason=None,
+            ),
+        ]
+
+    monkeypatch.setattr(cd, "default_capabilities", _fake_default_capabilities)
+
+
 class _ImmediateThread:
     """threading.Thread stand-in that runs its target synchronously on start().
 
@@ -682,6 +713,48 @@ def test_capability_fn_empty_falls_back_gracefully_no_crash():
     view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)  # must not raise
 
     assert "1" in view._add_after_buttons
+
+
+def test_uninjected_remix_view_does_not_perform_real_capability_io(monkeypatch):
+    """Fix 2 (SP-C Phase-2b-2 final review): ~14 tests in this module
+    construct RemixView() with no capability_fn, so set_run()'s render falls
+    through to capability_discovery.default_capabilities — which reads
+    plugins/ off disk and probes real server health/ports (see its docstring
+    in capability_discovery.py). Proves the module-level autouse isolation
+    fixture actually replaces `default_capabilities` before any such test
+    runs.
+
+    Uses call-count SPIES rather than raising fakes: discover_capabilities is
+    deliberately robust to its injected deps raising (a raising mcp_reader
+    degrades to native-only caps, see capability_discovery.py), so a raising
+    fake can't distinguish "never called" from "called, then its exception
+    was swallowed". A call counter can.
+    """
+    import capability_discovery as cd
+
+    calls = {"read": 0, "plugin_loaded": 0, "backend_up": 0}
+
+    def _spy_read(*_a, **_k):
+        calls["read"] += 1
+        return {}
+
+    def _spy_plugin_loaded(*_a, **_k):
+        calls["plugin_loaded"] += 1
+        return False
+
+    def _spy_backend_up(*_a, **_k):
+        calls["backend_up"] += 1
+        return False
+
+    monkeypatch.setattr(cd, "_read_all_plugin_mcp", _spy_read)
+    monkeypatch.setattr(cd, "_real_is_plugin_loaded", _spy_plugin_loaded)
+    monkeypatch.setattr(cd, "_real_is_backend_up", _spy_backend_up)
+
+    from pipeline_studio import RemixView
+    view = RemixView()  # no capability_fn injected — must not touch real I/O
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    assert calls == {"read": 0, "plugin_loaded": 0, "backend_up": 0}
 
 
 # ── LiveRunView ──────────────────────────────────────────────────────────────

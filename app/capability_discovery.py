@@ -106,17 +106,25 @@ def load_plugin_capabilities(mcp_reader: Callable[[], dict]) -> list[dict]:
     """Parse every plugin's mcp.json into a raw plugin-capability dict.
 
     `mcp_reader()` -> {plugin_name: mcp_dict}, exactly the shape produced by
-    reading plugins/<name>/mcp.json for every plugin directory.
+    reading plugins/<name>/mcp.json for every plugin directory. `plugin_name`
+    here is only used as a fallback label when a manifest declares no tools —
+    the returned capability's `plugin`/`id` are keyed by the plugin's PRIMARY
+    TOOL name (mirroring plugin_loader.py's load_plugins(): the first tool
+    with its own `x-ttlg.artifact_tool: true`, else `tools[0]`), since that is
+    the name plugin_loader.py/artgen.all_names()/`tt-ctl artgen <name>`
+    actually resolve by. The directory name and the tool name can differ
+    (e.g. dir `plugins/midi/`, tool `generate_midi`) — using the directory
+    name here would make such a plugin permanently latent even when loaded.
 
     Returns [] (never raises) if `mcp_reader` raises or a given manifest is
     malformed — callers fall back to native-only capabilities in that case.
 
     Each returned dict has keys: id, label, kind_out, kind_in, plugin,
-    hardware. `kind_in` defaults to None (a "seed" capability — it takes a
-    theme/text prompt, not a piped-in artifact) which is the case for every
-    artgen-style plugin today; `accepts_remix_from` is where a future task
-    could derive a real kind_in for plugins that *do* consume a specific
-    artifact kind.
+    hardware. `id` and `plugin` are both the resolved primary tool name.
+    `kind_in` defaults to None (a "seed" capability — it takes a theme/text
+    prompt, not a piped-in artifact) which is the case for every artgen-style
+    plugin today; `accepts_remix_from` is where a future task could derive a
+    real kind_in for plugins that *do* consume a specific artifact kind.
     """
     try:
         raw_map = mcp_reader() or {}
@@ -137,10 +145,23 @@ def load_plugin_capabilities(mcp_reader: Callable[[], dict]) -> list[dict]:
                 continue
 
             tools = manifest.get("tools") or []
-            tool0 = tools[0] if tools else {}
 
-            tool_name = tool0.get("name") or plugin_name
-            tool_label = tool0.get("description") or tool_name
+            # Resolve the PRIMARY tool the exact same way plugin_loader.py's
+            # load_plugins() does: the first tool whose own x-ttlg.artifact_tool
+            # is True, else tools[0]. This is the name plugin_loader.py
+            # registers the plugin under (PluginDef.name) and the name
+            # artgen.all_names() / `tt-ctl artgen <name>` resolve by — so the
+            # capability's `plugin` field must be THIS tool name, never the
+            # plugins/<dir> directory name, or a plugin whose dir != primary
+            # tool name (e.g. dir "midi", tool "generate_midi") would show as
+            # permanently latent ("plugin not available") despite being loaded.
+            primary_tool = next(
+                (t for t in tools if t.get("x-ttlg", {}).get("artifact_tool", False)),
+                tools[0] if tools else {},
+            )
+
+            tool_name = primary_tool.get("name") or plugin_name
+            tool_label = primary_tool.get("description") or tool_name
             kind_out = xt.get("media_type")
             hardware = xt.get("hardware")
             accepts_remix_from = tuple(xt.get("accepts_remix_from") or ())
@@ -150,7 +171,7 @@ def load_plugin_capabilities(mcp_reader: Callable[[], dict]) -> list[dict]:
                 "label": tool_label,
                 "kind_out": kind_out,
                 "kind_in": None,  # loose/seed input — see docstring
-                "plugin": plugin_name,
+                "plugin": tool_name,  # resolved primary tool name, not dir name
                 "hardware": hardware,
                 "accepts_remix_from": accepts_remix_from,
             })

@@ -149,6 +149,103 @@ def test_load_plugin_capabilities_skips_utility_plugins():
     assert "ffmpeg" not in names
 
 
+# ── Fixture: plugin directory name differs from its primary TOOL name ────────
+#
+# Real case (SP-C Phase-2b-2 final review, Fix 1): plugins/midi/ ships a tool
+# named "generate_midi". plugin_loader.py registers the plugin under its
+# PRIMARY TOOL name (the first tool with x-ttlg.artifact_tool=True, else
+# tools[0]["name"]) — NOT the directory name. artgen.all_names() and
+# `tt-ctl artgen <name>` resolve by that same tool name. A capability whose
+# `plugin` field is the directory name ("midi") can never match
+# is_plugin_loaded("midi") once the real plugin registry only knows
+# "generate_midi", so it shows up permanently latent even though it's loaded.
+
+def _fake_mcp_reader_dir_neq_tool():
+    return {
+        "midi": {
+            "x-ttlg": {
+                "output_ext": ".mid",
+                "media_type": "text",
+                "accepts_remix_from": [],
+                "can_remix_to": [],
+                "tab": "generative-art",
+                "hardware": None,
+            },
+            "tools": [
+                {
+                    "name": "generate_midi",
+                    "description": "Generate a MIDI composition",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                }
+            ],
+        },
+    }
+
+
+def _fake_mcp_reader_multi_tool_artifact_tool():
+    # Plugin declares a non-artifact helper tool FIRST and the real generator
+    # tool (marked artifact_tool=True) second — plugin_loader.py's primary
+    # selection must still pick the artifact_tool one, not tools[0].
+    return {
+        "midi": {
+            "x-ttlg": {
+                "output_ext": ".mid",
+                "media_type": "text",
+                "accepts_remix_from": [],
+                "can_remix_to": [],
+                "tab": "generative-art",
+                "hardware": None,
+            },
+            "tools": [
+                {
+                    "name": "list_midi_presets",
+                    "description": "List available MIDI presets",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                },
+                {
+                    "name": "generate_midi",
+                    "description": "Generate a MIDI composition",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                    "x-ttlg": {"artifact_tool": True},
+                },
+            ],
+        },
+    }
+
+
+def test_load_plugin_capabilities_uses_tool_name_not_dir_name_as_plugin_id():
+    caps = cd.load_plugin_capabilities(_fake_mcp_reader_dir_neq_tool)
+    assert len(caps) == 1
+    cap = caps[0]
+    assert cap["plugin"] == "generate_midi"
+    assert cap["id"] == "generate_midi"
+
+
+def test_load_plugin_capabilities_picks_artifact_tool_over_first_tool():
+    caps = cd.load_plugin_capabilities(_fake_mcp_reader_multi_tool_artifact_tool)
+    assert len(caps) == 1
+    cap = caps[0]
+    assert cap["plugin"] == "generate_midi"
+    assert cap["id"] == "generate_midi"
+
+
+def test_discover_capabilities_dir_neq_tool_name_is_live_when_tool_name_loaded():
+    # The end-to-end regression: is_plugin_loaded is keyed by the TOOL name
+    # (as artgen.all_names() really is) — the capability must come back LIVE,
+    # not latent, and its `plugin` param must be the runnable tool name.
+    caps = cd.discover_capabilities(
+        "text",
+        is_plugin_loaded=lambda n: n == "generate_midi",
+        is_backend_up=lambda f: True,
+        mcp_reader=_fake_mcp_reader_dir_neq_tool,
+    )
+    midi = next(c for c in caps if c.source == "plugin")
+    assert midi.plugin == "generate_midi"
+    assert midi.id == "generate_midi"
+    assert midi.live is True
+    assert midi.reason is None
+
+
 def test_discover_capabilities_skips_utility_plugins():
     # Regression: previously utility plugins (blip/depth/ffmpeg/rmbg) surfaced
     # in the composer's add-a-step picker as permanently-latent "plugin not
