@@ -244,6 +244,35 @@ def test_start_with_run_id_node_updates_target_adopted_id(monkeypatch, tmp_path)
     )
 
 
+def test_start_with_run_id_finishes_caller_record_if_popen_raises(monkeypatch, tmp_path):
+    """SP-C Phase-2a final review fix: in the adopt path (run_id=... given),
+    self._run_id must be set BEFORE subprocess.Popen() runs so that if Popen
+    raises, the except block's `if self._run_id: finish_run(...)` still fires
+    for the CALLER's already-created provisional record -- otherwise that
+    record (pid=0, status="running") is orphaned forever because self._run_id
+    stayed None when the assignment lived after Popen inside the try."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=OSError("boom")))
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+    on_run_finished = MagicMock()
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=on_run_finished,
+        run_id="fixed-id",
+    )
+
+    mock_store.create_run.assert_not_called()
+    mock_store.finish_run.assert_called_once_with("fixed-id", success=False)
+    on_run_finished.assert_called_once_with(False)
+
+
 # ── Restart recovery ──────────────────────────────────────────────────────────
 
 def test_reattach_marks_interrupted_if_proc_dead(monkeypatch, tmp_path):

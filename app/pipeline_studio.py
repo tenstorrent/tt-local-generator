@@ -1473,7 +1473,7 @@ class PipelineStudio(Gtk.Box):
             except Exception:  # noqa: BLE001 — never let a load error crash the shell
                 log.warning("failed to rebuild run view for %s", run_id, exc_info=True)
                 return
-            GLib.idle_add(self._show_run, run_view, record["spec_path"])
+            GLib.idle_add(self._show_run, run_view, record.get("spec_path"))
 
         threading.Thread(target=worker, daemon=True).start()
 

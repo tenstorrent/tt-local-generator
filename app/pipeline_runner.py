@@ -163,6 +163,14 @@ class PipelineRunner:
         log_dir.mkdir(parents=True, exist_ok=True)
 
         env = {**os.environ}
+        if run_id is not None:
+            # Adopt the caller's existing record BEFORE Popen runs (not
+            # after) so that if Popen raises, the except block below still
+            # sees self._run_id set and can mark that record failed instead
+            # of orphaning it in "running" state forever. The PID isn't
+            # known yet at this point — update_pid() is called after a
+            # successful Popen, below.
+            self._run_id = run_id
         try:
             # Launch the subprocess first so we have the real PID before
             # writing the run record — eliminates the window where reattach()
@@ -175,9 +183,7 @@ class PipelineRunner:
                 env=env,
             )
             if run_id is not None:
-                # Adopt the caller's existing record rather than minting a
-                # new one — patch in the real PID now that we have it.
-                self._run_id = run_id
+                # Patch in the real PID now that we have it.
                 self._store.update_pid(run_id, self._proc.pid)
             else:
                 self._run_id = self._store.create_run(
