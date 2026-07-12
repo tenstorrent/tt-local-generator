@@ -292,6 +292,54 @@ def test_tail_log_finally_reports_false_when_run_was_still_running(monkeypatch, 
     assert store.get_run(run_id)["status"] == "failed"
 
 
+# ── Live log tail (SP-C Phase 2a Task 4) ─────────────────────────────────────
+
+def test_watch_stdout_forwards_each_line_to_on_log(monkeypatch):
+    """_watch_stdout must dispatch every raw stdout line to on_log, verbatim,
+    in addition to the existing NODE:/LOG:/PLAYLIST: parsing — this is the
+    only source LiveRunView.on_log has for its live log tail (see
+    pipeline_studio.py's LiveRunView docstring)."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    runner = make_runner()
+    on_log = MagicMock()
+    runner._on_log = on_log
+
+    lines = ["NODE:1:running:FLUX.1-schnell\n", "LOG:/tmp/pipeline.log\n",
+             "some plain progress line\n"]
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(lines)
+    mock_proc.wait.return_value = MagicMock()  # non-int -> finally returns early
+    runner._proc = mock_proc
+
+    runner._watch_stdout("test-job")
+
+    assert on_log.call_args_list == [call(line) for line in lines]
+
+
+def test_start_default_on_log_is_none_backward_compatible(monkeypatch, tmp_path):
+    """start() without on_log= must not raise — every pre-existing caller/test
+    omits it, so the parameter must be fully optional."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
+    monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 12345
+    mock_popen.return_value.stdout = iter(["a line\n"])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    from pipeline_store import PipelineStore
+    runner = PipelineRunner()
+    runner._store = PipelineStore()
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+    )
+    assert runner._on_log is None
+
+
 # ── Health check ──────────────────────────────────────────────────────────────
 
 def test_health_check_result_passed_to_callback(monkeypatch):

@@ -27,14 +27,15 @@ Four pieces:
     The "learn from example" page (SP-C Task 4): one run's steps laid out
     end-to-end, in order, each with its real artifact (or an honest
     placeholder if the step hasn't produced one yet) and a per-step "Remix
-    from here →" stub, plus a top "Remix whole pipeline →" stub. Layout
+    from here →" button, plus a top "Remix whole pipeline →" button. Layout
     follows the validated mockup at
     `.superpowers/brainstorm/988333-1783804257/content/open-run.html`. Like
     DiscoverView, data arrives ONLY through `set_run()` — no PipelineStore
     import here. Both remix controls emit the custom `remix-request` signal
     (str): the node_id for a per-step remix, or `""` for the whole pipeline.
-    Phase 1 wiring (PipelineStudio, below) treats this as a stub — "coming in
-    the editor (Phase 2)" — not an actual editor.
+    PipelineStudio (below) opens the same whole-run RemixView for either case
+    today — RemixView's editing surface isn't per-step yet (see its own
+    docstring) — a future task may use node_id to scroll/focus that step.
 
 `RemixView(Gtk.Box)`
     The "change one thing, safely" edit surface (SP-C Phase 2a Task 2): each
@@ -69,20 +70,51 @@ Four pieces:
     resolving any step still "running" to done/failed.
 
 `PipelineStudio(Gtk.Box)`
-    The shell: a Gtk.Stack with "discover" (DiscoverView) and "open"
-    (OpenView, wrapped with a "← Discover" back control) pages. Loads runs
-    off the GTK main thread — via `pipeline_view_model.list_run_views(PipelineStore())`
-    in a daemon thread — then hands them to `DiscoverView.set_runs` through
-    `GLib.idle_add`, per the GTK threading rule in this repo's CLAUDE.md
-    (never touch widgets from a background thread). `DiscoverView`'s
-    "open-run" signal triggers the same pattern for a single run: build its
-    `RunView` off-thread (`build_run_view(PipelineStore().get_run(run_id))`),
-    then `GLib.idle_add` both `OpenView.set_run` and the stack switch.
+    The shell: a Gtk.Stack with "discover" (DiscoverView), "open" (OpenView,
+    wrapped with a "← Discover" back control), "remix" (RemixView, wrapped
+    with a "← Back" control), and "run" (LiveRunView, wrapped with a "← Back"
+    control) pages — the full SP-C Phase 2a Task 4 loop: Open → Remix → Run
+    → done. Loads runs off the GTK main thread — via
+    `pipeline_view_model.list_run_views(PipelineStore())` in a daemon thread —
+    then hands them to `DiscoverView.set_runs` through `GLib.idle_add`, per
+    the GTK threading rule in this repo's CLAUDE.md (never touch widgets from
+    a background thread). `DiscoverView`'s "open-run" signal triggers the
+    same pattern for a single run: build its `RunView` off-thread
+    (`build_run_view(PipelineStore().get_run(run_id))`), then `GLib.idle_add`
+    both `OpenView.set_run` and the stack switch.
+
+    The rest of the loop, wired here:
+
+    - `OpenView`'s "remix-request" → `RemixView.set_run(current_run, spec_path)`
+      for whichever run is currently open, then switch to "remix".
+    - `RemixView`'s "run-remix" (spec_path, edits) → derive a new spec file
+      (`spec_remix.derive_spec`) under `REMIXES_DIR`, create a provisional run
+      record for it (`PipelineStore.create_run`) so `LiveRunView.begin()` has
+      a real `RunView` to render (every step PENDING), switch to "run", then
+      construct a `PipelineRunner` and `.start()` it with the `LiveRunView`'s
+      own `on_node_update`/`on_log`/`on_finished` bound directly as its
+      callbacks (their signatures already match exactly — see LiveRunView's
+      docstring).
+
+      Known limitation: `PipelineRunner.start()` creates its OWN run record
+      internally (with the live subprocess's real pid) once the process
+      actually launches — it has no way to reuse an existing run id. So the
+      provisional record created here and the runner's real one are two
+      separate `PipelineStore` entries for the same logical run; only the
+      runner's own record accumulates the real `job_states`/`output_dir` as
+      the run progresses. Reconciling the two ids is left to a follow-up
+      task — for now the provisional record exists purely so `LiveRunView`
+      has a same-shape `RunView` to paint immediately.
+    - `LiveRunView`'s "run-done" (run_id) → rebuild the Open page from that
+      run id's current record (`build_run_view(PipelineStore().get_run(run_id))`,
+      off-thread, same `GLib.idle_add` pattern as `open-run`) and switch back
+      to "open".
 """
 from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Callable, Optional
 
 import gi
@@ -90,11 +122,32 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 from pipeline_engine import load_spec  # noqa: E402
+from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
-from spec_remix import editable_params  # noqa: E402
+from spec_remix import derive_spec, editable_params  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+# Where derived remix spec files land (SP-C Phase 2a Task 4). A sibling of
+# PipelineStore's own workflow-runs/ dir under the same app data root — see
+# spec_remix.derive_spec's docstring for the naming scheme used inside it
+# (remix_<base_stem>_<n>.json).
+REMIXES_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "remixes"
+
+
+def _default_remix_jobs() -> "list[dict]":
+    """The job list passed to PipelineStore.create_run/PipelineRunner.start
+    for a remix run.
+
+    Pipeline mode's run_workflow.sh drives one spec file end-to-end and
+    reports NODE:/LOG: signals per node regardless of "job name" — the
+    multi-job fan-out (one job per prompt) that PipelineStore's job_states
+    shape supports is a batch-UI concept, not something remix needs. A
+    single named job is enough bookkeeping for create_run()'s job_states/
+    playlist_ids dicts.
+    """
+    return [{"name": "remix", "prompt": ""}]
 
 
 def _thumb_pixbuf(path: "str | None", width: int, height: int):
@@ -262,10 +315,6 @@ _CSS = b"""
     color: #fff;
     border-radius: 8px;
     padding: 7px 13px;
-    font-size: 12px;
-}
-.ps-remix-toast {
-    color: #F6BC42;
     font-size: 12px;
 }
 .ps-remix-header {
@@ -1248,6 +1297,13 @@ class PipelineStudio(Gtk.Box):
         _apply_css()
         self._on_open_run_cb = on_open_run
 
+        # The run currently shown on the Open page — the source for
+        # "Remix ..." (either button on OpenView). None until the first
+        # open-run completes, and _on_remix_request no-ops if either is
+        # still None (there is nothing open yet to remix).
+        self._current_run_view: "Optional[RunView]" = None
+        self._current_spec_path: "Optional[str]" = None
+
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.append(self.stack)
@@ -1256,49 +1312,80 @@ class PipelineStudio(Gtk.Box):
         self.discover.connect("open-run", self._on_open_run)
         self.stack.add_titled(self.discover, "discover", "Discover")
 
-        # "open" page: a back-to-discover bar + a remix-stub toast wrapped
-        # around the real OpenView (fleshed out from the Task-3 stub here in
-        # Task 4).
+        # "open" page: a back-to-discover bar wrapped around the real OpenView.
         open_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        back_bar.set_margin_top(10)
-        back_bar.set_margin_start(18)
-        back_btn = Gtk.Button(label="← Discover")
-        back_btn.add_css_class("ps-open-back")
-        back_btn.add_css_class("ps-btn-ghost")
-        back_btn.connect("clicked", self._on_back_to_discover)
-        back_bar.append(back_btn)
-        open_page.append(back_bar)
+        open_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        open_back_bar.set_margin_top(10)
+        open_back_bar.set_margin_start(18)
+        open_back_btn = Gtk.Button(label="← Discover")
+        open_back_btn.add_css_class("ps-open-back")
+        open_back_btn.add_css_class("ps-btn-ghost")
+        open_back_btn.connect("clicked", self._on_back_to_discover)
+        open_back_bar.append(open_back_btn)
+        open_page.append(open_back_bar)
 
         self.open_view = OpenView()
         self.open_view.connect("remix-request", self._on_remix_request)
         self.open_view.set_vexpand(True)
         open_page.append(self.open_view)
 
-        # Phase-2 stub surface: remix-request is wired up here but does NOT
-        # open an editor yet — see module docstring. Hidden until the first
-        # remix click so it doesn't clutter the page on a fresh Open.
-        self._remix_toast = Gtk.Label(label="")
-        self._remix_toast.add_css_class("ps-remix-toast")
-        self._remix_toast.set_margin_start(18)
-        self._remix_toast.set_margin_bottom(10)
-        self._remix_toast.set_visible(False)
-        open_page.append(self._remix_toast)
-
         self.stack.add_titled(open_page, "open", "Open")
+
+        # "remix" page: a back-to-open bar wrapped around RemixView.
+        remix_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        remix_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        remix_back_bar.set_margin_top(10)
+        remix_back_bar.set_margin_start(18)
+        remix_back_btn = Gtk.Button(label="← Back")
+        remix_back_btn.add_css_class("ps-open-back")
+        remix_back_btn.add_css_class("ps-btn-ghost")
+        remix_back_btn.connect("clicked", self._on_back_to_open)
+        remix_back_bar.append(remix_back_btn)
+        remix_page.append(remix_back_bar)
+
+        self.remix_view = RemixView()
+        self.remix_view.connect("run-remix", self._on_run_remix)
+        self.remix_view.set_vexpand(True)
+        remix_page.append(self.remix_view)
+
+        self.stack.add_titled(remix_page, "remix", "Remix")
+
+        # "run" page: a back-to-open bar wrapped around LiveRunView. Back
+        # only navigates the UI away — it does not cancel the runner, which
+        # keeps driving PipelineRunner.start()'s callbacks in the background
+        # regardless of which stack page is visible.
+        run_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        run_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        run_back_bar.set_margin_top(10)
+        run_back_bar.set_margin_start(18)
+        run_back_btn = Gtk.Button(label="← Back")
+        run_back_btn.add_css_class("ps-open-back")
+        run_back_btn.add_css_class("ps-btn-ghost")
+        run_back_btn.connect("clicked", self._on_back_to_open)
+        run_back_bar.append(run_back_btn)
+        run_page.append(run_back_bar)
+
+        self.live_run = LiveRunView()
+        self.live_run.connect("run-done", self._on_run_done)
+        self.live_run.set_vexpand(True)
+        run_page.append(self.live_run)
+
+        self.stack.add_titled(run_page, "run", "Run")
 
         self.stack.set_visible_child_name("discover")
 
         self._load_runs_async()
 
     def show_discover(self) -> None:
-        """Reset the inner {discover, open} stack to "discover". Main-thread only.
+        """Reset the inner stack to "discover". Main-thread only.
 
         Called by MainWindow._show_pipelines every time the Pipelines toolbar
         toggle is re-activated, so leaving and re-entering Pipelines never
-        strands the user on a stale Open page from a previous visit — Discover
-        is always the front door.
+        strands the user on a stale Open/Remix/Run page from a previous
+        visit — Discover is always the front door.
         """
         self.stack.set_visible_child_name("discover")
 
@@ -1310,16 +1397,87 @@ class PipelineStudio(Gtk.Box):
     def _on_back_to_discover(self, _button: Gtk.Button) -> None:
         self.stack.set_visible_child_name("discover")
 
-    def _on_remix_request(self, _widget: "OpenView", node_id: str) -> None:
-        """Phase-2 stub: acknowledge the remix intent without opening an editor.
+    def _on_back_to_open(self, _button: Gtk.Button) -> None:
+        self.stack.set_visible_child_name("open")
 
-        node_id == "" means "remix whole pipeline"; otherwise it's the
-        specific step's node_id. Real editing lands in SP-C Phase 2 — this
-        just proves the signal is wired end-to-end.
+    def _on_remix_request(self, _widget: "OpenView", node_id: str) -> None:
+        """OpenView's "Remix from here"/"Remix whole pipeline" → open RemixView.
+
+        node_id distinguishes the two buttons ("" for whole-pipeline) but
+        RemixView edits the whole run either way today (see its docstring) —
+        a future task may use node_id to scroll/focus that step's card. If
+        nothing has been opened yet (both _current_* are None — shouldn't
+        happen in practice since these buttons only exist inside a rendered
+        OpenView, but defensive per this module's "always tolerate stale/
+        missing data" rule), this is a no-op rather than opening RemixView
+        with nothing to edit.
         """
-        what = "the whole pipeline" if node_id == "" else f"step {node_id}"
-        self._remix_toast.set_label(f"Remixing {what} — coming in the editor (Phase 2)")
-        self._remix_toast.set_visible(True)
+        del node_id  # not yet used — see docstring
+        if self._current_run_view is None or self._current_spec_path is None:
+            return
+        self.remix_view.set_run(self._current_run_view, self._current_spec_path)
+        self.stack.set_visible_child_name("remix")
+
+    def _on_run_remix(self, _widget: "RemixView", spec_path: str, edits: dict) -> None:
+        """RemixView's "Run this remix →" → derive, launch, and watch it live.
+
+        Deriving the spec and creating the provisional run record are pure/
+        fast JSON I/O (same cost class as RemixView's own load_spec() call in
+        set_run()), so they run synchronously here rather than off-thread —
+        only the actual pipeline subprocess (PipelineRunner.start) does real
+        background work. See the module docstring's "Known limitation" note
+        for why this creates a provisional PipelineStore record distinct from
+        the one PipelineRunner.start() creates for the live subprocess.
+        """
+        REMIXES_DIR.mkdir(parents=True, exist_ok=True)
+        derived_path = derive_spec(spec_path, edits, str(REMIXES_DIR))
+
+        jobs = _default_remix_jobs()
+        store = PipelineStore()
+        run_id = store.create_run(
+            spec_path=derived_path,
+            spec_name=Path(derived_path).stem,
+            jobs=jobs,
+            param_overrides=edits,
+            pid=0,
+            log_file="",
+        )
+        record = store.get_run(run_id)
+        run_view = build_run_view(record)
+
+        self.live_run.begin(run_view)
+        self.stack.set_visible_child_name("run")
+
+        runner = PipelineRunner(idle_add=GLib.idle_add)
+        runner.start(
+            derived_path,
+            jobs,
+            param_overrides=edits,
+            on_node_update=self.live_run.on_node_update,
+            on_run_finished=self.live_run.on_finished,
+            on_log=self.live_run.on_log,
+        )
+
+    def _on_run_done(self, _widget: "LiveRunView", run_id: str) -> None:
+        """LiveRunView's "run-done" → rebuild the Open page from the fresh record.
+
+        Same off-thread-then-idle_add pattern as _load_run_async — building a
+        RunView re-reads the spec + globs the output dir, so it's disk I/O
+        that must not run on the GTK main thread.
+        """
+        def worker() -> None:
+            try:
+                record = PipelineStore().get_run(run_id)
+                if record is None:
+                    log.warning("run-done: no run found for id %s", run_id)
+                    return
+                run_view = build_run_view(record)
+            except Exception:  # noqa: BLE001 — never let a load error crash the shell
+                log.warning("failed to rebuild run view for %s", run_id, exc_info=True)
+                return
+            GLib.idle_add(self._show_run, run_view, record["spec_path"])
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _load_runs_async(self) -> None:
         """Load RunViews off the GTK main thread; hand results back via idle_add.
@@ -1356,12 +1514,22 @@ class PipelineStudio(Gtk.Box):
             except Exception:  # noqa: BLE001 — never let a load error crash the shell
                 log.warning("failed to build run view for %s", run_id, exc_info=True)
                 return
-            GLib.idle_add(self._show_run, run_view)
+            GLib.idle_add(self._show_run, run_view, record.get("spec_path"))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_run(self, run_view: RunView) -> None:
-        """Main-thread only: populate OpenView and switch the stack to it."""
+    def _show_run(self, run_view: RunView, spec_path: "str | None") -> None:
+        """Main-thread only: populate OpenView, remember it for remix, switch to it.
+
+        spec_path is remembered (alongside the RunView) so a later
+        "remix-request" from OpenView has something to hand RemixView.set_run
+        — see _on_remix_request. It's accepted as possibly-None (e.g. an old
+        record missing the key) rather than required, matching this module's
+        "always tolerate stale/missing data" rule; _on_remix_request already
+        no-ops if it's None.
+        """
+        self._current_run_view = run_view
+        self._current_spec_path = spec_path
         self.open_view.set_run(run_view)
         self.stack.set_visible_child_name("open")
         return False

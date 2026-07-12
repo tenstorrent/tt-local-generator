@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,6 +31,22 @@ except Exception:  # pragma: no cover - environment-dependent
 
 from intent_vocab import intent_for
 from pipeline_view_model import RunView, StepView
+
+
+class _ImmediateThread:
+    """threading.Thread stand-in that runs its target synchronously on start().
+
+    Shared by every PipelineStudio test that drives a background-loading
+    method (open-run, run-done, ...) — swaps out real threading so the test
+    doesn't race a daemon thread, per the pattern this module's tests already
+    established for test_pipeline_studio_open_run_switches_stack_to_open.
+    """
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
 
 
 def _make_run(run_id: str = "run-1", title: str = "1964 World's Fair") -> RunView:
@@ -291,16 +308,12 @@ def test_pipeline_studio_open_run_switches_stack_to_open(monkeypatch):
     """
     import pipeline_studio
 
-    class _ImmediateThread:
-        def __init__(self, target=None, daemon=None):
-            self._target = target
-
-        def start(self):
-            self._target()
-
     class _FakeStore:
         def get_run(self, run_id):
-            return {"id": run_id}  # opaque; build_run_view is stubbed below
+            # opaque record; build_run_view is stubbed below to ignore it,
+            # but a real spec_path is included so _show_run has one to stash
+            # for a later remix-request.
+            return {"id": run_id, "spec_path": "/fake/spec.json"}
 
     monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
@@ -315,6 +328,7 @@ def test_pipeline_studio_open_run_switches_stack_to_open(monkeypatch):
 
     assert studio.stack.get_visible_child_name() == "open"
     assert studio.open_view._title_label.get_label() == "1964 World's Fair"
+    assert studio._current_spec_path == "/fake/spec.json"
 
 
 # ── RemixView ────────────────────────────────────────────────────────────────
@@ -614,3 +628,191 @@ def test_live_run_view_begin_is_repeat_safe():
 
     assert view._step_status_labels["1"].get_label() == "•"
     assert view._log_box.get_first_child() is None
+
+
+# ── PipelineStudio: wire the loop (Open → Remix → Run → done) ──────────────
+#
+# SP-C Phase 2a Task 4. PipelineRunner and PipelineStore are both mocked here
+# — this is a wiring test, not a real-subprocess/real-disk integration test
+# (see test_pipeline_runner.py for PipelineRunner's own unit tests). derive_spec
+# is left REAL (it's pure JSON I/O) but pointed at a tmp_path remixes dir via
+# a monkeypatched pipeline_studio.REMIXES_DIR, so no file lands under the
+# actual user's home directory.
+
+def test_pipeline_studio_remix_request_shows_remix_page_for_open_run(monkeypatch, tmp_path):
+    """OpenView's remix-request (either button) opens RemixView pre-filled
+    with whichever run is currently on the Open page."""
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio._show_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    studio.open_view.emit("remix-request", "")
+
+    assert studio.stack.get_visible_child_name() == "remix"
+    assert studio.remix_view._spec_path == _REMIX_SPEC_PATH
+    assert set(studio.remix_view._field_widgets.keys()) == {"1", "2", "3"}
+
+
+def test_pipeline_studio_remix_request_noop_when_nothing_open(monkeypatch, tmp_path):
+    """A remix-request before any run has ever been opened must not crash or
+    switch pages — there is nothing to pre-fill RemixView with."""
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.open_view.emit("remix-request", "")
+
+    assert studio.stack.get_visible_child_name() == "discover"
+
+
+def test_pipeline_studio_run_remix_derives_creates_run_and_starts_runner(monkeypatch, tmp_path):
+    """RemixView's run-remix must: derive a new spec under REMIXES_DIR, create
+    a provisional PipelineStore run record for the DERIVED path, show it in
+    LiveRunView and switch to "run", then construct a PipelineRunner and
+    start() it with the derived path and LiveRunView's own handlers bound
+    directly as its callbacks."""
+    import pipeline_studio
+
+    remixes_dir = tmp_path / "remixes"
+    remixes_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", remixes_dir)
+
+    # derive_spec is mocked (so the assertion below can check its call args
+    # precisely) — but build_run_view (left real) still needs an actual spec
+    # file at the "derived" path it returns, so write one using the same
+    # content as the remix fixture spec.
+    derived_path = str(remixes_dir / "remix_remix_fixture_spec_1.json")
+    Path(derived_path).write_text(Path(_REMIX_SPEC_PATH).read_text())
+    mock_derive_spec = MagicMock(return_value=derived_path)
+    monkeypatch.setattr(pipeline_studio, "derive_spec", mock_derive_spec)
+
+    # PipelineStore is fully mocked — create_run/get_run return a provisional
+    # record pointing at the derived spec file above.
+    mock_store_instance = MagicMock()
+    mock_store_instance.create_run.return_value = "provisional-run-1"
+    mock_store_instance.get_run.return_value = {
+        "id": "provisional-run-1",
+        "spec_path": derived_path,
+        "spec_name": "remix_remix_fixture_spec_1",
+        "output_dir": "",
+        "job_states": {},
+        "started_at": "2026-07-11T00:00:00+00:00",
+    }
+    mock_store_cls = MagicMock(return_value=mock_store_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
+
+    mock_runner_instance = MagicMock()
+    mock_runner_cls = MagicMock(return_value=mock_runner_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineRunner", mock_runner_cls)
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    edits = {"1": {"prompt": "a new prompt"}}
+    studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, edits)
+
+    # derive_spec called with (base_spec_path, edits, remixes_dir).
+    mock_derive_spec.assert_called_once_with(_REMIX_SPEC_PATH, edits, str(remixes_dir))
+
+    # create_run called with the DERIVED path.
+    create_kwargs = mock_store_instance.create_run.call_args.kwargs
+    assert create_kwargs["spec_path"] == derived_path
+    assert create_kwargs["param_overrides"] == edits
+
+    # PipelineRunner constructed with GLib.idle_add, started with the derived
+    # path and LiveRunView's handlers bound directly.
+    mock_runner_cls.assert_called_once_with(idle_add=pipeline_studio.GLib.idle_add)
+    start_args, start_kwargs = mock_runner_instance.start.call_args
+    assert start_args[0] == derived_path
+    assert start_kwargs["on_node_update"] == studio.live_run.on_node_update
+    assert start_kwargs["on_log"] == studio.live_run.on_log
+    assert start_kwargs["on_run_finished"] == studio.live_run.on_finished
+
+    assert studio.stack.get_visible_child_name() == "run"
+    assert list(studio.live_run._step_status_labels.keys()) == ["1", "2", "3"]
+
+
+def test_pipeline_studio_run_done_returns_to_open_with_fresh_run(monkeypatch, tmp_path):
+    """LiveRunView's run-done rebuilds the Open page from that run id's
+    current record and switches back to "open"."""
+    import pipeline_studio
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    finished_record = {
+        "id": "run-finished-1",
+        "spec_path": _REMIX_SPEC_PATH,
+        "spec_name": "remix_fixture_spec",
+        "output_dir": "",
+        "job_states": {},
+        "started_at": "2026-07-11T00:00:00+00:00",
+    }
+    mock_store_instance = MagicMock()
+    mock_store_instance.get_run.return_value = finished_record
+    mock_store_cls = MagicMock(return_value=mock_store_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+    studio.stack.set_visible_child_name("run")
+
+    studio.live_run.begin(_make_remix_run())
+    studio._on_run_done(studio.live_run, "run-finished-1")
+
+    mock_store_instance.get_run.assert_called_with("run-finished-1")
+    assert studio.stack.get_visible_child_name() == "open"
+    assert studio._current_spec_path == _REMIX_SPEC_PATH
+
+
+def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path):
+    """End-to-end wiring: run-remix -> (simulated finish) -> run-done -> Open."""
+    import pipeline_studio
+
+    remixes_dir = tmp_path / "remixes"
+    monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", remixes_dir)
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    mock_store_instance = MagicMock()
+    mock_store_instance.create_run.return_value = "provisional-run-1"
+
+    def _fake_get_run(run_id):
+        derived_path = str(remixes_dir / "remix_remix_fixture_spec_1.json")
+        return {
+            "id": run_id,
+            "spec_path": derived_path,
+            "spec_name": "remix_remix_fixture_spec_1",
+            "output_dir": "",
+            "job_states": {},
+            "started_at": "2026-07-11T00:00:00+00:00",
+        }
+
+    mock_store_instance.get_run.side_effect = _fake_get_run
+    mock_store_cls = MagicMock(return_value=mock_store_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineStore", mock_store_cls)
+
+    mock_runner_instance = MagicMock()
+    mock_runner_cls = MagicMock(return_value=mock_runner_instance)
+    monkeypatch.setattr(pipeline_studio, "PipelineRunner", mock_runner_cls)
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.remix_view.emit("run-remix", _REMIX_SPEC_PATH, {})
+    assert studio.stack.get_visible_child_name() == "run"
+
+    # Simulate the runner finishing: call the exact callback it was started
+    # with (LiveRunView.on_finished), which resolves running steps and emits
+    # run-done — PipelineStudio's handler (real, unmocked) then rebuilds Open.
+    on_run_finished = mock_runner_instance.start.call_args.kwargs["on_run_finished"]
+    on_run_finished(True)
+
+    assert studio.stack.get_visible_child_name() == "open"

@@ -57,6 +57,7 @@ class PipelineRunner:
         self._log_file: Optional[str] = None
         self._on_node_update: Optional[Callable] = None
         self._on_run_finished: Optional[Callable] = None
+        self._on_log: Optional[Callable] = None
         self._active_jobs: dict[str, dict] = {}
         self._cancelled = False
         # _retry_mode: set True by retry_node() so _watch_stdout does not call
@@ -123,10 +124,19 @@ class PipelineRunner:
         param_overrides: dict,
         on_node_update: Callable,
         on_run_finished: Callable,
+        on_log: Optional[Callable] = None,
     ) -> None:
-        """Launch run_workflow.sh for the given jobs and spec."""
+        """Launch run_workflow.sh for the given jobs and spec.
+
+        on_log, if given, is called with every raw stdout line the subprocess
+        emits (verbatim, including the trailing newline) — e.g. so a live-run
+        view can tail the log alongside the parsed NODE:/LOG: signals. It is
+        optional and defaults to None so existing callers (and every test that
+        predates this parameter) are unaffected.
+        """
         self._on_node_update = on_node_update
         self._on_run_finished = on_run_finished
+        self._on_log = on_log
         self._cancelled = False
 
         # Non-blocking health check — emits synthetic signal if degraded
@@ -384,6 +394,7 @@ class PipelineRunner:
             for line in self._proc.stdout:
                 if self._cancelled:
                     break
+                self._dispatch(self._on_log, line)
                 self._parse_line(line, current_job)
         finally:
             exit_code = self._proc.wait()
