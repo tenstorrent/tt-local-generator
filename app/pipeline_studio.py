@@ -11,7 +11,7 @@ finished runs. Layout follows the validated mockup at
 `.superpowers/brainstorm/988333-1783804257/content/discover-gallery.html`:
 one big featured "hero" card (the most recent run) + a grid of the rest.
 
-Four pieces:
+Five pieces:
 
 `DiscoverView(Gtk.Box)`
     Renders the hero + grid from a plain `list[RunView]` handed in via
@@ -21,7 +21,11 @@ Four pieces:
     and a display (see tests/test_pipeline_studio.py). Emits the custom
     `open-run` signal (str run_id) when a card's "Open" button is clicked;
     the caller (PipelineStudio, and eventually MainWindow) decides what that
-    means (switch to the "open" stack page, drill into the run, etc).
+    means (switch to the "open" stack page, drill into the run, etc). Also
+    carries the "✦ Start from scratch" affordance (SP-C Phase 2b-3 Task 4) —
+    a button, always visible above the hero/grid/empty state, that emits the
+    custom `start-from-scratch` signal (no args); `PipelineStudio` wires this
+    straight to `show_muse()` (blank canvas — no seed artifact).
 
 `OpenView(Gtk.Box)`
     The "learn from example" page (SP-C Task 4): one run's steps laid out
@@ -118,6 +122,39 @@ Four pieces:
     structural add/remove changes actually make it into the run, which
     `derive_spec` alone could never see since it re-reads spec_path from disk.
 
+`MuseView(Gtk.Box)`
+    The Muse — a goal-first "start from scratch" creative wizard (SP-C Phase
+    2b-3 Task 4). Where RemixView starts from an already-run pipeline, Muse
+    starts from nothing (or from one existing artifact) and asks "what do you
+    want to make?" instead of "what do you want to change?" `set_context(
+    seed_artifact=None)` renders either the blank-canvas heading ("What do you
+    want to make?") or, given `(path, kind, thumb_path)`, the scoped heading
+    ("Make this {kind} into…") with a thumbnail (`_build_thumb_frame`, shared
+    with Discover/Open) — plus one card per `goals_fn(seed_output_kind)`
+    (default `recipes.goals_for`), a "✨ Surprise me" button, and a free-text
+    entry + "Dream it up →" button.
+
+    Three paths all end the same way — emitting the custom `goal-chosen`
+    signal (object: the built seed spec dict), which `PipelineStudio` writes
+    to disk and hands to `RemixView.load_seed_spec`:
+
+    - **Goal card** click: synchronous — `recipes.build_seed_spec(goal,
+      seed_artifact=(path, kind))` (the goal path calls this REAL function
+      directly, not an injectable seam; only the free-text path's spec build
+      is injectable, via `seed_spec_fn`).
+    - **"Surprise me"**: same synchronous path, but the goal is chosen
+      deterministically — index `len(goals) // 2` of whatever `goals_fn` just
+      returned — NOT `random`/time, so repeated clicks (and tests) are
+      reproducible.
+    - **Free text** ("Dream it up →"): the `wingit_pipeline_fn` seam (default
+      wraps `wingit.map_freeform_to_pipeline` + `capability_discovery.
+      default_capabilities` + `wingit.default_llm_fn`) may hit the network, so
+      it runs on a daemon `threading.Thread`, applying the result back via
+      `GLib.idle_add` — the GTK threading rule in this repo's CLAUDE.md. A
+      `None` result (nothing mapped) shows the same gentle inline
+      `_show_message` RemixView's wing-it box uses, and emits nothing — never
+      a crash.
+
 `LiveRunView(Gtk.Box)`
     The "watch it run" page (SP-C Phase 2a Task 3): one row per step
     (intent-labelled, same verb/noun/model presentation as Open/RemixView)
@@ -139,10 +176,12 @@ Four pieces:
 
 `PipelineStudio(Gtk.Box)`
     The shell: a Gtk.Stack with "discover" (DiscoverView), "open" (OpenView,
-    wrapped with a "← Discover" back control), "remix" (RemixView, wrapped
-    with a "← Back" control), and "run" (LiveRunView, wrapped with a "← Back"
-    control) pages — the full SP-C Phase 2a Task 4 loop: Open → Remix → Run
-    → done. Loads runs off the GTK main thread — via
+    wrapped with a "← Discover" back control), "muse" (MuseView, wrapped with
+    a "← Discover" back control), "remix" (RemixView, wrapped with a "← Back"
+    control), and "run" (LiveRunView, wrapped with a "← Back" control) pages —
+    the full SP-C Phase 2a Task 4 loop: Open → Remix → Run → done, PLUS the
+    Phase 2b-3 Task 4 "start from scratch" loop: Muse → Remix → Run → done.
+    Loads runs off the GTK main thread — via
     `pipeline_view_model.list_run_views(PipelineStore())` in a daemon thread —
     then hands them to `DiscoverView.set_runs` through `GLib.idle_add`, per
     the GTK threading rule in this repo's CLAUDE.md (never touch widgets from
@@ -155,6 +194,14 @@ Four pieces:
 
     - `OpenView`'s "remix-request" → `RemixView.set_run(current_run, spec_path)`
       for whichever run is currently open, then switch to "remix".
+    - `DiscoverView`'s "start-from-scratch" → `show_muse()` (blank canvas).
+    - `MuseView`'s "goal-chosen" (spec dict) → write it to `REMIXES_DIR` via
+      `spec_remix.write_spec(spec, "muse", str(REMIXES_DIR))`, then
+      `RemixView.load_seed_spec(derived_path, title)` — `title` is "a new
+      pipeline" for blank mode or `f"your {kind}"` for scoped mode (the kind
+      `show_muse` was called with) — and switch to "remix". Unlike
+      `_on_run_remix` below, there is no base run/spec to preserve top-level
+      metadata from — a seed spec is brand new.
     - `RemixView`'s "run-remix" (spec_path, edits) → take the emitting
       `RemixView`'s `current_spec()` (the composed graph — every add/remove
       structural edit included), re-merge the base spec file's top-level
@@ -194,6 +241,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
+import recipes  # noqa: E402
 import showcase  # noqa: E402
 import wingit  # noqa: E402
 from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
@@ -201,7 +249,9 @@ from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
-from spec_remix import add_step, apply_edits, editable_params, remove_step, write_spec  # noqa: E402
+from spec_remix import (  # noqa: E402
+    add_step, apply_edits, editable_params, remove_step, seed_spec, write_spec,
+)
 
 log = logging.getLogger(__name__)
 
@@ -539,6 +589,14 @@ _CSS = b"""
     font-size: 11px;
     color: #9bc0ba;
 }
+.ps-muse-cta {
+    background-color: #F6BC42;
+    color: #3a2a00;
+    font-weight: 650;
+    border-radius: 9px;
+    padding: 8px 16px;
+    font-size: 12.5px;
+}
 """
 
 _css_applied = False
@@ -574,6 +632,10 @@ class DiscoverView(Gtk.Box):
 
     __gsignals__ = {
         "open-run": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        # Emitted by the "✦ Start from scratch" button (SP-C Phase 2b-3
+        # Task 4) — no args; PipelineStudio wires this to show_muse() (blank
+        # canvas, no seed artifact).
+        "start-from-scratch": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
     HERO_THUMB_W, HERO_THUMB_H = 320, 200
@@ -591,6 +653,22 @@ class DiscoverView(Gtk.Box):
         self._hero_recipe_labels: list = []
         self._hero_open_btn: "Gtk.Button | None" = None
         self._card_open_buttons: dict = {}
+
+        # "✦ Start from scratch" — always visible above the hero/grid/empty
+        # state (unlike that content, it is never rebuilt by set_runs(), so
+        # it's appended here rather than inside self._content).
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        top_bar.set_margin_top(18)
+        top_bar.set_margin_start(18)
+        top_bar.set_margin_end(18)
+        self._start_from_scratch_btn = Gtk.Button(label="✦ Start from scratch")
+        self._start_from_scratch_btn.add_css_class("ps-muse-cta")
+        self._start_from_scratch_btn.set_halign(Gtk.Align.START)
+        self._start_from_scratch_btn.connect(
+            "clicked", lambda _b: self.emit("start-from-scratch"),
+        )
+        top_bar.append(self._start_from_scratch_btn)
+        self.append(top_bar)
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1224,6 +1302,21 @@ class RemixView(Gtk.Box):
         self._hide_message()
         self._render()
 
+    def load_seed_spec(self, spec_path: str, title: str) -> None:
+        """Load a freshly-written SEED spec (from the Muse) — like `set_run`
+        but with no `RunView`, since a seed spec has no run history yet.
+
+        `title` is caller-supplied prose (e.g. "a new pipeline" or "your
+        image" — see `PipelineStudio._on_muse_goal_chosen`) rather than a
+        `RunView.title`, because there IS no run yet to name this from.
+        Otherwise identical to `set_run`: main-thread only, repeat-safe.
+        """
+        self._spec_path = spec_path
+        self._title_label.set_label(f"Composing · {title}")
+        self.working_spec = load_spec(spec_path)
+        self._hide_message()
+        self._render()
+
     def current_spec(self) -> dict:
         """The working spec with any still-pending param-field edits applied.
 
@@ -1712,6 +1805,324 @@ class RemixView(Gtk.Box):
         return widget.get_text()
 
 
+class MuseView(Gtk.Box):
+    """The Muse: goal-first "start from scratch" creative wizard (SP-C Phase
+    2b-3 Task 4). See module docstring for the full picture.
+
+    Data arrives ONLY through `set_context(seed_artifact=None)` — same rule
+    as every other view in this module: no PipelineStore/disk access of its
+    own beyond the injected seams below.
+    """
+
+    __gsignals__ = {
+        # (spec dict,) — the built seed spec, from whichever of the three
+        # paths (goal card / Surprise me / free text) produced one.
+        "goal-chosen": (GObject.SignalFlags.RUN_FIRST, None, (object,)),
+    }
+
+    THUMB_W, THUMB_H = 160, 100
+
+    def __init__(
+        self,
+        *,
+        goals_fn: "Callable[[Optional[str]], list] | None" = None,
+        wingit_pipeline_fn: "Callable[[str, Optional[str]], object] | None" = None,
+        seed_spec_fn: "Callable[..., dict] | None" = None,
+    ) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add_css_class("ps-discover")  # same dark-teal page background
+        _apply_css()
+
+        # `goals_fn(seed_output_kind) -> list[recipes.Goal]`. Real default
+        # wraps `recipes.goals_for` (keyword-only `seed_output_kind` there —
+        # this closure calls it positionally so tests can inject a plain
+        # `lambda kind: [...]` fake without matching that signature exactly).
+        self._goals_fn = goals_fn or (
+            lambda seed_output_kind: recipes.goals_for(seed_output_kind=seed_output_kind)
+        )
+
+        # `wingit_pipeline_fn(text, seed_output_kind) -> list[(class_type,
+        # params)] | None`. Real default wraps `wingit.map_freeform_to_pipeline`
+        # + `capability_discovery.default_capabilities` + `wingit.default_llm_fn`
+        # — the same "real closure" pattern RemixView's `wingit_fn` uses. Blank
+        # mode (`seed_output_kind is None`) asks `default_capabilities` for
+        # "text"-consuming capabilities: the user's typed sentence IS the text
+        # artifact wingit's "bare text seed" allowance expects (see wingit.py's
+        # `_kind_fits` docstring) — every plugin's seed capability (kind_in
+        # None) is always included regardless, so this never under-offers.
+        self._wingit_pipeline_fn = wingit_pipeline_fn or (
+            lambda text, seed_output_kind: wingit.map_freeform_to_pipeline(
+                text,
+                seed_output_kind=seed_output_kind,
+                capabilities=capability_discovery.default_capabilities(
+                    seed_output_kind or "text",
+                ),
+                llm_fn=wingit.default_llm_fn,
+            )
+        )
+
+        # `seed_spec_fn(steps, seed_artifact=...) -> dict`. Only the free-text
+        # path uses this seam — the goal-card/Surprise path always calls the
+        # real `recipes.build_seed_spec` directly (see class docstring in the
+        # module header and `_choose_goal` below).
+        self._seed_spec_fn = seed_spec_fn or seed_spec
+
+        # Set by set_context(); (path, kind, thumb_path) or None.
+        self._seed_artifact: "tuple[str, str, str | None] | None" = None
+        # The Goal list set_context() most recently rendered — Surprise me's
+        # deterministic middle-index pick reads from exactly this list, not a
+        # fresh goals_fn() call, so it always matches what's on screen.
+        self._goals: list = []
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        header.set_margin_top(18)
+        header.set_margin_start(18)
+        header.set_margin_end(18)
+
+        self._thumb_holder = Gtk.Box()
+        header.append(self._thumb_holder)
+
+        self._heading_label = Gtk.Label(label="")
+        self._heading_label.set_xalign(0)
+        self._heading_label.set_wrap(True)
+        self._heading_label.add_css_class("ps-hero-title")
+        self._heading_label.set_hexpand(True)
+        self._heading_label.set_valign(Gtk.Align.CENTER)
+        header.append(self._heading_label)
+
+        self.append(header)
+
+        # Hidden until a guard rejects a goal/free-text choice (see
+        # _show_message/_hide_message) — same gentle-inline-message pattern
+        # RemixView's composer guards use.
+        self._message_label = Gtk.Label(label="")
+        self._message_label.set_xalign(0)
+        self._message_label.add_css_class("ps-composer-message")
+        self._message_label.set_visible(False)
+        self._message_label.set_margin_top(4)
+        self._message_label.set_margin_start(18)
+        self._message_label.set_margin_end(18)
+        self.append(self._message_label)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        scroller.set_hexpand(True)
+        self.append(scroller)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        body.set_margin_top(10)
+        body.set_margin_bottom(18)
+        body.set_margin_start(18)
+        body.set_margin_end(18)
+        scroller.set_child(body)
+
+        self._cards_box = Gtk.FlowBox()
+        self._cards_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._cards_box.set_max_children_per_line(3)
+        self._cards_box.set_min_children_per_line(1)
+        self._cards_box.set_row_spacing(12)
+        self._cards_box.set_column_spacing(12)
+        self._cards_box.set_homogeneous(True)
+        body.append(self._cards_box)
+        # Keyed by Goal.id — kept around purely so tests/callers can find a
+        # specific goal's card button without walking the widget tree.
+        self._goal_buttons: "dict[str, Gtk.Button]" = {}
+
+        self._surprise_button = Gtk.Button(label="✨ Surprise me")
+        self._surprise_button.add_css_class("ps-btn-ghost")
+        self._surprise_button.set_halign(Gtk.Align.START)
+        self._surprise_button.connect("clicked", self._on_surprise_clicked)
+        body.append(self._surprise_button)
+
+        wing_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._freeform_entry = Gtk.Entry()
+        self._freeform_entry.set_placeholder_text(
+            "Or describe what you want to make, in your own words…"
+        )
+        self._freeform_entry.add_css_class("ps-field-entry")
+        self._freeform_entry.set_hexpand(True)
+        wing_row.append(self._freeform_entry)
+
+        self._dream_button = Gtk.Button(label="Dream it up →")
+        self._dream_button.add_css_class("ps-wingit-compose")
+        self._dream_button.connect("clicked", self._on_dream_clicked)
+        wing_row.append(self._dream_button)
+        body.append(wing_row)
+
+        self.set_context(None)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def set_context(self, seed_artifact: "tuple[str, str, str | None] | None" = None) -> None:
+        """(Re)build the whole wizard for blank canvas (`None`) or "starting
+        from this artifact" (`(path, kind, thumb_path)`). Main-thread only,
+        repeat-safe.
+        """
+        self._seed_artifact = seed_artifact
+        self._hide_message()
+
+        while child := self._thumb_holder.get_first_child():
+            self._thumb_holder.remove(child)
+
+        if seed_artifact is None:
+            self._heading_label.set_label("What do you want to make?")
+            seed_output_kind = None
+        else:
+            path, kind, thumb_path = seed_artifact
+            del path  # not needed for display — only kind/thumb_path are
+            self._heading_label.set_label(f"Make this {kind} into…")
+            self._thumb_holder.append(
+                _build_thumb_frame(thumb_path, self.THUMB_W, self.THUMB_H, "ps-card-thumb")
+            )
+            seed_output_kind = kind
+
+        try:
+            goals = self._goals_fn(seed_output_kind)
+        except Exception:
+            # A raising goals_fn (e.g. a genuinely broken plugin manifest
+            # deep in recipes.discover_goals) must never crash the wizard —
+            # degrade to "no goals right now" rather than take down the page.
+            goals = []
+        self._goals = list(goals or [])
+
+        while child := self._cards_box.get_first_child():
+            self._cards_box.remove(child)
+        self._goal_buttons = {}
+        for goal in self._goals:
+            self._cards_box.insert(self._build_goal_card(goal), -1)
+
+    # ── Goal cards / Surprise me ─────────────────────────────────────────────
+
+    def _build_goal_card(self, goal: "recipes.Goal") -> Gtk.Widget:
+        button = Gtk.Button()
+        button.add_css_class("ps-card")
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        content.set_valign(Gtk.Align.CENTER)
+
+        icon_label = Gtk.Label(label=goal.icon)
+        content.append(icon_label)
+
+        text_label = Gtk.Label(label=goal.label)
+        text_label.set_wrap(True)
+        text_label.add_css_class("ps-card-title")
+        content.append(text_label)
+
+        button.set_child(content)
+        button.connect("clicked", self._on_goal_card_clicked, goal)
+        self._goal_buttons[goal.id] = button
+        return button
+
+    def _on_goal_card_clicked(self, _button: Gtk.Button, goal: "recipes.Goal") -> None:
+        self._choose_goal(goal)
+
+    def _on_surprise_clicked(self, _button: Gtk.Button) -> None:
+        """Deterministic pick — index `len(goals) // 2` of the currently
+        rendered goal list, NOT `random`/time (this repo's test/reproducibility
+        discipline — see class docstring). A no-op when nothing is on offer."""
+        if not self._goals:
+            return
+        self._choose_goal(self._goals[len(self._goals) // 2])
+
+    def _choose_goal(self, goal: "recipes.Goal") -> None:
+        """Synchronous path shared by goal-card clicks and Surprise me: build
+        the seed spec via the REAL `recipes.build_seed_spec` (not an injected
+        seam — see class docstring) and emit `goal-chosen`, or show a gentle
+        message on a genuine kind mismatch instead of crashing."""
+        seed_artifact_pair = None
+        if self._seed_artifact is not None:
+            path, kind, _thumb_path = self._seed_artifact
+            seed_artifact_pair = (path, kind)
+
+        try:
+            spec = recipes.build_seed_spec(goal, seed_artifact=seed_artifact_pair)
+        except ValueError as exc:
+            self._show_message(f"Couldn't build that pipeline: {exc}")
+            return
+        self._hide_message()
+        self.emit("goal-chosen", spec)
+
+    # ── Free text ("Dream it up") ────────────────────────────────────────────
+
+    def _on_dream_clicked(self, _button: Gtk.Button) -> None:
+        """Map the free-text entry to a draft pipeline via `wingit_pipeline_fn`.
+
+        An empty/whitespace-only entry is a no-op (mirrors RemixView's
+        wing-it Compose button) rather than a spurious "couldn't compose"
+        message. Otherwise `wingit_pipeline_fn` runs on a daemon thread (the
+        default closure's LLM call may hit the network — GTK threading rule,
+        see CLAUDE.md) and the result is applied back on the main thread via
+        `GLib.idle_add(self._apply_freeform_result, ...)`. A raising
+        `wingit_pipeline_fn` is treated the same as a `None` result (gentle
+        message, nothing emitted) rather than crashing the worker thread.
+
+        Busy-guard: the Dream-it-up button is disabled synchronously here
+        (main thread, before the worker thread even starts) so a second click
+        while a mapping is in flight can't spawn a second worker.
+        `_apply_freeform_result` re-enables it.
+        """
+        text = self._freeform_entry.get_text().strip()
+        if not text:
+            return
+
+        self._dream_button.set_sensitive(False)
+        seed_output_kind = self._seed_artifact[1] if self._seed_artifact is not None else None
+        wingit_pipeline_fn = self._wingit_pipeline_fn
+
+        def worker() -> None:
+            try:
+                steps = wingit_pipeline_fn(text, seed_output_kind)
+            except Exception:
+                steps = None
+            GLib.idle_add(self._apply_freeform_result, steps)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_freeform_result(self, steps: "list | None") -> None:
+        """Apply a `wingit_pipeline_fn` outcome from `_on_dream_clicked`.
+        Always runs on the main thread (posted via `GLib.idle_add`).
+
+        `None`/empty means nothing could be drafted at all — shown as a
+        gentle inline message, nothing emitted, matching RemixView's wing-it
+        `None` handling. A real step list is turned into a spec via
+        `seed_spec_fn` (the injectable seam — see class docstring); a
+        `ValueError` from that call (a genuine kind mismatch) gets the same
+        gentle message rather than crashing.
+        """
+        try:
+            if not steps:
+                self._show_message("Couldn't compose that — try rephrasing.")
+                return
+
+            seed_artifact_pair = None
+            if self._seed_artifact is not None:
+                path, kind, _thumb_path = self._seed_artifact
+                seed_artifact_pair = (path, kind)
+
+            try:
+                spec = self._seed_spec_fn(steps, seed_artifact=seed_artifact_pair)
+            except ValueError:
+                self._show_message("Couldn't compose that — try rephrasing.")
+                return
+            self._hide_message()
+            self.emit("goal-chosen", spec)
+        finally:
+            try:
+                self._dream_button.set_sensitive(True)
+            except Exception:
+                pass
+
+    # ── Shared message helpers ───────────────────────────────────────────────
+
+    def _show_message(self, text: str) -> None:
+        self._message_label.set_label(text)
+        self._message_label.set_visible(True)
+
+    def _hide_message(self) -> None:
+        self._message_label.set_label("")
+        self._message_label.set_visible(False)
+
+
 class LiveRunView(Gtk.Box):
     """Live-run page: watch a pipeline run's progress in real time (SP-C Phase 2a Task 3).
 
@@ -2020,12 +2431,19 @@ class PipelineStudio(Gtk.Box):
         self._current_run_view: "Optional[RunView]" = None
         self._current_spec_path: "Optional[str]" = None
 
+        # The seed_artifact `show_muse()` was last called with — remembered
+        # purely so `_on_muse_goal_chosen` can pick the right remix title
+        # ("a new pipeline" vs. f"your {kind}") without MuseView itself
+        # needing to echo it back through the "goal-chosen" signal.
+        self._muse_seed_artifact: "Optional[tuple]" = None
+
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.append(self.stack)
 
         self.discover = DiscoverView()
         self.discover.connect("open-run", self._on_open_run)
+        self.discover.connect("start-from-scratch", lambda _w: self.show_muse())
         self.stack.add_titled(self.discover, "discover", "Discover")
 
         # "open" page: a back-to-discover bar wrapped around the real OpenView.
@@ -2047,6 +2465,29 @@ class PipelineStudio(Gtk.Box):
         open_page.append(self.open_view)
 
         self.stack.add_titled(open_page, "open", "Open")
+
+        # "muse" page: a back-to-discover bar wrapped around MuseView (SP-C
+        # Phase 2b-3 Task 4) — the "start from scratch" wizard's back control
+        # returns to Discover (its own front door), not Open (there is no run
+        # open yet when arriving here from "✦ Start from scratch").
+        muse_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        muse_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        muse_back_bar.set_margin_top(10)
+        muse_back_bar.set_margin_start(18)
+        muse_back_btn = Gtk.Button(label="← Discover")
+        muse_back_btn.add_css_class("ps-open-back")
+        muse_back_btn.add_css_class("ps-btn-ghost")
+        muse_back_btn.connect("clicked", self._on_back_to_discover)
+        muse_back_bar.append(muse_back_btn)
+        muse_page.append(muse_back_bar)
+
+        self.muse = MuseView()
+        self.muse.connect("goal-chosen", self._on_muse_goal_chosen)
+        self.muse.set_vexpand(True)
+        muse_page.append(self.muse)
+
+        self.stack.add_titled(muse_page, "muse", "Muse")
 
         # "remix" page: a back-to-open bar wrapped around RemixView.
         remix_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -2105,6 +2546,18 @@ class PipelineStudio(Gtk.Box):
         """
         self.stack.set_visible_child_name("discover")
 
+    def show_muse(self, seed_artifact: "Optional[tuple]" = None) -> None:
+        """Open the Muse wizard: blank canvas (`seed_artifact=None`, the
+        default — reached via Discover's "✦ Start from scratch") or scoped to
+        an existing artifact (`(path, kind, thumb_path)`). Main-thread only.
+
+        Remembers *seed_artifact* (see `self._muse_seed_artifact`'s docstring)
+        so `_on_muse_goal_chosen` can title the resulting remix correctly.
+        """
+        self._muse_seed_artifact = seed_artifact
+        self.muse.set_context(seed_artifact)
+        self.stack.set_visible_child_name("muse")
+
     def _on_open_run(self, _widget: DiscoverView, run_id: str) -> None:
         self._load_run_async(run_id)
         if self._on_open_run_cb is not None:
@@ -2132,6 +2585,33 @@ class PipelineStudio(Gtk.Box):
         if self._current_run_view is None or self._current_spec_path is None:
             return
         self.remix_view.set_run(self._current_run_view, self._current_spec_path)
+        self.stack.set_visible_child_name("remix")
+
+    def _on_muse_goal_chosen(self, _widget: "MuseView", spec: dict) -> None:
+        """MuseView's "goal-chosen" (spec dict) → write it and open RemixView.
+
+        Unlike `_on_run_remix` below, there is no base run/spec file to
+        re-merge top-level ``_``-metadata from — a Muse-built seed spec is
+        brand new, so it's written as-is via `spec_remix.write_spec` under a
+        fixed `"muse"` base name (every seed spec shares this base; multiple
+        seeds in a session just get distinct `remix_muse_<n>.json` files).
+
+        Title mirrors `show_muse`'s `seed_artifact`: "a new pipeline" for
+        blank mode, or f"your {kind}" for scoped mode — recipes.Goal.label
+        already describes the OUTCOME ("A poster"), not the starting point,
+        so this titles the Remix page around what the user started FROM
+        instead, matching RemixView's "Remixing · <run title>" convention.
+        """
+        REMIXES_DIR.mkdir(parents=True, exist_ok=True)
+        derived_path = write_spec(spec, "muse", str(REMIXES_DIR))
+
+        if self._muse_seed_artifact is None:
+            title = "a new pipeline"
+        else:
+            kind = self._muse_seed_artifact[1]
+            title = f"your {kind}"
+
+        self.remix_view.load_seed_spec(derived_path, title)
         self.stack.set_visible_child_name("remix")
 
     def _on_run_remix(self, remix_view: "RemixView", spec_path: str, edits: dict) -> None:

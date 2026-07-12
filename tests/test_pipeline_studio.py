@@ -52,6 +52,14 @@ def _isolate_capability_discovery_io(monkeypatch):
     below, or the `lambda output_kind: []` fake) are unaffected — RemixView
     only falls back to `capability_discovery.default_capabilities` when
     `capability_fn` is `None`, so those tests never reach it regardless.
+
+    Also stubs `_read_all_plugin_mcp` to return `{}` — `PipelineStudio`
+    (SP-C Phase 2b-3 Task 4) now eagerly constructs a `MuseView` in its own
+    `__init__`, whose default `goals_fn` wraps `recipes.goals_for`, which in
+    turn reads every real `plugins/<name>/mcp.json` off disk via this same
+    reader when not overridden. Stubbing it here keeps every PipelineStudio-
+    constructing test in this file free of real plugin-manifest I/O, exactly
+    like the `default_capabilities` stub above already does for RemixView.
     """
     import capability_discovery as cd
 
@@ -65,6 +73,7 @@ def _isolate_capability_discovery_io(monkeypatch):
         ]
 
     monkeypatch.setattr(cd, "default_capabilities", _fake_default_capabilities)
+    monkeypatch.setattr(cd, "_read_all_plugin_mcp", lambda: {})
 
 
 class _ImmediateThread:
@@ -1721,3 +1730,345 @@ def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path)
         f"expected only {created_run_id!r} to ever be queried via get_run(), "
         f"got {get_run_ids} -- a divergent id means dual run records"
     )
+
+
+# ── MuseView (SP-C Phase 2b-3 Task 4 — goal-first "start from scratch") ─────
+#
+# `goals_fn`/`wingit_pipeline_fn`/`seed_spec_fn` are injected seams (default
+# to real closures wiring `recipes.goals_for`, `wingit.map_freeform_to_pipeline`
+# + `capability_discovery.default_capabilities` + `wingit.default_llm_fn`, and
+# `spec_remix.seed_spec` — see MuseView.__init__ in pipeline_studio.py). Goal
+# cards and "Surprise me" build a spec via the REAL `recipes.build_seed_spec`
+# (not an injected seam — see the task brief's decision notes), so the fixture
+# Goals below use real native class_types so that call never raises.
+
+from recipes import Goal  # noqa: E402
+
+_MUSE_GOAL_A = Goal(
+    id="poster-fixture", label="A poster", icon="\U0001f5bc", output_kind="image",
+    applies_to="blank", recipe_steps=(("TTLGGenerateText", {}),),
+)
+_MUSE_GOAL_B = Goal(
+    id="verse-fixture", label="A verse", icon="\U0001f4dc", output_kind="text",
+    applies_to="blank", recipe_steps=(("TTLGGenerateText", {}),),
+)
+_MUSE_GOAL_SCOPED = Goal(
+    id="depth-fixture", label="A depth scene", icon="\U0001f300", output_kind="image",
+    applies_to="scoped", recipe_steps=(("TTLGEstimateDepth", {}),),
+)
+
+
+def test_muse_view_constructs():
+    from pipeline_studio import MuseView
+    view = MuseView(goals_fn=lambda kind: [])
+    assert isinstance(view, Gtk.Box)
+
+
+def test_muse_view_blank_shows_goal_cards_surprise_and_freeform():
+    from pipeline_studio import MuseView
+    view = MuseView(goals_fn=lambda kind: [_MUSE_GOAL_A, _MUSE_GOAL_B])
+
+    assert set(view._goal_buttons.keys()) == {"poster-fixture", "verse-fixture"}
+    assert view._heading_label.get_label() == "What do you want to make?"
+    assert view._surprise_button.get_sensitive() is True
+    assert isinstance(view._freeform_entry, Gtk.Entry)
+    assert isinstance(view._dream_button, Gtk.Button)
+
+
+def test_muse_view_goal_card_click_emits_goal_chosen_with_built_spec():
+    from pipeline_studio import MuseView
+    import recipes
+
+    view = MuseView(goals_fn=lambda kind: [_MUSE_GOAL_A])
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+
+    view._goal_buttons["poster-fixture"].emit("clicked")
+
+    assert received == [recipes.build_seed_spec(_MUSE_GOAL_A, seed_artifact=None)]
+
+
+def test_muse_view_scoped_context_calls_goals_fn_with_kind_and_shows_heading(tmp_path):
+    from pipeline_studio import MuseView
+
+    calls = []
+
+    def fake_goals_fn(seed_output_kind):
+        calls.append(seed_output_kind)
+        return [_MUSE_GOAL_SCOPED]
+
+    view = MuseView(goals_fn=fake_goals_fn)
+    calls.clear()  # drop the constructor's own blank-mode call
+
+    art_path = str(tmp_path / "art.png")
+    view.set_context((art_path, "image", None))
+
+    assert calls == ["image"]
+    assert view._heading_label.get_label() == "Make this image into…"
+    assert set(view._goal_buttons.keys()) == {"depth-fixture"}
+
+
+def test_muse_view_scoped_card_click_uses_path_and_kind_only():
+    """Decision: build_seed_spec is called with seed_artifact=(path, kind) —
+    the thumb_path (3rd tuple element passed to set_context) is display-only
+    and must never reach build_seed_spec/spec_remix.seed_spec."""
+    from pipeline_studio import MuseView
+    import recipes
+
+    view = MuseView(goals_fn=lambda kind: [_MUSE_GOAL_SCOPED])
+    view.set_context(("/tmp/art.png", "image", "/tmp/thumb.png"))
+
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+    view._goal_buttons["depth-fixture"].emit("clicked")
+
+    expected = recipes.build_seed_spec(_MUSE_GOAL_SCOPED, seed_artifact=("/tmp/art.png", "image"))
+    assert received == [expected]
+
+
+def test_muse_view_surprise_picks_deterministic_middle_goal():
+    from pipeline_studio import MuseView
+    import recipes
+
+    goals = [_MUSE_GOAL_A, _MUSE_GOAL_B, _MUSE_GOAL_SCOPED]
+    view = MuseView(goals_fn=lambda kind: goals)
+
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+    view._surprise_button.emit("clicked")
+
+    expected_goal = goals[len(goals) // 2]  # index 1 -> _MUSE_GOAL_B, NOT random
+    assert received == [recipes.build_seed_spec(expected_goal, seed_artifact=None)]
+
+
+def test_muse_view_surprise_noop_when_no_goals():
+    from pipeline_studio import MuseView
+    view = MuseView(goals_fn=lambda kind: [])
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+    view._surprise_button.emit("clicked")  # must not raise
+    assert received == []
+
+
+def test_muse_view_freeform_none_result_shows_gentle_message_no_emit(monkeypatch):
+    from pipeline_studio import MuseView
+    _run_wingit_inline(monkeypatch)
+
+    view = MuseView(goals_fn=lambda kind: [], wingit_pipeline_fn=lambda text, kind: None)
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+
+    view._freeform_entry.set_text("something dreamy but unmappable")
+    view._dream_button.emit("clicked")  # must not raise
+
+    assert received == []
+    assert view._message_label.get_visible() is True
+    assert "rephrasing" in view._message_label.get_label().lower()
+
+
+def test_muse_view_freeform_success_builds_via_seed_spec_fn_and_emits(monkeypatch):
+    from pipeline_studio import MuseView
+    _run_wingit_inline(monkeypatch)
+
+    draft_steps = [("TTLGGenerateText", {"caption": "a dream"})]
+
+    def fake_wingit_pipeline_fn(text, seed_output_kind):
+        assert text == "a lucid dream about the ocean"
+        assert seed_output_kind is None
+        return draft_steps
+
+    fake_spec = {"1": {"class_type": "TTLGGenerateText", "inputs": {"caption": "a dream"}}}
+
+    def fake_seed_spec_fn(steps, seed_artifact=None):
+        assert steps == draft_steps
+        assert seed_artifact is None
+        return fake_spec
+
+    view = MuseView(
+        goals_fn=lambda kind: [],
+        wingit_pipeline_fn=fake_wingit_pipeline_fn,
+        seed_spec_fn=fake_seed_spec_fn,
+    )
+    received = []
+    view.connect("goal-chosen", lambda _w, spec: received.append(spec))
+
+    view._freeform_entry.set_text("a lucid dream about the ocean")
+    view._dream_button.emit("clicked")
+
+    assert received == [fake_spec]
+
+
+def test_muse_view_freeform_scoped_passes_path_kind_pair_to_seed_spec_fn(monkeypatch, tmp_path):
+    from pipeline_studio import MuseView
+    _run_wingit_inline(monkeypatch)
+
+    draft_steps = [("TTLGEstimateDepth", {})]
+
+    def fake_wingit_pipeline_fn(text, seed_output_kind):
+        assert seed_output_kind == "image"
+        return draft_steps
+
+    captured = {}
+
+    def fake_seed_spec_fn(steps, seed_artifact=None):
+        captured["seed_artifact"] = seed_artifact
+        return {"1": {"class_type": "TTLGEstimateDepth", "inputs": {}}}
+
+    view = MuseView(
+        goals_fn=lambda kind: [],
+        wingit_pipeline_fn=fake_wingit_pipeline_fn,
+        seed_spec_fn=fake_seed_spec_fn,
+    )
+    art_path = str(tmp_path / "art.png")
+    view.set_context((art_path, "image", "/tmp/thumb.png"))
+    view._freeform_entry.set_text("make it feel deep")
+    view._dream_button.emit("clicked")
+
+    assert captured["seed_artifact"] == (art_path, "image")
+
+
+def test_muse_view_freeform_empty_text_does_nothing(monkeypatch):
+    from pipeline_studio import MuseView
+    _run_wingit_inline(monkeypatch)
+
+    calls = []
+
+    def fake_wingit_pipeline_fn(text, seed_output_kind):
+        calls.append(text)
+        return None
+
+    view = MuseView(goals_fn=lambda kind: [], wingit_pipeline_fn=fake_wingit_pipeline_fn)
+    view._freeform_entry.set_text("   ")
+    view._dream_button.emit("clicked")
+
+    assert calls == []
+    assert view._message_label.get_visible() is False
+
+
+# ── DiscoverView: "Start from scratch" affordance ───────────────────────────
+
+def test_discover_view_start_from_scratch_button_emits_signal():
+    from pipeline_studio import DiscoverView
+    view = DiscoverView()
+    received = []
+    view.connect("start-from-scratch", lambda _w: received.append(True))
+
+    view._start_from_scratch_btn.emit("clicked")
+
+    assert received == [True]
+
+
+# ── RemixView.load_seed_spec ─────────────────────────────────────────────────
+
+def test_remix_view_load_seed_spec_sets_title_working_spec_and_renders():
+    from pipeline_studio import RemixView
+    view = RemixView()
+
+    view.load_seed_spec(_REMIX_SPEC_PATH, "a new pipeline")
+
+    assert view._spec_path == _REMIX_SPEC_PATH
+    assert view._title_label.get_label() == "Composing · a new pipeline"
+    assert set(view.working_spec.keys()) == {"1", "2", "3"}
+    assert set(view._field_widgets.keys()) == {"1", "2", "3"}
+
+
+# ── PipelineStudio: muse page + wiring ──────────────────────────────────────
+
+def test_pipeline_studio_shell_has_muse_page(monkeypatch, tmp_path):
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    assert studio.stack.get_child_by_name("muse") is not None
+
+
+def test_pipeline_studio_show_muse_switches_stack_and_sets_context(monkeypatch, tmp_path):
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.show_muse()
+
+    assert studio.stack.get_visible_child_name() == "muse"
+    assert studio.muse._heading_label.get_label() == "What do you want to make?"
+
+
+def test_pipeline_studio_discover_start_from_scratch_shows_muse(monkeypatch, tmp_path):
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.discover.emit("start-from-scratch")
+
+    assert studio.stack.get_visible_child_name() == "muse"
+
+
+def test_pipeline_studio_muse_back_button_returns_to_discover(monkeypatch, tmp_path):
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.show_muse()
+    assert studio.stack.get_visible_child_name() == "muse"
+
+    muse_page = studio.stack.get_child_by_name("muse")
+    back_bar = muse_page.get_first_child()
+    back_btn = back_bar.get_first_child()
+    back_btn.emit("clicked")
+
+    assert studio.stack.get_visible_child_name() == "discover"
+
+
+def test_pipeline_studio_muse_goal_chosen_blank_writes_spec_and_shows_remix(monkeypatch, tmp_path):
+    import pipeline_studio
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+
+    remixes_dir = tmp_path / "remixes"
+    monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", remixes_dir)
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.show_muse()  # blank mode
+    spec = {"1": {"class_type": "TTLGGenerateText", "inputs": {}}}
+    studio.muse.emit("goal-chosen", spec)
+
+    written = list(remixes_dir.glob("remix_muse_*.json"))
+    assert len(written) == 1
+    assert json.loads(written[0].read_text()) == spec
+
+    assert studio.stack.get_visible_child_name() == "remix"
+    assert studio.remix_view._title_label.get_label() == "Composing · a new pipeline"
+    assert studio.remix_view.working_spec == spec
+
+
+def test_pipeline_studio_muse_goal_chosen_scoped_uses_kind_title(monkeypatch, tmp_path):
+    import pipeline_studio
+    import pipeline_store
+    monkeypatch.setattr(pipeline_store, "_INDEX_PATH", tmp_path / "pipeline-index.json")
+    monkeypatch.setattr(pipeline_store, "_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(pipeline_studio, "REMIXES_DIR", tmp_path / "remixes")
+
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+
+    studio.show_muse((str(tmp_path / "art.png"), "image", None))
+    spec = {"1": {"class_type": "TTLGEstimateDepth", "inputs": {}}}
+    studio.muse.emit("goal-chosen", spec)
+
+    assert studio.remix_view._title_label.get_label() == "Composing · your image"
+    assert studio.stack.get_visible_child_name() == "remix"
