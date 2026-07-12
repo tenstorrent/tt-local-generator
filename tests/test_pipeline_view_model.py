@@ -283,6 +283,57 @@ def test_text_content_none_when_node_or_key_missing_from_results(tmp_path):
     assert by_id["4"].text_content is None
 
 
+def test_text_content_never_returns_a_file_path(tmp_path):
+    """An image step records its output as a *_path string; that path must
+    render as an image, never leak into the review's text block (the original
+    '/…/node3_fg.png shown as text' bug)."""
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    # node 1 = TTLGTextToImage; its output key is a file path, not text.
+    (out_dir / "results.json").write_text(
+        '{"1": {"image_path": "/home/ttuser/x/node1_image.png"}}'
+    )
+    record = _make_record(spec_path=str(out_dir / "spec.json"),
+                          output_dir=str(out_dir), job_states={})
+    view = pvm.build_run_view(record)
+    step1 = next(s for s in view.steps if s.node_id == "1")
+    assert step1.text_content is None
+
+
+def test_text_content_surfaces_genuine_text_under_drifted_key(tmp_path):
+    """Historical runs record text under non-canonical keys (poem vs text);
+    it must still surface so review mode SHOWS the content, not an icon."""
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    # node 4 = TTLGGenerateText (canonical key 'text'); results has 'poem'.
+    (out_dir / "results.json").write_text(
+        '{"4": {"poem": "In twilight hush, where shadows play.", "_label": "poem"}}'
+    )
+    record = _make_record(spec_path=str(out_dir / "spec.json"),
+                          output_dir=str(out_dir), job_states={})
+    view = pvm.build_run_view(record)
+    step4 = next(s for s in view.steps if s.node_id == "4")
+    assert step4.text_content == "In twilight hush, where shadows play."
+
+
+def test_text_content_skips_metadata_and_media_paths(tmp_path):
+    """A '_'-prefixed metadata key and a drifted key whose value is a media
+    path are both ignored — neither is genuine display text."""
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    (out_dir / "results.json").write_text(
+        '{"4": {"_label": "x", "output_img": "/tmp/node4_out.png"}}'
+    )
+    record = _make_record(spec_path=str(out_dir / "spec.json"),
+                          output_dir=str(out_dir), job_states={})
+    view = pvm.build_run_view(record)
+    step4 = next(s for s in view.steps if s.node_id == "4")
+    assert step4.text_content is None
+
+
 def test_text_content_stays_none_when_artifact_present():
     """Node 1 (TTLGTextToImage) has a real on-disk artifact — text_content
     must stay None for it even if build_run_view is asked to resolve it,

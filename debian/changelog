@@ -1,3 +1,19 @@
+tt-local-generator (0.21.4) noble; urgency=medium
+
+  * Pipeline Studio review mode now SHOWS, doesn't tell. Two fixes to how a
+    finished run's steps are surfaced in the Open view: (1) a step's text
+    resolution never returns a file PATH as "text" anymore — image/video
+    steps record their output as a *_path, which was leaking into the step as
+    a displayed URL instead of rendering the picture; and it now surfaces
+    genuine text even when a historical run recorded it under a drifted key
+    (a poem stored as "poem" rather than "text" still shows). (2) The step
+    preview is render-first: a produced image/gif/video is shown as itself,
+    then real text, and only a small intent-icon tile when the step truly
+    produced nothing — so review gives you the full picture, not icons and
+    URLs standing in for content.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 12 Jul 2026 21:15:00 -0700
+
 tt-local-generator (0.21.3) noble; urgency=medium
 
   * Pipeline Studio card fix — thumbnails no longer inflate their card. The

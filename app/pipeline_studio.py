@@ -1256,19 +1256,21 @@ class OpenView(Gtk.Box):
         right.append(remix_btn)
         self._step_remix_buttons[step.node_id] = remix_btn
 
-        if step.text_content:
-            # Fix #6: the produced text IS the content — show it, not a
-            # placeholder icon standing in for it.
-            text_block, text_label = self._build_text_block(step.text_content)
-            right.append(text_block)
-            self._step_text_blocks[step.node_id] = text_label
-        elif step.artifact_path:
-            # Fix #6: substantially larger than the old flat 150×92 thumb —
-            # big enough to actually see what was made.
+        if step.artifact_path:
+            # Showing beats talking: a produced image/gif/video is the fullest
+            # thing to show, so render it FIRST (substantially larger than the
+            # old flat 150×92 thumb — big enough to actually see what was made).
             thumb = _build_thumb_frame(step.artifact_path, self.PREVIEW_W, self.PREVIEW_H,
                                         "ps-card-thumb", step.intent)
             right.append(thumb)
             self._step_thumb_frames[step.node_id] = thumb
+        elif step.text_content:
+            # No file artifact, but the step produced real TEXT (a caption,
+            # prompt, poem) — show the actual words, not a placeholder icon
+            # standing in for them.
+            text_block, text_label = self._build_text_block(step.text_content)
+            right.append(text_block)
+            self._step_text_blocks[step.node_id] = text_label
         else:
             # Fix #2/#4: nothing produced yet — a small, honest intent-icon
             # tile, not an oversized empty box.

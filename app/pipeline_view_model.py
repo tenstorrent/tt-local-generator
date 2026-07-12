@@ -78,6 +78,17 @@ _OUTPUT_KIND: dict[str, tuple[str, "tuple[str, ...] | None"]] = {
 # artifact — a GIF or arbitrary artifact does not qualify as a hero image).
 _HERO_KINDS = {"image", "video"}
 
+# Extensions that mark a string as a media-file PATH (a thing to render, never
+# to show as text). Superset of the engine's own suffixes so a drifted/unknown
+# output key holding an image/video path can't leak into the text block.
+_MEDIA_PATH_EXTS = _IMAGE_EXTS + _VIDEO_EXTS + _GIF_EXTS + (".webp", ".mov", ".svg")
+
+
+def _looks_like_media_path(value: str) -> bool:
+    """True if *value* ends in a known media extension — i.e. it is a file to
+    RENDER (via _resolve_artifact), not display text. See _resolve_text_content."""
+    return value.strip().lower().endswith(_MEDIA_PATH_EXTS)
+
 
 @dataclass
 class StepView:
@@ -215,7 +226,7 @@ def _resolve_text_content(output_dir: "Path | None", node_id: str, intent: Inten
     for TTLGGenerateText — and returns the first key that resolves to a real
     string.
     """
-    if output_dir is None or not intent.outputs:
+    if output_dir is None:
         return None
 
     candidates = (
@@ -237,9 +248,30 @@ def _resolve_text_content(output_dir: "Path | None", node_id: str, intent: Inten
     if not isinstance(node_data, dict):
         return None
 
+    def _is_genuine_text(key: str, value) -> bool:
+        # A value a person READS — never a file path. Reject: metadata
+        # (`_`-prefixed) keys; file-artifact output keys (those in
+        # _OUTPUT_KIND — image/video/gif *_path outputs, rendered by
+        # _resolve_artifact instead — this is the fix for the original bug
+        # that showed '/…/node3_fg.png' as a step's "text"); non-strings /
+        # blanks; and any value that merely looks like a media path (guards a
+        # drifted/unknown key whose value is actually an image/video path).
+        if key.startswith("_") or key in _OUTPUT_KIND:
+            return False
+        if not isinstance(value, str) or not value.strip():
+            return False
+        return not _looks_like_media_path(value)
+
+    # Canonical text output keys first (skip any that are file-artifact keys),
+    # then a drift-tolerant scan of the node's remaining values — real
+    # historical runs record text under non-canonical keys ('poem' vs 'text',
+    # 'video_prompt' vs 'prompt'), and review mode should still SHOW that text
+    # rather than fall back to a bare intent icon.
     for key in intent.outputs:
-        value = node_data.get(key)
-        if isinstance(value, str) and value.strip():
+        if _is_genuine_text(key, node_data.get(key)):
+            return node_data[key]
+    for key, value in node_data.items():
+        if _is_genuine_text(key, value):
             return value
     return None
 
