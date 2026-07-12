@@ -294,6 +294,29 @@ def test_pipeline_drops_kind_broken_tail():
     assert steps[0][0] == "TTLGTextToImage"
 
 
+def test_pipeline_drops_invalid_tail_keeps_valid_prefix():
+    # A genuine kind-broken tail: TextToImage (->image) then ImageToVideo
+    # (image->video) is a valid 2-step prefix; the 3rd step CaptionImage
+    # needs an IMAGE but the prior step produced a VIDEO, so it can't chain
+    # and must be dropped along with everything after it -- leaving exactly
+    # the 2-item valid prefix (NOT [] and NOT the full 3). This test FAILS
+    # if the drop-invalid-tail logic is removed (a full-list return would be
+    # len 3; a fail-whole-draft return would fall back to a single step).
+    def fn(prompt):
+        return (
+            '[{"capability_id":"TTLGTextToImage","params":{}},'
+            '{"capability_id":"TTLGImageToVideo","params":{}},'
+            '{"capability_id":"TTLGCaptionImage","params":{}}]'
+        )
+
+    steps = map_freeform_to_pipeline(
+        "x", seed_output_kind=None, capabilities=PIPE_CAPS, llm_fn=fn,
+    )
+
+    assert len(steps) == 2
+    assert [ct for ct, _ in steps] == ["TTLGTextToImage", "TTLGImageToVideo"]
+
+
 def test_pipeline_fallback_when_no_llm():
     steps = map_freeform_to_pipeline(
         "a fox", seed_output_kind=None, capabilities=PIPE_CAPS, llm_fn=None,
