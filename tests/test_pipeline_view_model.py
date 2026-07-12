@@ -213,6 +213,86 @@ def test_artifact_resolved_from_per_job_subdirectory():
     assert view.hero_path == str(_FIX_NESTED / "jobA" / "node1_image.png")
 
 
+# ── StepView.text_content (Task 6, fix #6) ──────────────────────────────────
+#
+# TTLGCaptionImage (node "2") and TTLGGenerateText (node "4") in the shared
+# fixture spec never have a file artifact (caption/text are text-only output
+# keys — see _OUTPUT_KIND), so their text, if any, must come from
+# output_dir/results.json instead.
+
+def test_text_content_populated_from_results_json(tmp_path):
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    (out_dir / "results.json").write_text(
+        '{"2": {"caption": "a weathered stone lighthouse"}, '
+        ' "4": {"text": "The lighthouse stands alone against the dusk."}}'
+    )
+
+    record = _make_record(
+        spec_path=str(out_dir / "spec.json"),
+        output_dir=str(out_dir),
+        job_states={},
+    )
+    view = pvm.build_run_view(record)
+    by_id = {s.node_id: s for s in view.steps}
+
+    assert by_id["2"].text_content == "a weathered stone lighthouse"
+    assert by_id["4"].text_content == "The lighthouse stands alone against the dusk."
+
+
+def test_text_content_none_when_results_json_absent():
+    """The shared sp_c_run fixture has no results.json at all — every
+    text-producing step must degrade to None, never crash."""
+    view = pvm.build_run_view(_make_record())
+    by_id = {s.node_id: s for s in view.steps}
+    assert by_id["2"].text_content is None
+    assert by_id["4"].text_content is None
+
+
+def test_text_content_none_when_results_json_malformed(tmp_path):
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    (out_dir / "results.json").write_text("{not valid json")
+
+    record = _make_record(
+        spec_path=str(out_dir / "spec.json"),
+        output_dir=str(out_dir),
+        job_states={},
+    )
+    view = pvm.build_run_view(record)  # must not raise
+    by_id = {s.node_id: s for s in view.steps}
+    assert by_id["4"].text_content is None
+
+
+def test_text_content_none_when_node_or_key_missing_from_results(tmp_path):
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    # results.json exists but has neither node "4" nor a "text" key for it.
+    (out_dir / "results.json").write_text('{"2": {"caption": "ok"}}')
+
+    record = _make_record(
+        spec_path=str(out_dir / "spec.json"),
+        output_dir=str(out_dir),
+        job_states={},
+    )
+    view = pvm.build_run_view(record)
+    by_id = {s.node_id: s for s in view.steps}
+    assert by_id["4"].text_content is None
+
+
+def test_text_content_stays_none_when_artifact_present():
+    """Node 1 (TTLGTextToImage) has a real on-disk artifact — text_content
+    must stay None for it even if build_run_view is asked to resolve it,
+    since the artifact is always the more informative thing to show."""
+    view = pvm.build_run_view(_make_record())
+    step1 = next(s for s in view.steps if s.node_id == "1")
+    assert step1.artifact_path is not None
+    assert step1.text_content is None
+
+
 # ── list_run_views ────────────────────────────────────────────────────────────
 
 class _FakeStore:

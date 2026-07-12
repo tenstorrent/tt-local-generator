@@ -38,6 +38,7 @@ flat) — prefer the most recently modified match.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,11 +84,22 @@ class StepView:
     """One pipeline node as the UI renders it.
 
     status ∈ {"done", "running", "pending", "failed"}.
+
+    text_content — this node's resolved TEXT output (caption/poem/prompt/...),
+    read from the run's `output_dir/results.json` (see `_resolve_text_content`),
+    for steps whose primary output has no file counterpart at all (so
+    `artifact_path` is always None for them — e.g. TTLGCaptionImage/
+    TTLGGenerateText/TTLGPromptCompose). None whenever there's no results.json,
+    it's malformed, or this node/key just isn't in it — same "never crash,
+    degrade to an honest absence" discipline as `_resolve_artifact`. Always
+    None when `artifact_path` is set (build_run_view only looks for text when
+    there's no file artifact to show instead — see its call site).
     """
     node_id: str
     intent: Intent
     status: str
     artifact_path: "str | None"
+    text_content: "str | None" = None
 
 
 @dataclass
@@ -184,6 +196,54 @@ def _resolve_artifact(output_dir: "Path | None", node_id: str, intent: Intent) -
     return str(best)
 
 
+def _resolve_text_content(output_dir: "Path | None", node_id: str, intent: Intent) -> "str | None":
+    """Find node_id's resolved TEXT output in the run's results.json, or None.
+
+    Mirrors `_resolve_artifact`'s discipline exactly, just against a
+    different file: `output_dir` absent short-circuits to None (never globs
+    Path("")); both the top level AND one directory down are searched (the
+    same `bin/run_worlds_fair.sh`-style nested-per-job layout `_resolve_
+    artifact` already accounts for — see its docstring); a missing, unreadable,
+    or malformed results.json, a non-dict payload, a node_id absent from it,
+    or a value that isn't a non-empty string are all treated as "no text
+    here" rather than raised — a bad/partial/pre-this-feature run record must
+    never crash the Open view, only render an honest gap.
+
+    Checks every one of `intent.outputs` (not just the first, unlike
+    `_resolve_artifact`) since results.json is a flat {key: value} dict per
+    node — e.g. `{"caption": "..."}`  for TTLGCaptionImage, `{"text": "..."}`
+    for TTLGGenerateText — and returns the first key that resolves to a real
+    string.
+    """
+    if output_dir is None or not intent.outputs:
+        return None
+
+    candidates = (
+        list(output_dir.glob("results.json"))
+        + list(output_dir.glob("*/results.json"))
+    )
+    candidates = [c for c in candidates if c.is_file()]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    try:
+        results = json.loads(best.read_text())
+    except Exception:  # noqa: BLE001 — malformed/unreadable results.json -> None
+        return None
+    if not isinstance(results, dict):
+        return None
+    node_data = results.get(node_id)
+    if not isinstance(node_data, dict):
+        return None
+
+    for key in intent.outputs:
+        value = node_data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def _artifact_kind(intent: Intent) -> "str | None":
     if not intent.outputs:
         return None
@@ -215,8 +275,14 @@ def build_run_view(record: dict) -> RunView:
         intent = intent_for(class_type)
         artifact_path = _resolve_artifact(output_dir, node_id, intent)
         status = _resolve_status(node_id, job_states, artifact_path)
+        # Only look for a text output when there's no file artifact to show
+        # instead — a step with both would be unusual, and the artifact
+        # (image/gif/video) is always the more informative thing to render.
+        text_content = (
+            None if artifact_path else _resolve_text_content(output_dir, node_id, intent)
+        )
         steps.append(StepView(node_id=node_id, intent=intent, status=status,
-                              artifact_path=artifact_path))
+                              artifact_path=artifact_path, text_content=text_content))
         if hero_path is None and artifact_path and _artifact_kind(intent) in _HERO_KINDS:
             hero_path = artifact_path
 

@@ -110,12 +110,55 @@ def _make_run(run_id: str = "run-1", title: str = "1964 World's Fair") -> RunVie
     )
 
 
+# ── _build_thumb_frame / _wrap_centered (module-level helpers) ──────────────
+
+def test_build_thumb_frame_no_path_with_intent_shows_intent_icon():
+    """Fix #4: the placeholder tile shows the step's intent icon — an
+    intentional 'nothing here yet' tile, not the bare generic fallback."""
+    import pipeline_studio as ps
+    intent = intent_for("TTLGCaptionImage")  # icon "📝" — distinct from the
+    # generic 🖼️ fallback so this test can't pass by coincidence.
+    frame = ps._build_thumb_frame(None, 100, 60, "ps-card-thumb", intent)
+    placeholder = frame.get_first_child()
+    assert isinstance(placeholder, Gtk.Label)
+    assert placeholder.get_label() == intent.icon
+
+
+def test_build_thumb_frame_no_path_no_intent_falls_back_to_generic_glyph():
+    import pipeline_studio as ps
+    frame = ps._build_thumb_frame(None, 100, 60, "ps-card-thumb")
+    placeholder = frame.get_first_child()
+    assert isinstance(placeholder, Gtk.Label)
+    assert placeholder.get_label() == "\U0001f5bc️"  # 🖼️
+
+
+def test_wrap_centered_is_centered_with_finite_width():
+    import pipeline_studio as ps
+    content = Gtk.Box()
+    wrapper = ps._wrap_centered(content)
+    assert wrapper.get_halign() == Gtk.Align.CENTER
+    assert wrapper.get_hexpand() is False
+    width, _height = wrapper.get_size_request()
+    assert 0 < width < 10_000  # a real bound, not hexpand sprawl
+
+
 # ── DiscoverView ───────────────────────────────────────────────────────────────
 
 def test_discover_view_constructs():
     from pipeline_studio import DiscoverView
     view = DiscoverView()
     assert isinstance(view, Gtk.Box)
+
+
+def test_discover_view_content_column_is_centered_bounded_width():
+    """Fix #5 (user feedback): content must not sprawl across the full
+    window width — a centered wrapper with a finite width request instead."""
+    from pipeline_studio import DiscoverView
+    view = DiscoverView()
+    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
+    assert view._content_wrapper.get_hexpand() is False
+    width, _height = view._content_wrapper.get_size_request()
+    assert 0 < width < 10_000
 
 
 def test_set_runs_empty_list_no_crash():
@@ -233,6 +276,17 @@ def test_open_view_constructs():
     assert isinstance(view, Gtk.Box)
 
 
+def test_open_view_content_column_is_centered_bounded_width():
+    """Fix #5 (user feedback): same centered/bounded-width contract as
+    DiscoverView/RemixView."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
+    assert view._content_wrapper.get_hexpand() is False
+    width, _height = view._content_wrapper.get_size_request()
+    assert 0 < width < 10_000
+
+
 def test_open_view_set_run_renders_one_row_per_step_in_order():
     from pipeline_studio import OpenView
     view = OpenView()
@@ -274,6 +328,21 @@ def test_open_view_set_run_zero_steps_no_crash():
     assert view._step_remix_buttons == {}
 
 
+def _open_view_row_for(view, steps, node_id):
+    """Walk `view._steps_box`'s children to find *node_id*'s row.
+
+    Shared by the structural tests below — there's no dict keyed by node_id
+    for the row itself (unlike _step_remix_buttons/_step_thumb_frames), so
+    tests that need to inspect the row's internal layout reach into the
+    widget tree directly.
+    """
+    index = [s.node_id for s in steps].index(node_id)
+    row = view._steps_box.get_first_child()
+    for _ in range(index):
+        row = row.get_next_sibling()
+    return row
+
+
 def test_open_view_model_detail_row_present_only_when_model_label_set():
     """A step whose intent.model_label is None (e.g. Describe/CaptionImage)
     must not render a model detail row; a model-bearing step (e.g.
@@ -294,25 +363,117 @@ def test_open_view_model_detail_row_present_only_when_model_label_set():
     view.set_run(run)
 
     def _has_model_row(node_id: str) -> bool:
-        # The step row order mirrors run.steps order; walk steps_box's
-        # children to find this step's row, then walk into its "main"
-        # column (verb_row, noun_label, [model_label]) to check for a third
-        # child. There's no dict keyed by node_id for this column (unlike
-        # _step_remix_buttons/_step_thumb_frames), so this reaches into the
-        # widget tree directly.
-        index = [s.node_id for s in steps].index(node_id)
-        row = view._steps_box.get_first_child()
-        for _ in range(index):
-            row = row.get_next_sibling()
+        # main column is (intent_row, [model_label]) — the combined intent
+        # label lives in intent_row (fix #1), so a model caption is the
+        # SECOND child of main, if present at all.
+        row = _open_view_row_for(view, steps, node_id)
         n_label = row.get_first_child()
         main = n_label.get_next_sibling()
-        verb_row = main.get_first_child()
-        noun_label = verb_row.get_next_sibling()
-        model_label = noun_label.get_next_sibling()
+        intent_row = main.get_first_child()
+        model_label = intent_row.get_next_sibling()
         return model_label is not None
 
     assert _has_model_row("1") is True   # TTLGTextToImage -> model_label "FLUX"
     assert _has_model_row("2") is False  # TTLGCaptionImage -> model_label None
+
+
+def test_open_view_step_row_has_single_combined_intent_label():
+    """Fix #1: verb+noun render as ONE label ('Generate an image'), not
+    separate verb/noun widgets stacked on top of each other."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+
+    step = StepView(node_id="1", intent=intent_for("TTLGTextToImage"),
+                     status="done", artifact_path=None)
+    steps = [step]
+    run = RunView(run_id="run-combined-label", title="Combined label test",
+                  created_at="2026-07-10T12:00:00+00:00", hero_path=None,
+                  steps=steps, recipe=[f"{step.intent.verb} {step.intent.noun}"])
+    view.set_run(run)
+
+    row = _open_view_row_for(view, steps, "1")
+    n_label = row.get_first_child()
+    main = n_label.get_next_sibling()
+    intent_row = main.get_first_child()
+    intent_label = intent_row.get_first_child()
+
+    assert isinstance(intent_label, Gtk.Label)
+    assert intent_label.get_label() == f"{step.intent.verb} {step.intent.noun}"
+    # The status glyph sits inline in the same row, not on a third line.
+    status_label = intent_label.get_next_sibling()
+    assert isinstance(status_label, Gtk.Label)
+
+
+def test_open_view_empty_step_is_compact_step_with_content_is_rich():
+    """Fix #2/#6 reconciliation: a step with no artifact/text gets the
+    compact treatment; a step that produced something gets the rich one."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+
+    empty_step = StepView(node_id="1", intent=intent_for("TTLGImageToVideo"),
+                           status="pending", artifact_path=None)
+    text_step = StepView(node_id="2", intent=intent_for("TTLGGenerateText"),
+                          status="done", artifact_path=None,
+                          text_content="A poem about the lighthouse.")
+    steps = [empty_step, text_step]
+    run = RunView(run_id="run-compact-rich", title="Compact/rich test",
+                  created_at="2026-07-10T12:00:00+00:00", hero_path=None,
+                  steps=steps, recipe=[])
+    view.set_run(run)
+
+    empty_row = _open_view_row_for(view, steps, "1")
+    rich_row = _open_view_row_for(view, steps, "2")
+
+    assert empty_row.has_css_class("ps-step-compact")
+    assert not empty_row.has_css_class("ps-step-rich")
+    assert rich_row.has_css_class("ps-step-rich")
+    assert not rich_row.has_css_class("ps-step-compact")
+
+
+def test_open_view_text_content_step_renders_inline_readable_text():
+    """Fix #6: a text-producing step's real produced text renders inline as
+    a readable label, not just a placeholder icon."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+
+    text = "A weathered lighthouse stands watch over the bay."
+    step = StepView(node_id="4", intent=intent_for("TTLGGenerateText"),
+                     status="done", artifact_path=None, text_content=text)
+    run = RunView(run_id="run-text-content", title="Text content test",
+                  created_at="2026-07-10T12:00:00+00:00", hero_path=None,
+                  steps=[step], recipe=[])
+    view.set_run(run)
+
+    assert view._step_text_blocks["4"].get_label() == text
+    # A text step has real content — no placeholder thumb frame at all.
+    assert "4" not in view._step_thumb_frames
+
+
+def test_open_view_image_artifact_gets_a_substantially_larger_preview():
+    """Fix #6: a step WITH a real image artifact requests a preview larger
+    than the old flat 150×92 thumb."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())
+
+    frame = view._step_thumb_frames["1"]
+    width, height = frame.get_size_request()
+    assert width > 150
+    assert height > 92
+    assert (width, height) == (OpenView.PREVIEW_W, OpenView.PREVIEW_H)
+
+
+def test_open_view_pending_step_placeholder_shows_intent_icon():
+    """Fix #4: a step with no artifact yet renders its intent's icon on the
+    placeholder tile, not the bare generic 🖼️ fallback."""
+    from pipeline_studio import OpenView
+    view = OpenView()
+    view.set_run(_make_run_with_artifact())  # node "2" is pending, no artifact
+
+    pending_frame = view._step_thumb_frames["2"]
+    placeholder_label = pending_frame.get_first_child()
+    assert isinstance(placeholder_label, Gtk.Label)
+    assert placeholder_label.get_label() == intent_for("TTLGImageToVideo").icon
 
 
 def test_open_view_remix_from_here_emits_node_id():
@@ -612,6 +773,17 @@ def test_remix_view_constructs():
     from pipeline_studio import RemixView
     view = RemixView()
     assert isinstance(view, Gtk.Box)
+
+
+def test_remix_view_content_column_is_centered_bounded_width():
+    """Fix #5 (user feedback): same centered/bounded-width contract as
+    DiscoverView/OpenView."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
+    assert view._content_wrapper.get_hexpand() is False
+    width, _height = view._content_wrapper.get_size_request()
+    assert 0 < width < 10_000
 
 
 def test_remix_view_set_run_builds_prefilled_fields_per_kind():

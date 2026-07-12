@@ -320,31 +320,80 @@ def _thumb_pixbuf(path: "str | None", width: int, height: int):
 
 
 def _build_thumb_frame(path: "str | None", width: int, height: int,
-                        css_class: str) -> Gtk.Widget:
-    """A fixed-size box holding either a scaled Gtk.Picture or an honest placeholder.
+                        css_class: str, intent: "Intent | None" = None) -> Gtk.Widget:
+    """A fixed-size box holding either a filled Gtk.Picture or an honest placeholder.
 
     Shared by DiscoverView (run/hero cards) and OpenView (per-step artifacts)
     so there's exactly one "thumbnail or placeholder" rendering rule in this
-    module. A step/run with no artifact yet (still pending, or an intent that
-    never produces a file — e.g. caption/text) renders the placeholder rather
-    than an empty or missing box.
+    module.
+
+    Fix #3 (hero doesn't fill its frame): the Picture is set to `hexpand`/
+    `vexpand` + `Gtk.ContentFit.COVER` so it fills/crops to the frame's exact
+    size rather than rendering at the (possibly much smaller, aspect-
+    preserved) pixbuf's own natural size, letterboxed and off-center inside
+    an otherwise-empty box.
+
+    Fix #4 (placeholder reads as broken): a step/run with no artifact yet
+    (still pending, or an intent that never produces a file — e.g. caption/
+    text) renders *intent*'s icon centered on this same styled frame — an
+    intentional "nothing here yet" tile — instead of a bare 🖼️ glyph floating
+    in a big empty dark box. *intent* is optional: DiscoverView's run-level
+    hero/card thumbs have no single per-step intent to show, so they fall
+    back to the generic image glyph (still on the same tidy tile styling).
     """
     frame = Gtk.Box()
     frame.set_size_request(width, height)
     frame.add_css_class(css_class)
     frame.set_halign(Gtk.Align.CENTER)
     frame.set_valign(Gtk.Align.CENTER)
+    frame.set_overflow(Gtk.Overflow.HIDDEN)
 
     pb = _thumb_pixbuf(path, width, height)
     if pb is not None:
         pic = Gtk.Picture.new_for_pixbuf(pb)
         pic.set_can_shrink(True)
+        pic.set_content_fit(Gtk.ContentFit.COVER)
+        pic.set_hexpand(True)
+        pic.set_vexpand(True)
         frame.append(pic)
     else:
-        placeholder = Gtk.Label(label="\U0001f5bc️")  # 🖼️
-        placeholder.add_css_class("muted")
+        frame.add_css_class("ps-thumb-placeholder")
+        icon_text = intent.icon if intent is not None else "\U0001f5bc️"  # 🖼️
+        placeholder = Gtk.Label(label=icon_text)
+        placeholder.add_css_class("ps-placeholder-icon")
         frame.append(placeholder)
     return frame
+
+
+# Comfortable reading/gallery column width (fix #5, user feedback: Discover/
+# Open/Remix content was sprawling across the whole window on a wide screen).
+_CONTENT_MAX_WIDTH = 960
+
+
+def _wrap_centered(content: Gtk.Widget, max_width: int = _CONTENT_MAX_WIDTH) -> Gtk.Widget:
+    """Constrain *content* to a centered, comfortable-reading-width column.
+
+    This module has no Adw dependency (see module docstring — no `import
+    Adw` anywhere in it), so rather than `Adw.Clamp` this is a plain
+    Gtk.Box wrapper built from primitives already used everywhere else here:
+    CENTER-aligned, non-expanding, with a finite `set_size_request` floor.
+    *content* itself is set to hexpand so it fills exactly this wrapper's
+    width (rather than also shrinking to its own natural size), giving the
+    same "gallery column" shape `Adw.Clamp` provides.
+
+    Callers keep their own reference to *content* (e.g. `self._steps_box`)
+    unchanged — this just inserts a new parent between it and whatever used
+    to hold it (a `Gtk.ScrolledWindow`, typically), so existing code/tests
+    that walk `content`'s children are unaffected.
+    """
+    wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    wrapper.add_css_class("ps-content-column")
+    wrapper.set_halign(Gtk.Align.CENTER)
+    wrapper.set_hexpand(False)
+    wrapper.set_size_request(max_width, -1)
+    content.set_hexpand(True)
+    wrapper.append(content)
+    return wrapper
 
 
 # ── Dark forest-teal theme ──────────────────────────────────────────────────
@@ -430,23 +479,45 @@ _CSS = b"""
     border-radius: 12px;
     padding: 12px;
 }
+.ps-step-compact {
+    padding: 8px 12px;
+}
+.ps-step-rich {
+    padding: 14px;
+}
 .ps-step-n {
     font-family: monospace;
     font-size: 13px;
     color: #6f948d;
 }
-.ps-step-verb {
+.ps-step-intent {
     font-size: 15px;
     font-weight: 700;
     color: #eef8f6;
 }
-.ps-step-noun {
-    font-size: 12px;
-    color: #94b8b2;
-}
 .ps-step-model {
     font-size: 10.5px;
     color: #6f948d;
+}
+.ps-step-text-block {
+    background-color: #0a1f1e;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.ps-step-text {
+    font-size: 12.5px;
+    color: #dcefe9;
+}
+.ps-thumb-placeholder {
+    border: 1px dashed alpha(#74C5DF, 0.22);
+}
+.ps-placeholder-icon {
+    font-size: 26px;
+    opacity: 0.55;
+}
+.ps-content-column {
+    /* Fix #5: centered max-width column wrapper - see _wrap_centered(). No
+       visual styling of its own; purely a layout constraint. */
 }
 .ps-status-done {
     color: #6FABA0;
@@ -681,7 +752,10 @@ class DiscoverView(Gtk.Box):
         self._content.set_margin_bottom(18)
         self._content.set_margin_start(18)
         self._content.set_margin_end(18)
-        scroller.set_child(self._content)
+        # Fix #5 (user feedback): constrain to a comfortable gallery-column
+        # width instead of sprawling across the whole window.
+        self._content_wrapper = _wrap_centered(self._content)
+        scroller.set_child(self._content_wrapper)
 
         self.set_runs([])
 
@@ -863,7 +937,16 @@ class OpenView(Gtk.Box):
         "remix-request": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    STEP_THUMB_W, STEP_THUMB_H = 150, 92
+    # Fix #2 (compact rows when empty): the placeholder tile for a step with
+    # no content yet is small — a tight list-item footprint, not a big empty
+    # box competing for attention with steps that DID produce something.
+    STEP_THUMB_W, STEP_THUMB_H = 96, 64
+
+    # Fix #6 (see each step's real content): a step WITH a produced artifact
+    # gets a substantially larger preview than the old flat 150×92 thumb —
+    # large enough to actually see what was made, not just a token that it
+    # exists.
+    PREVIEW_W, PREVIEW_H = 420, 260
 
     # status -> (glyph, css class). Anything outside pipeline_view_model's
     # known statuses (which is already constrained to done/running/pending/
@@ -894,6 +977,11 @@ class OpenView(Gtk.Box):
         # specific step's widget and read back the render order.
         self._step_remix_buttons: dict = {}
         self._step_thumb_frames: dict = {}
+        # Fix #6: text-producing steps (caption/text/prompt — no file
+        # artifact) render their real text inline instead of a thumb frame.
+        # Keyed by node_id -> the Gtk.Label actually holding the text, so
+        # tests/callers can read it back directly.
+        self._step_text_blocks: dict = {}
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.set_margin_top(18)
@@ -927,7 +1015,10 @@ class OpenView(Gtk.Box):
         self._steps_box.set_margin_bottom(18)
         self._steps_box.set_margin_start(18)
         self._steps_box.set_margin_end(18)
-        scroller.set_child(self._steps_box)
+        # Fix #5 (user feedback): constrain to a comfortable gallery-column
+        # width instead of sprawling across the whole window.
+        self._content_wrapper = _wrap_centered(self._steps_box)
+        scroller.set_child(self._content_wrapper)
 
         # ── "Build showcase" capstone footer ────────────────────────────────
         showcase_footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -988,6 +1079,7 @@ class OpenView(Gtk.Box):
             self._steps_box.remove(child)
         self._step_remix_buttons = {}
         self._step_thumb_frames = {}
+        self._step_text_blocks = {}
 
         if not run.steps:
             empty = Gtk.Label(label="This run has no steps.")
@@ -1001,8 +1093,26 @@ class OpenView(Gtk.Box):
     # ── Row building ─────────────────────────────────────────────────────────
 
     def _build_step_row(self, index: int, step: StepView) -> Gtk.Widget:
+        """Build one step row.
+
+        Fix #1 (cohesive intent label): verb+noun render as ONE label
+        (`f"{verb} {noun}"`) with the status glyph inline, and the model (when
+        present) as a single small muted caption below — not three stacked
+        lines that read as fragmented text.
+
+        Fix #2/#6 reconciled: a step with neither a real artifact nor real
+        text (still pending, or an intent that never produces either) gets
+        the `ps-step-compact` tight-list-item treatment and a small
+        intent-icon placeholder tile; a step that DID produce something gets
+        `ps-step-rich` and either a substantially larger image/gif/video
+        preview or its actual text rendered inline — see each other's
+        docstring for exactly what "larger"/"inline" mean.
+        """
+        has_content = bool(step.artifact_path or step.text_content)
+
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         row.add_css_class("ps-step")
+        row.add_css_class("ps-step-rich" if has_content else "ps-step-compact")
 
         n_label = Gtk.Label(label=str(index))
         n_label.add_css_class("ps-step-n")
@@ -1013,21 +1123,16 @@ class OpenView(Gtk.Box):
         main.set_hexpand(True)
         main.set_valign(Gtk.Align.CENTER)
 
-        verb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        verb_label = Gtk.Label(label=step.intent.verb)
-        verb_label.set_xalign(0)
-        verb_label.add_css_class("ps-step-verb")
-        verb_row.append(verb_label)
+        intent_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        intent_label = Gtk.Label(label=f"{step.intent.verb} {step.intent.noun}")
+        intent_label.set_xalign(0)
+        intent_label.add_css_class("ps-step-intent")
+        intent_row.append(intent_label)
 
         status_label = Gtk.Label(label=self._STATUS_GLYPH.get(step.status, "•"))
         status_label.add_css_class(self._STATUS_CSS.get(step.status, "ps-status-pending"))
-        verb_row.append(status_label)
-        main.append(verb_row)
-
-        noun_label = Gtk.Label(label=step.intent.noun)
-        noun_label.set_xalign(0)
-        noun_label.add_css_class("ps-step-noun")
-        main.append(noun_label)
+        intent_row.append(status_label)
+        main.append(intent_row)
 
         # model_label is omitted entirely (not shown as blank) for intents
         # that don't name an underlying tool/model — e.g. Describe/Cut
@@ -1049,13 +1154,49 @@ class OpenView(Gtk.Box):
         right.append(remix_btn)
         self._step_remix_buttons[step.node_id] = remix_btn
 
-        thumb = _build_thumb_frame(step.artifact_path, self.STEP_THUMB_W, self.STEP_THUMB_H,
-                                    "ps-card-thumb")
-        right.append(thumb)
-        self._step_thumb_frames[step.node_id] = thumb
+        if step.text_content:
+            # Fix #6: the produced text IS the content — show it, not a
+            # placeholder icon standing in for it.
+            text_block, text_label = self._build_text_block(step.text_content)
+            right.append(text_block)
+            self._step_text_blocks[step.node_id] = text_label
+        elif step.artifact_path:
+            # Fix #6: substantially larger than the old flat 150×92 thumb —
+            # big enough to actually see what was made.
+            thumb = _build_thumb_frame(step.artifact_path, self.PREVIEW_W, self.PREVIEW_H,
+                                        "ps-card-thumb", step.intent)
+            right.append(thumb)
+            self._step_thumb_frames[step.node_id] = thumb
+        else:
+            # Fix #2/#4: nothing produced yet — a small, honest intent-icon
+            # tile, not an oversized empty box.
+            thumb = _build_thumb_frame(None, self.STEP_THUMB_W, self.STEP_THUMB_H,
+                                        "ps-card-thumb", step.intent)
+            right.append(thumb)
+            self._step_thumb_frames[step.node_id] = thumb
 
         row.append(right)
         return row
+
+    def _build_text_block(self, text: str) -> "tuple[Gtk.Widget, Gtk.Label]":
+        """A readable inline text block for a text-producing step (fix #6).
+
+        Returns (container, label) — the container is what gets appended to
+        the row; the label is what `_step_text_blocks` keeps a reference to,
+        so tests/callers can read the rendered text back directly without
+        walking into the container.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.add_css_class("ps-step-text-block")
+        box.set_size_request(self.PREVIEW_W, -1)
+
+        label = Gtk.Label(label=text)
+        label.set_wrap(True)
+        label.set_xalign(0)
+        label.set_valign(Gtk.Align.START)
+        label.add_css_class("ps-step-text")
+        box.append(label)
+        return box, label
 
     def _on_remix_clicked(self, _button: Gtk.Button, node_id: str) -> None:
         self.emit("remix-request", node_id)
@@ -1273,7 +1414,10 @@ class RemixView(Gtk.Box):
         self._steps_box.set_margin_bottom(10)
         self._steps_box.set_margin_start(18)
         self._steps_box.set_margin_end(18)
-        scroller.set_child(self._steps_box)
+        # Fix #5 (user feedback): constrain to a comfortable gallery-column
+        # width instead of sprawling across the whole window.
+        self._content_wrapper = _wrap_centered(self._steps_box)
+        scroller.set_child(self._content_wrapper)
 
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         footer.set_margin_top(4)
@@ -1482,17 +1626,15 @@ class RemixView(Gtk.Box):
 
         intent = intent_for(class_type)
 
+        # Fix #1 (cohesive intent label): one combined "verb noun" label
+        # instead of two stacked lines, matching OpenView/LiveRunView's
+        # identical treatment of the same intent vocabulary.
         verb_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         verb_col.set_hexpand(True)
-        verb_label = Gtk.Label(label=intent.verb)
-        verb_label.set_xalign(0)
-        verb_label.add_css_class("ps-step-verb")
-        verb_col.append(verb_label)
-
-        noun_label = Gtk.Label(label=intent.noun)
-        noun_label.set_xalign(0)
-        noun_label.add_css_class("ps-step-noun")
-        verb_col.append(noun_label)
+        intent_label = Gtk.Label(label=f"{intent.verb} {intent.noun}")
+        intent_label.set_xalign(0)
+        intent_label.add_css_class("ps-step-intent")
+        verb_col.append(intent_label)
 
         # model_label is a quiet secondary detail — omitted entirely (not
         # shown blank) when the intent doesn't name an underlying tool,
@@ -2339,7 +2481,13 @@ class LiveRunView(Gtk.Box):
 
     def _build_step_row(self, index: int, step: StepView) -> "tuple[Gtk.Widget, Gtk.Label]":
         """Build one PENDING step row; returns (row, status_label) so begin()
-        can keep the label reference for later in-place glyph updates."""
+        can keep the label reference for later in-place glyph updates.
+
+        Fix #1 (cohesive intent label): one combined "verb noun" label with
+        the status glyph inline, matching OpenView/RemixView's identical
+        treatment of the same intent vocabulary — see OpenView._build_step_
+        row's docstring for the full rationale.
+        """
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         row.add_css_class("ps-step")
 
@@ -2352,21 +2500,16 @@ class LiveRunView(Gtk.Box):
         main.set_hexpand(True)
         main.set_valign(Gtk.Align.CENTER)
 
-        verb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        verb_label = Gtk.Label(label=step.intent.verb)
-        verb_label.set_xalign(0)
-        verb_label.add_css_class("ps-step-verb")
-        verb_row.append(verb_label)
+        intent_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        intent_label = Gtk.Label(label=f"{step.intent.verb} {step.intent.noun}")
+        intent_label.set_xalign(0)
+        intent_label.add_css_class("ps-step-intent")
+        intent_row.append(intent_label)
 
         status_label = Gtk.Label(label=self._STATUS_GLYPH["pending"])
         status_label.add_css_class(self._STATUS_CSS["pending"])
-        verb_row.append(status_label)
-        main.append(verb_row)
-
-        noun_label = Gtk.Label(label=step.intent.noun)
-        noun_label.set_xalign(0)
-        noun_label.add_css_class("ps-step-noun")
-        main.append(noun_label)
+        intent_row.append(status_label)
+        main.append(intent_row)
 
         # model_label omitted entirely (not shown blank) when the intent
         # doesn't name an underlying tool — same guard as OpenView/RemixView.
