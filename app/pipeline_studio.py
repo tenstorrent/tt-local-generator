@@ -60,6 +60,27 @@ Four pieces:
     (live capabilities section) building on
     `.superpowers/brainstorm/988333-1783804257/content/intent-composer.html`.
 
+    Each step card also carries the same mockup's "imagination-first" wing-it
+    box (SP-C Phase 2b-3 Task 2): a free-form `Gtk.Entry` + "✨ Compose it"
+    button, alongside the capability picker rather than replacing it. The
+    `wingit_fn` constructor arg — a real closure wiring
+    `wingit.map_freeform_to_step` + `capability_discovery.default_capabilities`
+    + `wingit.default_llm_fn` by default — maps the typed text plus that
+    step's `output_kind` to a `wingit.WingitResult | None`. The default
+    closure may hit the network (the LLM pass inside `default_llm_fn`), so
+    `_on_wingit_compose_clicked` runs it on a daemon `threading.Thread` and
+    applies the result on the main thread via
+    `GLib.idle_add(self._apply_wingit_result, ...)` — the GTK threading rule
+    in this repo's CLAUDE.md. Tests inject a synchronous fake and monkeypatch
+    `threading.Thread`/`GLib.idle_add` to run inline (same pattern
+    `PipelineStudio`'s open-run tests already use), so the fake path needs no
+    special-casing. A `WingitResult` is added exactly like a capability
+    picker choice — `add_step_after(node_id, result.class_type,
+    params=result.params)`, which already commits pending edits, re-renders,
+    and guards a kind-incompatible `ValueError`. `None` (nothing mapped) shows
+    the same gentle inline `_show_message` the structural guards use and adds
+    nothing.
+
     Data arrives ONLY through `set_run(run, spec_path)` — like Discover/
     OpenView, no `PipelineStore` import here. `set_run` loads a WORKING SPEC
     DICT via `pipeline_engine.load_spec` (pure spec-file IO, not a store/
@@ -173,6 +194,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
+import wingit  # noqa: E402
 from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
@@ -436,6 +458,18 @@ _CSS = b"""
     font-size: 11px;
     border-radius: 8px;
     padding: 4px 8px;
+}
+.ps-wingit-row {
+    margin-top: 2px;
+    margin-bottom: 2px;
+}
+.ps-wingit-compose {
+    background-color: #4FD1C5;
+    color: #062c28;
+    font-weight: 700;
+    font-size: 11.5px;
+    border-radius: 8px;
+    padding: 4px 12px;
 }
 .ps-cap-label {
     font-size: 12px;
@@ -888,6 +922,7 @@ class RemixView(Gtk.Box):
     def __init__(
         self,
         capability_fn: "Callable[[str], list] | None" = None,
+        wingit_fn: "Callable[[str, str], object] | None" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
@@ -897,6 +932,17 @@ class RemixView(Gtk.Box):
         # health); tests inject a fake so the picker is exercised without ever
         # touching disk/hardware. See class docstring for the full contract.
         self._capability_fn = capability_fn or capability_discovery.default_capabilities
+
+        # Same seam pattern for wing-it (SP-C Phase 2b-3 Task 2): the default
+        # closure wires the real mapper + real capability discovery + real LLM
+        # call, none of which this module touches directly — tests inject a
+        # plain fake `wingit_fn(text, output_kind) -> WingitResult | None`.
+        self._wingit_fn = wingit_fn or (
+            lambda text, output_kind: wingit.map_freeform_to_step(
+                text, output_kind, capability_discovery.default_capabilities(output_kind),
+                llm_fn=wingit.default_llm_fn,
+            )
+        )
 
         self._spec_path: "str | None" = None
         # The composer's WORKING SPEC DICT (Phase 2b-1 Task 3) — loaded fresh
@@ -920,6 +966,11 @@ class RemixView(Gtk.Box):
         self._add_after_buttons: "dict[str, Gtk.MenuButton]" = {}
         self._add_after_popovers: "dict[str, Gtk.Popover]" = {}
         self._add_after_choice_buttons: "dict[str, dict[str, Gtk.Button]]" = {}
+        # Wing-it controls (SP-C Phase 2b-3 Task 2), keyed by node_id — same
+        # "kept around so tests can find/introspect them" rationale as the
+        # composer controls above.
+        self._wingit_entries: "dict[str, Gtk.Entry]" = {}
+        self._wingit_compose_buttons: "dict[str, Gtk.Button]" = {}
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.add_css_class("ps-remix-header")
@@ -1127,6 +1178,8 @@ class RemixView(Gtk.Box):
         self._add_after_buttons = {}
         self._add_after_popovers = {}
         self._add_after_choice_buttons = {}
+        self._wingit_entries = {}
+        self._wingit_compose_buttons = {}
 
         order = topo_order(self.working_spec)
         if not order:
@@ -1192,6 +1245,8 @@ class RemixView(Gtk.Box):
 
         head.append(controls)
         card.append(head)
+
+        card.append(self._build_wingit_row(node_id))
 
         node_widgets: "dict[str, Gtk.Widget]" = {}
         node_meta: "dict[str, tuple]" = {}
@@ -1283,6 +1338,83 @@ class RemixView(Gtk.Box):
     ) -> None:
         popover.popdown()
         self.add_step_after(node_id, class_type, params=params)
+
+    # ── Wing-it: free-form "describe the next step" (SP-C Phase 2b-3 Task 2) ─
+
+    def _build_wingit_row(self, node_id: str) -> Gtk.Widget:
+        """The "imagination-first" escape hatch alongside the capability
+        picker — a free-form entry + "✨ Compose it" button, per the top
+        "wing" box of `add-step-wingit.html`. Purely presentational; the
+        actual mapping happens in `_on_wingit_compose_clicked`."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("ps-wingit-row")
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(
+            "Say what should happen next, in your own words…"
+        )
+        entry.add_css_class("ps-field-entry")
+        entry.set_hexpand(True)
+        row.append(entry)
+        self._wingit_entries[node_id] = entry
+
+        compose_btn = Gtk.Button(label="✨ Compose it")
+        compose_btn.add_css_class("ps-wingit-compose")
+        compose_btn.connect("clicked", self._on_wingit_compose_clicked, node_id)
+        row.append(compose_btn)
+        self._wingit_compose_buttons[node_id] = compose_btn
+
+        return row
+
+    def _on_wingit_compose_clicked(self, _button: Gtk.Button, node_id: str) -> None:
+        """Map *node_id*'s wing-it entry text to a step via `self._wingit_fn`.
+
+        An empty/whitespace-only entry is a no-op — Compose does nothing
+        rather than reporting a spurious "couldn't compose that". Otherwise
+        `wingit_fn` runs on a daemon thread (the default closure's LLM call
+        may hit the network — GTK threading rule, see CLAUDE.md) and the
+        result is applied back on the main thread via
+        `GLib.idle_add(self._apply_wingit_result, ...)`. A raising
+        `wingit_fn` is treated the same as a `None` result (gentle message,
+        nothing added) rather than crashing the worker thread.
+        """
+        entry = self._wingit_entries.get(node_id)
+        if entry is None:
+            return
+        text = entry.get_text().strip()
+        if not text:
+            return
+
+        class_type = self.working_spec.get(node_id, {}).get("class_type", "")
+        output_kind = intent_for(class_type).output_kind
+        wingit_fn = self._wingit_fn
+
+        def worker() -> None:
+            try:
+                result = wingit_fn(text, output_kind)
+            except Exception:
+                result = None
+            GLib.idle_add(self._apply_wingit_result, node_id, result)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_wingit_result(self, node_id: str, result) -> None:
+        """Apply a `wingit.WingitResult` (or `None`) from
+        `_on_wingit_compose_clicked`. Always runs on the main thread (posted
+        via `GLib.idle_add`).
+
+        `None` means wing-it couldn't map the text to any live capability at
+        all — shown as a gentle inline message via the same `_show_message`
+        the add/remove structural guards use, adding nothing. A real result
+        is added exactly like a capability-picker choice: `add_step_after`
+        already commits pending edits, re-renders, and guards a
+        kind-incompatible `ValueError` with its own message.
+        """
+        if result is None:
+            self._show_message("Couldn't turn that into a step — try rephrasing.")
+            self._render()
+            return
+        self.add_step_after(node_id, result.class_type, params=result.params)
 
     def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.

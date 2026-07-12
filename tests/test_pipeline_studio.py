@@ -757,6 +757,168 @@ def test_uninjected_remix_view_does_not_perform_real_capability_io(monkeypatch):
     assert calls == {"read": 0, "plugin_loaded": 0, "backend_up": 0}
 
 
+# ── RemixView: wing-it (free-form "describe the next step") (SP-C Phase 2b-3
+# Task 2) ────────────────────────────────────────────────────────────────────
+#
+# `wingit_fn` is an injected seam (defaults to a real closure wiring
+# `wingit.map_freeform_to_step` + `capability_discovery.default_capabilities` +
+# `wingit.default_llm_fn` — see pipeline_studio.py's RemixView.__init__). Tests
+# inject a fake `wingit_fn(text, output_kind) -> WingitResult | None` and drive
+# the compose handler through the real click path, monkeypatching
+# `threading.Thread`/`GLib.idle_add` (the `_ImmediateThread` pattern already
+# used above for PipelineStudio's open-run) so the background-thread + idle_add
+# hop the real code takes runs synchronously and deterministically in tests —
+# no timing/races to fight.
+
+def _run_wingit_inline(monkeypatch) -> None:
+    import pipeline_studio
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+
+def test_remix_view_set_run_shows_wingit_entry_and_compose_button_per_step():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    assert set(view._wingit_entries.keys()) == {"1", "2", "3"}
+    assert set(view._wingit_compose_buttons.keys()) == {"1", "2", "3"}
+
+
+def test_wingit_compose_native_result_adds_step(monkeypatch):
+    """A WingitResult naming a NATIVE class_type adds a node of that
+    class_type after the composing step, same as choosing it from the
+    capability picker would."""
+    from pipeline_studio import RemixView
+    from wingit import WingitResult
+
+    _run_wingit_inline(monkeypatch)
+
+    def fake_wingit_fn(text, output_kind):
+        assert output_kind == "image"  # node "1" (TTLGTextToImage) output_kind
+        return WingitResult(
+            class_type="TTLGCaptionImage", params={}, capability_id="TTLGCaptionImage",
+            via="fallback",
+        )
+
+    view = RemixView(wingit_fn=fake_wingit_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._wingit_entries["1"].set_text("describe this image")
+    view._wingit_compose_buttons["1"].emit("clicked")
+
+    new_ids = set(view.working_spec) - before_ids
+    assert len(new_ids) == 1
+    new_node = view.working_spec[new_ids.pop()]
+    assert new_node["class_type"] == "TTLGCaptionImage"
+
+
+def test_wingit_compose_plugin_result_adds_artgen_node_with_plugin_param(monkeypatch):
+    """A WingitResult naming a PLUGIN capability (class_type always
+    TTLGArtgenGenerate, params carrying `plugin`) adds that generic node with
+    its plugin input set, same as choosing a plugin from the picker would."""
+    from pipeline_studio import RemixView
+    from wingit import WingitResult
+
+    _run_wingit_inline(monkeypatch)
+
+    def fake_wingit_fn(text, output_kind):
+        return WingitResult(
+            class_type="TTLGArtgenGenerate", params={"plugin": "verse", "prompt": text},
+            capability_id="verse", via="fallback",
+        )
+
+    view = RemixView(wingit_fn=fake_wingit_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    view._wingit_entries["1"].set_text("make a verse about it")
+    view._wingit_compose_buttons["1"].emit("clicked")
+
+    spec = view.current_spec()
+    new_ids = set(spec) - {"1", "2", "3"}
+    assert len(new_ids) == 1
+    new_node = spec[new_ids.pop()]
+    assert new_node["class_type"] == "TTLGArtgenGenerate"
+    assert new_node["inputs"]["plugin"] == "verse"
+
+
+def test_wingit_compose_none_result_shows_message_and_adds_nothing(monkeypatch):
+    """wingit_fn returning None (nothing maps) -> gentle inline message, no
+    node added, no crash."""
+    from pipeline_studio import RemixView
+
+    _run_wingit_inline(monkeypatch)
+
+    def fake_wingit_fn(text, output_kind):
+        return None
+
+    view = RemixView(wingit_fn=fake_wingit_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._wingit_entries["1"].set_text("total gibberish, wing it anyway")
+    view._wingit_compose_buttons["1"].emit("clicked")  # must not raise
+
+    assert set(view.working_spec) == before_ids
+    assert view._message_label.get_visible() is True
+    assert view._message_label.get_label() != ""
+
+
+def test_wingit_compose_empty_text_does_nothing(monkeypatch):
+    """An empty/whitespace-only entry never calls wingit_fn or adds a step —
+    Compose is a no-op rather than a spurious "couldn't compose" message."""
+    from pipeline_studio import RemixView
+
+    _run_wingit_inline(monkeypatch)
+
+    calls = []
+
+    def fake_wingit_fn(text, output_kind):
+        calls.append(text)
+        return None
+
+    view = RemixView(wingit_fn=fake_wingit_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._wingit_entries["1"].set_text("   ")
+    view._wingit_compose_buttons["1"].emit("clicked")
+
+    assert calls == []
+    assert set(view.working_spec) == before_ids
+    assert view._message_label.get_visible() is False
+
+
+def test_default_wingit_fn_wires_map_freeform_to_step_and_capabilities(monkeypatch):
+    """RemixView() with no injected wingit_fn wires the real closure:
+    wingit.map_freeform_to_step + capability_discovery.default_capabilities +
+    wingit.default_llm_fn — proven here by monkeypatching those two real deps
+    (never touching actual plugins/disk/network) and confirming the default
+    closure still produces a sensible fallback result end-to-end."""
+    import capability_discovery as cd
+    import wingit as wingit_mod
+    from pipeline_studio import RemixView
+
+    def fake_default_capabilities(output_kind):
+        return [
+            cd.Capability(
+                id="TTLGCaptionImage", label="Describe it", kind_out="text",
+                kind_in=output_kind, source="native", class_type="TTLGCaptionImage",
+                plugin=None, hardware=None, live=True, reason=None,
+            ),
+        ]
+
+    monkeypatch.setattr(cd, "default_capabilities", fake_default_capabilities)
+    monkeypatch.setattr(wingit_mod, "default_llm_fn", lambda prompt: None)  # force fallback
+
+    view = RemixView()
+    result = view._wingit_fn("describe this photo", "image")
+
+    assert result is not None
+    assert result.class_type == "TTLGCaptionImage"
+
+
 # ── LiveRunView ──────────────────────────────────────────────────────────────
 #
 # begin()/on_node_update()/on_log()/on_finished() are driven directly here —
