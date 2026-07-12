@@ -332,6 +332,73 @@ def add_step(spec: dict, after_node_id: str, class_type: str,
     return new_spec
 
 
+def seed_spec(steps: "list[tuple[str, dict]]", *,
+              seed_artifact: "tuple[str, str] | None" = None) -> dict:
+    """Build a fresh ComfyUI-API-v1 spec from an ordered list of
+    (class_type, params) steps, wiring each step's primary output into the
+    next step's canonical input (same kind rules as ``add_step``).
+
+    Node ids are minted ``"1"``, ``"2"``, ``"3"``, ... in list order. Step
+    i+1's ``intent.input_key`` is wired to ``[str(i+1), prev_intent.outputs[0]]``
+    when that intent declares a canonical input; caller-supplied *params* are
+    merged on top (a param with the same key as the canonical input wins,
+    mirroring ``add_step``).
+
+    ``seed_artifact=(path, kind)``: the FIRST step consumes it as starting
+    material. If step 0's intent has a canonical input whose ``input_kind``
+    matches *kind*, the literal *path* is placed on that ``input_key`` — a
+    literal file-path string, exactly what a wire from an upstream ``*_path``
+    output would deliver, so the engine resolves it unchanged. Raises
+    ``ValueError`` if *kind* is incompatible with step 0's ``input_kind``.
+
+    *steps* is never mutated; a brand-new spec dict is built from scratch.
+
+    Raises ``ValueError`` on an empty *steps* list, a kind mismatch between
+    adjacent steps (or between *seed_artifact* and step 0), or a resulting
+    spec that fails ``_validate`` (should not happen given the checks above,
+    but guards against an unexpected intent_vocab configuration).
+    """
+    if not steps:
+        raise ValueError("seed_spec requires at least one step")
+
+    spec: "dict[str, Any]" = {}
+    prev_id = None
+    prev_intent = None
+    for idx, (class_type, params) in enumerate(steps):
+        node_id = str(idx + 1)
+        intent = intent_for(class_type)
+        inputs: "dict[str, Any]" = {}
+
+        if intent.input_key and prev_id is not None:
+            if intent.input_kind and prev_intent is not None \
+                    and intent.input_kind != prev_intent.output_kind:
+                raise ValueError(
+                    f"cannot follow {prev_intent.output_kind!r} with "
+                    f"{class_type!r} (needs {intent.input_kind!r})"
+                )
+            if prev_intent is not None and prev_intent.outputs:
+                inputs[intent.input_key] = [prev_id, prev_intent.outputs[0]]
+
+        if idx == 0 and seed_artifact is not None:
+            path, kind = seed_artifact
+            if intent.input_key and intent.input_kind and intent.input_kind != kind:
+                raise ValueError(
+                    f"seed artifact kind {kind!r} incompatible with "
+                    f"{class_type!r} (needs {intent.input_kind!r})"
+                )
+            if intent.input_key:
+                inputs[intent.input_key] = path
+
+        if params:
+            inputs.update(params)
+
+        spec[node_id] = {"class_type": class_type, "inputs": inputs}
+        prev_id, prev_intent = node_id, intent
+
+    _validate(spec)
+    return spec
+
+
 def remove_step(spec: dict, node_id: str) -> dict:
     """Return a NEW spec with *node_id* removed and every consumer wire that
     pointed at it spliced onto *node_id*'s own upstream source (or dropped).

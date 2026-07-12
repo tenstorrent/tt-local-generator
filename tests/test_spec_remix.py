@@ -425,3 +425,46 @@ def test_write_spec_rejects_invalid_spec(tmp_path):
     broken = {"1": {"class_type": "X", "inputs": {"a": ["99", "k"]}}}  # dangling wire
     with pytest.raises(ValueError):
         spec_remix.write_spec(broken, "broken", str(tmp_path))
+
+
+# ── seed_spec ────────────────────────────────────────────────────────────────
+
+def test_seed_spec_single_step():
+    spec = spec_remix.seed_spec([("TTLGTextToImage", {"prompt": "a fox"})])
+    assert spec["1"]["class_type"] == "TTLGTextToImage"
+    assert spec["1"]["inputs"]["prompt"] == "a fox"
+
+
+def test_seed_spec_wires_adjacent_steps():
+    spec = spec_remix.seed_spec([
+        ("TTLGTextToImage", {"prompt": "a fox"}),
+        ("TTLGImageToVideo", {}),
+    ])
+    # step 2 (Film it) consumes step 1's image_path via its "image" key
+    assert spec["2"]["class_type"] == "TTLGImageToVideo"
+    assert spec["2"]["inputs"]["image"] == ["1", "image_path"]
+
+
+def test_seed_spec_kind_mismatch_raises():
+    with pytest.raises(ValueError):
+        # Film it (needs image) cannot follow Compose a prompt (produces text)
+        spec_remix.seed_spec([("TTLGPromptCompose", {}), ("TTLGImageToVideo", {})])
+
+
+def test_seed_spec_with_seed_artifact_places_literal_path():
+    spec = spec_remix.seed_spec(
+        [("TTLGImageToVideo", {})],
+        seed_artifact=("/tmp/pic.png", "image"),
+    )
+    assert spec["1"]["inputs"]["image"] == "/tmp/pic.png"
+
+
+def test_seed_spec_seed_artifact_kind_mismatch_raises():
+    with pytest.raises(ValueError):
+        # Compose a prompt needs text, not an image seed
+        spec_remix.seed_spec([("TTLGPromptCompose", {})], seed_artifact=("/tmp/pic.png", "image"))
+
+
+def test_seed_spec_empty_raises():
+    with pytest.raises(ValueError):
+        spec_remix.seed_spec([])
