@@ -37,6 +37,18 @@ class Intent:
     model_label — the underlying model/tool name (e.g. "FLUX"), shown only in
                   a secondary/detail context — never folded into `verb`/`noun`
                   or the `label()` string, which stay tool-agnostic.
+    input_key   — the request-payload key that an upstream artifact wires
+                  into (e.g. "prompt", "src", "image"). None for source nodes
+                  (nothing upstream to wire — a from-scratch generator) and
+                  for collector/plugin-driven nodes that don't have a single
+                  canonical artifact input (TTLGAddToPlaylist, TTLGArtgenGenerate).
+    input_kind  — the artifact KIND that `input_key` consumes: "image" | "text"
+                  | "video" | "gif" | "svg" | "playlist" | None. None whenever
+                  `input_key` is None.
+    output_kind — the artifact KIND this node's primary output produces, using
+                  the same vocabulary as `input_kind`. Used by the composer
+                  (`compatible_intents`) to find valid "add a step after this
+                  one" candidates.
     """
     class_type: str
     verb: str
@@ -44,6 +56,9 @@ class Intent:
     icon: str
     outputs: tuple[str, ...]
     model_label: str | None
+    input_key: str | None = None
+    input_kind: str | None = None
+    output_kind: str | None = None
 
 
 # ── The 12 native class_types the pipeline engine supports ───────────────────
@@ -60,6 +75,9 @@ INTENTS: dict[str, Intent] = {
         icon="🖼️",
         outputs=("image_path",),
         model_label="FLUX",
+        input_key="prompt",
+        input_kind="text",
+        output_kind="image",
     ),
     "TTLGImageToVideo": Intent(
         class_type="TTLGImageToVideo",
@@ -68,6 +86,9 @@ INTENTS: dict[str, Intent] = {
         icon="🎬",
         outputs=("video_path",),
         model_label="SkyReels",
+        input_key="image",
+        input_kind="image",
+        output_kind="video",
     ),
     "TTLGGenerateText": Intent(
         class_type="TTLGGenerateText",
@@ -76,6 +97,9 @@ INTENTS: dict[str, Intent] = {
         icon="✍️",
         outputs=("text",),
         model_label="Llama",
+        input_key="caption",
+        input_kind="text",
+        output_kind="text",
     ),
     "TTLGCaptionImage": Intent(
         class_type="TTLGCaptionImage",
@@ -84,6 +108,9 @@ INTENTS: dict[str, Intent] = {
         icon="📝",
         outputs=("caption",),
         model_label=None,
+        input_key="src",
+        input_kind="image",
+        output_kind="text",
     ),
     "TTLGRemoveBackground": Intent(
         class_type="TTLGRemoveBackground",
@@ -92,6 +119,9 @@ INTENTS: dict[str, Intent] = {
         icon="✂️",
         outputs=("fg_path",),
         model_label=None,
+        input_key="src",
+        input_kind="image",
+        output_kind="image",
     ),
     "TTLGEstimateDepth": Intent(
         class_type="TTLGEstimateDepth",
@@ -100,6 +130,9 @@ INTENTS: dict[str, Intent] = {
         icon="🗺️",
         outputs=("depth_path",),
         model_label=None,
+        input_key="src",
+        input_kind="image",
+        output_kind="image",
     ),
     "TTLGPromptCompose": Intent(
         class_type="TTLGPromptCompose",
@@ -108,6 +141,9 @@ INTENTS: dict[str, Intent] = {
         icon="🧩",
         outputs=("prompt",),
         model_label=None,
+        input_key="caption",
+        input_kind="text",
+        output_kind="text",
     ),
     "TTLGSVGRender": Intent(
         class_type="TTLGSVGRender",
@@ -116,6 +152,9 @@ INTENTS: dict[str, Intent] = {
         icon="🖊️",
         outputs=("png_path",),
         model_label=None,
+        input_key="src",
+        input_kind="text",
+        output_kind="image",
     ),
     "TTLGComposite": Intent(
         class_type="TTLGComposite",
@@ -124,6 +163,9 @@ INTENTS: dict[str, Intent] = {
         icon="🧷",
         outputs=("image_path",),
         model_label=None,
+        input_key="background_path",
+        input_kind="image",
+        output_kind="image",
     ),
     "TTLGAddToPlaylist": Intent(
         class_type="TTLGAddToPlaylist",
@@ -132,6 +174,9 @@ INTENTS: dict[str, Intent] = {
         icon="📼",
         outputs=("playlist_id",),
         model_label=None,
+        input_key=None,
+        input_kind=None,
+        output_kind="playlist",
     ),
     "TTLGArtgenGenerate": Intent(
         class_type="TTLGArtgenGenerate",
@@ -140,6 +185,9 @@ INTENTS: dict[str, Intent] = {
         icon="🎨",
         outputs=("artifact_path", "text", "png_path"),
         model_label=None,
+        input_key=None,
+        input_kind=None,
+        output_kind="text",
     ),
     "TTLGAnimateDiff": Intent(
         class_type="TTLGAnimateDiff",
@@ -148,6 +196,9 @@ INTENTS: dict[str, Intent] = {
         icon="🕺",
         outputs=("gif_path",),
         model_label=None,
+        input_key="prompt",
+        input_kind="text",
+        output_kind="gif",
     ),
 }
 
@@ -175,6 +226,21 @@ def intent_for(class_type: str) -> Intent:
     # passthrough node). class_type is still preserved on the Intent itself
     # for lookups/detail views; it's only kept out of verb/noun.
     return Intent(class_type, _GENERIC_VERB, "this step", _GENERIC_ICON, (), None)
+
+
+def compatible_intents(output_kind: str) -> list[Intent]:
+    """All native intents that can consume an artifact of `output_kind` as
+    their next-step input — i.e. `intent.input_kind == output_kind`.
+
+    Used by the composer (later SP-C tasks) to offer "add a step after this
+    one" choices: given the kind of artifact the current step just produced,
+    which intents could wire it in as their input?
+
+    Order is deterministic — INTENTS insertion order (the dict literal order
+    above), which is itself the fixed native class_type list — so repeated
+    calls with the same `output_kind` always return the same sequence.
+    """
+    return [i for i in INTENTS.values() if i.input_kind == output_kind]
 
 
 def label(class_type: str) -> str:
