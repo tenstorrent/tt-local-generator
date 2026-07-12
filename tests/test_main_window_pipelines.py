@@ -353,6 +353,42 @@ def test_remix_as_pipeline_animatediff_maps_to_gif_kind(tmp_path, monkeypatch):
     )
 
 
+def test_remix_as_pipeline_activates_via_pipelines_toggle_button(tmp_path, monkeypatch):
+    """The production activation path — `_pipelines_btn.set_active(True)` firing
+    the "toggled" signal into `_on_pipelines_toggled` → `_show_pipelines()` — is
+    what runs on every real card click (the toolbar button always exists by then).
+
+    Unlike the other _remix_as_pipeline tests (which have no `_pipelines_btn`, so
+    they exercise only the `else: self._show_pipelines()` fallback), this attaches
+    a real inactive ToggleButton wired exactly as production wires it, and asserts
+    the button ends up active AND show_muse is reached with the resolved tuple via
+    that toggle→signal path. Removing the `set_active(True)` branch must break this.
+    """
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    obj._pipelines_btn = Gtk.ToggleButton()
+    obj._pipelines_btn.connect("toggled", obj._on_pipelines_toggled)
+    assert obj._pipelines_btn.get_active() is False
+
+    img_path = tmp_path / "art.png"
+    img_path.write_bytes(b"fake-png")
+    thumb_path = tmp_path / "art_thumb.jpg"
+    thumb_path.write_bytes(b"fake-jpg")
+    rec = _make_record(
+        media_type="image", image_path=str(img_path), thumbnail_path=str(thumb_path),
+    )
+
+    obj._remix_as_pipeline(rec)
+
+    # (a) the toggle button was driven active — proves the set_active(True) branch ran.
+    assert obj._pipelines_btn.get_active() is True
+    # …which flipped the gallery stack to Pipelines via the real signal handler.
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    # (b) show_muse still reached with the correct seed tuple through that path.
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(img_path), "image", str(thumb_path))
+    )
+
+
 def test_remix_as_pipeline_unresolvable_kind_falls_back_to_blank_muse(tmp_path, monkeypatch):
     """A media_type with no known kind mapping (e.g. 'artgen') falls back to
     a blank muse even though the file exists on disk."""

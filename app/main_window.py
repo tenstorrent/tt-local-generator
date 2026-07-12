@@ -1642,7 +1642,7 @@ class GenerationCard(Gtk.Frame):
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
     Buttons: 💾 Save, 🔀 Remix, 🗑 Delete.
-    Hover reveals: 🔀 Remix button, ☆/★ star toggle.
+    Hover reveals: 🔀 Remix button, 🧩 Remix as pipeline button, ☆/★ star toggle.
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
     remix_cb(record) is called when the Remix button is clicked (opens RemixPopover).
