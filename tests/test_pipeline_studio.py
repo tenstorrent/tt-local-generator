@@ -457,3 +457,160 @@ def test_remix_view_set_run_is_repeat_safe():
     assert set(view._field_widgets.keys()) == {"1", "2", "3"}
     # Exactly one prompt Entry survives per node — not stacked duplicates.
     assert view._field_widgets["1"]["prompt"].get_text() == "a test prompt"
+
+
+# ── LiveRunView ──────────────────────────────────────────────────────────────
+#
+# begin()/on_node_update()/on_log()/on_finished() are driven directly here —
+# no real PipelineRunner/subprocess involved (see pipeline_studio.py's
+# LiveRunView docstring: this view owns no runner, Task 4 wires one to it).
+# on_node_update/on_finished's argument shapes below are copied verbatim from
+# how pipeline_runner.PipelineRunner actually calls them (_parse_line's NODE:
+# dispatch, start()'s __health__ signal, _watch_stdout's single-bool finish).
+
+def _make_live_run() -> RunView:
+    class_types = ["TTLGTextToImage", "TTLGImageToVideo", "TTLGGenerateText"]
+    steps = [
+        StepView(node_id=str(i), intent=intent_for(ct), status="pending", artifact_path=None)
+        for i, ct in enumerate(class_types, start=1)
+    ]
+    recipe = [f"{s.intent.verb} {s.intent.noun}" for s in steps]
+    return RunView(
+        run_id="run-live-1",
+        title="Live Test Run",
+        created_at="2026-07-10T12:00:00+00:00",
+        hero_path=None,
+        steps=steps,
+        recipe=recipe,
+    )
+
+
+def test_live_run_view_constructs():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    assert isinstance(view, Gtk.Box)
+
+
+def test_live_run_view_begin_shows_all_steps_pending():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    assert list(view._step_status_labels.keys()) == ["1", "2", "3"]
+    for label in view._step_status_labels.values():
+        assert label.get_label() == "•"
+
+
+def test_live_run_view_on_node_update_running_then_done():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "1", "running", "")
+    assert view._step_status_labels["1"].get_label() == "⟳"
+
+    view.on_node_update("job", "1", "done", "")
+    assert view._step_status_labels["1"].get_label() == "✓"
+
+
+def test_live_run_view_on_node_update_failed_glyph():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "2", "failed", "boom")
+    assert view._step_status_labels["2"].get_label() == "✕"
+
+
+def test_live_run_view_health_update_does_not_create_step_row():
+    """The runner's synthetic __health__/__chips__ signal must not be mistaken
+    for a real step (no new entry in _step_status_labels) and must not crash."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("__health__", "__chips__", "4", "")
+
+    assert list(view._step_status_labels.keys()) == ["1", "2", "3"]
+    assert "__chips__" not in view._step_status_labels
+    assert view._health_note.get_visible() is True
+    assert "4" in view._health_note.get_label()
+
+
+def test_live_run_view_health_update_real_signal_shape():
+    """The actual shape PipelineRunner.start() sends for a degraded chip check."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("__health__", "__chips__", "degraded", "AC power cycle recommended")
+
+    assert view._health_note.get_visible() is True
+    assert "AC power cycle recommended" in view._health_note.get_label()
+
+
+def test_live_run_view_on_log_switch_line_styled_as_switch_row():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_log("LOG:  resetting boards (flux → skyreels)")
+
+    last = view._log_box.get_last_child()
+    assert last.has_css_class("ps-log-switch")
+
+
+def test_live_run_view_on_log_plain_line_not_styled_as_switch():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_log("NODE:1:running:")
+
+    last = view._log_box.get_last_child()
+    assert not last.has_css_class("ps-log-switch")
+    assert last.has_css_class("ps-log-line")
+
+
+def test_live_run_view_on_finished_marks_running_steps_done_and_emits_run_done():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_node_update("job", "1", "done", "")
+    view.on_node_update("job", "2", "running", "")
+    # step "3" is left pending (never started)
+
+    received = []
+    view.connect("run-done", lambda _w, run_id: received.append(run_id))
+    view.on_finished(True)
+
+    assert view._step_status_labels["1"].get_label() == "✓"
+    assert view._step_status_labels["2"].get_label() == "✓"  # running -> done on success
+    assert view._step_status_labels["3"].get_label() == "•"  # untouched, never started
+    assert received == ["run-live-1"]
+
+
+def test_live_run_view_on_finished_failure_marks_running_as_failed():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_node_update("job", "1", "running", "")
+
+    view.on_finished(False)
+
+    assert view._step_status_labels["1"].get_label() == "✕"
+
+
+def test_live_run_view_begin_is_repeat_safe():
+    """Calling begin() again resets to PENDING and clears the log — no
+    leftover status from a previous run, matching set_runs/set_run's rule."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_node_update("job", "1", "done", "")
+    view.on_log("some earlier line")
+
+    view.begin(_make_live_run())
+
+    assert view._step_status_labels["1"].get_label() == "•"
+    assert view._log_box.get_first_child() is None

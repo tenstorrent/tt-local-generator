@@ -49,6 +49,25 @@ Four pieces:
     where `edits` is `{node_id: {key: new_value}}` containing only fields the
     user actually changed — an unmodified Run reproduces the base run.
 
+`LiveRunView(Gtk.Box)`
+    The "watch it run" page (SP-C Phase 2a Task 3): one row per step
+    (intent-labelled, same verb/noun/model presentation as Open/RemixView)
+    all starting PENDING, plus a live-log tail alongside. Layout follows the
+    validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/run-watch.html`. Unlike
+    Discover/Open/RemixView, data doesn't arrive once via a `set_*()` call —
+    `begin(run)` renders the initial PENDING state, then three handler
+    methods (`on_node_update`, `on_log`, `on_finished`) update it live. Their
+    signatures match `pipeline_runner.PipelineRunner`'s callbacks EXACTLY —
+    `on_node_update(job, node_id, status, detail)` and `on_finished(success)`
+    are literally what a caller passes as `PipelineRunner.start()`'s
+    `on_node_update=`/`on_run_finished=` arguments — so this view owns no
+    subprocess/PipelineRunner itself; wiring a real runner to it is Task 4's
+    job. The runner's synthetic `job="__health__"` node update (chip-health
+    warnings — never a real step) renders as a small note instead of a step
+    row. `on_finished` emits the custom `run-done` signal (str run_id) after
+    resolving any step still "running" to done/failed.
+
 `PipelineStudio(Gtk.Box)`
     The shell: a Gtk.Stack with "discover" (DiscoverView) and "open"
     (OpenView, wrapped with a "← Discover" back control) pages. Loads runs
@@ -281,6 +300,31 @@ _CSS = b"""
     padding: 10px 16px;
     font-size: 13px;
     font-weight: 700;
+}
+.ps-health-note {
+    font-size: 11px;
+    color: #F6BC42;
+    background-color: alpha(#F6BC42, 0.12);
+    border-radius: 8px;
+    padding: 4px 10px;
+}
+.ps-log-panel {
+    background-color: #040d0c;
+    border-left: 1px solid alpha(#74C5DF, 0.16);
+}
+.ps-log-line {
+    font-family: monospace;
+    font-size: 11px;
+    color: #bcd7d2;
+}
+.ps-log-switch {
+    font-family: monospace;
+    font-size: 11px;
+    color: #F6BC42;
+    padding: 4px 8px;
+    border-left: 2px solid #F6BC42;
+    background-color: alpha(#F6BC42, 0.08);
+    border-radius: 0 6px 6px 0;
 }
 """
 
@@ -901,6 +945,293 @@ class RemixView(Gtk.Box):
         if kind == "bool":
             return widget.get_active()
         return widget.get_text()
+
+
+class LiveRunView(Gtk.Box):
+    """Live-run page: watch a pipeline run's progress in real time (SP-C Phase 2a Task 3).
+
+    Renders one row per `RunView.steps` (intent-labelled, same verb/noun/model
+    presentation as Open/RemixView) plus a scrolling live-log tail, per the
+    validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/run-watch.html`. Unlike
+    Discover/Open/RemixView, data doesn't arrive once through a `set_*()`
+    call — `begin(run)` renders the initial PENDING state, and three handler
+    methods keep it live. Their signatures match
+    `pipeline_runner.PipelineRunner`'s callbacks EXACTLY, so a caller (Task 4)
+    can wire a real runner straight to this view:
+
+        runner.start(spec_path, jobs, overrides,
+                     on_node_update=view.on_node_update,
+                     on_run_finished=view.on_finished)
+
+    This view owns NO PipelineRunner/subprocess itself — `begin()` takes a
+    plain RunView and the `on_*` methods are pure handlers, matching the rule
+    Discover/Open/RemixView already follow for staying store/engine-free.
+
+    Per the mockup, board-switch `LOG:` lines ("resetting boards", "starting
+    server") are surfaced as first-class "switch" rows instead of plain log
+    text — transparency about the real hardware behaviour (stopping the
+    container, `tt-smi -r`, re-warming) is a feature, not noise to hide. The
+    runner's synthetic `job="__health__"` node update (chip-health/reattach
+    warnings — never a real pipeline step) renders as a small note instead of
+    a step row, so it can never be mistaken for one or crash the lookup.
+    """
+
+    __gsignals__ = {
+        # (run_id,) — emitted once from on_finished(), after any step still
+        # "running" has been resolved to done/failed.
+        "run-done": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+    }
+
+    # Reuse OpenView's status glyph/CSS maps — same status vocabulary
+    # (done/running/pending/failed) and same visual language, so a step
+    # looks identical whether you're browsing it after the fact (OpenView)
+    # or watching it happen live (this view).
+    _STATUS_GLYPH = OpenView._STATUS_GLYPH
+    _STATUS_CSS = OpenView._STATUS_CSS
+
+    # Substrings (case-insensitive) that mark a LOG: line as a board-switch
+    # event per the mockup ("LOG:  resetting boards (flux → skyreels)",
+    # "LOG: starting server flux") — surfaced as first-class rows instead of
+    # plain log text. Matched against the line with the leading "LOG:" intact
+    # since on_log() receives the runner's raw stdout line verbatim.
+    _SWITCH_MARKERS = ("resetting boards", "starting server")
+
+    def __init__(self) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add_css_class("ps-discover")  # same dark-teal page background
+        _apply_css()
+
+        self._run_id: "str | None" = None
+        # node_id -> current status string ("pending"/"running"/"done"/
+        # "failed"), tracked in parallel with the rendered glyph so
+        # on_finished() can tell which steps were still "running" without
+        # reverse-parsing a glyph character back into a status name.
+        self._step_status: "dict[str, str]" = {}
+        # node_id -> that step's status-glyph Gtk.Label, updated in place by
+        # on_node_update/on_finished (rows themselves are never rebuilt after
+        # begin() — only this label's text/css-class changes).
+        self._step_status_labels: "dict[str, Gtk.Label]" = {}
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.set_margin_top(18)
+        header.set_margin_start(18)
+        header.set_margin_end(18)
+
+        self._title_label = Gtk.Label(label="")
+        self._title_label.set_xalign(0)
+        self._title_label.set_wrap(True)
+        self._title_label.add_css_class("ps-open-title")
+        self._title_label.set_hexpand(True)
+        header.append(self._title_label)
+
+        # Hidden until the runner sends a __health__ update (see
+        # _show_health_note) so a healthy run's header stays clean.
+        self._health_note = Gtk.Label(label="")
+        self._health_note.add_css_class("ps-health-note")
+        self._health_note.set_visible(False)
+        header.append(self._health_note)
+
+        self.append(header)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        body.set_vexpand(True)
+        self.append(body)
+
+        steps_scroller = Gtk.ScrolledWindow()
+        steps_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        steps_scroller.set_vexpand(True)
+        steps_scroller.set_hexpand(True)
+        body.append(steps_scroller)
+
+        self._steps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self._steps_box.set_margin_top(10)
+        self._steps_box.set_margin_bottom(18)
+        self._steps_box.set_margin_start(18)
+        self._steps_box.set_margin_end(18)
+        steps_scroller.set_child(self._steps_box)
+
+        # Live-log tail: a narrow fixed-width side panel, per the mockup's
+        # two-column `.body { grid-template-columns: 1fr 300px }` layout.
+        log_scroller = Gtk.ScrolledWindow()
+        log_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        log_scroller.set_vexpand(True)
+        log_scroller.set_size_request(280, -1)
+        log_scroller.add_css_class("ps-log-panel")
+        body.append(log_scroller)
+
+        self._log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._log_box.set_margin_top(10)
+        self._log_box.set_margin_bottom(10)
+        self._log_box.set_margin_start(10)
+        self._log_box.set_margin_end(10)
+        log_scroller.set_child(self._log_box)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def begin(self, run: RunView) -> None:
+        """(Re)initialise the view for a fresh run: every step PENDING, log cleared.
+
+        Main-thread only, repeat-safe — same clear-then-rebuild pattern as
+        DiscoverView.set_runs/OpenView.set_run/RemixView.set_run, so calling
+        begin() again (e.g. re-opening Live for a different run without
+        recreating the widget) never leaves stale rows/state behind.
+        """
+        self._run_id = run.run_id
+        self._title_label.set_label(run.title)
+        self._health_note.set_visible(False)
+        self._health_note.set_label("")
+
+        while child := self._steps_box.get_first_child():
+            self._steps_box.remove(child)
+        while child := self._log_box.get_first_child():
+            self._log_box.remove(child)
+        self._step_status = {}
+        self._step_status_labels = {}
+
+        for index, step in enumerate(run.steps, start=1):
+            row, status_label = self._build_step_row(index, step)
+            self._steps_box.append(row)
+            self._step_status[step.node_id] = "pending"
+            self._step_status_labels[step.node_id] = status_label
+
+    # ── PipelineRunner callback handlers ─────────────────────────────────────
+    #
+    # Signatures below match pipeline_runner.PipelineRunner exactly: it
+    # dispatches on_node_update(job, node_id, status, detail) via
+    # self._idle_add for every NODE: line (_parse_line) plus the synthetic
+    # job="__health__" chip-health signal (start()); on_finished(success) is
+    # called once, with a single positional bool, when the run's subprocess
+    # exits (_watch_stdout/_tail_log) — never a run_id, never keyword args.
+
+    def on_node_update(self, job: str, node_id: str, status: str, detail: str) -> None:
+        """Update the step row whose node_id matches, or show a health note.
+
+        The runner's `__health__` job (today: node_id "__chips__" for a
+        degraded chip-health check, or "__reattach__" for a stalled
+        reattach — see pipeline_runner.py's start()/reattach()) is never a
+        real pipeline step. Rather than hardcode one node_id, this checks
+        `job == "__health__"` generically so any future __health__ signal
+        still renders a note instead of crashing a node_id lookup.
+        """
+        if job == "__health__":
+            self._show_health_note(node_id, status, detail)
+            return
+
+        label = self._step_status_labels.get(node_id)
+        if label is None:
+            # Unknown node_id — e.g. a stale callback delivered after begin()
+            # was called again for a different run. Ignore rather than crash;
+            # there is no step row to update.
+            return
+
+        self._step_status[node_id] = status
+        self._set_status_glyph(label, status)
+
+    def on_log(self, line: str) -> None:
+        """Append one raw stdout line to the live log tail.
+
+        Board-switch lines (per the mockup: "resetting boards", "starting
+        server") are styled as first-class "switch" rows instead of plain
+        log text — see _is_switch_line and this class's docstring.
+        """
+        text = line.rstrip("\n")
+        row = Gtk.Label(label=text)
+        row.set_xalign(0)
+        row.set_wrap(True)
+        row.add_css_class("ps-log-switch" if self._is_switch_line(text) else "ps-log-line")
+        self._log_box.append(row)
+
+    def on_finished(self, success: bool) -> None:
+        """Resolve any step still "running" to done/failed, then emit run-done.
+
+        Steps that never started ("pending") are left untouched: the run
+        genuinely never reached them, so flipping them to done or failed
+        would misrepresent what actually happened. Matches PipelineRunner's
+        on_run_finished(success) call exactly — see this class's docstring.
+        """
+        resolved = "done" if success else "failed"
+        for node_id, status in list(self._step_status.items()):
+            if status == "running":
+                self._step_status[node_id] = resolved
+                self._set_status_glyph(self._step_status_labels[node_id], resolved)
+
+        if self._run_id is not None:
+            self.emit("run-done", self._run_id)
+
+    # ── Row building / helpers ───────────────────────────────────────────────
+
+    def _build_step_row(self, index: int, step: StepView) -> "tuple[Gtk.Widget, Gtk.Label]":
+        """Build one PENDING step row; returns (row, status_label) so begin()
+        can keep the label reference for later in-place glyph updates."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        row.add_css_class("ps-step")
+
+        n_label = Gtk.Label(label=str(index))
+        n_label.add_css_class("ps-step-n")
+        n_label.set_valign(Gtk.Align.START)
+        row.append(n_label)
+
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        main.set_hexpand(True)
+        main.set_valign(Gtk.Align.CENTER)
+
+        verb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        verb_label = Gtk.Label(label=step.intent.verb)
+        verb_label.set_xalign(0)
+        verb_label.add_css_class("ps-step-verb")
+        verb_row.append(verb_label)
+
+        status_label = Gtk.Label(label=self._STATUS_GLYPH["pending"])
+        status_label.add_css_class(self._STATUS_CSS["pending"])
+        verb_row.append(status_label)
+        main.append(verb_row)
+
+        noun_label = Gtk.Label(label=step.intent.noun)
+        noun_label.set_xalign(0)
+        noun_label.add_css_class("ps-step-noun")
+        main.append(noun_label)
+
+        # model_label omitted entirely (not shown blank) when the intent
+        # doesn't name an underlying tool — same guard as OpenView/RemixView.
+        if step.intent.model_label:
+            model_label = Gtk.Label(label=step.intent.model_label)
+            model_label.set_xalign(0)
+            model_label.add_css_class("ps-step-model")
+            main.append(model_label)
+
+        row.append(main)
+        return row, status_label
+
+    def _set_status_glyph(self, label: Gtk.Label, status: str) -> None:
+        """Update *label*'s glyph text and status CSS class in place."""
+        label.set_label(self._STATUS_GLYPH.get(status, "•"))
+        for css in self._STATUS_CSS.values():
+            label.remove_css_class(css)
+        label.add_css_class(self._STATUS_CSS.get(status, "ps-status-pending"))
+
+    def _is_switch_line(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(marker in lowered for marker in self._SWITCH_MARKERS)
+
+    def _show_health_note(self, node_id: str, status: str, detail: str) -> None:
+        """Render the runner's synthetic __health__ signal as a small note.
+
+        PipelineRunner only ever sends node_id="__chips__" (chip-health
+        degraded — status e.g. "degraded", detail a human hint like "AC power
+        cycle recommended") or "__reattach__" (a stalled reattach warning,
+        status="warn") today. "__chips__" additionally gets a friendlier
+        "N chips" phrasing when status is a bare count, since that's the
+        most likely shape a future chip-count signal would take; any other
+        __health__ shape still degrades to showing detail (or status if no
+        detail) instead of crashing or being silently dropped.
+        """
+        if node_id == "__chips__" and status.isdigit():
+            text = f"{status} chip{'' if status == '1' else 's'}"
+        else:
+            text = detail or status
+        self._health_note.set_label(f"⚠ {text}" if text else "")
+        self._health_note.set_visible(bool(text))
 
 
 class PipelineStudio(Gtk.Box):
