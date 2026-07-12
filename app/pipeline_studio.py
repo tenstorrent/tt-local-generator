@@ -43,9 +43,21 @@ Four pieces:
     intent card with its `spec_remix.editable_params` fields inline
     (pre-filled with the working spec's current values), a **Remove**
     control, and a **＋ add a step after** control that opens a contextual
-    `Gtk.Popover` of `intent_vocab.compatible_intents(<this node's
-    output_kind>)` — only intents that can actually consume what this step
-    produces. Layout follows the validated mockup at
+    `Gtk.Popover` of DYNAMIC capabilities (SP-C Phase 2b-2 Task 2): the
+    `capability_fn` constructor arg — `capability_discovery.default_capabilities`
+    by default — is called with this node's output_kind and returns a
+    `list[capability_discovery.Capability]` mixing native engine intents and
+    plugin capabilities, each already flagged live/latent against real
+    plugin-load and backend-health state. Live entries are clickable and add a
+    step; latent entries render disabled/greyed with their `reason` (e.g.
+    "start a video model") as a tooltip and add nothing when clicked. If
+    `capability_fn` returns nothing (e.g. an injected test fake, or discovery
+    finding no plugins at all), the picker falls back to
+    `intent_vocab.compatible_intents(<output_kind>)` wrapped as live native
+    Capability stand-ins, so it never renders empty for a kind that genuinely
+    has native next-steps. Layout follows the validated mockup at
+    `.superpowers/brainstorm/988333-1783804257/content/add-step-wingit.html`
+    (live capabilities section) building on
     `.superpowers/brainstorm/988333-1783804257/content/intent-composer.html`.
 
     Data arrives ONLY through `set_run(run, spec_path)` — like Discover/
@@ -160,6 +172,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
+import capability_discovery  # noqa: E402
 from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
@@ -423,6 +436,18 @@ _CSS = b"""
     font-size: 11px;
     border-radius: 8px;
     padding: 4px 8px;
+}
+.ps-cap-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #eef8f6;
+}
+.ps-cap-detail {
+    font-size: 10px;
+    color: #6f948d;
+}
+.ps-cap-latent {
+    opacity: 0.5;
 }
 .ps-composer-message {
     font-size: 11.5px;
@@ -860,10 +885,18 @@ class RemixView(Gtk.Box):
         "run-remix": (GObject.SignalFlags.RUN_FIRST, None, (str, object)),
     }
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        capability_fn: "Callable[[str], list] | None" = None,
+    ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
         _apply_css()
+
+        # Real deps by default (plugin manifests on disk + live plugin/backend
+        # health); tests inject a fake so the picker is exercised without ever
+        # touching disk/hardware. See class docstring for the full contract.
+        self._capability_fn = capability_fn or capability_discovery.default_capabilities
 
         self._spec_path: "str | None" = None
         # The composer's WORKING SPEC DICT (Phase 2b-1 Task 3) — loaded fresh
@@ -971,8 +1004,15 @@ class RemixView(Gtk.Box):
 
     # ── Composer: add / remove steps ────────────────────────────────────────
 
-    def add_step_after(self, node_id: str, class_type: str) -> None:
+    def add_step_after(
+        self, node_id: str, class_type: str, params: "dict | None" = None,
+    ) -> None:
         """Add a new *class_type* node after *node_id*, then re-render.
+
+        *params* is forwarded verbatim to `spec_remix.add_step` — used by the
+        add-after picker's plugin capabilities to set the new
+        TTLGArtgenGenerate node's `plugin` input (e.g.
+        `params={"plugin": "verse"}`); native capabilities pass `None`.
 
         Commits any pending param-field edits into `working_spec` FIRST (see
         `_commit_pending_edits`) so a structural change never discards an
@@ -985,7 +1025,7 @@ class RemixView(Gtk.Box):
         """
         self._commit_pending_edits()
         try:
-            self.working_spec = add_step(self.working_spec, node_id, class_type)
+            self.working_spec = add_step(self.working_spec, node_id, class_type, params=params)
         except ValueError as exc:
             self._show_message(f"Couldn't add that step: {exc}")
             self._render()
@@ -1029,15 +1069,45 @@ class RemixView(Gtk.Box):
         self._message_label.set_label("")
         self._message_label.set_visible(False)
 
-    def _add_after_intents_for(self, node_id: str) -> list:
-        """Compatible next-step Intents for *node_id*'s output, or `[]` if it
-        has no `output_kind` (e.g. an unrecognized/generic-fallback intent)."""
+    def _add_after_intents_for(self, node_id: str) -> "list[capability_discovery.Capability]":
+        """Dynamic add-after `Capability` list for *node_id*'s output, or
+        `[]` if it has no `output_kind` (e.g. an unrecognized/generic-fallback
+        intent).
+
+        Delegates to `self._capability_fn(output_kind)` (see class docstring)
+        rather than the static `intent_vocab.compatible_intents` directly.
+        Falls back to a live-native-only Capability list synthesized from
+        `compatible_intents` when `capability_fn` returns nothing (an empty
+        test fake, or — defensively — an unexpected exception from the real
+        discovery path) so the picker degrades gracefully instead of ever
+        rendering a false "nothing can follow this" empty state or crashing.
+        """
         node = self.working_spec.get(node_id, {})
         class_type = node.get("class_type", "")
         output_kind = intent_for(class_type).output_kind
         if not output_kind:
             return []
-        return compatible_intents(output_kind)
+        try:
+            caps = self._capability_fn(output_kind)
+        except Exception:
+            caps = None
+        if caps:
+            return caps
+        return [
+            capability_discovery.Capability(
+                id=intent.class_type,
+                label=label(intent.class_type),
+                kind_out=intent.output_kind,
+                kind_in=intent.input_kind,
+                source="native",
+                class_type=intent.class_type,
+                plugin=None,
+                hardware=None,
+                live=True,
+                reason=None,
+            )
+            for intent in compatible_intents(output_kind)
+        ]
 
     # ── Row building ─────────────────────────────────────────────────────────
 
@@ -1138,8 +1208,10 @@ class RemixView(Gtk.Box):
         return card
 
     def _build_add_after_button(self, node_id: str) -> Gtk.MenuButton:
-        """A "＋ add a step after" control whose popover lists only intents
-        compatible with *node_id*'s output kind (`_add_after_intents_for`)."""
+        """A "＋ add a step after" control whose popover lists the dynamic
+        capabilities compatible with *node_id*'s output kind
+        (`_add_after_intents_for`) — live ones enabled, latent ones greyed
+        with their reason (see `add-step-wingit.html` mockup)."""
         menu_button = Gtk.MenuButton(label="＋ add a step after")  # ＋
         menu_button.add_css_class("ps-composer-add")
 
@@ -1151,17 +1223,52 @@ class RemixView(Gtk.Box):
         popover_box.set_margin_end(6)
 
         choices = self._add_after_intents_for(node_id)
+        # Keyed by Capability.id, NOT class_type — every plugin capability
+        # shares the same class_type (TTLGArtgenGenerate), so class_type
+        # would collide across plugins; `id` is the stable per-capability
+        # identifier (see Capability's docstring in capability_discovery.py).
         choice_buttons: "dict[str, Gtk.Button]" = {}
         if not choices:
             none_label = Gtk.Label(label="No compatible next step")
             none_label.add_css_class("ps-empty-msg")
             popover_box.append(none_label)
-        for choice in choices:
-            item = Gtk.Button(label=label(choice.class_type))
-            item.add_css_class("ps-btn-ghost")
-            item.connect("clicked", self._on_add_after_chosen, node_id, choice.class_type, popover)
+        for cap in choices:
+            item = Gtk.Button()
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            main_label = Gtk.Label(label=cap.label)
+            main_label.set_xalign(0)
+            main_label.add_css_class("ps-cap-label")
+            content.append(main_label)
+
+            # Quiet secondary detail: the latent reason ("start a video
+            # model") when greyed, or the plugin name for a live plugin
+            # capability (native capabilities have no such detail to show).
+            detail_text = cap.reason if not cap.live else cap.plugin
+            if detail_text:
+                detail_label = Gtk.Label(label=detail_text)
+                detail_label.set_xalign(0)
+                detail_label.add_css_class("ps-cap-detail")
+                content.append(detail_label)
+
+            item.set_child(content)
+
+            if cap.live:
+                item.add_css_class("ps-btn-ghost")
+                params = {"plugin": cap.plugin} if cap.source == "plugin" else None
+                item.connect(
+                    "clicked", self._on_add_after_chosen, node_id, cap.class_type, popover, params,
+                )
+            else:
+                item.add_css_class("ps-cap-latent")
+                item.set_sensitive(False)
+                if cap.reason:
+                    item.set_tooltip_text(cap.reason)
+                # No click handler: a disabled Gtk.Button never emits
+                # "clicked", but the guard is explicit in intent too — a
+                # latent capability must never add a step.
+
             popover_box.append(item)
-            choice_buttons[choice.class_type] = item
+            choice_buttons[cap.id] = item
 
         popover.set_child(popover_box)
         menu_button.set_popover(popover)
@@ -1170,10 +1277,12 @@ class RemixView(Gtk.Box):
         self._add_after_choice_buttons[node_id] = choice_buttons
         return menu_button
 
-    def _on_add_after_chosen(self, _button: Gtk.Button, node_id: str, class_type: str,
-                              popover: Gtk.Popover) -> None:
+    def _on_add_after_chosen(
+        self, _button: Gtk.Button, node_id: str, class_type: str,
+        popover: Gtk.Popover, params: "dict | None",
+    ) -> None:
         popover.popdown()
-        self.add_step_after(node_id, class_type)
+        self.add_step_after(node_id, class_type, params=params)
 
     def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.

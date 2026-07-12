@@ -586,6 +586,104 @@ def test_current_spec_reflects_param_edit_and_structural_change():
     assert view._field_widgets["1"]["prompt"].get_text() == "a new prompt"
 
 
+# ── RemixView: add-after picker uses dynamic capabilities (SP-C Phase 2b-2 Task 2)
+#
+# `capability_fn` is an injected seam (defaults to
+# capability_discovery.default_capabilities in real use) so these tests never
+# touch real plugins/hardware — a fake returns a fixed mix of one live native
+# Capability, one live plugin Capability, and one latent Capability regardless
+# of the output_kind asked for.
+
+def _fake_capability_fn(output_kind):
+    import capability_discovery as cd
+    return [
+        cd.Capability(
+            id="TTLGCaptionImage", label="Describe it", kind_out="text",
+            kind_in=output_kind, source="native", class_type="TTLGCaptionImage",
+            plugin=None, hardware=None, live=True, reason=None,
+        ),
+        cd.Capability(
+            id="verse", label="Make a verse", kind_out="text",
+            kind_in=None, source="plugin", class_type="TTLGArtgenGenerate",
+            plugin="verse", hardware=None, live=True, reason=None,
+        ),
+        cd.Capability(
+            id="vidhw", label="Animate a scene", kind_out="video",
+            kind_in=None, source="plugin", class_type="TTLGArtgenGenerate",
+            plugin="vidhw", hardware="blackhole", live=False,
+            reason="start a video model",
+        ),
+    ]
+
+
+def test_add_after_picker_lists_live_native_live_plugin_and_disabled_latent():
+    from pipeline_studio import RemixView
+    view = RemixView(capability_fn=_fake_capability_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    buttons = view._add_after_choice_buttons["1"]
+    assert set(buttons) == {"TTLGCaptionImage", "verse", "vidhw"}
+
+    assert buttons["TTLGCaptionImage"].get_sensitive() is True
+    assert buttons["verse"].get_sensitive() is True
+
+    latent_btn = buttons["vidhw"]
+    assert latent_btn.get_sensitive() is False
+    assert latent_btn.get_tooltip_text() == "start a video model"
+
+
+def test_choosing_live_native_capability_adds_step_of_its_class_type():
+    from pipeline_studio import RemixView
+    view = RemixView(capability_fn=_fake_capability_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._add_after_choice_buttons["1"]["TTLGCaptionImage"].emit("clicked")
+
+    new_ids = set(view.working_spec) - before_ids
+    assert len(new_ids) == 1
+    new_node = view.working_spec[new_ids.pop()]
+    assert new_node["class_type"] == "TTLGCaptionImage"
+
+
+def test_choosing_live_plugin_capability_adds_artgen_node_with_plugin_param():
+    from pipeline_studio import RemixView
+    view = RemixView(capability_fn=_fake_capability_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._add_after_choice_buttons["1"]["verse"].emit("clicked")
+
+    new_ids = set(view.working_spec) - before_ids
+    assert len(new_ids) == 1
+    new_id = new_ids.pop()
+    spec = view.current_spec()
+    assert spec[new_id]["class_type"] == "TTLGArtgenGenerate"
+    assert spec[new_id]["inputs"]["plugin"] == "verse"
+
+
+def test_clicking_latent_capability_adds_nothing():
+    from pipeline_studio import RemixView
+    view = RemixView(capability_fn=_fake_capability_fn)
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+
+    before_ids = set(view.working_spec)
+    view._add_after_choice_buttons["1"]["vidhw"].emit("clicked")
+
+    assert set(view.working_spec) == before_ids
+
+
+def test_capability_fn_empty_falls_back_gracefully_no_crash():
+    """An injected capability_fn returning [] must not crash the picker — it
+    either falls back to the static vocabulary or shows nothing, but never
+    raises."""
+    from pipeline_studio import RemixView
+    view = RemixView(capability_fn=lambda output_kind: [])
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)  # must not raise
+
+    assert "1" in view._add_after_buttons
+
+
 # ── LiveRunView ──────────────────────────────────────────────────────────────
 #
 # begin()/on_node_update()/on_log()/on_finished() are driven directly here —
