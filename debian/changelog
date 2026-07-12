@@ -1,3 +1,17 @@
+tt-local-generator (0.20.0) noble; urgency=medium
+
+  * Pipeline Studio Phase 3 — build a showcase. Any completed run can be turned
+    into a self-contained, shareable HTML page (Build showcase in the Open view):
+    a dark, editorial layout with the results embedded (images/video as data
+    URIs, no external references) and "the pipeline behind it" recipe, plus a
+    footer crediting tt-local-generator on Tenstorrent hardware. Generation runs
+    off the main thread and the page opens in the browser. New app/showcase.py
+    (self-contained-HTML generator from a run's view-model, verified end-to-end
+    on a real run). This completes the Pipeline Studio create arc:
+    Discover -> Open -> Remix/Compose -> Run -> Showcase.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 20:15:00 -0700
+
 tt-local-generator (0.19.0) noble; urgency=medium
 
   * Pipeline Studio Phase 2b-3 — "wing it". The composer's add-a-step area now has
