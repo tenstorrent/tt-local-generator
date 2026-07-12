@@ -336,20 +336,30 @@ def remove_step(spec: dict, node_id: str) -> dict:
     list/dict entry when nested) if it doesn't. This guarantees the result
     never contains a wire pointing at the removed node.
 
-    Deliberate design choice (the "genuinely ambiguous" case called out in
-    the task brief): this rewiring is purely STRUCTURAL — it reconnects a
-    consumer to whatever node_id's own upstream was, without checking that
-    the consumer's expected input KIND still matches what's now arriving
-    (e.g. removing an image->caption node whose caption feeds a text prompt
-    elsewhere would leave that consumer wired to an image path instead of
-    text). ``add_step`` enforces kind-compatibility because it's choosing a
-    NEW connection; ``remove_step`` does not re-validate kind on EXISTING
-    connections it's merely re-routing, because the alternative (silently
-    dropping every downstream consumer's wire whenever kinds don't line up)
-    would be equally surprising and would throw away more of the graph than
-    the user asked to remove. The composer UI is expected to warn/preview
-    before removal in a case like this; this function only guarantees
-    structural validity (acyclic, no dangling wire), not semantic validity.
+    Canonical-vs-nested distinction (the "genuinely ambiguous" case called
+    out in the task brief): a consumer's CANONICAL input — the key equal to
+    ``intent_for(consumer's class_type).input_key``, when that intent also
+    declares an ``input_kind`` — is where we actually know what KIND of
+    artifact the consumer expects, so it's rewired KIND-AWARE: it is spliced
+    onto ``up`` only when ``up`` delivers the SAME kind the consumer wants
+    (``intent_for(up's source node's class_type).output_kind ==
+    consumer_intent.input_kind``). If ``up`` is ``None`` (nothing to
+    reconnect to) or the kind doesn't match (e.g. removing an image->caption
+    node whose caption fed a text prompt elsewhere would otherwise leave that
+    consumer wired to an image path instead of text), the canonical key is
+    DROPPED entirely rather than wired to something semantically wrong — the
+    consumer falls back to its own literal/default value.
+
+    Every OTHER wire referencing *node_id* — a non-canonical top-level key,
+    or a wire nested inside a list/dict-shaped input (e.g.
+    TTLGAddToPlaylist's ``artifacts``/``metadata``) — keeps the prior, purely
+    STRUCTURAL behavior: it is spliced onto ``up`` (or dropped if ``up`` is
+    ``None``) with no kind check, because intent_vocab has no per-key kind
+    information for those positions to check against. The composer UI is
+    expected to warn/preview before removal in a case like this; this
+    function only guarantees structural validity (acyclic, no dangling wire)
+    for the nested/non-canonical case, not semantic validity — canonical
+    inputs get the stronger, semantically-correct guarantee described above.
 
     Raises ``ValueError`` if *node_id* doesn't exist, or if the resulting
     spec fails validation (should not happen given the rewiring above, but
@@ -367,6 +377,18 @@ def remove_step(spec: dict, node_id: str) -> dict:
         if _is_wire(candidate):
             up = candidate
 
+    # The KIND `up` would deliver if spliced in — the output_kind of up's
+    # OWN source node. Looked up now, before node_id is deleted, while
+    # new_spec still holds every other node untouched (up's source node is
+    # never node_id itself — it's node_id's own upstream). None when there's
+    # no upstream at all, or (defensively) if up points at a node that's
+    # somehow missing from the spec.
+    up_kind = None
+    if up is not None:
+        up_src_node = new_spec.get(up[0])
+        if isinstance(up_src_node, dict):
+            up_kind = intent_for(up_src_node.get("class_type", "")).output_kind
+
     del new_spec[node_id]
 
     for nid, n in new_spec.items():
@@ -375,8 +397,21 @@ def remove_step(spec: dict, node_id: str) -> dict:
         inputs = n.get("inputs")
         if not isinstance(inputs, dict):
             continue
+        consumer_intent = intent_for(n.get("class_type", ""))
         new_inputs: "dict[str, Any]" = {}
         for key, value in inputs.items():
+            is_canonical_ref = (
+                key == consumer_intent.input_key
+                and consumer_intent.input_kind is not None
+                and _is_wire(value)
+                and value[0] == node_id
+            )
+            if is_canonical_ref:
+                if up is not None and up_kind == consumer_intent.input_kind:
+                    new_inputs[key] = up
+                # else: kind mismatch (or no upstream at all) — drop the
+                # canonical key entirely rather than wire something wrong.
+                continue
             rewired = _rewire_wires(value, node_id, up)
             if rewired is not _DROP:
                 new_inputs[key] = rewired
