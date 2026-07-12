@@ -28,10 +28,13 @@ predates this being handled at all). See `_resolve_status`.
 
 Artifact resolution mirrors the engine handlers' naming exactly
 (`ctx.output_dir / f"node{nid}_<suffix>"`, see `pipeline_engine._h_*`): glob
-`output_dir` for `node{id}_*` and `node{id}.*`, filter to the extensions that
+`output_dir` for `node{id}_*` and `node{id}.*` at the top level AND one
+directory down (`output_dir/*/node{id}_*`), filter to the extensions that
 match the node's primary output kind, and — since a retried node can leave
-behind more than one candidate file (e.g. a fixed re-render) — prefer the
-most recently modified match.
+behind more than one candidate file (e.g. a fixed re-render), or a multi-job
+run can leave one candidate per job subdirectory (`bin/run_worlds_fair.sh`
+writes each job's artifacts into its own `output_dir/<job-name>/` rather than
+flat) — prefer the most recently modified match.
 """
 from __future__ import annotations
 
@@ -144,6 +147,14 @@ def _resolve_artifact(output_dir: "Path | None", node_id: str, intent: Intent) -
     (e.g. an old/partial record) — globbing `Path("")` would silently
     resolve to "." and scan the process's current working directory, so an
     absent output_dir short-circuits to "no artifact" instead.
+
+    Real historical runs (`bin/run_worlds_fair.sh`, multi-job) don't write
+    artifacts flat into `output_dir` — they fan the same spec out over one
+    subdirectory per job (e.g. `<output_dir>/1964-ny/node1_image.png`), so a
+    top-level-only glob finds nothing for those records. Search both the top
+    level AND exactly one directory down (`output_dir/*/node{id}_*`) — one
+    level is as deep as any known layout goes, and bounding the recursion
+    (rather than `rglob`) keeps this cheap even if `output_dir` is huge.
     """
     if output_dir is None:
         return None
@@ -154,14 +165,21 @@ def _resolve_artifact(output_dir: "Path | None", node_id: str, intent: Intent) -
         return None
     _kind, allowed_exts = kind_info
 
-    candidates = list(output_dir.glob(f"node{node_id}_*")) + \
-        list(output_dir.glob(f"node{node_id}.*"))
+    candidates = (
+        list(output_dir.glob(f"node{node_id}_*"))
+        + list(output_dir.glob(f"node{node_id}.*"))
+        + list(output_dir.glob(f"*/node{node_id}_*"))
+        + list(output_dir.glob(f"*/node{node_id}.*"))
+    )
+    candidates = [c for c in candidates if c.is_file()]
     if allowed_exts is not None:
         candidates = [c for c in candidates if c.suffix.lower() in allowed_exts]
     if not candidates:
         return None
     # Prefer the most recently modified match (a retried node can leave more
-    # than one candidate behind, e.g. node6_video.mp4 + node6_video_fixed.mp4).
+    # than one candidate behind, e.g. node6_video.mp4 + node6_video_fixed.mp4,
+    # or — for a multi-job nested run — one candidate per job subdir; picking
+    # the newest resolves to a real artifact rather than leaving it blank).
     best = max(candidates, key=lambda p: p.stat().st_mtime)
     return str(best)
 

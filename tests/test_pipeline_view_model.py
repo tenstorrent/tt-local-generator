@@ -13,6 +13,16 @@ _FIX = Path(__file__).parent / "fixtures" / "sp_c_run"
 _SPEC = str(_FIX / "spec.json")
 _OUT = str(_FIX)
 
+# Real historical runs from bin/run_worlds_fair.sh fan out one pipeline spec
+# over several per-job subdirectories (e.g. <output_dir>/1964-ny/node1_image.png)
+# rather than writing artifacts flat into output_dir. This fixture mirrors that
+# layout with a single job subdir ("jobA") so build_run_view's artifact
+# resolution is exercised against both flat (sp_c_run) and nested (this)
+# layouts.
+_FIX_NESTED = Path(__file__).parent / "fixtures" / "sp_c_run_nested"
+_SPEC_NESTED = str(_FIX_NESTED / "spec.json")
+_OUT_NESTED = str(_FIX_NESTED)
+
 
 def _make_record(**overrides) -> dict:
     record = {
@@ -174,6 +184,33 @@ def test_most_recently_modified_artifact_wins_on_ambiguity(tmp_path):
     view = pvm.build_run_view(record)
     step1 = next(s for s in view.steps if s.node_id == "1")
     assert step1.artifact_path == str(newer)
+
+
+def test_artifact_resolved_from_per_job_subdirectory():
+    """A run_worlds_fair.sh-style record whose output_dir holds artifacts one
+    level down (in a per-job subdir) must still resolve node artifacts —
+    not just runs that write flat into output_dir. Regression for the
+    Pipeline Studio Discover/Open bug where every real multi-job run
+    rendered as all-placeholder because the resolver only globbed the top
+    level of output_dir."""
+    record = {
+        "id": "22222222-2222-2222-2222-222222222222",
+        "spec_path": _SPEC_NESTED,
+        "spec_name": "World's Fair recipe",
+        "output_dir": _OUT_NESTED,
+        "status": "done",
+        "started_at": "2026-06-02T09:25:16+00:00",
+        "finished_at": "2026-06-02T09:30:00+00:00",
+        "job_states": {},
+    }
+    view = pvm.build_run_view(record)
+    by_id = {s.node_id: s for s in view.steps}
+
+    assert by_id["1"].artifact_path == str(_FIX_NESTED / "jobA" / "node1_image.png")
+    assert Path(by_id["1"].artifact_path).exists()
+    assert by_id["4"].artifact_path == str(_FIX_NESTED / "jobA" / "node4_video.mp4")
+    assert Path(by_id["4"].artifact_path).exists()
+    assert view.hero_path == str(_FIX_NESTED / "jobA" / "node1_image.png")
 
 
 # ── list_run_views ────────────────────────────────────────────────────────────

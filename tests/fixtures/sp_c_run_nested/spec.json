@@ -1,0 +1,5 @@
+{
+  "_spec_version": "comfyui-api-v1",
+  "1": {"class_type": "TTLGTextToImage", "inputs": {"model": "FLUX.1-schnell", "prompt": "a lighthouse at dusk", "width": 512, "height": 512}},
+  "4": {"class_type": "TTLGImageToVideo", "inputs": {"src": ["1", "image_path"]}}
+}
