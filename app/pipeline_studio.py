@@ -194,6 +194,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
+import showcase  # noqa: E402
 import wingit  # noqa: E402
 from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
@@ -210,6 +211,12 @@ log = logging.getLogger(__name__)
 # root — see spec_remix.write_spec's docstring for the naming scheme used
 # inside it (remix_<base_stem>_<n>.json).
 REMIXES_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "remixes"
+
+# Where "Build showcase" (SP-C Phase 3 Task 2) writes its self-contained HTML
+# pages — a sibling of REMIXES_DIR under the same app data root. See
+# `showcase.write_showcase`'s docstring for the filename scheme used inside it
+# (showcase_<slug(title)>_<n>.html).
+SHOWCASES_DIR = Path.home() / ".local" / "share" / "tt-local-generator" / "showcases"
 
 
 def _default_remix_jobs() -> "list[dict]":
@@ -515,6 +522,23 @@ _CSS = b"""
     background-color: alpha(#F6BC42, 0.08);
     border-radius: 0 6px 6px 0;
 }
+.ps-showcase-btn {
+    background-color: #F6BC42;
+    color: #3a2a00;
+    font-weight: 650;
+    border-radius: 9px;
+    padding: 8px 16px;
+    font-size: 12.5px;
+}
+.ps-showcase-open-btn {
+    color: #74C5DF;
+    font-size: 12px;
+}
+.ps-showcase-path {
+    font-family: monospace;
+    font-size: 11px;
+    color: #9bc0ba;
+}
 """
 
 _css_applied = False
@@ -745,6 +769,16 @@ class OpenView(Gtk.Box):
     Data comes ONLY through `set_run()` — same rule as DiscoverView, and for
     the same reason: this widget must be unit-testable with a hand-built
     RunView and never reach into PipelineStore/disk itself.
+
+    Also the home of the "Build showcase" capstone (SP-C Phase 3 Task 2):
+    a run — finished or not, this view doesn't gate on it — can be turned
+    into a self-contained, shareable HTML page via the `showcase_fn` seam
+    (production default: `showcase.write_showcase`, writing into
+    `SHOWCASES_DIR`). Generation touches disk and downscales/base64-encodes
+    every artifact, so it runs on a daemon thread (GTK threading rule, see
+    CLAUDE.md) with the same busy-guard + `GLib.idle_add` reveal pattern
+    RemixView's wing-it compose button already established — see
+    `_on_build_showcase_clicked`/`_apply_showcase_result`.
     """
 
     __gsignals__ = {
@@ -763,10 +797,19 @@ class OpenView(Gtk.Box):
     _STATUS_CSS = {"done": "ps-status-done", "running": "ps-status-running",
                     "pending": "ps-status-pending", "failed": "ps-status-failed"}
 
-    def __init__(self) -> None:
+    def __init__(self, showcase_fn: "Callable[[RunView], str] | None" = None) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
         _apply_css()
+
+        # "Build showcase" seam (SP-C Phase 3 Task 2): tests inject a fake
+        # `showcase_fn(run_view) -> str` (or one that raises); production
+        # default builds a real page and writes it under SHOWCASES_DIR.
+        self._showcase_fn: "Callable[[RunView], str]" = showcase_fn or (
+            lambda run_view: showcase.write_showcase(run_view, SHOWCASES_DIR)
+        )
+        self._run_view: "RunView | None" = None
+        self._showcase_path: "str | None" = None
 
         # Populated by set_run(); keyed by node_id, in step order (Python
         # dicts preserve insertion order) so tests/callers can both look up a
@@ -808,11 +851,60 @@ class OpenView(Gtk.Box):
         self._steps_box.set_margin_end(18)
         scroller.set_child(self._steps_box)
 
+        # ── "Build showcase" capstone footer ────────────────────────────────
+        showcase_footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        showcase_footer.set_margin_top(4)
+        showcase_footer.set_margin_bottom(4)
+        showcase_footer.set_margin_start(18)
+        showcase_footer.set_margin_end(18)
+
+        self._showcase_btn = Gtk.Button(label="✦ Build showcase")
+        self._showcase_btn.add_css_class("ps-showcase-btn")
+        self._showcase_btn.connect("clicked", self._on_build_showcase_clicked)
+        showcase_footer.append(self._showcase_btn)
+
+        self._showcase_open_btn = Gtk.Button(label="Open →")
+        self._showcase_open_btn.add_css_class("ps-showcase-open-btn")
+        self._showcase_open_btn.connect("clicked", self._on_open_showcase_clicked)
+        self._showcase_open_btn.set_visible(False)
+        showcase_footer.append(self._showcase_open_btn)
+
+        self._showcase_path_label = Gtk.Label(label="")
+        self._showcase_path_label.set_xalign(0)
+        self._showcase_path_label.set_wrap(True)
+        self._showcase_path_label.set_hexpand(True)
+        self._showcase_path_label.add_css_class("ps-showcase-path")
+        self._showcase_path_label.set_visible(False)
+        showcase_footer.append(self._showcase_path_label)
+
+        self.append(showcase_footer)
+
+        # Hidden until a showcase build fails (see _show_showcase_message) —
+        # same gentle-inline-message pattern as RemixView's _message_label.
+        self._showcase_message_label = Gtk.Label(label="")
+        self._showcase_message_label.set_xalign(0)
+        self._showcase_message_label.add_css_class("ps-composer-message")
+        self._showcase_message_label.set_visible(False)
+        self._showcase_message_label.set_margin_top(2)
+        self._showcase_message_label.set_margin_bottom(10)
+        self._showcase_message_label.set_margin_start(18)
+        self._showcase_message_label.set_margin_end(18)
+        self.append(self._showcase_message_label)
+
     # ── Public API ───────────────────────────────────────────────────────────
 
     def set_run(self, run: RunView) -> None:
-        """(Re)build the step list for *run*. Main-thread only, repeat-safe."""
+        """(Re)build the step list for *run*. Main-thread only, repeat-safe.
+
+        Also resets the showcase capstone's state (button re-enabled, any
+        previously-revealed path/message hidden) — a stale result from a
+        previously-loaded run must never bleed into a freshly-loaded one.
+        """
         self._title_label.set_label(run.title)
+        self._run_view = run
+        self._showcase_btn.set_sensitive(True)
+        self._hide_showcase_message()
+        self._hide_showcase_result()
 
         while child := self._steps_box.get_first_child():
             self._steps_box.remove(child)
@@ -889,6 +981,96 @@ class OpenView(Gtk.Box):
 
     def _on_remix_clicked(self, _button: Gtk.Button, node_id: str) -> None:
         self.emit("remix-request", node_id)
+
+    # ── "Build showcase" capstone ────────────────────────────────────────────
+
+    def _on_build_showcase_clicked(self, _button: Gtk.Button) -> None:
+        """Build a shareable showcase page for the currently loaded run.
+
+        Runs `self._showcase_fn` on a daemon thread — the production default
+        (`showcase.write_showcase`) downscales/base64-encodes every artifact,
+        which can be slow for a run with a large video, so it must never
+        block the GTK main thread (see CLAUDE.md's GTK threading rule).
+
+        Busy-guard: the button is disabled synchronously here, before the
+        worker thread is even started, so a second click while a build is in
+        flight can't kick off a duplicate build. `_apply_showcase_result`
+        (posted back via `GLib.idle_add`) re-enables it on both the success
+        and failure path — same pattern as
+        `RemixView._on_wingit_compose_clicked`/`_apply_wingit_result`.
+        """
+        if self._run_view is None:
+            return  # defensive: no run loaded yet, nothing to showcase
+
+        self._showcase_btn.set_sensitive(False)
+        self._hide_showcase_message()
+        self._hide_showcase_result()
+
+        run_view = self._run_view
+        showcase_fn = self._showcase_fn
+
+        def worker() -> None:
+            try:
+                path = showcase_fn(run_view)
+            except Exception:
+                # A raising showcase_fn must never crash the worker thread —
+                # treated identically to any other build failure.
+                GLib.idle_add(self._apply_showcase_result, None, True)
+                return
+            GLib.idle_add(self._apply_showcase_result, path, False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_showcase_result(self, path: "str | None", failed: bool) -> None:
+        """Apply a `showcase_fn` outcome from `_on_build_showcase_clicked`.
+
+        Always runs on the main thread (posted via `GLib.idle_add`, or
+        invoked directly by a test simulating that hop). Re-enables the
+        Build showcase button on BOTH the success and failure path so a
+        failed build never leaves the control stuck disabled.
+        """
+        self._showcase_btn.set_sensitive(True)
+        if failed or not path:
+            self._show_showcase_message("Couldn't build the showcase.")
+            return
+        self._showcase_path = path
+        self._showcase_path_label.set_label(path)
+        self._showcase_path_label.set_visible(True)
+        self._showcase_open_btn.set_visible(True)
+
+    def _on_open_showcase_clicked(self, _button: Gtk.Button) -> None:
+        """Launch the just-built showcase file in the system default handler.
+
+        Same pattern `main_window.DetailPanel._open_external` already uses
+        for videos — `subprocess.Popen(["xdg-open", path])` (or `["open",
+        path]` on macOS) — wrapped in try/except since a missing opener
+        binary or an unreadable path must never crash the app.
+        """
+        if not self._showcase_path:
+            return
+        import platform
+        import subprocess  # noqa: PLC0415 — local import, mirrors main_window's _open_external
+        try:
+            if platform.system() == "Darwin":
+                subprocess.Popen(["open", self._showcase_path])
+            else:
+                subprocess.Popen(["xdg-open", self._showcase_path])
+        except Exception:
+            pass
+
+    def _show_showcase_message(self, text: str) -> None:
+        self._showcase_message_label.set_label(text)
+        self._showcase_message_label.set_visible(True)
+
+    def _hide_showcase_message(self) -> None:
+        self._showcase_message_label.set_label("")
+        self._showcase_message_label.set_visible(False)
+
+    def _hide_showcase_result(self) -> None:
+        self._showcase_path = None
+        self._showcase_path_label.set_label("")
+        self._showcase_path_label.set_visible(False)
+        self._showcase_open_btn.set_visible(False)
 
 
 class RemixView(Gtk.Box):

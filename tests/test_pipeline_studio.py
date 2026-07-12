@@ -17,7 +17,7 @@ import sys
 import threading as _threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -328,6 +328,211 @@ def test_open_view_remix_whole_pipeline_emits_empty_string():
     view._remix_all_btn.emit("clicked")
 
     assert received == [""]
+
+
+# ── OpenView: "Build showcase" capstone (SP-C Phase 3, Task 2) ────────────────
+#
+# `showcase_fn` is injected exactly like RemixView's `wingit_fn` seam: tests
+# never touch the real `showcase.write_showcase` (no PIL/disk work), and the
+# busy-guard tests below reuse the same "real threading.Thread + captured
+# GLib.idle_add" technique `_click_wingit_compose_with_blocking_fn` established
+# so the button-disabled-mid-flight assertion isn't a race.
+
+def test_open_view_build_showcase_button_present_and_result_hidden_initially():
+    from pipeline_studio import OpenView
+    view = OpenView(showcase_fn=lambda run_view: "/tmp/unused.html")
+    view.set_run(_make_run_with_artifact())
+
+    assert view._showcase_btn.get_sensitive() is True
+    assert view._showcase_path_label.get_visible() is False
+    assert view._showcase_open_btn.get_visible() is False
+    assert view._showcase_message_label.get_visible() is False
+
+
+def test_open_view_build_showcase_calls_fn_with_run_view_and_reveals_path(monkeypatch, tmp_path):
+    """Driving the click synchronously (thread + idle_add both immediate):
+    the fake is called with the loaded RunView and its returned path is
+    revealed via the path label + Open button."""
+    import pipeline_studio
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    fake_path = str(tmp_path / "showcase_test_0.html")
+    received = []
+
+    def fake_showcase_fn(run_view):
+        received.append(run_view)
+        return fake_path
+
+    from pipeline_studio import OpenView
+    view = OpenView(showcase_fn=fake_showcase_fn)
+    run = _make_run_with_artifact()
+    view.set_run(run)
+
+    view._showcase_btn.emit("clicked")
+
+    assert received == [run]
+    assert view._showcase_path_label.get_label() == fake_path
+    assert view._showcase_path_label.get_visible() is True
+    assert view._showcase_open_btn.get_visible() is True
+    assert view._showcase_message_label.get_visible() is False
+    # Re-enabled after the (synchronous, here) build completes.
+    assert view._showcase_btn.get_sensitive() is True
+
+
+def test_open_view_build_showcase_disables_button_while_in_flight(monkeypatch):
+    from pipeline_studio import OpenView
+
+    release = _threading.Event()
+
+    def slow_showcase_fn(run_view):
+        release.wait(timeout=5)
+        return "/tmp/showcase_slow.html"
+
+    view = OpenView(showcase_fn=slow_showcase_fn)
+    view.set_run(_make_run_with_artifact())
+    assert view._showcase_btn.get_sensitive() is True
+
+    import pipeline_studio
+    idle_calls: list = []
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: idle_calls.append((fn, a)))
+
+    view._showcase_btn.emit("clicked")
+    try:
+        assert view._showcase_btn.get_sensitive() is False
+    finally:
+        release.set()  # let the blocked worker thread finish either way
+
+
+def test_open_view_build_showcase_reenables_and_reveals_after_success(monkeypatch):
+    from pipeline_studio import OpenView
+
+    release = _threading.Event()
+
+    def slow_showcase_fn(run_view):
+        release.wait(timeout=5)
+        return "/tmp/showcase_success.html"
+
+    view = OpenView(showcase_fn=slow_showcase_fn)
+    view.set_run(_make_run_with_artifact())
+
+    import pipeline_studio
+    idle_calls: list = []
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: idle_calls.append((fn, a)))
+
+    view._showcase_btn.emit("clicked")
+    release.set()
+    for _ in range(200):
+        if idle_calls:
+            break
+        time.sleep(0.01)
+    assert idle_calls, "worker never posted its result back via idle_add"
+
+    fn, args = idle_calls[0]
+    fn(*args)  # runs _apply_showcase_result(...) "on the main thread"
+
+    assert view._showcase_btn.get_sensitive() is True
+    assert view._showcase_path_label.get_label() == "/tmp/showcase_success.html"
+    assert view._showcase_path_label.get_visible() is True
+    assert view._showcase_open_btn.get_visible() is True
+    assert view._showcase_message_label.get_visible() is False
+
+
+def test_open_view_build_showcase_raising_fn_shows_gentle_message_no_crash(monkeypatch):
+    """A raising `showcase_fn` must never crash the worker thread or the app
+    — it degrades to a gentle inline message and re-enables the button."""
+    from pipeline_studio import OpenView
+
+    release = _threading.Event()
+
+    def raising_showcase_fn(run_view):
+        release.wait(timeout=5)
+        raise RuntimeError("boom")
+
+    view = OpenView(showcase_fn=raising_showcase_fn)
+    view.set_run(_make_run_with_artifact())
+
+    import pipeline_studio
+    idle_calls: list = []
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: idle_calls.append((fn, a)))
+
+    view._showcase_btn.emit("clicked")
+    release.set()
+    for _ in range(200):
+        if idle_calls:
+            break
+        time.sleep(0.01)
+    assert idle_calls, "worker never posted its result back via idle_add"
+
+    fn, args = idle_calls[0]
+    fn(*args)  # runs _apply_showcase_result(...) "on the main thread"
+
+    assert view._showcase_btn.get_sensitive() is True
+    assert view._showcase_message_label.get_visible() is True
+    assert view._showcase_message_label.get_label() != ""
+    assert view._showcase_path_label.get_visible() is False
+    assert view._showcase_open_btn.get_visible() is False
+
+
+def test_open_view_set_run_again_resets_showcase_state(monkeypatch):
+    """Repeat-safe: a stale path/message from a previous run must not bleed
+    into a freshly-loaded run's showcase state."""
+    import pipeline_studio
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    from pipeline_studio import OpenView
+    view = OpenView(showcase_fn=lambda run_view: "/tmp/first.html")
+    view.set_run(_make_run_with_artifact())
+    view._showcase_btn.emit("clicked")
+    assert view._showcase_path_label.get_visible() is True
+
+    view.set_run(_make_run_with_artifact())
+    assert view._showcase_path_label.get_visible() is False
+    assert view._showcase_open_btn.get_visible() is False
+    assert view._showcase_message_label.get_visible() is False
+    assert view._showcase_btn.get_sensitive() is True
+
+
+def test_open_view_open_showcase_button_launches_via_xdg_open(monkeypatch):
+    """The Open affordance reuses the app's existing external-open pattern
+    (`subprocess.Popen(["xdg-open", path])`, see main_window.py's
+    `_open_external`) — mocked here so the test never shells out for real."""
+    import pipeline_studio
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    from pipeline_studio import OpenView
+    view = OpenView(showcase_fn=lambda run_view: "/tmp/showcase_open_me.html")
+    view.set_run(_make_run_with_artifact())
+    view._showcase_btn.emit("clicked")
+    assert view._showcase_open_btn.get_visible() is True
+
+    with patch("subprocess.Popen") as mock_popen:
+        view._showcase_open_btn.emit("clicked")
+
+    assert mock_popen.called
+    args = mock_popen.call_args.args[0]
+    assert args[-1] == "/tmp/showcase_open_me.html"
+
+
+def test_open_view_open_showcase_button_guards_popen_exception(monkeypatch):
+    """A failing opener (e.g. `xdg-open` missing) must not crash the app."""
+    import pipeline_studio
+
+    monkeypatch.setattr(pipeline_studio.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(pipeline_studio.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    from pipeline_studio import OpenView
+    view = OpenView(showcase_fn=lambda run_view: "/tmp/showcase_open_me.html")
+    view.set_run(_make_run_with_artifact())
+    view._showcase_btn.emit("clicked")
+
+    with patch("subprocess.Popen", side_effect=OSError("no such opener")):
+        view._showcase_open_btn.emit("clicked")  # must not raise
 
 
 # ── PipelineStudio: open-run wiring ──────────────────────────────────────────
