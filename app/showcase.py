@@ -45,7 +45,18 @@ from typing import Callable
 
 from pipeline_view_model import RunView, StepView
 
-EncodeAssetFn = Callable[[str, str], "str | None"]
+# `encode_asset(path, kind, max_px=...)` — `max_px` is always passed by the
+# builder (hero vs gallery request different caps, see `_HERO_MAX_PX` /
+# `_GALLERY_MAX_PX` below), so the alias is intentionally loose (`...`)
+# rather than a fixed 3-arg signature: any callable that accepts a `max_px`
+# keyword (with a default, for callers that don't care) fits.
+EncodeAssetFn = Callable[..., "str | None"]
+
+# Hero embeds large (full-bleed at the top of the page); gallery thumbnails
+# are much smaller on screen, so encoding them at hero resolution just wastes
+# bytes in the self-contained HTML. See `default_encode_asset`'s `max_px` arg.
+_HERO_MAX_PX = 1000
+_GALLERY_MAX_PX = 680
 
 # ── Output-kind -> encode_asset "kind" mapping ────────────────────────────────
 #
@@ -103,6 +114,12 @@ def _find_hero(run_view: RunView) -> "tuple[StepView, str] | tuple[None, None]":
     (image vs video) the hero is in order to call `encode_asset` correctly,
     and re-scanning is cheap and avoids a second source of truth going stale
     relative to `pipeline_view_model`'s own hero-selection logic.
+
+    Note this deliberately diverges from `pipeline_view_model._HERO_KINDS`
+    (which excludes "gif"): `_ASSET_KIND` maps "gif" to "image", so a GIF step
+    is hero-eligible here even though the view model wouldn't pick it as
+    `RunView.hero_path`. That's fine — this module only needs *an* image/video
+    to feature, not agreement with the view model's specific hero choice.
     """
     for step in run_view.steps:
         if not step.artifact_path:
@@ -113,19 +130,31 @@ def _find_hero(run_view: RunView) -> "tuple[StepView, str] | tuple[None, None]":
     return None, None
 
 
-def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> str:
+def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> "tuple[str, str | None]":
+    """Build the hero figure, and report which step's asset it embedded.
+
+    Returns `(html, embedded_node_id)`. The caller (`build_showcase_html`)
+    excludes `embedded_node_id` from the gallery loop so the same asset is
+    never encoded/embedded a second time. `embedded_node_id` is `None` when
+    there's no hero candidate, or when `encode_asset` declined (missing/
+    oversized/etc.) — in the latter case nothing was actually embedded here,
+    so the step is left free to still get an honest gallery tile rather than
+    silently disappearing from the page.
+    """
     step, kind = _find_hero(run_view)
     if step is None:
-        return ""
-    encoded = encode_asset(step.artifact_path, kind)
+        return "", None
+    encoded = encode_asset(step.artifact_path, kind, max_px=_HERO_MAX_PX)
     if not encoded:
-        return ""
+        return "", None
     if kind == "video":
-        return (
+        html = (
             f'<figure class="hero"><video src="{encoded}" autoplay loop muted '
             f'playsinline controls></video></figure>'
         )
-    return f'<figure class="hero"><img src="{encoded}" alt="{_esc(run_view.title)}"></figure>'
+    else:
+        html = f'<figure class="hero"><img src="{encoded}" alt="{_esc(run_view.title)}"></figure>'
+    return html, step.node_id
 
 
 def _placeholder_tile(label: str, status: str) -> str:
@@ -147,7 +176,7 @@ def _gallery_tile(step: StepView, encode_asset: EncodeAssetFn) -> str:
 
     encoded = None
     if step.status == "done" and step.artifact_path and kind:
-        encoded = encode_asset(step.artifact_path, kind)
+        encoded = encode_asset(step.artifact_path, kind, max_px=_GALLERY_MAX_PX)
 
     if not encoded:
         # Covers: not done yet, no artifact on disk, unrecognized output kind,
@@ -234,8 +263,16 @@ def build_showcase_html(run_view: RunView, *, encode_asset: EncodeAssetFn) -> st
     one yet) always renders an honest placeholder tile, never a fabricated
     thumbnail.
     """
-    hero_html = _hero_html(run_view, encode_asset)
-    gallery_html = "".join(_gallery_tile(step, encode_asset) for step in run_view.steps)
+    hero_html, hero_node_id = _hero_html(run_view, encode_asset)
+    # Exclude the hero's own step from the gallery loop — its asset was
+    # already embedded once above; looping over ALL steps here would encode
+    # and embed it a SECOND time (worst for video: doubles the largest
+    # payload in the page).
+    gallery_html = "".join(
+        _gallery_tile(step, encode_asset)
+        for step in run_view.steps
+        if step.node_id != hero_node_id
+    )
     recipe_html = _recipe_html(run_view.recipe)
     title = _esc(run_view.title)
 
@@ -280,14 +317,19 @@ def build_showcase_html(run_view: RunView, *, encode_asset: EncodeAssetFn) -> st
 """
 
 
-def default_encode_asset(path: "str | None", kind: str) -> "str | None":
+def default_encode_asset(path: "str | None", kind: str, max_px: int = _HERO_MAX_PX) -> "str | None":
     """The one impure encoder — PIL + disk I/O live here and nowhere else.
 
-    image -> downscale (LANCZOS, capped at ~1000px on the long edge) then
+    image -> downscale (LANCZOS, capped at `max_px` on the long edge) then
              base64 JPEG (or PNG if the source has real alpha) data URI.
+             The builder passes a smaller cap for gallery thumbnails
+             (`_GALLERY_MAX_PX`) than for the hero (`_HERO_MAX_PX`) — the
+             default here only matters for callers that invoke this function
+             directly without going through `build_showcase_html`.
     video -> base64 the raw file as a `data:video/mp4;base64,...` URI.
+             (`max_px` is not meaningful for video and is ignored.)
     text  -> the file's decoded text content (the builder inlines it as a
-             gallery snippet, no data URI needed).
+             gallery snippet, no data URI needed; `max_px` is ignored).
 
     Returns None for a missing path, an unreadable/corrupt file, an
     oversized file (see the `_MAX_*_BYTES` guards — a multi-hundred-MB video
@@ -313,7 +355,7 @@ def default_encode_asset(path: "str | None", kind: str) -> "str | None":
             fmt = "PNG" if has_alpha else "JPEG"
             if fmt == "JPEG" and im.mode != "RGB":
                 im = im.convert("RGB")
-            im.thumbnail((1000, 1000), Image.LANCZOS)
+            im.thumbnail((max_px, max_px), Image.LANCZOS)
             buf = io.BytesIO()
             if fmt == "JPEG":
                 im.save(buf, "JPEG", quality=82, optimize=True)

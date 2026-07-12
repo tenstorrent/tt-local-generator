@@ -62,13 +62,25 @@ def _make_run_view(**overrides) -> RunView:
 _FAKE_TEXT_INLINE = "A gleaming silver sphere against a bright blue sky."
 
 
-def _fake_encode_asset(path, kind):
-    """Deterministic fake encoder — no PIL, no disk I/O."""
+def _fake_encode_asset(path, kind, max_px=1000):
+    """Deterministic fake encoder — no PIL, no disk I/O.
+
+    Accepts (and ignores) the `max_px` hero/gallery size-cap argument so this
+    fake stays a drop-in for `build_showcase_html`, which now always passes it
+    (as a keyword) to distinguish hero-size vs gallery-thumbnail encoding.
+    """
     if path == _FIX_PNG and kind == "image":
         return "data:image/png;base64,QUJD"
     if path == "/fake/text/node2.txt" and kind == "text":
         return _FAKE_TEXT_INLINE
     return None  # covers the pending step's absent artifact, and anything unknown
+
+
+_IMAGE_INTENT_2 = Intent(
+    class_type="TTLGEstimateDepth", verb="Read", noun="its depth map", icon="🗺️",
+    outputs=("depth_path",), model_label="MiDaS",
+    input_key="src", input_kind="image", output_kind="image",
+)
 
 
 # ── build_showcase_html ───────────────────────────────────────────────────────
@@ -118,6 +130,46 @@ def test_footer_credits_tt_local_generator():
     html = showcase.build_showcase_html(_make_run_view(), encode_asset=_fake_encode_asset)
     assert "tt-local-generator" in html
     assert "Tenstorrent" in html
+
+
+def test_hero_asset_embedded_exactly_once():
+    """The hero step's own step also appears first in `run_view.steps`, so a
+    naive gallery loop over ALL steps re-encodes/re-embeds the same asset a
+    second time. For a video hero this doubles the largest payload in the
+    page. The hero figure is the one and only place that data URI belongs.
+    """
+    html = showcase.build_showcase_html(_make_run_view(), encode_asset=_fake_encode_asset)
+    assert html.count("data:image/png;base64,QUJD") == 1
+
+
+def test_gallery_calls_encoder_with_smaller_max_px_than_hero():
+    """Plan: hero embeds at ~1000px, gallery thumbnails at ~680px. Use a spy
+    encoder to capture the `max_px` the builder requests for each call — the
+    first call (the hero) must ask for the larger size; every later call (the
+    gallery tiles) must ask for the smaller one.
+    """
+    calls = []
+
+    def spy_encode(path, kind, max_px=1000):
+        calls.append({"path": path, "kind": kind, "max_px": max_px})
+        if kind == "image":
+            return "data:image/png;base64,QUJD"
+        if kind == "text":
+            return _FAKE_TEXT_INLINE
+        return None
+
+    run_view = _make_run_view()
+    # A second, non-hero image step so there's a real gallery image encode
+    # call to compare against the hero's — not just the text snippet.
+    run_view.steps.append(
+        StepView(node_id="5", intent=_IMAGE_INTENT_2, status="done", artifact_path=_FIX_PNG)
+    )
+
+    showcase.build_showcase_html(run_view, encode_asset=spy_encode)
+
+    assert len(calls) == 3  # hero + gallery-text + gallery-image
+    assert calls[0]["max_px"] == 1000  # hero, encoded first
+    assert all(c["max_px"] == 680 for c in calls[1:])  # every gallery tile
 
 
 def test_failed_step_also_renders_as_honest_placeholder():
