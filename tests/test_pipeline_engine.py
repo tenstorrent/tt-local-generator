@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import io
+import json
 import sys
 import urllib.error
 from pathlib import Path
@@ -106,6 +107,34 @@ def test_dry_run_emits_signals_and_publishes_keys():
     # signals: a running+done per node, in topo order
     assert any(l == "NODE:1:running:" or l.startswith("NODE:1:running") for l in lines)
     assert any(l.startswith("NODE:3:done") for l in lines)
+
+
+def test_run_writes_results_json_that_round_trips(tmp_path):
+    """run() must persist its node outputs to output_dir/results.json in the
+    {node_id: {output_key: value}} shape the Open view + run_single_node.sh
+    read. Without this, per-step text previews are dormant on engine runs."""
+    spec = eng.load_spec(str(_FIX))
+    results = eng.run(spec, dry_run=True, emit=lambda s: None,
+                      output_dir=str(tmp_path))
+    rp = tmp_path / "results.json"
+    assert rp.exists(), "engine did not write results.json"
+    on_disk = json.loads(rp.read_text())
+    assert set(on_disk) == set(results)                 # same nodes
+    assert on_disk["3"]["text"] == results["3"]["text"] # text output persisted
+
+
+def test_results_json_feeds_step_text_content(tmp_path):
+    """End-to-end: an engine run's results.json makes build_run_view surface
+    a text step's produced text (closes the loop with Task 6's reader)."""
+    from pipeline_view_model import build_run_view
+    spec = eng.load_spec(str(_FIX))
+    eng.run(spec, dry_run=True, emit=lambda s: None, output_dir=str(tmp_path))
+    record = {"id": "run-test", "started_at": "2026-07-12T00:00:00",
+              "spec_path": str(_FIX), "spec_name": "mini",
+              "output_dir": str(tmp_path), "job_states": {}}
+    rv = build_run_view(record)
+    assert any(s.text_content for s in rv.steps), \
+        "no step got text_content from the engine-written results.json"
 
 
 # ── Task 2: real node handlers (dry-run keys + mocked-helper real paths) ───────

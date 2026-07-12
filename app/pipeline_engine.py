@@ -1029,6 +1029,27 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
     out_dir.mkdir(parents=True, exist_ok=True)
     ctx = _Ctx(out_dir, dry_run, emit)
     results: dict = {}
+    results_path = out_dir / "results.json"
+
+    def _persist() -> None:
+        """Serialize the accumulated node outputs to results.json.
+
+        `results` is ALREADY in the {node_id: {output_key: value}} shape both
+        consumers expect: pipeline_view_model._resolve_text_content reads it to
+        show each step's produced text in the Open view, and bin/run_single_
+        node.sh reads it to retry a node with prior context. Written after
+        every node (and once, empty, up front) so a partial/failed run still
+        leaves an inspectable, retry-able file. `default=str` coerces any stray
+        non-JSON value (a Path, say) rather than aborting; the whole write is
+        best-effort — a disk/serialization error must never kill a run whose
+        real product is the artifacts, not this side file.
+        """
+        try:
+            results_path.write_text(json.dumps(results, indent=2, default=str))
+        except Exception as e:  # noqa: BLE001 — side-artifact write is best-effort
+            emit(f"LOG:  could not write results.json: {e}")
+
+    _persist()  # empty up front, so even an immediate failure leaves a file
     # Backend currently active across the node loop ("" = none started yet).
     # ARTGEN_DETECT is handled out-of-band (it never stops/resets — it reuses
     # whatever LLM happens to be up) so it does not participate in this tracking.
@@ -1063,6 +1084,7 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
             inputs = resolve_inputs(node.get("inputs", {}), results)
             results[nid] = handler(nid, inputs, ctx) or {}
             emit(f"NODE:{nid}:done:{ct}")
+            _persist()
         except Exception as e:  # noqa: BLE001
             emit(f"NODE:{nid}:failed:{e}")
             # Issue 2: honor the optional flag. COMPATIBILITY_MAP is the single
@@ -1071,6 +1093,7 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
             optional = bool(entry and entry.get("optional", False))
             if optional:
                 results[nid] = {}   # leave outputs absent; continue the run
+                _persist()
                 continue
             raise
     return results

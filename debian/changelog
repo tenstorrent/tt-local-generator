@@ -1,3 +1,15 @@
+tt-local-generator (0.21.2) noble; urgency=medium
+
+  * Pipeline engine now writes results.json (the {node_id: {output_key:
+    value}} map of each node's resolved outputs) into the run's output
+    directory, incrementally after every node. This lights up the Open
+    view's inline per-step TEXT previews for engine-driven runs (previously
+    only historical/worlds-fair runs had it) and gives bin/run_single_node.sh
+    a file to retry a node from. Best-effort: a write failure logs a warning
+    and never aborts the run.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 12 Jul 2026 19:30:00 -0700
+
 tt-local-generator (0.21.1) noble; urgency=medium
 
   * Muse: scoped wizard (starting from a video/gif artifact, which has no
