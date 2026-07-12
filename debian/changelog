@@ -1,3 +1,18 @@
+tt-local-generator (0.18.0) noble; urgency=medium
+
+  * Pipeline Studio Phase 2b-2 — the composer's "add a step" list is now dynamic.
+    Instead of a fixed menu, it is generated at runtime from your plugins' MCP
+    definitions (each plugins/<name>/mcp.json's x-ttlg + tools) plus the live
+    plugin registry and server health, filtered to what can consume the current
+    step's output. Capabilities that need a model that isn't running are shown
+    greyed with a reason ("start a video model") rather than hidden, so the menu
+    reflects — and teaches — what's actually possible right now and grows as you
+    start more models. New app/capability_discovery.py (pure core + a live-deps
+    wrapper); utility plugins (blip/depth/rmbg/ffmpeg) are excluded since their
+    function is already offered as native intents. (Free-form "wing it" is 2b-3.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 19:15:00 -0700
+
 tt-local-generator (0.17.0) noble; urgency=medium
 
   * Pipeline Studio Phase 2b-1 — compose pipelines by adding/removing steps
