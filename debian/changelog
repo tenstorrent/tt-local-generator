@@ -1,3 +1,19 @@
+tt-local-generator (0.16.0) noble; urgency=medium
+
+  * Pipeline Studio (Phase 2a) — the Remix → Run loop. From an opened run you can
+    now Remix it: tweak a step's plain-language parameters (the "change one thing,
+    the rest still runs" idea) and Run the derived pipeline live. A modified spec
+    is derived to ~/.local/share/tt-local-generator/remixes/ (the base example is
+    never mutated) and executed through the existing engine, with a live view
+    showing each step's intent + status (✓/⟳) and the board-switching surfaced as
+    it happens; on completion it returns to the run's Open view with the real
+    fresh artifacts. New: app/spec_remix.py (editable params + derive_spec),
+    RemixView + LiveRunView in app/pipeline_studio.py, and an optional on_log
+    line-callback on PipelineRunner feeding the live log tail. (The free-form
+    composer — add/remove steps, wing-it, live MCP capabilities — is Phase 2b.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 11 Jul 2026 18:00:00 -0700
+
 tt-local-generator (0.15.0) noble; urgency=medium
 
   * Pipeline Studio (Phase 1) — a new "Pipelines" area to browse already-run
