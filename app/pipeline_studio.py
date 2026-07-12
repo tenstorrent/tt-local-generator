@@ -238,7 +238,7 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
 import recipes  # noqa: E402
@@ -370,29 +370,94 @@ def _build_thumb_frame(path: "str | None", width: int, height: int,
 _CONTENT_MAX_WIDTH = 960
 
 
-def _wrap_centered(content: Gtk.Widget, max_width: int = _CONTENT_MAX_WIDTH) -> Gtk.Widget:
-    """Constrain *content* to a centered, comfortable-reading-width column.
+class _MaxWidthBin(Gtk.Widget):
+    """A single-child container that CAPS its child's width at *max_width*.
 
-    This module has no Adw dependency (see module docstring — no `import
-    Adw` anywhere in it), so rather than `Adw.Clamp` this is a plain
-    Gtk.Box wrapper built from primitives already used everywhere else here:
-    CENTER-aligned, non-expanding, with a finite `set_size_request` floor.
-    *content* itself is set to hexpand so it fills exactly this wrapper's
-    width (rather than also shrinking to its own natural size), giving the
-    same "gallery column" shape `Adw.Clamp` provides.
+    Fix #5 (user feedback), corrected after review: an earlier version used a
+    plain `Gtk.Box` + `set_size_request(960, -1)`, but `set_size_request`
+    only raises a widget's MINIMUM size — GTK is still free to allocate it
+    MORE. A child whose own natural width exceeds 960 (e.g. an unwrapped
+    recipe chip row for a long pipeline) would blow the wrapper wide open,
+    reproducing the exact full-width sprawl this was meant to fix.
 
-    Callers keep their own reference to *content* (e.g. `self._steps_box`)
-    unchanged — this just inserts a new parent between it and whatever used
-    to hold it (a `Gtk.ScrolledWindow`, typically), so existing code/tests
-    that walk `content`'s children are unaffected.
+    This module has no `Adw` dependency (grep the module — no `import Adw`),
+    so rather than `Adw.Clamp` this is a minimal custom widget that enforces a
+    REAL ceiling by overriding measurement/allocation:
+
+    - `do_measure` (horizontal): report the child's natural width clamped
+      DOWN to `max_width`, so an over-wide child never inflates this bin's
+      requested width. Minimum is likewise clamped so the bin can still
+      shrink below `max_width` on a narrow window (it's a ceiling, not a
+      fixed width). Vertical measurement passes the child's request through
+      at the allocated width so wrapping children (FlowBox/wrapped labels)
+      report the correct height.
+    - `do_size_allocate`: give the child at most `max_width` px, centered
+      within whatever width this bin actually received.
+
+    The child is set `hexpand` so it fills up to the cap; callers keep their
+    own reference to it unchanged (this just becomes its new parent).
     """
-    wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-    wrapper.add_css_class("ps-content-column")
-    wrapper.set_halign(Gtk.Align.CENTER)
-    wrapper.set_hexpand(False)
-    wrapper.set_size_request(max_width, -1)
+
+    def __init__(self, child: Gtk.Widget, max_width: int = _CONTENT_MAX_WIDTH) -> None:
+        super().__init__()
+        self._max_width = max_width
+        self._child = child
+        child.set_parent(self)
+
+    def do_measure(self, orientation, for_size):
+        # Horizontal: cap the reported widths at max_width so an over-wide
+        # child can never make this bin (and thus the column) wider than the
+        # cap. Vertical: measure the child at the capped width so wrapping
+        # content reports the right height.
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            child_min, child_nat, _mb, _nb = self._child.measure(orientation, for_size)
+            minimum = min(child_min, self._max_width)
+            natural = min(child_nat, self._max_width)
+            return (minimum, natural, -1, -1)
+        capped_for_size = for_size
+        if for_size > self._max_width:
+            capped_for_size = self._max_width
+        child_min, child_nat, _mb, _nb = self._child.measure(orientation, capped_for_size)
+        return (child_min, child_nat, -1, -1)
+
+    def do_size_allocate(self, width, height, baseline):
+        child_width = min(width, self._max_width)
+        # Center the (possibly narrower-than-allocated) child within the full
+        # width this bin received.
+        x = max(0, (width - child_width) // 2)
+        allocation = Gdk.Rectangle()
+        allocation.x = x
+        allocation.y = 0
+        allocation.width = child_width
+        allocation.height = height
+        self._child.size_allocate(allocation, baseline)
+
+    def do_dispose(self):
+        # A widget that calls set_parent() must unparent its child before
+        # disposal or GTK warns/leaks — the documented teardown for a custom
+        # container (see the Gtk.Widget subclassing docs).
+        if self._child is not None:
+            self._child.unparent()
+            self._child = None
+        Gtk.Widget.do_dispose(self)
+
+
+def _wrap_centered(content: Gtk.Widget, max_width: int = _CONTENT_MAX_WIDTH) -> Gtk.Widget:
+    """Constrain *content* to a centered column no wider than *max_width*.
+
+    Wraps *content* in a `_MaxWidthBin`, which enforces a genuine width
+    CEILING (see its docstring for why `set_size_request` alone was
+    insufficient). *content* is set `hexpand` so it fills the column up to
+    the cap; callers keep their own reference to it unchanged — this just
+    inserts a new parent between it and whatever used to hold it (a
+    `Gtk.ScrolledWindow`, typically), so existing code/tests that walk
+    *content*'s children are unaffected.
+    """
     content.set_hexpand(True)
-    wrapper.append(content)
+    wrapper = _MaxWidthBin(content, max_width)
+    wrapper.add_css_class("ps-content-column")
+    wrapper.set_halign(Gtk.Align.FILL)
+    wrapper.set_hexpand(True)
     return wrapper
 
 
@@ -895,20 +960,40 @@ class DiscoverView(Gtk.Box):
         Returns the container plus the list of chip Labels (recipe steps
         only, excluding the "→" arrow separators) so callers/tests can read
         back exactly the strings in `run.recipe`.
+
+        Fix #5 (review follow-up): uses a wrapping `Gtk.FlowBox` rather than
+        an unbounded horizontal `Gtk.Box`. A long pipeline's chip row used to
+        force its own natural width to the sum of every chip — which, inside
+        the content-column clamp, is exactly the over-wide child that would
+        push the column past its cap. A FlowBox reflows chips onto multiple
+        lines within whatever width it's allocated, so a 9-step recipe wraps
+        instead of stretching. The "→" separators are ordinary flow items
+        between chips, so the "Generate an image → Describe it → …" reading
+        is preserved as the row reflows.
         """
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        box.set_hexpand(False)
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_orientation(Gtk.Orientation.HORIZONTAL)
+        flow.set_min_children_per_line(1)
+        # A high per-line cap lets the FlowBox pack as many chips as FIT on a
+        # line and wrap the rest — the wrap point is driven by allocated
+        # width, not this number.
+        flow.set_max_children_per_line(100)
+        flow.set_row_spacing(6)
+        flow.set_column_spacing(6)
+        flow.set_homogeneous(False)
+        flow.set_hexpand(True)
         chip_labels: list = []
         for i, step in enumerate(recipe):
             if i > 0:
                 arrow = Gtk.Label(label="→")  # →
                 arrow.add_css_class("ps-chip-arrow")
-                box.append(arrow)
+                flow.insert(arrow, -1)
             chip = Gtk.Label(label=step)
             chip.add_css_class("ps-chip")
-            box.append(chip)
+            flow.insert(chip, -1)
             chip_labels.append(chip)
-        return box, chip_labels
+        return flow, chip_labels
 
     def _make_thumb(self, path: "str | None", width: int, height: int,
                      css_class: str) -> Gtk.Widget:

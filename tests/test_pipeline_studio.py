@@ -132,14 +132,37 @@ def test_build_thumb_frame_no_path_no_intent_falls_back_to_generic_glyph():
     assert placeholder.get_label() == "\U0001f5bc️"  # 🖼️
 
 
-def test_wrap_centered_is_centered_with_finite_width():
+def test_wrap_centered_caps_oversize_child_width():
+    """Fix #5 (review follow-up): the column cap must be a REAL ceiling, not
+    just a set_size_request floor. A deliberately-too-wide (3000px) child
+    must be MEASURED and ALLOCATED at <= the max width — this would FAIL with
+    the old `set_size_request(960, -1)` floor, which only raises the minimum
+    and lets GTK allocate more."""
     import pipeline_studio as ps
-    content = Gtk.Box()
-    wrapper = ps._wrap_centered(content)
-    assert wrapper.get_halign() == Gtk.Align.CENTER
-    assert wrapper.get_hexpand() is False
-    width, _height = wrapper.get_size_request()
-    assert 0 < width < 10_000  # a real bound, not hexpand sprawl
+    child = Gtk.Box()
+    child.set_size_request(3000, 40)  # far wider than the 960 cap
+    wrapper = ps._wrap_centered(child)
+
+    # Measurement: the wrapper's natural width never exceeds the cap, even
+    # though its child wants 3000px.
+    _min, natural, _mb, _nb = wrapper.measure(Gtk.Orientation.HORIZONTAL, -1)
+    assert natural <= ps._CONTENT_MAX_WIDTH
+
+    # Allocation: hand the wrapper 2000px and the child is still capped.
+    wrapper.allocate(2000, 300, -1, None)
+    assert child.get_width() <= ps._CONTENT_MAX_WIDTH
+
+
+def test_wrap_centered_narrow_window_lets_child_shrink():
+    """The cap is a ceiling, not a fixed width: on a window narrower than the
+    cap the child shrinks to fit rather than being pinned at 960px."""
+    import pipeline_studio as ps
+    child = Gtk.Box()
+    child.set_size_request(3000, 40)
+    wrapper = ps._wrap_centered(child)
+
+    wrapper.allocate(400, 300, -1, None)
+    assert child.get_width() <= 400
 
 
 # ── DiscoverView ───────────────────────────────────────────────────────────────
@@ -150,15 +173,15 @@ def test_discover_view_constructs():
     assert isinstance(view, Gtk.Box)
 
 
-def test_discover_view_content_column_is_centered_bounded_width():
-    """Fix #5 (user feedback): content must not sprawl across the full
-    window width — a centered wrapper with a finite width request instead."""
+def test_discover_view_content_column_is_capped_max_width_bin():
+    """Fix #5 (user feedback): content is routed through the real max-width
+    clamp so it can't sprawl across the full window."""
+    import pipeline_studio as ps
     from pipeline_studio import DiscoverView
     view = DiscoverView()
-    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
-    assert view._content_wrapper.get_hexpand() is False
-    width, _height = view._content_wrapper.get_size_request()
-    assert 0 < width < 10_000
+    assert isinstance(view._content_wrapper, ps._MaxWidthBin)
+    _min, natural, _mb, _nb = view._content_wrapper.measure(Gtk.Orientation.HORIZONTAL, -1)
+    assert natural <= ps._CONTENT_MAX_WIDTH
 
 
 def test_set_runs_empty_list_no_crash():
@@ -276,15 +299,15 @@ def test_open_view_constructs():
     assert isinstance(view, Gtk.Box)
 
 
-def test_open_view_content_column_is_centered_bounded_width():
-    """Fix #5 (user feedback): same centered/bounded-width contract as
+def test_open_view_content_column_is_capped_max_width_bin():
+    """Fix #5 (user feedback): same real-cap contract as
     DiscoverView/RemixView."""
+    import pipeline_studio as ps
     from pipeline_studio import OpenView
     view = OpenView()
-    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
-    assert view._content_wrapper.get_hexpand() is False
-    width, _height = view._content_wrapper.get_size_request()
-    assert 0 < width < 10_000
+    assert isinstance(view._content_wrapper, ps._MaxWidthBin)
+    _min, natural, _mb, _nb = view._content_wrapper.measure(Gtk.Orientation.HORIZONTAL, -1)
+    assert natural <= ps._CONTENT_MAX_WIDTH
 
 
 def test_open_view_set_run_renders_one_row_per_step_in_order():
@@ -775,15 +798,15 @@ def test_remix_view_constructs():
     assert isinstance(view, Gtk.Box)
 
 
-def test_remix_view_content_column_is_centered_bounded_width():
-    """Fix #5 (user feedback): same centered/bounded-width contract as
+def test_remix_view_content_column_is_capped_max_width_bin():
+    """Fix #5 (user feedback): same real-cap contract as
     DiscoverView/OpenView."""
+    import pipeline_studio as ps
     from pipeline_studio import RemixView
     view = RemixView()
-    assert view._content_wrapper.get_halign() == Gtk.Align.CENTER
-    assert view._content_wrapper.get_hexpand() is False
-    width, _height = view._content_wrapper.get_size_request()
-    assert 0 < width < 10_000
+    assert isinstance(view._content_wrapper, ps._MaxWidthBin)
+    _min, natural, _mb, _nb = view._content_wrapper.measure(Gtk.Orientation.HORIZONTAL, -1)
+    assert natural <= ps._CONTENT_MAX_WIDTH
 
 
 def test_remix_view_set_run_builds_prefilled_fields_per_kind():
@@ -1468,6 +1491,31 @@ def test_live_run_view_begin_shows_all_steps_pending():
     assert list(view._step_status_labels.keys()) == ["1", "2", "3"]
     for label in view._step_status_labels.values():
         assert label.get_label() == "•"
+
+
+def test_live_run_view_step_row_has_single_combined_intent_label():
+    """Fix #1 (review follow-up — MINOR): LiveRunView._build_step_row also
+    renders ONE combined 'verb noun' label (ps-step-intent) with the status
+    glyph inline, matching OpenView — not separate verb/noun widgets."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    run = _make_live_run()
+    view.begin(run)
+
+    step = run.steps[0]  # TTLGTextToImage -> "Generate an image"
+    # Walk the first step row: n_label, then main (intent_row, [model]).
+    row = view._steps_box.get_first_child()
+    n_label = row.get_first_child()
+    main = n_label.get_next_sibling()
+    intent_row = main.get_first_child()
+    intent_label = intent_row.get_first_child()
+
+    assert isinstance(intent_label, Gtk.Label)
+    assert intent_label.has_css_class("ps-step-intent")
+    assert intent_label.get_label() == f"{step.intent.verb} {step.intent.noun}"
+    # Status glyph sits inline in the same row.
+    status_label = intent_label.get_next_sibling()
+    assert isinstance(status_label, Gtk.Label)
 
 
 def test_live_run_view_on_node_update_running_then_done():
