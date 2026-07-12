@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 from capability_discovery import Capability
-from wingit import WingitResult, map_freeform_to_step
+from wingit import WingitResult, map_freeform_to_step, map_freeform_to_pipeline
 
 
 def _cap(id, kind_out, kind_in, source, class_type, plugin=None, live=True):
@@ -251,3 +251,99 @@ def test_default_llm_fn_returns_none_when_no_endpoint(monkeypatch):
     monkeypatch.setattr(artgen, "detect_artgen_endpoint", lambda: (None, None))
 
     assert wingit.default_llm_fn("prompt text") is None
+
+
+# ── map_freeform_to_pipeline: free text -> multi-step draft ─────────────────
+#
+# A separate small live-capability list exercising a real chain: text -> image
+# -> video, plus an image -> text side branch (caption), so kind-chaining
+# rules have something to actually validate against.
+
+PIPE_CAPS = [
+    _cap("TTLGTextToImage", "image", "text", "native", "TTLGTextToImage"),
+    _cap("TTLGImageToVideo", "video", "image", "native", "TTLGImageToVideo"),
+    _cap("TTLGCaptionImage", "text", "image", "native", "TTLGCaptionImage"),
+]
+
+
+def test_pipeline_llm_valid_chain():
+    def fn(prompt):
+        return (
+            '[{"capability_id":"TTLGTextToImage","params":{"prompt":"koi"}},'
+            '{"capability_id":"TTLGImageToVideo","params":{}}]'
+        )
+
+    steps = map_freeform_to_pipeline(
+        "koi looping", seed_output_kind=None, capabilities=PIPE_CAPS, llm_fn=fn,
+    )
+
+    assert [ct for ct, _ in steps] == ["TTLGTextToImage", "TTLGImageToVideo"]
+
+
+def test_pipeline_drops_kind_broken_tail():
+    def fn(prompt):
+        return (
+            '[{"capability_id":"TTLGTextToImage","params":{}},'
+            '{"capability_id":"TTLGCaptionImage","params":{}}]'
+        )
+
+    steps = map_freeform_to_pipeline(
+        "x", seed_output_kind=None, capabilities=PIPE_CAPS, llm_fn=fn,
+    )
+
+    assert steps[0][0] == "TTLGTextToImage"
+
+
+def test_pipeline_fallback_when_no_llm():
+    steps = map_freeform_to_pipeline(
+        "a fox", seed_output_kind=None, capabilities=PIPE_CAPS, llm_fn=None,
+    )
+
+    assert steps and steps[0][0] == "TTLGTextToImage"
+    assert "a fox" in str(steps[0][1].values())
+
+
+def test_pipeline_none_when_nothing_fits():
+    only_image_consumers = [
+        _cap("TTLGImageToVideo", "video", "image", "native", "TTLGImageToVideo"),
+    ]
+    assert map_freeform_to_pipeline(
+        "x", seed_output_kind="text", capabilities=only_image_consumers, llm_fn=None,
+    ) is None
+
+
+def test_pipeline_caps_at_max_steps():
+    # image -> image so the chain stays valid indefinitely after the seed
+    # step; only the first `max_steps` entries should survive even though
+    # the LLM returned more.
+    loop_caps = [_cap("TTLGRemoveBackground", "image", "image", "native", "TTLGRemoveBackground")]
+    seed_cap = [_cap("TTLGTextToImage", "image", "text", "native", "TTLGTextToImage")]
+
+    def fn(prompt):
+        return (
+            '[{"capability_id":"TTLGTextToImage","params":{}},'
+            '{"capability_id":"TTLGRemoveBackground","params":{}},'
+            '{"capability_id":"TTLGRemoveBackground","params":{}},'
+            '{"capability_id":"TTLGRemoveBackground","params":{}},'
+            '{"capability_id":"TTLGRemoveBackground","params":{}},'
+            '{"capability_id":"TTLGRemoveBackground","params":{}}]'
+        )
+
+    steps = map_freeform_to_pipeline(
+        "x", seed_output_kind=None, capabilities=seed_cap + loop_caps,
+        llm_fn=fn, max_steps=3,
+    )
+
+    assert len(steps) == 3
+
+
+def test_pipeline_llm_none_and_no_fallback_returns_none():
+    def fn(prompt):
+        return '[{"capability_id":"NoSuchCapability","params":{}}]'
+
+    only_image_consumers = [
+        _cap("TTLGImageToVideo", "video", "image", "native", "TTLGImageToVideo"),
+    ]
+    assert map_freeform_to_pipeline(
+        "x", seed_output_kind="text", capabilities=only_image_consumers, llm_fn=fn,
+    ) is None
