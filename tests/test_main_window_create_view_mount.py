@@ -38,17 +38,34 @@ def test_create_view_inspiration_door_wired_to_muse_bridge():
     assert "on_inspiration=self._on_loop_nav_remix" in _SRC
 
 
-def test_loop_nav_create_does_not_yet_route_to_create_view():
-    """Migration-safety guard: the Create movement must still resolve through
-    `_on_source_change` (the existing generation UI), not switch
-    `_gallery_stack` directly to "create" — that re-wiring is a later task
-    (see docs/superpowers/plans/2026-07-13-create-surface.md, Task 8)."""
-    assert (
-        'def _on_loop_nav_create(self) -> None:' in _SRC
-    )
-    # The handler body must not reference the new "create" stack child.
+def test_create_view_on_create_wired_to_real_generation():
+    """Task 8 (switchover subset): the Create CTA now routes to real
+    generation via `_on_create_generate`, not `on_create=None` (Task 3's
+    placeholder)."""
+    assert "on_create=self._on_create_generate" in _SRC
+
+
+def test_loop_nav_create_now_routes_to_create_view():
+    """Task 8 (switchover subset — see .superpowers/sdd/task-8-report.md,
+    which overrides Task 8's plan-document wording of "remove the old
+    tabs" for this task): the Create movement now switches `_gallery_stack`
+    to "create" directly, instead of resolving through `_on_source_change`.
+    The old ControlPanel/medium-tab UI is left fully intact in the source —
+    this only asserts the loop-nav routing target changed."""
+    assert 'def _on_loop_nav_create(self) -> None:' in _SRC
     start = _SRC.index("def _on_loop_nav_create(self) -> None:")
     end = _SRC.index("def _on_loop_nav_discover", start)
     body = _SRC[start:end]
-    assert '"create"' not in body
-    assert "_gallery_stack.set_visible_child_name" not in body
+    assert '"create"' in body
+    assert '_gallery_stack.set_visible_child_name("create")' in body
+
+
+def test_control_panel_and_old_galleries_still_constructed():
+    """Migration-safety guard: ControlPanel + the old medium galleries must
+    still be built and mounted — Task 8's switchover subset explicitly DEFERS
+    deleting them (that's a later task, only after a real-generation smoke
+    test on hardware). This just guards against an over-eager deletion."""
+    assert 'self._gallery_stack.add_named(self._video_gallery, "video")' in _SRC
+    assert 'self._gallery_stack.add_named(self._animate_gallery, "animate")' in _SRC
+    assert 'self._gallery_stack.add_named(self._image_gallery, "image")' in _SRC
+    assert 'self._gallery_stack.add_named(self._artgen_panel, "artgen")' in _SRC

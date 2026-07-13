@@ -64,6 +64,8 @@ def _make_mw(tmp_path, monkeypatch):
     fake_controls.get_model_source.return_value = "video"
     obj._controls = fake_controls
 
+    obj._gallery_stack.add_named(Gtk.Box(), "create")
+
     obj._pipelines_btn = Gtk.ToggleButton()
     obj._pipelines_toggle_syncing = False
 
@@ -123,21 +125,32 @@ def test_loop_nav_buttons_are_mutually_exclusive(tmp_path, monkeypatch):
     assert obj._loop_nav["create"].get_active() is False
 
 
-def test_loop_nav_create_reaches_existing_gallery_and_controls(tmp_path, monkeypatch):
-    """Activating Create routes to the existing gallery/ControlPanel view —
-    generation is reached exactly as it is today, via _on_source_change."""
+def test_loop_nav_create_routes_to_create_view(tmp_path, monkeypatch):
+    """Task 8 (switchover subset): activating Create now shows CreateView
+    (the "create" `_gallery_stack` child) directly, rather than resolving
+    through `_on_source_change`'s medium-tab lookup."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    # Start from some other state (as if Curate/Discover were previously active).
-    obj._ctrl_wrapper.set_visible(False)
-    obj._detail_wrap.set_visible(False)
+    obj._loop_nav["create"].set_active(True)
+
+    assert obj._gallery_stack.get_visible_child_name() == "create"
+    assert obj._pipelines_btn.get_active() is False
+
+
+def test_loop_nav_create_unchecks_pipelines_toggle(tmp_path, monkeypatch):
+    """If Pipelines was showing (shares `_gallery_stack`), Create must
+    uncheck its toggle — same stale-toggle fix `_on_source_change` already
+    provided for the old medium tabs, now reproduced for CreateView."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+
+    obj._loop_nav["remix"].set_active(True)
+    assert obj._pipelines_btn.get_active() is True
 
     obj._loop_nav["create"].set_active(True)
 
-    assert obj._gallery_stack.get_visible_child_name() == "video"
-    assert obj._ctrl_wrapper.get_visible() is True
-    assert obj._detail_wrap.get_visible() is True
+    assert obj._gallery_stack.get_visible_child_name() == "create"
     assert obj._pipelines_btn.get_active() is False
 
 

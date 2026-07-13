@@ -1535,6 +1535,18 @@ _IMAGE_MODEL_IDS: dict = {
     "motif":          "motif-image-6b-preview",
 }
 
+# Inverse of the two maps above: canonical server-side model id -> short key.
+# `create_param_panels.ImageParamPanel`/`VideoParamPanel.collect()` already
+# resolve their own "model" field to the CANONICAL id (they hold their own
+# duplicate copy of these dicts — see that module's CRITICAL STRATEGY note),
+# but `_on_generate`'s `model_id=` parameter expects the SHORT key (it does
+# `_IMAGE_MODEL_IDS.get(model_id or ..., default)` itself). CreateView's
+# `_on_create_generate` needs to invert back from canonical id to short key
+# before calling `_on_generate`, or every non-default model choice would
+# silently fall back to the default model.
+_IMAGE_MODEL_ID_TO_KEY: dict = {v: k for k, v in _IMAGE_MODEL_IDS.items()}
+_VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
+
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
 # handled by the health check).
@@ -8021,7 +8033,19 @@ class MainWindow(Gtk.ApplicationWindow):
         # `self._pipeline_studio.show_muse(seed_artifact=None)`), so it's
         # reused verbatim as CreateView's zero-arg `on_inspiration` callable
         # rather than reimplementing the Muse hand-off here.
-        self._create_view = CreateView(on_inspiration=self._on_loop_nav_remix)
+        #
+        # Task 8 (migration-safe switchover subset — see
+        # .superpowers/sdd/task-8-report.md): the Create CTA now routes to
+        # REAL generation via `_on_create_generate`, which translates the
+        # chosen medium + collected params into the exact same `_on_generate`
+        # call (native mediums) or the exact same `tt-ctl artgen ...`
+        # subprocess pattern `pipeline_engine._h_artgen_generate` already
+        # uses (artgen mediums) — no new generation code, no reimplemented
+        # worker launching.
+        self._create_view = CreateView(
+            on_inspiration=self._on_loop_nav_remix,
+            on_create=self._on_create_generate,
+        )
         self._gallery_stack.add_named(self._create_view, "create")
 
         self._gallery_stack.set_visible_child_name("video")
@@ -8834,12 +8858,36 @@ class MainWindow(Gtk.ApplicationWindow):
         return row
 
     def _on_loop_nav_create(self) -> None:
-        """Create: the current generation UI — ControlPanel + medium galleries,
-        completely unchanged. Reuses `_on_source_change` (the same call
-        `_hide_pipelines` makes) so Create always lands on whatever medium the
-        ControlPanel's source toggle already has active.
+        """Create: the unified Create surface (CreateView).
+
+        Create-surface plan Task 8 (migration-safe switchover subset — see
+        .superpowers/sdd/task-8-report.md, which overrides the plan
+        document's "remove the old tabs" wording for this task): the Create
+        movement now shows CreateView directly instead of routing through
+        `_on_source_change` (which used to land on whatever medium tab
+        ControlPanel's source toggle had active). ControlPanel and the old
+        medium galleries are left FULLY INTACT — still constructed, still
+        reachable in code (e.g. `_on_source_change` is unchanged and still
+        called by Discover) — only this loop-nav verb's routing target
+        changes, per the task's SAFE + REVERSIBLE scoping. A later task
+        removes the old tabs outright once a real-generation smoke test on
+        hardware confirms every medium works end-to-end through CreateView.
+
+        Keeps the pipelines-toggle uncheck dance `_on_source_change` used to
+        provide: Pipeline Studio shares this same `_gallery_stack`, so
+        leaving `_pipelines_btn` checked while "create" shows underneath
+        would reproduce the exact stale-toggle bug `_on_source_change`'s own
+        docstring already describes fixing once for the old medium tabs.
         """
-        self._on_source_change(self._controls.get_model_source())
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and pipelines_btn.get_active():
+            self._pipelines_toggle_syncing = True
+            try:
+                pipelines_btn.set_active(False)
+            finally:
+                self._pipelines_toggle_syncing = False
+
+        self._gallery_stack.set_visible_child_name("create")
 
     def _on_loop_nav_discover(self) -> None:
         """Discover (absorbs Curate): browse AND collect what you've made — the
@@ -10295,6 +10343,219 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._worker_gen:
             self._worker_gen.cancel()
         self._set_status("Cancelling…")
+
+    # ── Create surface: real generation (Task 8 switchover subset) ─────────────
+    #
+    # CreateView (create_view.py) is a self-contained widget with zero
+    # knowledge of workers, the API client, or artgen's subprocess plumbing —
+    # by design (see its module docstring). This is the seam that gives its
+    # `on_create(medium, params)` callback real teeth: dispatch by
+    # `medium.source`, then hand off to the ONE existing generation path for
+    # that source. Nothing here constructs a worker or an artgen subprocess
+    # call directly except the artgen branch's `tt-ctl` shell-out, which
+    # mirrors `pipeline_engine._h_artgen_generate` verbatim (same helpers) —
+    # the same pattern a pipeline node already uses today.
+
+    def _on_create_generate(self, medium, params: dict) -> None:
+        """CreateView's `on_create` seam — dispatch a chosen medium + its
+        collected panel params to real generation.
+
+        - native mediums (image/video/animate) translate straight into the
+          exact `_on_generate(...)` call the OLD ControlPanel/source-toggle
+          UI already makes for that medium — same worker classes, same
+          queue/callback plumbing. `_on_generate` is reused verbatim; this
+          method never constructs a worker itself.
+        - artgen mediums (verse/ansi/landscape/…) shell out to
+          `tt-ctl artgen <generator> ...`, exactly the way
+          `pipeline_engine._h_artgen_generate` already does for pipeline
+          nodes (same `_flag_from_key`/`_append_flag_value`/`_run_tt_ctl`
+          helpers, reused not reimplemented), then record the artifact into
+          the media store the same way `ArtgenPanel._run_generation` does
+          (`media_type="artgen"`, `generator_type=<generator>`) so it shows
+          up in the existing Artgen gallery immediately.
+
+        Fails soft everywhere: a bad/missing medium mapping, a failed
+        subprocess, or any other exception surfaces as a status-bar message
+        — a Create-surface click must never be able to crash the app.
+        """
+        try:
+            if medium.source == "native":
+                self._create_generate_native(medium, params)
+            elif medium.source == "artgen":
+                self._create_generate_artgen(medium, params)
+            else:
+                self._set_status(f"Don't know how to generate a {medium.label} yet.")
+        except Exception as exc:
+            self._set_status(f"Couldn't start generation: {exc}")
+
+    def _create_generate_native(self, medium, params: dict) -> None:
+        """Translate a native medium's `CreateParamPanel.collect()` dict into
+        the exact `_on_generate(...)` call the old ControlPanel/source-toggle
+        UI already makes for that medium.
+
+        `params["model"]` (from `ImageParamPanel`/`VideoParamPanel`) is
+        already the CANONICAL server-side model id (e.g. "flux.1-schnell") —
+        `_on_generate`'s `model_id=` parameter instead expects the SHORT key
+        it uses to look itself up in its own `_IMAGE_MODEL_IDS`/
+        `_VIDEO_MODEL_IDS` dicts, so the inverse maps above convert back
+        before the call. An unrecognized canonical id (e.g. an injected fake
+        in a test) falls back to each medium's documented default key rather
+        than raising.
+        """
+        prompt = params.get("prompt", "")
+
+        if medium.id == "image":
+            model_key = _IMAGE_MODEL_ID_TO_KEY.get(params.get("model", ""), "flux")
+            self._on_generate(
+                prompt,
+                params.get("negative_prompt", ""),
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+                model_source="image",
+                guidance_scale=float(params.get("guidance_scale", 3.5)),
+                model_id=model_key,
+            )
+        elif medium.id == "animate":
+            # AnimateGenerationWorker (via _on_generate's animate branch)
+            # takes no negative_prompt at all — pass "" for the positional
+            # `neg` slot, matching what the old ControlPanel's Animate tab
+            # already sends.
+            self._on_generate(
+                prompt,
+                "",
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+                model_source="animate",
+                ref_video_path=params.get("reference_video_path", ""),
+                ref_char_path=params.get("reference_image_path", ""),
+                animate_mode=params.get("animate_mode", "animation"),
+            )
+        else:  # "video"
+            model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+            self._on_generate(
+                prompt,
+                params.get("negative_prompt", ""),
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+                model_source="video",
+                model_id=model_key,
+            )
+            # NOTE (concern, see task-8-report.md): VideoParamPanel.collect()'s
+            # "num_frames" has no destination in `_on_generate` — that method
+            # derives num_frames internally from generation_config.clip_frames
+            # + the Preferences "clip length slot" setting, not from a
+            # parameter. Reusing `_on_generate` verbatim (required — never
+            # reimplement worker launching) means CreateView's frame-count
+            # spinner is currently cosmetic for the video medium. Also:
+            # `_on_generate`'s video branch decides animatediff-vs-
+            # GenerationWorker from `self._controls.get_video_model()` (the
+            # OLD ControlPanel's own dropdown), not from `model_id` — so if
+            # ControlPanel is left on "animatediff", a CreateView video
+            # generation will still take the animatediff path. Both are
+            # pre-existing shapes of `_on_generate` itself, not introduced by
+            # this task, and out of scope to fix here (would require changing
+            # the one function every rule says must stay untouched).
+
+    def _create_generate_artgen(self, medium, params: dict) -> None:
+        """Artgen mediums generate the SAME way `pipeline_engine`'s
+        `TTLGArtgenGenerate` pipeline node does: shell out to
+        ``tt-ctl artgen <generator> --output <path> [--flag value...]``
+        (`pipeline_engine._flag_from_key`/`_append_flag_value`/`_run_tt_ctl`
+        reused verbatim), then record the artifact into the media store the
+        same way `ArtgenPanel._run_generation` does — `media_type="artgen"`,
+        `generator_type=<generator>` — so the new artifact shows up in the
+        existing Artgen gallery immediately, without a separate re-scan.
+
+        Runs entirely off the GTK main thread (subprocess + disk + sqlite
+        I/O); only the final status message + gallery refresh are posted
+        back via `GLib.idle_add`, per CLAUDE.md's GTK threading rule.
+
+        The idea-door's `params["prompt"]` is deliberately NOT forwarded as
+        a CLI flag — artgen generators have no common `--prompt` flag (each
+        has its own bespoke vocabulary: `--theme`, `--form`, `--palette`,
+        …), so passing it through would make every artgen generation fail
+        with an "unrecognized argument" error from argparse.
+        """
+        generator = medium.generator
+        if not generator:
+            self._set_status(f"No artgen generator mapped for {medium.label}.")
+            return
+
+        prompt = params.get("prompt", "")
+        self._set_status(f"Generating {medium.label}…")
+
+        def run():
+            try:
+                import uuid as _uuid
+                from datetime import datetime, timezone
+
+                import artgen as _artgen
+                from artgen_thumb import make_thumbnail, make_artgen_path
+                from media_store import MediaRecord
+                from media_store import media_store as _ms
+                from pipeline_engine import _append_flag_value, _flag_from_key, _run_tt_ctl
+
+                try:
+                    ext = _artgen.get(generator).output_ext
+                except Exception:
+                    ext = ".txt"
+
+                short_id = str(_uuid.uuid4())[:8]
+                out_path = make_artgen_path(short_id, ext)
+
+                argv = ["artgen", generator, "--output", str(out_path)]
+                for key, value in params.items():
+                    if key == "prompt" or value is None:
+                        continue
+                    _append_flag_value(argv, _flag_from_key(key), value)
+                _run_tt_ctl(argv)
+
+                thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+                try:
+                    thumb_path = make_thumbnail(out_path, thumb_path)
+                except Exception:
+                    thumb_path = Path("")
+
+                safe_params = {
+                    k: v for k, v in params.items()
+                    if isinstance(v, (str, int, float, bool, type(None)))
+                }
+                rec = MediaRecord(
+                    id=str(_uuid.uuid4()),
+                    media_type="artgen",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    file_path=str(out_path),
+                    thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                    prompt=(prompt or medium.label)[:500],
+                    model_id="artgen",
+                    generator_type=generator,
+                    params=json.dumps(safe_params),
+                    starred=0,
+                )
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
+
+                GLib.idle_add(self._on_create_artgen_done, medium)
+            except Exception as exc:
+                GLib.idle_add(self._on_create_artgen_error, medium, str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_create_artgen_done(self, medium) -> bool:
+        """Main-thread completion callback for `_create_generate_artgen`."""
+        self._set_status(f"{medium.label} ready.")
+        artgen_panel = getattr(self, "_artgen_panel", None)
+        if artgen_panel is not None:
+            try:
+                artgen_panel._gallery.refresh()
+            except Exception:
+                pass  # a refresh failure must never crash the Create surface
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_artgen_error(self, medium, msg: str) -> bool:
+        """Main-thread error callback for `_create_generate_artgen`."""
+        self._set_status(f"Couldn't generate {medium.label}: {msg}")
+        return GLib.SOURCE_REMOVE
 
     # ── Server start / stop ────────────────────────────────────────────────────
 
