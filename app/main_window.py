@@ -71,21 +71,26 @@ if _USE_SYSTEM_PLAYER:
 # ── Tenstorrent dark palette as GTK CSS ───────────────────────────────────────
 
 _CSS = b"""
-/* -- Tenstorrent color palette -------------------------------------------- */
-@define-color tt_bg_panel    #0A1F28;
-@define-color tt_bg_darkest  #0F2A35;
-@define-color tt_bg_dark     #1A3C47;
-@define-color tt_border      #2D5566;
-@define-color tt_accent      #4FD1C5;
-@define-color tt_accent_light #81E6D9;
-@define-color tt_text        #E8F0F2;
-@define-color tt_text_muted  #607D8B;
-@define-color tt_pink        #EC96B8;
-@define-color tt_success     #27AE60;
-@define-color tt_error       #FF6B6B;
-@define-color tt_bg_error_dark #2D1A1A;
+/* -- Tenstorrent color palette -------------------------------------------------
+ * Brand dark forest-teal (docs-site theme + tt-vscode-toolkit), matching what
+ * Pipeline Studio already uses; replaces the older tt-vscode-toolkit blue-gray
+ * + bright-teal look (#0F2A35 / #4FD1C5). Centralized here via @define-color so
+ * every @tt_* reference across the whole main app re-skins from one place.
+ * (ASCII only: this whole block lives inside a b"" bytes literal.) */
+@define-color tt_bg_panel    #0A1F1E;   /* was #0A1F28 */
+@define-color tt_bg_darkest  #071716;   /* was #0F2A35 : window ground */
+@define-color tt_bg_dark     #0D2B2A;   /* was #1A3C47 : cards / inputs / buttons */
+@define-color tt_border      #1C4340;   /* was #2D5566 : teal-tinted hairline */
+@define-color tt_accent      #1B8EB1;   /* was #4FD1C5 : brand primary (links/CTA) */
+@define-color tt_accent_light #74C5DF;  /* was #81E6D9 : brand highlight / hover */
+@define-color tt_text        #EEF8F6;   /* was #E8F0F2 */
+@define-color tt_text_muted  #94B8B2;   /* was #607D8B */
+@define-color tt_pink        #EC96B8;   /* semantic (star) : kept */
+@define-color tt_success     #6FABA0;   /* was #27AE60 : brand green */
+@define-color tt_error       #FF9E8A;   /* brand red */
+@define-color tt_bg_error_dark #2A1613;
 @define-color tt_bg_pink_dark  #2D1A2D;
-@define-color tt_text_hint     #4A6572;
+@define-color tt_text_hint     #6F948D;  /* was #4A6572 */
 
 window, .view {
     background-color: @tt_bg_darkest;
@@ -435,7 +440,7 @@ scrollbar slider:hover {
 }
 .server-row-mismatch {
     background-color: #1A1000;
-    border: 1px solid #F4C471;
+    border: 1px solid #F6BC42;
     border-radius: 4px;
     padding: 5px 6px;
 }
@@ -457,7 +462,7 @@ scrollbar slider:hover {
 }
 .server-model-match  { color: @tt_success; }
 .server-model-offline { color: @tt_text_muted; }
-.server-model-mismatch { color: #F4C471; }
+.server-model-mismatch { color: #F6BC42; }
 .server-model-starting { color: @tt_accent; }
 .server-sub-lbl {
     color: @tt_text_hint;
@@ -465,8 +470,8 @@ scrollbar slider:hover {
 }
 .server-switch-btn {
     background: transparent;
-    border: 1px solid #F4C471;
-    color: #F4C471;
+    border: 1px solid #F6BC42;
+    color: #F6BC42;
     border-radius: 4px;
     padding: 2px 6px;
     font-size: 10px;
@@ -520,7 +525,7 @@ scrollbar slider:hover {
     min-width: 42px;
 }
 .servers-popover-btn:hover { background: rgba(79,209,197,0.1); border-color: @tt_accent; }
-.servers-popover-btn-stop:hover { background: rgba(255,107,107,0.1); border-color: #FF6B6B; color: #FF6B6B; }
+.servers-popover-btn-stop:hover { background: rgba(255,158,138,0.1); border-color: #FF9E8A; color: #FF9E8A; }
 .servers-popover-last-star { color: @tt_accent; font-size: .8rem; margin-left: .2rem; }
 .servers-cap-header {
     font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
@@ -608,13 +613,13 @@ scrollbar slider:hover {
 /* Amber border + pulse when model requires an image but none is loaded */
 .seed-thumb-well.required {
     border-style: solid;
-    border-color: #F4C471;
+    border-color: #F6BC42;
     animation: seed-pulse 1.8s ease-in-out infinite;
 }
 @keyframes seed-pulse {
-    0%   { border-color: #F4C471; }
-    50%  { border-color: alpha(#F4C471, 0.35); }
-    100% { border-color: #F4C471; }
+    0%   { border-color: #F6BC42; }
+    50%  { border-color: alpha(#F6BC42, 0.35); }
+    100% { border-color: #F6BC42; }
 }
 /* Solid teal border when a seed image is loaded (overrides required amber) */
 .seed-thumb-well.has-seed {
@@ -860,7 +865,7 @@ video > mediacontrols { opacity: 0; }
 }
 .tt-statusbar-seg-warn {
     font-size: 10px;
-    color: #FF6B6B;
+    color: #FF9E8A;
 }
 .tt-statusbar-sep {
     color: @tt_border;
@@ -958,8 +963,8 @@ menubar > item.context-menu-item:selected > label {
 }
 .playlists-del-btn:hover {
     background: rgba(255, 107, 107, 0.10);
-    border-color: #FF6B6B;
-    color: #FF6B6B;
+    border-color: #FF9E8A;
+    color: #FF9E8A;
 }
 /* -- Selection mode banner ---------------------------------------------------- */
 .selection-banner {
@@ -999,8 +1004,8 @@ menubar > item.context-menu-item:selected > label {
 }
 .selection-cancel-btn:hover {
     background: rgba(255, 107, 107, 0.08);
-    border-color: #FF6B6B;
-    color: #FF6B6B;
+    border-color: #FF9E8A;
+    color: #FF9E8A;
 }
 /* -- Card checkbox overlay ---------------------------------------------------- */
 /* Semi-opaque pill behind the checkbox so it reads against any card image */
@@ -1280,8 +1285,8 @@ popover.picker-popover > contents {
     border-radius: 4px;
 }
 .artgen-health-ok    { color: #27AE60; font-size: 15px; }
-.artgen-health-bad   { color: #FF6B6B; font-size: 15px; }
-.artgen-health-unknown { color: #607D8B; font-size: 15px; }
+.artgen-health-bad   { color: #FF9E8A; font-size: 15px; }
+.artgen-health-unknown { color: #94B8B2; font-size: 15px; }
 .artgen-srv-start-btn {
     background: @tt_accent;
     color: @tt_bg_darkest;
@@ -1350,7 +1355,7 @@ popover.picker-popover > contents {
   padding: 6px 12px;
 }
 .mosaic-status-lbl {
-  color: #E8F0F2;
+  color: #EEF8F6;
   font-size: 12px;
 }
 /* -- Log viewer ------------------------------------------------------------ */

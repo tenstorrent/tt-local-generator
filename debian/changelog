@@ -1,3 +1,14 @@
+tt-local-generator (0.25.0) noble; urgency=medium
+
+  * UI beautification (palette): the main app is re-skinned from the older
+    tt-vscode-toolkit blue-gray + bright-teal look (#0F2A35 / #4FD1C5) to the
+    brand dark forest-teal that Pipeline Studio already uses -- unified via the
+    central @define-color tokens, so the toolbar, all galleries, the detail
+    panel, and server controls converge on one identity. Stray old-palette
+    literals (warning yellow, error red, muted/text) swept to the brand set.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 11:00:00 -0700
+
 tt-local-generator (0.24.1) noble; urgency=medium
 
   * Pipeline Studio Open view is now fan-out aware too: a step that produced
