@@ -1,3 +1,18 @@
+tt-local-generator (0.26.0) noble; urgency=medium
+
+  * Loop nav: a new top-level nav -- Create / Curate / Discover / Remix --
+    reframes the app by activity instead of by medium (SP-C Task 1, the
+    first slice of the Create/Curate/Discover/Remix restructure). This slice
+    routes to EXISTING surfaces only, so nothing else changes: Create is the
+    default-active movement and reaches today's generation UI (ControlPanel +
+    medium galleries) unchanged; Curate shows the current gallery full-width
+    (placeholder -- a later slice adds the starred/playlist filter); Discover
+    opens Pipeline Studio's Discover page via the existing "Pipelines" toggle
+    bridge; Remix opens the Muse via the same bridge, unseeded. Styled with a
+    new `.loop-nav-btn` variant of the existing `.source-btn` radio-group CSS.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 12:00:00 -0700
+
 tt-local-generator (0.25.0) noble; urgency=medium
 
   * UI beautification (palette): the main app is re-skinned from the older

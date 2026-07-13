@@ -347,6 +347,51 @@ scrollbar slider:hover {
 .source-btn:checked:hover {
     background-color: @tt_accent_light;
 }
+.loop-nav-row {
+    padding: 6px 10px;
+    background-color: @tt_bg_darkest;
+    border-bottom: 1px solid @tt_border;
+}
+.loop-nav-btn {
+    background-color: @tt_bg_dark;
+    color: @tt_text_muted;
+    border: 1px solid @tt_border;
+    border-radius: 0;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 0;
+}
+.loop-nav-btn label {
+    padding: 0;
+    margin: 0;
+}
+.loop-nav-btn:hover {
+    background-color: @tt_border;
+    color: @tt_text;
+}
+.loop-nav-btn-left {
+    border-radius: 6px 0 0 6px;
+}
+.loop-nav-btn-mid {
+    border-radius: 0;
+    border-left-width: 0;
+}
+.loop-nav-btn-right {
+    border-radius: 0 6px 6px 0;
+    border-left-width: 0;
+}
+.loop-nav-btn-active,
+.loop-nav-btn:checked {
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    border-color: @tt_accent;
+    font-weight: bold;
+}
+.loop-nav-btn-active:hover,
+.loop-nav-btn:checked:hover {
+    background-color: @tt_accent_light;
+}
 .server-start-btn {
     background-color: @tt_bg_dark;
     color: @tt_accent;
@@ -7776,6 +7821,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._pipelines_toggle_syncing = False
 
         self._build_ui()
+        # Now that _build_ui() has constructed everything the loop nav's
+        # "toggled" handlers touch (_gallery_stack, _ctrl_wrapper, _detail_wrap,
+        # _pipelines_btn), it's safe to activate Create — the loop's default
+        # landing movement. Fires _on_loop_nav_create(), which is a no-op-safe
+        # re-application of the state _build_ui already left things in.
+        self._loop_nav_create_btn.set_active(True)
         self._load_history()
         self._rebuild_playlists_menu()   # populate Playlists menu after history is loaded
         self._restore_queue()
@@ -7836,6 +7887,17 @@ class MainWindow(Gtk.ApplicationWindow):
         # Wire the history store so the SHOT panel seed buttons can read history.
         # (ControlPanel._get_history_records uses self._store via this attribute.)
         self._controls._store = self._store
+
+        # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
+        # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
+        # 2026-07-13-create-surface-design.md). Appended FIRST so it sits above
+        # everything else, including today's medium toggle (which stays inside
+        # Create for this task — a later slice replaces it with medium chips).
+        # Built here (self._controls already exists) but its default-active
+        # button isn't set yet — that happens at the end of __init__, once
+        # _gallery_stack / _ctrl_wrapper / _detail_wrap / _pipelines_btn (built
+        # further below) exist for the "toggled" handler to touch safely.
+        root_box.append(self._build_loop_nav())
 
         # ── Main toolbar ──────────────────────────────────────────────────────
         # The toolbar strip is built inside ControlPanel (logo, source toggle,
@@ -8679,6 +8741,126 @@ class MainWindow(Gtk.ApplicationWindow):
         density_act = self.lookup_action("gallery-density")
         if density_act:
             density_act.set_enabled(source != "artgen")
+
+    # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────────
+    #
+    # SP-C Task 1 (docs/superpowers/specs/2026-07-13-create-surface-design.md):
+    # the new top-level nav that reframes the app by *activity* rather than by
+    # medium. For this task the four movements route to EXISTING surfaces only
+    # — no internal rewrites of ControlPanel, the medium galleries, or Pipeline
+    # Studio. Generation itself is completely unchanged; Create just reaches it
+    # through this nav instead of being the app's only mode.
+
+    def _build_loop_nav(self) -> Gtk.Box:
+        """Build the loop nav row: four movements sharing one radio group.
+
+        Reuses the `.source-btn`/attractor button styling pattern (a `.loop-
+        nav-btn` variant of the same left/mid/mid/right radio-group CSS as
+        today's medium toggle) rather than inventing new chrome. Returns the
+        row widget; the caller appends it to `root_box` *first* so it sits
+        above everything else, including the medium toggle that still lives
+        inside Create for this task.
+
+        Does NOT set any button active — `MainWindow.__init__` does that once
+        `_build_ui()` has finished constructing everything the handlers below
+        touch (`_gallery_stack`, `_ctrl_wrapper`, `_detail_wrap`,
+        `_pipelines_btn`), so firing the "toggled" signal here can never touch
+        an attribute that doesn't exist yet.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("loop-nav-row")
+
+        create_btn = Gtk.ToggleButton(label="✨ Create")
+        create_btn.add_css_class("loop-nav-btn")
+        create_btn.add_css_class("loop-nav-btn-left")
+        create_btn.set_tooltip_text(
+            "Create — start something new: an idea, a model, or an inspiration."
+        )
+
+        curate_btn = Gtk.ToggleButton(label="⭐ Curate")
+        curate_btn.add_css_class("loop-nav-btn")
+        curate_btn.add_css_class("loop-nav-btn-mid")
+        curate_btn.set_tooltip_text("Curate — browse and organize what you've made.")
+
+        discover_btn = Gtk.ToggleButton(label="🔭 Discover")
+        discover_btn.add_css_class("loop-nav-btn")
+        discover_btn.add_css_class("loop-nav-btn-mid")
+        discover_btn.set_tooltip_text(
+            "Discover — Pipeline Studio's Discover page and Watch TT-TV."
+        )
+
+        remix_btn = Gtk.ToggleButton(label="🔀 Remix")
+        remix_btn.add_css_class("loop-nav-btn")
+        remix_btn.add_css_class("loop-nav-btn-right")
+        remix_btn.set_tooltip_text("Remix — the Muse: turn anything into a new pipeline.")
+
+        curate_btn.set_group(create_btn)
+        discover_btn.set_group(create_btn)
+        remix_btn.set_group(create_btn)
+
+        create_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_create())
+        curate_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_curate())
+        discover_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_discover())
+        remix_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_remix())
+
+        row.append(create_btn)
+        row.append(curate_btn)
+        row.append(discover_btn)
+        row.append(remix_btn)
+
+        # Keyed lookup for tests and for __init__'s default-active line.
+        self._loop_nav = {
+            "create": create_btn,
+            "curate": curate_btn,
+            "discover": discover_btn,
+            "remix": remix_btn,
+        }
+        self._loop_nav_create_btn = create_btn
+        return row
+
+    def _on_loop_nav_create(self) -> None:
+        """Create: the current generation UI — ControlPanel + medium galleries,
+        completely unchanged. Reuses `_on_source_change` (the same call
+        `_hide_pipelines` makes) so Create always lands on whatever medium the
+        ControlPanel's source toggle already has active.
+        """
+        self._on_source_change(self._controls.get_model_source())
+
+    def _on_loop_nav_curate(self) -> None:
+        """Curate: the current-source gallery, full-width (placeholder for
+        this task — a later slice adds the starred/playlist filter Curate is
+        named for). Reuses `_on_source_change` for the gallery switch and
+        pipelines-toggle sync, then additionally collapses the generation
+        controls so the gallery gets the width — same cards, star/playlist
+        actions, and detail panel Create already uses.
+        """
+        self._on_source_change(self._controls.get_model_source())
+        self._ctrl_wrapper.set_visible(False)
+
+    def _on_loop_nav_discover(self) -> None:
+        """Discover: Pipeline Studio's Discover page — reuses the existing
+        "🧩 Pipelines" toggle's activation path (`_show_pipelines`) so Discover
+        and the toolbar toggle can never disagree about what's mounted.
+        """
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and not pipelines_btn.get_active():
+            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+        else:
+            self._show_pipelines()
+
+    def _on_loop_nav_remix(self) -> None:
+        """Remix: Pipeline Studio's Muse, unseeded — reuses the exact
+        activation bridge `_remix_as_pipeline` uses (enter Pipelines the same
+        way the toolbar toggle does, then hand off to `show_muse()`), just
+        without a seed artifact.
+        """
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and not pipelines_btn.get_active():
+            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+        else:
+            self._show_pipelines()
+
+        self._pipeline_studio.show_muse(seed_artifact=None)
 
     # ── Pipeline Studio (Discover + Open) ───────────────────────────────────────
 
