@@ -50,6 +50,49 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
+import field_roles
+
+
+@dataclass
+class FieldSpec:
+    """Purely-additive metadata describing ONE field a param panel exposes.
+
+    `field_specs()` (below) emits a list of these per panel so a later task's
+    shared RoleZonePanel can group fields into brief/direction/control zones
+    without having to know each panel's widget internals. This dataclass
+    carries no widget references and does not participate in `collect()` —
+    it is a read-only description, built fresh on every call.
+
+    Fields:
+      key      — matches a `collect()` dict key (or an artgen `_ArgSpec.dest`)
+                 EXACTLY. This is the join key between "what this field is"
+                 (FieldSpec) and "what value it currently holds" (collect()).
+      label    — human-readable label (mirrors the panel's own row label,
+                 or `_humanize_dest()` for artgen).
+      kind     — widget-shape hint: "int" | "float" | "bool" | "choice" |
+                 "str" | "path" | "model". "model" is a deliberate special
+                 case (see module docstring's per-panel notes below) — model
+                 selection is not one of the brief/direction/control zones,
+                 it is handled as its own concern by the caller.
+      default  — the value this field starts at (mirrors the widget's built
+                 default, NOT necessarily `collect()`'s current value).
+      role     — a `field_roles.FieldRole` — which zone (brief/direction/
+                 control) and how the value is used (words/interpreted/exact).
+      choices  — for "choice"/"model" kinds, the list of legal values (for
+                 "model" specs this is the panel's own `(key, label)` tuple
+                 list, unchanged, so a caller can render the same dropdown).
+      tooltip  — optional help text (artgen forwards the argparse `help=`
+                 string here; native panels default to "").
+    """
+
+    key: str
+    label: str
+    kind: str
+    default: object
+    role: "field_roles.FieldRole"
+    choices: "Optional[list]" = None
+    tooltip: str = ""
+
 
 class CreateParamPanel(ABC):
     """Contract every per-medium param panel on the Create surface implements.
@@ -68,6 +111,20 @@ class CreateParamPanel(ABC):
     @abstractmethod
     def collect(self) -> dict:
         """Read current widget values into the medium-specific params dict."""
+
+    @abstractmethod
+    def field_specs(self) -> "list[FieldSpec]":
+        """Describe every field this panel exposes as a list of `FieldSpec`.
+
+        Purely additive metadata for a later task's RoleZonePanel grouping —
+        does NOT affect `collect()` in any way, and does not require `build()`
+        to have been called first (mirrors `collect()`'s own "never raises
+        before build()" contract where practical). Every `key` here MUST
+        match a real `collect()` key (or, for `ArtgenParamPanel`, a real
+        introspected argparse dest) — see each panel's own implementation for
+        the exact key list and rationale for any role that isn't a bare
+        `classify_native`/`classify_artgen` call.
+        """
 
 
 # Image model dropdown choices: (internal key, human label), display order.
@@ -145,6 +202,42 @@ class ImageParamPanel(CreateParamPanel):
             ),
             "model": self._selected_model_id(),
         }
+
+    def field_specs(self) -> "list[FieldSpec]":
+        """One spec per `collect()` key (see that method's exact dict shape).
+
+        `model` is deliberately `kind="model"` rather than being classified by
+        `field_roles.classify_native` — model selection is not a brief/
+        direction/control zone field, it's handled as its own concern by a
+        later task's caller (see `FieldSpec.kind`'s docstring note). Every
+        other key uses `classify_native(key)` unmodified so the roles agree
+        with the shared vocabulary `field_roles.py` defines for native panels.
+        """
+        return [
+            FieldSpec(
+                key="num_inference_steps", label="Steps", kind="int", default=20,
+                role=field_roles.classify_native("num_inference_steps"),
+            ),
+            FieldSpec(
+                key="seed", label="Seed", kind="int", default=-1,
+                role=field_roles.classify_native("seed"),
+                tooltip="-1 = random seed",
+            ),
+            FieldSpec(
+                key="guidance_scale", label="Guidance scale", kind="float", default=3.5,
+                role=field_roles.classify_native("guidance_scale"),
+            ),
+            FieldSpec(
+                key="negative_prompt", label="Negative prompt", kind="str", default="",
+                role=field_roles.classify_native("negative_prompt"),
+                tooltip="blurry, low quality, deformed…",
+            ),
+            FieldSpec(
+                key="model", label="Model", kind="model", default=_DEFAULT_MODEL_KEY,
+                role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
+                choices=_IMAGE_MODEL_CHOICES,
+            ),
+        ]
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -333,6 +426,43 @@ class VideoParamPanel(CreateParamPanel):
             "num_frames": self._selected_num_frames(),
         }
 
+    def field_specs(self) -> "list[FieldSpec]":
+        """One spec per `collect()` key (see that method's exact dict shape).
+
+        `model` is `kind="model"` for the same reason as `ImageParamPanel`
+        (model selection is handled as its own concern, not a zone field).
+        `num_frames`'s 0="runner default" sentinel (see `_selected_num_frames`)
+        is metadata-invisible here — the spec's `default` is the widget's
+        starting value (0), matching the other native panels' convention of
+        describing the built default, not the collect()-time semantics.
+        """
+        return [
+            FieldSpec(
+                key="num_inference_steps", label="Steps", kind="int", default=20,
+                role=field_roles.classify_native("num_inference_steps"),
+            ),
+            FieldSpec(
+                key="seed", label="Seed", kind="int", default=-1,
+                role=field_roles.classify_native("seed"),
+                tooltip="-1 = random seed",
+            ),
+            FieldSpec(
+                key="num_frames", label="Frame count", kind="int", default=0,
+                role=field_roles.classify_native("num_frames"),
+                tooltip="0 = runner default",
+            ),
+            FieldSpec(
+                key="negative_prompt", label="Negative prompt", kind="str", default="",
+                role=field_roles.classify_native("negative_prompt"),
+                tooltip="blurry, low quality, deformed…",
+            ),
+            FieldSpec(
+                key="model", label="Model", kind="model", default=_DEFAULT_VIDEO_MODEL_KEY,
+                role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
+                choices=_VIDEO_MODEL_CHOICES,
+            ),
+        ]
+
     # ── Internals ─────────────────────────────────────────────────────────────
 
     def _selected_model_id(self) -> str:
@@ -505,6 +635,68 @@ class AnimateParamPanel(CreateParamPanel):
             "animate_mode": self._animate_mode,
             "model": _ANIMATE_MODEL_ID,
         }
+
+    def field_specs(self) -> "list[FieldSpec]":
+        """One spec per `collect()` key (see that method's exact dict shape).
+
+        Three keys deliberately do NOT use `field_roles.classify_native`
+        (which would fall through to its "unknown key -> control/exact"
+        default for all three, misclassifying them):
+
+          - `animate_mode` is a direction field, not a numeric control — it's
+            a toggle between "animation"/"replacement" interpretive framing,
+            so it gets an explicit `FieldRole(ROLE_DIRECTION, MARK_EXACT)`
+            per the task brief.
+          - `reference_video_path` / `reference_image_path` are file paths,
+            not native brief/direction/control text — `kind="path"` flags
+            that a path-picker widget (not a plain entry) should render them.
+            Per the task brief ("path fields -> give them kind='path' and a
+            sensible role (brief/words is fine for reference inputs, or
+            direction - pick brief/words and note it)") these are classified
+            brief/words: the reference video/image are user-supplied CREATIVE
+            INPUT the model conditions on (motion pattern / character
+            likeness), the same "raw material the generator reads" role a
+            text brief plays for image/video prompts — not an exact numeric
+            dial the model never interprets.
+
+        `model` is `kind="model"` with no dropdown choices (this medium has
+        exactly one native model today — see `_ANIMATE_MODEL_ID`) — still
+        emitted so a caller can treat "model" uniformly across all three
+        native panels without a hasattr/None check.
+        """
+        brief_words = field_roles.FieldRole(field_roles.ROLE_BRIEF, field_roles.MARK_WORDS)
+        return [
+            FieldSpec(
+                key="num_inference_steps", label="Steps", kind="int", default=20,
+                role=field_roles.classify_native("num_inference_steps"),
+            ),
+            FieldSpec(
+                key="seed", label="Seed", kind="int", default=-1,
+                role=field_roles.classify_native("seed"),
+                tooltip="-1 = random seed",
+            ),
+            FieldSpec(
+                key="animate_mode", label="Mode", kind="choice",
+                default=_ANIMATE_MODE_ANIMATION,
+                role=field_roles.FieldRole(field_roles.ROLE_DIRECTION, field_roles.MARK_EXACT),
+                choices=[_ANIMATE_MODE_ANIMATION, _ANIMATE_MODE_REPLACEMENT],
+            ),
+            FieldSpec(
+                key="reference_video_path", label="Motion video", kind="path", default="",
+                role=brief_words,
+                tooltip="no motion video selected",
+            ),
+            FieldSpec(
+                key="reference_image_path", label="Character image", kind="path", default="",
+                role=brief_words,
+                tooltip="no character image selected",
+            ),
+            FieldSpec(
+                key="model", label="Model", kind="model", default=_ANIMATE_MODEL_ID,
+                role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
+                choices=None,
+            ),
+        ]
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
@@ -980,6 +1172,34 @@ class ArtgenParamPanel(CreateParamPanel):
             except Exception:
                 result[control.dest] = None
         return result
+
+    def field_specs(self) -> "list[FieldSpec]":
+        """One `FieldSpec` per introspected argparse dest for this generator.
+
+        Re-runs `_introspect_generator_args` fresh (does NOT require `build()`
+        to have run first, and does not depend on `self._controls`) — same
+        fail-soft contract as that function: an unknown/broken generator name
+        yields `[]`, never raises. `role` comes from `field_roles.classify_artgen`,
+        which is exactly the classifier the task brief specifies for artgen
+        dests (unlike the native panels, no key needs a hand-rolled override —
+        `classify_artgen` already handles bool/int/float/choice/str uniformly).
+        """
+        try:
+            arg_specs = _introspect_generator_args(self._generator_name)
+        except Exception:
+            arg_specs = []
+        return [
+            FieldSpec(
+                key=spec.dest,
+                label=_humanize_dest(spec.dest),
+                kind=spec.kind,
+                default=spec.default,
+                role=field_roles.classify_artgen(spec),
+                choices=spec.choices,
+                tooltip=spec.help,
+            )
+            for spec in arg_specs
+        ]
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
