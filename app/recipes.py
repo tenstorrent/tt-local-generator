@@ -125,6 +125,19 @@ _CURATED: "list[Goal]" = [
          (("TTLGCaptionImage", {}), ("TTLGPromptCompose", {}), ("TTLGTextToImage", {}))),
     Goal("film-this", "A short film", "🎬", "video", "scoped",
          (("TTLGImageToVideo", {}),)),
+    # scoped, text-consuming — "Make this lore into…" (Muse text-seed bridge).
+    # illustrated-series is a DAG: TTLGMontage and TTLGAddToPlaylist both
+    # consume node 2's image batch, expressed purely via [node_id, key] wires
+    # in params (seed_spec's own auto-wire only chains consecutive steps).
+    Goal("illustrated-series", "An illustrated series", "📽", "video", "scoped",
+         (("TTLGSplitText", {"mode": "paragraphs", "max_items": 8}),
+          ("TTLGTextToImage", {"style_suffix": ", cinematic, richly detailed, atmospheric"}),
+          ("TTLGMontage", {"captions": ["1", "fragments"], "seconds_per": 2.5}),
+          ("TTLGAddToPlaylist", {"artifacts": ["2", "image_path"], "playlist_name": "lore series"}))),
+    Goal("illustrate-it", "An illustration", "🖼", "image", "scoped",
+         (("TTLGTextToImage", {"style_suffix": ", cinematic, richly detailed"}),)),
+    Goal("lore-poster", "A poster", "🖼", "image", "scoped",
+         (("TTLGTextToImage", {"style_suffix": ", bold poster art, dramatic composition"}),)),
 ]
 
 

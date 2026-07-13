@@ -23,7 +23,12 @@ def test_curated_goals_nonempty_and_kind_safe():
     assert any(g.id == "looping-animation" for g in goals)
     # every curated recipe materializes without raising (kind-safe wiring)
     for g in goals:
-        seed = ("/tmp/x.png", "image") if g.applies_to == "scoped" else None
+        if g.applies_to == "scoped":
+            first_kind = intent_for(g.recipe_steps[0][0]).input_kind
+            seed = (("frag one\n\nfrag two", "text") if first_kind == "text"
+                    else ("/tmp/x.png", "image"))
+        else:
+            seed = None
         spec = build_seed_spec(g, seed_artifact=seed)
         assert len(spec) == len(g.recipe_steps)
 
@@ -63,6 +68,23 @@ def test_all_goals_curated_wins_on_id_collision():
         "id": "poster"}}, "tools": [{"name": "p"}]}}
     poster = [g for g in all_goals(mcp_reader=fake) if g.id == "poster"]
     assert len(poster) == 1 and poster[0].via == "curated"
+
+
+def test_text_scoped_goals_present():
+    ids = {g.id for g in recipes.goals_for(seed_output_kind="text")}
+    assert {"illustrated-series", "illustrate-it", "lore-poster"} <= ids
+    # image-seeded scoped goals are NOT offered for a text seed
+    assert "animate-this" not in ids
+
+
+def test_illustrated_series_builds_a_valid_seeded_spec():
+    g = next(g for g in recipes.curated_goals() if g.id == "illustrated-series")
+    spec = recipes.build_seed_spec(g, seed_artifact=("frag one\n\nfrag two", "text"))
+    assert spec["1"]["class_type"] == "TTLGSplitText"
+    assert spec["1"]["inputs"]["text"] == "frag one\n\nfrag two"   # text content seeded, not a path
+    assert spec["2"]["inputs"]["prompt"] == ["1", "fragments"]      # auto-wired fan-out
+    assert spec["3"]["inputs"]["images"] == ["2", "image_path"]     # montage consumes the batch
+    assert spec["4"]["inputs"]["artifacts"] == ["2", "image_path"]  # playlist consumes the batch
 
 
 def test_every_blank_goal_first_step_seeds_an_editable_prompt():
