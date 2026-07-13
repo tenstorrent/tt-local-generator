@@ -1066,3 +1066,125 @@ class ArtgenParamPanel(CreateParamPanel):
             choices=spec.choices or [], none_default=spec.none_default,
         )
         return row, control
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ModifierPills (Task 3 — docs/superpowers/plans/2026-07-13-create-surface.md)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Reusable widget for the Create surface's "Direction" zone (built in a later
+# task) and, eventually, pipeline text fields: tapping a category-grouped "add"
+# chip creates a visible, REMOVABLE pill; `applied_text()` returns the
+# space-joined modifier text (in click order) to append to the brief.
+#
+# `load_chips_for_kind` is a thin seam over `chip_config.load_chips` — tests
+# monkeypatch it directly so they never depend on `config/prompt_chips.yaml`'s
+# actual contents, and a broken/missing config file degrades to "no chips"
+# rather than raising (same fail-soft convention as `_introspect_generator_args`
+# above).
+
+
+def load_chips_for_kind(kind: str) -> "list":
+    """Seam over `chip_config.load_chips(kind)` — returns `[]` for an unknown
+    kind or any load error (missing/malformed YAML), never raises. Tests
+    monkeypatch this attribute directly to force a known bank."""
+    try:
+        from chip_config import load_chips
+        return load_chips(kind)
+    except Exception:
+        return []
+
+
+class ModifierPills(Gtk.Box):
+    """Category-grouped "add" chips that turn into removable pills.
+
+    Every chip row (both the "applied" row and each category's "add" row) is
+    a `Gtk.FlowBox` — NEVER a plain horizontal `Gtk.Box` — so a long bank of
+    chips wraps onto additional lines instead of overflowing the panel width.
+
+    `self._applied` is an ordered `list[ChipEntry]` recording click order;
+    `applied_text()` space-joins each entry's `.text` in that order. Clicking
+    an "add" chip calls `_apply_entry`; clicking a pill's "✕" calls
+    `_remove_entry`. Both re-render just the applied-pills row (the add-chip
+    rows never change after construction).
+    """
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add_css_class("modifier-pills")
+
+        self._kind = kind
+        self._applied: "list" = []  # ordered list[ChipEntry], click order
+
+        try:
+            self._categories = load_chips_for_kind(kind) or []
+        except Exception:
+            self._categories = []
+
+        # Applied-pills row: rebuilt on every apply/remove.
+        self._applied_flow = Gtk.FlowBox()
+        self._applied_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._applied_flow.add_css_class("modifier-pills-applied")
+        self.append(self._applied_flow)
+
+        # One "add" FlowBox per category — built once, never rebuilt.
+        for category in self._categories:
+            self.append(self._build_category_box(category))
+
+        self._render_applied()
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def applied_text(self) -> str:
+        """Space-joined `.text` of every applied pill, in click order."""
+        return " ".join(entry.text for entry in self._applied)
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _build_category_box(self, category) -> Gtk.Widget:
+        group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        group.add_css_class("modifier-pills-category")
+
+        header = Gtk.Label(label=category.name)
+        header.add_css_class("modifier-pills-category-label")
+        header.set_xalign(0.0)
+        group.append(header)
+
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.add_css_class("modifier-pills-add-row")
+        for entry in category.chips:
+            btn = Gtk.Button(label=f"+ {entry.label}")
+            btn.add_css_class("create-addchip")
+            if entry.tip:
+                btn.set_tooltip_text(entry.tip)
+            btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
+            flow.append(btn)
+        group.append(flow)
+
+        return group
+
+    def _apply_entry(self, entry) -> None:
+        self._applied.append(entry)
+        self._render_applied()
+
+    def _remove_entry(self, entry) -> None:
+        if entry in self._applied:
+            self._applied.remove(entry)
+        self._render_applied()
+
+    def _render_applied(self) -> None:
+        """Rebuild the applied-pills FlowBox from `self._applied`."""
+        child = self._applied_flow.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._applied_flow.remove(child)
+            child = nxt
+
+        for entry in self._applied:
+            pill = Gtk.Button(label=f"{entry.label} ✕")
+            pill.add_css_class("create-pill")
+            if entry.tip:
+                pill.set_tooltip_text(entry.tip)
+            pill.connect("clicked", lambda _b, e=entry: self._remove_entry(e))
+            self._applied_flow.append(pill)
