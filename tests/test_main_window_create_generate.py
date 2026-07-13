@@ -68,6 +68,11 @@ def _make_mw(monkeypatch):
     obj._on_generate = MagicMock()
     obj._set_status = MagicMock()
     obj._artgen_panel = None  # absent by default; artgen-done test overrides
+    # `_create_generate_native`'s video branch syncs the OLD ControlPanel's
+    # model selection before calling `_on_generate` (FIX 1). A MagicMock is
+    # enough for the image/animate branches (which never touch it) and lets
+    # the video tests assert the sync happened.
+    obj._controls = MagicMock()
 
     for name in (
         "_on_create_generate",
@@ -154,6 +159,29 @@ def test_video_medium_routes_to_on_generate_with_model_source_video(monkeypatch)
     assert kwargs["model_id"] == "mochi"
 
 
+def test_video_medium_syncs_old_control_model_before_generate(monkeypatch):
+    """FIX 1 (silently-wrong-worker bug): `_on_generate`'s video branch picks
+    the worker from `self._controls.get_video_model()`, NOT `model_id`. That
+    field defaults to "animatediff" on a fresh session — so CreateView MUST
+    sync the old control to the chosen model FIRST, or Wan2.2/Mochi silently
+    run AnimateDiff. Assert the sync happened before `_on_generate`."""
+    obj = _make_mw(monkeypatch)
+
+    call_order = []
+    obj._controls._set_model.side_effect = lambda k: call_order.append(("set_model", k))
+    obj._on_generate.side_effect = lambda *a, **k: call_order.append(("generate", k["model_source"]))
+
+    obj._on_create_generate(_VIDEO_MEDIUM, {"model": "wan2.2-t2v"})
+
+    # canonical "wan2.2-t2v" -> short key "wan2"
+    obj._controls._set_model.assert_called_once_with("wan2")
+    # _video_model directly guaranteed too (so get_video_model() agrees even
+    # if the old control's _model_source wasn't "video").
+    assert obj._controls._video_model == "wan2"
+    # the sync must precede the actual generation call.
+    assert call_order == [("set_model", "wan2"), ("generate", "video")]
+
+
 def test_animate_medium_routes_to_on_generate_with_ref_paths_and_mode(monkeypatch):
     obj = _make_mw(monkeypatch)
     params = {
@@ -231,6 +259,50 @@ def test_artgen_medium_shells_out_to_tt_ctl_artgen_with_generator_and_flags(
     # the idea-door prompt must NOT be forwarded — no artgen generator has a
     # common --prompt flag (see _create_generate_artgen's docstring).
     assert "--prompt" not in argv
+
+
+_ANIMATEDIFF_MEDIUM = Medium(id="animatediff", label="AnimateDiff", icon="🕺",
+                             kind="gif", source="artgen", generator="animatediff")
+
+
+def test_artgen_animatediff_skips_empty_append_flags(monkeypatch, tmp_path):
+    """FIX 2 (artgen "animatediff" medium failed 100% via Create): its
+    `--per-chip-prompt`/`--prompt-schedule` are argparse `action="append"`
+    flags rendered as blank entries that collect "" (not None). The forwarding
+    loop must skip empty/whitespace strings and empty lists, or it emits
+    `--prompt-schedule ""` → `tt-ctl artgen animatediff` raises. A meaningful
+    scalar flag alongside must still be forwarded."""
+    obj = _make_mw(monkeypatch)
+    fake_ms, run_tt_ctl_spy, _out = _patch_artgen_deps(monkeypatch, tmp_path=tmp_path)
+    monkeypatch.setattr(
+        __import__("artgen"), "get",
+        lambda name: type("G", (), {"output_ext": ".gif"})(),
+    )
+
+    params = {
+        "prompt": "a spinning galaxy",       # idea-door prompt — never forwarded
+        "prompt_schedule": "",               # empty append flag — must be skipped
+        "per_chip_prompt": [],               # empty list append flag — must be skipped
+        "ad_neg_prompt": "   ",              # whitespace-only string — must be skipped
+        "steps": 8,                          # real scalar — must be forwarded
+    }
+    obj._on_create_generate(_ANIMATEDIFF_MEDIUM, params)
+
+    run_tt_ctl_spy.assert_called_once()
+    (argv,), _kwargs = run_tt_ctl_spy.call_args
+    assert argv[0] == "artgen"
+    assert argv[1] == "animatediff"
+    # No empty-valued flag anywhere in argv.
+    assert "--prompt-schedule" not in argv
+    assert "--per-chip-prompt" not in argv
+    assert "--ad-neg-prompt" not in argv
+    assert "--prompt" not in argv
+    # The one meaningful scalar flag survives.
+    assert "--steps" in argv
+    assert "8" in argv
+    # No bare "" ever leaked into argv as a value.
+    assert "" not in argv
+    assert "   " not in argv
 
 
 def test_artgen_medium_records_artifact_in_media_store(monkeypatch, tmp_path):

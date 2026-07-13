@@ -10432,6 +10432,24 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         else:  # "video"
             model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+            # FIX 1 (task-8 review — silently-wrong-worker bug): `_on_generate`'s
+            # video branch does NOT read `model_id` to decide which worker to
+            # run — it reads `self._controls.get_video_model()` (the OLD
+            # ControlPanel dropdown), which DEFAULTS to "animatediff" on a
+            # fresh session until a health check finds a running video server.
+            # So without syncing it first, choosing Wan2.2/Mochi in CreateView
+            # would silently run AnimateDiff. Sync the old control to
+            # CreateView's chosen model BEFORE the call. This stays additive —
+            # it drives the existing ControlPanel setter, touching neither
+            # `_on_generate`'s body nor worker code.
+            #
+            # `_set_model` only writes `_video_model` when the control's own
+            # `_model_source` is already "video" (the fresh-session bug case —
+            # source defaults to "video"), so we also set `_video_model`
+            # directly to guarantee `get_video_model()` agrees regardless of
+            # whatever source the old (now-hidden) ControlPanel was last left in.
+            self._controls._set_model(model_key)
+            self._controls._video_model = model_key
             self._on_generate(
                 prompt,
                 params.get("negative_prompt", ""),
@@ -10440,20 +10458,14 @@ class MainWindow(Gtk.ApplicationWindow):
                 model_source="video",
                 model_id=model_key,
             )
-            # NOTE (concern, see task-8-report.md): VideoParamPanel.collect()'s
-            # "num_frames" has no destination in `_on_generate` — that method
-            # derives num_frames internally from generation_config.clip_frames
-            # + the Preferences "clip length slot" setting, not from a
-            # parameter. Reusing `_on_generate` verbatim (required — never
-            # reimplement worker launching) means CreateView's frame-count
-            # spinner is currently cosmetic for the video medium. Also:
-            # `_on_generate`'s video branch decides animatediff-vs-
-            # GenerationWorker from `self._controls.get_video_model()` (the
-            # OLD ControlPanel's own dropdown), not from `model_id` — so if
-            # ControlPanel is left on "animatediff", a CreateView video
-            # generation will still take the animatediff path. Both are
-            # pre-existing shapes of `_on_generate` itself, not introduced by
-            # this task, and out of scope to fix here (would require changing
+            # NOTE (remaining concern, see task-8-report.md):
+            # VideoParamPanel.collect()'s "num_frames" has no destination in
+            # `_on_generate` — that method derives num_frames internally from
+            # generation_config.clip_frames + the Preferences "clip length
+            # slot" setting, not from a parameter. Reusing `_on_generate`
+            # verbatim (required — never reimplement worker launching) means
+            # CreateView's frame-count spinner is currently cosmetic for the
+            # video medium. Out of scope to fix here (would require changing
             # the one function every rule says must stay untouched).
 
     def _create_generate_artgen(self, medium, params: dict) -> None:
@@ -10506,6 +10518,22 @@ class MainWindow(Gtk.ApplicationWindow):
                 argv = ["artgen", generator, "--output", str(out_path)]
                 for key, value in params.items():
                     if key == "prompt" or value is None:
+                        continue
+                    # FIX 2 (task-8 review — artgen "animatediff" medium failed
+                    # 100% via Create): argparse `action="append"` flags (e.g.
+                    # animatediff's `--per-chip-prompt`/`--prompt-schedule`,
+                    # default None) are rendered by ArtgenParamPanel as plain
+                    # entries that collect "" — not None — so the None-skip
+                    # above misses them, and forwarding `--prompt-schedule ""`
+                    # makes `tt-ctl artgen animatediff` raise every time. Only
+                    # forward values that carry a real choice: skip an empty/
+                    # whitespace-only string and an empty list/tuple. A blank
+                    # scalar entry (e.g. an untouched `--theme`) is likewise
+                    # skipped so the generator's own default applies, which is
+                    # the same thing a bare CLI invocation would do.
+                    if isinstance(value, str) and not value.strip():
+                        continue
+                    if isinstance(value, (list, tuple)) and not value:
                         continue
                     _append_flag_value(argv, _flag_from_key(key), value)
                 _run_tt_ctl(argv)
