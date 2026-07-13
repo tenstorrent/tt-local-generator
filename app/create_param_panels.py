@@ -871,7 +871,12 @@ class AnimateParamPanel(CreateParamPanel):
     def _on_pick_ref_video(self, _btn: Gtk.Button) -> None:
         dlg = Gtk.FileDialog()
         dlg.set_title("Select motion video")
-        parent = self._widget.get_root() if self._widget is not None else None
+        # Derive the transient parent from the clicked button, not from
+        # `self._widget`: once a RoleZonePanel (Task 5) re-parents this panel's
+        # rows out of its own `build()` box, `self._widget` becomes an orphaned,
+        # un-mounted box whose `get_root()` is None — but the button is still
+        # in the live widget tree, so its `get_root()` is the real window.
+        parent = _btn.get_root() if _btn is not None else None
         dlg.open(parent, None, self._on_ref_video_picked)
 
     def _on_ref_video_picked(self, dlg, result) -> None:
@@ -887,7 +892,10 @@ class AnimateParamPanel(CreateParamPanel):
     def _on_pick_ref_image(self, _btn: Gtk.Button) -> None:
         dlg = Gtk.FileDialog()
         dlg.set_title("Select character image")
-        parent = self._widget.get_root() if self._widget is not None else None
+        # See `_on_pick_ref_video`: derive the parent from the live button, not
+        # from the possibly-orphaned `self._widget`, so the dialog stays modal
+        # to the real window after RoleZonePanel re-parenting.
+        parent = _btn.get_root() if _btn is not None else None
         dlg.open(parent, None, self._on_ref_image_picked)
 
     def _on_ref_image_picked(self, dlg, result) -> None:

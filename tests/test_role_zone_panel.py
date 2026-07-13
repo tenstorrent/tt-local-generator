@@ -132,3 +132,64 @@ def test_animate_path_field_gets_neutral_tooltip_not_marker_tip():
     assert isinstance(label, Gtk.Label)
     tip = label.get_tooltip_text()
     assert tip != fr.MARKER_TIP[fr.MARK_WORDS]
+
+
+def _find_browse_button(row) -> "Gtk.Button | None":
+    """Return the 'Browse…' Gtk.Button inside an Animate ref-video/ref-image
+    row (label, entry, then the browse button)."""
+    child = row.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Button):
+            return child
+        child = child.get_next_sibling()
+    return None
+
+
+def test_animate_pickers_derive_live_root_after_reparenting(monkeypatch):
+    """Regression guard: after RoleZonePanel re-parents AnimateParamPanel's
+    rows, the panel's own `build()` box (`self._widget`) is orphaned and its
+    `get_root()` is None — but the Browse buttons are in the live RoleZonePanel
+    widget tree, so THEY resolve the real window. The file-picker handlers must
+    therefore derive their FileDialog transient parent from the clicked button
+    (`_btn.get_root()`), not from `self._widget`, so the dialog stays parented
+    to and modal against the main window once Task 6 mounts this.
+
+    We capture the parent the handler actually passes to `Gtk.FileDialog.open`.
+    Against 4ef08e7 (handlers used `self._widget.get_root()`) that parent would
+    be None because `self._widget` is orphaned; with the fix it is the live
+    window. Invoking the real handler (not just checking widget roots) is what
+    makes this test genuinely fail against the pre-fix code.
+    """
+    panel = cpp.AnimateParamPanel()
+    rp = cpp.RoleZonePanel(panel, _medium("gif"))
+
+    win = Gtk.Window()
+    win.set_child(rp)
+    win.present()  # realize the widget tree so get_root() resolves the window
+
+    # The panel's own build() box was re-parented away and discarded — orphaned.
+    assert panel._widget.get_root() is None
+
+    captured: "list" = []
+
+    def _fake_open(self, parent, cancellable, callback):
+        captured.append(parent)  # no dialog is actually shown
+
+    monkeypatch.setattr(Gtk.FileDialog, "open", _fake_open)
+
+    for key, handler in (
+        ("reference_video_path", panel._on_pick_ref_video),
+        ("reference_image_path", panel._on_pick_ref_image),
+    ):
+        row = panel._row_for(key)
+        assert row is not None
+        browse = _find_browse_button(row)
+        assert browse is not None
+        # The button (live in the tree) resolves the real window; the handler
+        # must forward exactly that as the dialog's transient parent.
+        assert browse.get_root() is win
+        captured.clear()
+        handler(browse)
+        assert captured == [win]
+
+    win.destroy()
