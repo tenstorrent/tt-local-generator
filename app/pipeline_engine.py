@@ -477,17 +477,41 @@ def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
 
 @register("TTLGTextToImage")
 def _h_text_to_image(nid, inp, ctx):
+    # List-aware fan-out: when `prompt` resolves to a LIST (e.g. wired from
+    # TTLGSplitText's "fragments"), generate one image per element within
+    # this single node execution. _backend_for("TTLGTextToImage", ...)
+    # already resolved FLUX before dispatch regardless of prompt shape, so
+    # every element in the batch shares one FLUX session — no per-item
+    # server switch. A single element's failure is logged and skipped (its
+    # slot omitted); the rest of the batch proceeds. The scalar path below
+    # is unchanged and does NOT swallow exceptions.
+    prompt = inp.get("prompt", "")
+    suffix = inp.get("style_suffix", "") or ""
+    if isinstance(prompt, list):
+        paths = []
+        for i, frag in enumerate(prompt):
+            out = str(ctx.output_dir / f"node{nid}_image_{i}.png")
+            full = f"{frag}{suffix}"
+            if ctx.dry_run:
+                paths.append(out); continue
+            try:
+                paths.append(_media_image_request(
+                    server=inp.get("server", "http://localhost:8000"), prompt=full,
+                    width=inp.get("width", 1024), height=inp.get("height", 1024),
+                    steps=inp.get("steps", 4), seed=inp.get("seed", 0),
+                    negative_prompt=inp.get("negative_prompt"), out_path=out))
+            except Exception as e:  # noqa: BLE001 — skip a bad frame, keep the batch
+                ctx.emit(f"LOG:  image {i} failed: {e}")
+        return {"image_path": paths}
+    # scalar (unchanged)
     out = str(ctx.output_dir / f"node{nid}_image.png")
     if ctx.dry_run:
         return {"image_path": out}
-    path = _media_image_request(
-        server=inp.get("server", "http://localhost:8000"),
-        prompt=inp.get("prompt", ""),
-        width=inp.get("width", 1024), height=inp.get("height", 1024),
+    full = f"{prompt}{suffix}"
+    return {"image_path": _media_image_request(server=inp.get("server", "http://localhost:8000"),
+        prompt=full, width=inp.get("width", 1024), height=inp.get("height", 1024),
         steps=inp.get("steps", 4), seed=inp.get("seed", 0),
-        negative_prompt=inp.get("negative_prompt"), out_path=out,
-    )
-    return {"image_path": path}
+        negative_prompt=inp.get("negative_prompt"), out_path=out)}
 
 
 @register("TTLGImageToVideo")

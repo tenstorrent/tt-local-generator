@@ -1194,3 +1194,105 @@ def test_split_text_no_log_line_when_not_truncated():
         "4", {"text": "a\n\nb"}, _ctx(dry=True, emit=lines.append))
     assert out["fragments"] == ["a", "b"]
     assert not any(l.startswith("LOG:") for l in lines)
+
+
+# ── Task 2: TTLGTextToImage list-aware (fan-out over a fragment list) ──────
+# When `prompt` resolves to a LIST (e.g. wired from TTLGSplitText's
+# "fragments"), the handler generates one image per element within this
+# single node execution — one FLUX session for the whole batch, since
+# _backend_for("TTLGTextToImage", ...) always resolves to FLUX regardless
+# of prompt shape. A scalar prompt keeps the original single-image behavior.
+
+def test_text_to_image_list_prompt_dry_run_returns_path_list():
+    out = eng.HANDLERS["TTLGTextToImage"]("2", {"prompt": ["a", "b", "c"]}, _ctx(dry=True))
+    assert out["image_path"] == [
+        "/tmp/out/node2_image_0.png",
+        "/tmp/out/node2_image_1.png",
+        "/tmp/out/node2_image_2.png",
+    ]
+
+
+def test_text_to_image_engine_run_split_then_image_fan_out(tmp_path):
+    """Exact scenario from the brief: SplitText -> TextToImage, full engine
+    dry-run (topo_order + resolve_inputs + dispatch), 3-fragment lore."""
+    spec = {
+        "1": {"class_type": "TTLGSplitText", "inputs": {"text": "a\n\nb\n\nc"}},
+        "2": {"class_type": "TTLGTextToImage", "inputs": {"prompt": ["1", "fragments"]}},
+    }
+    results = eng.run(spec, dry_run=True, emit=lambda s: None, output_dir=str(tmp_path))
+    assert results["2"]["image_path"] == [
+        str(tmp_path / "node2_image_0.png"),
+        str(tmp_path / "node2_image_1.png"),
+        str(tmp_path / "node2_image_2.png"),
+    ]
+
+
+def test_text_to_image_scalar_prompt_still_returns_single_path_string(monkeypatch):
+    def fake(**k):
+        return "/tmp/out.png"
+    monkeypatch.setattr(eng, "_media_image_request", fake)
+    out = eng.HANDLERS["TTLGTextToImage"]("1", {"prompt": "solo lore"}, _ctx())
+    assert out["image_path"] == "/tmp/out.png"
+    assert isinstance(out["image_path"], str)
+
+
+def test_text_to_image_list_prompt_generates_one_call_per_fragment(monkeypatch):
+    calls = []
+    def fake(**k):
+        calls.append(k)
+        return k["out_path"]
+    monkeypatch.setattr(eng, "_media_image_request", fake)
+    out = eng.HANDLERS["TTLGTextToImage"]("2",
+        {"prompt": ["frag one", "frag two", "frag three"]}, _ctx())
+    assert [c["prompt"] for c in calls] == ["frag one", "frag two", "frag three"]
+    assert out["image_path"] == [
+        "/tmp/out/node2_image_0.png",
+        "/tmp/out/node2_image_1.png",
+        "/tmp/out/node2_image_2.png",
+    ]
+
+
+def test_text_to_image_style_suffix_appended_to_every_list_prompt(monkeypatch):
+    calls = []
+    def fake(**k):
+        calls.append(k)
+        return k["out_path"]
+    monkeypatch.setattr(eng, "_media_image_request", fake)
+    eng.HANDLERS["TTLGTextToImage"]("2",
+        {"prompt": ["a", "b"], "style_suffix": ", neon glow"}, _ctx())
+    assert [c["prompt"] for c in calls] == ["a, neon glow", "b, neon glow"]
+
+
+def test_text_to_image_style_suffix_appended_to_scalar_prompt(monkeypatch):
+    calls = {}
+    def fake(**k):
+        calls["req"] = k
+        return k["out_path"]
+    monkeypatch.setattr(eng, "_media_image_request", fake)
+    eng.HANDLERS["TTLGTextToImage"]("1",
+        {"prompt": "castle", "style_suffix": ", oil painting"}, _ctx())
+    assert calls["req"]["prompt"] == "castle, oil painting"
+
+
+def test_text_to_image_list_prompt_skips_failed_frame_and_continues(monkeypatch):
+    lines = []
+    def fake(**k):
+        if "bad" in k["prompt"]:
+            raise RuntimeError("flux exploded")
+        return k["out_path"]
+    monkeypatch.setattr(eng, "_media_image_request", fake)
+    out = eng.HANDLERS["TTLGTextToImage"]("2",
+        {"prompt": ["good1", "bad", "good2"]}, _ctx(emit=lines.append))
+    assert out["image_path"] == [
+        "/tmp/out/node2_image_0.png",
+        "/tmp/out/node2_image_2.png",
+    ]
+    assert any(l.startswith("LOG:") for l in lines)
+
+
+def test_text_to_image_scalar_prompt_failure_still_raises(monkeypatch):
+    def _boom(**k):
+        raise RuntimeError("flux exploded")
+    monkeypatch.setattr(eng, "_media_image_request", _boom)
+    with pytest.raises(RuntimeError):
+        eng.HANDLERS["TTLGTextToImage"]("1", {"prompt": "castle"}, _ctx())
