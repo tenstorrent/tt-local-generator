@@ -250,6 +250,15 @@ def test_artgen_back_fill_excludes_stubs(tmp_path, monkeypatch):
     import artgen
     monkeypatch.setattr(plugin_loader, "_SEARCH_PATHS", [tmp_path])
     plugin_loader._PLUGINS.clear()
+    # Swap in a throwaway copy of the real registry (via monkeypatch, so it's
+    # restored automatically at teardown) rather than `.clear()`-ing the
+    # actual `artgen._GENERATORS` dict in place. The in-place `.clear()` this
+    # replaced permanently wiped every real generator (verse/landscape/ansi/…)
+    # for the rest of the test session — any later test that introspects a
+    # real generator (e.g. `_introspect_generator_args("landscape")`) would
+    # silently see an empty registry and get `[]` back instead of its real
+    # arg specs, a state leak with no relation to what this test is checking.
+    monkeypatch.setattr(artgen, "_GENERATORS", dict(artgen._GENERATORS))
     artgen._GENERATORS.clear()
     plugin_loader.load_plugins()
     # Manually trigger back-fill as _load_generators() does

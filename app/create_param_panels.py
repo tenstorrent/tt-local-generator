@@ -126,6 +126,19 @@ class CreateParamPanel(ABC):
         `classify_native`/`classify_artgen` call.
         """
 
+    def _row_for(self, key: str) -> "Optional[Gtk.Widget]":
+        """Return the built row widget for a field `key`, if this panel's
+        `build()` populated a `self._rows` dict (every concrete panel below
+        does). Returns `None` before `build()` has run, or for a key that
+        deliberately has no zone-placeable row (e.g. the `"model"` kind
+        special case — see `FieldSpec.kind`'s docstring).
+
+        Purely additive: `RoleZonePanel` (Task 5) uses this to re-parent an
+        ALREADY-BUILT widget into a zone container. It never constructs a new
+        widget and never touches `collect()`'s data path.
+        """
+        return getattr(self, "_rows", {}).get(key)
+
 
 # Image model dropdown choices: (internal key, human label), display order.
 # Mirrors ControlPanel's `_build_image_model_row` entries (main_window.py) —
@@ -167,6 +180,10 @@ class ImageParamPanel(CreateParamPanel):
         self._guidance_adj: Optional[Gtk.Adjustment] = None
         self._model_dropdown: Optional[Gtk.DropDown] = None
         self._neg_entry: Optional[Gtk.Entry] = None
+        # key -> built row widget, populated by build(). Lets RoleZonePanel
+        # (Task 5) re-parent an already-built row into a zone by field key
+        # via the base class's `_row_for` — see that method's docstring.
+        self._rows: "dict[str, Gtk.Widget]" = {}
 
     # ── CreateParamPanel protocol ────────────────────────────────────────────
 
@@ -174,11 +191,26 @@ class ImageParamPanel(CreateParamPanel):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("image-param-panel")
 
-        box.append(self._build_steps_row())
-        box.append(self._build_seed_row())
-        box.append(self._build_guidance_row())
-        box.append(self._build_model_row())
-        box.append(self._build_negative_row())
+        self._rows = {}
+        steps_row = self._build_steps_row()
+        box.append(steps_row)
+        self._rows["num_inference_steps"] = steps_row
+
+        seed_row = self._build_seed_row()
+        box.append(seed_row)
+        self._rows["seed"] = seed_row
+
+        guidance_row = self._build_guidance_row()
+        box.append(guidance_row)
+        self._rows["guidance_scale"] = guidance_row
+
+        model_row = self._build_model_row()
+        box.append(model_row)
+        self._rows["model"] = model_row
+
+        neg_row = self._build_negative_row()
+        box.append(neg_row)
+        self._rows["negative_prompt"] = neg_row
 
         self._widget = box
         return box
@@ -392,6 +424,9 @@ class VideoParamPanel(CreateParamPanel):
         self._model_dropdown: Optional[Gtk.DropDown] = None
         self._frames_adj: Optional[Gtk.Adjustment] = None
         self._neg_entry: Optional[Gtk.Entry] = None
+        # key -> built row widget, populated by build() — see ImageParamPanel's
+        # `_rows` for the rationale (RoleZonePanel re-parenting, Task 5).
+        self._rows: "dict[str, Gtk.Widget]" = {}
 
     # ── CreateParamPanel protocol ────────────────────────────────────────────
 
@@ -399,11 +434,26 @@ class VideoParamPanel(CreateParamPanel):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("video-param-panel")
 
-        box.append(self._build_steps_row())
-        box.append(self._build_seed_row())
-        box.append(self._build_model_row())
-        box.append(self._build_frames_row())
-        box.append(self._build_negative_row())
+        self._rows = {}
+        steps_row = self._build_steps_row()
+        box.append(steps_row)
+        self._rows["num_inference_steps"] = steps_row
+
+        seed_row = self._build_seed_row()
+        box.append(seed_row)
+        self._rows["seed"] = seed_row
+
+        model_row = self._build_model_row()
+        box.append(model_row)
+        self._rows["model"] = model_row
+
+        frames_row = self._build_frames_row()
+        box.append(frames_row)
+        self._rows["num_frames"] = frames_row
+
+        neg_row = self._build_negative_row()
+        box.append(neg_row)
+        self._rows["negative_prompt"] = neg_row
 
         self._widget = box
         return box
@@ -597,6 +647,12 @@ class AnimateParamPanel(CreateParamPanel):
         # in sync by the toggle group's "toggled" handler, read by collect()
         # rather than re-deriving it from widget state on every read.
         self._animate_mode: str = _ANIMATE_MODE_ANIMATION
+        # key -> built row widget, populated by build() — see ImageParamPanel's
+        # `_rows` for the rationale (RoleZonePanel re-parenting, Task 5).
+        # Note: no "model" entry — this panel builds no model row (single
+        # fixed model id, no dropdown); RoleZonePanel skips kind="model"
+        # specs entirely regardless, so the absence is harmless.
+        self._rows: "dict[str, Gtk.Widget]" = {}
 
     # ── CreateParamPanel protocol ────────────────────────────────────────────
 
@@ -604,11 +660,26 @@ class AnimateParamPanel(CreateParamPanel):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("animate-param-panel")
 
-        box.append(self._build_ref_video_row())
-        box.append(self._build_ref_image_row())
-        box.append(self._build_mode_row())
-        box.append(self._build_steps_row())
-        box.append(self._build_seed_row())
+        self._rows = {}
+        ref_video_row = self._build_ref_video_row()
+        box.append(ref_video_row)
+        self._rows["reference_video_path"] = ref_video_row
+
+        ref_image_row = self._build_ref_image_row()
+        box.append(ref_image_row)
+        self._rows["reference_image_path"] = ref_image_row
+
+        mode_row = self._build_mode_row()
+        box.append(mode_row)
+        self._rows["animate_mode"] = mode_row
+
+        steps_row = self._build_steps_row()
+        box.append(steps_row)
+        self._rows["num_inference_steps"] = steps_row
+
+        seed_row = self._build_seed_row()
+        box.append(seed_row)
+        self._rows["seed"] = seed_row
 
         self._widget = box
         return box
@@ -1128,6 +1199,11 @@ class ArtgenParamPanel(CreateParamPanel):
         self._generator_name = generator_name
         self._widget: Optional[Gtk.Widget] = None
         self._controls: "list[_ArgControl]" = []
+        # dest -> built row widget, populated by build() — see
+        # ImageParamPanel's `_rows` for the rationale (RoleZonePanel
+        # re-parenting, Task 5). Absent entirely when introspection finds no
+        # args (the "no configurable parameters" label has no dest to key on).
+        self._rows: "dict[str, Gtk.Widget]" = {}
 
     # ── CreateParamPanel protocol ────────────────────────────────────────────
 
@@ -1135,6 +1211,7 @@ class ArtgenParamPanel(CreateParamPanel):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("artgen-param-panel")
         self._controls = []
+        self._rows = {}
 
         try:
             specs = _introspect_generator_args(self._generator_name)
@@ -1153,6 +1230,7 @@ class ArtgenParamPanel(CreateParamPanel):
                 row, control = self._build_control_row(spec)
                 box.append(row)
                 self._controls.append(control)
+                self._rows[spec.dest] = row
 
         self._widget = box
         return box
@@ -1408,3 +1486,192 @@ class ModifierPills(Gtk.Box):
                 pill.set_tooltip_text(entry.tip)
             pill.connect("clicked", lambda _b, e=entry: self._remove_entry(e))
             self._applied_flow.append(pill)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RoleZonePanel (Task 5 — docs/superpowers/plans/2026-07-13-create-surface.md,
+# `.superpowers/sdd/task-5-brief.md`)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# THE HARD MIGRATION INVARIANT: `RoleZonePanel.collect()` MUST return the
+# wrapped panel's `collect()` output byte-for-byte. That dict feeds real
+# generation workers (ImageGenerationWorker / GenerationWorker /
+# AnimateGenerationWorker / the artgen run seam) — any drift here is a
+# regression in what actually gets generated, not a cosmetic bug.
+#
+# The way this is guaranteed: RoleZonePanel calls `panel.build()` exactly
+# ONCE, then RE-PARENTS the panel's already-built per-field row widgets (via
+# the base class's `_row_for(key)`, populated by every concrete panel's own
+# `build()` — see each panel's `_rows` dict above) into zone containers. It
+# NEVER constructs a new widget bound to a field's value and NEVER touches
+# the panel's adjustments/entries/dropdowns directly. Because the panel keeps
+# ownership of those exact widget instances, `panel.collect()` reads them
+# unchanged no matter which container currently parents them — GTK4 widgets
+# don't care who their parent is for the purpose of `get_value()`/`get_text()`
+# etc. `RoleZonePanel.collect()` itself is a one-line passthrough.
+#
+# ── The "model" special case ─────────────────────────────────────────────────
+#
+# `FieldSpec.kind == "model"` is explicitly NOT one of the brief/direction/
+# control zones (see that dataclass's own docstring) — model selection is a
+# separate concern a later task's caller (CreateView) renders itself.
+# RoleZonePanel therefore skips any spec with `kind == "model"` entirely: it
+# never looks up a row for it and never re-parents anything. (AnimateParamPanel
+# doesn't even build a row for its `model` spec — there is no dropdown, just a
+# fixed id — so skipping it is also the only way to avoid `_row_for` returning
+# `None` and being treated as an error.)
+#
+# ── Marker-glyph labeling ─────────────────────────────────────────────────────
+#
+# Every OTHER relocated field gets its row's label text rewritten to
+# `f"{MARKER_GLYPH[marker]} {spec.label}"` and a tooltip from `MARKER_TIP`,
+# regardless of which zone it lands in — brief, direction, or control. This
+# is a label/tooltip-only mutation (never touches the value-bearing widget
+# next to the label), so it cannot affect `collect()`. The ONE override:
+# `spec.kind == "path"` fields (e.g. Animate's reference video/character
+# image, classified brief/words) get a neutral tooltip instead of
+# `MARKER_TIP[MARK_WORDS]` ("Your words — the model turns this into art."),
+# which reads strangely floating next to a file-path picker row (Task 4's
+# noted oddity, carried forward and fixed here).
+
+
+class RoleZonePanel(Gtk.Box):
+    """Shared three-zone renderer wrapping ANY `CreateParamPanel`.
+
+    Lays the wrapped panel's fields into three visual zones per
+    `field_specs()`'s roles:
+
+      - **Your brief** — the panel's `ROLE_BRIEF` fields (e.g. Image/Video's
+        `negative_prompt`, Animate's reference video/image paths). The
+        MAIN prompt itself is NOT owned here — CreateView's idea-door prompt
+        entry persists across medium swaps and sits directly above wherever
+        this panel is mounted, so the prompt and this zone read as one region.
+      - **Direction** — a `ModifierPills(medium.kind)` followed by the
+        panel's `ROLE_DIRECTION` fields.
+      - **Controls** — a collapsed `Gtk.Expander` holding the panel's
+        `ROLE_CONTROL` fields in a wrapping `Gtk.FlowBox` grid.
+
+    See the module comment above for the hard `collect()` invariant this
+    class exists to preserve.
+    """
+
+    def __init__(self, panel: CreateParamPanel, medium) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add_css_class("role-zone-panel")
+
+        self._panel = panel
+
+        # Build the wrapped panel's widgets EXACTLY ONCE. Everything below
+        # re-parents these widgets into zone containers — it never rebuilds
+        # them — so `panel.collect()` keeps reading its own, unchanged
+        # widget instances (the hard invariant, see module comment).
+        panel.build()
+
+        try:
+            specs = panel.field_specs()
+        except Exception:
+            specs = []
+
+        # ── "Your brief" zone ────────────────────────────────────────────
+        self._brief_zone = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._brief_zone.add_css_class("role-zone-brief-body")
+        brief_frame = Gtk.Frame(label="Your brief")
+        brief_frame.add_css_class("role-zone-brief")
+        brief_frame.set_child(self._brief_zone)
+
+        # ── "Direction" zone ─────────────────────────────────────────────
+        self._direction_zone = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._direction_zone.add_css_class("role-zone-direction-body")
+        self._modifier_pills = ModifierPills(medium.kind)
+        self._direction_zone.append(self._modifier_pills)
+        direction_frame = Gtk.Frame(label="Direction")
+        direction_frame.add_css_class("role-zone-direction")
+        direction_frame.set_child(self._direction_zone)
+
+        # ── "Controls" zone (collapsed expander, wrapping grid) ─────────
+        self._controls_grid = Gtk.FlowBox()
+        self._controls_grid.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._controls_grid.add_css_class("role-zone-controls-grid")
+        self._controls_expander = Gtk.Expander(label="Controls")
+        self._controls_expander.add_css_class("role-zone-controls")
+        self._controls_expander.set_expanded(False)  # collapsed by default
+        self._controls_expander.set_child(self._controls_grid)
+
+        # ── Re-parent every field's row into its zone ───────────────────
+        for spec in specs:
+            if spec.kind == "model":
+                # Deliberately not a zone field — see module comment.
+                continue
+            row = panel._row_for(spec.key)
+            if row is None:
+                # No built widget to relocate for this key (should not
+                # normally happen for a non-model spec, but never crash the
+                # Create surface over a panel/spec mismatch).
+                continue
+            row.unparent()
+            self._relabel_row(row, spec)
+            self._zone_for_role(spec.role.role).append(row)
+
+        self.append(brief_frame)
+        self.append(direction_frame)
+        self.append(self._controls_expander)
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def collect(self) -> dict:
+        """Return the wrapped panel's `collect()` output verbatim — see the
+        module comment's hard migration invariant."""
+        return self._panel.collect()
+
+    def applied_modifier_text(self) -> str:
+        """Space-joined applied-modifier text from the Direction zone's
+        `ModifierPills` — CreateView reads this to build the final prompt
+        (the modifier text is NOT injected into `collect()`'s dict here)."""
+        return self._modifier_pills.applied_text()
+
+    def append_modifier_for_test(self, text: str) -> None:
+        """Test hook: apply a synthetic modifier entry so a later task can
+        assert prompt assembly without depending on the real chip bank's
+        contents (`config/prompt_chips.yaml`)."""
+        from chip_config import ChipEntry
+        self._modifier_pills._apply_entry(ChipEntry(label=text, text=text, tip=""))
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _zone_for_role(self, role: str) -> Gtk.Widget:
+        if role == field_roles.ROLE_BRIEF:
+            return self._brief_zone
+        if role == field_roles.ROLE_DIRECTION:
+            return self._direction_zone
+        return self._controls_grid  # ROLE_CONTROL, and any unknown role
+
+    def _relabel_row(self, row: Gtk.Widget, spec: FieldSpec) -> None:
+        """Rewrite *row*'s label text to `"{glyph} {label}"` and set a
+        marker tooltip — see module comment for the `kind == "path"`
+        override. A no-op if the row's first child isn't a `Gtk.Label`
+        (defensive; every panel's `_row()` helper puts the label first)."""
+        label_widget = row.get_first_child()
+        if not isinstance(label_widget, Gtk.Label):
+            return
+        glyph = field_roles.MARKER_GLYPH.get(spec.role.marker, "")
+        label_widget.set_label(f"{glyph} {spec.label}".strip())
+        if spec.kind == "path":
+            tip = spec.tooltip or "Reference input the model reads"
+        else:
+            tip = field_roles.MARKER_TIP.get(spec.role.marker, "")
+        if tip:
+            label_widget.set_tooltip_text(tip)
+
+    def _direction_label_texts(self) -> "list[str]":
+        """Test helper: the rendered label strings of every row currently in
+        the Direction zone (the `ModifierPills` widget itself is skipped —
+        it has no row-shaped label)."""
+        texts: "list[str]" = []
+        child = self._direction_zone.get_first_child()
+        while child is not None:
+            if child is not self._modifier_pills:
+                label_widget = child.get_first_child()
+                if isinstance(label_widget, Gtk.Label):
+                    texts.append(label_widget.get_label())
+            child = child.get_next_sibling()
+        return texts
