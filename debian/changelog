@@ -1,3 +1,16 @@
+tt-local-generator (0.23.0) noble; urgency=medium
+
+  * Generative Art gallery gets its own "🧩 Remix as pipeline…" bridge into
+    Pipeline Studio's Muse — a new button next to the existing "🔀 Remix" on
+    both the artgen card grid and the detail sidebar. A text artifact (e.g. a
+    generated lore .txt) seeds the Muse with its own file content and no
+    thumbnail ("Make this text into…"), routing straight into the scoped
+    text-seeded recipes (e.g. TTLGSplitText). Image/GIF artifacts seed like
+    the existing video/image gallery bridge; JSON/unknown, missing, or empty
+    artifacts fall back to a blank muse instead of guessing.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 08:00:00 -0700
+
 tt-local-generator (0.22.0) noble; urgency=medium
 
   * Pipeline Studio now renders VIDEO steps as a real poster frame (first
