@@ -69,24 +69,6 @@ tt-local-generator (0.26.1) noble; urgency=medium
 
  -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 11:45:00 -0700
 
-tt-local-generator (0.27.0) noble; urgency=medium
-
-  * Medium-chip discovery (`app/create_mediums.py`, pure, no GTK): the core
-    behind the Create surface's chip row (SP-C Task 2). `discover_mediums`
-    returns one `Medium` per native medium (image/video/animate, always
-    first, deterministic) plus one per artgen generator name it's given --
-    so every plugin dropped into plugins/ appears as a chip automatically,
-    with zero hardcoded list to maintain. `default_mediums()` is the thin
-    real wrapper over `artgen.all_names()`. Icons reuse the app's existing
-    visual vocabulary: native chips match main_window.py's medium-toggle
-    icons (🎥/💃/🖼️), artgen chips reuse artgen_gallery.py's `_TYPE_EMOJI`
-    values where they exist. Never crashes: empty/None/raising
-    `artgen_names` degrades to native-only; an unrecognized generator name
-    gets a title-cased fallback label/icon and kind "image" instead of
-    taking down the rest of the chip row.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 12:15:00 -0700
-
 tt-local-generator (0.26.0) noble; urgency=medium
 
   * Loop nav: a new top-level nav -- Create / Curate / Discover / Remix --
