@@ -61,7 +61,7 @@ class Intent:
     output_kind: str | None = None
 
 
-# ── The 13 native class_types the pipeline engine supports ───────────────────
+# ── The 14 native class_types the pipeline engine supports ───────────────────
 #
 # One Intent per native class_type from workflow_compat.COMPATIBILITY_MAP
 # (entries where ttlg == class_type, i.e. exact native nodes — not the
@@ -210,6 +210,17 @@ INTENTS: dict[str, Intent] = {
         input_key="text",
         input_kind="text",
         output_kind="text",
+    ),
+    "TTLGMontage": Intent(
+        class_type="TTLGMontage",
+        verb="Stitch",
+        noun="a montage",
+        icon="🎞️",
+        outputs=("video_path",),
+        model_label=None,
+        input_key="images",
+        input_kind="image",
+        output_kind="video",
     ),
 }
 

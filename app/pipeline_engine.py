@@ -648,6 +648,135 @@ def _h_add_to_playlist(nid, inp, ctx):
     return {"playlist_id": pid}
 
 
+# ── Task 3: TTLGMontage — list of images -> one captioned slideshow mp4 ──────
+#
+# Capstone node for a fan-out lore -> one-image-per-fragment -> montage
+# pipeline: stitches the whole LIST of stills into a single mp4 via ffmpeg's
+# concat demuxer. Marked optional=True in COMPATIBILITY_MAP (see
+# workflow_compat.py) so a failed/absent ffmpeg never aborts the run — the
+# individual stills the pipeline already produced still stand.
+
+def _escape_drawtext(text: str) -> str:
+    """Escape a caption for ffmpeg's drawtext filter.
+
+    drawtext's mini-language treats ``:`` as an option separator, ``'`` as
+    the text-argument delimiter, and ``,`` as a filter-chain separator, so
+    each must be backslash-escaped (backslash itself escaped first) or the
+    filtergraph fails to parse.
+    """
+    return (text.replace("\\", "\\\\")
+                .replace(":", "\\:")
+                .replace("'", "\\'")
+                .replace(",", "\\,"))
+
+
+def _caption_drawtext_chain(captions: "list[str]", n: int, seconds_per: float) -> str:
+    """Build a comma-joined chain of timed drawtext filters, one per image.
+
+    Each caption is only visible during its own image's slot in the
+    concatenated timeline (``enable='between(t,start,end)'``), so a single
+    ffmpeg pass can overlay every caption without a per-image pre-render.
+    Images with no matching caption (list shorter than `n`, or an empty
+    string) contribute no filter. Returns "" if no caption produced a filter.
+    """
+    parts = []
+    for i in range(n):
+        cap = captions[i] if i < len(captions) else ""
+        if not cap:
+            continue
+        start, end = i * seconds_per, (i + 1) * seconds_per
+        text = _escape_drawtext(str(cap))
+        parts.append(
+            f"drawtext=text='{text}':fontcolor=white:fontsize=36:"
+            f"x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=black@0.5:boxborderw=10:"
+            f"enable='between(t,{start},{end})'"
+        )
+    return ",".join(parts)
+
+
+def _write_concat_list(list_path: Path, images: "list[str]", seconds_per: float) -> None:
+    """Write an ffmpeg concat-demuxer list file for a fixed-duration slideshow.
+
+    Each image gets a ``file``/``duration`` pair. Per a well-known concat
+    demuxer quirk, the *last* entry's ``duration`` has no effect unless the
+    same ``file`` line is repeated once more afterward (with no trailing
+    duration) — ffmpeg only applies a duration to the transition into the
+    *next* file line, so the final image needs one extra repeat to "close out".
+    """
+    lines = []
+    for img in images:
+        lines.append(f"file '{img}'")
+        lines.append(f"duration {seconds_per}")
+    lines.append(f"file '{images[-1]}'")
+    list_path.write_text("\n".join(lines) + "\n")
+
+
+def _run_ffmpeg(argv: "list[str]") -> bool:
+    """Run ``ffmpeg <argv...>`` as a subprocess, returning success as a bool.
+
+    Mirrors the `_docker_stop_all`/`_run_tt_ctl` subprocess.run pattern
+    (`stdin=DEVNULL` so a stalled ffmpeg can never block on terminal input,
+    `capture_output=True` to keep stray output out of the pipeline log) but,
+    unlike those, never raises — TTLGMontage is fail-soft by design (see
+    COMPATIBILITY_MAP["TTLGMontage"]), so an absent/broken ffmpeg install must
+    degrade to {"video_path": None}, not abort the run. This is the ONE seam
+    tests monkeypatch to avoid shelling out to a real ffmpeg binary.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffmpeg", *argv], stdin=subprocess.DEVNULL,
+            capture_output=True, timeout=300,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+@register("TTLGMontage")
+def _h_montage(nid, inp, ctx):
+    """Stitch a LIST of images into one captioned slideshow mp4.
+
+    Fail-soft (see module docstring above and COMPATIBILITY_MAP["TTLGMontage"]):
+    an empty/non-list `images` input, or any ffmpeg failure, returns
+    {"video_path": None} instead of raising. Captions (`captions`, one string
+    per image, best-effort) are overlaid via timed `drawtext` filters in the
+    same ffmpeg pass; if that captioned render fails (e.g. fonts unavailable
+    in the container), the plain (uncaptioned) slideshow is retried before
+    giving up — captions must never be the reason a montage fails outright.
+    """
+    out = str(ctx.output_dir / f"node{nid}_montage.mp4")
+    if ctx.dry_run:
+        return {"video_path": out}
+
+    images = inp.get("images")
+    if not isinstance(images, list) or not images:
+        return {"video_path": None}
+
+    seconds_per = float(inp.get("seconds_per", 2.5))
+    captions = inp.get("captions") or []
+
+    list_path = ctx.output_dir / f"node{nid}_montage_list.txt"
+    _write_concat_list(list_path, images, seconds_per)
+
+    base_vf = "scale=1024:-2,format=yuv420p"
+    cap_chain = _caption_drawtext_chain(captions, len(images), seconds_per) if captions else ""
+    vf = f"{base_vf},{cap_chain}" if cap_chain else base_vf
+
+    argv = ["-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+            "-vf", vf, "-r", "30", out]
+    ok = _run_ffmpeg(argv)
+
+    if not ok and cap_chain:
+        ctx.emit(f"LOG:  node{nid} montage captions failed to render, "
+                  f"retrying without captions")
+        argv = ["-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+                "-vf", base_vf, "-r", "30", out]
+        ok = _run_ffmpeg(argv)
+
+    return {"video_path": out if ok else None}
+
+
 # ── Task 7: artgen-plugin + AnimateDiff node handlers ────────────────────────
 #
 # Both node types shell out to the repo-root `tt-ctl` CLI (a subprocess call)

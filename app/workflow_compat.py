@@ -58,6 +58,18 @@ COMPATIBILITY_MAP: dict[str, dict] = {
     #                   (e.g. TTLGPromptCompose) without reading the file back
     "TTLGArtgenGenerate": {"ttlg": "TTLGArtgenGenerate", "optional": True},
 
+    # TTLGMontage — stitches a LIST of images (e.g. the fan-out stills from a
+    # TTLGSplitText -> TTLGTextToImage batch) into one captioned slideshow mp4
+    # via ffmpeg. optional=True because the montage is a capstone convenience:
+    # if ffmpeg is missing/fails, or `images` is empty, the handler returns
+    # {"video_path": None} rather than raising — the run's individual stills
+    # still stand on their own even if the closing video can't be built.
+    #
+    # Output keys:
+    #   video_path — path to the rendered mp4, or None if the render failed
+    #                or was skipped (fail-soft; see _h_montage/_run_ffmpeg)
+    "TTLGMontage": {"ttlg": "TTLGMontage", "optional": True},
+
     # TTLGAnimateDiff — Wan2.2-Animate-14B character animation to GIF.
     #
     # Output keys:

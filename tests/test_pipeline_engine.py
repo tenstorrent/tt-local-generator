@@ -1296,3 +1296,126 @@ def test_text_to_image_scalar_prompt_failure_still_raises(monkeypatch):
     monkeypatch.setattr(eng, "_media_image_request", _boom)
     with pytest.raises(RuntimeError):
         eng.HANDLERS["TTLGTextToImage"]("1", {"prompt": "castle"}, _ctx())
+
+
+# ── TTLGMontage — list of images -> one captioned slideshow mp4 (Task 3) ──────
+#
+# The ffmpeg call is behind the module-level eng._run_ffmpeg(argv) -> bool seam
+# (mirrors eng._docker_stop_all / eng._run_tt_ctl's subprocess.run pattern), so
+# every "real" test here monkeypatches that seam instead of touching a real
+# ffmpeg binary. A fake that "touches" argv[-1] (the -y ... out path is always
+# the last element) and returns True stands in for a successful render.
+
+def test_montage_dry_run_key():
+    out = eng.HANDLERS["TTLGMontage"]("10",
+        {"images": ["/tmp/a.png", "/tmp/b.png"]}, _ctx(dry=True))
+    assert out["video_path"] == "/tmp/out/node10_montage.mp4"
+
+
+def test_montage_builds_slideshow_from_all_images(monkeypatch, tmp_path):
+    calls = []
+    def fake_run_ffmpeg(argv):
+        calls.append(argv)
+        Path(argv[-1]).touch()
+        return True
+    monkeypatch.setattr(eng, "_run_ffmpeg", fake_run_ffmpeg)
+    images = [str(tmp_path / "a.png"), str(tmp_path / "b.png"), str(tmp_path / "c.png")]
+    for p in images:
+        Path(p).touch()
+    out = eng.HANDLERS["TTLGMontage"]("10", {"images": images}, _ctx(tmp=str(tmp_path)))
+    assert out["video_path"] == str(tmp_path / "node10_montage.mp4")
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:5] == ["-y", "-f", "concat", "-safe", "0"]
+    list_path = Path(argv[argv.index("-i") + 1])
+    list_text = list_path.read_text()
+    for img in images:
+        assert f"file '{img}'" in list_text
+    # concat-demuxer duration quirk: the last image's `file` line must be
+    # repeated (otherwise its `duration` directive is silently dropped).
+    assert list_text.count(f"file '{images[-1]}'") == 2
+
+
+def test_montage_passes_captions_via_drawtext(monkeypatch, tmp_path):
+    calls = []
+    def fake_run_ffmpeg(argv):
+        calls.append(argv)
+        Path(argv[-1]).touch()
+        return True
+    monkeypatch.setattr(eng, "_run_ffmpeg", fake_run_ffmpeg)
+    images = [str(tmp_path / "a.png"), str(tmp_path / "b.png")]
+    for p in images:
+        Path(p).touch()
+    captions = ["hello world", "second caption"]
+    eng.HANDLERS["TTLGMontage"]("11",
+        {"images": images, "captions": captions}, _ctx(tmp=str(tmp_path)))
+    assert len(calls) == 1
+    vf = calls[0][calls[0].index("-vf") + 1]
+    assert "drawtext" in vf
+    for cap in captions:
+        assert cap in vf
+
+
+def test_montage_no_captions_no_drawtext(monkeypatch, tmp_path):
+    calls = []
+    def fake_run_ffmpeg(argv):
+        calls.append(argv)
+        Path(argv[-1]).touch()
+        return True
+    monkeypatch.setattr(eng, "_run_ffmpeg", fake_run_ffmpeg)
+    images = [str(tmp_path / "a.png")]
+    Path(images[0]).touch()
+    eng.HANDLERS["TTLGMontage"]("16", {"images": images}, _ctx(tmp=str(tmp_path)))
+    vf = calls[0][calls[0].index("-vf") + 1]
+    assert "drawtext" not in vf
+
+
+def test_montage_ffmpeg_failure_returns_none_no_raise(monkeypatch, tmp_path):
+    monkeypatch.setattr(eng, "_run_ffmpeg", lambda argv: False)
+    images = [str(tmp_path / "a.png")]
+    Path(images[0]).touch()
+    out = eng.HANDLERS["TTLGMontage"]("12", {"images": images}, _ctx(tmp=str(tmp_path)))
+    assert out == {"video_path": None}
+
+
+def test_montage_empty_images_returns_none():
+    out = eng.HANDLERS["TTLGMontage"]("13", {"images": []}, _ctx())
+    assert out == {"video_path": None}
+
+
+def test_montage_non_list_images_returns_none():
+    out = eng.HANDLERS["TTLGMontage"]("14", {"images": "not-a-list"}, _ctx())
+    assert out == {"video_path": None}
+
+
+def test_montage_caption_failure_falls_back_to_plain_slideshow(monkeypatch, tmp_path):
+    """Captions are best-effort: if the captioned render fails (e.g. missing
+    fonts), retry the plain slideshow rather than failing the node."""
+    calls = []
+    def fake_run_ffmpeg(argv):
+        calls.append(argv)
+        vf = argv[argv.index("-vf") + 1]
+        if "drawtext" in vf:
+            return False
+        Path(argv[-1]).touch()
+        return True
+    monkeypatch.setattr(eng, "_run_ffmpeg", fake_run_ffmpeg)
+    images = [str(tmp_path / "a.png")]
+    Path(images[0]).touch()
+    out = eng.HANDLERS["TTLGMontage"]("15",
+        {"images": images, "captions": ["oops"]}, _ctx(tmp=str(tmp_path)))
+    assert out["video_path"] == str(tmp_path / "node15_montage.mp4")
+    assert len(calls) == 2
+    assert "drawtext" not in calls[1][calls[1].index("-vf") + 1]
+
+
+def test_compatibility_map_montage_optional():
+    assert eng.COMPATIBILITY_MAP["TTLGMontage"]["optional"] is True
+
+
+def test_run_ffmpeg_seam_returns_false_on_missing_binary(monkeypatch):
+    import subprocess
+    def fake_subprocess_run(*a, **k):
+        raise FileNotFoundError("no ffmpeg binary")
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    assert eng._run_ffmpeg(["-y"]) is False
