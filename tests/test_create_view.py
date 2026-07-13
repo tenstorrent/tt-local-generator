@@ -15,6 +15,15 @@ house style already established by create_mediums.py / capability_discovery.py.
 Creating GTK widgets needs a display; the full suite runs under xvfb. When no
 display is available this module skips itself (matches the repo's headless
 fallback, see test_pipeline_studio.py).
+
+**Task 4** ports the native "image" medium to a real `ImageParamPanel`
+(`create_param_panels.py`) — this file's Task 3 assertions that assumed every
+medium showed the stub (`params == {}` for the default-active "image" medium)
+are updated in place to assert against `ImageParamPanel`'s real defaults
+instead; every other Task 3 assertion (chips, doors, model strip, stub for
+non-ported mediums) is untouched. New tests below cover `ImageParamPanel`
+itself and the CreateView-level wiring (swap-on-select, CTA routes through
+`collect()`).
 """
 from __future__ import annotations
 
@@ -35,6 +44,19 @@ except Exception:  # pragma: no cover - environment-dependent
     pytest.skip("no GTK display available", allow_module_level=True)
 
 from create_mediums import Medium
+from create_param_panels import CreateParamPanel, ImageParamPanel
+
+# The exact default dict `ImageParamPanel.collect()` returns for a freshly
+# built, unmodified panel — mirrors ControlPanel's image defaults
+# (main_window.py: `_steps=20`, `_seed=-1`, `_guidance=3.5`,
+# `_image_model="flux"` -> server id "flux.1-schnell", `_neg=""`).
+_IMAGE_DEFAULTS = {
+    "negative_prompt": "",
+    "num_inference_steps": 20,
+    "seed": -1,
+    "guidance_scale": 3.5,
+    "model": "flux.1-schnell",
+}
 
 
 class _ImmediateThread:
@@ -115,12 +137,12 @@ def test_selecting_a_chip_sets_active_medium_and_swaps_panel(monkeypatch):
     # Only one chip stays active (shared radio group).
     assert view._chip_buttons["image"].get_active() is False
 
-    # The panel host was rebuilt to reflect the newly-selected medium — this
-    # task's stub panel labels itself by medium, so its presence is the
-    # observable signal Task 4+ will replace with a real per-type panel.
+    # "verse" has no ported panel yet (Task 6), so it falls back to the
+    # Task 3 stub label — its presence is the observable signal.
     child = view._panel_host.get_first_child()
     assert child is not None
     assert view._panel_host.get_first_child() is not None
+    assert view._active_panel is None
 
 
 def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
@@ -131,6 +153,73 @@ def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
 
     second_panel = view._panel_host.get_first_child()
     assert second_panel is not first_panel
+
+
+# ── Image param panel wiring (Task 4) ────────────────────────────────────
+
+def test_default_active_image_medium_mounts_real_image_param_panel(monkeypatch):
+    """"image" is the default-active chip (see test_first_medium_is_active_by_
+    default) and is a native medium -> CreateView must mount a real
+    ImageParamPanel for it immediately on construction, not the stub."""
+    view = _make_view(monkeypatch)
+
+    assert isinstance(view._active_panel, ImageParamPanel)
+    child = view._panel_host.get_first_child()
+    assert child is not None
+    assert not child.has_css_class("create-panel-stub-label")
+
+
+def test_switching_away_from_image_and_back_remounts_a_fresh_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+    first_image_panel = view._active_panel
+
+    view._chip_buttons["verse"].set_active(True)
+    assert view._active_panel is None
+
+    view._chip_buttons["image"].set_active(True)
+    assert isinstance(view._active_panel, ImageParamPanel)
+    # A fresh panel instance is built on every swap (not cached/reused).
+    assert view._active_panel is not first_image_panel
+
+
+def test_cta_calls_on_create_with_image_param_panel_collect_output(monkeypatch):
+    """CTA click for the default-active "image" medium must route through the
+    mounted ImageParamPanel's real `collect()` output, not `{}`."""
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._cta_btn.emit("clicked")
+
+    assert len(calls) == 1
+    medium, params = calls[0]
+    assert medium.id == "image"
+    assert params == _IMAGE_DEFAULTS
+
+
+def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
+    """Changing a widget on the mounted ImageParamPanel before clicking
+    Create must be reflected in the params `on_create` receives — proves the
+    CTA reads live widget state via `collect()`, not a stale snapshot."""
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    panel = view._active_panel
+    assert isinstance(panel, ImageParamPanel)
+    panel._neg_entry.set_text("blurry, extra limbs")
+    panel._steps_adj.set_value(35)
+    panel._seed_adj.set_value(42)
+    panel._guidance_adj.set_value(7.0)
+    panel._model_dropdown.set_selected(1)  # sdxl
+
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1] == {
+        "negative_prompt": "blurry, extra limbs",
+        "num_inference_steps": 35,
+        "seed": 42,
+        "guidance_scale": 7.0,
+        "model": "stable-diffusion-xl-base-1.0",
+    }
 
 
 # ── Doors ─────────────────────────────────────────────────────────────────
@@ -202,7 +291,12 @@ def test_cta_calls_on_create_with_active_medium_and_params(monkeypatch):
     assert len(calls) == 1
     medium, params = calls[0]
     assert medium.id == "image"  # the default-active medium
-    assert params == {}  # stub panel this task; real collect() arrives Task 4+
+    # "image" is ported to a real ImageParamPanel this task (Task 4) — see
+    # test_cta_calls_on_create_with_image_param_panel_collect_output for the
+    # dedicated assertion on its exact contents. Non-ported mediums (e.g.
+    # "verse", covered by test_cta_uses_currently_selected_medium below)
+    # still collect `{}` from the Task 3 stub.
+    assert params == _IMAGE_DEFAULTS
 
 
 def test_cta_uses_currently_selected_medium(monkeypatch):
@@ -238,3 +332,153 @@ def test_construction_never_calls_real_server_manager_or_create_mediums(monkeypa
     monkeypatch.setattr(server_manager, "status_all", _boom_health)
 
     _make_view(monkeypatch)  # must not raise
+
+
+# ── ImageParamPanel (standalone, no CreateView needed) ───────────────────
+
+def test_image_param_panel_is_a_create_param_panel():
+    assert isinstance(ImageParamPanel(), CreateParamPanel)
+
+
+def test_image_param_panel_build_returns_a_widget_with_controls():
+    panel = ImageParamPanel()
+    widget = panel.build()
+
+    assert isinstance(widget, Gtk.Widget)
+    # Five rows: steps, seed, guidance scale, model, negative prompt.
+    rows = []
+    child = widget.get_first_child()
+    while child is not None:
+        rows.append(child)
+        child = child.get_next_sibling()
+    assert len(rows) == 5
+    # The widgets collect() reads must actually exist after build().
+    assert panel._steps_adj is not None
+    assert panel._seed_adj is not None
+    assert panel._guidance_adj is not None
+    assert panel._model_dropdown is not None
+    assert panel._neg_entry is not None
+
+
+def test_image_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
+    panel = ImageParamPanel()
+    panel.build()
+
+    assert panel.collect() == _IMAGE_DEFAULTS
+    # Exactly the keys ImageGenerationWorker takes (minus `prompt`) — no more,
+    # no less.
+    assert set(panel.collect().keys()) == {
+        "negative_prompt", "num_inference_steps", "seed", "guidance_scale", "model",
+    }
+
+
+def test_image_param_panel_collect_reflects_changed_widget_values():
+    panel = ImageParamPanel()
+    panel.build()
+
+    panel._neg_entry.set_text("watermark, text")
+    panel._steps_adj.set_value(12)
+    panel._seed_adj.set_value(777)
+    panel._guidance_adj.set_value(9.5)
+    panel._model_dropdown.set_selected(3)  # motif
+
+    assert panel.collect() == {
+        "negative_prompt": "watermark, text",
+        "num_inference_steps": 12,
+        "seed": 777,
+        "guidance_scale": 9.5,
+        "model": "motif-image-6b-preview",
+    }
+
+
+def test_image_param_panel_model_dropdown_covers_all_four_choices():
+    panel = ImageParamPanel()
+    panel.build()
+
+    expected = {
+        0: "flux.1-schnell",
+        1: "stable-diffusion-xl-base-1.0",
+        2: "z-image-turbo",
+        3: "motif-image-6b-preview",
+    }
+    for idx, model_id in expected.items():
+        panel._model_dropdown.set_selected(idx)
+        assert panel.collect()["model"] == model_id
+
+
+def test_image_param_panel_collect_before_build_degrades_to_defaults():
+    """collect() must never raise, even if called before build() — a caller
+    bug shouldn't crash the Create CTA."""
+    panel = ImageParamPanel()
+    assert panel.collect() == _IMAGE_DEFAULTS
+
+
+# ── Guard: ControlPanel / _on_generate / real generation untouched ───────
+#
+# CRITICAL STRATEGY (task-4-brief.md): ImageParamPanel is a FRESH widget, not
+# an extraction from ControlPanel. `app/main_window.py` (ControlPanel, the
+# real `_on_generate` generation path) and `app/worker.py`
+# (ImageGenerationWorker, the real worker classes) must be byte-for-byte
+# unmodified by this task — generation stays 100% on the existing path.
+#
+# These hashes were computed from the pre-Task-4 working tree
+# (`sha256sum app/main_window.py app/worker.py`, commit a8aad2a — Task 3's
+# CreateView-shell commit) and are a regression guard for *this task only*.
+# A later task (e.g. Task 8, which deletes ControlPanel) is expected to
+# change these files and must update or remove this guard when it does —
+# that is a deliberate, reviewed change, not silent drift.
+
+import hashlib  # noqa: E402
+
+_APP_DIR = Path(__file__).parent.parent / "app"
+_MAIN_WINDOW_SHA256 = "4c3c90efb73c8f4dd8c38adec1e7ef7ef16432e327a81f94c0ca7bc4c1051431"
+_WORKER_SHA256 = "a53893fc328529ba4a349ffae5ed76802f927f55c02b6a9915cde9054fe6f482"
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_main_window_untouched_by_this_task():
+    assert _sha256_of(_APP_DIR / "main_window.py") == _MAIN_WINDOW_SHA256, (
+        "app/main_window.py changed — Task 4 must not touch ControlPanel or "
+        "_on_generate (see task-4-brief.md CRITICAL STRATEGY). If a later, "
+        "deliberate task (e.g. Task 8) changed this file on purpose, update "
+        "_MAIN_WINDOW_SHA256 above rather than deleting this guard."
+    )
+
+
+def test_worker_untouched_by_this_task():
+    assert _sha256_of(_APP_DIR / "worker.py") == _WORKER_SHA256, (
+        "app/worker.py changed — Task 4 must not touch ImageGenerationWorker "
+        "or any other worker class. If a later, deliberate task changed this "
+        "file on purpose, update _WORKER_SHA256 above rather than deleting "
+        "this guard."
+    )
+
+
+def _import_lines(src: str) -> list:
+    """Every non-comment `import X` / `from X import ...` line in `src`,
+    stripped of leading whitespace. Deliberately line-based (not an AST
+    walk) — plenty for an import-check guard and keeps the test simple."""
+    lines = []
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            lines.append(stripped)
+    return lines
+
+
+def test_create_param_panels_module_does_not_import_main_window_or_worker():
+    """Import-check companion to the hash guards above: create_param_panels.py
+    (and create_view.py) must not import main_window's `ControlPanel` or
+    `worker.py` at all — reinforcing that ImageParamPanel is fully
+    independent, not a disguised extraction. Prose *mentioning* those module
+    names in comments/docstrings (explaining the CRITICAL STRATEGY) is fine
+    and expected — only actual `import`/`from ... import` statements count."""
+    for filename in ("create_param_panels.py", "create_view.py"):
+        src = (_APP_DIR / filename).read_text()
+        for line in _import_lines(src):
+            assert "main_window" not in line, f"{filename}: {line!r}"
+            assert "worker" not in line, f"{filename}: {line!r}"
+            assert "ControlPanel" not in line, f"{filename}: {line!r}"

@@ -73,6 +73,9 @@ Native mediums (image/video/animate) + one Medium per `artgen.all_names()` gener
 
 ---
 
+
+> **Approach refinement (2026-07-13, from auditing ControlPanel):** ControlPanel is a MONOLITH (shared prompt fields + per-medium rows toggled by visibility), not cleanly separable per-medium panels. So Tasks 4-6 **build FRESH per-medium panels in CreateView** that produce the exact param dicts the existing workers expect, and leave `ControlPanel` UNTOUCHED. This is not lasting duplication: Task 8 deletes ControlPanel + the old tabs, so the fresh panels ARE its replacement. Zero risk to the working generation path meanwhile.
+
 ### Task 4: `CreateParamPanel` protocol + port the IMAGE medium
 
 **Files:** Modify `app/create_view.py`, `app/main_window.py` (extract image controls). Test: extend `tests/test_create_view.py`.

@@ -6,11 +6,13 @@ Task 3: docs/superpowers/specs/2026-07-13-create-surface-design.md).
 
 Replaces the four medium tabs (Video / Animate / Image / Generative Art) with
 ONE surface where the medium is a *chip*, not a top-level division. This
-module builds the shell only — three doors in (idea / model / inspiration),
-the medium-chip row, a per-medium param-panel host, the live-model strip, and
-the Create CTA. Per-type param panels (real image/video/animate/artgen
-controls) arrive in Tasks 4-6; this task's panel host shows a plain stub
-labeled by the selected medium so the swap is observable and testable.
+module builds the shell — three doors in (idea / model / inspiration), the
+medium-chip row, a per-medium param-panel host, the live-model strip, and the
+Create CTA. Per-type param panels (real image/video/animate/artgen controls)
+arrive in Tasks 4-6; Task 4 (this task) ports the IMAGE medium to a real
+`ImageParamPanel` (`create_param_panels.py`) — every other medium still shows
+the plain stub label until its own task lands (video/animate: Task 5,
+artgen: Task 6).
 
 **Migration-safe by construction**: this view is built ALONGSIDE the existing
 medium-tab generation UI (main_window.py's ControlPanel + `_gallery_stack`
@@ -50,6 +52,7 @@ from gi.repository import GLib, Gtk  # noqa: E402
 
 import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
+from create_param_panels import CreateParamPanel, ImageParamPanel  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +140,27 @@ _CSS = b"""
 .create-panel-stub-label {
     color: #607D8B;
     font-size: 12.5px;
+}
+
+/* -- Per-medium real param panels (ImageParamPanel, Task 4; more to follow) - */
+.image-param-panel {
+    padding: 2px 0;
+}
+.image-param-row {
+    padding: 3px 0;
+}
+.image-param-label {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.image-param-input {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+.image-param-input:focus-within {
+    border-color: #4FD1C5;
 }
 
 /* -- Live-model strip -------------------------------------------------------- */
@@ -228,12 +252,27 @@ class CreateView(Gtk.Box):
         self._active_medium: Optional[Medium] = None
         self._chip_buttons: dict = {}
         self._model_health: dict = {}
+        # The currently-mounted real param panel (Task 4+), or None while the
+        # active medium still shows the Task 3 stub. `_collect_params` reads
+        # this to decide between a real `panel.collect()` and `{}`.
+        self._active_panel: Optional[CreateParamPanel] = None
+
+        # Built (but not yet appended) BEFORE the chip row: `_build_chip_row`
+        # activates the first chip's toggle button as its last step, which
+        # synchronously fires `_select_medium` -> `_swap_panel` -> reads
+        # `self._panel_host`. Constructing the chip row before this existed
+        # was a Task 3 latent bug — PyGObject swallows the resulting
+        # AttributeError inside the GTK signal marshaller (logs a traceback,
+        # doesn't raise), so the initial swap silently no-opped and the
+        # default-active medium never actually got a mounted panel. Building
+        # (not appending) `_panel_host` first fixes the ordering while
+        # leaving the visual append order — doors, chips, panel host, model
+        # strip, CTA — unchanged.
+        self._panel_host = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._panel_host.add_css_class("create-panel-host")
 
         self.append(self._build_doors_row())
         self.append(self._build_chip_row())
-
-        self._panel_host = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self._panel_host.add_css_class("create-panel-host")
         self.append(self._panel_host)
 
         self._model_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -334,8 +373,10 @@ class CreateView(Gtk.Box):
     def _swap_panel(self, medium: Medium) -> None:
         """Rebuild the param-panel host for the newly-selected medium.
 
-        Task 3 stub only — a plain, honestly-labeled placeholder. Tasks 4-6
-        replace this with real per-type panels (build_params()/collect()).
+        Task 4 ports the native "image" medium to a real `ImageParamPanel`
+        (`create_param_panels.py`). Every other medium still gets the Task 3
+        stub — a plain, honestly-labeled placeholder — until its own task
+        lands (video/animate: Task 5, artgen: Task 6).
         """
         child = self._panel_host.get_first_child()
         while child is not None:
@@ -343,6 +384,13 @@ class CreateView(Gtk.Box):
             self._panel_host.remove(child)
             child = nxt
 
+        if medium.id == "image" and medium.source == "native":
+            panel = ImageParamPanel()
+            self._panel_host.append(panel.build())
+            self._active_panel = panel
+            return
+
+        self._active_panel = None
         stub = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         label = Gtk.Label(label=f"{medium.icon} {medium.label} — controls coming soon")
         label.add_css_class("create-panel-stub-label")
@@ -419,7 +467,16 @@ class CreateView(Gtk.Box):
         self._on_create(self._active_medium, self._collect_params())
 
     def _collect_params(self) -> dict:
-        """Task 3 stub: no real per-type panel exists yet, so there are no
-        params to collect. Tasks 4-6 replace this with the active panel's
-        `collect()`."""
-        return {}
+        """Delegate to the active medium's real panel, if one is mounted.
+
+        Mediums without a ported panel yet (still showing the Task 3 stub)
+        fall back to `{}`, matching Task 3's behavior exactly. A panel whose
+        `collect()` raises degrades to `{}` too, rather than crashing the CTA
+        click — `on_create` is never worth losing over a bad widget read.
+        """
+        if self._active_panel is None:
+            return {}
+        try:
+            return self._active_panel.collect()
+        except Exception:
+            return {}
