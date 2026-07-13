@@ -44,6 +44,7 @@ from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_panel import ArtgenPanel
 import artgen_kind
+from create_view import CreateView
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
 from worker import (
@@ -8002,6 +8003,19 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
+
+        # Create-surface Task 3 (docs/superpowers/specs/2026-07-13-create-
+        # surface-design.md): CreateView is built and mounted here ALONGSIDE
+        # the existing medium-tab UI above, but is NOT yet reachable — no
+        # loop-nav verb or toolbar control switches `_gallery_stack` to it.
+        # The old ✨ Create movement keeps routing to "video"/"animate"/
+        # "image"/"artgen" via `_on_loop_nav_create` until every medium's
+        # param panel is ported (a later task). Generation itself
+        # (GenerationWorker/api_client/ControlPanel) is untouched — CreateView
+        # has no wiring to real generation yet (on_create=None), matching its
+        # injectable-seam design so it stays fully unit-testable in isolation.
+        self._create_view = CreateView()
+        self._gallery_stack.add_named(self._create_view, "create")
 
         self._gallery_stack.set_visible_child_name("video")
 
