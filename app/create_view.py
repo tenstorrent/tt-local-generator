@@ -9,10 +9,10 @@ ONE surface where the medium is a *chip*, not a top-level division. This
 module builds the shell — three doors in (idea / model / inspiration), the
 medium-chip row, a per-medium param-panel host, the live-model strip, and the
 Create CTA. Per-type param panels (real image/video/animate/artgen controls)
-arrive in Tasks 4-6; Task 4 (this task) ports the IMAGE medium to a real
-`ImageParamPanel` (`create_param_panels.py`) — every other medium still shows
-the plain stub label until its own task lands (video/animate: Task 5,
-artgen: Task 6).
+arrive in Tasks 4-6; Task 4 ported the IMAGE medium to a real
+`ImageParamPanel`; this task (5) ports VIDEO and ANIMATE to
+`VideoParamPanel`/`AnimateParamPanel` (all in `create_param_panels.py`) — only
+artgen mediums still show the plain stub label, until Task 6.
 
 **Migration-safe by construction**: this view is built ALONGSIDE the existing
 medium-tab generation UI (main_window.py's ControlPanel + `_gallery_stack`
@@ -52,7 +52,23 @@ from gi.repository import GLib, Gtk  # noqa: E402
 
 import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
-from create_param_panels import CreateParamPanel, ImageParamPanel  # noqa: E402
+from create_param_panels import (  # noqa: E402
+    AnimateParamPanel,
+    CreateParamPanel,
+    ImageParamPanel,
+    VideoParamPanel,
+)
+
+
+# Native medium id -> its real CreateParamPanel class. `_swap_panel` mounts
+# a fresh instance of the mapped class for any native medium listed here;
+# every other medium (artgen, or a future native medium not yet ported)
+# falls through to the Task 3 stub. Image: Task 4. Video/Animate: Task 5.
+_NATIVE_PANEL_CLASSES: "dict[str, type]" = {
+    "image": ImageParamPanel,
+    "video": VideoParamPanel,
+    "animate": AnimateParamPanel,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,6 +176,56 @@ _CSS = b"""
     border-radius: 4px;
 }
 .image-param-input:focus-within {
+    border-color: #4FD1C5;
+}
+
+/* -- VideoParamPanel (Task 5) -- same look as ImageParamPanel, own namespace
+   so a later change to one never accidentally reskins the other. -------- */
+.video-param-panel {
+    padding: 2px 0;
+}
+.video-param-row {
+    padding: 3px 0;
+}
+.video-param-label {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.video-param-input {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+.video-param-input:focus-within {
+    border-color: #4FD1C5;
+}
+
+/* -- AnimateParamPanel (Task 5) ---------------------------------------------- */
+.animate-param-panel {
+    padding: 2px 0;
+}
+.animate-param-row {
+    padding: 3px 0;
+}
+.animate-param-label {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.animate-param-input {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+.animate-param-input:focus-within {
+    border-color: #4FD1C5;
+}
+/* Mode toggle buttons (Animation/Replacement) get the active-accent look
+   shared with the doors row's :checked state. */
+.animate-param-input:checked {
+    background-color: #4FD1C5;
+    color: #0F2A35;
     border-color: #4FD1C5;
 }
 
@@ -373,10 +439,11 @@ class CreateView(Gtk.Box):
     def _swap_panel(self, medium: Medium) -> None:
         """Rebuild the param-panel host for the newly-selected medium.
 
-        Task 4 ports the native "image" medium to a real `ImageParamPanel`
-        (`create_param_panels.py`). Every other medium still gets the Task 3
-        stub — a plain, honestly-labeled placeholder — until its own task
-        lands (video/animate: Task 5, artgen: Task 6).
+        Task 4 ported the native "image" medium to a real `ImageParamPanel`
+        (`create_param_panels.py`); this task (5) ports "video" and "animate"
+        to `VideoParamPanel`/`AnimateParamPanel`. Only artgen mediums still
+        get the Task 3 stub — a plain, honestly-labeled placeholder — until
+        their own task lands (Task 6).
         """
         child = self._panel_host.get_first_child()
         while child is not None:
@@ -384,8 +451,8 @@ class CreateView(Gtk.Box):
             self._panel_host.remove(child)
             child = nxt
 
-        if medium.id == "image" and medium.source == "native":
-            panel = ImageParamPanel()
+        if medium.source == "native" and medium.id in _NATIVE_PANEL_CLASSES:
+            panel = _NATIVE_PANEL_CLASSES[medium.id]()
             self._panel_host.append(panel.build())
             self._active_panel = panel
             return

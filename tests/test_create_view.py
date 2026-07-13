@@ -44,7 +44,12 @@ except Exception:  # pragma: no cover - environment-dependent
     pytest.skip("no GTK display available", allow_module_level=True)
 
 from create_mediums import Medium
-from create_param_panels import CreateParamPanel, ImageParamPanel
+from create_param_panels import (
+    AnimateParamPanel,
+    CreateParamPanel,
+    ImageParamPanel,
+    VideoParamPanel,
+)
 
 # The exact default dict `ImageParamPanel.collect()` returns for a freshly
 # built, unmodified panel — mirrors ControlPanel's image defaults
@@ -56,6 +61,34 @@ _IMAGE_DEFAULTS = {
     "seed": -1,
     "guidance_scale": 3.5,
     "model": "flux.1-schnell",
+}
+
+# The exact default dict `VideoParamPanel.collect()` returns for a freshly
+# built, unmodified panel — matches `worker.GenerationWorker`'s kwargs (minus
+# `prompt`, which CreateView's idea-door prompt entry owns). `num_frames`
+# defaults to None (server/runner default) via a 0="auto" spin sentinel,
+# mirroring the seed field's -1="random" sentinel already used by
+# ImageParamPanel. Steps clamp (12-50) and default (20) mirror
+# `api_client.APIClient.submit`'s server-side clamp.
+_VIDEO_DEFAULTS = {
+    "negative_prompt": "",
+    "num_inference_steps": 20,
+    "seed": -1,
+    "model": "wan2.2-t2v",
+    "num_frames": None,
+}
+
+# The exact default dict `AnimateParamPanel.collect()` returns for a freshly
+# built, unmodified panel — matches `worker.AnimateGenerationWorker`'s kwargs
+# (minus `prompt`). Empty ref paths are valid (see module docstring): the
+# panel never validates, only collects widget state.
+_ANIMATE_DEFAULTS = {
+    "reference_video_path": "",
+    "reference_image_path": "",
+    "num_inference_steps": 20,
+    "seed": -1,
+    "animate_mode": "animation",
+    "model": "wan2.2-animate-14b",
 }
 
 
@@ -87,6 +120,8 @@ def _fake_mediums():
                source="native", generator=None),
         Medium(id="video", label="Video", icon="\U0001f3a5", kind="video",
                source="native", generator=None),
+        Medium(id="animate", label="Animate", icon="\U0001f483", kind="gif",
+               source="native", generator=None),
         Medium(id="verse", label="Verse", icon="✍", kind="text",
                source="artgen", generator="verse"),
     ]
@@ -115,7 +150,7 @@ def test_create_view_builds(monkeypatch):
 
 def test_chips_render_one_per_medium(monkeypatch):
     view = _make_view(monkeypatch)
-    assert set(view._chip_buttons.keys()) == {"image", "video", "verse"}
+    assert set(view._chip_buttons.keys()) == {"image", "video", "animate", "verse"}
     for medium_id, btn in view._chip_buttons.items():
         assert isinstance(btn, Gtk.ToggleButton)
 
@@ -219,6 +254,133 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
         "seed": 42,
         "guidance_scale": 7.0,
         "model": "stable-diffusion-xl-base-1.0",
+    }
+
+
+# ── Video param panel wiring (Task 5) ────────────────────────────────────
+
+def test_selecting_video_medium_mounts_real_video_param_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+
+    view._chip_buttons["video"].set_active(True)
+
+    assert isinstance(view._active_panel, VideoParamPanel)
+    child = view._panel_host.get_first_child()
+    assert child is not None
+    assert not child.has_css_class("create-panel-stub-label")
+
+
+def test_switching_away_from_video_and_back_remounts_a_fresh_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+    first_video_panel = view._active_panel
+
+    view._chip_buttons["verse"].set_active(True)
+    assert view._active_panel is None
+
+    view._chip_buttons["video"].set_active(True)
+    assert isinstance(view._active_panel, VideoParamPanel)
+    assert view._active_panel is not first_video_panel
+
+
+def test_cta_calls_on_create_with_video_param_panel_collect_output(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["video"].set_active(True)
+    view._cta_btn.emit("clicked")
+
+    assert len(calls) == 1
+    medium, params = calls[0]
+    assert medium.id == "video"
+    assert params == _VIDEO_DEFAULTS
+
+
+def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["video"].set_active(True)
+    panel = view._active_panel
+    assert isinstance(panel, VideoParamPanel)
+    panel._neg_entry.set_text("blurry, watermark")
+    panel._steps_adj.set_value(40)
+    panel._seed_adj.set_value(101)
+    panel._model_dropdown.set_selected(2)  # skyreels
+    panel._frames_adj.set_value(65)
+
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1] == {
+        "negative_prompt": "blurry, watermark",
+        "num_inference_steps": 40,
+        "seed": 101,
+        "model": "skyreels-v2-i2v-14b-540p",
+        "num_frames": 65,
+    }
+
+
+# ── Animate param panel wiring (Task 5) ──────────────────────────────────
+
+def test_selecting_animate_medium_mounts_real_animate_param_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+
+    view._chip_buttons["animate"].set_active(True)
+
+    assert isinstance(view._active_panel, AnimateParamPanel)
+    child = view._panel_host.get_first_child()
+    assert child is not None
+    assert not child.has_css_class("create-panel-stub-label")
+
+
+def test_switching_away_from_animate_and_back_remounts_a_fresh_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._chip_buttons["animate"].set_active(True)
+    first_animate_panel = view._active_panel
+
+    view._chip_buttons["verse"].set_active(True)
+    assert view._active_panel is None
+
+    view._chip_buttons["animate"].set_active(True)
+    assert isinstance(view._active_panel, AnimateParamPanel)
+    assert view._active_panel is not first_animate_panel
+
+
+def test_cta_calls_on_create_with_animate_param_panel_collect_output(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["animate"].set_active(True)
+    view._cta_btn.emit("clicked")
+
+    assert len(calls) == 1
+    medium, params = calls[0]
+    assert medium.id == "animate"
+    assert params == _ANIMATE_DEFAULTS
+
+
+def test_cta_reflects_edited_animate_param_panel_widgets(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["animate"].set_active(True)
+    panel = view._active_panel
+    assert isinstance(panel, AnimateParamPanel)
+    panel._ref_video_entry.set_text("/tmp/motion.mp4")
+    panel._ref_image_entry.set_text("/tmp/character.png")
+    panel._steps_adj.set_value(28)
+    panel._seed_adj.set_value(7)
+    panel._mode_repl_btn.set_active(True)
+
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1] == {
+        "reference_video_path": "/tmp/motion.mp4",
+        "reference_image_path": "/tmp/character.png",
+        "num_inference_steps": 28,
+        "seed": 7,
+        "animate_mode": "replacement",
+        "model": "wan2.2-animate-14b",
     }
 
 
@@ -413,6 +575,210 @@ def test_image_param_panel_collect_before_build_degrades_to_defaults():
     assert panel.collect() == _IMAGE_DEFAULTS
 
 
+# ── VideoParamPanel (standalone, no CreateView needed) ───────────────────
+
+def test_video_param_panel_is_a_create_param_panel():
+    assert isinstance(VideoParamPanel(), CreateParamPanel)
+
+
+def test_video_param_panel_build_returns_a_widget_with_controls():
+    panel = VideoParamPanel()
+    widget = panel.build()
+
+    assert isinstance(widget, Gtk.Widget)
+    # Five rows: steps, seed, model, num_frames, negative prompt.
+    rows = []
+    child = widget.get_first_child()
+    while child is not None:
+        rows.append(child)
+        child = child.get_next_sibling()
+    assert len(rows) == 5
+    assert panel._steps_adj is not None
+    assert panel._seed_adj is not None
+    assert panel._model_dropdown is not None
+    assert panel._frames_adj is not None
+    assert panel._neg_entry is not None
+
+
+def test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
+    panel = VideoParamPanel()
+    panel.build()
+
+    assert panel.collect() == _VIDEO_DEFAULTS
+    assert set(panel.collect().keys()) == {
+        "negative_prompt", "num_inference_steps", "seed", "model", "num_frames",
+    }
+
+
+def test_video_param_panel_collect_reflects_changed_widget_values():
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel._neg_entry.set_text("blurry, low quality")
+    panel._steps_adj.set_value(45)
+    panel._seed_adj.set_value(9)
+    panel._model_dropdown.set_selected(1)  # mochi
+    panel._frames_adj.set_value(49)
+
+    assert panel.collect() == {
+        "negative_prompt": "blurry, low quality",
+        "num_inference_steps": 45,
+        "seed": 9,
+        "model": "mochi-1-preview",
+        "num_frames": 49,
+    }
+
+
+def test_video_param_panel_num_frames_zero_collects_as_none():
+    """The 0 sentinel means 'runner default' — mirrors the seed field's -1
+    sentinel for 'random'. GenerationWorker's own default is `num_frames=None`."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel._frames_adj.set_value(0)
+    assert panel.collect()["num_frames"] is None
+
+
+def test_video_param_panel_model_dropdown_covers_all_three_choices():
+    panel = VideoParamPanel()
+    panel.build()
+
+    expected = {
+        0: "wan2.2-t2v",
+        1: "mochi-1-preview",
+        2: "skyreels-v2-i2v-14b-540p",
+    }
+    for idx, model_id in expected.items():
+        panel._model_dropdown.set_selected(idx)
+        assert panel.collect()["model"] == model_id
+
+
+def test_video_param_panel_collect_before_build_degrades_to_defaults():
+    panel = VideoParamPanel()
+    assert panel.collect() == _VIDEO_DEFAULTS
+
+
+# ── AnimateParamPanel (standalone, no CreateView needed) ─────────────────
+
+def test_animate_param_panel_is_a_create_param_panel():
+    assert isinstance(AnimateParamPanel(), CreateParamPanel)
+
+
+def test_animate_param_panel_build_returns_a_widget_with_controls():
+    panel = AnimateParamPanel()
+    widget = panel.build()
+
+    assert isinstance(widget, Gtk.Widget)
+    # Five rows: motion video, character image, mode, steps, seed.
+    rows = []
+    child = widget.get_first_child()
+    while child is not None:
+        rows.append(child)
+        child = child.get_next_sibling()
+    assert len(rows) == 5
+    assert panel._ref_video_entry is not None
+    assert panel._ref_image_entry is not None
+    assert panel._mode_anim_btn is not None
+    assert panel._mode_repl_btn is not None
+    assert panel._steps_adj is not None
+    assert panel._seed_adj is not None
+
+
+def test_animate_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
+    panel = AnimateParamPanel()
+    panel.build()
+
+    assert panel.collect() == _ANIMATE_DEFAULTS
+    assert set(panel.collect().keys()) == {
+        "reference_video_path", "reference_image_path",
+        "num_inference_steps", "seed", "animate_mode", "model",
+    }
+
+
+def test_animate_param_panel_collect_reflects_changed_widget_values():
+    panel = AnimateParamPanel()
+    panel.build()
+
+    panel._ref_video_entry.set_text("/home/user/motion.mp4")
+    panel._ref_image_entry.set_text("/home/user/char.jpg")
+    panel._steps_adj.set_value(33)
+    panel._seed_adj.set_value(555)
+    panel._mode_repl_btn.set_active(True)
+
+    assert panel.collect() == {
+        "reference_video_path": "/home/user/motion.mp4",
+        "reference_image_path": "/home/user/char.jpg",
+        "num_inference_steps": 33,
+        "seed": 555,
+        "animate_mode": "replacement",
+        "model": "wan2.2-animate-14b",
+    }
+
+
+def test_animate_param_panel_mode_toggle_is_mutually_exclusive(monkeypatch):
+    panel = AnimateParamPanel()
+    panel.build()
+
+    panel._mode_repl_btn.set_active(True)
+    assert panel.collect()["animate_mode"] == "replacement"
+    assert panel._mode_anim_btn.get_active() is False
+
+    panel._mode_anim_btn.set_active(True)
+    assert panel.collect()["animate_mode"] == "animation"
+    assert panel._mode_repl_btn.get_active() is False
+
+
+def test_animate_param_panel_empty_ref_paths_are_allowed():
+    """Empty paths are valid — validation is the worker/CTA's concern, not
+    the panel (see module docstring)."""
+    panel = AnimateParamPanel()
+    panel.build()
+
+    assert panel.collect()["reference_video_path"] == ""
+    assert panel.collect()["reference_image_path"] == ""
+
+
+def test_animate_param_panel_file_pick_callbacks_set_entry_text_from_gfile():
+    """Simulates a completed Gtk.FileDialog.open() round-trip without opening
+    a real dialog: calls the panel's `_finish` handlers directly with a fake
+    dlg/gfile pair, matching the `open_finish()` try/except pattern documented
+    in CLAUDE.md (GTK4 FileDialog is async)."""
+    panel = AnimateParamPanel()
+    panel.build()
+
+    class _FakeGFile:
+        def get_path(self):
+            return "/tmp/picked_motion.mp4"
+
+    class _FakeDlg:
+        def open_finish(self, _result):
+            return _FakeGFile()
+
+    panel._on_ref_video_picked(_FakeDlg(), None)
+    assert panel._ref_video_entry.get_text() == "/tmp/picked_motion.mp4"
+
+
+def test_animate_param_panel_file_pick_cancel_does_not_raise_or_clear():
+    """`open_finish()` raises when the user cancels the dialog — the panel
+    must swallow that (per CLAUDE.md's FileDialog try/except pattern) and
+    leave the existing entry text untouched."""
+    panel = AnimateParamPanel()
+    panel.build()
+    panel._ref_image_entry.set_text("/keep/me.png")
+
+    class _FakeDlg:
+        def open_finish(self, _result):
+            raise Exception("cancelled")
+
+    panel._on_ref_image_picked(_FakeDlg(), None)  # must not raise
+    assert panel._ref_image_entry.get_text() == "/keep/me.png"
+
+
+def test_animate_param_panel_collect_before_build_degrades_to_defaults():
+    panel = AnimateParamPanel()
+    assert panel.collect() == _ANIMATE_DEFAULTS
+
+
 # ── Guard: generation entry points intact ────────────────────────────────
 #
 # CRITICAL STRATEGY (task-4-brief.md): ImageParamPanel is a FRESH widget, not
@@ -457,6 +823,51 @@ def test_image_generation_worker_accepts_expected_kwargs():
         assert name in params, (
             f"worker.ImageGenerationWorker.__init__ no longer accepts {name!r} — "
             "ImageParamPanel.collect() targets exactly these kwargs; the "
+            "generation contract must stay intact."
+        )
+
+
+def test_generation_worker_accepts_expected_kwargs():
+    """The worker contract VideoParamPanel.collect() targets must stay stable."""
+    import inspect
+
+    import worker
+
+    params = inspect.signature(worker.GenerationWorker.__init__).parameters
+    for name in (
+        "prompt",
+        "negative_prompt",
+        "num_inference_steps",
+        "seed",
+        "model",
+        "num_frames",
+    ):
+        assert name in params, (
+            f"worker.GenerationWorker.__init__ no longer accepts {name!r} — "
+            "VideoParamPanel.collect() targets exactly these kwargs; the "
+            "generation contract must stay intact."
+        )
+
+
+def test_animate_generation_worker_accepts_expected_kwargs():
+    """The worker contract AnimateParamPanel.collect() targets must stay stable."""
+    import inspect
+
+    import worker
+
+    params = inspect.signature(worker.AnimateGenerationWorker.__init__).parameters
+    for name in (
+        "reference_video_path",
+        "reference_image_path",
+        "prompt",
+        "num_inference_steps",
+        "seed",
+        "animate_mode",
+        "model",
+    ):
+        assert name in params, (
+            f"worker.AnimateGenerationWorker.__init__ no longer accepts {name!r} — "
+            "AnimateParamPanel.collect() targets exactly these kwargs; the "
             "generation contract must stay intact."
         )
 
