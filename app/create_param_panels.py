@@ -2,13 +2,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 """
 CreateParamPanel protocol + the real per-medium panels: ImageParamPanel
-(Create-surface plan, Task 4), VideoParamPanel + AnimateParamPanel (Task 5:
-docs/superpowers/plans/2026-07-13-create-surface.md).
+(Create-surface plan, Task 4), VideoParamPanel + AnimateParamPanel (Task 5),
+ArtgenParamPanel (Task 6: docs/superpowers/plans/2026-07-13-create-surface.md).
 
 CreateView (Task 3, `app/create_view.py`) hosts one panel per medium chip.
 Task 3 shipped only a stub label; Task 4 ported the IMAGE medium to a real
-panel; this task ports VIDEO and ANIMATE. Only artgen mediums keep the stub
-now, until Task 6.
+panel; Task 5 ported VIDEO and ANIMATE; this task (6) ports every artgen
+generator medium (verse/ansi/landscape/…) to `ArtgenParamPanel` — see that
+class's own section below for the introspection strategy. Every medium the
+Create surface offers now has a real panel; only a future, not-yet-existing
+medium would fall back to the Task 3 stub.
 
 **Why this is a fresh widget, not an extraction from `ControlPanel`**
 (see `.superpowers/sdd/task-4-brief.md`'s CRITICAL STRATEGY, which overrides
@@ -38,7 +41,9 @@ shared.
 """
 from __future__ import annotations
 
+import argparse
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Optional
 
 import gi
@@ -625,3 +630,328 @@ class AnimateParamPanel(CreateParamPanel):
             path = gfile.get_path()
             if path:
                 self._ref_image_entry.set_text(path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ArtgenParamPanel (Task 6 — docs/superpowers/plans/2026-07-13-create-surface.md)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Unlike Image/Video/Animate, artgen has ~11 generators (verse/ansi/landscape/
+# codeart/freeform/…) each with its own bespoke `add_args(parser)`. The
+# CRITICAL STRATEGY for this task (task-6-brief.md, overriding the plan
+# document's "reuse ArtgenPanel's controls" wording) is: do NOT extract from
+# or touch `ArtgenPanel._build_controls_page` in artgen_panel.py — that method
+# is a per-generator monolith of hardcoded if/elif branches wired directly
+# into the live artgen generation UI, and touching it risks the one thing
+# every project rule treats as sacrosanct (breaking real generation).
+#
+# Instead, ONE class — `ArtgenParamPanel` — is parameterized by generator name
+# and INTROSPECTS that generator's own `add_args` via a throwaway
+# `argparse.ArgumentParser`, deriving a tidy control per resolved argparse
+# dest. A new artgen plugin with a novel `add_args` gets a working param panel
+# for free, with zero new code here.
+#
+# ── Introspection contract ───────────────────────────────────────────────────
+#
+# `_introspect_generator_args(name)` builds `parser = argparse.ArgumentParser()`,
+# calls `artgen.get(name).add_args(parser)`, then walks `parser._actions`:
+#
+#   - the implicit `-h/--help` action (dest "help") is skipped.
+#   - `action.choices` truthy           -> "choice" (dropdown).
+#   - `type(action).__name__` is one of argparse's private
+#     `_StoreTrueAction`/`_StoreFalseAction` -> "bool" (switch).
+#   - `action.type is int`              -> "int" (spin button).
+#   - `action.type is float`            -> "float" (spin button, 2 decimals).
+#   - else                              -> "str" (entry).
+#
+# **Boolean flag-pair dedup**: several generators (e.g. landscape's
+# `--mountains`/`--no-mountains`) register TWO argparse actions that share one
+# `dest` — the standard argparse idiom for a flag with an explicit "off"
+# spelling. Building a widget per ACTION would show two controls for one
+# value. Dedup is by `dest`, keeping only the first action's metadata
+# (label/help) — the *default value*, however, is resolved by calling
+# `parser.parse_args([])` and reading `vars(namespace)[dest]`, not
+# `action.default` directly: argparse only applies the earliest-registered
+# action's default for a shared dest when no flag is passed (later actions in
+# the pair have no default of their own), so parsing an empty arg list is the
+# only reliable way to get the resolved value — same trick a real CLI
+# invocation with no flags would produce.
+#
+# **The `None`-default sentinel**: some int/float args default to `None`
+# (e.g. ansi's `--width`, landscape's `--glitch-seed`) to mean "let the
+# generator decide". Mirrors `VideoParamPanel`'s `num_frames` 0="runner
+# default" convention: the spin button's starting value is 0 when the
+# resolved default is `None`; `collect()` returns whatever integer/float the
+# spin currently shows (0 included) — the panel never re-encodes 0 back to
+# `None`, unlike `VideoParamPanel._selected_num_frames`, because there is no
+# single shared "0 means auto" contract across ~11 generators' args the way
+# there is for the one native video path. Downstream (the artgen run seam,
+# a later task) is expected to treat this the same way the CLI already does:
+# an explicit 0 is a valid value for some args and "unset" for others, and
+# only the generator itself knows which.
+
+
+@dataclass
+class _ArgSpec:
+    """One argparse dest's resolved shape, ready to become a control.
+
+    `default` is the value `parser.parse_args([])` actually resolves for this
+    dest (see module comment above) — NOT necessarily `action.default`, which
+    can lie for a shared-dest boolean pair.
+    """
+
+    dest: str
+    kind: str  # "choice" | "bool" | "int" | "float" | "str"
+    default: object
+    help: str = ""
+    choices: "Optional[list]" = None
+
+
+@dataclass
+class _ArgControl:
+    """A built widget plus enough metadata for `collect()` to read it back."""
+
+    dest: str
+    kind: str
+    widget: Gtk.Widget
+    choices: "list" = field(default_factory=list)
+
+    def read(self) -> object:
+        if self.kind == "choice":
+            idx = self.widget.get_selected()
+            if self.choices and 0 <= idx < len(self.choices):
+                return self.choices[idx]
+            return self.choices[0] if self.choices else None
+        if self.kind == "bool":
+            return bool(self.widget.get_active())
+        if self.kind == "int":
+            return int(self.widget.get_value())
+        if self.kind == "float":
+            return float(self.widget.get_value())
+        return self.widget.get_text()  # "str"
+
+
+def _humanize_dest(dest: str) -> str:
+    """"ansi_style" -> "Ansi Style"; "count" -> "Count". Falls back to the raw
+    dest string if it's empty/whitespace-only (never returns "")."""
+    text = dest.replace("_", " ").replace("-", " ").strip()
+    return text.title() if text else dest
+
+
+def _classify_action(action: "argparse.Action") -> "tuple[str, Optional[list]]":
+    """Return (kind, choices) for one argparse.Action — see module comment.
+
+    Three distinct argparse spellings all mean "this is a boolean flag":
+    the classic `_StoreTrueAction`/`_StoreFalseAction` pair (one action per
+    flag, sharing a dest — see the boolean flag-pair dedup note above) and
+    the modern single-action `argparse.BooleanOptionalAction` (Python 3.9+,
+    registers `--flag`/`--no-flag` together, e.g. codeart's
+    `--should-compile`/`--no-should-compile`). All three must render as a
+    switch, not fall through to the "str" default — the plain class-name
+    check below (not an isinstance of the public `BooleanOptionalAction`)
+    keeps this uniform with the private-class checks it sits beside.
+    """
+    cls_name = type(action).__name__
+    if cls_name in ("_StoreTrueAction", "_StoreFalseAction", "BooleanOptionalAction"):
+        return "bool", None
+    if action.choices:
+        return "choice", list(action.choices)
+    if action.type is int:
+        return "int", None
+    if action.type is float:
+        return "float", None
+    return "str", None
+
+
+def _introspect_generator_args(generator_name: str) -> "list[_ArgSpec]":
+    """Build the arg specs for *generator_name* by calling its own `add_args`
+    against a throwaway parser. Returns `[]` for an unregistered generator
+    name or any exception raised while introspecting — a bad/removed plugin
+    must degrade to an empty panel, never crash the Create surface.
+
+    Imports `artgen` lazily (inside this function), matching the convention
+    already established by `create_mediums.default_mediums`: this module
+    stays importable — and every OTHER panel here stays usable — even if the
+    artgen package or its plugin-loading machinery is broken.
+    """
+    try:
+        import artgen as _artgen
+        gen = _artgen.get(generator_name)
+    except Exception:
+        return []
+
+    parser = argparse.ArgumentParser()
+    try:
+        gen.add_args(parser)
+    except Exception:
+        return []
+
+    # Resolve the shared-dest boolean pairs' real defaults (see module
+    # comment) by parsing an empty arg list — exactly what a bare
+    # `tt-ctl artgen <name>` invocation with no flags would resolve to.
+    try:
+        defaults_ns = vars(parser.parse_args([]))
+    except SystemExit:
+        defaults_ns = {}
+
+    specs: "list[_ArgSpec]" = []
+    seen_dests: set = set()
+    for action in getattr(parser, "_actions", []):
+        dest = action.dest
+        if dest == "help" or dest in seen_dests:
+            continue
+        seen_dests.add(dest)
+        kind, choices = _classify_action(action)
+        default = defaults_ns.get(dest, action.default)
+        specs.append(_ArgSpec(
+            dest=dest, kind=kind, default=default,
+            help=action.help or "", choices=choices,
+        ))
+    return specs
+
+
+class ArtgenParamPanel(CreateParamPanel):
+    """One param panel class for every artgen generator (verse/ansi/
+    landscape/…) — parameterized by generator NAME at construction, not
+    subclassed per generator (see module comment for the CRITICAL STRATEGY
+    this implements).
+
+    `collect()` returns exactly `{dest: value}` for every argparse dest the
+    named generator's `add_args` declares — this IS the params dict a later
+    task (the artgen run-path wiring) feeds straight to `argparse.Namespace`
+    construction / `generate_artifact`, no key translation needed.
+    """
+
+    def __init__(self, generator_name: str) -> None:
+        self._generator_name = generator_name
+        self._widget: Optional[Gtk.Widget] = None
+        self._controls: "list[_ArgControl]" = []
+
+    # ── CreateParamPanel protocol ────────────────────────────────────────────
+
+    def build(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.add_css_class("artgen-param-panel")
+        self._controls = []
+
+        try:
+            specs = _introspect_generator_args(self._generator_name)
+        except Exception:
+            specs = []
+
+        if not specs:
+            label = Gtk.Label(
+                label=f"{self._generator_name} — no configurable parameters"
+            )
+            label.add_css_class("artgen-param-empty-label")
+            label.set_xalign(0.0)
+            box.append(label)
+        else:
+            for spec in specs:
+                row, control = self._build_control_row(spec)
+                box.append(row)
+                self._controls.append(control)
+
+        self._widget = box
+        return box
+
+    def collect(self) -> dict:
+        """Read every mounted control's current value into `{dest: value}`.
+
+        Empty before `build()` (or if introspection found no args) —
+        deliberately `{}`, not a defaulted dict, since there is no fixed
+        kwarg contract to fall back to the way Image/Video/Animate have
+        (those wrap ONE fixed worker signature; this wraps N different
+        generators' N different argparse shapes)."""
+        result: dict = {}
+        for control in self._controls:
+            try:
+                result[control.dest] = control.read()
+            except Exception:
+                result[control.dest] = None
+        return result
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _row(self, label_text: str) -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("artgen-param-row")
+        label = Gtk.Label(label=label_text)
+        label.add_css_class("artgen-param-label")
+        label.set_xalign(0.0)
+        label.set_size_request(120, -1)
+        row.append(label)
+        return row
+
+    def _build_control_row(self, spec: _ArgSpec) -> "tuple[Gtk.Box, _ArgControl]":
+        row = self._row(_humanize_dest(spec.dest))
+        tooltip = spec.help or None
+
+        if spec.kind == "choice":
+            choices = spec.choices or []
+            labels = [str(c) for c in choices]
+            dropdown = Gtk.DropDown(model=Gtk.StringList.new(labels))
+            dropdown.add_css_class("artgen-param-input")
+            default_idx = choices.index(spec.default) if spec.default in choices else 0
+            dropdown.set_selected(default_idx)
+            if tooltip:
+                dropdown.set_tooltip_text(tooltip)
+            row.append(dropdown)
+            widget = dropdown
+
+        elif spec.kind == "bool":
+            switch = Gtk.Switch()
+            switch.set_valign(Gtk.Align.CENTER)
+            switch.set_active(bool(spec.default))
+            switch.add_css_class("artgen-param-input")
+            if tooltip:
+                switch.set_tooltip_text(tooltip)
+            row.append(switch)
+            widget = switch
+
+        elif spec.kind == "int":
+            default_val = int(spec.default) if isinstance(spec.default, int) else 0
+            adj = Gtk.Adjustment(
+                value=default_val, lower=-1_000_000, upper=1_000_000,
+                step_increment=1, page_increment=10,
+            )
+            spin = Gtk.SpinButton(adjustment=adj, climb_rate=1, digits=0)
+            spin.set_numeric(True)
+            spin.add_css_class("artgen-param-input")
+            if spec.default is None:
+                spin.set_tooltip_text((tooltip + " " if tooltip else "") + "(0 = generator default)")
+            elif tooltip:
+                spin.set_tooltip_text(tooltip)
+            row.append(spin)
+            widget = spin
+
+        elif spec.kind == "float":
+            default_val = float(spec.default) if isinstance(spec.default, (int, float)) else 0.0
+            adj = Gtk.Adjustment(
+                value=default_val, lower=-1_000_000.0, upper=1_000_000.0,
+                step_increment=0.1, page_increment=1.0,
+            )
+            spin = Gtk.SpinButton(adjustment=adj, climb_rate=0.1, digits=2)
+            spin.set_numeric(True)
+            spin.add_css_class("artgen-param-input")
+            if tooltip:
+                spin.set_tooltip_text(tooltip)
+            row.append(spin)
+            widget = spin
+
+        else:  # "str"
+            entry = Gtk.Entry()
+            entry.set_hexpand(True)
+            entry.add_css_class("artgen-param-input")
+            if isinstance(spec.default, str):
+                entry.set_text(spec.default)
+            if tooltip:
+                entry.set_placeholder_text(tooltip)
+                entry.set_tooltip_text(tooltip)
+            row.append(entry)
+            widget = entry
+
+        control = _ArgControl(
+            dest=spec.dest, kind=spec.kind, widget=widget, choices=spec.choices or [],
+        )
+        return row, control

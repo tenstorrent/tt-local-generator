@@ -46,6 +46,7 @@ except Exception:  # pragma: no cover - environment-dependent
 from create_mediums import Medium
 from create_param_panels import (
     AnimateParamPanel,
+    ArtgenParamPanel,
     CreateParamPanel,
     ImageParamPanel,
     VideoParamPanel,
@@ -172,12 +173,12 @@ def test_selecting_a_chip_sets_active_medium_and_swaps_panel(monkeypatch):
     # Only one chip stays active (shared radio group).
     assert view._chip_buttons["image"].get_active() is False
 
-    # "verse" has no ported panel yet (Task 6), so it falls back to the
-    # Task 3 stub label — its presence is the observable signal.
+    # "verse" is an artgen medium -> mounts a real ArtgenParamPanel introspected
+    # from the verse generator's own add_args (Task 6), not the Task 3 stub.
     child = view._panel_host.get_first_child()
     assert child is not None
     assert view._panel_host.get_first_child() is not None
-    assert view._active_panel is None
+    assert isinstance(view._active_panel, ArtgenParamPanel)
 
 
 def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
@@ -208,8 +209,11 @@ def test_switching_away_from_image_and_back_remounts_a_fresh_panel(monkeypatch):
     view = _make_view(monkeypatch)
     first_image_panel = view._active_panel
 
+    # "verse" also mounts a real panel now (ArtgenParamPanel, Task 6) — the
+    # meaningful assertion is that the type changed, not that the panel host
+    # went blank.
     view._chip_buttons["verse"].set_active(True)
-    assert view._active_panel is None
+    assert isinstance(view._active_panel, ArtgenParamPanel)
 
     view._chip_buttons["image"].set_active(True)
     assert isinstance(view._active_panel, ImageParamPanel)
@@ -276,7 +280,7 @@ def test_switching_away_from_video_and_back_remounts_a_fresh_panel(monkeypatch):
     first_video_panel = view._active_panel
 
     view._chip_buttons["verse"].set_active(True)
-    assert view._active_panel is None
+    assert isinstance(view._active_panel, ArtgenParamPanel)
 
     view._chip_buttons["video"].set_active(True)
     assert isinstance(view._active_panel, VideoParamPanel)
@@ -339,7 +343,7 @@ def test_switching_away_from_animate_and_back_remounts_a_fresh_panel(monkeypatch
     first_animate_panel = view._active_panel
 
     view._chip_buttons["verse"].set_active(True)
-    assert view._active_panel is None
+    assert isinstance(view._active_panel, ArtgenParamPanel)
 
     view._chip_buttons["animate"].set_active(True)
     assert isinstance(view._active_panel, AnimateParamPanel)
@@ -382,6 +386,70 @@ def test_cta_reflects_edited_animate_param_panel_widgets(monkeypatch):
         "animate_mode": "replacement",
         "model": "wan2.2-animate-14b",
     }
+
+
+# ── Artgen param panel wiring (Task 6) ───────────────────────────────────
+
+def test_selecting_artgen_medium_mounts_artgen_param_panel_for_its_generator(monkeypatch):
+    """Selecting "verse" (source="artgen", generator="verse") must mount an
+    ArtgenParamPanel built for the "verse" generator — not the Task 3 stub,
+    and not one of the native panel classes."""
+    view = _make_view(monkeypatch)
+
+    view._chip_buttons["verse"].set_active(True)
+
+    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert view._active_panel._generator_name == "verse"
+    child = view._panel_host.get_first_child()
+    assert child is not None
+    assert not child.has_css_class("create-panel-stub-label")
+
+
+def test_switching_away_from_artgen_and_back_remounts_a_fresh_panel(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._chip_buttons["verse"].set_active(True)
+    first_verse_panel = view._active_panel
+
+    view._chip_buttons["image"].set_active(True)
+    assert isinstance(view._active_panel, ImageParamPanel)
+
+    view._chip_buttons["verse"].set_active(True)
+    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert view._active_panel is not first_verse_panel
+
+
+def test_cta_calls_on_create_with_artgen_param_panel_collect_output(monkeypatch):
+    """CTA click for an artgen medium must route through the mounted
+    ArtgenParamPanel's real `collect()` output — the verse generator's own
+    argparse defaults (form/theme/count), not `{}`."""
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["verse"].set_active(True)
+    view._cta_btn.emit("clicked")
+
+    assert len(calls) == 1
+    medium, params = calls[0]
+    assert medium.id == "verse"
+    assert params == {"form": "haiku", "theme": "the passage of time", "count": 3}
+
+
+def test_cta_reflects_edited_artgen_param_panel_widgets(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._chip_buttons["verse"].set_active(True)
+    panel = view._active_panel
+    assert isinstance(panel, ArtgenParamPanel)
+    controls = {c.dest: c for c in panel._controls}
+    controls["theme"].widget.set_text("winter forges")
+    controls["count"].widget.get_adjustment().set_value(5)
+    # "form" is a choice dropdown; select "lore" (index 1 of haiku/lore/epitaph/couplet).
+    controls["form"].widget.set_selected(1)
+
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1] == {"form": "lore", "theme": "winter forges", "count": 5}
 
 
 # ── Doors ─────────────────────────────────────────────────────────────────
@@ -455,9 +523,9 @@ def test_cta_calls_on_create_with_active_medium_and_params(monkeypatch):
     assert medium.id == "image"  # the default-active medium
     # "image" is ported to a real ImageParamPanel this task (Task 4) — see
     # test_cta_calls_on_create_with_image_param_panel_collect_output for the
-    # dedicated assertion on its exact contents. Non-ported mediums (e.g.
-    # "verse", covered by test_cta_uses_currently_selected_medium below)
-    # still collect `{}` from the Task 3 stub.
+    # dedicated assertion on its exact contents. "verse" and every other
+    # artgen medium are ported to ArtgenParamPanel in Task 6 — see the
+    # ArtgenParamPanel section below for its dedicated CTA-routing assertion.
     assert params == _IMAGE_DEFAULTS
 
 
@@ -777,6 +845,137 @@ def test_animate_param_panel_file_pick_cancel_does_not_raise_or_clear():
 def test_animate_param_panel_collect_before_build_degrades_to_defaults():
     panel = AnimateParamPanel()
     assert panel.collect() == _ANIMATE_DEFAULTS
+
+
+# ── ArtgenParamPanel (standalone, no CreateView needed) ──────────────────
+#
+# ArtgenParamPanel is parameterized by generator NAME, not one class per
+# generator (task-6-brief.md's CRITICAL STRATEGY): it introspects the named
+# generator's own `add_args(parser)` via a throwaway argparse.ArgumentParser
+# and builds one control per resolved argparse dest. "verse" and "ansi" are
+# used below specifically because their `add_args` produce different shapes
+# (verse: choice/str/int; ansi: str/int-with-None-default/choice/choice/
+# str/str) — proving the panel is generator-driven, not a hardcoded per-
+# generator branch.
+
+def test_artgen_param_panel_is_a_create_param_panel():
+    assert isinstance(ArtgenParamPanel("verse"), CreateParamPanel)
+
+
+def test_artgen_param_panel_verse_builds_controls_from_add_args():
+    panel = ArtgenParamPanel("verse")
+    widget = panel.build()
+
+    assert isinstance(widget, Gtk.Widget)
+    # verse.add_args declares exactly three args: --form, --theme, --count.
+    assert {c.dest for c in panel._controls} == {"form", "theme", "count"}
+
+
+def test_artgen_param_panel_verse_collect_returns_generator_defaults():
+    panel = ArtgenParamPanel("verse")
+    panel.build()
+
+    assert panel.collect() == {
+        "form": "haiku",
+        "theme": "the passage of time",
+        "count": 3,
+    }
+
+
+def test_artgen_param_panel_verse_collect_reflects_edited_widgets():
+    panel = ArtgenParamPanel("verse")
+    panel.build()
+
+    controls = {c.dest: c for c in panel._controls}
+    controls["theme"].widget.set_text("a machine dreaming")
+    controls["count"].widget.get_adjustment().set_value(7)
+    controls["form"].widget.set_selected(3)  # haiku/lore/epitaph/couplet -> couplet
+
+    assert panel.collect() == {
+        "form": "couplet",
+        "theme": "a machine dreaming",
+        "count": 7,
+    }
+
+
+def test_artgen_param_panel_ansi_builds_its_own_args_not_hardcoded():
+    """A second generator with a totally different add_args shape must
+    produce its own controls — proves the panel introspects per-generator,
+    it does not hardcode verse's three fields."""
+    panel = ArtgenParamPanel("ansi")
+    panel.build()
+
+    dests = {c.dest for c in panel._controls}
+    # ansi.add_args declares: subject, width, colors, ansi_style, board_name, tagline.
+    assert dests == {"subject", "width", "colors", "ansi_style", "board_name", "tagline"}
+    # Different from verse's control set — the whole point of introspection.
+    assert dests != {"form", "theme", "count"}
+
+
+def test_artgen_param_panel_ansi_collect_returns_generator_defaults():
+    panel = ArtgenParamPanel("ansi")
+    panel.build()
+
+    assert panel.collect() == {
+        "subject": "a mountain at sunset",
+        "width": 0,  # None default round-trips through the int spin's 0 sentinel
+        "colors": "256",
+        "ansi_style": "scene",
+        "board_name": "",
+        "tagline": "",
+    }
+
+
+def test_artgen_param_panel_boolean_flag_pairs_collapse_to_one_control():
+    """landscape.add_args declares --mountains/--no-mountains (and similar
+    pairs) sharing one dest each via argparse's store_true/store_false
+    convention — the panel must build exactly ONE control per dest, not two,
+    and must resolve the correct starting default (mountains defaults to
+    True, clouds/stars/glitch default to False)."""
+    panel = ArtgenParamPanel("landscape")
+    panel.build()
+
+    dests = [c.dest for c in panel._controls]
+    assert dests.count("mountains") == 1
+    assert dests.count("clouds") == 1
+    assert dests.count("stars") == 1
+
+    defaults = panel.collect()
+    assert defaults["mountains"] is True
+    assert defaults["clouds"] is False
+    assert defaults["stars"] is False
+    assert defaults["glitch"] is False
+
+
+def test_artgen_param_panel_collect_before_build_returns_empty_dict():
+    """collect() must never raise, even if called before build()."""
+    panel = ArtgenParamPanel("verse")
+    assert panel.collect() == {}
+
+
+def test_artgen_param_panel_boolean_optional_action_renders_as_bool():
+    """codeart.add_args uses the modern single-action
+    `argparse.BooleanOptionalAction` spelling (`--should-compile`/
+    `--no-should-compile` sharing one action, unlike landscape's classic
+    store_true/store_false PAIR of actions) — this must also render as a
+    switch (default True), not fall through to the str/entry branch."""
+    panel = ArtgenParamPanel("codeart")
+    panel.build()
+
+    controls = {c.dest: c for c in panel._controls}
+    assert controls["should_compile"].kind == "bool"
+    assert panel.collect()["should_compile"] is True
+
+
+def test_artgen_param_panel_unknown_generator_degrades_to_empty_panel():
+    """A generator name that isn't registered (e.g. a stale medium after a
+    plugin was removed) must not crash build()/collect() — it degrades to an
+    empty, honestly-labeled panel."""
+    panel = ArtgenParamPanel("not-a-real-generator")
+    widget = panel.build()
+
+    assert isinstance(widget, Gtk.Widget)
+    assert panel.collect() == {}
 
 
 # ── Guard: generation entry points intact ────────────────────────────────

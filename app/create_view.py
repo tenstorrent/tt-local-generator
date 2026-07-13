@@ -9,10 +9,15 @@ ONE surface where the medium is a *chip*, not a top-level division. This
 module builds the shell — three doors in (idea / model / inspiration), the
 medium-chip row, a per-medium param-panel host, the live-model strip, and the
 Create CTA. Per-type param panels (real image/video/animate/artgen controls)
-arrive in Tasks 4-6; Task 4 ported the IMAGE medium to a real
-`ImageParamPanel`; this task (5) ports VIDEO and ANIMATE to
-`VideoParamPanel`/`AnimateParamPanel` (all in `create_param_panels.py`) — only
-artgen mediums still show the plain stub label, until Task 6.
+arrived across Tasks 4-6; Task 4 ported the IMAGE medium to a real
+`ImageParamPanel`; Task 5 ported VIDEO and ANIMATE to
+`VideoParamPanel`/`AnimateParamPanel`; this task (6) ports every artgen
+generator medium (verse/ansi/landscape/…) to `ArtgenParamPanel` — one class,
+parameterized by generator name, that introspects the generator's own
+`add_args` (all panel classes live in `create_param_panels.py`). Every medium
+the Create surface can offer now has a real panel — the plain Task 3 stub
+label is now dead code kept only as a fallback for a hypothetical future
+medium kind.
 
 **Migration-safe by construction**: this view is built ALONGSIDE the existing
 medium-tab generation UI (main_window.py's ControlPanel + `_gallery_stack`
@@ -54,6 +59,7 @@ import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
 from create_param_panels import (  # noqa: E402
     AnimateParamPanel,
+    ArtgenParamPanel,
     CreateParamPanel,
     ImageParamPanel,
     VideoParamPanel,
@@ -227,6 +233,32 @@ _CSS = b"""
     background-color: #4FD1C5;
     color: #0F2A35;
     border-color: #4FD1C5;
+}
+
+/* -- ArtgenParamPanel (Task 6) -- one class for every artgen generator, so
+   one namespace here covers verse/ansi/landscape/etc uniformly. ---------- */
+.artgen-param-panel {
+    padding: 2px 0;
+}
+.artgen-param-row {
+    padding: 3px 0;
+}
+.artgen-param-label {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.artgen-param-input {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+.artgen-param-input:focus-within {
+    border-color: #4FD1C5;
+}
+.artgen-param-empty-label {
+    color: #607D8B;
+    font-size: 12.5px;
 }
 
 /* -- Live-model strip -------------------------------------------------------- */
@@ -440,10 +472,14 @@ class CreateView(Gtk.Box):
         """Rebuild the param-panel host for the newly-selected medium.
 
         Task 4 ported the native "image" medium to a real `ImageParamPanel`
-        (`create_param_panels.py`); this task (5) ports "video" and "animate"
-        to `VideoParamPanel`/`AnimateParamPanel`. Only artgen mediums still
-        get the Task 3 stub — a plain, honestly-labeled placeholder — until
-        their own task lands (Task 6).
+        (`create_param_panels.py`); Task 5 ported "video" and "animate" to
+        `VideoParamPanel`/`AnimateParamPanel`; this task (6) ports every
+        artgen medium (`medium.source == "artgen"` — verse/ansi/landscape/…)
+        to `ArtgenParamPanel`, constructed with `medium.generator` so it
+        introspects that generator's own argparse args. A medium that is
+        neither a mapped native id nor an artgen medium (only possible for a
+        future medium kind not yet ported) still falls back to the Task 3
+        stub — a plain, honestly-labeled placeholder.
         """
         child = self._panel_host.get_first_child()
         while child is not None:
@@ -453,6 +489,12 @@ class CreateView(Gtk.Box):
 
         if medium.source == "native" and medium.id in _NATIVE_PANEL_CLASSES:
             panel = _NATIVE_PANEL_CLASSES[medium.id]()
+            self._panel_host.append(panel.build())
+            self._active_panel = panel
+            return
+
+        if medium.source == "artgen" and medium.generator:
+            panel = ArtgenParamPanel(medium.generator)
             self._panel_host.append(panel.build())
             self._active_panel = panel
             return
