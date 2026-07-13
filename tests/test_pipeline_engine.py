@@ -1147,3 +1147,50 @@ def test_artgen_generate_dry_run_text_ext_has_text():
         {"plugin": "verse", "ext": ".txt"}, _ctx(dry=True))
     assert out["text"] == "placeholder artifact text"
     assert "png_path" not in out
+
+
+# ── Task 1: TTLGSplitText — lore text -> list of fragments ──────────────────
+
+def test_split_text_handler_registered():
+    assert "TTLGSplitText" in eng.HANDLERS
+
+
+def test_split_text_dry_run_reflects_real_fan_out_width():
+    """Per the brief: split_text is pure/cheap, so even dry-run uses the
+    REAL input text — the whole point is that a dry-run preview shows the
+    true fan-out width, not a fixed fake count."""
+    out = eng.HANDLERS["TTLGSplitText"]("1", {"text": "a\n\nb\n\nc"}, _ctx(dry=True))
+    assert out["fragments"] == ["a", "b", "c"]
+
+
+def test_split_text_engine_dry_run_one_node_spec():
+    """The exact Step-4 scenario from the brief: a 1-node spec run through
+    the full engine (topo_order + resolve_inputs + dispatch) in dry_run."""
+    spec = {"1": {"class_type": "TTLGSplitText", "inputs": {"text": "a\n\nb\n\nc"}}}
+    results = eng.run(spec, dry_run=True, emit=lambda s: None)
+    assert results["1"]["fragments"] == ["a", "b", "c"]
+
+
+def test_split_text_unresolved_wire_falls_back_to_placeholder():
+    """If `text` is still a raw [node_id, key] wire (handler probed before
+    resolve_inputs ran), split_text(<list>) would crash — the handler must
+    guard against that and hand back a believable 2-fragment placeholder."""
+    out = eng.HANDLERS["TTLGSplitText"]("2", {"text": ["1", "text"]}, _ctx(dry=True))
+    assert out["fragments"] == ["fragment 1", "fragment 2"]
+
+
+def test_split_text_emits_log_line_when_truncated():
+    lines = []
+    text = "\n\n".join(str(i) for i in range(20))
+    out = eng.HANDLERS["TTLGSplitText"](
+        "3", {"text": text, "max_items": 8}, _ctx(dry=True, emit=lines.append))
+    assert len(out["fragments"]) == 8
+    assert any(l.startswith("LOG:") for l in lines)
+
+
+def test_split_text_no_log_line_when_not_truncated():
+    lines = []
+    out = eng.HANDLERS["TTLGSplitText"](
+        "4", {"text": "a\n\nb"}, _ctx(dry=True, emit=lines.append))
+    assert out["fragments"] == ["a", "b"]
+    assert not any(l.startswith("LOG:") for l in lines)

@@ -61,7 +61,7 @@ class Intent:
     output_kind: str | None = None
 
 
-# ── The 12 native class_types the pipeline engine supports ───────────────────
+# ── The 13 native class_types the pipeline engine supports ───────────────────
 #
 # One Intent per native class_type from workflow_compat.COMPATIBILITY_MAP
 # (entries where ttlg == class_type, i.e. exact native nodes — not the
@@ -199,6 +199,17 @@ INTENTS: dict[str, Intent] = {
         input_key="prompt",
         input_kind="text",
         output_kind="gif",
+    ),
+    "TTLGSplitText": Intent(
+        class_type="TTLGSplitText",
+        verb="Break",
+        noun="into fragments",
+        icon="📑",
+        outputs=("fragments",),
+        model_label=None,
+        input_key="text",
+        input_kind="text",
+        output_kind="text",
     ),
 }
 

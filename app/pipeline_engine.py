@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Callable
 
 import server_manager as sm
+from split_text import split_text
 from workflow_compat import COMPATIBILITY_MAP
 
 # Repo root: app/ -> repo root (same resolution as server_manager). Used to
@@ -510,6 +511,40 @@ def _h_caption_image(nid, inp, ctx):
         return {"caption": "The 1964 World's Fair Unisphere stands tall against a bright sky."}
     caption = _run_plugin("blip", "caption_image", inp.get("src"), inp.get("prompt", ""))
     return {"caption": caption}
+
+
+@register("TTLGSplitText")
+def _h_split_text(nid, inp, ctx):
+    """Split a text "lore" artifact into fragments (first step of a fan-out
+    lore -> one image per fragment -> montage pipeline).
+
+    Unlike most handlers, this one does NOT special-case ``ctx.dry_run`` with
+    a fixed placeholder: ``split_text`` is pure and cheap, so even a dry run
+    calls it on the REAL input text — that way a dry-run preview shows the
+    true fan-out width (how many downstream nodes would actually be spawned)
+    instead of a fake fixed count. The one exception is an unresolved wire:
+    if ``text`` is still a raw ``[node_id, key]`` pair (this handler probed
+    before the engine's ``resolve_inputs`` step ran, or invoked directly in a
+    test), there is nothing real to split, so fall back to two generic
+    placeholder fragments rather than crashing on ``split_text(<list>)``.
+    """
+    text = inp.get("text", "")
+    if _is_wire(text):
+        return {"fragments": ["fragment 1", "fragment 2"]}
+
+    mode = inp.get("mode", "paragraphs")
+    max_items = int(inp.get("max_items", 8))
+    fragments = split_text(text, mode, max_items)
+
+    # Re-split uncapped just to learn the true (pre-cap) fragment count, so
+    # we can tell the user when their text produced more fragments than the
+    # requested cap allows. Cheap: split_text is pure text processing.
+    raw = split_text(text, mode, max_items=10**9)
+    if len(raw) > max_items:
+        ctx.emit(f"LOG:  split '{mode}' produced {len(raw)} fragments, "
+                  f"capped to {max_items}")
+
+    return {"fragments": fragments}
 
 
 @register("TTLGRemoveBackground")

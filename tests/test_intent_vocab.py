@@ -87,9 +87,12 @@ def test_representative_wiring_metadata():
     i = iv.INTENTS["TTLGAnimateDiff"]
     assert (i.input_key, i.input_kind, i.output_kind) == ("prompt", "text", "gif")
 
+    i = iv.INTENTS["TTLGSplitText"]
+    assert (i.input_key, i.input_kind, i.output_kind) == ("text", "text", "text")
+
 
 def test_every_intent_has_wiring_fields_present():
-    """All three fields must exist on every one of the 12 native Intents
+    """All three fields must exist on every one of the 13 native Intents
     (None is a valid value — e.g. collector/plugin-driven nodes with no
     single upstream artifact input — but the attribute must be present)."""
     for class_type, i in iv.INTENTS.items():
