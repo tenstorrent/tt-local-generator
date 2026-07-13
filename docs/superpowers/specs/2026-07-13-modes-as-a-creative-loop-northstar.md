@@ -15,19 +15,25 @@ practice into four tool-shaped rooms. Cf. `project-creative-solution-positioning
 
 ## The reframe: verbs, as a loop — not tabs
 
-The top level is four **activities**, but they are **stations in a loop**, not walled rooms:
+The top level is three **activities** (Curate merged into Discover — see below), but they are
+**stations in a loop**, not walled rooms:
 
 - **Create** — make something new.
-- **Discover** — browse and get inspired.
-- **Curate** — collect and thread the body of work.
+- **Discover** — browse *and collect*: get inspired, and curate as you go (star, playlist,
+  thread) — across individual artifacts AND whole pipelines/projects/packages.
 - **Remix** — transform what exists.
+
+**Curate folds into Discover** (refined 2026-07-13): browsing and collecting are the same
+act — you make playlists as you find things, star them, thread them together; and you can
+discover at any granularity (a single artifact or a whole package). So there is no separate
+Curate destination; curation is *inline* in Discover.
 
 They flow into each other (the user's own words):
 - *Create* is what you do to have something to *Discover*.
 - *Discover* is what you do when you need inspiration to *Create*.
-- *Curate* you do because the first take isn't always great and **the threads between
-  things reveal themselves later**, not up front.
-- Some acts are **both at once** — a pipeline is Create *and* Curate.
+- Collecting/threading happens *while* discovering, because **the threads between things
+  reveal themselves later**, not up front.
+- Some acts are **both at once** — a pipeline is Create *and* a curated collection.
 
 So the UI must make **moving between verbs natural**, and must not force an act into one box.
 
@@ -53,11 +59,12 @@ So the UI must make **moving between verbs natural**, and must not force an act 
   (verse/ansi/landscape/…). The Generative-Art overload dissolves here: those generators
   become options in Create, not a crammed tab. Prompt tools live here. Three doors
   (intent/model/inspiration). Per-art-type controls on a shared scaffold.
-- **Discover** — the gallery of everything made · Pipeline Studio's Discover (past runs) ·
-  **Watch / TT-TV** (the live stream — passive intake/inspiration) · examples.
-- **Curate** — playlists · star/favorites · showcases · shaping/threading the collection.
-- **Remix** — the Muse · remix-as-pipeline · the composer (a Create+Curate hybrid; pipelines
-  live at this seam).
+- **Discover** (browse + collect) — the gallery of everything made · Pipeline Studio's
+  Discover (past runs/projects) · **Watch / TT-TV** (the live stream) · examples — WITH
+  inline curation: star/favorites, playlists, showcases, threading. Browse at any
+  granularity: a single artifact or a whole package/pipeline.
+- **Remix** — the Muse · remix-as-pipeline · the composer (pipelines live at this seam — a
+  create-and-collect hybrid).
 - **Global chrome** — server/model controls stay ambient, but they are effectively the
   **model door** into Create (start a model → Create adapts to its medium).
 

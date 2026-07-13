@@ -16,9 +16,11 @@ Remix reorganization are later slices (much already exists as the gallery + Pipe
 
 ## Resolutions to the three open questions (from the mockup)
 
-1. **Loop nav = four movements, not tabs.** A top-level nav (Create · Discover · Curate ·
-   Remix) styled as movements, with cross-links ("then → Discover / Curate / Remix" from a
-   finished create) so it reads as a loop, not silos. Create is the default landing.
+1. **Loop nav = three movements, not tabs.** A top-level nav (Create · Discover · Remix)
+   styled as movements, with cross-links so it reads as a loop, not silos. Create is the
+   default landing. **Curate folded into Discover** (refined 2026-07-13): browsing and
+   collecting are one act — you star / playlist / thread as you find things — so Discover is
+   "browse + collect," not a separate destination.
 2. **Doors = a persistent, lightweight row**, with **"Start with an idea" default-active**.
    Entry mode varies per task, so switching doors is always one tap (not a locked first
    choice).

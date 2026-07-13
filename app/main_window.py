@@ -8777,16 +8777,15 @@ class MainWindow(Gtk.ApplicationWindow):
             "Create — start something new: an idea, a model, or an inspiration."
         )
 
-        curate_btn = Gtk.ToggleButton(label="⭐ Curate")
-        curate_btn.add_css_class("loop-nav-btn")
-        curate_btn.add_css_class("loop-nav-btn-mid")
-        curate_btn.set_tooltip_text("Curate — browse and organize what you've made.")
-
+        # Discover absorbs Curate: browsing and collecting are one act — you
+        # star, build playlists, and thread things together AS you find them,
+        # across individual artifacts and whole pipelines/projects.
         discover_btn = Gtk.ToggleButton(label="🔭 Discover")
         discover_btn.add_css_class("loop-nav-btn")
         discover_btn.add_css_class("loop-nav-btn-mid")
         discover_btn.set_tooltip_text(
-            "Discover — Pipeline Studio's Discover page and Watch TT-TV."
+            "Discover — browse and collect what you've made: star it, add it to "
+            "playlists, thread it together (individual artifacts or whole projects)."
         )
 
         remix_btn = Gtk.ToggleButton(label="🔀 Remix")
@@ -8794,24 +8793,20 @@ class MainWindow(Gtk.ApplicationWindow):
         remix_btn.add_css_class("loop-nav-btn-right")
         remix_btn.set_tooltip_text("Remix — the Muse: turn anything into a new pipeline.")
 
-        curate_btn.set_group(create_btn)
         discover_btn.set_group(create_btn)
         remix_btn.set_group(create_btn)
 
         create_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_create())
-        curate_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_curate())
         discover_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_discover())
         remix_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_remix())
 
         row.append(create_btn)
-        row.append(curate_btn)
         row.append(discover_btn)
         row.append(remix_btn)
 
         # Keyed lookup for tests and for __init__'s default-active line.
         self._loop_nav = {
             "create": create_btn,
-            "curate": curate_btn,
             "discover": discover_btn,
             "remix": remix_btn,
         }
@@ -8826,27 +8821,18 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._on_source_change(self._controls.get_model_source())
 
-    def _on_loop_nav_curate(self) -> None:
-        """Curate: the current-source gallery, full-width (placeholder for
-        this task — a later slice adds the starred/playlist filter Curate is
-        named for). Reuses `_on_source_change` for the gallery switch and
-        pipelines-toggle sync, then additionally collapses the generation
-        controls so the gallery gets the width — same cards, star/playlist
-        actions, and detail panel Create already uses.
+    def _on_loop_nav_discover(self) -> None:
+        """Discover (absorbs Curate): browse AND collect what you've made — the
+        gallery, full-width, with the star/playlist/detail actions you use to
+        thread things together as you find them. Reuses `_on_source_change`
+        for the gallery switch + pipelines-toggle sync, then collapses the
+        generation controls so the gallery gets the width. Whole-project /
+        pipeline discovery (Pipeline Studio's Discover) stays reachable via the
+        🧩 Pipelines toggle; a later slice unifies artifact- and project-browse
+        under this one Discover.
         """
         self._on_source_change(self._controls.get_model_source())
         self._ctrl_wrapper.set_visible(False)
-
-    def _on_loop_nav_discover(self) -> None:
-        """Discover: Pipeline Studio's Discover page — reuses the existing
-        "🧩 Pipelines" toggle's activation path (`_show_pipelines`) so Discover
-        and the toolbar toggle can never disagree about what's mounted.
-        """
-        pipelines_btn = getattr(self, "_pipelines_btn", None)
-        if pipelines_btn is not None and not pipelines_btn.get_active():
-            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
-        else:
-            self._show_pipelines()
 
     def _on_loop_nav_remix(self) -> None:
         """Remix: Pipeline Studio's Muse, unseeded — reuses the exact

@@ -1,3 +1,12 @@
+tt-local-generator (0.26.1) noble; urgency=medium
+
+  * Loop nav simplified to three movements: Create - Discover - Remix. Curate
+    folds into Discover -- browsing and collecting are one act (you star, build
+    playlists, and thread things together as you find them, across individual
+    artifacts and whole projects), so there's no separate Curate destination.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 11:45:00 -0700
+
 tt-local-generator (0.27.0) noble; urgency=medium
 
   * Medium-chip discovery (`app/create_mediums.py`, pure, no GTK): the core

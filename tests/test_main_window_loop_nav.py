@@ -75,7 +75,6 @@ def _make_mw(tmp_path, monkeypatch):
         "_on_source_change",
         "_build_loop_nav",
         "_on_loop_nav_create",
-        "_on_loop_nav_curate",
         "_on_loop_nav_discover",
         "_on_loop_nav_remix",
     ):
@@ -95,7 +94,7 @@ def test_build_loop_nav_exposes_keyed_buttons(tmp_path, monkeypatch):
     row = obj._build_loop_nav()
 
     assert isinstance(row, Gtk.Widget)
-    assert set(obj._loop_nav.keys()) == {"create", "curate", "discover", "remix"}
+    assert set(obj._loop_nav.keys()) == {"create", "discover", "remix"}
     for btn in obj._loop_nav.values():
         assert isinstance(btn, Gtk.ToggleButton)
 
@@ -108,7 +107,6 @@ def test_create_is_default_active(tmp_path, monkeypatch):
     obj._loop_nav["create"].set_active(True)
 
     assert obj._loop_nav["create"].get_active() is True
-    assert obj._loop_nav["curate"].get_active() is False
     assert obj._loop_nav["discover"].get_active() is False
     assert obj._loop_nav["remix"].get_active() is False
 
@@ -143,45 +141,18 @@ def test_loop_nav_create_reaches_existing_gallery_and_controls(tmp_path, monkeyp
     assert obj._pipelines_btn.get_active() is False
 
 
-def test_loop_nav_curate_routes_to_gallery_full_width(tmp_path, monkeypatch):
-    """Curate is a placeholder this task: it shows the current gallery,
-    collapsing the generation controls for a browse-only view."""
+def test_loop_nav_discover_routes_to_gallery_full_width(tmp_path, monkeypatch):
+    """Discover (absorbs Curate): browse+collect the gallery, generation
+    controls collapsed, with the star/playlist/detail actions intact — this is
+    where you curate as you find things."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    obj._loop_nav["curate"].set_active(True)
+    obj._loop_nav["discover"].set_active(True)
 
     assert obj._gallery_stack.get_visible_child_name() == "video"
     assert obj._ctrl_wrapper.get_visible() is False
     assert obj._detail_wrap.get_visible() is True
-
-
-def test_loop_nav_discover_calls_show_pipelines(tmp_path, monkeypatch):
-    """Discover routes to Pipeline Studio's Discover page via _show_pipelines."""
-    obj = _make_mw(tmp_path, monkeypatch)
-    obj._build_loop_nav()
-    obj._show_pipelines = MagicMock()
-
-    obj._loop_nav["discover"].set_active(True)
-
-    assert obj._show_pipelines.called
-
-
-def test_loop_nav_discover_lands_pipeline_studio_on_discover_page(tmp_path, monkeypatch):
-    """End-to-end (no mocking): Discover really lands Pipeline Studio's inner
-    stack on "discover" and mounts it full-width, same as the existing
-    "🧩 Pipelines" toolbar toggle."""
-    obj = _make_mw(tmp_path, monkeypatch)
-    obj._build_loop_nav()
-
-    obj._loop_nav["discover"].set_active(True)
-
-    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
-    assert obj._pipeline_studio.stack.get_visible_child_name() == "discover"
-    assert obj._ctrl_wrapper.get_visible() is False
-    assert obj._detail_wrap.get_visible() is False
-    # Stays in sync with the existing "🧩 Pipelines" toggle.
-    assert obj._pipelines_btn.get_active() is True
 
 
 def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
@@ -197,13 +168,14 @@ def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
 
 
 def test_loop_nav_remix_reuses_pipeline_studio_instance(tmp_path, monkeypatch):
-    """Remix doesn't force a second PipelineStudio construction if Discover
-    already built one (avoids re-scanning run history)."""
+    """Remix doesn't force a second PipelineStudio construction once one was
+    built (avoids re-scanning run history)."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    obj._loop_nav["discover"].set_active(True)
+    obj._loop_nav["remix"].set_active(True)
     first = obj._pipeline_studio
+    obj._loop_nav["create"].set_active(True)
     obj._loop_nav["remix"].set_active(True)
 
     assert obj._pipeline_studio is first

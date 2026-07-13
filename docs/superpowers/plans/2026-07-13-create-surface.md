@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use `- [ ]`.
 
-**Goal:** Introduce the Create·Curate·Discover·Remix **loop nav** and a unified **CreateView** where the medium is a chip (not a tab), with three doors (idea/model/inspiration) and per-art-type params — reorganizing the main app per `docs/superpowers/specs/2026-07-13-create-surface-design.md` and the north-star.
+**Goal:** Introduce the Create·Discover·Remix **loop nav** and a unified **CreateView** where the medium is a chip (not a tab), with three doors (idea/model/inspiration) and per-art-type params — reorganizing the main app per `docs/superpowers/specs/2026-07-13-create-surface-design.md` and the north-star.
 
-**Architecture:** Build CreateView **alongside** the existing UI and migrate incrementally — the app is never broken mid-flight. The loop nav replaces the toolbar's medium tabs; "Create" hosts the new surface, the other three verbs route to today's galleries / Pipeline Studio as-is for now. Generation backends (`GenerationWorker` family, `api_client`, `server_manager`) are untouched — CreateView is a new *surface* over existing machinery.
+**Architecture:** Build CreateView **alongside** the existing UI and migrate incrementally — the app is never broken mid-flight. The loop nav replaces the toolbar's medium tabs; "Create" hosts the new surface, the other two verbs route to today's galleries / Pipeline Studio as-is for now. Generation backends (`GenerationWorker` family, `api_client`, `server_manager`) are untouched — CreateView is a new *surface* over existing machinery.
 
 **Tech Stack:** Python 3.12 / GTK4 (PyGObject), pytest (+`xvfb-run`). Reuses `app/main_window.py` (`ControlPanel`, `_on_generate`, the `source-btn` toggle, `_gallery_stack`, the toolbar, `ArtgenPanel`), `app/worker.py` (worker family), `app/capability_discovery.py`, `app/server_manager.py`, `app/intent_vocab.py`.
 
@@ -23,18 +23,17 @@
 
 ---
 
-### Task 1: Loop nav chrome (Create · Curate · Discover · Remix)
+### Task 1: Loop nav chrome (Create · Discover · Remix)  [DONE — revised to 3 verbs; Curate folded into Discover]
 
 **Files:** Modify `app/main_window.py` (toolbar). Test: `tests/test_main_window*.py` (xvfb).
 
-Replace the medium-tab toolbar row with a **loop nav** of four movements. For THIS task the verbs route to *existing* surfaces so nothing breaks:
+Replace the medium-tab toolbar row with a **loop nav** of three movements (Curate folded into Discover). For THIS task the verbs route to *existing* surfaces so nothing breaks:
 - **Create** → the current generation UI (the existing source toggle + ControlPanel + galleries), unchanged, just now reached via the Create verb.
-- **Discover** → the galleries (+ a link into Pipeline Studio's Discover) — reuse `_gallery_stack` / the existing Pipelines mount.
-- **Curate** → the gallery filtered to starred/playlists (reuse existing star/playlist surfaces) — for now, route to the gallery (a later slice refines).
+- **Discover** (absorbs Curate) → the galleries with inline star/playlist/detail (browse + collect); whole-project/pipeline discovery (Pipeline Studio) stays reachable via 🧩 Pipelines, unified under Discover in a later slice.
 - **Remix** → the Pipeline Studio Muse (`show_muse()`), reusing the existing mount.
 - Keep 🧩 Pipelines reachable (Discover/Remix cover it); Watch/TT-TV lives under Discover.
 
-- [ ] **Step 1: xvfb test** — assert the toolbar exposes a nav with the four verbs (a `_loop_nav` with buttons keyed create/discover/curate/remix), Create default-active, and activating each routes to the expected surface (mock the surface-switch calls). Old generation still reachable via Create. → fail.
+- [ ] **Step 1: xvfb test** — assert the toolbar exposes a nav with the three verbs (a `_loop_nav` with buttons keyed create/discover/remix), Create default-active, and activating each routes to the expected surface (mock the surface-switch calls). Old generation still reachable via Create. → fail.
 - [ ] **Step 2: run → fail.**
 - [ ] **Step 3: implement** the loop nav (reuse the `.source-btn`/attractor button styling → brand). Route handlers call existing show/switch methods. Do NOT yet change ControlPanel internals.
 - [ ] **Step 4: run → pass; full suite (xvfb) no NEW failures — generation path untouched.**
