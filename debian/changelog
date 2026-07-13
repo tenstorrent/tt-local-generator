@@ -1,3 +1,15 @@
+tt-local-generator (0.26.3) noble; urgency=medium
+
+  * Fan-out pipelines now give each image its OWN caption/metadata. Previously
+    every image in a lore->series shared one caption. TTLGTextToImage now
+    returns the per-image `prompts` alongside `image_path` (index-aligned,
+    skipping the same failed frames), and TTLGAddToPlaylist records each image
+    with its own prompt as caption. The illustrated-series recipe wires the
+    montage captions and the playlist captions to these per-image prompts --
+    which also fixes montage caption/image misalignment on a partial failure.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 13:00:00 -0700
+
 tt-local-generator (0.26.2) noble; urgency=medium
 
   * Revert the main-app palette to the original tt-vscode-toolkit variant

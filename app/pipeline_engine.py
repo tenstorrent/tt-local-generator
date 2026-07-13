@@ -466,7 +466,7 @@ def _flatten_artifacts(artifacts):
     return flat
 
 
-def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
+def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit, captions=None) -> str:
     """Create/reuse a playlist and add the resolved artifacts. Returns playlist id.
 
     Ports the node-9 block (run_workflow.sh:534-642). *artifacts* accepts, as of
@@ -480,11 +480,16 @@ def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
     from playlist_store import PlaylistStore
 
     caption = str(metadata.get("caption", "")) if metadata else ""
+    # Per-artifact captions (fan-out): a list aligned with the flattened
+    # artifacts, so each image keeps its OWN prompt/caption as record metadata
+    # instead of one shared caption for the whole batch. Falls back to the
+    # dict's own label / the shared caption / the playlist name when absent.
+    cap_list = captions if isinstance(captions, list) else None
     ps = PlaylistStore()
     pl = ps.get_or_create(playlist_name)
 
     record_ids = []
-    for art in _flatten_artifacts(artifacts):
+    for i, art in enumerate(_flatten_artifacts(artifacts)):
         if isinstance(art, str):
             path, mtype, label = art, "image", None
         elif isinstance(art, dict):
@@ -497,8 +502,11 @@ def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
         # ['node','key'] wire the engine did not flatten — see report concern).
         if not isinstance(path, str) or not path:
             continue
-        label = label or (f"{playlist_name}: {caption[:80]}" if caption else playlist_name)
-        rid = _import_artifact(path, mtype, label)
+        per = None
+        if cap_list is not None and i < len(cap_list) and isinstance(cap_list[i], str) and cap_list[i].strip():
+            per = cap_list[i]
+        prompt_text = per or label or (f"{playlist_name}: {caption[:80]}" if caption else playlist_name)
+        rid = _import_artifact(path, mtype, prompt_text)
         if rid:
             record_ids.append(rid)
 
@@ -528,21 +536,28 @@ def _h_text_to_image(nid, inp, ctx):
     prompt = inp.get("prompt", "")
     suffix = inp.get("style_suffix", "") or ""
     if isinstance(prompt, list):
-        paths = []
+        # Return `image_path` AND `prompts` as PARALLEL lists so each fan-out
+        # still keeps its OWN full prompt (fragment + style) — downstream nodes
+        # (playlist records, montage captions) pair image i with prompts[i] for
+        # per-image metadata, instead of one shared caption. A skipped/failed
+        # frame appends to NEITHER list, so the two stay index-aligned (this is
+        # also what fixes montage caption/image misalignment on partial failure).
+        paths, prompts = [], []
         for i, frag in enumerate(prompt):
             out = str(ctx.output_dir / f"node{nid}_image_{i}.png")
             full = f"{frag}{suffix}"
             if ctx.dry_run:
-                paths.append(out); continue
+                paths.append(out); prompts.append(full); continue
             try:
-                paths.append(_media_image_request(
+                p = _media_image_request(
                     server=inp.get("server", "http://localhost:8000"), prompt=full,
                     width=inp.get("width", 1024), height=inp.get("height", 1024),
                     steps=inp.get("steps", 4), seed=inp.get("seed", 0),
-                    negative_prompt=inp.get("negative_prompt"), out_path=out))
+                    negative_prompt=inp.get("negative_prompt"), out_path=out)
+                paths.append(p); prompts.append(full)
             except Exception as e:  # noqa: BLE001 — skip a bad frame, keep the batch
                 ctx.emit(f"LOG:  image {i} failed: {e}")
-        return {"image_path": paths}
+        return {"image_path": paths, "prompts": prompts}
     # scalar (unchanged)
     out = str(ctx.output_dir / f"node{nid}_image.png")
     if ctx.dry_run:
@@ -684,7 +699,8 @@ def _h_add_to_playlist(nid, inp, ctx):
     if ctx.dry_run:
         return {"playlist_id": f"dryrun-{nid}"}
     pid = _add_artifacts_to_playlist(
-        name, inp.get("artifacts", []), inp.get("metadata", {}) or {}, ctx.emit)
+        name, inp.get("artifacts", []), inp.get("metadata", {}) or {}, ctx.emit,
+        captions=inp.get("captions"))
     return {"playlist_id": pid}
 
 

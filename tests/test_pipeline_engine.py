@@ -513,8 +513,9 @@ def test_add_to_playlist_dry_run_key():
 
 def test_add_to_playlist_calls_helper(monkeypatch):
     calls = {}
-    def fake(name, artifacts, metadata, emit):
+    def fake(name, artifacts, metadata, emit, captions=None):
         calls["args"] = (name, artifacts, metadata)
+        calls["captions"] = captions
         return "pl-123"
     monkeypatch.setattr(eng, "_add_artifacts_to_playlist", fake)
     arts = [{"path": "/tmp/a.png", "type": "image"}]
@@ -966,7 +967,7 @@ def _stub_handler_helpers(monkeypatch):
     monkeypatch.setattr(eng, "_call_llm", lambda **k: "a poem")
     monkeypatch.setattr(eng, "_run_plugin", lambda *a: "a caption")
     monkeypatch.setattr(eng, "_add_artifacts_to_playlist",
-                        lambda name, arts, meta, emit: "pl-1")
+                        lambda name, arts, meta, emit, captions=None: "pl-1")
     monkeypatch.setattr(eng.time, "sleep", lambda s: None)
 
 
@@ -1531,3 +1532,46 @@ def test_caption_chain_has_no_raw_newline_and_uses_label(tmp_path):
     assert "\n" not in chain                 # no raw newline leaks into the filtergraph
     assert "Forest Tetris" in chain          # the short label is what's drawn
     assert "villagers built" not in chain    # the long body is NOT drawn
+
+
+# ── Fan-out per-image prompts/captions (each image keeps its own metadata) ────
+
+def test_text_to_image_list_returns_aligned_prompts():
+    spec = {"1": {"class_type": "TTLGSplitText", "inputs": {"text": "a\n\nb\n\nc"}},
+            "2": {"class_type": "TTLGTextToImage",
+                  "inputs": {"prompt": ["1", "fragments"], "style_suffix": " :: art"}}}
+    results = eng.run(spec, dry_run=True, emit=lambda s: None)
+    node2 = results["2"]
+    assert len(node2["image_path"]) == len(node2["prompts"]) == 3
+    # each prompt is its OWN fragment + the shared suffix (distinct, not shared)
+    assert node2["prompts"] == ["a :: art", "b :: art", "c :: art"]
+
+
+def test_add_artifacts_to_playlist_uses_per_image_captions(monkeypatch):
+    imported = []
+    monkeypatch.setattr(eng, "_import_artifact",
+                        lambda path, mtype, prompt_text, model="workflow": (imported.append((path, prompt_text)) or f"rid-{len(imported)}"))
+    class _PL:
+        id = "pl1"
+    monkeypatch.setattr(eng, "PlaylistStore", None, raising=False)
+    import playlist_store
+    monkeypatch.setattr(playlist_store.PlaylistStore, "get_or_create", lambda self, n: _PL())
+    monkeypatch.setattr(playlist_store.PlaylistStore, "add_records", lambda self, pid, rids: None)
+
+    eng._add_artifacts_to_playlist(
+        "series", ["/a.png", "/b.png", "/c.png"], {"caption": "SHARED"},
+        lambda s: None, captions=["prompt A", "prompt B", "prompt C"])
+    # each image recorded with its OWN caption, not the shared one
+    assert [p for _, p in imported] == ["prompt A", "prompt B", "prompt C"]
+
+
+def test_add_artifacts_to_playlist_falls_back_to_shared_when_no_captions(monkeypatch):
+    imported = []
+    monkeypatch.setattr(eng, "_import_artifact",
+                        lambda path, mtype, prompt_text, model="workflow": (imported.append(prompt_text) or "rid"))
+    import playlist_store
+    class _PL: id = "pl1"
+    monkeypatch.setattr(playlist_store.PlaylistStore, "get_or_create", lambda self, n: _PL())
+    monkeypatch.setattr(playlist_store.PlaylistStore, "add_records", lambda self, pid, rids: None)
+    eng._add_artifacts_to_playlist("series", ["/a.png"], {"caption": "shared cap"}, lambda s: None)
+    assert imported and "shared cap" in imported[0]

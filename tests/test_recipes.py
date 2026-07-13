@@ -122,3 +122,13 @@ def test_every_blank_goal_first_step_seeds_an_editable_prompt():
                 f"{first_params!r}) — that key is filled by the seed "
                 "artifact, not a hardcoded default"
             )
+
+
+def test_illustrated_series_wires_per_image_prompts_as_captions():
+    import recipes
+    g = next(x for x in recipes.curated_goals() if x.id == "illustrated-series")
+    spec = recipes.build_seed_spec(g, seed_artifact=("frag one\n\nfrag two", "text"))
+    # montage + playlist both caption from node 2's per-image `prompts` (aligned),
+    # so each still keeps its OWN vibrant caption (not one shared one)
+    assert spec["3"]["inputs"]["captions"] == ["2", "prompts"]
+    assert spec["4"]["inputs"]["captions"] == ["2", "prompts"]
