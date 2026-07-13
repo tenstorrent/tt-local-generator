@@ -510,6 +510,151 @@ def test_model_strip_reflects_running_vs_not(monkeypatch):
     assert view._model_health == {"wan2.2": True, "flux": False}
 
 
+# ── Model door: selectable model cards (Task 7) ──────────────────────────
+#
+# The Task 3 model strip (a passive health readout) becomes the model door's
+# selectable entries this task: real server_manager keys from _fake_health()
+# ("wan2.2"/capabilities=("video",), "flux"/capabilities=("image",)) — no
+# monkeypatching of server_manager.SERVERS is needed since the real registry
+# already declares sensible capabilities for these two services.
+
+def test_model_strip_cards_are_clickable_buttons(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert set(view._model_cards.keys()) == {"wan2.2", "flux"}
+    for card in view._model_cards.values():
+        assert isinstance(card, Gtk.Button)
+
+
+def test_selecting_a_running_model_card_sets_medium_from_its_capability(monkeypatch):
+    """"wan2.2" is running in _fake_health() and server_manager.SERVERS["wan2.2"]
+    declares capabilities=("video",) -> selecting its card must activate the
+    "video" medium and mount VideoParamPanel, one tap."""
+    view = _make_view(monkeypatch)
+
+    view._model_cards["wan2.2"].emit("clicked")
+
+    assert view._active_medium is not None
+    assert view._active_medium.id == "video"
+    assert isinstance(view._active_panel, VideoParamPanel)
+    assert view._chip_buttons["video"].get_active() is True
+
+
+def test_selecting_a_not_running_model_card_still_sets_medium(monkeypatch):
+    """"flux" is NOT running in _fake_health() — honest per the task brief
+    ("not-running show they'd need starting"), but still one-tap selectable;
+    actually starting the server is deferred to a later task."""
+    view = _make_view(monkeypatch)
+
+    view._model_cards["flux"].emit("clicked")
+
+    assert view._active_medium is not None
+    assert view._active_medium.id == "image"
+    assert isinstance(view._active_panel, ImageParamPanel)
+
+
+def test_not_running_model_card_is_labeled_honestly(monkeypatch):
+    view = _make_view(monkeypatch)
+    card = view._model_cards["flux"]
+    tooltip = (card.get_tooltip_text() or "").lower()
+    assert "start" in tooltip
+
+
+def test_running_model_card_has_no_needs_starting_tooltip(monkeypatch):
+    view = _make_view(monkeypatch)
+    card = view._model_cards["wan2.2"]
+    tooltip = card.get_tooltip_text()
+    assert not tooltip or "start" not in tooltip.lower()
+
+
+# ── _server_key_to_medium_id (Task 7) ────────────────────────────────────
+#
+# Pure capability -> medium-id mapping, exercised against REAL
+# server_manager.SERVERS entries (their `capabilities` tuples are already
+# sensible for this) combined with the fake `_fake_mediums()` list.
+
+def test_server_key_to_medium_id_maps_native_capabilities(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert view._server_key_to_medium_id("wan2.2") == "video"    # capabilities=("video",)
+    assert view._server_key_to_medium_id("flux") == "image"      # capabilities=("image",)
+    assert view._server_key_to_medium_id("animate") == "animate"  # capabilities=("animate",)
+
+
+def test_server_key_to_medium_id_maps_artgen_capability_to_first_artgen_medium(monkeypatch):
+    """server_manager.SERVERS["artgen-qwen3-8b"] declares capabilities=("artgen",)
+    -> since there is no single "artgen" medium id (each generator is its own
+    medium), this maps to the first artgen-sourced medium in the current
+    medium list — "verse" in _fake_mediums()."""
+    view = _make_view(monkeypatch)
+    assert view._server_key_to_medium_id("artgen-qwen3-8b") == "verse"
+
+
+def test_server_key_to_medium_id_returns_none_for_capability_with_no_medium(monkeypatch):
+    """server_manager.SERVERS["prompt-server"] declares capabilities=("prompt",)
+    -> no medium maps to "prompt" -> None, not a crash or a wrong guess."""
+    view = _make_view(monkeypatch)
+    assert view._server_key_to_medium_id("prompt-server") is None
+
+
+def test_server_key_to_medium_id_returns_none_for_unknown_key(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert view._server_key_to_medium_id("not-a-real-server-key") is None
+
+
+# ── Idea door: prompt entry (Task 7) ─────────────────────────────────────
+
+def test_idea_door_shows_a_prompt_entry_by_default(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert isinstance(view._prompt_entry, Gtk.Entry)
+    assert view._prompt_entry.get_visible() is True
+
+
+def test_prompt_entry_hidden_outside_idea_door(monkeypatch):
+    view = _make_view(monkeypatch)
+
+    view._doors["model"].set_active(True)
+    assert view._prompt_entry.get_visible() is False
+
+    view._doors["idea"].set_active(True)
+    assert view._prompt_entry.get_visible() is True
+
+
+def test_cta_payload_includes_typed_prompt(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._prompt_entry.set_text("a lighthouse in a storm")
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1]["prompt"] == "a lighthouse in a storm"
+    # The active panel's own params are still present alongside the prompt.
+    for key, value in _IMAGE_DEFAULTS.items():
+        assert calls[0][1][key] == value
+
+
+def test_cta_payload_omits_prompt_key_when_entry_is_empty(monkeypatch):
+    """Backward-compat guard: every Tasks 3-6 CTA test asserts an exact params
+    dict with no "prompt" key (the prompt entry is untouched/empty in those
+    tests) — an empty entry must not silently inject a "prompt": "" key and
+    break them."""
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._cta_btn.emit("clicked")
+
+    assert "prompt" not in calls[0][1]
+    assert calls[0][1] == _IMAGE_DEFAULTS
+
+
+def test_cta_payload_strips_whitespace_only_prompt(monkeypatch):
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+
+    view._prompt_entry.set_text("   ")
+    view._cta_btn.emit("clicked")
+
+    assert "prompt" not in calls[0][1]
+
+
 # ── CTA ───────────────────────────────────────────────────────────────────
 
 def test_cta_calls_on_create_with_active_medium_and_params(monkeypatch):

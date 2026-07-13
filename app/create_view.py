@@ -36,6 +36,29 @@ generation, network, or board access happens merely by constructing it:
     on_create(medium, params: dict)                  (CTA click)
     on_inspiration()                                 (entering the inspiration door)
 
+**Task 7 — the three doors wired.** Idea/model/inspiration go from three inert
+toggles to real entry points:
+
+  - **Idea** (default): a prompt entry ("What do you want to make?") sits
+    above the medium chips, visible only while `_entry_mode == "idea"`. Its
+    text is merged into the CTA payload as `params["prompt"]` — but only when
+    non-empty, so every Tasks 3-6 CTA test (which never touches the entry)
+    still gets back its exact pre-Task-7 params dict.
+  - **Model**: the live-model strip (`_apply_model_strip`) stops being a
+    passive readout — every entry is now a clickable `Gtk.Button` card.
+    Clicking one (running or not — see `_on_model_card_clicked`) resolves the
+    server's medium via `_server_key_to_medium_id` (its
+    `server_manager.SERVERS[key].capabilities` matched against the current
+    medium list) and activates that medium's chip, mounting its panel — "it's
+    a video model -> you're making video." A not-yet-running model is still
+    one tap (starting it for real is out of scope this task, see
+    task-7-brief.md); its card is honestly labeled/tooltipped so nothing lies
+    about whether hardware is actually up.
+  - **Inspiration**: unchanged from Task 3 — still just calls the injected
+    `on_inspiration()` seam. `main_window.py` wires this to
+    `self._on_loop_nav_remix` (the existing unseeded `show_muse()` bridge) —
+    Create does not reimplement the Muse hand-off.
+
 GTK threading rule: `health_fn` may do real network I/O (server_manager hits
 each service's health URL with a 2s timeout, sequentially, for every known
 server — worst case several seconds). It is therefore ALWAYS run off the GTK
@@ -279,6 +302,27 @@ _CSS = b"""
 .create-model-dot-on  { color: #27AE60; font-size: 9px; }
 .create-model-dot-off { color: #607D8B; font-size: 9px; }
 .create-model-label   { color: #E8F0F2; font-size: 11px; }
+/* Task 7: the strip's chips are now clickable model-door cards (Gtk.Button),
+   not a passive Gtk.Box readout -- a visible hover affordance says "tap me". */
+.create-model-chip:hover {
+    border-color: #4FD1C5;
+}
+
+/* -- Idea door's prompt entry (Task 7) ---------------------------------------- */
+.create-idea-row {
+    padding: 0 0 6px 0;
+}
+.create-idea-entry {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+.create-idea-entry:focus-within {
+    border-color: #4FD1C5;
+}
 
 /* -- Create CTA --------------------------------------------------------------- */
 .create-cta-row {
@@ -350,6 +394,13 @@ class CreateView(Gtk.Box):
         self._active_medium: Optional[Medium] = None
         self._chip_buttons: dict = {}
         self._model_health: dict = {}
+        # Model door (Task 7): server_manager key -> the clickable Gtk.Button
+        # card built for it in `_apply_model_strip`. Populated fresh on every
+        # health refresh; `_on_model_card_clicked` doesn't need this map
+        # directly (it re-derives the medium from `_server_key_to_medium_id`),
+        # but tests address cards by key, and a future "highlight the model
+        # behind the active medium" feature would read it too.
+        self._model_cards: dict = {}
         # The currently-mounted real param panel (Task 4+), or None while the
         # active medium still shows the Task 3 stub. `_collect_params` reads
         # this to decide between a real `panel.collect()` and `{}`.
@@ -370,6 +421,7 @@ class CreateView(Gtk.Box):
         self._panel_host.add_css_class("create-panel-host")
 
         self.append(self._build_doors_row())
+        self.append(self._build_idea_row())
         self.append(self._build_chip_row())
         self.append(self._panel_host)
 
@@ -428,8 +480,44 @@ class CreateView(Gtk.Box):
 
     def _set_entry_mode(self, mode: str) -> None:
         self._entry_mode = mode
+        # `_idea_row` may not exist yet the very first time this fires: the
+        # idea toggle's `set_active(True)` inside `_build_doors_row` runs
+        # synchronously, BEFORE `_build_idea_row` has been called in __init__
+        # (doors row is built first). The default visible state of a freshly
+        # constructed Gtk.Entry is already True, so skipping the explicit set
+        # on that first call is harmless — it only matters for later door
+        # switches, by which point `_idea_row` always exists.
+        idea_row = getattr(self, "_idea_row", None)
+        if idea_row is not None:
+            idea_row.set_visible(mode == "idea")
+        prompt_entry = getattr(self, "_prompt_entry", None)
+        if prompt_entry is not None:
+            prompt_entry.set_visible(mode == "idea")
         if mode == "inspiration" and self._on_inspiration is not None:
             self._on_inspiration()
+
+    # ── Idea door: prompt entry ──────────────────────────────────────────────
+
+    def _build_idea_row(self) -> Gtk.Box:
+        """The idea door's prompt entry: "What do you want to make?".
+
+        Visible only while `_entry_mode == "idea"` (see `_set_entry_mode`) —
+        the model door has its own way in (a model card) and the inspiration
+        door hands off entirely to the Muse, so neither needs a competing
+        prompt field on screen.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row.add_css_class("create-idea-row")
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("What do you want to make?")
+        entry.set_hexpand(True)
+        entry.add_css_class("create-idea-entry")
+        self._prompt_entry = entry
+
+        row.append(entry)
+        self._idea_row = row
+        return row
 
     # ── Medium chip row ──────────────────────────────────────────────────────
 
@@ -528,7 +616,17 @@ class CreateView(Gtk.Box):
         threading.Thread(target=_bg, daemon=True).start()
 
     def _apply_model_strip(self, statuses: dict) -> bool:
+        """Rebuild the model strip as clickable model-door cards (Task 7).
+
+        Each entry is now a `Gtk.Button` — clicking it is the model door's
+        "choose a model" gesture (`_on_model_card_clicked`), one tap whether
+        the model is running or not. A not-running card is honestly
+        relabeled/tooltipped ("needs starting") rather than pretending
+        selecting it starts anything for real — that wiring is deferred (see
+        task-7-brief.md).
+        """
         self._model_health = statuses
+        self._model_cards = {}
 
         child = self._model_strip.get_first_child()
         while child is not None:
@@ -540,21 +638,91 @@ class CreateView(Gtk.Box):
             sdef = server_manager.SERVERS.get(key)
             label_text = sdef.label if sdef is not None else str(key)
 
-            chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            chip.add_css_class("create-model-chip")
-            chip.add_css_class("create-model-chip-on" if running else "create-model-chip-off")
+            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
             dot = Gtk.Label(label="●" if running else "○")
             dot.add_css_class("create-model-dot-on" if running else "create-model-dot-off")
-            chip.append(dot)
+            inner.append(dot)
 
-            lbl = Gtk.Label(label=label_text)
+            lbl = Gtk.Label(label=label_text if running else f"{label_text} (needs starting)")
             lbl.add_css_class("create-model-label")
-            chip.append(lbl)
+            inner.append(lbl)
 
-            self._model_strip.append(chip)
+            card = Gtk.Button()
+            card.set_has_frame(False)
+            card.set_child(inner)
+            card.add_css_class("create-model-chip")
+            card.add_css_class("create-model-chip-on" if running else "create-model-chip-off")
+            if not running:
+                card.set_tooltip_text(
+                    "Not running — starting it costs time and may reset the board."
+                )
+            card.connect("clicked", lambda _b, k=key: self._on_model_card_clicked(k))
+
+            self._model_strip.append(card)
+            self._model_cards[key] = card
 
         return GLib.SOURCE_REMOVE
+
+    def _server_key_to_medium_id(self, key: str) -> Optional[str]:
+        """Model door: map a `server_manager` key to the Medium id it implies.
+
+        Reads `server_manager.SERVERS[key].capabilities` (e.g. `("video",)`,
+        `("artgen",)`) against the CURRENT medium list from `mediums_fn()`
+        (not a stale cache — a plugin could appear/disappear between calls).
+
+        - A native capability ("video"/"image"/"animate") maps 1:1 to the
+          identically-named native medium id.
+        - "artgen" has no single matching medium id (each artgen generator is
+          its own medium) — it maps to the FIRST artgen-sourced medium in the
+          list, a deliberate "pick a generative default", not a precise
+          per-model mapping.
+        - Anything else (unknown key, or a capability with no medium at all —
+          e.g. "prompt" for prompt-server) returns None. Callers must treat
+          None as "this model doesn't map to a medium" and no-op, never guess.
+        """
+        sdef = server_manager.SERVERS.get(key)
+        if sdef is None:
+            return None
+
+        try:
+            mediums = list(self._mediums_fn() or [])
+        except Exception:
+            mediums = []
+
+        native_ids = {m.id for m in mediums if m.source == "native"}
+        first_artgen_id = next((m.id for m in mediums if m.source == "artgen"), None)
+
+        for cap in sdef.capabilities:
+            if cap in native_ids:
+                return cap
+            if cap == "artgen" and first_artgen_id is not None:
+                return first_artgen_id
+        return None
+
+    def _on_model_card_clicked(self, key: str) -> None:
+        """Model door: selecting a card sets the medium from its capability
+        and mounts that medium's panel — "it's a video model -> you're
+        making video." Works the same whether the model is running or not
+        (see `_apply_model_strip`'s docstring for why that's honest, not
+        misleading)."""
+        medium_id = self._server_key_to_medium_id(key)
+        if medium_id is None:
+            return  # unmapped capability (e.g. prompt-server) or unknown key
+
+        try:
+            mediums = list(self._mediums_fn() or [])
+        except Exception:
+            mediums = []
+        medium = next((m for m in mediums if m.id == medium_id), None)
+        if medium is None:
+            return
+
+        btn = self._chip_buttons.get(medium_id)
+        if btn is not None:
+            btn.set_active(True)  # fires _select_medium via the chip's "toggled"
+        else:
+            self._select_medium(medium)
 
     # ── Create CTA ───────────────────────────────────────────────────────────
 
@@ -576,16 +744,33 @@ class CreateView(Gtk.Box):
         self._on_create(self._active_medium, self._collect_params())
 
     def _collect_params(self) -> dict:
-        """Delegate to the active medium's real panel, if one is mounted.
+        """Delegate to the active medium's real panel, if one is mounted,
+        then merge in the idea door's typed prompt (Task 7).
 
         Mediums without a ported panel yet (still showing the Task 3 stub)
         fall back to `{}`, matching Task 3's behavior exactly. A panel whose
         `collect()` raises degrades to `{}` too, rather than crashing the CTA
         click — `on_create` is never worth losing over a bad widget read.
+
+        `params["prompt"]` is added ONLY when the prompt entry holds
+        non-whitespace text. This is deliberate, not an oversight: every
+        Tasks 3-6 CTA test asserts an exact params dict with no "prompt" key
+        (they never touch the entry, so it's empty) — always injecting
+        `"prompt": ""` would silently break every one of them. A typed
+        prompt is real signal; an empty box is not.
         """
         if self._active_panel is None:
-            return {}
-        try:
-            return self._active_panel.collect()
-        except Exception:
-            return {}
+            params = {}
+        else:
+            try:
+                params = self._active_panel.collect()
+            except Exception:
+                params = {}
+
+        prompt_entry = getattr(self, "_prompt_entry", None)
+        if prompt_entry is not None:
+            prompt_text = prompt_entry.get_text().strip()
+            if prompt_text:
+                params = {**params, "prompt": prompt_text}
+
+        return params

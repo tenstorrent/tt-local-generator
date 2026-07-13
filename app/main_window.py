@@ -8014,7 +8014,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # (GenerationWorker/api_client/ControlPanel) is untouched — CreateView
         # has no wiring to real generation yet (on_create=None), matching its
         # injectable-seam design so it stays fully unit-testable in isolation.
-        self._create_view = CreateView()
+        #
+        # Task 7: the inspiration door DOES get wired to something real —
+        # `_on_loop_nav_remix` already does exactly the unseeded `show_muse()`
+        # activation dance (toggle/activate Pipelines, then
+        # `self._pipeline_studio.show_muse(seed_artifact=None)`), so it's
+        # reused verbatim as CreateView's zero-arg `on_inspiration` callable
+        # rather than reimplementing the Muse hand-off here.
+        self._create_view = CreateView(on_inspiration=self._on_loop_nav_remix)
         self._gallery_stack.add_named(self._create_view, "create")
 
         self._gallery_stack.set_visible_child_name("video")
