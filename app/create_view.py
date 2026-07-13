@@ -48,13 +48,17 @@ toggles to real entry points:
     text is merged into the CTA payload as `params["prompt"]` — but only when
     non-empty, so every Tasks 3-6 CTA test (which never touches the entry)
     still gets back its exact pre-Task-7 params dict.
-  - **Model**: Task 7 first wired this door to the live-model strip's
-    clickable cards; Task 6 retires that strip entirely (see class docstring)
-    because it was a persistent, non-wrapping `Gtk.Box` that overflowed the
-    window. This door now shows an honest placeholder — the grouped
-    model-door grid that replaces it is a separate, later task. Model
-    selection WITHIN a chosen medium now lives in the scoped
-    `_model_dropdown` above the panel host instead.
+  - **Model**: Task 6 retired the old persistent, non-wrapping live-model
+    strip (it was the thing overflowing the window) and left an honest
+    placeholder in its place. Task 7 replaces that placeholder with the real
+    grouped, wrapping model grid (`_build_model_door`): every
+    `server_manager.SERVERS` key, classified into Image/Video/Animate/Text
+    sections (empty sections omitted) and rendered as a `Gtk.FlowBox` of
+    status-dotted cards per section. Clicking a card (`_activate_model_card`)
+    selects that model's medium and returns to the Idea door, pre-scoping the
+    scoped `_model_dropdown` to the clicked model when practical. Model
+    selection WITHIN a chosen medium still lives in the scoped
+    `_model_dropdown` above the panel host, same as Task 6.
   - **Inspiration**: unchanged from Task 3 — still just calls the injected
     `on_inspiration()` seam. `main_window.py` wires this to
     `self._on_loop_nav_remix` (the existing unseeded `show_muse()` bridge) —
@@ -129,6 +133,29 @@ def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
     if medium.id == "animate":
         return _ANIMATE_MODEL_ID
     return None
+
+
+# Model door (Task 7): a `server_manager.SERVERS` key is classified into a
+# group by resolving the Medium it implies (`_server_key_to_medium_id`) and
+# looking at THAT Medium's own `kind` field, rather than a hardcoded
+# key->group table — a new server declaring an existing capability, or a new
+# artgen generator, lands in the right section with zero changes here.
+# "gif" (native Animate's own kind, and artgen's animatediff) maps to
+# "Animate" -- the app's only motion/character-animation medium is the
+# "gif"-kind one. A key with no medium mapping at all (e.g. "prompt-server",
+# capability "prompt") falls back to "Text" -- every key that hits this
+# fallback today is in fact a chat/LLM/prompt service.
+_MEDIUM_KIND_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
+    "image": "Image",
+    "video": "Video",
+    "gif": "Animate",
+    "text": "Text",
+}
+
+# Fixed display order for the model door's sections — independent of dict
+# iteration order, and stable regardless of which groups end up non-empty for
+# the current mediums_fn()/SERVERS combination.
+_MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Animate", "Text")
 
 
 # Native medium id -> its real CreateParamPanel class. `_swap_panel` mounts
@@ -326,10 +353,10 @@ _CSS = b"""
     font-size: 12.5px;
 }
 
-/* -- Live-model strip -------------------------------------------------------- */
-.create-model-strip {
-    padding: 2px 0 8px 0;
-}
+/* -- Model door cards (Task 7) -- reuses the dot/chip/label vocabulary the
+   pre-Task-6 live-model strip introduced (that strip's own container class,
+   .create-model-strip, is gone -- these per-card classes are not: they are
+   now the model door's clickable Gtk.Button cards, one per server key). --- */
 .create-model-chip {
     border-radius: 12px;
     padding: 3px 10px;
@@ -344,8 +371,7 @@ _CSS = b"""
 .create-model-dot-on  { color: #27AE60; font-size: 9px; }
 .create-model-dot-off { color: #607D8B; font-size: 9px; }
 .create-model-label   { color: #E8F0F2; font-size: 11px; }
-/* Task 7: the strip's chips are now clickable model-door cards (Gtk.Button),
-   not a passive Gtk.Box readout -- a visible hover affordance says "tap me". */
+/* A visible hover affordance says "tap me". */
 .create-model-chip:hover {
     border-color: #4FD1C5;
 }
@@ -458,12 +484,23 @@ _CSS = b"""
     border-radius: 4px;
 }
 
-/* -- Model door placeholder (Task 6) -- the grouped model-door grid is a
-   separate later task; this is an honest "not built yet" placeholder, not
-   the old clickable model-strip cards. ------------------------------------- */
-.create-model-door-placeholder-label {
-    color: #607D8B;
-    font-size: 12.5px;
+/* -- Model door: grouped, wrapping model grid (Task 7) -- replaces the Task 6
+   "not built yet" placeholder. One section per non-empty group (Image/Video/
+   Animate/Text); each section's cards live in a wrapping Gtk.FlowBox (see
+   .create-model-door-flow) so the whole ~15-and-growing model collection is
+   browsable without ever overflowing the window (width-clamp requirement,
+   same discipline as .create-chip-row). ------------------------------------ */
+.create-model-door {
+    padding: 2px 0;
+}
+.create-model-door-header {
+    color: #4FD1C5;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+.create-model-door-flow {
+    padding: 2px 0 4px 0;
 }
 """
 
@@ -505,16 +542,19 @@ class CreateView(Gtk.Box):
 
       - a `_model_dropdown` scoped to the ACTIVE medium's own models sits
         directly above `_panel_host` (see `_populate_model_dropdown`), and
-      - the "model" entry door shows an honest placeholder — the grouped
-        model-door grid is a separate, later task (explicitly out of scope
-        here; do not build it).
+      - the "model" entry door showed an honest placeholder in Task 6.
+
+    **Task 7 replaces that placeholder** with the real grouped, wrapping
+    model door (`_build_model_door`/`_model_door_groups`/
+    `_activate_model_card` — see the module docstring's "Model" bullet).
+    `_server_key_to_medium_id` (kept unused-but-intact since Task 6) is now
+    the routing core `_activate_model_card` reuses to turn a clicked card
+    back into an active medium.
 
     `self._model_strip` / `self._model_cards` / `_apply_model_strip` /
-    `_refresh_model_strip_async` / `_on_model_card_clicked` no longer exist.
-    `_server_key_to_medium_id` is kept — it's a pure capability->medium-id
-    mapping with no GTK ties, currently unused pending the grouped model-door
-    task, and removing it would only cost a future task the trouble of
-    rewriting it.
+    `_refresh_model_strip_async` no longer exist — those were the Task 6
+    retired live-model strip's own attributes, distinct from this task's
+    `_model_door_row`/`_build_model_door` grid.
     """
 
     def __init__(
@@ -668,7 +708,7 @@ class CreateView(Gtk.Box):
         """The idea door's prompt entry: "What do you want to make?".
 
         Visible only while `_entry_mode == "idea"` (see `_set_entry_mode`) —
-        the model door shows its own placeholder (`_build_model_door_row`)
+        the model door shows its own grouped model grid (`_build_model_door_row`)
         and the inspiration door hands off entirely to the Muse, so neither
         needs a competing prompt field on screen.
         """
@@ -685,32 +725,210 @@ class CreateView(Gtk.Box):
         self._idea_row = row
         return row
 
-    # ── Model door: placeholder (Task 6 retires the old model-strip cards) ──
+    # ── Model door: grouped, wrapping model grid (Task 7) ───────────────────
 
     def _build_model_door_row(self) -> Gtk.Box:
         """The model door's content while `_entry_mode == "model"`.
 
-        Task 6 retires the persistent, non-wrapping "live-model strip" that
+        Task 6 retired the persistent, non-wrapping "live-model strip" that
         used to double as this door's clickable cards (it was the thing
-        overflowing the window — see the class docstring). The GROUPED
-        model-door grid that replaces it is a separate, later task; this is
-        an honest placeholder in the meantime, hidden outside "model" mode
-        the same way `_idea_row` is hidden outside "idea" mode.
+        overflowing the window — see the class docstring) and left an honest
+        placeholder in its place. Task 7 mounts the real grouped model grid
+        (`_build_model_door`) here instead — hidden outside "model" mode the
+        same way `_idea_row` is hidden outside "idea" mode.
         """
         row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        row.add_css_class("create-model-door-placeholder")
+        row.add_css_class("create-model-door-row")
         row.set_visible(False)  # "idea" is the default-active door
 
-        label = Gtk.Label(
-            label="Model picker is getting a redesign — pick a medium below for now."
-        )
-        label.add_css_class("create-model-door-placeholder-label")
-        label.set_xalign(0.0)
-        label.set_wrap(True)
-        row.append(label)
+        row.append(self._build_model_door())
 
         self._model_door_row = row
         return row
+
+    def _classify_server_key_for_model_door(self, key: str) -> str:
+        """One `server_manager.SERVERS` key -> its model-door group name.
+
+        Reuses `_server_key_to_medium_id` (capability -> Medium id) plus the
+        resolved Medium's own `kind` field (`_MEDIUM_KIND_TO_MODEL_DOOR_
+        GROUP`) rather than hardcoding a key->group table — a new server
+        declaring an existing capability, or a new artgen generator, is
+        classified correctly with zero changes here.
+
+        Falls back to "Text" when the key doesn't map to any current medium
+        at all (e.g. "prompt-server", capability "prompt" has no matching
+        medium) — every key that hits this fallback today is in fact a
+        chat/LLM/prompt service.
+        """
+        medium_id = self._server_key_to_medium_id(key)
+        if medium_id is not None:
+            try:
+                mediums = list(self._mediums_fn() or [])
+            except Exception:
+                mediums = []
+            medium = next((m for m in mediums if m.id == medium_id), None)
+            if medium is not None:
+                return _MEDIUM_KIND_TO_MODEL_DOOR_GROUP.get(medium.kind, "Text")
+        return "Text"
+
+    def _model_door_groups(self) -> "dict[str, list[str]]":
+        """Every `server_manager.SERVERS` key, classified into Image/Video/
+        Animate/Text groups (see `_classify_server_key_for_model_door`).
+
+        Empty groups are omitted from the returned dict — `_build_model_door`
+        relies on this to skip empty sections entirely, per the task's "omit
+        empty groups" requirement.
+        """
+        groups: "dict[str, list[str]]" = {g: [] for g in _MODEL_DOOR_GROUP_ORDER}
+        for key in server_manager.SERVERS:
+            group = self._classify_server_key_for_model_door(key)
+            groups.setdefault(group, [])
+            groups[group].append(key)
+        return {g: keys for g, keys in groups.items() if keys}
+
+    def _build_model_door(self) -> Gtk.Widget:
+        """The model door's real content (Task 7) — a vertical stack of
+        group sections (a header `Gtk.Label` + a wrapping `Gtk.FlowBox` of
+        model cards), empty groups omitted. Rebuilt wholesale on every health
+        refresh (`_refresh_model_door`) so a card's status dot never goes
+        stale — the same tear-down-then-rebuild pattern `_swap_panel` uses
+        for `_panel_host`.
+
+        Every wrapping container here is a `Gtk.FlowBox`, never an unbounded
+        horizontal `Gtk.Box` — the width-clamp discipline this task exists to
+        enforce (see the class docstring's Task 6 "overflowed the window"
+        history).
+        """
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        container.add_css_class("create-model-door")
+
+        groups = self._model_door_groups()
+        for group_name in _MODEL_DOOR_GROUP_ORDER:
+            keys = groups.get(group_name)
+            if not keys:
+                continue  # omit empty groups
+
+            section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            section.add_css_class("create-model-door-section")
+
+            header = Gtk.Label(label=group_name)
+            header.add_css_class("create-model-door-header")
+            header.set_xalign(0.0)
+            section.append(header)
+
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_max_children_per_line(8)
+            flow.set_row_spacing(6)
+            flow.set_column_spacing(6)
+            flow.add_css_class("create-model-door-flow")
+            for key in keys:
+                flow.append(self._build_model_card(key))
+            section.append(flow)
+
+            container.append(section)
+
+        return container
+
+    def _build_model_card(self, key: str) -> Gtk.Widget:
+        """One clickable model card: a live-status dot + the model's label.
+
+        Health reuses `self._model_health` — the SAME source Task 6's scoped
+        dropdown reads (`_populate_model_dropdown`) — so a card's dot can
+        never disagree with the dropdown's dot for the same server key (the
+        same "single source of truth" discipline CLAUDE.md documents for the
+        artgen panel's own health dot).
+        """
+        sdef = server_manager.SERVERS.get(key)
+        label_text = sdef.label if sdef is not None else key
+        running = self._model_health.get(key, False)
+
+        btn = Gtk.Button()
+        btn.add_css_class("create-model-chip")
+        btn.add_css_class("create-model-chip-on" if running else "create-model-chip-off")
+        btn.set_tooltip_text(label_text)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        dot = Gtk.Label(label="●" if running else "○")
+        dot.add_css_class("create-model-dot-on" if running else "create-model-dot-off")
+        content.append(dot)
+
+        label = Gtk.Label(label=label_text)
+        label.add_css_class("create-model-label")
+        content.append(label)
+
+        btn.set_child(content)
+        btn.connect("clicked", lambda _b, k=key: self._activate_model_card(k))
+        return btn
+
+    def _refresh_model_door(self) -> None:
+        """Rebuild `_model_door_row`'s content from scratch — called after
+        every health refresh so a card's status dot never goes stale. Mirrors
+        `_swap_panel`'s tear-down-then-rebuild pattern for `_panel_host`."""
+        row = getattr(self, "_model_door_row", None)
+        if row is None:
+            return
+        child = row.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            row.remove(child)
+            child = nxt
+        row.append(self._build_model_door())
+
+    def _preselect_model_key(self, key: str) -> None:
+        """Select *key*'s entry in the scoped `_model_dropdown`, if present.
+
+        A no-op (not an error) when *key* isn't among the active medium's
+        currently scoped entries — e.g. a canonical-id-excluded key
+        (`_canonical_model_id_for` deliberately excludes "skyreels", see that
+        function's docstring) still routes to the Video medium correctly; it
+        just can't be pre-selected in the dropdown.
+        """
+        entries = getattr(self, "_model_dropdown_entries", [])
+        for idx, (entry_key, _canonical, _label) in enumerate(entries):
+            if entry_key == key:
+                self._model_dropdown.set_selected(idx)
+                return
+
+    def _activate_model_card(self, key: str) -> None:
+        """Model door card click: select that model's medium and return to
+        the Idea door, pre-scoped to this model.
+
+        Reuses existing routing rather than reimplementing it:
+        `_server_key_to_medium_id` (capability -> Medium id) resolves the
+        Medium; activating its chip button fires the SAME
+        `_select_medium` -> `_swap_panel` path a manual chip click does
+        (repopulating the scoped dropdown for the new medium as a side
+        effect), then the Idea door toggle is activated
+        (`_set_entry_mode("idea")`). Finally the scoped dropdown is
+        pre-selected to *key* when practical (`_preselect_model_key`) — "when
+        practical" because a canonical-id-excluded key has nothing to
+        pre-select, which is fine.
+
+        A key with no medium mapping at all (`_server_key_to_medium_id`
+        returns None — e.g. "prompt-server") is a deliberate no-op: there is
+        no medium to route to.
+        """
+        medium_id = self._server_key_to_medium_id(key)
+        if medium_id is None:
+            return
+
+        try:
+            mediums = list(self._mediums_fn() or [])
+        except Exception:
+            mediums = []
+        medium = next((m for m in mediums if m.id == medium_id), None)
+        if medium is None:
+            return
+
+        btn = self._chip_buttons.get(medium_id)
+        if btn is not None:
+            btn.set_active(True)  # fires _select_medium -> _swap_panel via "toggled"
+        else:
+            self._select_medium(medium)
+
+        self._preselect_model_key(key)
+        self._doors["idea"].set_active(True)  # fires _set_entry_mode("idea")
 
     # ── Medium chip row ──────────────────────────────────────────────────────
 
@@ -913,6 +1131,7 @@ class CreateView(Gtk.Box):
         self._model_health = statuses
         if self._active_medium is not None:
             self._populate_model_dropdown(self._active_medium)
+        self._refresh_model_door()
         return GLib.SOURCE_REMOVE
 
     def _server_key_to_medium_id(self, key: str) -> Optional[str]:

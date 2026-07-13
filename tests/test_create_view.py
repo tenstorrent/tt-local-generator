@@ -620,6 +620,166 @@ def test_model_door_placeholder_visible_only_in_model_mode(monkeypatch):
     assert view._model_door_row.get_visible() is False
 
 
+# ── Model door: grouped, wrapping model grid (Task 7) ────────────────────
+#
+# Task 6 left an honest "not built yet" placeholder in the model door after
+# retiring the non-wrapping live-model strip. Task 7 replaces that
+# placeholder with a grouped, wrapping Gtk.FlowBox grid — every
+# server_manager key classified into Image/Video/Animate/Text — so the whole
+# (~15 and growing) model collection is browsable without ever overflowing
+# the window. `_model_door_groups()` and `_activate_model_card()` are the
+# pure/GTK test seams (task-7-brief.md, Step 1, verbatim below).
+
+def test_model_door_groups_by_type(monkeypatch):
+    view = _make_view(monkeypatch)
+    groups = view._model_door_groups()
+    assert set(groups) <= {"Image", "Video", "Animate", "Text"}
+    assert "flux" in groups["Image"]
+    assert all(v for v in groups.values())
+
+
+def test_model_door_card_click_routes_to_medium(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._activate_model_card("flux")
+    assert view._active_medium.id == "image"
+    assert view._entry_mode == "idea"
+
+
+def test_model_door_groups_video_and_animate_and_text(monkeypatch):
+    """Beyond Image (the brief's one asserted group), the other three groups
+    must also classify sensibly against the real server_manager.SERVERS
+    table combined with _fake_mediums()'s image/video/animate/verse list."""
+    view = _make_view(monkeypatch)
+    groups = view._model_door_groups()
+
+    assert "wan2.2" in groups["Video"]
+    assert "mochi" in groups["Video"]
+    assert "skyreels" in groups["Video"]
+    assert "flux" not in groups["Video"]
+
+    assert groups["Animate"] == ["animate"]
+
+    # Every artgen chat-LLM server, plus prompt-server (capability "prompt",
+    # no matching medium — falls back to "Text"), lands in Text.
+    assert "prompt-server" in groups["Text"]
+    assert "artgen-qwen3-8b" in groups["Text"]
+    assert "artgen-llama-3.3-70b" in groups["Text"]
+
+
+def test_model_door_omits_empty_groups(monkeypatch):
+    """When mediums_fn() offers no "video"/"animate" medium at all, the
+    corresponding groups must not appear in the dict — the "no empty groups"
+    requirement, exercised on a shape the default fake mediums can't show
+    (all four groups are non-empty there)."""
+    def _minimal_mediums():
+        return [
+            Medium(id="image", label="Image", icon="\U0001f5bc️", kind="image",
+                   source="native", generator=None),
+            Medium(id="verse", label="Verse", icon="✍", kind="text",
+                   source="artgen", generator="verse"),
+        ]
+
+    view = _make_view(monkeypatch, mediums_fn=_minimal_mediums)
+    groups = view._model_door_groups()
+
+    assert "Animate" not in groups
+    assert "Video" not in groups
+    assert set(groups) <= {"Image", "Text"}
+    assert all(v for v in groups.values())
+
+
+def test_build_model_door_renders_one_flowbox_section_per_nonempty_group(monkeypatch):
+    view = _make_view(monkeypatch)
+    groups = view._model_door_groups()
+
+    door = view._build_model_door()
+
+    assert isinstance(door, Gtk.Widget)
+    sections = []
+    child = door.get_first_child()
+    while child is not None:
+        sections.append(child)
+        child = child.get_next_sibling()
+    assert len(sections) == len(groups)
+
+    # Every section's model list is a wrapping Gtk.FlowBox, never an
+    # unbounded horizontal Gtk.Box — the width-clamp requirement.
+    for section in sections:
+        flow = section.get_first_child().get_next_sibling()
+        assert isinstance(flow, Gtk.FlowBox)
+
+
+def test_activate_model_card_switches_active_medium(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert view._active_medium.id == "image"
+
+    view._activate_model_card("wan2.2")
+
+    assert view._active_medium.id == "video"
+    assert view._entry_mode == "idea"
+
+
+def test_activate_model_card_preselects_scoped_dropdown_when_practical(monkeypatch):
+    view = _make_view(monkeypatch)
+
+    view._activate_model_card("wan2.2")
+
+    idx = view._model_dropdown.get_selected()
+    key, _canonical, _label = view._model_dropdown_entries[idx]
+    assert key == "wan2.2"
+
+
+def test_activate_model_card_switches_from_model_door_back_to_idea(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._doors["model"].set_active(True)
+    assert view._entry_mode == "model"
+    assert view._model_door_row.get_visible() is True
+
+    view._activate_model_card("z-image-turbo")
+
+    assert view._active_medium.id == "image"
+    assert view._entry_mode == "idea"
+    assert view._model_door_row.get_visible() is False
+    assert view._prompt_entry.get_visible() is True
+
+
+def test_activate_model_card_unknown_key_is_a_noop(monkeypatch):
+    view = _make_view(monkeypatch)
+    before = view._active_medium.id
+
+    view._activate_model_card("not-a-real-server-key")  # must not raise
+
+    assert view._active_medium.id == before
+
+
+def test_activate_model_card_capability_without_medium_is_a_noop(monkeypatch):
+    """"prompt-server" (capability "prompt") maps to no medium at all
+    (_server_key_to_medium_id returns None) -> clicking it must not change
+    the active medium or raise."""
+    view = _make_view(monkeypatch)
+    before = view._active_medium.id
+
+    view._activate_model_card("prompt-server")
+
+    assert view._active_medium.id == before
+
+
+def test_model_door_rebuilds_dots_on_health_refresh(monkeypatch):
+    """Task 6's single-source-of-truth discipline (CLAUDE.md: the artgen
+    panel's health dot reuses the same source as generation routing) extends
+    to the model door's cards — a health refresh must rebuild the door so its
+    dots reflect the fresh status map, not the stale one from construction."""
+    view = _make_view(monkeypatch)
+    assert view._model_health.get("wan2.2") is True
+
+    view._apply_model_health({"wan2.2": False, "flux": True})
+
+    assert view._model_health == {"wan2.2": False, "flux": True}
+    # The rebuilt door must exist and still be a well-formed widget tree
+    # (no stale children left over from the pre-refresh build).
+    assert view._model_door_row.get_first_child() is not None
+
+
 # ── _server_key_to_medium_id (Task 7) ────────────────────────────────────
 #
 # Pure capability -> medium-id mapping, exercised against REAL
