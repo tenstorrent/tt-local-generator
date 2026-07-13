@@ -58,6 +58,38 @@ class _ImmediateThread:
         self._target()
 
 
+class _FakeControls:
+    """Minimal stand-in reproducing the legacy `ControlPanel`'s REAL
+    `_set_model` source-gated branching (main_window.py) — the exact behavior
+    a MagicMock hides and that FIX 1's re-review side-effect hinged on.
+
+    The key faithful detail: `_set_model` is NOT a no-op when
+    `_model_source != "video"` — with `_model_source == "image"` it clobbers
+    `_image_model` with whatever key it's handed. So a video-model key routed
+    through `_set_model` while the (permanently-mounted, still-reachable)
+    control is in image mode would corrupt the legacy Image tab's model
+    selection. These tests use this stand-in so re-introducing that
+    `_set_model` call would fail loudly.
+    """
+
+    def __init__(self, model_source: str) -> None:
+        self._model_source = model_source
+        self._image_model = "flux"        # a valid image key (the default)
+        self._video_model = "animatediff"  # the fresh-session default that started the bug
+
+    def _set_model(self, model: str) -> None:
+        if self._model_source == "video":
+            self._video_model = model
+        elif self._model_source == "image":
+            self._image_model = model  # <-- the clobber FIX 1's re-review caught
+
+    def get_video_model(self) -> str:
+        return self._video_model
+
+    def get_image_model(self) -> str:
+        return self._image_model
+
+
 def _make_mw(monkeypatch):
     """Minimal MainWindow exposing only what `_on_create_generate` touches."""
     import main_window as mw
@@ -159,27 +191,53 @@ def test_video_medium_routes_to_on_generate_with_model_source_video(monkeypatch)
     assert kwargs["model_id"] == "mochi"
 
 
-def test_video_medium_syncs_old_control_model_before_generate(monkeypatch):
+def test_video_medium_syncs_video_model_before_generate(monkeypatch):
     """FIX 1 (silently-wrong-worker bug): `_on_generate`'s video branch picks
     the worker from `self._controls.get_video_model()`, NOT `model_id`. That
     field defaults to "animatediff" on a fresh session — so CreateView MUST
-    sync the old control to the chosen model FIRST, or Wan2.2/Mochi silently
-    run AnimateDiff. Assert the sync happened before `_on_generate`."""
+    set the control's video model to the chosen model BEFORE `_on_generate`,
+    or Wan2.2/Mochi silently run AnimateDiff. Uses the REAL-branching stand-in
+    (source already "video") and asserts the value was in place before the
+    generation call fired."""
     obj = _make_mw(monkeypatch)
+    obj._controls = _FakeControls("video")
 
-    call_order = []
-    obj._controls._set_model.side_effect = lambda k: call_order.append(("set_model", k))
-    obj._on_generate.side_effect = lambda *a, **k: call_order.append(("generate", k["model_source"]))
+    seen_before_generate = {}
+    obj._on_generate.side_effect = (
+        lambda *a, **k: seen_before_generate.update(video_model=obj._controls.get_video_model())
+    )
 
     obj._on_create_generate(_VIDEO_MEDIUM, {"model": "wan2.2-t2v"})
 
-    # canonical "wan2.2-t2v" -> short key "wan2"
-    obj._controls._set_model.assert_called_once_with("wan2")
-    # _video_model directly guaranteed too (so get_video_model() agrees even
-    # if the old control's _model_source wasn't "video").
-    assert obj._controls._video_model == "wan2"
-    # the sync must precede the actual generation call.
-    assert call_order == [("set_model", "wan2"), ("generate", "video")]
+    # canonical "wan2.2-t2v" -> short key "wan2", in place before _on_generate.
+    assert seen_before_generate == {"video_model": "wan2"}
+    assert obj._controls.get_video_model() == "wan2"
+    obj._on_generate.assert_called_once()
+
+
+def test_video_medium_does_not_clobber_image_model_in_image_source(monkeypatch):
+    """FIX 1 re-review (side-effect bug): syncing the video model must NOT
+    corrupt the legacy Image tab. With the control in `_model_source ==
+    "image"` (reachable with zero clicks when `last_successful_deployment` was
+    an image model), routing the video key through `_set_model` would take its
+    image branch and clobber `_image_model` with "wan2" — so a later click on
+    the still-mounted Image tab would silently fall back to FLUX / launch the
+    Wan2.2 script. The fix sets `_video_model` DIRECTLY (never `_set_model`),
+    so `get_video_model()` becomes "wan2" while `_image_model` is untouched.
+
+    This FAILS against the pre-fix 37eaaa9 code (which called `_set_model`)
+    and passes after."""
+    obj = _make_mw(monkeypatch)
+    obj._controls = _FakeControls("image")  # zero-click-reachable startup state
+
+    obj._on_create_generate(_VIDEO_MEDIUM, {"model": "wan2.2-t2v"})
+
+    # (a) the video worker selection is correct...
+    assert obj._controls.get_video_model() == "wan2"
+    # (b) ...and the legacy image-model selection is UNTOUCHED (not "wan2").
+    assert obj._controls.get_image_model() == "flux"
+    obj._on_generate.assert_called_once()
+    assert obj._on_generate.call_args.kwargs["model_source"] == "video"
 
 
 def test_animate_medium_routes_to_on_generate_with_ref_paths_and_mode(monkeypatch):

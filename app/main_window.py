@@ -10438,17 +10438,22 @@ class MainWindow(Gtk.ApplicationWindow):
             # ControlPanel dropdown), which DEFAULTS to "animatediff" on a
             # fresh session until a health check finds a running video server.
             # So without syncing it first, choosing Wan2.2/Mochi in CreateView
-            # would silently run AnimateDiff. Sync the old control to
-            # CreateView's chosen model BEFORE the call. This stays additive —
-            # it drives the existing ControlPanel setter, touching neither
-            # `_on_generate`'s body nor worker code.
+            # would silently run AnimateDiff. Set the control's video-model key
+            # directly BEFORE the call so `get_video_model()` returns it. This
+            # stays additive — it touches neither `_on_generate`'s body nor
+            # worker code.
             #
-            # `_set_model` only writes `_video_model` when the control's own
-            # `_model_source` is already "video" (the fresh-session bug case —
-            # source defaults to "video"), so we also set `_video_model`
-            # directly to guarantee `get_video_model()` agrees regardless of
-            # whatever source the old (now-hidden) ControlPanel was last left in.
-            self._controls._set_model(model_key)
+            # We set `_video_model` DIRECTLY rather than via `_set_model()`:
+            # `_set_model` is NOT a no-op when the (permanently-mounted, still
+            # reachable) legacy ControlPanel's own `_model_source != "video"`
+            # — with `_model_source == "image"` (reachable with zero clicks
+            # when `last_successful_deployment` was an image model), it would
+            # take its `elif ... == "image"` branch and clobber `_image_model`
+            # with a video key like "wan2", so a later click on the legacy
+            # Image tab would silently fall back to FLUX / launch the Wan2.2
+            # start script. Its only other effect is cosmetic source-desc/
+            # start-button labels on a surface the user isn't looking at, so
+            # dropping it entirely is both safe and correct.
             self._controls._video_model = model_key
             self._on_generate(
                 prompt,
