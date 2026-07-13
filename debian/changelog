@@ -1,3 +1,14 @@
+tt-local-generator (0.26.2) noble; urgency=medium
+
+  * Revert the main-app palette to the original tt-vscode-toolkit variant
+    (teal #4FD1C5 on deep blue-gray #0F2A35). The v0.25.0 unification to the
+    docs-site forest-teal was reverted: per the global CLAUDE.md, editor/IDE
+    surfaces (which the main app is) use the tt-vscode-toolkit variant, while
+    the docs-site forest-teal is for web/branding surfaces. Pipeline Studio
+    keeps its forest-teal.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 12:15:00 -0700
+
 tt-local-generator (0.26.1) noble; urgency=medium
 
   * Loop nav simplified to three movements: Create - Discover - Remix. Curate
