@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover - environment-dependent
 
 from create_mediums import Medium
 from create_param_panels import (
+    _VIDEO_MODEL_IDS,
     AnimateParamPanel,
     ArtgenParamPanel,
     CreateParamPanel,
@@ -310,7 +311,7 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
     panel._neg_entry.set_text("blurry, watermark")
     panel._steps_adj.set_value(40)
     panel._seed_adj.set_value(101)
-    panel._model_dropdown.set_selected(2)  # skyreels
+    panel._model_dropdown.set_selected(1)  # mochi (SkyReels removed — I2V, no seed image)
     panel._frames_adj.set_value(65)
 
     view._cta_btn.emit("clicked")
@@ -319,7 +320,7 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
         "negative_prompt": "blurry, watermark",
         "num_inference_steps": 40,
         "seed": 101,
-        "model": "skyreels-v2-i2v-14b-540p",
+        "model": "mochi-1-preview",
         "num_frames": 65,
     }
 
@@ -852,18 +853,22 @@ def test_video_param_panel_num_frames_zero_collects_as_none():
     assert panel.collect()["num_frames"] is None
 
 
-def test_video_param_panel_model_dropdown_covers_all_three_choices():
+def test_video_param_panel_model_dropdown_covers_both_choices():
+    """SkyReels (I2V, needs a conditioning image the text-to-video Video door
+    doesn't collect) was removed — only the two text-to-video models remain."""
     panel = VideoParamPanel()
     panel.build()
 
     expected = {
         0: "wan2.2-t2v",
         1: "mochi-1-preview",
-        2: "skyreels-v2-i2v-14b-540p",
     }
     for idx, model_id in expected.items():
         panel._model_dropdown.set_selected(idx)
         assert panel.collect()["model"] == model_id
+    # SkyReels is gone: there is no third choice to select.
+    assert panel._model_dropdown.get_model().get_n_items() == 2
+    assert "skyreels-v2-i2v-14b-540p" not in _VIDEO_MODEL_IDS.values()
 
 
 def test_video_param_panel_collect_before_build_degrades_to_defaults():
@@ -1063,7 +1068,11 @@ def test_artgen_param_panel_ansi_collect_returns_generator_defaults():
 
     assert panel.collect() == {
         "subject": "a mountain at sunset",
-        "width": 0,  # None default round-trips through the int spin's 0 sentinel
+        # --width is `type=int default=None`; its spin starts at 0 and an
+        # untouched 0 collects as None (unset) so the generator's own
+        # auto-default applies — NOT a literal 0 that would build a 0-column
+        # canvas (whole-branch review F2).
+        "width": None,
         "colors": "256",
         "ansi_style": "scene",
         "board_name": "",

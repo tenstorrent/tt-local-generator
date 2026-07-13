@@ -8889,6 +8889,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._gallery_stack.set_visible_child_name("create")
 
+        # Restore the left control pane + right detail pane to the startup
+        # Create state (both visible — `_build_ui` leaves them at their GTK4
+        # default of visible, and startup's own `_on_loop_nav_create` never
+        # touches them). Discover collapses `_ctrl_wrapper` (and, when it lands
+        # on an artgen source, `_detail_wrap`); without re-showing them here a
+        # Discover→Create hop would leave Create's layout diverged from that
+        # documented startup state.
+        self._ctrl_wrapper.set_visible(True)
+        self._detail_wrap.set_visible(True)
+
     def _on_loop_nav_discover(self) -> None:
         """Discover (absorbs Curate): browse AND collect what you've made — the
         gallery, full-width, with the star/playlist/detail actions you use to
@@ -10511,6 +10521,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 from media_store import MediaRecord
                 from media_store import media_store as _ms
                 from pipeline_engine import _append_flag_value, _flag_from_key, _run_tt_ctl
+                from create_param_panels import artgen_bool_flags
 
                 try:
                     ext = _artgen.get(generator).output_ext
@@ -10521,8 +10532,35 @@ class MainWindow(Gtk.ApplicationWindow):
                 out_path = make_artgen_path(short_id, ext)
 
                 argv = ["artgen", generator, "--output", str(out_path)]
+                # FIX 3 (whole-branch review — default-True bool switches can't
+                # emit their "off" spelling): a store_true default=True flag
+                # paired with a store_false (e.g. landscape's --mountains /
+                # --no-mountains, both dest "mountains") renders as ONE switch.
+                # Turning it OFF collects `mountains=False`, but
+                # `_append_flag_value` only knows the positive flag and OMITS a
+                # False value — so neither --mountains nor --no-mountains ever
+                # reaches the generator and it silently falls back to its
+                # default (mountains ON). `artgen_bool_flags` gives each bool
+                # dest its (positive, negative) CLI spelling straight from the
+                # generator's own argparse, so we emit the EXPLICIT flag that
+                # matches the switch: --mountains when ON, --no-mountains when
+                # OFF (or nothing OFF when there is no negative spelling, e.g. a
+                # bare --glitch — the previous, correct behavior for those).
+                # Done here, not in the shared `_append_flag_value` (which the
+                # pipeline engine also uses and must stay generator-agnostic).
+                bool_flags = artgen_bool_flags(generator)
                 for key, value in params.items():
                     if key == "prompt" or value is None:
+                        continue
+                    if isinstance(value, bool):
+                        pos_flag, neg_flag = bool_flags.get(key, (None, None))
+                        if value:
+                            argv.append(pos_flag or _flag_from_key(key))
+                        elif neg_flag:
+                            argv.append(neg_flag)
+                        # False + no negative spelling: omit entirely (a bare
+                        # store_true with no --no-x — the generator's default
+                        # already means "off").
                         continue
                     # FIX 2 (task-8 review — artgen "animatediff" medium failed
                     # 100% via Create): argparse `action="append"` flags (e.g.

@@ -168,6 +168,30 @@ def test_loop_nav_discover_routes_to_gallery_full_width(tmp_path, monkeypatch):
     assert obj._detail_wrap.get_visible() is True
 
 
+def test_loop_nav_discover_then_create_restores_control_pane(tmp_path, monkeypatch):
+    """Whole-branch review fix: Discover collapses `_ctrl_wrapper`; returning to
+    Create must restore it (and `_detail_wrap`) to the startup Create state
+    (both visible) — otherwise Create's layout stays diverged from startup
+    after any Discover visit."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+
+    # Startup Create state (the harness seeds both panes visible, matching
+    # `_build_ui`'s GTK4 default + startup `_on_loop_nav_create`).
+    startup_ctrl = obj._ctrl_wrapper.get_visible()
+    startup_detail = obj._detail_wrap.get_visible()
+    assert startup_ctrl is True
+
+    obj._loop_nav["discover"].set_active(True)
+    assert obj._ctrl_wrapper.get_visible() is False  # Discover collapsed it
+
+    obj._loop_nav["create"].set_active(True)
+
+    assert obj._gallery_stack.get_visible_child_name() == "create"
+    assert obj._ctrl_wrapper.get_visible() == startup_ctrl
+    assert obj._detail_wrap.get_visible() == startup_detail
+
+
 def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
     """Remix routes to Pipeline Studio's Muse via the existing bridge."""
     obj = _make_mw(tmp_path, monkeypatch)

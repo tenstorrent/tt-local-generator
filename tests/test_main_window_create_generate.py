@@ -363,6 +363,68 @@ def test_artgen_animatediff_skips_empty_append_flags(monkeypatch, tmp_path):
     assert "   " not in argv
 
 
+_LANDSCAPE_MEDIUM = Medium(id="landscape", label="Landscape", icon="🏔",
+                           kind="image", source="artgen", generator="landscape")
+
+
+def _patch_artgen_deps_real_generator(monkeypatch, *, tmp_path):
+    """Like `_patch_artgen_deps` but LEAVES `artgen.get` real, so
+    `artgen_bool_flags`/introspection see the generator's actual argparse — the
+    bool-spelling decision (FIX 3) depends on it. Only the disk/sqlite/subprocess
+    side effects are stubbed."""
+    import artgen_thumb
+    import media_store
+    import pipeline_engine
+
+    out_path = tmp_path / "landscape_artifact.svg"
+    monkeypatch.setattr(artgen_thumb, "make_artgen_path", lambda *a, **k: out_path)
+    monkeypatch.setattr(artgen_thumb, "make_thumbnail", lambda src, dst: Path(""))
+
+    fake_ms = MagicMock()
+    monkeypatch.setattr(media_store, "media_store", fake_ms)
+
+    run_tt_ctl_spy = MagicMock()
+    monkeypatch.setattr(pipeline_engine, "_run_tt_ctl", run_tt_ctl_spy)
+
+    return fake_ms, run_tt_ctl_spy, out_path
+
+
+def test_artgen_default_true_bool_off_emits_negative_flag(monkeypatch, tmp_path):
+    """FIX 3 (whole-branch review): landscape's --mountains is store_true
+    default=True, paired with --no-mountains (store_false, same dest). Turning
+    the switch OFF collects `mountains=False`; the seam must emit the EXPLICIT
+    --no-mountains (never omit both flags, which would let the generator fall
+    back to its default and ignore the user's choice). A default-off flag
+    turned ON (clouds=True) emits its bare positive --clouds.
+
+    This FAILS against the pre-fix code (which routed False through
+    `_append_flag_value` and dropped it entirely)."""
+    obj = _make_mw(monkeypatch)
+    fake_ms, run_tt_ctl_spy, _out = _patch_artgen_deps_real_generator(
+        monkeypatch, tmp_path=tmp_path
+    )
+
+    params = {
+        "mountains": False,   # default-True switch turned OFF → --no-mountains
+        "clouds": True,       # default-False switch turned ON  → --clouds
+        "stars": False,       # default-False, still OFF        → --no-stars (or omit)
+        "glitch": False,      # bare store_true, OFF, no negation → omitted entirely
+    }
+    obj._on_create_generate(_LANDSCAPE_MEDIUM, params)
+
+    run_tt_ctl_spy.assert_called_once()
+    (argv,), _kwargs = run_tt_ctl_spy.call_args
+
+    # OFF default-True bool → its explicit negative spelling, NOT omitted.
+    assert "--no-mountains" in argv
+    assert "--mountains" not in argv
+    # ON default-False bool → bare positive spelling.
+    assert "--clouds" in argv
+    assert "--no-clouds" not in argv
+    # A bare store_true with no "--no-x" left OFF emits nothing.
+    assert "--glitch" not in argv
+
+
 def test_artgen_medium_records_artifact_in_media_store(monkeypatch, tmp_path):
     obj = _make_mw(monkeypatch)
     fake_ms, _spy, out_path = _patch_artgen_deps(monkeypatch, tmp_path=tmp_path)

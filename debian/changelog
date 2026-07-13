@@ -1,3 +1,20 @@
+tt-local-generator (0.27.1) noble; urgency=medium
+
+  * Fixed four Create-surface defects from the whole-branch review:
+    - Artgen boolean switches with a default of "on" (e.g. landscape's
+      --mountains) now emit their explicit --no-<x> spelling when turned off,
+      instead of silently dropping the flag and reverting to the default.
+    - None-default numeric params (ansi --width, landscape --glitch-seed,
+      animatediff --device-id) no longer forward a literal 0 that overrides the
+      generator's own auto-default; an untouched 0 collects as "unset".
+    - Returning to Create after a Discover visit restores the left control pane
+      and detail pane to the startup Create layout.
+    - Dropped the SkyReels I2V option from the text-to-video Video door: it
+      needs a conditioning image the door doesn't collect, so it could only
+      fail. Re-add once an image-seeded video path exists.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 16:00:00 -0700
+
 tt-local-generator (0.27.0) noble; urgency=medium
 
   * New Create surface -- the first movement of the Create/Discover/Remix

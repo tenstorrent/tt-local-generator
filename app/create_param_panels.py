@@ -235,7 +235,7 @@ class ImageParamPanel(CreateParamPanel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Video model dropdown choices: (internal key, human label), display order.
-# Only the three models `worker.GenerationWorker` actually drives through
+# Only the text-to-video models `worker.GenerationWorker` drives through
 # `api_client.APIClient.submit()` are offered here — "animatediff" is
 # deliberately excluded: it runs through a completely different code path
 # in ControlPanel (a local, serverless GIF pipeline with its own `frames=`
@@ -245,19 +245,25 @@ class ImageParamPanel(CreateParamPanel):
 # `GenerationWorker`'s kwargs. Labels mirror ControlPanel's
 # `_ALL_VIDEO_MODEL_ENTRIES` (main_window.py) for the three shared entries —
 # duplicated, not imported, per the module docstring's CRITICAL STRATEGY note.
+#
+# SkyReels is deliberately OMITTED: `skyreels-v2-i2v-14b-540p` is an
+# image-to-video model that requires a conditioning (character/seed) image,
+# but the Video door is text-to-video oriented and collects NO image input —
+# `_create_generate_native`'s video branch would hand the I2V model
+# `seed_image_path=""`, so it can only fail. Offering it here is a trap. Re-add
+# it once the Create surface grows an image-seeded video path that can supply
+# the conditioning image this model needs.
 _VIDEO_MODEL_CHOICES: "list[tuple[str, str]]" = [
     ("wan2", "Wan2.2 — 720p video"),
     ("mochi", "Mochi-1 — 480×848 video"),
-    ("skyreels", "SkyReels I2V — 960×544 Blackhole"),
 ]
 
 # Internal key -> server-side model id string, passed as `model=` to
 # GenerationWorker. Mirrors ControlPanel's `_VIDEO_MODEL_IDS` (minus the
-# animatediff entry, excluded above).
+# animatediff entry, excluded above, and skyreels — see the choices note).
 _VIDEO_MODEL_IDS: "dict[str, str]" = {
     "wan2": "wan2.2-t2v",
     "mochi": "mochi-1-preview",
-    "skyreels": "skyreels-v2-i2v-14b-540p",
 }
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
@@ -705,6 +711,19 @@ class _ArgSpec:
     default: object
     help: str = ""
     choices: "Optional[list]" = None
+    # Bool dests carry their explicit CLI spellings so the artgen run seam can
+    # emit the flag that MATCHES the switch state — the positive flag when ON
+    # (e.g. "--mountains"), the negative flag when OFF if the generator defines
+    # one (e.g. "--no-mountains"). `neg_flag` is None for a bool with no "off"
+    # spelling (e.g. a bare "--glitch"), in which case OFF emits nothing.
+    pos_flag: "Optional[str]" = None
+    neg_flag: "Optional[str]" = None
+    # True for an int/float dest whose RESOLVED default is None (e.g. ansi's
+    # `--width`, landscape's `--glitch-seed`, animatediff's `--device-id`),
+    # meaning "let the generator decide". The spin starts at 0 for these; a
+    # current value of 0 collects as None so the generator's own auto-default
+    # applies instead of a literal 0 overriding it. See `_ArgControl.read`.
+    none_default: bool = False
 
 
 @dataclass
@@ -715,6 +734,10 @@ class _ArgControl:
     kind: str
     widget: Gtk.Widget
     choices: "list" = field(default_factory=list)
+    # Mirrors `_ArgSpec.none_default`: when set, a numeric value of 0 reads
+    # back as None (the "unset — use the generator's auto-default" sentinel)
+    # rather than the literal 0 that would override that default downstream.
+    none_default: bool = False
 
     def read(self) -> object:
         if self.kind == "choice":
@@ -725,9 +748,18 @@ class _ArgControl:
         if self.kind == "bool":
             return bool(self.widget.get_active())
         if self.kind == "int":
-            return int(self.widget.get_value())
+            value = int(self.widget.get_value())
+            # Honor the tooltip contract the int control shows the user for a
+            # None-default arg ("0 = generator default"): 0 means "unset", so
+            # return None and let the seam omit the flag entirely.
+            if self.none_default and value == 0:
+                return None
+            return value
         if self.kind == "float":
-            return float(self.widget.get_value())
+            value = float(self.widget.get_value())
+            if self.none_default and value == 0:
+                return None
+            return value
         return self.widget.get_text()  # "str"
 
 
@@ -763,6 +795,43 @@ def _classify_action(action: "argparse.Action") -> "tuple[str, Optional[list]]":
     return "str", None
 
 
+def _bool_flag_pair(actions: "list[argparse.Action]") -> "tuple[Optional[str], Optional[str]]":
+    """Given EVERY argparse action that shares one boolean dest, return the
+    ``(positive, negative)`` CLI option-string spellings the generator accepts.
+
+    Three spellings all mean "boolean flag" (see `_classify_action`):
+
+      - the classic `_StoreTrueAction`/`_StoreFalseAction` PAIR — two actions
+        sharing a dest, e.g. landscape's `--mountains` (store_true) and
+        `--no-mountains` (store_false); the positive is the store_true
+        action's option string, the negative is the store_false's.
+      - a single `argparse.BooleanOptionalAction` — one action whose
+        `option_strings` holds both `--flag` and `--no-flag`; the negative is
+        the one starting `--no-`, the positive is the other.
+
+    Either half may be absent (e.g. a bare `--glitch` store_true with no
+    `--no-glitch`), in which case that side of the tuple is None.
+    """
+    pos: "Optional[str]" = None
+    neg: "Optional[str]" = None
+    for action in actions:
+        cls_name = type(action).__name__
+        opts = list(action.option_strings)
+        if cls_name == "BooleanOptionalAction":
+            for opt in opts:
+                if opt.startswith("--no-"):
+                    neg = neg or opt
+                else:
+                    pos = pos or opt
+        elif cls_name == "_StoreFalseAction":
+            if opts:
+                neg = neg or opts[0]
+        elif cls_name == "_StoreTrueAction":
+            if opts:
+                pos = pos or opts[0]
+    return pos, neg
+
+
 def _introspect_generator_args(generator_name: str) -> "list[_ArgSpec]":
     """Build the arg specs for *generator_name* by calling its own `add_args`
     against a throwaway parser. Returns `[]` for an unregistered generator
@@ -794,20 +863,61 @@ def _introspect_generator_args(generator_name: str) -> "list[_ArgSpec]":
     except SystemExit:
         defaults_ns = {}
 
-    specs: "list[_ArgSpec]" = []
-    seen_dests: set = set()
+    # Group every action by dest FIRST so a shared-dest boolean pair (e.g.
+    # landscape's --mountains/--no-mountains) can contribute BOTH its positive
+    # and negative CLI spellings to the one spec that dest becomes — see
+    # `_bool_flag_pair`. (The old code dedup'd by dest keeping only the first
+    # action, which discarded the negative spelling entirely.)
+    actions_by_dest: "dict[str, list]" = {}
+    dest_order: "list[str]" = []
     for action in getattr(parser, "_actions", []):
         dest = action.dest
-        if dest == "help" or dest in seen_dests:
+        if dest == "help":
             continue
-        seen_dests.add(dest)
-        kind, choices = _classify_action(action)
-        default = defaults_ns.get(dest, action.default)
+        if dest not in actions_by_dest:
+            actions_by_dest[dest] = []
+            dest_order.append(dest)
+        actions_by_dest[dest].append(action)
+
+    specs: "list[_ArgSpec]" = []
+    for dest in dest_order:
+        actions = actions_by_dest[dest]
+        first = actions[0]  # keep first action's metadata (label/help), as before
+        kind, choices = _classify_action(first)
+        default = defaults_ns.get(dest, first.default)
+        pos_flag = neg_flag = None
+        none_default = False
+        if kind == "bool":
+            pos_flag, neg_flag = _bool_flag_pair(actions)
+        elif kind in ("int", "float"):
+            none_default = default is None
         specs.append(_ArgSpec(
             dest=dest, kind=kind, default=default,
-            help=action.help or "", choices=choices,
+            help=first.help or "", choices=choices,
+            pos_flag=pos_flag, neg_flag=neg_flag, none_default=none_default,
         ))
     return specs
+
+
+def artgen_bool_flags(
+    generator_name: str,
+) -> "dict[str, tuple[Optional[str], Optional[str]]]":
+    """Map each boolean dest of *generator_name* to its ``(positive, negative)``
+    CLI flag spellings, so the artgen run seam (`MainWindow._create_generate_
+    artgen`) can emit the EXACT flag matching a switch state: the positive flag
+    when the switch is ON, the negative flag (when the generator defines one)
+    when OFF.
+
+    Returns ``{}`` for an unknown/broken generator — same fail-soft contract as
+    `_introspect_generator_args`. Kept here (not in `pipeline_engine`) so the
+    shared `_append_flag_value` stays generator-agnostic; the bool-spelling
+    knowledge lives with the introspection that produced it.
+    """
+    flags: "dict[str, tuple[Optional[str], Optional[str]]]" = {}
+    for spec in _introspect_generator_args(generator_name):
+        if spec.kind == "bool":
+            flags[spec.dest] = (spec.pos_flag, spec.neg_flag)
+    return flags
 
 
 class ArtgenParamPanel(CreateParamPanel):
@@ -952,6 +1062,7 @@ class ArtgenParamPanel(CreateParamPanel):
             widget = entry
 
         control = _ArgControl(
-            dest=spec.dest, kind=spec.kind, widget=widget, choices=spec.choices or [],
+            dest=spec.dest, kind=spec.kind, widget=widget,
+            choices=spec.choices or [], none_default=spec.none_default,
         )
         return row, control
