@@ -1,3 +1,25 @@
+tt-local-generator (0.27.0) noble; urgency=medium
+
+  * New Create surface -- the first movement of the Create/Discover/Remix
+    creative loop. The top-nav Create verb now opens CreateView instead of the
+    old per-model tabs: three "doors" (start from an idea, from a model, or from
+    inspiration), medium chips that adapt to what can actually run, per-medium
+    parameter panels (image / video / animate / artgen), a live model strip, and
+    one Create button. It routes to the same generation engine the old tabs use
+    -- native mediums through the existing worker path, artgen mediums through
+    `tt-ctl` -- so nothing about how art is produced changed.
+  * The legacy per-model toolbar and Generative-Art tab are kept as a reachable
+    fallback for now; retiring them waits on a real-generation smoke test on
+    hardware.
+  * Fixed two silently-wrong generation routes uncovered while wiring the
+    switchover: a video medium could run AnimateDiff instead of the chosen
+    model (the worker was picked from the old, hidden control's default), and
+    the artgen "AnimateDiff" medium failed every time because empty
+    append-action flags were forwarded as `--prompt-schedule ""`. Also stopped
+    the video-model sync from clobbering the legacy image-model state.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 15:00:00 -0700
+
 tt-local-generator (0.26.3) noble; urgency=medium
 
   * Fan-out pipelines now give each image its OWN caption/metadata. Previously
