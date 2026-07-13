@@ -526,6 +526,89 @@ def test_add_to_playlist_calls_helper(monkeypatch):
     assert calls["args"][2] == {"poem": "p"}
 
 
+# ---- TTLGAddToPlaylist: list-aware fan-out collect (Task 4) ----
+#
+# `artifacts` may now resolve to: a single path string (scalar upstream),
+# a flat list of path strings (the fan-out TextToImage `image_path` batch),
+# a nested list-of-lists (defensive — an un-flattened wire), or the
+# pre-existing list-of-dicts shape (the 1964 pipeline: [{"label","path",
+# "type"}]). All four must normalize to a flat list of entries before the
+# playlist helper adds them.
+
+def test_flatten_artifacts_single_string():
+    assert eng._flatten_artifacts("/a.png") == ["/a.png"]
+
+
+def test_flatten_artifacts_flat_list_of_strings():
+    flat = ["/a.png", "/b.png", "/c.png"]
+    assert eng._flatten_artifacts(flat) == flat
+
+
+def test_flatten_artifacts_nested_list_flattens_one_level():
+    assert eng._flatten_artifacts([["/a.png", "/b.png"]]) == ["/a.png", "/b.png"]
+
+
+def test_flatten_artifacts_leaves_list_of_dicts_unchanged():
+    dicts = [{"label": "x", "path": "/a.png", "type": "image"},
+             {"label": "y", "path": "/b.png", "type": "image"}]
+    assert eng._flatten_artifacts(dicts) == dicts
+
+
+def _mock_playlist_store(monkeypatch, added):
+    """Swap playlist_store.PlaylistStore for a stub that records add_records()
+    calls without touching the real SQLite-backed media store."""
+    class _FakePlaylist:
+        id = "pl-fanout"
+
+    class _FakeStore:
+        def get_or_create(self, name):
+            return _FakePlaylist()
+
+        def add_records(self, playlist_id, record_ids):
+            added.extend(record_ids)
+            return len(record_ids)
+
+    import playlist_store
+    monkeypatch.setattr(playlist_store, "PlaylistStore", _FakeStore)
+
+
+def test_add_artifacts_to_playlist_fanout_list_of_strings(monkeypatch):
+    added = []
+    _mock_playlist_store(monkeypatch, added)
+    monkeypatch.setattr(eng, "_import_artifact", lambda path, mtype, label: f"rid:{path}")
+    pid = eng._add_artifacts_to_playlist(
+        "fair", ["/a.png", "/b.png", "/c.png"], {}, lambda s: None)
+    assert pid == "pl-fanout"
+    assert len(added) == 3
+
+
+def test_add_artifacts_to_playlist_single_string(monkeypatch):
+    added = []
+    _mock_playlist_store(monkeypatch, added)
+    monkeypatch.setattr(eng, "_import_artifact", lambda path, mtype, label: f"rid:{path}")
+    eng._add_artifacts_to_playlist("fair", "/a.png", {}, lambda s: None)
+    assert len(added) == 1
+
+
+def test_add_artifacts_to_playlist_nested_list_flattened(monkeypatch):
+    added = []
+    _mock_playlist_store(monkeypatch, added)
+    monkeypatch.setattr(eng, "_import_artifact", lambda path, mtype, label: f"rid:{path}")
+    eng._add_artifacts_to_playlist("fair", [["/a.png", "/b.png"]], {}, lambda s: None)
+    assert len(added) == 2
+
+
+def test_add_artifacts_to_playlist_list_of_dicts_still_works(monkeypatch):
+    # Regression guard: the 1964 pipeline's existing shape must not break.
+    added = []
+    _mock_playlist_store(monkeypatch, added)
+    monkeypatch.setattr(eng, "_import_artifact", lambda path, mtype, label: f"rid:{path}")
+    dicts = [{"label": "x", "path": "/a.png", "type": "image"},
+             {"label": "y", "path": "/b.png", "type": "image"}]
+    eng._add_artifacts_to_playlist("fair", dicts, {}, lambda s: None)
+    assert len(added) == 2
+
+
 # ---- _run_plugin loader mechanism (real import, lightweight fn) ----
 
 def test_run_plugin_loads_and_calls_real_module():

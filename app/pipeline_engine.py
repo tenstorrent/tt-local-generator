@@ -435,13 +435,47 @@ def _import_artifact(src, media_type, prompt_text, model="workflow"):
     return rid
 
 
+def _flatten_artifacts(artifacts):
+    """Normalize the ``artifacts`` input into a flat list of artifact entries.
+
+    Task 4: TTLGAddToPlaylist must collect a fan-out image batch (a LIST of
+    paths from the list-aware TTLGTextToImage's ``image_path``), not just a
+    single artifact. The wire may resolve to any of:
+
+      - a single path string           -> ``[string]``
+      - a flat list                    -> returned as-is (order preserved)
+      - a nested list-of-lists         -> flattened one level (defensive,
+        in case an upstream wire was not already flattened by the engine)
+      - the pre-existing list-of-dicts shape (``[{"label","path","type"}]``
+        used by the 1964 pipeline) -> returned as-is; each dict is a single
+        entry, so it is never itself a candidate for flattening
+
+    Each returned entry may be a plain path string OR a dict — callers
+    (``_add_artifacts_to_playlist``) handle both shapes per element.
+    """
+    if isinstance(artifacts, str):
+        return [artifacts]
+    if not isinstance(artifacts, list):
+        return []
+    flat = []
+    for item in artifacts:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return flat
+
+
 def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
     """Create/reuse a playlist and add the resolved artifacts. Returns playlist id.
 
-    Ports the node-9 block (run_workflow.sh:534-642). *artifacts* is a list of
-    dicts with resolved string ``path`` + ``type`` (+ optional ``label``);
-    *metadata* carries the resolved caption/poem for record prompts. Emits a
-    ``PLAYLIST:<count>:<name>`` signal for pipeline_runner, matching the bash.
+    Ports the node-9 block (run_workflow.sh:534-642). *artifacts* accepts, as of
+    Task 4, either the original list of dicts with resolved string ``path`` +
+    ``type`` (+ optional ``label``) — the 1964 pipeline's shape — OR a single
+    path string / flat list / nested list of paths from a fan-out image batch
+    (see ``_flatten_artifacts``). *metadata* carries the resolved caption/poem
+    for record prompts. Emits a ``PLAYLIST:<count>:<name>`` signal for
+    pipeline_runner, matching the bash.
     """
     from playlist_store import PlaylistStore
 
@@ -450,14 +484,20 @@ def _add_artifacts_to_playlist(playlist_name, artifacts, metadata, emit) -> str:
     pl = ps.get_or_create(playlist_name)
 
     record_ids = []
-    for art in artifacts:
-        path = art.get("path")
+    for art in _flatten_artifacts(artifacts):
+        if isinstance(art, str):
+            path, mtype, label = art, "image", None
+        elif isinstance(art, dict):
+            path = art.get("path")
+            mtype = art.get("type", "image")
+            label = art.get("label")
+        else:
+            continue
         # Skip anything not yet resolved to a real string path (e.g. a leftover
         # ['node','key'] wire the engine did not flatten — see report concern).
         if not isinstance(path, str) or not path:
             continue
-        mtype = art.get("type", "image")
-        label = art.get("label") or (f"{playlist_name}: {caption[:80]}" if caption else playlist_name)
+        label = label or (f"{playlist_name}: {caption[:80]}" if caption else playlist_name)
         rid = _import_artifact(path, mtype, label)
         if rid:
             record_ids.append(rid)
