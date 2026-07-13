@@ -1087,6 +1087,7 @@ class OpenView(Gtk.Box):
     # large enough to actually see what was made, not just a token that it
     # exists.
     PREVIEW_W, PREVIEW_H = 420, 260
+    FANOUT_THUMB = 128   # per-still tile size in a fan-out step's grid
 
     # status -> (glyph, css class). Anything outside pipeline_view_model's
     # known statuses (which is already constrained to done/running/pending/
@@ -1294,7 +1295,24 @@ class OpenView(Gtk.Box):
         right.append(remix_btn)
         self._step_remix_buttons[step.node_id] = remix_btn
 
-        if step.artifact_path:
+        if len(step.artifact_paths) > 1:
+            # Fan-out step (e.g. one still per lore fragment): show the WHOLE
+            # series as a wrapped grid, not just one image — the review should
+            # reflect everything the step made (matches the showcase gallery).
+            grid = Gtk.FlowBox()
+            grid.set_selection_mode(Gtk.SelectionMode.NONE)
+            grid.set_max_children_per_line(3)
+            grid.set_column_spacing(8)
+            grid.set_row_spacing(8)
+            grid.set_halign(Gtk.Align.END)
+            grid.set_size_request(self.PREVIEW_W, -1)
+            for p in step.artifact_paths:
+                grid.insert(
+                    _build_thumb_frame(p, self.FANOUT_THUMB, self.FANOUT_THUMB,
+                                        "ps-card-thumb", step.intent), -1)
+            right.append(grid)
+            self._step_thumb_frames[step.node_id] = grid
+        elif step.artifact_path:
             # Showing beats talking: a produced image/gif/video is the fullest
             # thing to show, so render it FIRST (substantially larger than the
             # old flat 150×92 thumb — big enough to actually see what was made).

@@ -2384,3 +2384,20 @@ def test_poster_frame_video_extract_fails_returns_none(tmp_path):
     vid = tmp_path / "v.mp4"
     vid.write_bytes(b"fake")
     assert ps._poster_frame_for(str(vid), extract_fn=lambda s, d: False) is None
+
+
+def test_open_view_fanout_step_renders_a_grid_of_all_stills():
+    """A fan-out step (many artifact_paths) shows every still as a grid in the
+    Open view, not just one — matching the fan-out-aware showcase."""
+    from pipeline_studio import OpenView
+    from pipeline_view_model import RunView, StepView
+    paths = ("/fake/s0.png", "/fake/s1.png", "/fake/s2.png", "/fake/s3.png")
+    step = StepView(node_id="1", intent=intent_for("TTLGTextToImage"), status="done",
+                    artifact_path=paths[0], artifact_paths=paths)
+    run = RunView(run_id="r", title="Series", created_at="", hero_path=paths[0],
+                  steps=[step], recipe=["Generate an image"])
+    view = OpenView()
+    view.set_run(run)
+    grid = view._step_thumb_frames["1"]
+    assert isinstance(grid, Gtk.FlowBox)
+    assert grid.observe_children().get_n_items() == len(paths)

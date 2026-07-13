@@ -1,3 +1,12 @@
+tt-local-generator (0.24.1) noble; urgency=medium
+
+  * Pipeline Studio Open view is now fan-out aware too: a step that produced
+    many artifacts (e.g. one still per lore fragment) shows them ALL as a
+    wrapped grid, not just one — so the in-app review matches what the
+    showcase shows.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 10:30:00 -0700
+
 tt-local-generator (0.24.0) noble; urgency=medium
 
   * Showcase is now fan-out aware. A fan-out step (e.g. a list-aware
