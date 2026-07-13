@@ -7,17 +7,21 @@ Task 3: docs/superpowers/specs/2026-07-13-create-surface-design.md).
 Replaces the four medium tabs (Video / Animate / Image / Generative Art) with
 ONE surface where the medium is a *chip*, not a top-level division. This
 module builds the shell — three doors in (idea / model / inspiration), the
-medium-chip row, a per-medium param-panel host, the live-model strip, and the
-Create CTA. Per-type param panels (real image/video/animate/artgen controls)
-arrived across Tasks 4-6; Task 4 ported the IMAGE medium to a real
-`ImageParamPanel`; Task 5 ported VIDEO and ANIMATE to
-`VideoParamPanel`/`AnimateParamPanel`; this task (6) ports every artgen
-generator medium (verse/ansi/landscape/…) to `ArtgenParamPanel` — one class,
-parameterized by generator name, that introspects the generator's own
-`add_args` (all panel classes live in `create_param_panels.py`). Every medium
-the Create surface can offer now has a real panel — the plain Task 3 stub
-label is now dead code kept only as a fallback for a hypothetical future
-medium kind.
+medium-chip row, a scoped model dropdown, a role-zoned per-medium param-panel
+host, and the Create CTA, all clamped to a comfortable centered column width
+(`gtk_layout.wrap_centered`). Per-type param panels (real image/video/animate/
+artgen controls) arrived across Tasks 4-6; Task 4 ported the IMAGE medium to a
+real `ImageParamPanel`; Task 5 ported VIDEO and ANIMATE to
+`VideoParamPanel`/`AnimateParamPanel` and added `RoleZonePanel`, the shared
+brief/direction/controls wrapper every real panel is now mounted through; this
+task (6) ports every artgen generator medium (verse/ansi/landscape/…) to
+`ArtgenParamPanel` — one class, parameterized by generator name, that
+introspects the generator's own `add_args` (all panel classes live in
+`create_param_panels.py`) — AND retires the persistent flat "live-model strip"
+in favor of a `_model_dropdown` scoped to the active medium's own models, AND
+mounts every real panel wrapped in `RoleZonePanel`. Every medium the Create
+surface can offer now has a real panel — the plain Task 3 stub label is now
+dead code kept only as a fallback for a hypothetical future medium kind.
 
 **Migration-safe by construction**: this view is built ALONGSIDE the existing
 medium-tab generation UI (main_window.py's ControlPanel + `_gallery_stack`
@@ -44,16 +48,13 @@ toggles to real entry points:
     text is merged into the CTA payload as `params["prompt"]` — but only when
     non-empty, so every Tasks 3-6 CTA test (which never touches the entry)
     still gets back its exact pre-Task-7 params dict.
-  - **Model**: the live-model strip (`_apply_model_strip`) stops being a
-    passive readout — every entry is now a clickable `Gtk.Button` card.
-    Clicking one (running or not — see `_on_model_card_clicked`) resolves the
-    server's medium via `_server_key_to_medium_id` (its
-    `server_manager.SERVERS[key].capabilities` matched against the current
-    medium list) and activates that medium's chip, mounting its panel — "it's
-    a video model -> you're making video." A not-yet-running model is still
-    one tap (starting it for real is out of scope this task, see
-    task-7-brief.md); its card is honestly labeled/tooltipped so nothing lies
-    about whether hardware is actually up.
+  - **Model**: Task 7 first wired this door to the live-model strip's
+    clickable cards; Task 6 retires that strip entirely (see class docstring)
+    because it was a persistent, non-wrapping `Gtk.Box` that overflowed the
+    window. This door now shows an honest placeholder — the grouped
+    model-door grid that replaces it is a separate, later task. Model
+    selection WITHIN a chosen medium now lives in the scoped
+    `_model_dropdown` above the panel host instead.
   - **Inspiration**: unchanged from Task 3 — still just calls the injected
     `on_inspiration()` seam. `main_window.py` wires this to
     `self._on_loop_nav_remix` (the existing unseeded `show_muse()` bridge) —
@@ -78,15 +79,56 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk  # noqa: E402
 
+import gtk_layout  # noqa: E402
 import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
 from create_param_panels import (  # noqa: E402
+    _ANIMATE_MODEL_ID,
+    _IMAGE_MODEL_IDS,
+    _VIDEO_MODEL_IDS,
     AnimateParamPanel,
     ArtgenParamPanel,
-    CreateParamPanel,
     ImageParamPanel,
+    RoleZonePanel,
     VideoParamPanel,
 )
+
+# Video-only alias: server_manager's key for the Wan2.2 text-to-video service
+# is "wan2.2", but VideoParamPanel's own internal short key (and therefore
+# `_VIDEO_MODEL_IDS`'s key) is "wan2" — a pre-existing naming mismatch between
+# the two modules (VideoParamPanel predates the scoped dropdown). Image's
+# server_manager keys ("flux"/"sdxl"/"z-image-turbo"/"motif") already match
+# `_IMAGE_MODEL_IDS`'s keys exactly, and Animate has exactly one native model
+# id (`_ANIMATE_MODEL_ID`, no dropdown/dict at all) — so this one-entry alias
+# is the only translation table the scoped dropdown needs.
+_VIDEO_SERVER_KEY_ALIAS: "dict[str, str]" = {"wan2.2": "wan2"}
+
+
+def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
+    """Translate a `server_manager.SERVERS` key into the exact canonical
+    model-id STRING the corresponding native `CreateParamPanel`'s own model
+    dropdown would have produced for the equivalent choice.
+
+    This is the piece that keeps the scoped dropdown's `model` value
+    byte-for-byte compatible with the pre-Task-6 panel-owned model field (the
+    migration invariant `_collect_params` depends on) — see the values in
+    `create_param_panels._IMAGE_MODEL_IDS` / `_VIDEO_MODEL_IDS` /
+    `_ANIMATE_MODEL_ID`, which this function reads rather than re-deriving.
+
+    Returns `None` for a server key with no equivalent in the panel's own
+    choices (e.g. "skyreels" — VideoParamPanel deliberately excludes it, see
+    that class's module comment) or for a non-native medium (artgen has no
+    "model" field at all) — callers must treat `None` as "don't offer this
+    key for this medium", never guess a fallback.
+    """
+    if medium.id == "image":
+        return _IMAGE_MODEL_IDS.get(server_key)
+    if medium.id == "video":
+        panel_key = _VIDEO_SERVER_KEY_ALIAS.get(server_key, server_key)
+        return _VIDEO_MODEL_IDS.get(panel_key)
+    if medium.id == "animate":
+        return _ANIMATE_MODEL_ID
+    return None
 
 
 # Native medium id -> its real CreateParamPanel class. `_swap_panel` mounts
@@ -339,6 +381,90 @@ _CSS = b"""
 .create-cta-btn:hover {
     background-color: #81E6D9;
 }
+
+/* -- RoleZonePanel zones (Task 6) -- one class per zone so a future change to
+   the brief/direction/controls look never has to touch create_param_panels.py
+   (which stays GTK-styling-agnostic beyond its own per-field row classes). -- */
+.role-zone-panel {
+    padding: 2px 0;
+}
+.role-zone-brief,
+.role-zone-direction {
+    border: 1px solid #2D5566;
+    border-radius: 6px;
+    padding: 6px;
+    margin-bottom: 4px;
+}
+.role-zone-brief-body,
+.role-zone-direction-body {
+    padding: 2px 0;
+}
+.role-zone-controls {
+    margin-top: 2px;
+}
+.role-zone-controls-grid {
+    padding: 4px 0;
+}
+
+/* -- ModifierPills (RoleZonePanel's Direction-zone add-chips / pills) ------- */
+.modifier-pills {
+    padding: 2px 0;
+}
+.modifier-pills-category-label {
+    color: #607D8B;
+    font-size: 11px;
+    font-weight: bold;
+}
+.modifier-pills-add-row,
+.modifier-pills-applied {
+    padding: 2px 0;
+}
+.create-addchip {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 11px;
+}
+.create-addchip:hover {
+    border-color: #4FD1C5;
+}
+.create-pill {
+    background-color: #4FD1C5;
+    color: #0F2A35;
+    border-radius: 12px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+.create-pill:hover {
+    background-color: #81E6D9;
+}
+
+/* -- Scoped model dropdown (Task 6) -- replaces the retired flat model strip;
+   lists ONLY the active medium's own models, above the panel host. --------- */
+.create-model-dropdown-row {
+    padding: 0 0 6px 0;
+}
+.create-model-dropdown-label {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.create-model-dropdown {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+
+/* -- Model door placeholder (Task 6) -- the grouped model-door grid is a
+   separate later task; this is an honest "not built yet" placeholder, not
+   the old clickable model-strip cards. ------------------------------------- */
+.create-model-door-placeholder-label {
+    color: #607D8B;
+    font-size: 12.5px;
+}
 """
 
 _css_applied = False
@@ -365,12 +491,30 @@ def _apply_css() -> None:
 
 
 class CreateView(Gtk.Box):
-    """The Create surface shell: doors, medium chips, a param-panel host, the
-    live-model strip, and the Create CTA.
+    """The Create surface shell: doors, medium chips, a scoped model dropdown,
+    a role-zoned param-panel host, and the Create CTA — all clamped to a
+    comfortable centered column width.
 
     Injectable seams (see module docstring) make this fully testable with
     fakes. Nothing here imports `GenerationWorker`, `api_client`, or
     `ControlPanel` — wiring the CTA to real generation is a later task.
+
+    **Task 6 retires the persistent flat "live-model strip"** (a `Gtk.Box` of
+    every known server, unconditionally visible and NOT wrapping — the thing
+    overflowing the window per user report). In its place:
+
+      - a `_model_dropdown` scoped to the ACTIVE medium's own models sits
+        directly above `_panel_host` (see `_populate_model_dropdown`), and
+      - the "model" entry door shows an honest placeholder — the grouped
+        model-door grid is a separate, later task (explicitly out of scope
+        here; do not build it).
+
+    `self._model_strip` / `self._model_cards` / `_apply_model_strip` /
+    `_refresh_model_strip_async` / `_on_model_card_clicked` no longer exist.
+    `_server_key_to_medium_id` is kept — it's a pure capability->medium-id
+    mapping with no GTK ties, currently unused pending the grouped model-door
+    task, and removing it would only cost a future task the trouble of
+    rewriting it.
     """
 
     def __init__(
@@ -394,44 +538,63 @@ class CreateView(Gtk.Box):
         self._active_medium: Optional[Medium] = None
         self._chip_buttons: dict = {}
         self._model_health: dict = {}
-        # Model door (Task 7): server_manager key -> the clickable Gtk.Button
-        # card built for it in `_apply_model_strip`. Populated fresh on every
-        # health refresh; `_on_model_card_clicked` doesn't need this map
-        # directly (it re-derives the medium from `_server_key_to_medium_id`),
-        # but tests address cards by key, and a future "highlight the model
-        # behind the active medium" feature would read it too.
-        self._model_cards: dict = {}
-        # The currently-mounted real param panel (Task 4+), or None while the
-        # active medium still shows the Task 3 stub. `_collect_params` reads
-        # this to decide between a real `panel.collect()` and `{}`.
-        self._active_panel: Optional[CreateParamPanel] = None
+        # The currently-mounted RoleZonePanel (wrapping a real param panel,
+        # Task 4+/6), or None while the active medium still shows the Task 3
+        # stub. `_collect_params` reads this to decide between a real
+        # `panel.collect()` and `{}`, and to read `applied_modifier_text()`.
+        self._active_panel: Optional[RoleZonePanel] = None
+        # Scoped model dropdown (Task 6): (server_key, canonical_model_id or
+        # None, label) aligned 1:1 with the Gtk.StringList currently mounted
+        # in `_model_dropdown` — see `_populate_model_dropdown`/`_collect_params`.
+        self._model_dropdown_entries: "list[tuple]" = []
 
         # Built (but not yet appended) BEFORE the chip row: `_build_chip_row`
         # activates the first chip's toggle button as its last step, which
         # synchronously fires `_select_medium` -> `_swap_panel` -> reads
-        # `self._panel_host`. Constructing the chip row before this existed
-        # was a Task 3 latent bug — PyGObject swallows the resulting
-        # AttributeError inside the GTK signal marshaller (logs a traceback,
-        # doesn't raise), so the initial swap silently no-opped and the
-        # default-active medium never actually got a mounted panel. Building
-        # (not appending) `_panel_host` first fixes the ordering while
-        # leaving the visual append order — doors, chips, panel host, model
-        # strip, CTA — unchanged.
+        # `self._panel_host` AND `self._model_dropdown`. Constructing the chip
+        # row before these existed was a Task 3 latent bug — PyGObject
+        # swallows the resulting AttributeError inside the GTK signal
+        # marshaller (logs a traceback, doesn't raise), so the initial swap
+        # silently no-opped and the default-active medium never actually got
+        # a mounted panel. Building (not appending) both widgets first fixes
+        # the ordering while leaving the visual append order unchanged.
         self._panel_host = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._panel_host.add_css_class("create-panel-host")
 
-        self.append(self._build_doors_row())
-        self.append(self._build_idea_row())
-        self.append(self._build_chip_row())
-        self.append(self._panel_host)
+        self._model_dropdown = Gtk.DropDown()
+        self._model_dropdown.add_css_class("create-model-dropdown")
 
-        self._model_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._model_strip.add_css_class("create-model-strip")
-        self.append(self._model_strip)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        content.add_css_class("create-view-content")
+        content.append(self._build_doors_row())
+        content.append(self._build_idea_row())
+        content.append(self._build_model_door_row())
+        content.append(self._build_chip_row())  # fires _select_medium synchronously
+        content.append(self._build_model_dropdown_row())
+        content.append(self._panel_host)
+        content.append(self._build_cta_row())
 
-        self.append(self._build_cta_row())
+        # Width clamp (fix: content sprawling edge-to-edge / overflowing on a
+        # wide window) — `self` stays a plain Gtk.Box so every existing caller
+        # (main_window.py mounts `self._create_view` directly) is unaffected;
+        # only what's INSIDE it is now capped to a comfortable column.
+        self.append(gtk_layout.wrap_centered(content))
 
-        self._refresh_model_strip_async()
+        self._refresh_model_health_async()
+
+    # ── Width clamp test helper ──────────────────────────────────────────────
+
+    def _is_width_clamped(self) -> bool:
+        """True if some ancestor in the built tree is a `MaxWidthBin` —
+        proof the surface's content is actually capped, not just visually
+        similar. Walks `self`'s direct children (that's where `wrap_centered`
+        inserts its wrapper in `__init__`)."""
+        child = self.get_first_child()
+        while child is not None:
+            if isinstance(child, gtk_layout.MaxWidthBin):
+                return True
+            child = child.get_next_sibling()
+        return False
 
     # ── Doors row (idea default / model / inspiration) ──────────────────────
 
@@ -493,6 +656,9 @@ class CreateView(Gtk.Box):
         prompt_entry = getattr(self, "_prompt_entry", None)
         if prompt_entry is not None:
             prompt_entry.set_visible(mode == "idea")
+        model_door_row = getattr(self, "_model_door_row", None)
+        if model_door_row is not None:
+            model_door_row.set_visible(mode == "model")
         if mode == "inspiration" and self._on_inspiration is not None:
             self._on_inspiration()
 
@@ -502,9 +668,9 @@ class CreateView(Gtk.Box):
         """The idea door's prompt entry: "What do you want to make?".
 
         Visible only while `_entry_mode == "idea"` (see `_set_entry_mode`) —
-        the model door has its own way in (a model card) and the inspiration
-        door hands off entirely to the Muse, so neither needs a competing
-        prompt field on screen.
+        the model door shows its own placeholder (`_build_model_door_row`)
+        and the inspiration door hands off entirely to the Muse, so neither
+        needs a competing prompt field on screen.
         """
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.add_css_class("create-idea-row")
@@ -519,11 +685,45 @@ class CreateView(Gtk.Box):
         self._idea_row = row
         return row
 
+    # ── Model door: placeholder (Task 6 retires the old model-strip cards) ──
+
+    def _build_model_door_row(self) -> Gtk.Box:
+        """The model door's content while `_entry_mode == "model"`.
+
+        Task 6 retires the persistent, non-wrapping "live-model strip" that
+        used to double as this door's clickable cards (it was the thing
+        overflowing the window — see the class docstring). The GROUPED
+        model-door grid that replaces it is a separate, later task; this is
+        an honest placeholder in the meantime, hidden outside "model" mode
+        the same way `_idea_row` is hidden outside "idea" mode.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        row.add_css_class("create-model-door-placeholder")
+        row.set_visible(False)  # "idea" is the default-active door
+
+        label = Gtk.Label(
+            label="Model picker is getting a redesign — pick a medium below for now."
+        )
+        label.add_css_class("create-model-door-placeholder-label")
+        label.set_xalign(0.0)
+        label.set_wrap(True)
+        row.append(label)
+
+        self._model_door_row = row
+        return row
+
     # ── Medium chip row ──────────────────────────────────────────────────────
 
-    def _build_chip_row(self) -> Gtk.Box:
-        """One chip per `mediums_fn()` medium; selecting one swaps the panel."""
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    def _build_chip_row(self) -> Gtk.Widget:
+        """One chip per `mediums_fn()` medium; selecting one swaps the panel.
+
+        A `Gtk.FlowBox` (not a plain horizontal `Gtk.Box`) — with ~11 artgen
+        generators plus the 3 native mediums, a fixed-direction box would run
+        the row off the edge of even the width-clamped column; FlowBox wraps
+        onto additional lines instead (width-clamp requirement, Task 6).
+        """
+        row = Gtk.FlowBox()
+        row.set_selection_mode(Gtk.SelectionMode.NONE)
         row.add_css_class("create-chip-row")
         self._chip_row = row
 
@@ -568,6 +768,12 @@ class CreateView(Gtk.Box):
         neither a mapped native id nor an artgen medium (only possible for a
         future medium kind not yet ported) still falls back to the Task 3
         stub — a plain, honestly-labeled placeholder.
+
+        Task 6: every real panel is wrapped in `RoleZonePanel(panel, medium)`
+        before mounting — `self._active_panel` is the RoleZonePanel, not the
+        bare panel (see class docstring). The scoped model dropdown is
+        repopulated for the new medium on every swap, including the stub
+        fallback (an empty/placeholder dropdown is still correct there).
         """
         child = self._panel_host.get_first_child()
         while child is not None:
@@ -575,16 +781,20 @@ class CreateView(Gtk.Box):
             self._panel_host.remove(child)
             child = nxt
 
+        self._populate_model_dropdown(medium)
+
         if medium.source == "native" and medium.id in _NATIVE_PANEL_CLASSES:
             panel = _NATIVE_PANEL_CLASSES[medium.id]()
-            self._panel_host.append(panel.build())
-            self._active_panel = panel
+            zoned = RoleZonePanel(panel, medium)
+            self._panel_host.append(zoned)
+            self._active_panel = zoned
             return
 
         if medium.source == "artgen" and medium.generator:
             panel = ArtgenParamPanel(medium.generator)
-            self._panel_host.append(panel.build())
-            self._active_panel = panel
+            zoned = RoleZonePanel(panel, medium)
+            self._panel_host.append(zoned)
+            self._active_panel = zoned
             return
 
         self._active_panel = None
@@ -595,73 +805,114 @@ class CreateView(Gtk.Box):
         stub.append(label)
         self._panel_host.append(stub)
 
-    # ── Live-model strip ─────────────────────────────────────────────────────
+    # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 
-    def _refresh_model_strip_async(self) -> None:
+    def _build_model_dropdown_row(self) -> Gtk.Box:
+        """Label + `self._model_dropdown`, mounted directly above
+        `_panel_host`. The dropdown's contents are populated per-medium by
+        `_populate_model_dropdown` (called from `_swap_panel` and from the
+        health refresh), never here — at construction time the active medium
+        isn't chosen yet.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("create-model-dropdown-row")
+
+        label = Gtk.Label(label="Model")
+        label.add_css_class("create-model-dropdown-label")
+        row.append(label)
+
+        self._model_dropdown.set_hexpand(True)
+        row.append(self._model_dropdown)
+        return row
+
+    def _scoped_model_keys(self, medium: Optional[Medium] = None) -> "list[str]":
+        """`server_manager` keys whose `capabilities` match *medium* (default:
+        the currently-active medium) — the pure "what belongs in the scoped
+        dropdown" query, split out from the GTK-building side so a test (or a
+        future caller) can assert the list without touching widgets.
+
+        Capability lookup: a native medium's own id IS its capability string
+        ("image"/"video"/"animate" — matches `server_manager.ServerDef.
+        capabilities` verbatim); an artgen medium's capability is the fixed
+        string "artgen" (every artgen generator shares the same chat-LLM
+        servers — there's no per-generator server). Anything else (no active
+        medium yet, or a future medium kind) returns `[]`.
+        """
+        medium = medium if medium is not None else self._active_medium
+        if medium is None:
+            return []
+        cap = "artgen" if medium.source == "artgen" else medium.id
+        return [sdef.key for sdef in server_manager.servers_for_capability(cap)]
+
+    def _populate_model_dropdown(self, medium: Medium) -> None:
+        """Rebuild `self._model_dropdown` to list ONLY *medium*'s own models.
+
+        For a native medium with a real model field (image/video/animate),
+        an entry is included only when `_canonical_model_id_for` resolves a
+        value for it — this keeps every SELECTABLE entry able to produce a
+        real "model" value in `_collect_params` (see that function and
+        `_canonical_model_id_for`'s docstring for why e.g. "skyreels" is
+        correctly absent from the video dropdown). For an artgen medium (no
+        "model" field at all) every scoped key is listed for information —
+        selecting one has no effect on `collect()`.
+
+        Health dots reuse `self._model_health` (kept fresh by
+        `_refresh_model_health_async`/`_apply_model_health`) — "if practical,
+        else just labels" per the task brief; a key absent from the health
+        map (never checked yet) just shows the "offline" dot.
+        """
+        is_native_with_model = medium.source == "native" and medium.id in (
+            "image", "video", "animate",
+        )
+
+        entries: "list[tuple]" = []
+        labels: "list[str]" = []
+        for key in self._scoped_model_keys(medium):
+            canonical = _canonical_model_id_for(medium, key)
+            if is_native_with_model and canonical is None:
+                continue
+            sdef = server_manager.SERVERS.get(key)
+            label_text = sdef.label if sdef is not None else key
+            running = self._model_health.get(key, False)
+            dot = "●" if running else "○"
+            labels.append(f"{dot} {label_text}")
+            entries.append((key, canonical, label_text))
+
+        if not entries:
+            labels = ["No models available"]
+            entries = [(None, None, "No models available")]
+
+        self._model_dropdown_entries = entries
+        self._model_dropdown.set_model(Gtk.StringList.new(labels))
+        self._model_dropdown.set_selected(0)
+
+    # ── Model health (feeds the scoped dropdown's status dots) ──────────────
+
+    def _refresh_model_health_async(self) -> None:
         """Fetch health off the GTK main thread; apply on the main thread.
 
         `health_fn` (real default: `server_manager.status_all`) may perform
         real HTTP calls with per-service timeouts, so it must never run on
         the GTK thread (see module docstring / CLAUDE.md's GTK threading
         rule). Any exception from a bad/fake `health_fn` degrades to an
-        empty strip rather than crashing the view.
+        empty status map rather than crashing the view.
         """
         def _bg() -> None:
             try:
                 statuses = dict(self._health_fn() or {})
             except Exception:
                 statuses = {}
-            GLib.idle_add(self._apply_model_strip, statuses)
+            GLib.idle_add(self._apply_model_health, statuses)
 
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _apply_model_strip(self, statuses: dict) -> bool:
-        """Rebuild the model strip as clickable model-door cards (Task 7).
-
-        Each entry is now a `Gtk.Button` — clicking it is the model door's
-        "choose a model" gesture (`_on_model_card_clicked`), one tap whether
-        the model is running or not. A not-running card is honestly
-        relabeled/tooltipped ("needs starting") rather than pretending
-        selecting it starts anything for real — that wiring is deferred (see
-        task-7-brief.md).
-        """
+    def _apply_model_health(self, statuses: dict) -> bool:
+        """Store the fresh health map and refresh the scoped dropdown's dots
+        for whichever medium is currently active (a no-op if none is active
+        yet — shouldn't happen post-`__init__`, but defensive)."""
         self._model_health = statuses
-        self._model_cards = {}
-
-        child = self._model_strip.get_first_child()
-        while child is not None:
-            nxt = child.get_next_sibling()
-            self._model_strip.remove(child)
-            child = nxt
-
-        for key, running in statuses.items():
-            sdef = server_manager.SERVERS.get(key)
-            label_text = sdef.label if sdef is not None else str(key)
-
-            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-
-            dot = Gtk.Label(label="●" if running else "○")
-            dot.add_css_class("create-model-dot-on" if running else "create-model-dot-off")
-            inner.append(dot)
-
-            lbl = Gtk.Label(label=label_text if running else f"{label_text} (needs starting)")
-            lbl.add_css_class("create-model-label")
-            inner.append(lbl)
-
-            card = Gtk.Button()
-            card.set_has_frame(False)
-            card.set_child(inner)
-            card.add_css_class("create-model-chip")
-            card.add_css_class("create-model-chip-on" if running else "create-model-chip-off")
-            if not running:
-                card.set_tooltip_text(
-                    "Not running — starting it costs time and may reset the board."
-                )
-            card.connect("clicked", lambda _b, k=key: self._on_model_card_clicked(k))
-
-            self._model_strip.append(card)
-            self._model_cards[key] = card
-
+        if self._active_medium is not None:
+            self._populate_model_dropdown(self._active_medium)
         return GLib.SOURCE_REMOVE
 
     def _server_key_to_medium_id(self, key: str) -> Optional[str]:
@@ -700,30 +951,6 @@ class CreateView(Gtk.Box):
                 return first_artgen_id
         return None
 
-    def _on_model_card_clicked(self, key: str) -> None:
-        """Model door: selecting a card sets the medium from its capability
-        and mounts that medium's panel — "it's a video model -> you're
-        making video." Works the same whether the model is running or not
-        (see `_apply_model_strip`'s docstring for why that's honest, not
-        misleading)."""
-        medium_id = self._server_key_to_medium_id(key)
-        if medium_id is None:
-            return  # unmapped capability (e.g. prompt-server) or unknown key
-
-        try:
-            mediums = list(self._mediums_fn() or [])
-        except Exception:
-            mediums = []
-        medium = next((m for m in mediums if m.id == medium_id), None)
-        if medium is None:
-            return
-
-        btn = self._chip_buttons.get(medium_id)
-        if btn is not None:
-            btn.set_active(True)  # fires _select_medium via the chip's "toggled"
-        else:
-            self._select_medium(medium)
-
     # ── Create CTA ───────────────────────────────────────────────────────────
 
     def _build_cta_row(self) -> Gtk.Box:
@@ -744,20 +971,38 @@ class CreateView(Gtk.Box):
         self._on_create(self._active_medium, self._collect_params())
 
     def _collect_params(self) -> dict:
-        """Delegate to the active medium's real panel, if one is mounted,
-        then merge in the idea door's typed prompt (Task 7).
+        """Delegate to the active medium's mounted `RoleZonePanel`, if one is
+        mounted, then fold in the idea door's typed prompt + the Direction
+        zone's applied modifier text (Task 7 / Task 6), and finally override
+        "model" from the scoped dropdown (Task 6).
 
         Mediums without a ported panel yet (still showing the Task 3 stub)
         fall back to `{}`, matching Task 3's behavior exactly. A panel whose
         `collect()` raises degrades to `{}` too, rather than crashing the CTA
         click — `on_create` is never worth losing over a bad widget read.
 
-        `params["prompt"]` is added ONLY when the prompt entry holds
-        non-whitespace text. This is deliberate, not an oversight: every
-        Tasks 3-6 CTA test asserts an exact params dict with no "prompt" key
-        (they never touch the entry, so it's empty) — always injecting
-        `"prompt": ""` would silently break every one of them. A typed
-        prompt is real signal; an empty box is not.
+        **Prompt assembly** (Task 6): the final `prompt` is the idea door's
+        typed text, plus a trailing space and the active RoleZonePanel's
+        `applied_modifier_text()`, but ONLY when that modifier text is
+        non-empty — an untouched Direction zone must not glue a stray
+        trailing space onto the prompt. `params["prompt"]` is added at all
+        ONLY when the combined text is non-empty. This is deliberate, not an
+        oversight: every Tasks 3-6 CTA test asserts an exact params dict with
+        no "prompt" key (they never touch the entry or a modifier, so both
+        are empty) — always injecting `"prompt": ""` would silently break
+        every one of them.
+
+        **Model override** (Task 6): `RoleZonePanel.collect()` returns the
+        wrapped panel's OWN "model" value verbatim — but that panel's model
+        dropdown is never shown (RoleZonePanel deliberately skips `kind ==
+        "model"` fields, see that class's module comment), so its selection
+        can never change from its built-in default. The scoped
+        `_model_dropdown` is what the user actually sees and clicks; its
+        current selection's canonical id (via `_model_dropdown_entries`,
+        populated by `_populate_model_dropdown`) replaces "model" in the
+        collected dict whenever one is available — e.g. for an artgen medium
+        (no "model" key in `collect()` at all) there is nothing to override,
+        so the dict is left exactly as `collect()` produced it.
         """
         if self._active_panel is None:
             params = {}
@@ -767,10 +1012,30 @@ class CreateView(Gtk.Box):
             except Exception:
                 params = {}
 
+        if "model" in params:
+            entries = getattr(self, "_model_dropdown_entries", [])
+            idx = self._model_dropdown.get_selected()
+            if 0 <= idx < len(entries):
+                _key, canonical, _label = entries[idx]
+                if canonical is not None:
+                    params["model"] = canonical
+
         prompt_entry = getattr(self, "_prompt_entry", None)
-        if prompt_entry is not None:
-            prompt_text = prompt_entry.get_text().strip()
-            if prompt_text:
-                params = {**params, "prompt": prompt_text}
+        prompt_text = prompt_entry.get_text().strip() if prompt_entry is not None else ""
+
+        modifier_text = ""
+        if isinstance(self._active_panel, RoleZonePanel):
+            try:
+                modifier_text = (self._active_panel.applied_modifier_text() or "").strip()
+            except Exception:
+                modifier_text = ""
+
+        if modifier_text:
+            combined = f"{prompt_text} {modifier_text}".strip()
+        else:
+            combined = prompt_text
+
+        if combined:
+            params = {**params, "prompt": combined}
 
         return params

@@ -1413,6 +1413,20 @@ class ModifierPills(Gtk.Box):
     an "add" chip calls `_apply_entry`; clicking a pill's "✕" calls
     `_remove_entry`. Both re-render just the applied-pills row (the add-chip
     rows never change after construction).
+
+    **De-dup (Task 6, task-6-brief.md item 6)**: once an entry is applied its
+    "add" chip is hidden (`set_visible(False)`) so the SAME modifier can't be
+    tapped twice — before this, `_applied` could accumulate the identical
+    `ChipEntry` any number of times, and `applied_text()` would repeat its
+    text once per click. Removing the pill restores the add-chip
+    (`set_visible(True)`), so a modifier can always be re-applied after being
+    taken off. `self._add_buttons` maps `id(entry)` (ChipEntry is a plain,
+    unhashable dataclass) to the exact `Gtk.Button` built for it in
+    `_build_category_box`, so `_apply_entry`/`_remove_entry` can look it up
+    without a widget tree walk. A synthetic entry never built by this widget
+    (e.g. `append_modifier_for_test`'s ad-hoc `ChipEntry`) simply has no
+    matching button — `.get(id(entry))` returns `None` and the toggle is
+    skipped, matching this class's existing fail-soft conventions.
     """
 
     def __init__(self, kind: str) -> None:
@@ -1421,6 +1435,7 @@ class ModifierPills(Gtk.Box):
 
         self._kind = kind
         self._applied: "list" = []  # ordered list[ChipEntry], click order
+        self._add_buttons: "dict[int, Gtk.Button]" = {}  # id(entry) -> its add-chip button
 
         try:
             self._categories = load_chips_for_kind(kind) or []
@@ -1466,17 +1481,24 @@ class ModifierPills(Gtk.Box):
                 btn.set_tooltip_text(entry.tip)
             btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
             flow.append(btn)
+            self._add_buttons[id(entry)] = btn
         group.append(flow)
 
         return group
 
     def _apply_entry(self, entry) -> None:
         self._applied.append(entry)
+        btn = self._add_buttons.get(id(entry))
+        if btn is not None:
+            btn.set_visible(False)  # de-dup: can't add the same modifier twice
         self._render_applied()
 
     def _remove_entry(self, entry) -> None:
         if entry in self._applied:
             self._applied.remove(entry)
+        btn = self._add_buttons.get(id(entry))
+        if btn is not None:
+            btn.set_visible(True)  # restore the add-chip now the pill is gone
         self._render_applied()
 
     def _render_applied(self) -> None:

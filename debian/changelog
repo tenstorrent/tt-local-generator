@@ -1,3 +1,28 @@
+tt-local-generator (0.28.0) noble; urgency=medium
+
+  * Create surface, Task 6: role-zoned CreateView.
+    - Retired the persistent flat "live-model strip" Gtk.Box (a non-wrapping
+      row of every known server that overflowed the window) and its Task 7
+      click-to-select-medium cards.
+    - Added a model dropdown scoped to the ACTIVE medium's own models
+      (server_manager capability-filtered), mounted above the panel host --
+      replaces the old strip as the way to pick a model within a medium.
+    - Every real per-medium panel (Image/Video/Animate/Artgen) is now mounted
+      wrapped in RoleZonePanel (brief / direction / controls zones), not
+      bare -- `_active_panel` is a RoleZonePanel.
+    - The whole surface is wrapped in gtk_layout.wrap_centered(...) so
+      nothing can overflow the window on a wide screen; the medium-chip row
+      is now a wrapping Gtk.FlowBox instead of a fixed-direction Gtk.Box.
+    - The Direction zone's modifier "add" chips now hide once applied (and
+      reappear when the pill is removed), preventing the same modifier from
+      being added twice.
+    - The final prompt sent to generation is now the idea-door text plus the
+      Direction zone's applied modifier text (only appended when non-empty).
+    - The "model" entry door shows an honest placeholder; the grouped
+      model-door grid is deferred to a later task.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 17:00:00 -0700
+
 tt-local-generator (0.27.1) noble; urgency=medium
 
   * Fixed four Create-surface defects from the whole-branch review:

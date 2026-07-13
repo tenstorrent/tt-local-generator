@@ -62,3 +62,57 @@ def test_remove_drops_pill():
 
 def test_unknown_kind_no_crash():
     assert cpp.ModifierPills("nope").applied_text() == ""
+
+
+# ── De-dup (Task 6, task-6-brief.md item 6) ──────────────────────────────────
+
+def test_add_chip_hides_after_applying_and_reappears_on_removal(monkeypatch):
+    """Clicking an add-chip must hide it so the same modifier can't be added
+    twice; removing the resulting pill restores the add-chip so it can be
+    re-applied later."""
+    from chip_config import ChipCategory, ChipEntry
+    entry = ChipEntry("neon", "neon glow", "")
+    monkeypatch.setattr(
+        cpp, "load_chips_for_kind",
+        lambda k: [ChipCategory("Lighting", [entry])],
+    )
+
+    p = cpp.ModifierPills("image")
+    add_btn = p._add_buttons[id(entry)]
+    assert add_btn.get_visible() is True
+
+    add_btn.emit("clicked")
+    assert add_btn.get_visible() is False
+    assert p.applied_text() == "neon glow"
+
+    # Only one applied pill exists — click its "x" to remove it.
+    pill_child = p._applied_flow.get_first_child()
+    assert pill_child is not None
+    pill_btn = pill_child.get_child()
+    pill_btn.emit("clicked")
+
+    assert add_btn.get_visible() is True
+    assert p.applied_text() == ""
+
+
+def test_add_chip_click_cannot_double_apply_the_same_modifier(monkeypatch):
+    """Regression guard for the exact bug item 6 describes: before the hide-
+    on-apply fix, nothing stopped a second click from appending the same
+    entry twice. Since the button is hidden (not destroyed) after the first
+    click, emitting "clicked" again still fires the same handler — the real
+    UI prevents the second click by hiding the widget; this test asserts the
+    widget-visibility side of that contract directly."""
+    from chip_config import ChipCategory, ChipEntry
+    entry = ChipEntry("neon", "neon glow", "")
+    monkeypatch.setattr(
+        cpp, "load_chips_for_kind",
+        lambda k: [ChipCategory("Lighting", [entry])],
+    )
+
+    p = cpp.ModifierPills("image")
+    add_btn = p._add_buttons[id(entry)]
+
+    add_btn.emit("clicked")
+    assert add_btn.get_visible() is False
+    # A hidden widget is exactly what keeps a real user from clicking it
+    # again — the de-dup contract this task requires.

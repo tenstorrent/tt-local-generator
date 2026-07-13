@@ -24,6 +24,19 @@ instead; every other Task 3 assertion (chips, doors, model strip, stub for
 non-ported mediums) is untouched. New tests below cover `ImageParamPanel`
 itself and the CreateView-level wiring (swap-on-select, CTA routes through
 `collect()`).
+
+**Task 6** wraps every real panel in `RoleZonePanel` before mounting — so
+`view._active_panel` is now a `RoleZonePanel`, not the bare
+Image/Video/Animate/ArtgenParamPanel. Every assertion below that used to
+check `isinstance(view._active_panel, XParamPanel)` now checks
+`isinstance(view._active_panel, RoleZonePanel)` and unwraps the real panel
+via `_panel_of(view)` (== `view._active_panel._panel`) to reach its widgets.
+Task 6 also retires the flat, always-visible "live-model strip" (and its
+click-to-select-medium cards) in favor of a `_model_dropdown` SCOPED to the
+active medium — the old `test_model_strip_*`/`test_*_model_card_*` tests
+are replaced by the scoped-dropdown tests near the bottom of this file;
+`_server_key_to_medium_id`'s own tests are untouched (it's a pure helper with
+no GTK ties, kept for a future grouped model-door task).
 """
 from __future__ import annotations
 
@@ -50,8 +63,19 @@ from create_param_panels import (
     ArtgenParamPanel,
     CreateParamPanel,
     ImageParamPanel,
+    RoleZonePanel,
     VideoParamPanel,
 )
+
+
+def _panel_of(view):
+    """Unwrap `view._active_panel` (a `RoleZonePanel` since Task 6) down to
+    the real Image/Video/Animate/ArtgenParamPanel instance it wraps, so a
+    test can reach that panel's own widgets (`_neg_entry`, `_steps_adj`, …).
+    Raises AttributeError (via `._panel`) if `_active_panel` isn't a
+    RoleZonePanel — a deliberately loud failure rather than returning None,
+    since every non-stub medium is wrapped as of this task."""
+    return view._active_panel._panel
 
 # The exact default dict `ImageParamPanel.collect()` returns for a freshly
 # built, unmodified panel — mirrors ControlPanel's image defaults
@@ -175,11 +199,13 @@ def test_selecting_a_chip_sets_active_medium_and_swaps_panel(monkeypatch):
     assert view._chip_buttons["image"].get_active() is False
 
     # "verse" is an artgen medium -> mounts a real ArtgenParamPanel introspected
-    # from the verse generator's own add_args (Task 6), not the Task 3 stub.
+    # from the verse generator's own add_args (Task 6), not the Task 3 stub —
+    # wrapped in a RoleZonePanel (Task 6), not mounted bare.
     child = view._panel_host.get_first_child()
     assert child is not None
     assert view._panel_host.get_first_child() is not None
-    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert isinstance(view._active_panel, RoleZonePanel)
+    assert isinstance(_panel_of(view), ArtgenParamPanel)
 
 
 def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
@@ -200,7 +226,8 @@ def test_default_active_image_medium_mounts_real_image_param_panel(monkeypatch):
     ImageParamPanel for it immediately on construction, not the stub."""
     view = _make_view(monkeypatch)
 
-    assert isinstance(view._active_panel, ImageParamPanel)
+    assert isinstance(view._active_panel, RoleZonePanel)
+    assert isinstance(_panel_of(view), ImageParamPanel)
     child = view._panel_host.get_first_child()
     assert child is not None
     assert not child.has_css_class("create-panel-stub-label")
@@ -208,18 +235,18 @@ def test_default_active_image_medium_mounts_real_image_param_panel(monkeypatch):
 
 def test_switching_away_from_image_and_back_remounts_a_fresh_panel(monkeypatch):
     view = _make_view(monkeypatch)
-    first_image_panel = view._active_panel
+    first_image_panel = _panel_of(view)
 
     # "verse" also mounts a real panel now (ArtgenParamPanel, Task 6) — the
     # meaningful assertion is that the type changed, not that the panel host
     # went blank.
     view._chip_buttons["verse"].set_active(True)
-    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert isinstance(_panel_of(view), ArtgenParamPanel)
 
     view._chip_buttons["image"].set_active(True)
-    assert isinstance(view._active_panel, ImageParamPanel)
+    assert isinstance(_panel_of(view), ImageParamPanel)
     # A fresh panel instance is built on every swap (not cached/reused).
-    assert view._active_panel is not first_image_panel
+    assert _panel_of(view) is not first_image_panel
 
 
 def test_cta_calls_on_create_with_image_param_panel_collect_output(monkeypatch):
@@ -243,13 +270,16 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
-    panel = view._active_panel
+    panel = _panel_of(view)
     assert isinstance(panel, ImageParamPanel)
     panel._neg_entry.set_text("blurry, extra limbs")
     panel._steps_adj.set_value(35)
     panel._seed_adj.set_value(42)
     panel._guidance_adj.set_value(7.0)
-    panel._model_dropdown.set_selected(1)  # sdxl
+    # Model selection now lives in the SCOPED dropdown (Task 6), not the
+    # panel's own (unmounted, invisible) model row — see _panel_of's docstring
+    # and RoleZonePanel's "model field is never placed in any zone" contract.
+    view._model_dropdown.set_selected(1)  # sdxl (server_manager order: flux, sdxl, ...)
 
     view._cta_btn.emit("clicked")
 
@@ -269,7 +299,8 @@ def test_selecting_video_medium_mounts_real_video_param_panel(monkeypatch):
 
     view._chip_buttons["video"].set_active(True)
 
-    assert isinstance(view._active_panel, VideoParamPanel)
+    assert isinstance(view._active_panel, RoleZonePanel)
+    assert isinstance(_panel_of(view), VideoParamPanel)
     child = view._panel_host.get_first_child()
     assert child is not None
     assert not child.has_css_class("create-panel-stub-label")
@@ -278,14 +309,14 @@ def test_selecting_video_medium_mounts_real_video_param_panel(monkeypatch):
 def test_switching_away_from_video_and_back_remounts_a_fresh_panel(monkeypatch):
     view = _make_view(monkeypatch)
     view._chip_buttons["video"].set_active(True)
-    first_video_panel = view._active_panel
+    first_video_panel = _panel_of(view)
 
     view._chip_buttons["verse"].set_active(True)
-    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert isinstance(_panel_of(view), ArtgenParamPanel)
 
     view._chip_buttons["video"].set_active(True)
-    assert isinstance(view._active_panel, VideoParamPanel)
-    assert view._active_panel is not first_video_panel
+    assert isinstance(_panel_of(view), VideoParamPanel)
+    assert _panel_of(view) is not first_video_panel
 
 
 def test_cta_calls_on_create_with_video_param_panel_collect_output(monkeypatch):
@@ -306,12 +337,15 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
     view._chip_buttons["video"].set_active(True)
-    panel = view._active_panel
+    panel = _panel_of(view)
     assert isinstance(panel, VideoParamPanel)
     panel._neg_entry.set_text("blurry, watermark")
     panel._steps_adj.set_value(40)
     panel._seed_adj.set_value(101)
-    panel._model_dropdown.set_selected(1)  # mochi (SkyReels removed — I2V, no seed image)
+    # Scoped dropdown (Task 6): server_manager order is wan2.2, mochi, skyreels;
+    # skyreels has no canonical-id mapping (I2V, excluded — see
+    # _canonical_model_id_for) so the dropdown only ever offers [wan2.2, mochi].
+    view._model_dropdown.set_selected(1)  # mochi
     panel._frames_adj.set_value(65)
 
     view._cta_btn.emit("clicked")
@@ -332,7 +366,8 @@ def test_selecting_animate_medium_mounts_real_animate_param_panel(monkeypatch):
 
     view._chip_buttons["animate"].set_active(True)
 
-    assert isinstance(view._active_panel, AnimateParamPanel)
+    assert isinstance(view._active_panel, RoleZonePanel)
+    assert isinstance(_panel_of(view), AnimateParamPanel)
     child = view._panel_host.get_first_child()
     assert child is not None
     assert not child.has_css_class("create-panel-stub-label")
@@ -341,14 +376,14 @@ def test_selecting_animate_medium_mounts_real_animate_param_panel(monkeypatch):
 def test_switching_away_from_animate_and_back_remounts_a_fresh_panel(monkeypatch):
     view = _make_view(monkeypatch)
     view._chip_buttons["animate"].set_active(True)
-    first_animate_panel = view._active_panel
+    first_animate_panel = _panel_of(view)
 
     view._chip_buttons["verse"].set_active(True)
-    assert isinstance(view._active_panel, ArtgenParamPanel)
+    assert isinstance(_panel_of(view), ArtgenParamPanel)
 
     view._chip_buttons["animate"].set_active(True)
-    assert isinstance(view._active_panel, AnimateParamPanel)
-    assert view._active_panel is not first_animate_panel
+    assert isinstance(_panel_of(view), AnimateParamPanel)
+    assert _panel_of(view) is not first_animate_panel
 
 
 def test_cta_calls_on_create_with_animate_param_panel_collect_output(monkeypatch):
@@ -369,7 +404,7 @@ def test_cta_reflects_edited_animate_param_panel_widgets(monkeypatch):
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
     view._chip_buttons["animate"].set_active(True)
-    panel = view._active_panel
+    panel = _panel_of(view)
     assert isinstance(panel, AnimateParamPanel)
     panel._ref_video_entry.set_text("/tmp/motion.mp4")
     panel._ref_image_entry.set_text("/tmp/character.png")
@@ -399,8 +434,10 @@ def test_selecting_artgen_medium_mounts_artgen_param_panel_for_its_generator(mon
 
     view._chip_buttons["verse"].set_active(True)
 
-    assert isinstance(view._active_panel, ArtgenParamPanel)
-    assert view._active_panel._generator_name == "verse"
+    assert isinstance(view._active_panel, RoleZonePanel)
+    verse_panel = _panel_of(view)
+    assert isinstance(verse_panel, ArtgenParamPanel)
+    assert verse_panel._generator_name == "verse"
     child = view._panel_host.get_first_child()
     assert child is not None
     assert not child.has_css_class("create-panel-stub-label")
@@ -409,14 +446,14 @@ def test_selecting_artgen_medium_mounts_artgen_param_panel_for_its_generator(mon
 def test_switching_away_from_artgen_and_back_remounts_a_fresh_panel(monkeypatch):
     view = _make_view(monkeypatch)
     view._chip_buttons["verse"].set_active(True)
-    first_verse_panel = view._active_panel
+    first_verse_panel = _panel_of(view)
 
     view._chip_buttons["image"].set_active(True)
-    assert isinstance(view._active_panel, ImageParamPanel)
+    assert isinstance(_panel_of(view), ImageParamPanel)
 
     view._chip_buttons["verse"].set_active(True)
-    assert isinstance(view._active_panel, ArtgenParamPanel)
-    assert view._active_panel is not first_verse_panel
+    assert isinstance(_panel_of(view), ArtgenParamPanel)
+    assert _panel_of(view) is not first_verse_panel
 
 
 def test_cta_calls_on_create_with_artgen_param_panel_collect_output(monkeypatch):
@@ -440,7 +477,7 @@ def test_cta_reflects_edited_artgen_param_panel_widgets(monkeypatch):
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
     view._chip_buttons["verse"].set_active(True)
-    panel = view._active_panel
+    panel = _panel_of(view)
     assert isinstance(panel, ArtgenParamPanel)
     controls = {c.dest: c for c in panel._controls}
     controls["theme"].widget.set_text("winter forges")
@@ -492,79 +529,95 @@ def test_inspiration_door_is_safe_with_no_callback(monkeypatch):
     assert view._entry_mode == "inspiration"
 
 
-# ── Model strip ───────────────────────────────────────────────────────────
+# ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
+#
+# The flat, always-visible "live-model strip" (and the Task 7 model-door
+# cards built on top of it) is retired this task — it was a non-wrapping
+# `Gtk.Box` that overflowed the window. `_model_dropdown` replaces it: a
+# single dropdown, scoped to the ACTIVE medium's own models, mounted above
+# `_panel_host`.
 
-def test_model_strip_renders_from_fake_health_fn(monkeypatch):
+def test_model_strip_is_retired(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert not hasattr(view, "_model_strip") or view._model_strip is None
+    assert not hasattr(view, "_model_cards")
+
+
+def test_no_persistent_model_strip(monkeypatch):
+    """Step-1 brief test, verbatim (task-6-brief.md)."""
+    view = _make_view(monkeypatch)
+    assert not hasattr(view, "_model_strip") or view._model_strip is None
+
+
+def test_scoped_dropdown_lists_only_active_medium_models(monkeypatch):
+    """Step-1 brief test, verbatim (task-6-brief.md): default-active medium
+    is "image" -> only image-capable server_manager keys are offered."""
+    view = _make_view(monkeypatch)
+    keys = view._scoped_model_keys()
+    assert "flux" in keys and "wan2.2" not in keys
+
+
+def test_scoped_dropdown_switches_contents_with_active_medium(monkeypatch):
     view = _make_view(monkeypatch)
 
-    children = []
-    child = view._model_strip.get_first_child()
-    while child is not None:
-        children.append(child)
-        child = child.get_next_sibling()
+    view._chip_buttons["video"].set_active(True)
 
-    assert len(children) == 2  # one row per key in _fake_health()
+    keys = view._scoped_model_keys()
+    assert "wan2.2" in keys and "mochi" in keys
+    assert "flux" not in keys
 
 
-def test_model_strip_reflects_running_vs_not(monkeypatch):
+def test_model_dropdown_widget_model_rebuilds_on_medium_swap(monkeypatch):
+    view = _make_view(monkeypatch)
+    image_list = view._model_dropdown.get_model()
+
+    view._chip_buttons["video"].set_active(True)
+
+    assert view._model_dropdown.get_model() is not image_list
+
+
+def test_model_dropdown_default_selection_yields_image_default_model_id(monkeypatch):
+    """Index 0 of the default-active "image" medium's scoped dropdown must
+    translate to the exact canonical id ImageParamPanel's OWN (now-hidden)
+    model dropdown would have produced by default — the migration invariant
+    this task's `_canonical_model_id_for` exists to preserve."""
+    view = _make_view(monkeypatch)
+    idx = view._model_dropdown.get_selected()
+    _key, canonical, _label = view._model_dropdown_entries[idx]
+    assert canonical == "flux.1-schnell"
+
+
+def test_video_scoped_dropdown_excludes_skyreels(monkeypatch):
+    """VideoParamPanel deliberately excludes SkyReels (I2V, no seed image —
+    see that class's module comment); the scoped dropdown must not offer a
+    key that can't produce a valid "model" value for the video medium."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+
+    canonicals = {c for _k, c, _l in view._model_dropdown_entries}
+    assert "skyreels-v2-i2v-14b-540p" not in canonicals
+
+
+def test_model_health_reflects_running_vs_not(monkeypatch):
     view = _make_view(monkeypatch)
     assert view._model_health == {"wan2.2": True, "flux": False}
 
 
-# ── Model door: selectable model cards (Task 7) ──────────────────────────
+# ── Model door placeholder (Task 6) ──────────────────────────────────────
 #
-# The Task 3 model strip (a passive health readout) becomes the model door's
-# selectable entries this task: real server_manager keys from _fake_health()
-# ("wan2.2"/capabilities=("video",), "flux"/capabilities=("image",)) — no
-# monkeypatching of server_manager.SERVERS is needed since the real registry
-# already declares sensible capabilities for these two services.
+# The grouped model-door grid is a separate, later task; the door itself
+# still exists but now shows an honest "not built yet" placeholder instead
+# of the retired model-strip's clickable cards.
 
-def test_model_strip_cards_are_clickable_buttons(monkeypatch):
+def test_model_door_placeholder_visible_only_in_model_mode(monkeypatch):
     view = _make_view(monkeypatch)
-    assert set(view._model_cards.keys()) == {"wan2.2", "flux"}
-    for card in view._model_cards.values():
-        assert isinstance(card, Gtk.Button)
+    assert view._model_door_row.get_visible() is False
 
+    view._doors["model"].set_active(True)
+    assert view._model_door_row.get_visible() is True
 
-def test_selecting_a_running_model_card_sets_medium_from_its_capability(monkeypatch):
-    """"wan2.2" is running in _fake_health() and server_manager.SERVERS["wan2.2"]
-    declares capabilities=("video",) -> selecting its card must activate the
-    "video" medium and mount VideoParamPanel, one tap."""
-    view = _make_view(monkeypatch)
-
-    view._model_cards["wan2.2"].emit("clicked")
-
-    assert view._active_medium is not None
-    assert view._active_medium.id == "video"
-    assert isinstance(view._active_panel, VideoParamPanel)
-    assert view._chip_buttons["video"].get_active() is True
-
-
-def test_selecting_a_not_running_model_card_still_sets_medium(monkeypatch):
-    """"flux" is NOT running in _fake_health() — honest per the task brief
-    ("not-running show they'd need starting"), but still one-tap selectable;
-    actually starting the server is deferred to a later task."""
-    view = _make_view(monkeypatch)
-
-    view._model_cards["flux"].emit("clicked")
-
-    assert view._active_medium is not None
-    assert view._active_medium.id == "image"
-    assert isinstance(view._active_panel, ImageParamPanel)
-
-
-def test_not_running_model_card_is_labeled_honestly(monkeypatch):
-    view = _make_view(monkeypatch)
-    card = view._model_cards["flux"]
-    tooltip = (card.get_tooltip_text() or "").lower()
-    assert "start" in tooltip
-
-
-def test_running_model_card_has_no_needs_starting_tooltip(monkeypatch):
-    view = _make_view(monkeypatch)
-    card = view._model_cards["wan2.2"]
-    tooltip = card.get_tooltip_text()
-    assert not tooltip or "start" not in tooltip.lower()
+    view._doors["idea"].set_active(True)
+    assert view._model_door_row.get_visible() is False
 
 
 # ── _server_key_to_medium_id (Task 7) ────────────────────────────────────
@@ -654,6 +707,49 @@ def test_cta_payload_strips_whitespace_only_prompt(monkeypatch):
     view._cta_btn.emit("clicked")
 
     assert "prompt" not in calls[0][1]
+
+
+# ── Modifier text folded into the prompt (Task 6) ────────────────────────
+
+def test_collect_params_appends_modifier_text(monkeypatch):
+    """Step-1 brief test, verbatim (task-6-brief.md)."""
+    view = _make_view(monkeypatch)
+    view._prompt_entry.set_text("a castle")
+    view._active_panel.append_modifier_for_test("golden hour lighting")
+
+    params = view._collect_params()
+
+    assert params["prompt"] == "a castle golden hour lighting"
+
+
+def test_collect_params_dict_keys_unchanged_for_image(monkeypatch):
+    """Step-1 brief test, verbatim (task-6-brief.md)."""
+    view = _make_view(monkeypatch)
+    view._prompt_entry.set_text("x")
+
+    p = view._collect_params()
+
+    assert set(p) >= {
+        "prompt", "negative_prompt", "num_inference_steps", "seed",
+        "guidance_scale", "model",
+    }
+
+
+def test_collect_params_modifier_text_alone_needs_no_leading_space(monkeypatch):
+    """An untouched idea-door entry (empty prompt) plus an applied modifier
+    must not leave a stray leading space in the final prompt."""
+    view = _make_view(monkeypatch)
+    view._active_panel.append_modifier_for_test("golden hour lighting")
+
+    params = view._collect_params()
+
+    assert params["prompt"] == "golden hour lighting"
+
+
+def test_collect_params_no_modifier_and_no_prompt_omits_prompt_key(monkeypatch):
+    view = _make_view(monkeypatch)
+    params = view._collect_params()
+    assert "prompt" not in params
 
 
 # ── CTA ───────────────────────────────────────────────────────────────────
