@@ -1502,3 +1502,32 @@ def test_run_ffmpeg_seam_returns_false_on_missing_binary(monkeypatch):
         raise FileNotFoundError("no ffmpeg binary")
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
     assert eng._run_ffmpeg(["-y"]) is False
+
+
+# ── Montage caption escaping/labeling (fix: captions failed on real lore) ──────
+
+def test_caption_label_extracts_short_title_from_markdown_fragment():
+    frag = "- **The Dogged Dancer**  \nA local girl named Lila once played Tetris."
+    assert eng._caption_label(frag) == "The Dogged Dancer"
+
+def test_caption_label_first_line_when_no_markdown():
+    assert eng._caption_label("A plain caption\nsecond line") == "A plain caption"
+
+def test_caption_label_truncates_long_single_line():
+    lbl = eng._caption_label("x" * 200, max_len=64)
+    assert len(lbl) <= 64 and lbl.endswith("…")
+
+def test_caption_label_empty_for_blank():
+    assert eng._caption_label("   \n  ") == ""
+
+def test_escape_drawtext_handles_newline_and_percent():
+    out = eng._escape_drawtext("a\nb%c")
+    assert "\n" not in out          # newline neutralized (not a raw newline)
+    assert "%" not in out or "\\%" in out  # percent escaped
+
+def test_caption_chain_has_no_raw_newline_and_uses_label(tmp_path):
+    frag = "- **Forest Tetris**  \nvillagers built \"The Forest's Dots\": a grid, 100% wood."
+    chain = eng._caption_drawtext_chain([frag], 1, 2.5)
+    assert "\n" not in chain                 # no raw newline leaks into the filtergraph
+    assert "Forest Tetris" in chain          # the short label is what's drawn
+    assert "villagers built" not in chain    # the long body is NOT drawn

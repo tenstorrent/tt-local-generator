@@ -696,15 +696,46 @@ def _h_add_to_playlist(nid, inp, ctx):
 # workflow_compat.py) so a failed/absent ffmpeg never aborts the run — the
 # individual stills the pipeline already produced still stand.
 
+def _caption_label(text: str, max_len: int = 64) -> str:
+    """Reduce a fragment to a short, single-line caption LABEL.
+
+    A recipe wires the montage's captions to the raw fragments, which are
+    often a multi-line markdown blob (``- **Title**\\n<paragraph>``). Drawing
+    the whole paragraph is both illegible and a filtergraph hazard (raw
+    newlines break drawtext parsing — the real-lore failure this fixes). We
+    take the first non-empty line, strip leading markdown bullets/heading
+    marks and surrounding ``**`` emphasis, collapse internal whitespace, and
+    truncate to *max_len* with an ellipsis. Returns "" for blank input.
+    """
+    for line in str(text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = line.lstrip("-*#> \t").strip()          # markdown bullet/heading
+        if line.startswith("**") and line.endswith("**") and len(line) > 4:
+            line = line[2:-2].strip()                  # **Title** -> Title
+        line = line.replace("**", "")                  # stray emphasis
+        line = " ".join(line.split())                  # collapse whitespace
+        if not line:
+            continue
+        return (line[: max_len - 1] + "…") if len(line) > max_len else line
+    return ""
+
+
 def _escape_drawtext(text: str) -> str:
     """Escape a caption for ffmpeg's drawtext filter.
 
     drawtext's mini-language treats ``:`` as an option separator, ``'`` as
     the text-argument delimiter, and ``,`` as a filter-chain separator, so
     each must be backslash-escaped (backslash itself escaped first) or the
-    filtergraph fails to parse.
+    filtergraph fails to parse. Additionally, a raw newline aborts the parse
+    and ``%`` triggers strftime-style expansion, so newlines are flattened to
+    spaces and ``%`` is escaped — both were unhandled and both occur in real
+    lore text (the failure that made captions silently drop).
     """
     return (text.replace("\\", "\\\\")
+                .replace("\n", " ").replace("\r", " ")
+                .replace("%", "\\%")
                 .replace(":", "\\:")
                 .replace("'", "\\'")
                 .replace(",", "\\,"))
@@ -721,11 +752,11 @@ def _caption_drawtext_chain(captions: "list[str]", n: int, seconds_per: float) -
     """
     parts = []
     for i in range(n):
-        cap = captions[i] if i < len(captions) else ""
+        cap = _caption_label(captions[i]) if i < len(captions) else ""
         if not cap:
             continue
         start, end = i * seconds_per, (i + 1) * seconds_per
-        text = _escape_drawtext(str(cap))
+        text = _escape_drawtext(cap)
         parts.append(
             f"drawtext=text='{text}':fontcolor=white:fontsize=36:"
             f"x=(w-text_w)/2:y=h-text_h-40:box=1:boxcolor=black@0.5:boxborderw=10:"

@@ -1,3 +1,15 @@
+tt-local-generator (0.23.1) noble; urgency=medium
+
+  * Montage captions now render on real lore. TTLGMontage's drawtext captions
+    silently dropped (fell back to a plain slideshow) whenever a fragment
+    contained a newline or a "%" — which every real multi-line lore fragment
+    does. Fix: each caption is reduced to a short single-line LABEL (the
+    fragment's title, markdown/emphasis stripped, truncated) and the drawtext
+    escaper now also flattens newlines and escapes "%". Verified on an 8-still
+    tetris-lore series — captions like "The Dogged Dancer" now burn in.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 09:30:00 -0700
+
 tt-local-generator (0.23.0) noble; urgency=medium
 
   * Generative Art gallery gets its own "🧩 Remix as pipeline…" bridge into
