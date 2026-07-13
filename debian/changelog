@@ -1,3 +1,16 @@
+tt-local-generator (0.22.0) noble; urgency=medium
+
+  * Pipeline Studio now renders VIDEO steps as a real poster frame (first
+    frame extracted once via ffmpeg and cached as <stem>.poster.jpg), instead
+    of the clapperboard placeholder — so a produced .mp4 shows as itself in
+    the Open view and Discover hero/cards. GIFs still render directly. Falls
+    back to the honest placeholder only if ffmpeg is absent/fails.
+  * Gallery declutter: PipelineStore.delete_run(run_id) removes a run from the
+    index (leaving on-disk artifacts untouched), so stale/failed/empty runs
+    can be cleared out.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 13 Jul 2026 07:00:00 -0700
+
 tt-local-generator (0.21.4) noble; urgency=medium
 
   * Pipeline Studio review mode now SHOWS, doesn't tell. Two fixes to how a

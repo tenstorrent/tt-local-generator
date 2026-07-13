@@ -2349,3 +2349,38 @@ def test_pipeline_studio_muse_goal_chosen_scoped_uses_kind_title(monkeypatch, tm
 
     assert studio.remix_view._title_label.get_label() == "Composing · your image"
     assert studio.stack.get_visible_child_name() == "remix"
+
+
+# ── Video poster-frame thumbnails (_poster_frame_for) ────────────────────────
+
+def test_poster_frame_image_passes_through():
+    import pipeline_studio as ps
+    assert ps._poster_frame_for("/x/a.png", extract_fn=lambda s, d: False) == "/x/a.png"
+    assert ps._poster_frame_for("/x/a.gif", extract_fn=lambda s, d: False) == "/x/a.gif"
+
+
+def test_poster_frame_video_extracts_and_caches(tmp_path):
+    import pipeline_studio as ps
+    vid = tmp_path / "node6_video.mp4"
+    vid.write_bytes(b"fake")
+    calls = []
+
+    def fake_extract(src, dest):
+        calls.append((src, dest))
+        Path(dest).write_bytes(b"jpg")
+        return True
+
+    out = ps._poster_frame_for(str(vid), extract_fn=fake_extract)
+    assert out == str(tmp_path / "node6_video.poster.jpg")
+    assert Path(out).exists()
+    assert len(calls) == 1
+    # cached — a second call reuses the poster, no re-extraction
+    out2 = ps._poster_frame_for(str(vid), extract_fn=fake_extract)
+    assert out2 == out and len(calls) == 1
+
+
+def test_poster_frame_video_extract_fails_returns_none(tmp_path):
+    import pipeline_studio as ps
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"fake")
+    assert ps._poster_frame_for(str(vid), extract_fn=lambda s, d: False) is None

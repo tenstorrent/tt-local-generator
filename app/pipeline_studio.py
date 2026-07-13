@@ -304,6 +304,36 @@ def _with_preserved_top_level_metadata(spec: dict, base_spec_path: str) -> dict:
     return merged
 
 
+# Video extensions that GdkPixbuf can't load directly — we render a poster
+# frame instead (see _poster_frame_for). GIF is deliberately excluded: pixbuf
+# loads it fine (first/animated frame), so a produced GIF shows as itself.
+_POSTER_VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv", ".avi")
+
+
+def _poster_frame_for(path: str, *, extract_fn) -> "str | None":
+    """Return an IMAGE path to render for *path*.
+
+    Image paths pass straight through. Video paths get a poster frame — the
+    first frame extracted (once, cached next to the file as ``<stem>.poster.jpg``)
+    via ``extract_fn(src, dest) -> bool`` — so a produced video renders as a real
+    frame instead of failing to load as a pixbuf and falling back to the 🎬
+    placeholder. Returns None only when a video's poster can't be produced
+    (ffmpeg absent/failed) — the caller then shows the honest placeholder.
+
+    Pure/injectable (`extract_fn` is the real ffmpeg wrapper in production,
+    a fake in tests) — no GTK, no subprocess of its own.
+    """
+    p = Path(path)
+    if p.suffix.lower() not in _POSTER_VIDEO_EXTS:
+        return path
+    poster = p.with_name(p.stem + ".poster.jpg")
+    if poster.exists():
+        return str(poster)
+    if extract_fn(path, str(poster)) and poster.exists():
+        return str(poster)
+    return None
+
+
 def _thumb_pixbuf(path: "str | None", width: int, height: int):
     """Aspect-preserving thumbnail load, or None if there's nothing to load.
 
@@ -312,11 +342,19 @@ def _thumb_pixbuf(path: "str | None", width: int, height: int):
     scope) so importing pipeline_studio never drags in all of main_window's
     heavier dependencies, and so there's no module-load-time circular import
     once a later task embeds PipelineStudio inside MainWindow.
+
+    Video artifacts (a produced .mp4 etc.) are rendered via a poster frame
+    (`_poster_frame_for` + animate_picker.extract_thumbnail) so they show as a
+    real frame rather than the placeholder tile.
     """
     if not path:
         return None
+    from animate_picker import extract_thumbnail
     from main_window import _load_pixbuf
-    return _load_pixbuf(path, width, height)
+    src = _poster_frame_for(path, extract_fn=extract_thumbnail)
+    if src is None:
+        return None
+    return _load_pixbuf(src, width, height)
 
 
 def _build_thumb_frame(path: "str | None", width: int, height: int,

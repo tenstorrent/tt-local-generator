@@ -133,3 +133,21 @@ def test_update_pid(store):
 def test_update_pid_unknown_run_is_noop(store):
     """update_pid() on a non-existent run_id must not raise."""
     store.update_pid("does-not-exist", 123)  # must not raise
+
+
+def test_delete_run_removes_only_that_record(store):
+    a = store.create_run(spec_path="/s.json", spec_name="A", jobs=[],
+                         param_overrides={}, pid=1, log_file="/x.log")
+    b = store.create_run(spec_path="/s.json", spec_name="B", jobs=[],
+                         param_overrides={}, pid=2, log_file="/y.log")
+    assert store.delete_run(a) is True
+    ids = {r["id"] for r in store.list_runs(limit=50)}
+    assert a not in ids and b in ids
+
+
+def test_delete_run_unknown_id_returns_false(store):
+    store.create_run(spec_path="/s.json", spec_name="A", jobs=[],
+                     param_overrides={}, pid=1, log_file="/x.log")
+    before = len(store.list_runs(limit=50))
+    assert store.delete_run("no-such-id") is False
+    assert len(store.list_runs(limit=50)) == before

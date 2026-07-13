@@ -204,6 +204,22 @@ class PipelineStore:
                     break
             self._save(records)
 
+    def delete_run(self, run_id: str) -> bool:
+        """Remove a run record from the index. Returns True if one was removed.
+
+        Used to declutter the gallery (stale/failed/empty runs). Removes only
+        the index entry — the run's `output_dir` artifacts on disk are left
+        untouched (a deliberately conservative choice: the index is cheap to
+        rebuild, real generated media is not).
+        """
+        with self._lock:
+            records = self._load()
+            kept = [r for r in records if r.get("id") != run_id]
+            if len(kept) == len(records):
+                return False
+            self._save(kept)
+            return True
+
     def update_output_dir(self, run_id: str, output_dir: str) -> None:
         """Persist the workflow output directory path for an existing run record.
 
