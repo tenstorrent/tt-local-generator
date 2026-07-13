@@ -1,6 +1,7 @@
 """Tests for pipeline_view_model — record -> intent-steps + artifacts."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -366,3 +367,41 @@ def test_list_run_views_skips_unloadable_record():
     views = pvm.list_run_views(_FakeStore([bad, good]))
     assert len(views) == 1
     assert views[0].run_id == good["id"]
+
+
+# ── StepView.artifact_paths (fan-out: all N stills, not just one) ─────────────
+
+def _touch_png(p):
+    from pathlib import Path as _P
+    _P(p).write_bytes(b"\x89PNG\r\n\x1a\n")  # enough to exist with a .png ext
+    return str(p)
+
+def test_artifact_paths_lists_all_fanout_images(tmp_path):
+    out_dir = tmp_path / "run_out"; out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    a = _touch_png(out_dir / "node1_image_0.png")
+    b = _touch_png(out_dir / "node1_image_1.png")
+    (out_dir / "results.json").write_text(json.dumps({"1": {"image_path": [a, b]}}))
+    rec = _make_record(spec_path=str(out_dir / "spec.json"), output_dir=str(out_dir), job_states={})
+    step1 = next(s for s in pvm.build_run_view(rec).steps if s.node_id == "1")
+    assert list(step1.artifact_paths) == [a, b]
+
+def test_artifact_paths_filters_missing_files(tmp_path):
+    out_dir = tmp_path / "run_out"; out_dir.mkdir()
+    (out_dir / "spec.json").write_text(Path(_SPEC).read_text())
+    a = _touch_png(out_dir / "node1_image_0.png")
+    (out_dir / "results.json").write_text(json.dumps({"1": {"image_path": [a, str(out_dir / "gone.png")]}}))
+    rec = _make_record(spec_path=str(out_dir / "spec.json"), output_dir=str(out_dir), job_states={})
+    step1 = next(s for s in pvm.build_run_view(rec).steps if s.node_id == "1")
+    assert list(step1.artifact_paths) == [a]
+
+def test_artifact_paths_falls_back_to_single_artifact():
+    # default fixture run: node 1 has one real on-disk artifact, no results.json list
+    step1 = next(s for s in pvm.build_run_view(_make_record()).steps if s.node_id == "1")
+    assert step1.artifact_path is not None
+    assert list(step1.artifact_paths) == [step1.artifact_path]
+
+def test_artifact_paths_empty_for_text_step():
+    step2 = next(s for s in pvm.build_run_view(_make_record()).steps if s.node_id == "2")
+    assert step2.artifact_path is None
+    assert list(step2.artifact_paths) == []

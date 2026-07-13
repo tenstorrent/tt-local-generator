@@ -111,6 +111,14 @@ class StepView:
     status: str
     artifact_path: "str | None"
     text_content: "str | None" = None
+    # artifact_paths — ALL of this step's on-disk file artifacts, in order. For
+    # an ordinary single-output step this is (artifact_path,) (or empty); for a
+    # FAN-OUT step (e.g. a list-aware TTLGTextToImage that generated one image
+    # per lore fragment) it's every produced file, read from the run's
+    # results.json list output. Consumers that want the whole series (the
+    # showcase gallery) iterate this; artifact_path remains the single hero/
+    # representative artifact for backward compatibility + hero selection.
+    artifact_paths: "tuple[str, ...]" = ()
 
 
 @dataclass
@@ -283,6 +291,54 @@ def _artifact_kind(intent: Intent) -> "str | None":
     return kind_info[0] if kind_info else None
 
 
+def _resolve_artifact_list(output_dir: "Path | None", node_id: str, intent: Intent) -> "tuple[str, ...]":
+    """All of node_id's on-disk file artifacts (in order), for a fan-out step.
+
+    A list-aware node (e.g. TTLGTextToImage given a list of prompts) records
+    its primary output as a LIST of paths in results.json. Read that list and
+    keep the entries that are real files with an allowed extension for the
+    intent's kind — so the showcase can render every still in a series, not
+    just the one `_resolve_artifact` globs. Returns () when there's no
+    results.json, the node's primary output isn't a list, or nothing survives
+    the existence/extension filter (same never-crash discipline as
+    `_resolve_artifact`/`_resolve_text_content`). A single (scalar) output is
+    NOT handled here — build_run_view falls back to `(artifact_path,)`.
+    """
+    if output_dir is None or not intent.outputs:
+        return ()
+    kind_info = _OUTPUT_KIND.get(intent.outputs[0])
+    if kind_info is None:
+        return ()
+    _kind, allowed_exts = kind_info
+
+    candidates = (list(output_dir.glob("results.json"))
+                  + list(output_dir.glob("*/results.json")))
+    candidates = [c for c in candidates if c.is_file()]
+    if not candidates:
+        return ()
+    best = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        results = json.loads(best.read_text())
+        node_data = results[node_id]
+        value = node_data[intent.outputs[0]]
+    except Exception:  # noqa: BLE001 — missing/malformed/absent -> no list
+        return ()
+    if not isinstance(value, list):
+        return ()
+
+    out: "list[str]" = []
+    for p in value:
+        if not isinstance(p, str) or not p:
+            continue
+        fp = Path(p)
+        if not fp.is_file():
+            continue
+        if allowed_exts is not None and fp.suffix.lower() not in allowed_exts:
+            continue
+        out.append(p)
+    return tuple(out)
+
+
 def build_run_view(record: dict) -> RunView:
     """Build a `RunView` from a raw `PipelineStore` run record.
 
@@ -313,8 +369,14 @@ def build_run_view(record: dict) -> RunView:
         text_content = (
             None if artifact_path else _resolve_text_content(output_dir, node_id, intent)
         )
+        # Fan-out steps record a LIST of artifacts in results.json; fall back to
+        # the single globbed artifact_path (wrapped) for ordinary steps.
+        artifact_paths = _resolve_artifact_list(output_dir, node_id, intent)
+        if not artifact_paths and artifact_path:
+            artifact_paths = (artifact_path,)
         steps.append(StepView(node_id=node_id, intent=intent, status=status,
-                              artifact_path=artifact_path, text_content=text_content))
+                              artifact_path=artifact_path, text_content=text_content,
+                              artifact_paths=artifact_paths))
         if hero_path is None and artifact_path and _artifact_kind(intent) in _HERO_KINDS:
             hero_path = artifact_path
 

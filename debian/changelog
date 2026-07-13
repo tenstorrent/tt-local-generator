@@ -1,3 +1,16 @@
+tt-local-generator (0.24.0) noble; urgency=medium
+
+  * Showcase is now fan-out aware. A fan-out step (e.g. a list-aware
+    TTLGTextToImage that made one still per lore fragment) previously showed
+    only ONE of its N images in "Build showcase" — the run view-model
+    resolved a single artifact per step. StepView now carries `artifact_paths`
+    (all of a step's on-disk files, read from the run's results.json list
+    output), and the showcase renders a gallery tile per still — so an
+    "illustrated series" shows every image, not just the hero. Single-artifact
+    and text/placeholder steps are unchanged.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 10:00:00 -0700
+
 tt-local-generator (0.23.1) noble; urgency=medium
 
   * Montage captions now render on real lore. TTLGMontage's drawtext captions

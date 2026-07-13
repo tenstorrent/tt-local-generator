@@ -130,23 +130,23 @@ def _find_hero(run_view: RunView) -> "tuple[StepView, str] | tuple[None, None]":
     return None, None
 
 
-def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> "tuple[str, str | None]":
-    """Build the hero figure, and report which step's asset it embedded.
+def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> "tuple[str, str | None, str | None]":
+    """Build the hero figure, and report which step/path asset it embedded.
 
-    Returns `(html, embedded_node_id)`. The caller (`build_showcase_html`)
-    excludes `embedded_node_id` from the gallery loop so the same asset is
-    never encoded/embedded a second time. `embedded_node_id` is `None` when
-    there's no hero candidate, or when `encode_asset` declined (missing/
-    oversized/etc.) — in the latter case nothing was actually embedded here,
-    so the step is left free to still get an honest gallery tile rather than
-    silently disappearing from the page.
+    Returns `(html, embedded_node_id, embedded_path)`. The caller
+    (`build_showcase_html`) uses `embedded_path` to skip re-embedding that
+    exact asset in the gallery — so for a FAN-OUT hero step (many stills) the
+    gallery still shows the OTHER stills, only the one hero image is excluded.
+    Both id and path are `None` when there's no hero candidate, or when
+    `encode_asset` declined — nothing was embedded, so the step is left free
+    to still get honest gallery tiles.
     """
     step, kind = _find_hero(run_view)
     if step is None:
-        return "", None
+        return "", None, None
     encoded = encode_asset(step.artifact_path, kind, max_px=_HERO_MAX_PX)
     if not encoded:
-        return "", None
+        return "", None, None
     if kind == "video":
         html = (
             f'<figure class="hero"><video src="{encoded}" autoplay loop muted '
@@ -154,7 +154,7 @@ def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> "tuple[str, st
         )
     else:
         html = f'<figure class="hero"><img src="{encoded}" alt="{_esc(run_view.title)}"></figure>'
-    return html, step.node_id
+    return html, step.node_id, step.artifact_path
 
 
 def _placeholder_tile(label: str, status: str) -> str:
@@ -171,12 +171,18 @@ def _placeholder_tile(label: str, status: str) -> str:
 
 
 def _gallery_tile(step: StepView, encode_asset: EncodeAssetFn) -> str:
+    """A gallery tile for the step's single/representative artifact (or a
+    text/placeholder tile when it has no on-disk file)."""
+    return _gallery_tile_for_path(step, step.artifact_path, encode_asset)
+
+
+def _gallery_tile_for_path(step: StepView, path: "str | None", encode_asset: EncodeAssetFn) -> str:
     label = f"{step.intent.verb} {step.intent.noun}".strip()
     kind = _asset_kind(step.intent.output_kind)
 
     encoded = None
-    if step.status == "done" and step.artifact_path and kind:
-        encoded = encode_asset(step.artifact_path, kind, max_px=_GALLERY_MAX_PX)
+    if step.status == "done" and path and kind:
+        encoded = encode_asset(path, kind, max_px=_GALLERY_MAX_PX)
 
     if not encoded:
         # Covers: not done yet, no artifact on disk, unrecognized output kind,
@@ -263,16 +269,21 @@ def build_showcase_html(run_view: RunView, *, encode_asset: EncodeAssetFn) -> st
     one yet) always renders an honest placeholder tile, never a fabricated
     thumbnail.
     """
-    hero_html, hero_node_id = _hero_html(run_view, encode_asset)
-    # Exclude the hero's own step from the gallery loop — its asset was
-    # already embedded once above; looping over ALL steps here would encode
-    # and embed it a SECOND time (worst for video: doubles the largest
-    # payload in the page).
-    gallery_html = "".join(
-        _gallery_tile(step, encode_asset)
-        for step in run_view.steps
-        if step.node_id != hero_node_id
-    )
+    hero_html, hero_node_id, hero_path = _hero_html(run_view, encode_asset)
+    # Render a gallery tile per ON-DISK artifact so a FAN-OUT step (e.g. one
+    # image per lore fragment) shows every still, not just one. The hero's
+    # exact asset is embedded once above, so it's skipped here (only that one
+    # path — a fan-out hero step's OTHER stills still appear). A step with no
+    # file artifacts (text/pending) falls back to a single text/placeholder
+    # tile via `_gallery_tile`.
+    tiles: "list[str]" = []
+    for step in run_view.steps:
+        paths = [p for p in step.artifact_paths if p != hero_path]
+        if paths:
+            tiles.extend(_gallery_tile_for_path(step, p, encode_asset) for p in paths)
+        elif step.node_id != hero_node_id:
+            tiles.append(_gallery_tile(step, encode_asset))
+    gallery_html = "".join(tiles)
     recipe_html = _recipe_html(run_view.recipe)
     title = _esc(run_view.title)
 

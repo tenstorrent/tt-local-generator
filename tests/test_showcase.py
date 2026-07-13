@@ -224,3 +224,24 @@ def test_default_encode_asset_text_reads_file(tmp_path):
 
 def test_default_encode_asset_none_path_returns_none():
     assert showcase.default_encode_asset(None, "image") is None
+
+
+# ── Fan-out: a step with multiple artifacts renders a tile per still ──────────
+
+def test_fanout_step_renders_a_tile_per_artifact():
+    from pipeline_view_model import StepView, RunView
+    paths = ["/fake/series/a0.png", "/fake/series/a1.png", "/fake/series/a2.png"]
+    step = StepView(node_id="1", intent=_IMAGE_INTENT, status="done",
+                    artifact_path=paths[0], artifact_paths=tuple(paths))
+    run_view = RunView(run_id="r", title="A Series", created_at="",
+                       hero_path=paths[0], steps=[step], recipe=["Generate an image"])
+
+    def _echo_encode(path, kind, max_px=1000):
+        return f"data:image/png;base64,{path}"   # echo the path so we can count embeds
+
+    html = showcase.build_showcase_html(run_view, encode_asset=_echo_encode)
+    # every fan-out still is embedded somewhere on the page...
+    for p in paths:
+        assert f"data:image/png;base64,{p}" in html
+    # ...and the hero still (a0) is embedded exactly once (hero, not hero+gallery)
+    assert html.count(f"data:image/png;base64,{paths[0]}") == 1
