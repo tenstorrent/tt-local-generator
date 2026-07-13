@@ -128,6 +128,7 @@ class ArtgenPanel(Gtk.Box):
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_remix: "Optional[Callable[['MediaRecord'], None]]" = None
+        self.on_remix_as_pipeline: "Optional[Callable[['MediaRecord'], None]]" = None
         self._active_count: int = 0            # artgen jobs currently in flight (0.._MAX_CONCURRENT_ARTGEN)
         self._gen_queue: deque = deque()  # (gen_name, args) tuples pending manual generation
         self._last_out_path: Path | None = None
@@ -191,12 +192,14 @@ class ArtgenPanel(Gtk.Box):
         self._gallery.on_watch_requested = self._on_watch_requested
         self._gallery.on_card_deleted = self._on_gallery_card_deleted
         self._gallery.on_remix = self._on_remix_record
+        self._gallery.on_remix_as_pipeline = self._on_remix_as_pipeline_record
         self._sub_stack.add_named(self._gallery, "gallery")
 
         self._detail = ArtgenDetail()
         self._detail.on_back = self._on_detail_back
         self._detail.on_deleted = self._on_detail_deleted
         self._detail.on_remix = self._on_remix_record
+        self._detail.on_remix_as_pipeline = self._on_remix_as_pipeline_record
         self._sub_stack.add_named(self._detail, "detail")
 
         self._watch = ArtgenWatch()
@@ -1636,6 +1639,12 @@ class ArtgenPanel(Gtk.Box):
         """Forward the remix request to the MainWindow callback if wired."""
         if self.on_remix:
             self.on_remix(rec)
+
+    def _on_remix_as_pipeline_record(self, rec: "MediaRecord") -> None:
+        """Forward the "remix as pipeline" request to the MainWindow callback
+        if wired. Parallel seam to `_on_remix_record` — see `on_remix_as_pipeline`."""
+        if self.on_remix_as_pipeline:
+            self.on_remix_as_pipeline(rec)
 
     def _on_watch_requested(self, generator_type: str | None) -> None:
         records = _media_store.query(media_type="artgen", generator_type=generator_type)

@@ -474,6 +474,7 @@ class ArtgenGallery(Gtk.Box):
         self.on_watch_requested: Optional[Callable[[Optional[str]], None]] = None
         self.on_card_deleted: Optional[Callable[[str], None]] = None
         self.on_remix: Optional[Callable[["MediaRecord"], None]] = None
+        self.on_remix_as_pipeline: Optional[Callable[["MediaRecord"], None]] = None
         self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
         self._build()
@@ -687,6 +688,18 @@ class ArtgenGallery(Gtk.Box):
 
         seed_btn.connect("clicked", _on_seed)
         actions.append(seed_btn)
+
+        pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
+        pipeline_btn.add_css_class("artgen-card-remix-btn")
+        pipeline_btn.set_tooltip_text("Turn this into a multi-step pipeline")
+
+        def _on_pipeline_seed(_b, _rec=rec):
+            if self.on_remix_as_pipeline:
+                self.on_remix_as_pipeline(_rec)
+
+        pipeline_btn.connect("clicked", _on_pipeline_seed)
+        actions.append(pipeline_btn)
+        overlay._remix_as_pipeline_btn = pipeline_btn  # stashed for test access
 
         hover_rev.set_child(actions)
         overlay.add_overlay(hover_rev)

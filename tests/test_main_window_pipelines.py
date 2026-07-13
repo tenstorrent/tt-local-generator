@@ -405,3 +405,131 @@ def test_remix_as_pipeline_unresolvable_kind_falls_back_to_blank_muse(tmp_path, 
     obj._remix_as_pipeline(rec)
 
     obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+
+
+# ── Task 7: generative-art gallery bridge (MediaRecord branch) ───────────────
+#
+# _remix_as_pipeline also accepts a media_store.MediaRecord (the artgen
+# gallery's own record type, distinct from history_store.GenerationRecord).
+# It dispatches on record type: a MediaRecord resolves its seed via
+# artgen_kind.artgen_seed_kind(file_path, generator_type) instead of the
+# GenerationRecord media_type table above. The GenerationRecord branch above
+# must keep working unchanged.
+
+def _make_media_record(tmp_path, filename="lore.txt", content="Once upon a time...",
+                        generator_type="lore", thumbnail_path="", **kwargs):
+    """Minimal MediaRecord builder backed by a real file (or none, when
+    content is None, to exercise the missing-file fallback)."""
+    from media_store import MediaRecord
+
+    p = tmp_path / filename
+    if content is not None:
+        p.write_text(content, encoding="utf-8")
+    base = dict(
+        id="artgen-1",
+        media_type="artgen",
+        created_at="2026-07-01T00:00:00Z",
+        file_path=str(p),
+        thumbnail_path=thumbnail_path,
+        prompt="a lore prompt",
+        model_id="artgen-qwen3-8b",
+        generator_type=generator_type,
+        params="{}",
+        starred=0,
+    )
+    base.update(kwargs)
+    return MediaRecord(**base)
+
+
+def test_remix_as_pipeline_media_record_text_seeds_content_with_no_thumb(tmp_path, monkeypatch):
+    """A lore .txt MediaRecord with real content seeds (content, 'text', None)
+    — text seeds show the "text" heading with no image thumbnail."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    rec = _make_media_record(tmp_path, content="Once upon a time, a forge dreamed.")
+
+    obj._remix_as_pipeline(rec)
+
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=("Once upon a time, a forge dreamed.", "text", None)
+    )
+
+
+def test_remix_as_pipeline_media_record_image_kind_resolves_with_thumb(tmp_path, monkeypatch):
+    """An image-kind artgen artifact (e.g. an SVG banner) resolves like the
+    GenerationRecord image branch: (path, kind, thumb)."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    thumb = tmp_path / "banner_thumb.jpg"
+    thumb.write_bytes(b"fake-jpg")
+    rec = _make_media_record(
+        tmp_path, filename="banner.svg", content="<svg></svg>",
+        generator_type="banner", thumbnail_path=str(thumb),
+    )
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(tmp_path / "banner.svg"), "image", str(thumb))
+    )
+
+
+def test_remix_as_pipeline_media_record_json_falls_back_to_blank_muse(tmp_path, monkeypatch):
+    """A .json artgen artifact (e.g. a palette) has no resolvable seed kind
+    — falls back to a blank muse rather than guessing."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    rec = _make_media_record(
+        tmp_path, filename="palette.json", content='{"colors": []}',
+        generator_type="palette",
+    )
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+
+
+def test_remix_as_pipeline_media_record_missing_file_falls_back_to_blank_muse(tmp_path, monkeypatch):
+    """A record whose file was never written to disk must never crash — blank
+    muse instead of a seeded one."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    rec = _make_media_record(tmp_path, content=None)
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+
+
+def test_remix_as_pipeline_media_record_empty_text_falls_back_to_blank_muse(tmp_path, monkeypatch):
+    """Whitespace-only lore content is treated as empty — blank muse."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    rec = _make_media_record(tmp_path, content="   \n\t  ")
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+
+
+def test_remix_as_pipeline_generation_record_path_unaffected_by_media_record_branch(tmp_path, monkeypatch):
+    """The pre-existing GenerationRecord branch (video/image galleries) keeps
+    working unchanged now that MediaRecord dispatch has been added."""
+    obj = _make_mw_for_remix(tmp_path, monkeypatch)
+    img_path = tmp_path / "art.png"
+    img_path.write_bytes(b"fake-png")
+    rec = _make_record(media_type="image", image_path=str(img_path))
+
+    obj._remix_as_pipeline(rec)
+
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(img_path), "image", rec.thumbnail_path)
+    )
+
+
+def test_main_window_wires_artgen_panel_on_remix_as_pipeline_source():
+    """Regression guard: main_window.py must wire
+    `self._artgen_panel.on_remix_as_pipeline = self._remix_as_pipeline`
+    right after the existing `on_remix` wiring (mirrors
+    test_workflow_popover_not_imported_at_startup's source-text style — a
+    full MainWindow() construction is too heavy/network-dependent to build
+    in tests, see the module docstring above)."""
+    src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
+    assert "self._artgen_panel.on_remix = self._on_remix_card" in src
+    assert "self._artgen_panel.on_remix_as_pipeline = self._remix_as_pipeline" in src

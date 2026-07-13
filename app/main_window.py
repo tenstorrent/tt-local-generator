@@ -43,7 +43,9 @@ from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_panel import ArtgenPanel
+import artgen_kind
 from history_store import GenerationRecord, HistoryStore
+from media_store import MediaRecord
 from worker import (
     AnimateDiffGenerationWorker,
     AnimateGenerationWorker,
@@ -7929,6 +7931,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
         self._artgen_panel    = ArtgenPanel()
         self._artgen_panel.on_remix = self._on_remix_card
+        self._artgen_panel.on_remix_as_pipeline = self._remix_as_pipeline
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
@@ -8730,24 +8733,41 @@ class MainWindow(Gtk.ApplicationWindow):
         "animatediff": "gif",
     }
 
-    def _remix_as_pipeline(self, record: GenerationRecord) -> None:
+    def _remix_as_pipeline(self, record) -> None:
         """Open Pipeline Studio's Muse scoped to this record's primary artifact.
 
         Wired as `remix_as_pipeline_cb` to every GenerationCard/DetailPanel's
-        "🧩 Remix as pipeline…" button ("Make this image into…"). Resolves
-        (path, kind, thumb_path) from the record, activates the Pipelines area
-        exactly the way the "🧩 Pipelines" toolbar toggle does, then hands the
-        seed artifact to PipelineStudio.show_muse().
+        "🧩 Remix as pipeline…" button ("Make this image into…") AND as
+        `ArtgenPanel.on_remix_as_pipeline` for the Generative Art gallery's own
+        "🧩 Remix as pipeline…" affordance. Accepts either record type and
+        dispatches on it:
 
-        Never fails: if the artifact's file is missing/unreadable, or its
-        media_type doesn't map to a kind Muse understands, falls back to a
-        blank muse (`show_muse()` with no seed_artifact) instead of raising or
-        seeding garbage.
+        - `history_store.GenerationRecord` (video/image galleries): resolves
+          (path, kind, thumb_path) via `_REMIX_KIND_BY_MEDIA_TYPE`, as before.
+        - `media_store.MediaRecord` (artgen gallery): resolves via
+          `_resolve_artgen_media_seed`, which classifies the artifact's file
+          extension through `artgen_kind.artgen_seed_kind` — a "text" artifact
+          (e.g. a lore .txt) seeds its own file content as the muse's opaque
+          seed value ("Make this text into…"), an "image"/"gif" artifact seeds
+          its path like the GenerationRecord branch, and anything unresolved
+          (json/unknown, missing/unreadable/empty) falls back to a blank muse.
+
+        Either way this activates the Pipelines area exactly the way the
+        "🧩 Pipelines" toolbar toggle does, then hands the seed artifact to
+        PipelineStudio.show_muse().
+
+        Never fails: a missing/unreadable file, an unresolved kind, or an
+        unrecognized media_type all fall back to a blank muse
+        (`show_muse(seed_artifact=None)`) instead of raising or seeding
+        garbage.
         """
-        kind = self._REMIX_KIND_BY_MEDIA_TYPE.get(record.media_type)
-        seed_artifact = None
-        if record.media_exists and kind is not None:
-            seed_artifact = (record.media_file_path, kind, record.thumbnail_path)
+        if isinstance(record, MediaRecord):
+            seed_artifact = self._resolve_artgen_media_seed(record)
+        else:
+            kind = self._REMIX_KIND_BY_MEDIA_TYPE.get(record.media_type)
+            seed_artifact = None
+            if record.media_exists and kind is not None:
+                seed_artifact = (record.media_file_path, kind, record.thumbnail_path)
 
         # Activate the Pipelines area the same way the toolbar toggle does.
         pipelines_btn = getattr(self, "_pipelines_btn", None)
@@ -8757,6 +8777,46 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_pipelines()
 
         self._pipeline_studio.show_muse(seed_artifact=seed_artifact)
+
+    @staticmethod
+    def _resolve_artgen_media_seed(record: "MediaRecord"):
+        """Resolve an artgen `MediaRecord` into a Muse seed_artifact tuple.
+
+        `artgen_kind.artgen_seed_kind` classifies the artifact by file
+        extension:
+
+        - `"text"` (.txt/.md/.py — e.g. a lore artifact): read the file as
+          utf-8, best-effort. Non-empty (post-strip) content seeds
+          `(content, "text", None)` — the thumbnail is deliberately `None`
+          because the Muse shows the "Make this text into…" heading with no
+          image thumb for a text seed, never the file's own thumbnail_path.
+        - `"image"`/`"gif"` (.png/.jpg/.svg/.ans/.webp/.gif): seeds
+          `(file_path, kind, thumbnail_path)` if the file exists on disk.
+        - `None` (json/unknown extension, or any failure above): `None` —
+          the caller opens a blank muse.
+
+        Never raises — any exception here is treated the same as "not
+        seedable" (blank muse), matching the GenerationRecord branch's
+        never-fails contract.
+        """
+        try:
+            kind = artgen_kind.artgen_seed_kind(record.file_path, record.generator_type)
+            if kind is None:
+                return None
+            if kind == "text":
+                try:
+                    content = Path(record.file_path).read_text(encoding="utf-8")
+                except Exception:
+                    return None
+                if not content.strip():
+                    return None
+                return (content, "text", None)
+            # "image" / "gif"
+            if record.file_path and Path(record.file_path).exists():
+                return (record.file_path, kind, record.thumbnail_path)
+            return None
+        except Exception:
+            return None
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
