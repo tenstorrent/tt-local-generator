@@ -106,8 +106,25 @@ impossible. Palette stays the tt-vscode-toolkit variant (`#4FD1C5`/`#0F2A35`).
 
 The legacy per-model tabs / ControlPanel / ArtgenPanel remain the reachable
 fallback until a real-generation smoke test on hardware; deleting them is a
-separate step. Applying `field_roles` + `ModifierPills` to pipeline node fields
-is the planned follow-on (sub-project 2 in the redesign spec).
+separate step.
+
+**Pipeline editor adoption (sub-project 2, v0.29.0).** The same vocabulary now
+drives `RemixView`'s node field editing (`app/pipeline_studio.py`), so a field
+means the same thing in Create and in Remix/Compose. `field_roles` gained a
+deepened `classify_pipeline_field` (classifies a `spec_remix.ParamField` by
+kind/value/key) and a pure `marker_prefix(marker)` label formatter shared by both
+surfaces. In each step card, fields are classified, ordered brief -> direction ->
+control, marker-prefixed (✎/✨/⚙ + tooltip), and the control fields sit under a
+per-card collapsed `Gtk.Expander` "Controls (N)". Brief text fields get a
+contextual `ModifierPills` (imported from `create_param_panels`; bank chosen by
+`intent_for(class_type).output_kind` via `_bank_kind_for_output` -- image/video/
+gif->animate, text/None->no bank), and `_collect_edits` folds each field's
+`applied_text()` into its value at Run time. **Edit-contract invariant preserved:**
+`_field_widgets`/`_field_meta` are populated for every field regardless of zone,
+and with no retype + no applied pill a field stays out of the edit diff (untouched
+run reproduces exactly). Known follow-up: `ModifierPills` re-reads
+`config/prompt_chips.yaml` per render (fail-soft, uncached) on both surfaces --
+cache `load_chips_for_kind` if render latency ever matters.
 
 ## Version discipline
 

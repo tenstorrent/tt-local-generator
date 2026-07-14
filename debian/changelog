@@ -1,17 +1,28 @@
-tt-local-generator (0.28.2) noble; urgency=medium
+tt-local-generator (0.29.0) noble; urgency=medium
 
-  * Pipeline Studio's Remix editor: a brief (creative-words) text field on a
-    node whose output feeds an image/video/animate chip bank now shows a
-    contextual ModifierPills widget right under that field -- clicking a
-    pill folds its text into that field's collected edit value at Run time
-    ("<original text> <pill text>"). A field with no pill applied and no
-    retyping still collects to its unchanged original value, so an untouched
-    remix run still reproduces the base run exactly (empty edit diff) --
-    the same "change one thing, safely" invariant every prior field-editing
-    task in this composer has preserved. Text-output (LLM) nodes get no bank
-    at all, since there's no image/video/animate chip set that fits.
+  * Field roles in the pipeline editor -- the Create surface's field vocabulary
+    now applies to Pipeline Studio's Remix/Compose editor, so a field means the
+    same thing everywhere.
+    - Every editable node field carries the same marker as Create: a pencil
+      (your words -- text the model renders), a spark (the model chooses from
+      this value), or a gear (exact setting the model never reads).
+    - A step card's fields are ordered brief -> direction -> control, and the
+      deterministic (gear) fields are tucked under a per-card collapsed
+      "Controls (N)" disclosure, so the creative inputs lead.
+    - Brief (creative-words) text fields gain a contextual modifier-pill "Add"
+      affordance: the chip bank is chosen by the node's output kind (an
+      image-output node offers image chips, video offers video, gif offers
+      animate; text/LLM nodes get none). Applied pill text is folded into that
+      field's value at Run time ("<original text> <pill text>").
+    - Edit-contract preserved: a field with no retyping and no applied pill
+      still collects to its unchanged original value, so an untouched remix
+      run reproduces the base run exactly (empty edit diff).
+    - Built on the shared, GTK-free `field_roles` layer (deepened
+      `classify_pipeline_field`, new `marker_prefix` formatter) and the
+      `ModifierPills` widget, both introduced with the Create surface -- no
+      duplication, and generation / derive_spec are untouched.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 19:00:00 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 19:30:00 -0700
 
 tt-local-generator (0.28.1) noble; urgency=medium
 
