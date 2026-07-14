@@ -241,6 +241,10 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
+from field_roles import (  # noqa: E402
+    MARKER_TIP, ROLE_BRIEF, ROLE_CONTROL, ROLE_DIRECTION,
+    classify_pipeline_field, marker_prefix,
+)
 from gtk_layout import CONTENT_MAX_WIDTH, MaxWidthBin, wrap_centered  # noqa: E402
 import recipes  # noqa: E402
 import showcase  # noqa: E402
@@ -594,6 +598,10 @@ _CSS = b"""
     padding: 4px 10px;
 }
 .ps-field-key {
+    font-size: 10.5px;
+    color: #7fb0a8;
+}
+.ps-controls-expander {
     font-size: 10.5px;
     color: #7fb0a8;
 }
@@ -1437,6 +1445,16 @@ class RemixView(Gtk.Box):
         # widget's kind — see _read_widget_value/_collect_edits).
         self._field_widgets: "dict[str, dict[str, Gtk.Widget]]" = {}
         self._field_meta: "dict[str, dict[str, tuple]]" = {}
+        # Field-role zoning (Task 2 of "pipeline field roles"): each node's
+        # editable fields are classified brief/direction/control
+        # (`field_roles.classify_pipeline_field`) and rendered in that order;
+        # `_field_order` records the resulting DISPLAY order of keys per node
+        # so tests (and any future caller) can check ordering/zone without
+        # walking the widget tree. `_controls_expanders` holds the collapsed
+        # "Controls (N)" `Gtk.Expander` per node — only present when that
+        # node has at least one control-role field.
+        self._field_order: "dict[str, list[str]]" = {}
+        self._controls_expanders: "dict[str, Gtk.Expander]" = {}
         # Composer controls, keyed by node_id — kept around purely so tests
         # can find/introspect a specific step's Remove button or add-after
         # popover without walking the widget tree.
@@ -1670,6 +1688,8 @@ class RemixView(Gtk.Box):
             self._steps_box.remove(child)
         self._field_widgets = {}
         self._field_meta = {}
+        self._field_order = {}
+        self._controls_expanders = {}
         self._remove_buttons = {}
         self._add_after_buttons = {}
         self._add_after_popovers = {}
@@ -1742,17 +1762,63 @@ class RemixView(Gtk.Box):
 
         card.append(self._build_wingit_row(node_id))
 
+        # Classify every field by role (Task 2 of "pipeline field roles"):
+        # brief (creative words), direction (interpreted/exact choices), or
+        # control (deterministic knobs the model never reads). Partitioning
+        # preserves each field's ORIGINAL relative order within its zone —
+        # only the zone grouping is new, not a re-sort within a zone.
+        brief: "list[tuple]" = []
+        direction: "list[tuple]" = []
+        control: "list[tuple]" = []
+        for field in fields:
+            role = classify_pipeline_field(field.kind, field.value, field.key)
+            if role.role == ROLE_BRIEF:
+                brief.append((field, role))
+            elif role.role == ROLE_DIRECTION:
+                direction.append((field, role))
+            else:
+                control.append((field, role))
+
         node_widgets: "dict[str, Gtk.Widget]" = {}
         node_meta: "dict[str, tuple]" = {}
-        for field in fields:
-            row, widget = self._build_field_row(field)
+        field_order: "list[str]" = []
+
+        # Brief then direction rows go straight on the card body, in that
+        # order — the "what to say, then how" reading order the brief calls
+        # for. Every field's widget/meta is recorded here regardless of
+        # which zone it lands in, so `_collect_edits` (unchanged by this
+        # task) keeps finding every field exactly as before.
+        for field, role in brief + direction:
+            row, widget = self._build_field_row(field, role)
             card.append(row)
             node_widgets[field.key] = widget
             node_meta[field.key] = (field.kind, field.value)
+            field_order.append(field.key)
+
+        # Control (⚙) fields are deterministic knobs, not creative choices —
+        # tuck them under a collapsed per-card expander so the primary
+        # reading path is brief/direction only. Only built when the node
+        # actually has control fields (e.g. node "3"'s bool `loop` field is
+        # direction-role, not control, so it never gets one).
+        if control:
+            exp = Gtk.Expander(label=f"Controls ({len(control)})")
+            exp.set_expanded(False)
+            exp.add_css_class("ps-controls-expander")
+            control_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            for field, role in control:
+                row, widget = self._build_field_row(field, role)
+                control_box.append(row)
+                node_widgets[field.key] = widget
+                node_meta[field.key] = (field.kind, field.value)
+                field_order.append(field.key)
+            exp.set_child(control_box)
+            card.append(exp)
+            self._controls_expanders[node_id] = exp
 
         if node_widgets:
             self._field_widgets[node_id] = node_widgets
             self._field_meta[node_id] = node_meta
+        self._field_order[node_id] = field_order
 
         return card
 
@@ -1939,8 +2005,15 @@ class RemixView(Gtk.Box):
                 except Exception:
                     pass
 
-    def _build_field_row(self, field) -> "tuple[Gtk.Widget, Gtk.Widget]":
+    def _build_field_row(self, field, role) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.
+
+        *role* is the `field_roles.FieldRole` `_build_step_card` already
+        classified this field as — the label is prefixed with its marker
+        glyph (`field_roles.marker_prefix`) and gets a tooltip explaining the
+        marker (`field_roles.MARKER_TIP`), so every field visibly declares
+        how its value is used (creative words / model-interpreted / exact
+        setting) without changing the field's editable widget at all.
 
         Returns (row, widget) — the caller keeps the widget reference (keyed
         by node_id/key) so Run-time diffing can read its current value; the
@@ -1948,16 +2021,25 @@ class RemixView(Gtk.Box):
         """
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-        key_label = Gtk.Label(label=field.label)
+        key_label = Gtk.Label(label=marker_prefix(role.marker) + field.label)
         key_label.set_xalign(0)
         key_label.add_css_class("ps-field-key")
         key_label.set_size_request(120, -1)
+        key_label.set_tooltip_text(MARKER_TIP[role.marker])
         row.append(key_label)
 
         widget = self._build_field_widget(field)
         widget.set_hexpand(True)
         row.append(widget)
         return row, widget
+
+    def _node_field_order(self, node_id: str) -> "list[str]":
+        """Field keys for *node_id* in DISPLAY order — brief then direction
+        rows (card body), then control rows (inside the collapsed
+        expander) — as built by `_build_step_card`. A test seam: cheaper
+        than walking the widget tree to recover ordering, and exercised by
+        `_ordered_field_roles_for_node` in tests/test_pipeline_studio.py."""
+        return list(self._field_order.get(node_id, []))
 
     def _build_field_widget(self, field) -> Gtk.Widget:
         """Kind -> widget, per the brief: Entry (text), SpinButton (number),

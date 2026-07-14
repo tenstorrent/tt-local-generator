@@ -916,6 +916,92 @@ def test_remix_view_set_run_is_repeat_safe():
     assert view._field_widgets["1"]["prompt"].get_text() == "a test prompt"
 
 
+# ── RemixView: field roles — classify/order/mark (Task 2 of "pipeline field
+# roles") ────────────────────────────────────────────────────────────────────
+#
+# Each step card's editable fields get classified brief/direction/control
+# (`field_roles.classify_pipeline_field`), ordered brief -> direction ->
+# control, marker-prefixed + tooltipped, and control fields tucked under a
+# collapsed per-card "Controls (N)" Gtk.Expander. Reuses the same remix
+# fixture: node "1" has prompt/negative_prompt (brief) + steps (control);
+# node "2" has num_frames (control); node "3" has loop (bool -> direction).
+
+def _walk_widgets(widget):
+    """Depth-first walk of *widget*'s entire descendant tree (GTK4's
+    get_first_child/get_next_sibling chain reaches into container internals
+    like Gtk.Expander's content, even while collapsed — the child widgets
+    exist in the tree, just not visible)."""
+    yield widget
+    child = widget.get_first_child()
+    while child is not None:
+        yield from _walk_widgets(child)
+        child = child.get_next_sibling()
+
+
+def _all_field_label_texts(view) -> "list[str]":
+    """Every `ps-field-key` label's text, walking all built step cards."""
+    texts = []
+    for widget in _walk_widgets(view):
+        if isinstance(widget, Gtk.Label) and widget.has_css_class("ps-field-key"):
+            texts.append(widget.get_text())
+    return texts
+
+
+def _ordered_field_roles_for_node(view, node_id: str) -> "list[str]":
+    """The classified `field_roles` role (brief/direction/control) of each
+    of *node_id*'s fields, in DISPLAY order — via the `_node_field_order`
+    test seam rather than walking the widget tree."""
+    import field_roles as fr
+    order = view._node_field_order(node_id)
+    meta = view._field_meta[node_id]
+    return [
+        fr.classify_pipeline_field(meta[key][0], meta[key][1], key).role
+        for key in order
+    ]
+
+
+def test_remix_field_labels_carry_role_markers():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    texts = _all_field_label_texts(view)
+    assert any(t.startswith("✎ ") for t in texts)   # a brief field (e.g. a prompt)
+    assert any(t.startswith(("⚙ ", "✨ ")) for t in texts)
+
+
+def test_remix_control_fields_live_in_collapsed_expander():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    # Node "2" (num_frames) has at least one control field -> a Controls
+    # expander, collapsed by default.
+    exp = view._controls_expanders.get("2")
+    assert exp is not None
+    assert exp.get_expanded() is False
+
+
+def test_remix_fields_ordered_brief_then_direction_then_control():
+    from pipeline_studio import RemixView
+    import field_roles as fr
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    roles = _ordered_field_roles_for_node(view, node_id="1")
+    order = {fr.ROLE_BRIEF: 0, fr.ROLE_DIRECTION: 1, fr.ROLE_CONTROL: 2}
+    ranks = [order[r] for r in roles]
+    assert ranks == sorted(ranks)
+
+
+def test_remix_no_edits_still_emits_empty_dict():
+    # Invariant unchanged by the reordering/markers.
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    received = []
+    view.connect("run-remix", lambda _w, sp, edits: received.append(edits))
+    view._run_button.emit("clicked")
+    assert received == [{}]
+
+
 # ── RemixView: composer add/remove steps (SP-C Phase 2b-1 Task 3) ───────────
 #
 # Reuses the same remix fixture spec: node "1" TTLGTextToImage (output_kind
