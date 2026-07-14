@@ -63,6 +63,52 @@ token budget.
 (51, 87), toxic green (46, 82), hot magenta (201, 199), gold (226, 220). Zone rules
 constrain rows 1-2 and 18-20 to near-black void (232–234), rows 3-17 to the neon subject.
 
+## Create surface (role zones, scoped models, modifier pills)
+
+The **Create** loop-nav verb opens `CreateView` (`app/create_view.py`), the
+role-grouped generation surface (v0.28.0). Three key ideas, each backed by a
+small unit — deliberately shared so pipeline field configuration can adopt them
+later:
+
+- **`app/field_roles.py`** — a pure (no-GTK) taxonomy. Every field has a **role**
+  (`ROLE_BRIEF` / `ROLE_DIRECTION` / `ROLE_CONTROL` → the three zones) and a
+  **marker** (`MARK_WORDS` ✎ raw text the model renders · `MARK_INTERPRETED` ✨
+  a value the model/LLM decides from · `MARK_EXACT` ⚙ deterministic, never read
+  by the model). `classify_native`, `classify_artgen`, `classify_pipeline_field`
+  are the single source of truth. Glyphs live in `MARKER_GLYPH` — Python strings
+  only, never inside a `b"""` CSS literal.
+- **`RoleZonePanel`** (in `app/create_param_panels.py`) — wraps any
+  `CreateParamPanel`, reads its `field_specs()`, and **re-parents** the panel's
+  already-built field widgets into the brief / Direction / collapsed-Controls
+  zones. It never rebuilds widgets, so `RoleZonePanel.collect()` is a verbatim
+  passthrough to `panel.collect()`. **Migration invariant:** that dict must stay
+  byte-for-byte compatible with what generation consumes — guarded by
+  `test_role_zone_panel.py`'s collect-equality tests. The `kind=="model"` field
+  is excluded here; CreateView's scoped dropdown owns model selection.
+- **`ModifierPills`** (same file) — the Direction zone's chip palette. Banks come
+  from `chip_config.load_chips(medium.kind)`; tapping an add-chip creates a
+  removable pill (the add-chip hides until removed), and `applied_text()` is
+  appended to the brief at generate time.
+
+**Models:** no persistent full-width strip (it overflowed — retired in 0.28.0).
+Within a medium, a scoped `Gtk.DropDown` lists only that medium's models. The
+"Start with a model" door is a grouped, wrapping grid (Image / Video / Animate /
+Text) classified by each `ServerDef.capabilities` via
+`_CAPABILITY_TO_MODEL_DOOR_GROUP` — **not** by `_server_key_to_medium_id` (that
+"first artgen medium" heuristic mis-files the chat-LLM backends under Animate;
+regression-guarded). Text cards return to the Idea door without changing the
+active medium.
+
+**Width discipline:** the whole surface is wrapped in
+`gtk_layout.wrap_centered` (`MaxWidthBin`, extracted from `pipeline_studio`), and
+every multi-item row is a wrapping `Gtk.FlowBox` — width overflow is structurally
+impossible. Palette stays the tt-vscode-toolkit variant (`#4FD1C5`/`#0F2A35`).
+
+The legacy per-model tabs / ControlPanel / ArtgenPanel remain the reachable
+fallback until a real-generation smoke test on hardware; deleting them is a
+separate step. Applying `field_roles` + `ModifierPills` to pipeline node fields
+is the planned follow-on (sub-project 2 in the redesign spec).
+
 ## Version discipline
 
 **Always increment the version when landing changes.** The version in `VERSION`

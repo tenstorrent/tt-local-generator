@@ -1,27 +1,36 @@
 tt-local-generator (0.28.0) noble; urgency=medium
 
-  * Create surface, Task 6: role-zoned CreateView.
-    - Retired the persistent flat "live-model strip" Gtk.Box (a non-wrapping
-      row of every known server that overflowed the window) and its Task 7
-      click-to-select-medium cards.
-    - Added a model dropdown scoped to the ACTIVE medium's own models
-      (server_manager capability-filtered), mounted above the panel host --
-      replaces the old strip as the way to pick a model within a medium.
-    - Every real per-medium panel (Image/Video/Animate/Artgen) is now mounted
-      wrapped in RoleZonePanel (brief / direction / controls zones), not
-      bare -- `_active_panel` is a RoleZonePanel.
-    - The whole surface is wrapped in gtk_layout.wrap_centered(...) so
-      nothing can overflow the window on a wide screen; the medium-chip row
-      is now a wrapping Gtk.FlowBox instead of a fixed-direction Gtk.Box.
-    - The Direction zone's modifier "add" chips now hide once applied (and
-      reappear when the pill is removed), preventing the same modifier from
-      being added twice.
-    - The final prompt sent to generation is now the idea-door text plus the
-      Direction zone's applied modifier text (only appended when non-empty).
-    - The "model" entry door shows an honest placeholder; the grouped
-      model-door grid is deferred to a later task.
+  * Create surface redesign -- every field now says what it does, models scale,
+    and width overflow is impossible by construction. Fixes four reported
+    problems on the Create surface.
+    - Role zones: each medium's fields are grouped into "Your brief" (the
+      creative input the model renders), "Direction" (things that steer the
+      result), and a collapsed "Controls" (deterministic knobs). Every field
+      carries a marker -- a pencil (your words), a spark (the model chooses
+      from this value), or a gear (exact setting the model never reads) -- so
+      you can tell LLM-interpreted choices from raw input at a glance.
+    - The modifier "fun" is back as removable pills: tap a Camera/Lighting/
+      Mood/Style chip in the Direction zone to add a pill (an applied chip
+      hides until you remove its pill), and the applied modifier text is
+      appended to the brief at generate time.
+    - Models: the persistent flat "live-model strip" that overflowed the
+      window is retired. Picking a model within a medium is now a dropdown
+      scoped to that medium's own models; browsing the whole collection is the
+      "Start with a model" door -- a wrapping grid grouped Image / Video /
+      Animate / Text (classified by each server's capabilities), which scales
+      to any number of models without overflowing.
+    - The whole surface is width-clamped (gtk_layout.wrap_centered) and every
+      multi-item row wraps, so it can never exceed the window again.
+    - New shared, GTK-free `field_roles` layer (role + marker taxonomy and
+      classifiers) so the same vocabulary can drive pipeline field
+      configuration in a later change. `MaxWidthBin`/`wrap_centered` extracted
+      to a shared `gtk_layout` module.
+    - Migration-safe: generation is untouched -- each panel's collect() output
+      dict is byte-for-byte compatible, and the model value the scoped dropdown
+      produces matches what the old panel field produced. The legacy per-model
+      tabs remain the reachable fallback.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 17:00:00 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 17:30:00 -0700
 
 tt-local-generator (0.27.1) noble; urgency=medium
 
