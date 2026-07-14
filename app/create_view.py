@@ -25,11 +25,16 @@ dead code kept only as a fallback for a hypothetical future medium kind.
 
 **Migration-safe by construction**: this view is built ALONGSIDE the existing
 medium-tab generation UI (main_window.py's ControlPanel + `_gallery_stack`
-video/animate/image/artgen children) — it is mounted as a new, not-yet-
-reachable `_gallery_stack` child ("create") this task. The loop nav's ✨
-Create verb keeps routing to the old UI until every medium panel is ported
-(see docs/superpowers/plans/2026-07-13-create-surface.md, Task 8). Generation
-itself (`GenerationWorker`/`api_client`) is completely untouched by this file.
+video/animate/image/artgen children), mounted as the `_gallery_stack`
+"create" child. As of the Task 8 switchover the loop nav's ✨ Create verb now
+routes HERE — CreateView IS the Create surface, and its `on_create` seam is
+wired to `MainWindow._on_create_generate` (real generation). The legacy
+ControlPanel/medium-tab UI is intentionally left in place as a still-mounted
+fallback (its deletion is a later task, deferred until a real-generation
+smoke test on hardware). Generation itself (`GenerationWorker`/`api_client`)
+is completely untouched by this file — CreateView only translates a chosen
+medium + collected params into the SAME `_on_generate`/`tt-ctl artgen` call
+the old UI already makes (see `main_window.py._on_create_generate`).
 
 Every external dependency is an injected constructor seam so this widget is
 fully unit-testable with fakes (tests/test_create_view.py) — no real
@@ -1102,10 +1107,32 @@ class CreateView(Gtk.Box):
         `_refresh_model_health_async`/`_apply_model_health`) — "if practical,
         else just labels" per the task brief; a key absent from the health
         map (never checked yet) just shows the "offline" dot.
+
+        **Selection is preserved across repopulation** by SERVER KEY, not by
+        index. Repopulation fires both on a medium swap AND on the async
+        health refresh (`_apply_model_health`), which can land seconds after
+        the view appears (`status_all` sweeps ~16 servers at a 2s-per-server
+        timeout when they're down). Snapping unconditionally back to index 0
+        would silently discard a user's just-made choice — e.g. pick
+        "Mochi-1", the initial health check completes, and Create would
+        generate "wan2.2-t2v" instead. So: capture the currently-selected
+        key before rebuilding, then re-select it if it's still present in the
+        new list, else fall back to index 0. On a medium SWAP the previous
+        key belongs to a different medium and won't be present, so it
+        naturally falls back to 0 (resetting to the new medium's default —
+        the correct behavior there); on a same-medium health refresh the key
+        IS present, so the selection holds. This also makes
+        `_preselect_model_key`'s choice survive the health refresh that races
+        a Model-door card click.
         """
         is_native_with_model = medium.source == "native" and medium.id in (
             "image", "video", "animate",
         )
+
+        # Capture the currently-selected server key BEFORE the rebuild — the
+        # list contents (and therefore indices) can change, so the index is
+        # not a stable handle; the key is.
+        prev_key = self._selected_model_key()
 
         entries: "list[tuple]" = []
         labels: "list[str]" = []
@@ -1126,7 +1153,30 @@ class CreateView(Gtk.Box):
 
         self._model_dropdown_entries = entries
         self._model_dropdown.set_model(Gtk.StringList.new(labels))
-        self._model_dropdown.set_selected(0)
+        # Re-select the previously-chosen key if it survived the rebuild
+        # (same-medium health refresh), else index 0 (medium swap / first
+        # populate / a key that dropped out of the list).
+        restored = 0
+        if prev_key is not None:
+            for idx, (entry_key, _canonical, _label) in enumerate(entries):
+                if entry_key == prev_key:
+                    restored = idx
+                    break
+        self._model_dropdown.set_selected(restored)
+
+    def _selected_model_key(self) -> Optional[str]:
+        """The server key of the scoped dropdown's current selection, or
+        `None` when nothing valid is selected yet (no entries, or the
+        placeholder "No models available" sentinel whose key is `None`).
+        Reads the `(server_key, canonical, label)` entry list built by
+        `_populate_model_dropdown` — the index is only meaningful paired with
+        that list, which is why this is the single place that maps one to the
+        other."""
+        entries = getattr(self, "_model_dropdown_entries", [])
+        idx = self._model_dropdown.get_selected()
+        if 0 <= idx < len(entries):
+            return entries[idx][0]
+        return None
 
     # ── Model health (feeds the scoped dropdown's status dots) ──────────────
 

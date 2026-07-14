@@ -603,6 +603,79 @@ def test_model_health_reflects_running_vs_not(monkeypatch):
     assert view._model_health == {"wan2.2": True, "flux": False}
 
 
+def _mochi_index(view):
+    """Index of the Mochi entry in the video scoped dropdown (canonical id
+    "mochi-1-preview") — asserts it exists so the test fails loudly if the
+    dropdown contents change out from under it."""
+    for idx, (_key, canonical, _label) in enumerate(view._model_dropdown_entries):
+        if canonical == "mochi-1-preview":
+            return idx
+    raise AssertionError("Mochi entry not found in video scoped dropdown")
+
+
+def test_health_refresh_preserves_scoped_model_selection(monkeypatch):
+    """Regression guard (whole-slice review, Important): the async health
+    refresh must NOT snap the scoped dropdown back to index 0 and silently
+    discard the user's model choice.
+
+    Repro: active medium = video, user picks Mochi (not the default index 0
+    Wan2.2), THEN the initial `status_all` health check completes (it races
+    the view's appearance, landing seconds later when servers are down) and
+    `_apply_model_health` repopulates the dropdown. Before the fix this reset
+    the selection to Wan2.2 -> Create generated "wan2.2-t2v" instead of the
+    chosen "mochi-1-preview". After the fix the selection is preserved by
+    server key across repopulation.
+
+    Fails against 839f80a (resets to wan2.2-t2v); passes after.
+    """
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["video"].set_active(True)
+
+    view._model_dropdown.set_selected(_mochi_index(view))
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+    # The async health result lands (same active medium) -> repopulation.
+    view._apply_model_health({"wan2.2": True, "mochi": False})
+
+    # Selection preserved: still Mochi, not snapped back to Wan2.2 (index 0).
+    idx = view._model_dropdown.get_selected()
+    _key, canonical, _label = view._model_dropdown_entries[idx]
+    assert canonical == "mochi-1-preview"
+    view._cta_btn.emit("clicked")
+    assert calls[-1][1]["model"] == "mochi-1-preview"
+
+
+def test_medium_swap_resets_scoped_model_selection_to_default(monkeypatch):
+    """The flip side of preservation: swapping to a DIFFERENT medium must
+    reset to that medium's default (index 0) — the previously-selected key
+    belongs to another medium and isn't in the new list, so it naturally
+    falls back to 0 rather than being (wrongly) preserved across mediums."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+    view._model_dropdown.set_selected(_mochi_index(view))
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+    # Swap video -> image: a different medium, different key set.
+    view._chip_buttons["image"].set_active(True)
+
+    assert view._model_dropdown.get_selected() == 0
+    assert view._collect_params()["model"] == "flux.1-schnell"
+
+
+def test_repopulation_preserves_selection_after_preselect_model_key(monkeypatch):
+    """`_preselect_model_key` (used by the Model-door card path) selects a
+    non-default entry; a subsequent health refresh must not undo it."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+    view._preselect_model_key("mochi")
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+    view._apply_model_health({"wan2.2": False, "mochi": True})
+
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+
 # ── Model door visibility (grid shown only in "model" mode) ──────────────
 #
 # The model door row (which now holds the Task 7 grouped grid, not the

@@ -8016,16 +8016,18 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_panel, "artgen")
 
-        # Create-surface Task 3 (docs/superpowers/specs/2026-07-13-create-
-        # surface-design.md): CreateView is built and mounted here ALONGSIDE
-        # the existing medium-tab UI above, but is NOT yet reachable — no
-        # loop-nav verb or toolbar control switches `_gallery_stack` to it.
-        # The old ✨ Create movement keeps routing to "video"/"animate"/
-        # "image"/"artgen" via `_on_loop_nav_create` until every medium's
-        # param panel is ported (a later task). Generation itself
-        # (GenerationWorker/api_client/ControlPanel) is untouched — CreateView
-        # has no wiring to real generation yet (on_create=None), matching its
-        # injectable-seam design so it stays fully unit-testable in isolation.
+        # Create-surface (docs/superpowers/specs/2026-07-13-create-surface-
+        # design.md): CreateView is built and mounted here ALONGSIDE the
+        # existing medium-tab UI above, as the `_gallery_stack` "create"
+        # child. As of the Task 8 switchover it IS the reachable Create
+        # surface — the loop-nav ✨ Create verb switches `_gallery_stack` to
+        # "create" (see `_on_loop_nav_create`). The legacy medium-tab UI
+        # ("video"/"animate"/"image"/"artgen") is intentionally left mounted
+        # as a still-reachable fallback; deleting it is a later task. Real
+        # generation (GenerationWorker/api_client/ControlPanel) is untouched —
+        # CreateView's `on_create` seam is wired to `_on_create_generate`
+        # (below), which only translates a chosen medium + params into the
+        # SAME generation calls the old UI already makes.
         #
         # Task 7: the inspiration door DOES get wired to something real —
         # `_on_loop_nav_remix` already does exactly the unseeded `show_muse()`

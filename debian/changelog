@@ -1,3 +1,16 @@
+tt-local-generator (0.28.1) noble; urgency=medium
+
+  * Fixed a race in the Create surface's scoped model dropdown: the async
+    startup health check (status_all, ~16 servers at a 2s-per-server timeout)
+    could land seconds after the view appeared and repopulate the dropdown,
+    unconditionally snapping the selection back to index 0 -- silently
+    discarding the user's model choice (e.g. picking Mochi-1, then generating
+    Wan2.2 instead). Repopulation now preserves the selection by server key:
+    a same-medium health refresh keeps the chosen model, while a medium swap
+    still correctly resets to the new medium's default.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 18:00:00 -0700
+
 tt-local-generator (0.28.0) noble; urgency=medium
 
   * Create surface redesign -- every field now says what it does, models scale,
