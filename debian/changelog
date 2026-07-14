@@ -1,3 +1,18 @@
+tt-local-generator (0.29.1) noble; urgency=medium
+
+  * Pipeline editor field-roles follow-up (whole-slice review fixes):
+    - Modifier-pill "Add" affordance no longer attaches to negative/avoid
+      brief fields (e.g. "negative_prompt"). Pill chips are positive style
+      descriptors, so folding one into a negative field inverted the user's
+      intent -- an image/video node now shows pills on its positive prompt
+      only, while the negative field still renders as a normal marked (pencil)
+      brief Entry with no pill bank.
+    - RemixView field-label tooltips now look up the marker tip defensively
+      (MARKER_TIP.get(marker, "")) so a future novel marker degrades to an
+      empty tooltip instead of raising, matching the Create surface.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 20:00:00 -0700
+
 tt-local-generator (0.29.0) noble; urgency=medium
 
   * Field roles in the pipeline editor -- the Create surface's field vocabulary

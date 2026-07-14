@@ -310,6 +310,16 @@ def _with_preserved_top_level_metadata(spec: dict, base_spec_path: str) -> dict:
     return merged
 
 
+# Brief-role text fields whose value is a NEGATIVE style directive (things to
+# AVOID), not positive creative words. ModifierPills chips are positive style
+# descriptors ("golden hour lighting", ...) — folding one into a negative/avoid
+# field would tell the model to avoid the very thing the user asked to add, the
+# exact opposite of intent. These fields still render as normal marked brief
+# (✎) Entry rows; they just never grow an "Add" pill bank (see
+# `_build_step_card`). Create doesn't hit this because it folds its single
+# Direction pills widget into the POSITIVE prompt only.
+_NEGATIVE_FIELD_KEYS = {"negative_prompt", "avoid"}
+
 # Video extensions that GdkPixbuf can't load directly — we render a poster
 # frame instead (see _poster_frame_for). GIF is deliberately excluded: pixbuf
 # loads it fine (first/animated frame), so a produced GIF shows as itself.
@@ -1822,10 +1832,18 @@ class RemixView(Gtk.Box):
             # only a BRIEF (creative-words) TEXT field on a node whose
             # output feeds a chip bank gets one — number/bool brief fields
             # don't exist today, but the kind check keeps this from ever
-            # attaching pills to the wrong widget type if one did. Appended
-            # directly under the field's own row so it reads as "this field's
-            # modifiers", not a card-wide control.
-            if role.role == ROLE_BRIEF and field.kind == "text" and bank_kind is not None:
+            # attaching pills to the wrong widget type if one did. Negative/
+            # avoid fields are excluded: pill chips are POSITIVE descriptors,
+            # so folding one into a negative field inverts the user's intent
+            # (see `_NEGATIVE_FIELD_KEYS`). Appended directly under the
+            # field's own row so it reads as "this field's modifiers", not a
+            # card-wide control.
+            if (
+                role.role == ROLE_BRIEF
+                and field.kind == "text"
+                and field.key not in _NEGATIVE_FIELD_KEYS
+                and bank_kind is not None
+            ):
                 pills = ModifierPills(bank_kind)
                 card.append(pills)
                 self._field_pills.setdefault(node_id, {})[field.key] = pills
@@ -2060,7 +2078,7 @@ class RemixView(Gtk.Box):
         key_label.set_xalign(0)
         key_label.add_css_class("ps-field-key")
         key_label.set_size_request(120, -1)
-        key_label.set_tooltip_text(MARKER_TIP[role.marker])
+        key_label.set_tooltip_text(MARKER_TIP.get(role.marker, ""))
         row.append(key_label)
 
         widget = self._build_field_widget(field)

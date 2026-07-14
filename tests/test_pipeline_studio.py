@@ -1072,6 +1072,35 @@ def test_brief_text_field_on_image_node_has_pills():
     assert "prompt" in view._field_pills.get("1", {})
 
 
+def test_negative_prompt_brief_field_gets_no_pills():
+    """Modifier chips are POSITIVE style descriptors — folding one into the
+    negative/avoid field would tell the model to avoid what the user wanted
+    to add. So `negative_prompt` (a brief-role text field, ✎) renders its
+    Entry but grows no pill bank, even on an image/video node that HAS a
+    bank for its positive prompt."""
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    # Positive prompt still has pills; the negative field must not.
+    assert "prompt" in view._field_pills.get("1", {})
+    assert "negative_prompt" not in view._field_pills.get("1", {})
+    # And it's still a rendered, editable brief Entry (not dropped).
+    assert isinstance(view._field_widgets["1"]["negative_prompt"], Gtk.Entry)
+
+
+def test_marker_tip_lookup_tolerates_unknown_marker():
+    """`_build_field_row` must degrade gracefully (empty tooltip) for a novel
+    marker rather than KeyError — mirrors Create's `.get(..., "")` lookup."""
+    from types import SimpleNamespace
+    from pipeline_studio import RemixView
+    import field_roles as fr
+    view = RemixView()
+    field = SimpleNamespace(key="prompt", label="Prompt", kind="text", value="x")
+    role = fr.FieldRole("brief", "not-a-real-marker")
+    row, widget = view._build_field_row(field, role)  # must not raise
+    assert isinstance(widget, Gtk.Entry)
+
+
 def test_brief_field_on_text_node_has_no_pills():
     from pipeline_studio import RemixView
     view = RemixView()
