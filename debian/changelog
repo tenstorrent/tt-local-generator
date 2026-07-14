@@ -1,3 +1,18 @@
+tt-local-generator (0.28.2) noble; urgency=medium
+
+  * Pipeline Studio's Remix editor: a brief (creative-words) text field on a
+    node whose output feeds an image/video/animate chip bank now shows a
+    contextual ModifierPills widget right under that field -- clicking a
+    pill folds its text into that field's collected edit value at Run time
+    ("<original text> <pill text>"). A field with no pill applied and no
+    retyping still collects to its unchanged original value, so an untouched
+    remix run still reproduces the base run exactly (empty edit diff) --
+    the same "change one thing, safely" invariant every prior field-editing
+    task in this composer has preserved. Text-output (LLM) nodes get no bank
+    at all, since there's no image/video/animate chip set that fits.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 19:00:00 -0700
+
 tt-local-generator (0.28.1) noble; urgency=medium
 
   * Fixed a race in the Create surface's scoped model dropdown: the async

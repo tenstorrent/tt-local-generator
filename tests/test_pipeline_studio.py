@@ -1002,6 +1002,109 @@ def test_remix_no_edits_still_emits_empty_dict():
     assert received == [{}]
 
 
+# ── RemixView: contextual ModifierPills on brief fields (Task 3 of "pipeline
+# field roles") ──────────────────────────────────────────────────────────────
+#
+# A brief (✎) TEXT field on a node whose output_kind maps to a chip bank
+# ("image"/"video"/"gif" -> "animate") gets a ModifierPills widget alongside
+# it; applying a pill folds its text into that field's collected edit value.
+# node "1" (TTLGTextToImage, output_kind "image") is the image-bank case.
+# `remix_fixture_spec_with_text.json` adds node "4" (TTLGGenerateText,
+# output_kind "text") — text has no bank per the brief — reusing the ORIGINAL
+# 3-node fixture/RunView for every other test so their exact node-id-set
+# assertions (e.g. test_remix_view_set_run_is_repeat_safe) stay untouched.
+
+_REMIX_SPEC_WITH_TEXT_PATH = str(
+    Path(__file__).parent / "fixtures" / "remix_fixture_spec_with_text.json"
+)
+
+
+def _make_remix_run_with_text() -> RunView:
+    """Like `_make_remix_run()` but with a 4th node ("4", TTLGGenerateText,
+    output_kind "text") added, matching `_REMIX_SPEC_WITH_TEXT_PATH`."""
+    class_types = {
+        "1": "TTLGTextToImage", "2": "TTLGImageToVideo",
+        "3": "TTLGAnimateDiff", "4": "TTLGGenerateText",
+    }
+    steps = [
+        StepView(node_id=nid, intent=intent_for(ct), status="done", artifact_path=None)
+        for nid, ct in class_types.items()
+    ]
+    recipe = [f"{s.intent.verb} {s.intent.noun}" for s in steps]
+    return RunView(
+        run_id="run-remix-text-1",
+        title="Tower of Pisa GIF + narration",
+        created_at="2026-07-10T12:00:00+00:00",
+        hero_path=None,
+        steps=steps,
+        recipe=recipe,
+    )
+
+
+def _first_text_output_node(view) -> str:
+    """The first node_id in *view*'s loaded working_spec whose class_type's
+    intent has output_kind == "text" — a test seam so callers don't have to
+    hardcode which fixture node_id that is."""
+    for node_id, node in view.working_spec.items():
+        if node_id.startswith("_") or not isinstance(node, dict):
+            continue
+        if intent_for(node.get("class_type", "")).output_kind == "text":
+            return node_id
+    raise AssertionError("no text-output node found in the loaded working_spec")
+
+
+def test_bank_kind_for_output_mapping():
+    from pipeline_studio import RemixView
+    v = RemixView()
+    assert v._bank_kind_for_output("image") == "image"
+    assert v._bank_kind_for_output("video") == "video"
+    assert v._bank_kind_for_output("gif") == "animate"
+    assert v._bank_kind_for_output("text") is None
+    assert v._bank_kind_for_output("playlist") is None
+    assert v._bank_kind_for_output(None) is None
+
+
+def test_brief_text_field_on_image_node_has_pills():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    # node "1" is a text->image node with a brief "prompt" field.
+    assert "prompt" in view._field_pills.get("1", {})
+
+
+def test_brief_field_on_text_node_has_no_pills():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run_with_text(), _REMIX_SPEC_WITH_TEXT_PATH)
+    # A text-output (LLM) node's brief field gets no bank -> no pills entry.
+    text_node_id = _first_text_output_node(view)
+    assert "prompt" not in view._field_pills.get(text_node_id, {})
+
+
+def test_applied_pill_folds_into_field_edit_value():
+    from pipeline_studio import RemixView
+    from chip_config import ChipEntry
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    pills = view._field_pills["1"]["prompt"]
+    pills._apply_entry(ChipEntry("golden hour", "golden hour lighting", ""))
+    received = []
+    view.connect("run-remix", lambda _w, sp, edits: received.append(edits))
+    view._run_button.emit("clicked")
+    orig = view._field_meta["1"]["prompt"][1]
+    assert received[0]["1"]["prompt"] == f"{orig} golden hour lighting"
+
+
+def test_no_pill_no_text_change_still_empty_edit():
+    from pipeline_studio import RemixView
+    view = RemixView()
+    view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
+    received = []
+    view.connect("run-remix", lambda _w, sp, edits: received.append(edits))
+    view._run_button.emit("clicked")
+    assert received == [{}]
+
+
 # ── RemixView: composer add/remove steps (SP-C Phase 2b-1 Task 3) ───────────
 #
 # Reuses the same remix fixture spec: node "1" TTLGTextToImage (output_kind

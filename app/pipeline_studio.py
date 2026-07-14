@@ -241,8 +241,9 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
+from create_param_panels import ModifierPills  # noqa: E402
 from field_roles import (  # noqa: E402
-    MARKER_TIP, ROLE_BRIEF, ROLE_CONTROL, ROLE_DIRECTION,
+    MARKER_TIP, ROLE_BRIEF, ROLE_DIRECTION,
     classify_pipeline_field, marker_prefix,
 )
 from gtk_layout import CONTENT_MAX_WIDTH, MaxWidthBin, wrap_centered  # noqa: E402
@@ -1455,6 +1456,13 @@ class RemixView(Gtk.Box):
         # node has at least one control-role field.
         self._field_order: "dict[str, list[str]]" = {}
         self._controls_expanders: "dict[str, Gtk.Expander]" = {}
+        # Contextual ModifierPills (Task 3 of "pipeline field roles"): a
+        # brief TEXT field on a node whose output_kind maps to a chip bank
+        # (`_bank_kind_for_output`) gets a `ModifierPills` widget rendered
+        # directly under its field row. Keyed node_id -> field key -> the
+        # `ModifierPills` instance, so `_collect_edits` can fold each field's
+        # `applied_text()` into that field's collected value at Run time.
+        self._field_pills: "dict[str, dict[str, ModifierPills]]" = {}
         # Composer controls, keyed by node_id — kept around purely so tests
         # can find/introspect a specific step's Remove button or add-after
         # popover without walking the widget tree.
@@ -1674,6 +1682,19 @@ class RemixView(Gtk.Box):
             for intent in compatible_intents(output_kind)
         ]
 
+    def _bank_kind_for_output(self, output_kind: "str | None") -> "str | None":
+        """Which `create_param_panels.ModifierPills` chip bank (if any) fits
+        a node whose `Intent.output_kind` is *output_kind*.
+
+        Only "image"/"video"/"gif" (chip_config's animate bank) have a bank —
+        "text"/"playlist"/None/anything unrecognized get no pills at all
+        (`_build_step_card` skips building a `ModifierPills` in that case).
+        The "gif" -> "animate" rename matches `chip_config`'s tab naming
+        (AnimateDiff's output_kind is "gif"; its chip bank is called
+        "animate").
+        """
+        return {"image": "image", "video": "video", "gif": "animate"}.get(output_kind)
+
     # ── Row building ─────────────────────────────────────────────────────────
 
     def _render(self) -> None:
@@ -1689,6 +1710,7 @@ class RemixView(Gtk.Box):
         self._field_widgets = {}
         self._field_meta = {}
         self._field_order = {}
+        self._field_pills = {}
         self._controls_expanders = {}
         self._remove_buttons = {}
         self._add_after_buttons = {}
@@ -1788,12 +1810,25 @@ class RemixView(Gtk.Box):
         # for. Every field's widget/meta is recorded here regardless of
         # which zone it lands in, so `_collect_edits` (unchanged by this
         # task) keeps finding every field exactly as before.
+        bank_kind = self._bank_kind_for_output(intent.output_kind)
         for field, role in brief + direction:
             row, widget = self._build_field_row(field, role)
             card.append(row)
             node_widgets[field.key] = widget
             node_meta[field.key] = (field.kind, field.value)
             field_order.append(field.key)
+
+            # Contextual ModifierPills (Task 3 of "pipeline field roles"):
+            # only a BRIEF (creative-words) TEXT field on a node whose
+            # output feeds a chip bank gets one — number/bool brief fields
+            # don't exist today, but the kind check keeps this from ever
+            # attaching pills to the wrong widget type if one did. Appended
+            # directly under the field's own row so it reads as "this field's
+            # modifiers", not a card-wide control.
+            if role.role == ROLE_BRIEF and field.kind == "text" and bank_kind is not None:
+                pills = ModifierPills(bank_kind)
+                card.append(pills)
+                self._field_pills.setdefault(node_id, {})[field.key] = pills
 
         # Control (⚙) fields are deterministic knobs, not creative choices —
         # tuck them under a collapsed per-card expander so the primary
@@ -2089,6 +2124,15 @@ class RemixView(Gtk.Box):
             for key, widget in widgets.items():
                 kind, orig_value = self._field_meta[node_id][key]
                 new_value = self._read_widget_value(kind, orig_value, widget)
+                # Fold this field's applied ModifierPills text (if any) into
+                # its collected value BEFORE the changed/unchanged diff below
+                # — an untouched field with no pills applied is unaffected
+                # (new_value == orig_value, still excluded from edits), while
+                # an applied pill always counts as a change even if the
+                # text itself wasn't retyped.
+                pills = self._field_pills.get(node_id, {}).get(key)
+                if pills is not None and pills.applied_text():
+                    new_value = f"{new_value} {pills.applied_text()}".strip()
                 if new_value != orig_value:
                     edits.setdefault(node_id, {})[key] = new_value
         return edits
