@@ -71,12 +71,32 @@ def classify_artgen(spec) -> FieldRole:
     return FieldRole(ROLE_DIRECTION, MARK_EXACT)
 
 
+_PIPELINE_BRIEF_KEYS = frozenset({
+    "prompt", "text", "negative_prompt", "subject",
+    "theme", "caption", "description", "lore",
+})
+
+
 def classify_pipeline_field(kind: str, default=None, key: str = "") -> FieldRole:
-    """Basic pipeline-field classifier (sub-project 2 deepens this)."""
-    if key in _NATIVE_BRIEF or kind == "prompt":
+    """Classify one editable pipeline ParamField (kind/value/key)."""
+    if key in _PIPELINE_BRIEF_KEYS or kind == "prompt":
         return FieldRole(ROLE_BRIEF, MARK_WORDS)
-    if kind in ("int", "float", "number"):
+    if kind == "number":
         return FieldRole(ROLE_CONTROL, MARK_EXACT)
-    if default in _INTERPRETED_VALUES:
-        return FieldRole(ROLE_DIRECTION, MARK_INTERPRETED)
-    return FieldRole(ROLE_DIRECTION, MARK_EXACT)
+    if kind == "bool":
+        return FieldRole(ROLE_DIRECTION, MARK_EXACT)
+    if kind in ("text", "choice"):
+        if default in _INTERPRETED_VALUES:
+            return FieldRole(ROLE_DIRECTION, MARK_INTERPRETED)
+        return FieldRole(ROLE_DIRECTION, MARK_EXACT)
+    return FieldRole(ROLE_CONTROL, MARK_EXACT)
+
+
+def marker_prefix(marker: str) -> str:
+    """Glyph + trailing space for a marker, or "" for an unknown marker.
+
+    A pure formatter so RoleZonePanel (Create) and RemixView (pipeline)
+    decorate field labels identically without importing each other.
+    """
+    glyph = MARKER_GLYPH.get(marker)
+    return f"{glyph} " if glyph else ""
