@@ -603,13 +603,13 @@ def test_model_health_reflects_running_vs_not(monkeypatch):
     assert view._model_health == {"wan2.2": True, "flux": False}
 
 
-# ── Model door placeholder (Task 6) ──────────────────────────────────────
+# ── Model door visibility (grid shown only in "model" mode) ──────────────
 #
-# The grouped model-door grid is a separate, later task; the door itself
-# still exists but now shows an honest "not built yet" placeholder instead
-# of the retired model-strip's clickable cards.
+# The model door row (which now holds the Task 7 grouped grid, not the
+# retired Task 6 placeholder) is visible only while the "model" door toggle
+# is active — same show/hide-on-door-toggle contract the idea row has.
 
-def test_model_door_placeholder_visible_only_in_model_mode(monkeypatch):
+def test_model_door_row_visible_only_in_model_mode(monkeypatch):
     view = _make_view(monkeypatch)
     assert view._model_door_row.get_visible() is False
 
@@ -659,27 +659,97 @@ def test_model_door_groups_video_and_animate_and_text(monkeypatch):
 
     assert groups["Animate"] == ["animate"]
 
-    # Every artgen chat-LLM server, plus prompt-server (capability "prompt",
-    # no matching medium — falls back to "Text"), lands in Text.
+    # Every artgen chat-LLM server, plus prompt-server (capability "prompt"),
+    # lands in Text.
     assert "prompt-server" in groups["Text"]
     assert "artgen-qwen3-8b" in groups["Text"]
     assert "artgen-llama-3.3-70b" in groups["Text"]
 
 
-def test_model_door_omits_empty_groups(monkeypatch):
-    """When mediums_fn() offers no "video"/"animate" medium at all, the
-    corresponding groups must not appear in the dict — the "no empty groups"
-    requirement, exercised on a shape the default fake mediums can't show
-    (all four groups are non-empty there)."""
-    def _minimal_mediums():
-        return [
-            Medium(id="image", label="Image", icon="\U0001f5bc️", kind="image",
-                   source="native", generator=None),
-            Medium(id="verse", label="Verse", icon="✍", kind="text",
-                   source="artgen", generator="verse"),
-        ]
+# _fake_mediums() has exactly ONE artgen medium (verse, text-kind), which
+# masks a critical mis-grouping/-routing bug: the six chat-LLM backends have
+# the generic ("artgen",) capability, and the OLD (3c11874) code classified
+# them by "the FIRST artgen medium in mediums_fn()". In the real app that
+# first artgen medium is `animatediff` (kind "gif") -> every "Qwen3-8B" card
+# would land in **Animate** and clicking it would switch the panel to
+# AnimateDiff. This fixture mirrors default_mediums()'s real shape: natives
+# first, then artgen mediums in alphabetical order so `animatediff` (gif)
+# precedes `verse` (text) — the exact ordering that triggered the bug.
 
-    view = _make_view(monkeypatch, mediums_fn=_minimal_mediums)
+def _fake_mediums_multi_artgen():
+    return [
+        Medium(id="image", label="Image", icon="\U0001f5bc️", kind="image",
+               source="native", generator=None),
+        Medium(id="video", label="Video", icon="\U0001f3a5", kind="video",
+               source="native", generator=None),
+        Medium(id="animate", label="Animate", icon="\U0001f483", kind="gif",
+               source="native", generator=None),
+        Medium(id="animatediff", label="AnimateDiff", icon="\U0001f57a",
+               kind="gif", source="artgen", generator="animatediff"),
+        Medium(id="verse", label="Verse", icon="✍", kind="text",
+               source="artgen", generator="verse"),
+    ]
+
+
+def test_llm_servers_group_as_text_with_multiple_artgen_mediums(monkeypatch):
+    """CRITICAL regression guard (fails against 3c11874, passes after the
+    capability-based-classification fix): with MORE THAN ONE artgen medium
+    present — `animatediff` (gif) alphabetically before `verse` (text),
+    mirroring default_mediums() — every artgen-* chat/LLM key AND
+    prompt-server must land in groups["Text"], never in groups["Animate"]."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_multi_artgen)
+    groups = view._model_door_groups()
+
+    llm_keys = [
+        "artgen-qwen3-8b",
+        "artgen-llama-3.1-8b",
+        "artgen-qwen2.5-7b",
+        "artgen-llama-3.3-70b",
+        "artgen-qwen3-32b",
+        "artgen-deepseek-r1-70b",
+        "prompt-server",
+    ]
+    for key in llm_keys:
+        assert key in groups["Text"], f"{key} must be in Text, not elsewhere"
+        assert key not in groups.get("Animate", []), (
+            f"{key} must NOT be in Animate (the first-artgen-medium bug)"
+        )
+
+
+def test_activate_llm_card_does_not_jump_to_animate_medium(monkeypatch):
+    """CRITICAL regression guard (fails against 3c11874, passes after the
+    fix): clicking a chat-LLM card must NOT switch the active medium to the
+    animate/gif medium (the first-artgen-medium `_server_key_to_medium_id`
+    would resolve). The active medium is left unchanged — a Text card click
+    never lands the user on AnimateDiff."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_multi_artgen)
+    before = view._active_medium.id
+    assert before == "image"
+
+    view._activate_model_card("artgen-qwen3-8b")
+
+    assert view._active_medium.id == before          # unchanged
+    assert view._active_medium.id not in ("animate", "animatediff")
+    assert view._active_medium.kind != "gif"
+    # It still moves the user into the create/Idea flow.
+    assert view._entry_mode == "idea"
+
+
+def test_model_door_omits_empty_groups(monkeypatch):
+    """Classification is now purely by `server_manager.SERVERS` capabilities
+    (independent of mediums_fn), so an empty group only arises when SERVERS
+    itself has no server for that capability. Reduce SERVERS to image+text
+    servers and assert the Video/Animate sections are omitted entirely — the
+    "no empty groups" requirement."""
+    import server_manager
+
+    subset = {
+        k: server_manager.SERVERS[k]
+        for k in ("flux", "sdxl", "artgen-qwen3-8b", "prompt-server")
+    }
+    monkeypatch.setattr(server_manager, "SERVERS", subset)
+
+    view = _make_view(monkeypatch)
     groups = view._model_door_groups()
 
     assert "Animate" not in groups

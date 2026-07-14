@@ -136,25 +136,35 @@ def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
 
 
 # Model door (Task 7): a `server_manager.SERVERS` key is classified into a
-# group by resolving the Medium it implies (`_server_key_to_medium_id`) and
-# looking at THAT Medium's own `kind` field, rather than a hardcoded
-# key->group table — a new server declaring an existing capability, or a new
-# artgen generator, lands in the right section with zero changes here.
-# "gif" (native Animate's own kind, and artgen's animatediff) maps to
-# "Animate" -- the app's only motion/character-animation medium is the
-# "gif"-kind one. A key with no medium mapping at all (e.g. "prompt-server",
-# capability "prompt") falls back to "Text" -- every key that hits this
-# fallback today is in fact a chat/LLM/prompt service.
-_MEDIUM_KIND_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
+# group by its OWN `ServerDef.capabilities`, NOT by resolving "the Medium it
+# implies" — that indirection (via `_server_key_to_medium_id`) is fatally
+# wrong for the six chat-LLM backends, whose capability is the generic
+# ("artgen",): `_server_key_to_medium_id` maps "artgen" to the *first
+# artgen-sourced medium* in `mediums_fn()`, which in the real app is
+# `animatediff` (kind "gif"). That would file every "Qwen3-8B"/"Llama-…"
+# card under **Animate** and make clicking one switch the panel to
+# AnimateDiff. Capability-based classification is unambiguous instead:
+#
+#   image   -> Image   (flux/sdxl/z-image-turbo/motif)
+#   video   -> Video   (wan2.2/mochi/skyreels)
+#   animate -> Animate (Wan2.2-Animate-14B, the ONE real animate server)
+#   artgen  -> Text    (the chat-LLM backends — Qwen/Llama/DeepSeek/…)
+#   prompt  -> Text    (prompt-server, the tiny prompt-gen Qwen)
+#
+# First matching capability wins (every real ServerDef has exactly one).
+# Anything unrecognised falls back to "Text" (every such key today is a
+# chat/LLM/prompt service).
+_CAPABILITY_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
     "image": "Image",
     "video": "Video",
-    "gif": "Animate",
-    "text": "Text",
+    "animate": "Animate",
+    "artgen": "Text",
+    "prompt": "Text",
 }
 
 # Fixed display order for the model door's sections — independent of dict
 # iteration order, and stable regardless of which groups end up non-empty for
-# the current mediums_fn()/SERVERS combination.
+# the current SERVERS table.
 _MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Animate", "Text")
 
 
@@ -490,7 +500,13 @@ _CSS = b"""
    .create-model-door-flow) so the whole ~15-and-growing model collection is
    browsable without ever overflowing the window (width-clamp requirement,
    same discipline as .create-chip-row). ------------------------------------ */
+.create-model-door-row {
+    padding: 0 0 6px 0;
+}
 .create-model-door {
+    padding: 2px 0;
+}
+.create-model-door-section {
     padding: 2px 0;
 }
 .create-model-door-header {
@@ -749,26 +765,20 @@ class CreateView(Gtk.Box):
     def _classify_server_key_for_model_door(self, key: str) -> str:
         """One `server_manager.SERVERS` key -> its model-door group name.
 
-        Reuses `_server_key_to_medium_id` (capability -> Medium id) plus the
-        resolved Medium's own `kind` field (`_MEDIUM_KIND_TO_MODEL_DOOR_
-        GROUP`) rather than hardcoding a key->group table — a new server
-        declaring an existing capability, or a new artgen generator, is
-        classified correctly with zero changes here.
-
-        Falls back to "Text" when the key doesn't map to any current medium
-        at all (e.g. "prompt-server", capability "prompt" has no matching
-        medium) — every key that hits this fallback today is in fact a
-        chat/LLM/prompt service.
+        Classifies by the server's OWN `ServerDef.capabilities`
+        (`_CAPABILITY_TO_MODEL_DOOR_GROUP`), NOT by "the medium it implies" —
+        see that table's comment for why routing the six chat-LLM backends
+        (capability ("artgen",)) through `_server_key_to_medium_id` would
+        mis-file them under Animate. First matching capability wins; an
+        unknown key or an unrecognised capability falls back to "Text" (every
+        such key today is a chat/LLM/prompt service).
         """
-        medium_id = self._server_key_to_medium_id(key)
-        if medium_id is not None:
-            try:
-                mediums = list(self._mediums_fn() or [])
-            except Exception:
-                mediums = []
-            medium = next((m for m in mediums if m.id == medium_id), None)
-            if medium is not None:
-                return _MEDIUM_KIND_TO_MODEL_DOOR_GROUP.get(medium.kind, "Text")
+        sdef = server_manager.SERVERS.get(key)
+        if sdef is not None:
+            for cap in sdef.capabilities:
+                group = _CAPABILITY_TO_MODEL_DOOR_GROUP.get(cap)
+                if group is not None:
+                    return group
         return "Text"
 
     def _model_door_groups(self) -> "dict[str, list[str]]":
@@ -777,7 +787,9 @@ class CreateView(Gtk.Box):
 
         Empty groups are omitted from the returned dict — `_build_model_door`
         relies on this to skip empty sections entirely, per the task's "omit
-        empty groups" requirement.
+        empty groups" requirement. Purely a function of `SERVERS` +
+        capabilities (no `mediums_fn()` I/O) since the classification-by-
+        capability fix.
         """
         groups: "dict[str, list[str]]" = {g: [] for g in _MODEL_DOOR_GROUP_ORDER}
         for key in server_manager.SERVERS:
@@ -891,24 +903,36 @@ class CreateView(Gtk.Box):
                 return
 
     def _activate_model_card(self, key: str) -> None:
-        """Model door card click: select that model's medium and return to
-        the Idea door, pre-scoped to this model.
+        """Model door card click: for a native-medium card (Image/Video/
+        Animate), select that model's medium and return to the Idea door,
+        pre-scoped to this model. For a **Text** card (a chat-LLM backend or
+        prompt-server), return to the Idea door WITHOUT changing the active
+        medium.
 
-        Reuses existing routing rather than reimplementing it:
-        `_server_key_to_medium_id` (capability -> Medium id) resolves the
-        Medium; activating its chip button fires the SAME
-        `_select_medium` -> `_swap_panel` path a manual chip click does
-        (repopulating the scoped dropdown for the new medium as a side
-        effect), then the Idea door toggle is activated
-        (`_set_entry_mode("idea")`). Finally the scoped dropdown is
-        pre-selected to *key* when practical (`_preselect_model_key`) — "when
-        practical" because a canonical-id-excluded key has nothing to
-        pre-select, which is fine.
+        Why the split: a Text card's server has the generic ("artgen",)
+        capability, which `_server_key_to_medium_id` maps to "the first
+        artgen-sourced medium" = `animatediff` (kind "gif") in the real app.
+        Routing a "Qwen3-8B" click through that heuristic would silently jump
+        the user to AnimateDiff — the exact bug this method must not have. So
+        classification-by-capability (`_classify_server_key_for_model_door`)
+        gates the routing: only NON-Text cards resolve+activate a medium.
 
-        A key with no medium mapping at all (`_server_key_to_medium_id`
-        returns None — e.g. "prompt-server") is a deliberate no-op: there is
-        no medium to route to.
+        Reuses existing routing rather than reimplementing it: for a native
+        card, `_server_key_to_medium_id` resolves the Medium and activating
+        its chip button fires the SAME `_select_medium` -> `_swap_panel` path
+        a manual chip click does (repopulating the scoped dropdown as a side
+        effect); the dropdown is then pre-selected to *key* when practical
+        (`_preselect_model_key` — "when practical" because a canonical-id-
+        excluded key like "skyreels" has nothing to pre-select). Either way
+        the Idea door toggle is activated last (`_set_entry_mode("idea")`).
         """
+        # Text cards (chat LLMs / prompt-server): never resolve a medium —
+        # just move the user into the Idea flow, active medium untouched. A
+        # Text card click must NEVER land on AnimateDiff.
+        if self._classify_server_key_for_model_door(key) == "Text":
+            self._doors["idea"].set_active(True)
+            return
+
         medium_id = self._server_key_to_medium_id(key)
         if medium_id is None:
             return
