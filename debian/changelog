@@ -1,3 +1,22 @@
+tt-local-generator (0.30.0) noble; urgency=medium
+
+  * New "Emoji Storyteller" artgen generator + a developer tutorial on writing
+    plugins that reuse an existing model.
+    - `plugins/emoji-storyteller/` tells a little story almost entirely in
+      emoji and symbols (theme / scenes / word-budget flags). It ships no new
+      infrastructure: it reuses whatever chat model is already running on the
+      artgen server (`uses_llm = True`), so it appears automatically as
+      `tt-ctl artgen emoji-storyteller`, a Create medium chip, and a remixable
+      pipeline node.
+    - `docs/tutorials/adding-an-artgen-plugin.md` walks through building it end
+      to end: the plugin anatomy (dir + mcp.json + plugin.py), how a generator
+      reuses a model via the injected `call_fn` (never naming or loading one),
+      keeping `add_args` in sync with the manifest schema, single- vs
+      multi-pass generation, and testing with a fake `call_fn` (no network /
+      no hardware) plus `--simulate`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 21:00:00 -0700
+
 tt-local-generator (0.29.1) noble; urgency=medium
 
   * Pipeline editor field-roles follow-up (whole-slice review fixes):
