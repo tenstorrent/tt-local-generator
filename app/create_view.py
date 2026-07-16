@@ -115,6 +115,24 @@ from model_status import Status  # noqa: E402
 # is the only translation table the scoped dropdown needs.
 _VIDEO_SERVER_KEY_ALIAS: "dict[str, str]" = {"wan2.2": "wan2"}
 
+# SP-2 Task 3: native-medium id -> the capability string `ModelStatusService`
+# expects (matches `server_manager.ServerDef.capabilities` verbatim). This is
+# keyed by `medium.id`, NOT `medium.kind` — the native "animate" medium's
+# `kind` is "gif" (it reports its output file-kind for gallery/playback
+# purposes, see `create_mediums.Medium`'s docstring), not "animate", so a
+# kind-keyed lookup would silently return `None` for the one medium whose
+# model most often needs a moment to finish starting. `medium.id` IS the
+# capability string for all three native mediums (mirrors the same id-based
+# capability resolution `_scoped_model_keys` already uses one line below via
+# `medium.id`), so keying off it here keeps this map correct for Animate too.
+# Absent from the map -> no capability -> auto-select is skipped (covers
+# every artgen medium, whose id is a generator name, not a capability).
+_MODEL_STATUS_CAPABILITY: "dict[str, str]" = {
+    "image": "image",
+    "video": "video",
+    "animate": "animate",
+}
+
 
 def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
     """Translate a `server_manager.SERVERS` key into the exact canonical
@@ -1321,6 +1339,18 @@ class CreateView(Gtk.Box):
         IS present, so the selection holds. This also makes
         `_preselect_model_key`'s choice survive the health refresh that races
         a Model-door card click.
+
+        **SP-2 Task 3 — auto-select the running model on a FRESH populate.**
+        When the previous key does NOT survive the rebuild (medium swap /
+        first build), the "index 0" fallback described above is no longer
+        unconditional: `_autoselect_running_model_index` gets first crack,
+        defaulting the selection to whatever `self._status_service` reports
+        running or starting for *medium*'s capability, and only falling back
+        to index 0 itself when there's no service, no capability, nothing
+        running/starting, or the running key isn't in this medium's scoped
+        list. Because this only runs on the "prev_key not found" branch, a
+        same-medium refresh is untouched — a model finishing its startup
+        can't override a manual pick, preserving the guarantee above.
         """
         is_native_with_model = medium.source == "native" and medium.id in (
             "image", "video", "animate",
@@ -1350,15 +1380,62 @@ class CreateView(Gtk.Box):
         self._model_dropdown_entries = entries
         self._model_dropdown.set_model(Gtk.StringList.new(labels))
         # Re-select the previously-chosen key if it survived the rebuild
-        # (same-medium health refresh), else index 0 (medium swap / first
-        # populate / a key that dropped out of the list).
-        restored = 0
+        # (same-medium health refresh) — v0.28.1 fix, untouched: `restored`
+        # stays `None` until a match is found, which is exactly how we tell
+        # "fresh populate" (medium swap / first build — prev_key belongs to a
+        # different medium's key set, or there was no prior selection at all)
+        # from "same-medium refresh" (prev_key IS one of the new entries).
+        restored: "Optional[int]" = None
         if prev_key is not None:
             for idx, (entry_key, _canonical, _label) in enumerate(entries):
                 if entry_key == prev_key:
                     restored = idx
                     break
+        if restored is None:
+            # Fresh populate: prefer the running/starting model for this
+            # medium's capability (SP-2 Task 3) over the hardcoded index 0
+            # default. A same-medium refresh never reaches this branch, so a
+            # model finishing its health check can't yank a manual pick out
+            # from under the user (the exact regression the v0.28.1 fix
+            # above guards against).
+            restored = self._autoselect_running_model_index(medium, entries)
         self._model_dropdown.set_selected(restored)
+
+    def _autoselect_running_model_index(
+        self, medium: Medium, entries: "list[tuple]"
+    ) -> int:
+        """SP-2 Task 3: index into *entries* of the model actually running or
+        starting for *medium*'s capability, or `0` (the pre-existing medium
+        default) when auto-select doesn't apply.
+
+        Only called from `_populate_model_dropdown` on a FRESH populate (see
+        that method) — never on a same-medium refresh, which preserves a
+        manual pick instead.
+
+        Falls back to `0` in every case that isn't a clean "yes, auto-select
+        this": no `_status_service` injected (byte-identical to pre-Task-3
+        behavior), *medium* has no capability (artgen mediums — no model
+        dropdown semantics), the service has nothing running/starting for
+        that capability, or the key it returns isn't one of *entries* (e.g.
+        it maps to a server key this medium's dropdown doesn't scope, or
+        (defensively) the service call itself raises) — never guess, just use
+        the existing default.
+        """
+        if self._status_service is None:
+            return 0
+        cap = _MODEL_STATUS_CAPABILITY.get(medium.id)
+        if cap is None:
+            return 0
+        try:
+            running_key = self._status_service.running_or_starting(cap)
+        except Exception:
+            return 0
+        if running_key is None:
+            return 0
+        for idx, (entry_key, _canonical, _label) in enumerate(entries):
+            if entry_key == running_key:
+                return idx
+        return 0
 
     def _selected_model_key(self) -> Optional[str]:
         """The server key of the scoped dropdown's current selection, or

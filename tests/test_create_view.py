@@ -192,12 +192,23 @@ class _FakeStatusService:
     plus a `push()` test helper that mimics `_notify()` fanning a fresh
     snapshot out to subscribers. Never touches real health checks, sockets,
     or subprocesses — matches the fake-service discipline task-2-brief.md
-    calls for."""
+    calls for.
 
-    def __init__(self, initial: "dict | None" = None):
+    `running` (SP-2 Task 3): a `capability -> server_key` map backing
+    `running_or_starting(capability)`. Defaults to `{}` so every pre-Task-3
+    test (which never calls this method) is unaffected; a capability absent
+    from the map returns `None`, matching the real service's "nothing
+    running/starting" case.
+    """
+
+    def __init__(self, initial: "dict | None" = None, running: "dict | None" = None):
         self._snapshot = dict(initial or {})
         self.subscribers: list = []
         self.unsubscribed: list = []
+        self._running = dict(running or {})
+
+    def running_or_starting(self, capability: str):
+        return self._running.get(capability)
 
     def snapshot(self) -> dict:
         return dict(self._snapshot)
@@ -822,6 +833,98 @@ def test_repopulation_preserves_selection_after_preselect_model_key(monkeypatch)
     view._apply_model_health({"wan2.2": False, "mochi": True})
 
     assert view._collect_params()["model"] == "mochi-1-preview"
+
+
+# ── SP-2 Task 3: auto-select the running/starting model (fresh populate) ──
+#
+# `_FakeStatusService.running_or_starting` is keyed by capability
+# ("image"/"video"/"animate" — see `_MODEL_STATUS_CAPABILITY` in
+# create_view.py). Video's scoped dropdown lists wan2.2 at index 0 (the
+# pre-Task-3 default) and mochi at index 1 (see `_mochi_index`); every test
+# below that wants a signal-bearing assertion (one that would actually FAIL
+# without the Task 3 implementation) picks a running/starting key that is
+# NOT the medium's index-0 default, so a bug that silently ignores the
+# service can't accidentally pass.
+
+def test_autoselect_running_model_on_medium_populate(monkeypatch):
+    """A fresh populate (medium switch) defaults to the model the service
+    reports running for that medium's capability — here Mochi (index 1),
+    proving the auto-select actually overrides the pre-Task-3 index-0
+    (Wan2.2) default rather than coincidentally matching it."""
+    fake_service = _FakeStatusService(running={"video": "mochi"})
+    view = _make_view(monkeypatch, status_service=fake_service)
+
+    view._chip_buttons["video"].set_active(True)  # fresh populate for video
+
+    idx = view._model_dropdown.get_selected()
+    assert idx == _mochi_index(view)
+    _key, canonical, _label = view._model_dropdown_entries[idx]
+    assert canonical == "mochi-1-preview"
+
+
+def test_autoselect_starting_when_none_ready(monkeypatch):
+    """`running_or_starting` makes no READY/STARTING distinction visible to
+    CreateView (that preference order lives in `ModelStatusService` itself,
+    unit-tested separately in test_model_status.py) — from here, a STARTING
+    key behaves identically to a READY one: whatever key the service hands
+    back is what gets selected. Uses "motif" (image capability, index 3 —
+    not the default "flux" at index 0) to keep the assertion signal-bearing
+    for a second medium."""
+    fake_service = _FakeStatusService(running={"image": "motif"})
+    view = _make_view(monkeypatch, status_service=fake_service)
+    # "image" is already the default-active medium (see
+    # test_first_medium_is_active_by_default) -- but the dropdown is
+    # populated by _swap_panel during __init__, before which the fake
+    # service already had its `running` map, so construction itself is the
+    # fresh populate under test here.
+
+    idx = view._model_dropdown.get_selected()
+    _key, canonical, _label = view._model_dropdown_entries[idx]
+    assert canonical == "motif-image-6b-preview"
+
+
+def test_autoselect_falls_back_to_default_when_nothing_running(monkeypatch):
+    """`running_or_starting` returning `None` (nothing running/starting for
+    this capability) must fall back to the existing medium default (index
+    0), not crash or leave the dropdown unselected."""
+    fake_service = _FakeStatusService(running={})
+    view = _make_view(monkeypatch, status_service=fake_service)
+
+    view._chip_buttons["video"].set_active(True)
+
+    assert view._model_dropdown.get_selected() == 0
+    assert view._collect_params()["model"] == "wan2.2-t2v"
+
+
+def test_manual_pick_preserved_across_refresh_with_status_service(monkeypatch):
+    """v0.28.1 regression guard, extended to the status_service path: a
+    manual pick must survive a same-medium refresh even when the service now
+    reports a DIFFERENT model running — auto-select must never fire outside
+    the "prev_key not found" (fresh populate) branch."""
+    fake_service = _FakeStatusService(running={"video": "wan2.2"})
+    view = _make_view(monkeypatch, status_service=fake_service)
+    view._chip_buttons["video"].set_active(True)
+
+    view._model_dropdown.set_selected(_mochi_index(view))
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+    # Same-medium refresh (status snapshot push) lands; the service would
+    # auto-select wan2.2 on a FRESH populate, but this is a refresh, not a
+    # fresh populate, so the manual Mochi pick must hold.
+    fake_service.push({"wan2.2": Status.READY, "mochi": Status.OFF})
+
+    assert view._collect_params()["model"] == "mochi-1-preview"
+
+
+def test_autoselect_noop_when_status_service_is_none(monkeypatch):
+    """No service injected -> byte-identical to pre-Task-3 behavior: fresh
+    populate always lands on index 0, exactly like
+    `test_medium_swap_resets_scoped_model_selection_to_default`."""
+    view = _make_view(monkeypatch)  # status_service=None
+    view._chip_buttons["video"].set_active(True)
+
+    assert view._model_dropdown.get_selected() == 0
+    assert view._collect_params()["model"] == "wan2.2-t2v"
 
 
 # ── Model door visibility (grid shown only in "model" mode) ──────────────
