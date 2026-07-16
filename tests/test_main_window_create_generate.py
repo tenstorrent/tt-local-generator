@@ -699,6 +699,96 @@ def _make_mw_lifecycle(monkeypatch):
     return obj, fake_gallery, fake_create_view
 
 
+# ── SkyReels-I2V seed-image guard (SP-3c-1 review fix) ──────────────────────
+#
+# SkyReels-V2-I2V-14B-540P (re-enabled this task) is an image-to-video model
+# that REQUIRES a conditioning image — the exact reason it was pulled from
+# the Video door in v0.27.1. Re-enabling the model choice without also
+# gating generation would let a user click Create with no seed image and
+# have the request silently fail server-side (or worse, wrongly proceed).
+# `_create_generate_native`'s video branch must block BEFORE ever calling
+# `_on_generate` when model == skyreels and `seed_image_path` is empty,
+# surfacing a clear message via the inline result panel — mirrors
+# ControlPanel's own `_seed_image_required()`/`_on_action_clicked` guard
+# (main_window.py ~6126/~6579) so both surfaces enforce the same rule.
+
+
+def test_skyreels_without_seed_image_blocks_generation_and_shows_error(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._on_generate = MagicMock()  # spy: must never be called when blocked
+
+    params = {
+        "prompt": "a dancer moving to the beat",
+        "model": "skyreels-v2-i2v-14b-540p",
+        "num_inference_steps": 20,
+        "seed": -1,
+        # no "seed_image_path" key at all — the exact state a fresh
+        # VideoParamPanel with an untouched SeedImageWell collects.
+    }
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    obj._on_generate.assert_not_called()
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    assert "SkyReels" in fake_create_view._result_panel.calls[-1][1]
+    # `_fail_create_job` must clear the flag, exactly like every other
+    # early-return guard (worker-busy, disk space, artgen-no-generator) —
+    # otherwise the panel would be stuck "pending" forever.
+    assert obj._create_job_active is False
+
+
+def test_skyreels_with_empty_string_seed_image_path_also_blocks(monkeypatch):
+    """An explicit `""` (not just a missing key) must be treated identically
+    — both are "no seed image", the exact default `SeedImageWell.path()`
+    returns before a file is chosen."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._on_generate = MagicMock()
+
+    params = {"model": "skyreels-v2-i2v-14b-540p", "seed_image_path": ""}
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    obj._on_generate.assert_not_called()
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+
+
+def test_skyreels_with_seed_image_proceeds_to_on_generate(monkeypatch):
+    """With a real seed image path present, SkyReels-I2V generation proceeds
+    normally — the guard must never block the model when it CAN actually
+    run, only when it can't."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._on_generate = MagicMock()
+
+    params = {
+        "prompt": "a dancer moving to the beat",
+        "model": "skyreels-v2-i2v-14b-540p",
+        "seed_image_path": "/tmp/character.png",
+    }
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    obj._on_generate.assert_called_once()
+    kwargs = obj._on_generate.call_args.kwargs
+    assert kwargs["video_model_key"] == "skyreels"
+    assert kwargs["seed_image_path"] == "/tmp/character.png"
+    assert not any(c[0] == "show_error" for c in fake_create_view._result_panel.calls)
+
+
+def test_non_skyreels_video_model_never_requires_a_seed_image(monkeypatch):
+    """Regression guard: the new check must be scoped to `model_key ==
+    "skyreels"` only — wan2/mochi must keep working with no seed image at
+    all, exactly as before this task."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._on_generate = MagicMock()
+
+    params = {"model": "wan2.2-t2v"}  # no seed_image_path
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    obj._on_generate.assert_called_once()
+    assert not any(c[0] == "show_error" for c in fake_create_view._result_panel.calls)
+
+
 def test_create_native_job_shows_pending_in_panel(monkeypatch):
     obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
 

@@ -1,3 +1,17 @@
+tt-local-generator (0.36.1) noble; urgency=medium
+
+  * Fix (SP-3c-1 review): Create's SkyReels-I2V model now requires a seed
+    image before generation is allowed to start. Re-enabling SkyReels-I2V in
+    v0.36.0 restored the model choice but left no guard in the Create CTA
+    path, so selecting it with no seed image silently submitted a request
+    that could only fail server-side -- the exact reason it was pulled in
+    v0.27.1. `_create_generate_native`'s video branch now blocks before
+    calling `_on_generate` when the SkyReels model is selected with an empty
+    `seed_image_path`, surfacing a clear message in the Create result panel
+    instead (mirrors ControlPanel's own `_seed_image_required()` guard).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 07:00:00 -0700
+
 tt-local-generator (0.36.0) noble; urgency=medium
 
   * Create gains a seed-image well for image-to-image / image-conditioned

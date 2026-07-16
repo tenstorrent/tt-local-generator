@@ -10813,6 +10813,30 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         else:  # "video"
             model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+            # SP-3c-1 review fix (Important): SkyReels-I2V requires a
+            # conditioning image — the exact reason it was pulled from the
+            # Video door in v0.27.1 (see `_VIDEO_MODEL_IDS`'s module comment
+            # in create_param_panels.py). Re-enabling it in the model list
+            # without also gating generation here would let a user submit an
+            # I2V request with `seed_image_path=""`, which can only fail
+            # server-side with no explanation — mirrors ControlPanel's own
+            # guard (`_seed_image_required()` + `_on_action_clicked`'s check,
+            # ~line 6579) so both surfaces enforce the same rule. Blocked
+            # BEFORE calling `_on_generate` at all — no worker is started.
+            if model_key == "skyreels" and not params.get("seed_image_path"):
+                msg = (
+                    "SkyReels I2V requires a starting image — add one to the "
+                    "seed image well before generating."
+                )
+                self._set_status(msg)
+                # `_begin_create_job` already set _create_job_active + showed
+                # "pending" in the result panel before this method was
+                # called (see `_on_create_generate`) — `_fail_create_job`
+                # clears that flag and surfaces the error in the same panel,
+                # mirroring `_create_generate_artgen`'s "no generator mapped"
+                # early-return pattern.
+                self._fail_create_job(msg)
+                return
             # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
             # used to pick the video worker from `self._controls.get_video_model()`
             # regardless of `model_id` — which DEFAULTS to "animatediff" on a

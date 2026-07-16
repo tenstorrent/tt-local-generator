@@ -79,8 +79,9 @@ def test_applied_modifier_text_delegates_to_pills():
 
 
 def test_brief_zone_holds_negative_prompt_field():
-    """ImageParamPanel's one ROLE_BRIEF field (negative_prompt) must land in
-    the brief zone, not direction or controls."""
+    """ImageParamPanel's `negative_prompt` field (one of its two ROLE_BRIEF
+    fields, alongside SP-3c-1's `seed_image_path`) must land in the brief
+    zone, not direction or controls."""
     rp = cpp.RoleZonePanel(cpp.ImageParamPanel(), _medium())
     # Walk the brief zone's children looking for the negative-prompt entry.
     found = False
@@ -191,5 +192,47 @@ def test_animate_pickers_derive_live_root_after_reparenting(monkeypatch):
         captured.clear()
         handler(browse)
         assert captured == [win]
+
+    win.destroy()
+
+
+def test_seed_image_well_derives_live_root_after_reparenting(monkeypatch):
+    """SP-3c-1 review fix (Minor 1): the same regression guard as
+    `test_animate_pickers_derive_live_root_after_reparenting`, for
+    `ImageParamPanel`'s `SeedImageWell`.
+
+    After `RoleZonePanel` re-parents `ImageParamPanel`'s rows (including the
+    seed-image row) into its own brief/direction/controls zones, the panel's
+    own `build()` box (`self._widget`) is orphaned — `get_root()` on it
+    returns None. Unlike `AnimateParamPanel`'s Browse buttons (which derive
+    their FileDialog parent from the CLICKED BUTTON), `SeedImageWell` IS the
+    widget that gets re-parented directly — `_open_file_dialog` calls
+    `self.get_root()` on the well itself, so as long as the well stays live
+    in the RoleZonePanel tree (it does — `_row_for`/re-parenting moves rows,
+    never destroys their contents), that resolves to the real window.
+    """
+    panel = cpp.ImageParamPanel()
+    rp = cpp.RoleZonePanel(panel, _medium("image"))
+
+    win = Gtk.Window()
+    win.set_child(rp)
+    win.present()  # realize the widget tree so get_root() resolves the window
+
+    # The panel's own build() box was re-parented away and discarded — orphaned.
+    assert panel._widget.get_root() is None
+    # But the seed well itself, live in the RoleZonePanel tree, resolves the
+    # real window.
+    assert panel._seed_well.get_root() is win
+
+    captured: "list" = []
+
+    def _fake_open(self, parent, cancellable, callback):
+        captured.append(parent)  # no dialog is actually shown
+
+    monkeypatch.setattr(Gtk.FileDialog, "open", _fake_open)
+
+    panel._seed_well._open_file_dialog()
+
+    assert captured == [win]
 
     win.destroy()
