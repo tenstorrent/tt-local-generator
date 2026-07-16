@@ -10680,12 +10680,34 @@ class MainWindow(Gtk.ApplicationWindow):
                     params=json.dumps(safe_params),
                     starred=0,
                 )
+                # `CreateResultPanel._build_artifact_widget` (create_view.py)
+                # reads `record.media_file_path` — the attribute name
+                # `history_store.GenerationRecord` exposes as a computed
+                # property for the native path. `media_store.MediaRecord`
+                # only has `file_path`, so without this the panel's "finished"
+                # render would always fall through to its "Result file not
+                # found." placeholder even though the artifact exists. Set
+                # the same duck-typed attribute the panel already documents
+                # accepting ("a duck-typed stand-in works too"). Safe:
+                # `MediaRecord` is a plain (non-frozen, non-slotted) dataclass
+                # and `MediaStore.add`/`_upsert` only read its declared
+                # fields, so this extra instance attribute is never persisted.
+                rec.media_file_path = str(out_path)
                 _ms.add(rec)
                 _ms.ensure_auto_playlists()
 
                 GLib.idle_add(self._on_create_artgen_done, medium)
+                # Task 4: forward the just-written record to the inline
+                # Create result panel and clear the Create-job flag — see
+                # `_on_create_artgen_finished` below.
+                GLib.idle_add(self._on_create_artgen_finished, rec)
             except Exception as exc:
                 GLib.idle_add(self._on_create_artgen_error, medium, str(exc))
+                # Task 4: reuse `_fail_create_job` (Task 3) so a failed artgen
+                # Create job surfaces in the panel and clears the flag exactly
+                # like a failed native job does — no terminal path of this
+                # worker may leave `_create_job_active` stuck True.
+                GLib.idle_add(self._fail_create_job, str(exc))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -10703,6 +10725,30 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_create_artgen_error(self, medium, msg: str) -> bool:
         """Main-thread error callback for `_create_generate_artgen`."""
         self._set_status(f"Couldn't generate {medium.label}: {msg}")
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_artgen_finished(self, record) -> bool:
+        """Main-thread success callback that forwards an artgen Create job's
+        freshly-written media-store `record` to the inline `CreateResultPanel`
+        and clears `_create_job_active` (Task 4).
+
+        Mirrors `_on_finished`'s Create-forwarding block for the native path:
+        a no-op when no Create job is active (so a non-Create artgen call —
+        none exist today, but the guard is free and consistent — is
+        unaffected), and the panel call is try/except-wrapped so a
+        panel/widget error can never leave the flag stuck True. Without this,
+        `_begin_create_job`'s "pending" state (shown before the subprocess
+        runs) would never resolve for the artgen path — the panel would sit
+        on "Generating…" forever and the window-global flag would stay True,
+        wrongly affecting the next unrelated job (see `_fail_create_job`'s
+        docstring for the exact failure mode this class of bug causes).
+        """
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:
+                pass
+            self._create_job_active = False
         return GLib.SOURCE_REMOVE
 
     # ── Server start / stop ────────────────────────────────────────────────────

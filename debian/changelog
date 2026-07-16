@@ -1,3 +1,22 @@
+tt-local-generator (0.31.0) noble; urgency=medium
+
+  * Create surface: artgen (verse/ansi/landscape/…) jobs now resolve in the
+    inline result panel. `_begin_create_job` already put the panel into
+    "pending" for artgen jobs (Task 3), but nothing ever called
+    `show_finished`/`show_error` on that path, so the panel sat on
+    "Generating…" forever and the window-global Create-job flag stayed
+    stuck True, silently breaking the next unrelated job. `_create_generate_
+    artgen`'s worker thread now forwards its media-store record to
+    `show_finished` on success and reuses `_fail_create_job` on any failure
+    (bad generator, non-zero `tt-ctl` exit, or any other exception) --
+    resolving the panel/flag on every terminal path. Also aliases the
+    freshly-built `MediaRecord` with a `media_file_path` attribute so the
+    panel's artifact renderer (which reads that name, matching
+    `GenerationRecord`'s native-path property) can actually display the
+    artgen artifact instead of a "not found" placeholder.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 00:00:00 -0700
+
 tt-local-generator (0.30.2) noble; urgency=medium
 
   * Create surface is now vertically scrollable. CreateView was mounted

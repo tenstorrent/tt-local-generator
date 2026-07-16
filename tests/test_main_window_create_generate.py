@@ -893,3 +893,121 @@ def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch)
     assert len(fake_gallery.add_pending_calls) == 1
     # ...and the panel was NOT touched again by it — no state bled forward.
     assert fake_create_view._result_panel.calls == calls_after_failure
+
+
+# ── In-place Create results: artgen generation lifecycle → result panel ─────
+#
+# (task-4-brief.md) A Create-originated artgen (verse/ansi/landscape/…) job
+# must drive `self._create_view._result_panel` through pending -> finished |
+# error too, exactly like the native path (task-3) — `_begin_create_job`
+# already shows "pending" for BOTH branches, so before this task the artgen
+# panel state never resolved and `_create_job_active` stayed stuck True.
+# `_create_generate_artgen`'s subprocess + disk + sqlite I/O must still reach
+# the media store / Artgen gallery exactly as before (persistence unaffected
+# — the panel forwarding is additive).
+
+def _make_mw_artgen_lifecycle(monkeypatch):
+    """Like `_make_mw` (the artgen-dispatch tests above) but ALSO wires the
+    Create-panel/flag plumbing (`_create_view`, `_create_job_active`,
+    `_begin_create_job`, `_fail_create_job`, `_on_create_artgen_finished`) so
+    the panel-forwarding half of the artgen lifecycle can be exercised too.
+
+    `threading.Thread` is stubbed with `_ImmediateThread` (runs its target
+    synchronously) rather than `_NoOpThread` (used by the native lifecycle
+    harness above): unlike `_on_generate`'s worker, which calls a REAL
+    `GenerationWorker.run_with_callbacks` that would attempt a real HTTP
+    request, the artgen worker closure's entire body is made mock-safe by
+    `_patch_artgen_deps` (subprocess/disk/sqlite all patched), so it's safe —
+    and necessary, since that's where the record actually gets built — to
+    let it run inline.
+    """
+    import main_window as mw
+
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+
+    obj._set_status = MagicMock()
+    obj._artgen_panel = None
+    obj._controls = MagicMock()
+    obj._create_job_active = False
+    fake_create_view = _FakeCreateView()
+    obj._create_view = fake_create_view
+
+    for name in (
+        "_on_create_generate",
+        "_create_generate_artgen",
+        "_on_create_artgen_done",
+        "_on_create_artgen_error",
+        "_on_create_artgen_finished",
+        "_begin_create_job",
+        "_fail_create_job",
+    ):
+        setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
+
+    monkeypatch.setattr(mw.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    return obj, fake_create_view
+
+
+def test_artgen_create_shows_pending_then_finished(monkeypatch, tmp_path):
+    """Success path: the panel sees show_pending (from `_begin_create_job`,
+    called before dispatch) then show_finished with the SAME record that was
+    written to the media store, and the flag is cleared."""
+    obj, fake_create_view = _make_mw_artgen_lifecycle(monkeypatch)
+    fake_ms, _spy, out_path = _patch_artgen_deps(monkeypatch, tmp_path=tmp_path)
+
+    obj._on_create_generate(_VERSE_MEDIUM, {"prompt": "winter forges", "form": "haiku"})
+
+    method_names = [c[0] for c in fake_create_view._result_panel.calls]
+    assert method_names == ["show_pending", "show_finished"]
+
+    fake_ms.add.assert_called_once()
+    (written_rec,), _kwargs = fake_ms.add.call_args
+    finished_rec = fake_create_view._result_panel.calls[-1][1]
+    # The panel got the very same record object the media store wrote.
+    assert finished_rec is written_rec
+    assert finished_rec.file_path == str(out_path)
+    # Duck-typed alias `_build_artifact_widget` (create_view.py) actually
+    # reads — without it the panel would always show its "not found"
+    # placeholder even though the artifact exists at `file_path`.
+    assert finished_rec.media_file_path == str(out_path)
+
+    assert obj._create_job_active is False
+
+
+def test_artgen_create_failure_shows_error_in_panel(monkeypatch, tmp_path):
+    """Failure path: a raising `tt-ctl` subprocess must surface as show_error
+    in the panel (via `_fail_create_job`) and clear the flag — never leave it
+    stuck True — while still keeping the existing status-bar message and
+    never writing a (missing/invalid) record to the media store."""
+    obj, fake_create_view = _make_mw_artgen_lifecycle(monkeypatch)
+    failing_spy = MagicMock(side_effect=RuntimeError("tt-ctl artgen verse failed (exit 1)"))
+    fake_ms, _spy, _out_path = _patch_artgen_deps(
+        monkeypatch, run_tt_ctl=failing_spy, tmp_path=tmp_path
+    )
+
+    obj._on_create_generate(_VERSE_MEDIUM, {"prompt": "winter forges"})
+
+    method_names = [c[0] for c in fake_create_view._result_panel.calls]
+    assert method_names == ["show_pending", "show_error"]
+    assert obj._create_job_active is False
+    fake_ms.add.assert_not_called()
+    # The existing status-bar message is still set (unchanged behavior).
+    last_status = obj._set_status.call_args[0][0]
+    assert "Couldn't generate Verse" in last_status
+
+
+def test_artgen_create_panel_error_does_not_leave_flag_stuck(monkeypatch, tmp_path):
+    """A raising `show_finished` must not prevent the flag from clearing —
+    mirrors the native path's `test_panel_error_never_blocks_generation`."""
+    obj, fake_create_view = _make_mw_artgen_lifecycle(monkeypatch)
+    _patch_artgen_deps(monkeypatch, tmp_path=tmp_path)
+
+    def _boom(_record):
+        raise RuntimeError("panel exploded")
+    fake_create_view._result_panel.show_finished = _boom
+
+    obj._on_create_generate(_VERSE_MEDIUM, {"prompt": "winter forges"})
+
+    assert obj._create_job_active is False
