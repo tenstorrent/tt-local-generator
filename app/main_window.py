@@ -10787,10 +10787,24 @@ class MainWindow(Gtk.ApplicationWindow):
         second artgen click while busy still shows a status message rather
         than silently dropping the request or (worse) re-entering
         `_begin_create_job` and clobbering the running job's panel state.
+
+        Review fix (whole-slice review, post-4938dfc): `_create_enqueue_native`
+        only catches its own `_NativeGenerateGuardError` — any OTHER
+        exception (e.g. a malformed `params` value failing `int()`/`float()`
+        inside `_native_generate_args`) used to propagate straight out of
+        this method, violating the "never crash the app" invariant the
+        not-busy branch's own `try/except` below already upholds. Wrapped
+        here too, but deliberately NOT via `_fail_create_job` — that would
+        touch `_create_job_active`/show an error in the panel, both of which
+        belong to the FIRST job, which is still running and uninvolved in
+        this (failed) enqueue attempt. A friendly status message is enough.
         """
         if self._create_job_active:
             if medium.source == "native":
-                self._create_enqueue_native(medium, params)
+                try:
+                    self._create_enqueue_native(medium, params)
+                except Exception as exc:
+                    self._set_status(f"Couldn't queue generation: {exc}")
             else:
                 self._set_status(
                     "A generation is already running — "

@@ -1382,6 +1382,30 @@ def test_create_while_busy_artgen_medium_shows_status_not_enqueue(monkeypatch):
     )
 
 
+def test_create_while_busy_native_non_guard_exception_does_not_crash(monkeypatch):
+    """Whole-slice review fix (post-4938dfc): `_create_enqueue_native` only
+    catches its own `_NativeGenerateGuardError` — a non-guard exception (a
+    malformed `params` value blowing up `int()`/`float()`, a bug in a future
+    edit, ...) must still be caught by `_on_create_generate` itself, exactly
+    like the not-busy branch's own `try/except` already does. It must NOT
+    propagate (no raise), must surface as a friendly status message, must
+    NOT touch `_create_job_active` (the running FIRST job owns that flag —
+    only this enqueue attempt failed), and nothing must land on the queue."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+    obj._create_enqueue_native = MagicMock(side_effect=RuntimeError("boom"))
+
+    # Must not raise.
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "second click",
+                                             "model": "flux.1-schnell"})
+
+    assert obj._queue == []
+    assert fake_create_view._result_panel.calls == []
+    # Untouched — still the FIRST (still-running) job's flag.
+    assert obj._create_job_active is True
+    obj._set_status.assert_called_with("Couldn't queue generation: boom")
+
+
 def test_queue_cancel_removes_item_and_refreshes_create_display(monkeypatch):
     """The cancel callback CreateView's queue rows call
     (`fake_create_view.refresh_queue`'s second arg, `_on_queue_remove`) must

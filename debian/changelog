@@ -1,3 +1,21 @@
+tt-local-generator (0.39.1) noble; urgency=medium
+
+  * Fix: a Create click while busy (SP-3c-4's enqueue path) could crash the
+    app if `_create_enqueue_native` raised anything other than its own
+    `_NativeGenerateGuardError` (e.g. a malformed param blowing up an
+    `int()`/`float()` parse) -- that exception was uncaught, propagating out
+    of `_on_create_generate` and violating its own "a Create-surface click
+    must never be able to crash the app" invariant. The not-busy dispatch
+    path already caught this; the busy (enqueue) path didn't.
+  * `_on_create_generate`'s busy-path native branch now wraps
+    `_create_enqueue_native(...)` in its own `try/except Exception`,
+    surfacing the failure as a status-bar message. Deliberately does NOT
+    call `_fail_create_job` and does NOT touch `_create_job_active` -- that
+    flag belongs to the FIRST job, which is still running; only the second
+    click's (failed) enqueue attempt is affected.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 11:00:00 -0700
+
 tt-local-generator (0.39.0) noble; urgency=medium
 
   * A second Create click while a job is already running now ENQUEUES
