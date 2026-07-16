@@ -150,6 +150,33 @@ panel's renderer (which reads that name, matching `GenerationRecord`) resolves
 the artifact; `MediaStore.add` reads only declared fields, so it's inert for
 persistence.
 
+## Model status (single source of truth)
+
+`app/model_status.py` — `ModelStatusService`, a **GUI-free** single source of
+truth for server/model state (v0.32.0, SP-1 of the coherent-shell program).
+One poll thread merges managed-server health (`server_manager.status_all`) with
+the artgen port-sweep (`artgen.detect_artgen_endpoint` -> any `artgen`/`prompt`
+capability server reads ready when a chat endpoint is up on any port), tracks a
+`starting` state (app-initiated via `note_starting()`, plus inferred-starting
+when a server's `health_url` port is open but health hasn't passed), and resolves
+each `server_manager.SERVERS` key to `Status.OFF/STARTING/READY/ERROR` via the
+pure `_resolve(...)`. Design notes:
+- **GUI-free**: no `gi` import; `server_manager`/`artgen` imports are LAZY (inside
+  the default `health_fn`/`detect_fn` callables) so the module imports standalone.
+- **Injectable**: `health_fn`/`detect_fn`/`clock`/`port_probe`/`poll_interval`/
+  `start_timeout` are constructor params -> tests drive `_tick()` directly with
+  fakes, no threads/sleeps/sockets.
+- **Lock discipline**: `_tick` does all I/O (health/detect/port probes) OUTSIDE
+  `self._lock`, takes the lock only to read/mutate `_starting`/`_ready_at` and
+  swap `_statuses`, and calls `_notify()` AFTER releasing (since `_notify` ->
+  `snapshot()` re-acquires the non-reentrant lock). Subscribers get change-only
+  notifications; a raising subscriber never breaks the loop.
+- **Consumers**: `snapshot()`/`status(key)`/`subscribe(cb)` and capability helpers
+  `ready_keys(cap)` (most-recently-ready first) / `starting_keys(cap)` /
+  `running_or_starting(cap)`. SP-2 wires the surfaces (footer row, statusbar,
+  Servers popover, CreateView dropdown+door, artgen panel) to it -- retiring the
+  four ad-hoc pollers -- and Create auto-selects `running_or_starting(medium cap)`.
+
 ## Version discipline
 
 **Always increment the version when landing changes.** The version in `VERSION`

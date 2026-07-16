@@ -1,3 +1,19 @@
+tt-local-generator (0.32.0) noble; urgency=medium
+
+  * New GUI-free `ModelStatusService` (app/model_status.py): one poll loop that
+    is the single source of truth for every managed server/model's state --
+    off / starting / ready / error. It merges managed-server health checks with
+    the artgen port-sweep (so a chat model started on any port still reads as
+    ready), tracks a real 'starting' state (both app-initiated starts and an
+    inferred-starting for external servers whose port is open but health hasn't
+    passed), exposes a subscribe API (change-only notifications), and offers
+    capability helpers (ready_keys / running_or_starting) for auto-selecting a
+    running model. Foundation for unifying the app's four ad-hoc health pollers
+    and adding at-a-glance loading indicators (wired to surfaces next). No UI or
+    generation behavior changes yet.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 02:00:00 -0700
+
 tt-local-generator (0.31.1) noble; urgency=medium
 
   * In-place Create results: hardened the Create-job state lifecycle after the
