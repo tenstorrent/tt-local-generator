@@ -223,8 +223,9 @@ _STYLE = """
   :root{ --base:#071a19; --surf:#0d2b2a; --surf2:#12403d; --line:rgba(116,197,223,.16);
          --ink:#eef8f6; --mut:#9bc0ba; --faint:#6f948d; --accent:#37a7c9; --teal:#4FD1C5;
          --gold:#F6BC42;
-         --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-         --mono:ui-monospace,"SFMono-Regular","Cascadia Code","Berkeley Mono",Menlo,monospace; }
+         --emoji:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla";
+         --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif,var(--emoji);
+         --mono:ui-monospace,"SFMono-Regular","Cascadia Code","Berkeley Mono",Menlo,monospace,var(--emoji); }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{background:radial-gradient(1000px 460px at 50% -12%,#0f3a38 0%,var(--base) 58%);}

@@ -1,3 +1,14 @@
+tt-local-generator (0.30.1) noble; urgency=medium
+
+  * Showcase: emoji/symbol art now renders as color glyphs in the gallery
+    thumbnail snippets, not tofu blocks. The `--mono`/`--sans` font stacks
+    had no color-emoji fallback, so a monospace snippet (e.g. an Emoji
+    Storyteller piece) showed replacement boxes in the browser while the
+    full/hero view rendered fine. Appended the platform color-emoji fonts to
+    both stacks (used only for codepoints the primary font lacks).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 21:30:00 -0700
+
 tt-local-generator (0.30.0) noble; urgency=medium
 
   * New "Emoji Storyteller" artgen generator + a developer tutorial on writing
