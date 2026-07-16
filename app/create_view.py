@@ -82,6 +82,8 @@ exercised by the injected-fake test path.
 from __future__ import annotations
 
 import threading
+import time
+from pathlib import Path
 from typing import Callable, Optional
 
 import gi
@@ -522,6 +524,78 @@ _CSS = b"""
 }
 .create-model-door-flow {
     padding: 2px 0 4px 0;
+}
+
+/* -- CreateResultPanel (Task 1, in-place Create results) -- a standalone
+   widget this task (not yet mounted in CreateView -- see the class
+   docstring); its own namespace so a future wiring task never has to touch
+   this CSS. Palette matches the rest of CreateView (tt-vscode-toolkit
+   teal/deep-blue-gray), not the forest-teal used by pipeline_studio.py. ---- */
+.create-result-panel {
+    padding: 4px 0;
+}
+.create-result-current {
+    background-color: #0A1F28;
+    border: 1px solid #2D5566;
+    border-radius: 8px;
+    padding: 12px;
+    min-height: 120px;
+}
+.create-result-empty-label {
+    color: #607D8B;
+    font-size: 12.5px;
+}
+.create-result-spinner {
+    color: #4FD1C5;
+}
+.create-result-status {
+    color: #E8F0F2;
+    font-size: 13px;
+    font-weight: bold;
+}
+.create-result-elapsed {
+    color: #4FD1C5;
+    font-size: 11.5px;
+}
+.create-result-prompt {
+    color: #A9C1C6;
+    font-size: 12px;
+}
+.create-result-error-label {
+    color: #FF6B6B;
+    font-size: 13px;
+}
+.create-result-placeholder {
+    color: #607D8B;
+    font-size: 12.5px;
+}
+.create-result-picture {
+    border-radius: 6px;
+}
+.create-result-text-scroll {
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+}
+.create-result-text-view {
+    background-color: #1A3C47;
+    color: #E8F0F2;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 6px;
+}
+.create-result-recents {
+    padding: 6px 0 0 0;
+}
+.create-result-recent-btn {
+    background-color: #1A3C47;
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+    padding: 2px;
+    min-width: 64px;
+    min-height: 36px;
+}
+.create-result-recent-btn:hover {
+    border-color: #4FD1C5;
 }
 """
 
@@ -1332,3 +1406,380 @@ class CreateView(Gtk.Box):
             params = {**params, "prompt": combined}
 
         return params
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CreateResultPanel — in-place Create results (SDD Task 1,
+# .superpowers/sdd/task-1-brief.md).
+#
+# A STANDALONE widget this task: it is not constructed by `CreateView`, not
+# mounted in `main_window.py`, and does not touch generation. Wiring it into
+# the real Create flow (replacing/augmenting the legacy PendingCard/gallery
+# hand-off) is Tasks 2-4. This file only has to render one current result
+# (pending / finished / error) plus a capped "recents" strip so the user
+# doesn't lose track of what they just made without leaving the Create
+# surface — the same job `PendingCard`/`GenerationCard` do for the gallery,
+# just inline.
+#
+# Elapsed-timer discipline mirrors `main_window.PendingCard` exactly: a
+# `GLib.timeout_add(1000, ...)` ticks a "Ns elapsed" label while pending, and
+# is cancelled via `GLib.source_remove` on EVERY state transition (finished,
+# error, or an explicit `clear()`) — never left running past the state that
+# started it, per CLAUDE.md's GTK-threading discipline.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RECENTS_MAX = 6
+
+# Extension sets used to classify a result artifact's kind for rendering.
+# Deliberately narrow (matches the brief exactly) — an unrecognised extension
+# falls through to the honest "unknown" placeholder rather than guessing.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+_VIDEO_EXTS = {".mp4"}
+_GIF_EXTS = {".gif"}
+_TEXT_EXTS = {".txt", ".ans"}
+
+
+def _artifact_kind(path: str) -> str:
+    """Classify an artifact path's rendering kind by file extension.
+
+    Returns one of "image" | "video" | "gif" | "text" | "unknown". Never
+    raises — an empty path or an unrecognised extension both map to
+    "unknown", which `CreateResultPanel._build_artifact_widget` renders as an
+    honest placeholder (never a broken-image icon).
+    """
+    if not path:
+        return "unknown"
+    ext = Path(path).suffix.lower()
+    if ext in _IMAGE_EXTS:
+        return "image"
+    if ext in _VIDEO_EXTS:
+        return "video"
+    if ext in _GIF_EXTS:
+        return "gif"
+    if ext in _TEXT_EXTS:
+        return "text"
+    return "unknown"
+
+
+class CreateResultPanel(Gtk.Box):
+    """Renders a single "current result" inline, plus a newest-first recents
+    strip capped at `_RECENTS_MAX`.
+
+    Three states drive the current-result area — "empty" (nothing generated
+    yet), "pending" (spinner + elapsed seconds + the prompt that's cooking),
+    "finished" (the artifact itself), "error" (a message) — exposed via the
+    `state` test seam so callers/tests never have to infer state from widget
+    structure. `recents_count()` is the other test seam: the number of items
+    currently in the capped strip.
+
+    Every external input is a plain value (`prompt: str`, `record`, a
+    message string) — this widget never touches `GenerationWorker`,
+    `api_client`, or `server_manager`, so it is fully unit-testable with
+    fakes/fixtures and importing it triggers no network or subprocess I/O.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        _apply_css()
+        self.add_css_class("create-result-panel")
+
+        self._state = "empty"
+        self._timer_id: Optional[int] = None
+        self._pending_start: float = 0.0
+        # Newest-first list of `history_store.GenerationRecord`-like objects
+        # (only `.prompt`/`.thumbnail_path`/`.media_file_path` are read, so a
+        # duck-typed stand-in works too) — capped at `_RECENTS_MAX` by
+        # `_push_recent`, which drops the OLDEST (list tail) entry once full.
+        self._recents: list = []
+
+        # References populated only while pending — read by `show_progress`
+        # and `_tick`; absent (via getattr default) outside the pending state.
+        self._pending_status_lbl: Optional[Gtk.Label] = None
+        self._pending_elapsed_lbl: Optional[Gtk.Label] = None
+
+        self._current_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._current_box.add_css_class("create-result-current")
+        self.append(self._current_box)
+
+        self._recents_flow = Gtk.FlowBox()
+        self._recents_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._recents_flow.set_max_children_per_line(_RECENTS_MAX)
+        self._recents_flow.add_css_class("create-result-recents")
+        self.append(self._recents_flow)
+
+        self._show_empty()
+
+    # ── Test seams ───────────────────────────────────────────────────────────
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    def recents_count(self) -> int:
+        return len(self._recents)
+
+    # ── Internal helpers ─────────────────────────────────────────────────────
+
+    def _clear_current(self) -> None:
+        """Tear down every child of the current-result box. Called at the
+        start of every state transition so each state's `_show_*`/`show_*`
+        method starts from a clean slate (mirrors `_swap_panel`'s tear-down-
+        then-rebuild pattern elsewhere in this file)."""
+        child = self._current_box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._current_box.remove(child)
+            child = nxt
+
+    def _stop_timer(self) -> None:
+        """Cancel the pending elapsed-timer, if one is running. MUST be
+        called before every state transition away from "pending" — mirrors
+        `PendingCard.stop_timer()`."""
+        if self._timer_id is not None:
+            GLib.source_remove(self._timer_id)
+            self._timer_id = None
+
+    # ── State: empty ─────────────────────────────────────────────────────────
+
+    def _show_empty(self) -> None:
+        self._stop_timer()
+        self._clear_current()
+        self._state = "empty"
+        self._pending_status_lbl = None
+        self._pending_elapsed_lbl = None
+
+        label = Gtk.Label(label="Nothing yet — press Create to make something.")
+        label.add_css_class("create-result-empty-label")
+        label.set_wrap(True)
+        self._current_box.append(label)
+
+    def clear(self) -> None:
+        """Reset the current-result area to "empty". Does NOT touch the
+        recents strip — recents are a history of what's been made, independent
+        of whatever the current-result area happens to be showing right now."""
+        self._show_empty()
+
+    # ── State: pending ───────────────────────────────────────────────────────
+
+    def show_pending(self, prompt: str, medium=None) -> None:
+        """Show the pending state: spinner + elapsed seconds + the prompt.
+
+        `medium` (a `create_mediums.Medium` or `None`) only affects the
+        header text (its icon/label, when present) — never required, since
+        Create's "idea" door can generate without an explicit medium choice.
+        """
+        self._stop_timer()
+        self._clear_current()
+        self._state = "pending"
+        self._pending_start = time.monotonic()
+
+        spinner = Gtk.Spinner()
+        spinner.set_spinning(True)
+        spinner.add_css_class("create-result-spinner")
+        spinner.set_halign(Gtk.Align.CENTER)
+        self._current_box.append(spinner)
+
+        icon = getattr(medium, "icon", "") if medium is not None else ""
+        medium_label = getattr(medium, "label", "") if medium is not None else ""
+        if icon or medium_label:
+            header_text = f"{icon} Generating {medium_label}…".strip()
+        else:
+            header_text = "Generating…"
+        self._pending_status_lbl = Gtk.Label(label=header_text)
+        self._pending_status_lbl.add_css_class("create-result-status")
+        self._pending_status_lbl.set_wrap(True)
+        self._current_box.append(self._pending_status_lbl)
+
+        self._pending_elapsed_lbl = Gtk.Label(label="0s elapsed")
+        self._pending_elapsed_lbl.add_css_class("create-result-elapsed")
+        self._current_box.append(self._pending_elapsed_lbl)
+
+        if prompt:
+            prompt_lbl = Gtk.Label(label=prompt)
+            prompt_lbl.add_css_class("create-result-prompt")
+            prompt_lbl.set_wrap(True)
+            prompt_lbl.set_xalign(0.0)
+            self._current_box.append(prompt_lbl)
+
+        self._timer_id = GLib.timeout_add(1000, self._tick)
+
+    def _tick(self) -> bool:
+        """GLib.timeout_add callback — runs on the main thread, so touching
+        widgets directly is safe (mirrors `PendingCard._tick`). Returns True
+        to keep firing every second until `_stop_timer` cancels it."""
+        elapsed = int(time.monotonic() - self._pending_start)
+        m, s = divmod(elapsed, 60)
+        text = f"{m}m {s:02d}s elapsed" if m else f"{s}s elapsed"
+        if self._pending_elapsed_lbl is not None:
+            self._pending_elapsed_lbl.set_label(text)
+        return True
+
+    def show_progress(self, message: str) -> None:
+        """Update the pending status text in place. A no-op outside the
+        pending state — a stray progress message arriving after the job has
+        already finished/errored/been cleared must not resurrect a pending
+        label that no longer exists."""
+        if self._state != "pending" or self._pending_status_lbl is None:
+            return
+        self._pending_status_lbl.set_label(message)
+
+    # ── State: error ─────────────────────────────────────────────────────────
+
+    def show_error(self, message: str) -> None:
+        self._stop_timer()
+        self._clear_current()
+        self._state = "error"
+        self._pending_status_lbl = None
+        self._pending_elapsed_lbl = None
+
+        label = Gtk.Label(label=f"⚠ {message}")
+        label.add_css_class("create-result-error-label")
+        label.set_wrap(True)
+        self._current_box.append(label)
+
+    # ── State: finished ──────────────────────────────────────────────────────
+
+    def show_finished(self, record) -> None:
+        """Render `record`'s artifact inline and prepend it to the recents
+        strip (newest first, capped at `_RECENTS_MAX` — see `_push_recent`).
+        """
+        self._stop_timer()
+        self._render_record(record)
+        self._push_recent(record)
+
+    def _render_record(self, record) -> None:
+        """Render `record` into the current-result area and set state to
+        "finished". Split out from `show_finished` so `_on_recent_clicked`
+        can re-render a past result WITHOUT re-adding it to the recents strip
+        (that would let one recent's repeated clicks spam duplicates)."""
+        self._clear_current()
+        self._state = "finished"
+        self._pending_status_lbl = None
+        self._pending_elapsed_lbl = None
+        self._current_box.append(self._build_artifact_widget(record))
+
+    def _build_artifact_widget(self, record) -> Gtk.Widget:
+        """Render `record`'s primary artifact by kind (derived from its file
+        extension via `_artifact_kind`, never from `media_type` — a "video"
+        record could theoretically point at a still image after a forge
+        transform, etc.). A missing/unreadable/unrecognised path ALWAYS
+        degrades to an honest placeholder label — never a broken-image icon
+        (the brief's explicit requirement)."""
+        path = getattr(record, "media_file_path", "") or ""
+        kind = _artifact_kind(path)
+        exists = bool(path) and Path(path).exists()
+
+        if kind == "image" and exists:
+            try:
+                pic = Gtk.Picture.new_for_filename(path)
+                pic.set_can_shrink(True)
+                pic.add_css_class("create-result-picture")
+                return pic
+            except Exception:
+                pass  # fall through to the placeholder below
+
+        if kind in ("video", "gif") and exists:
+            # v1: a poster/thumbnail stands in for the real lazy-stream+loop
+            # video widget (GenerationCard's pattern in main_window.py) — an
+            # acceptable v1 per the brief. A real inline player is a
+            # reasonable follow-up once this panel is actually wired in.
+            thumb_path = getattr(record, "thumbnail_path", "") or ""
+            if thumb_path and Path(thumb_path).exists():
+                try:
+                    pic = Gtk.Picture.new_for_filename(thumb_path)
+                    pic.set_can_shrink(True)
+                    pic.add_css_class("create-result-picture")
+                    return pic
+                except Exception:
+                    pass
+            label = Gtk.Label(label="\U0001f3ac Result ready — open to view")
+            label.add_css_class("create-result-placeholder")
+            return label
+
+        if kind == "text" and exists:
+            try:
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                text = ""
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_min_content_height(160)
+            scroller.set_vexpand(True)
+            scroller.add_css_class("create-result-text-scroll")
+            buf = Gtk.TextBuffer()
+            buf.set_text(text)
+            view = Gtk.TextView(buffer=buf)
+            view.set_editable(False)
+            view.set_cursor_visible(False)
+            view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            view.add_css_class("create-result-text-view")
+            scroller.set_child(view)
+            return scroller
+
+        # Missing file, unreadable file, or an unrecognised extension — an
+        # honest placeholder, distinguishing "no path at all" from "path set
+        # but the file isn't there" purely for a clearer message.
+        if not path:
+            msg = "No result file."
+        else:
+            msg = "Result file not found."
+        label = Gtk.Label(label=msg)
+        label.add_css_class("create-result-placeholder")
+        return label
+
+    # ── Recents strip ────────────────────────────────────────────────────────
+
+    def _push_recent(self, record) -> None:
+        """Prepend `record` to the recents list (newest first) and drop the
+        oldest entry once past `_RECENTS_MAX`, then rebuild the strip."""
+        self._recents.insert(0, record)
+        if len(self._recents) > _RECENTS_MAX:
+            del self._recents[_RECENTS_MAX:]
+        self._rebuild_recents_flow()
+
+    def _rebuild_recents_flow(self) -> None:
+        child = self._recents_flow.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._recents_flow.remove(child)
+            child = nxt
+        for rec in self._recents:
+            self._recents_flow.append(self._build_recent_card(rec))
+
+    def _build_recent_card(self, record) -> Gtk.Widget:
+        """One clickable recent: a small thumbnail (image/video/gif) or a
+        plain kind-label chip (text, or anything unreadable) — clicking it
+        re-renders that record in the current-result area."""
+        btn = Gtk.Button()
+        btn.add_css_class("create-result-recent-btn")
+        btn.set_tooltip_text(getattr(record, "prompt", "") or "")
+
+        media_path = getattr(record, "media_file_path", "") or ""
+        kind = _artifact_kind(media_path)
+        thumb_path = getattr(record, "thumbnail_path", "") or ""
+        if not thumb_path and kind == "image":
+            thumb_path = media_path  # images have no separate thumbnail file
+
+        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif"):
+            try:
+                pic = Gtk.Picture.new_for_filename(thumb_path)
+                pic.set_can_shrink(True)
+                pic.set_size_request(64, 36)
+                btn.set_child(pic)
+                btn.connect("clicked", lambda _b, r=record: self._on_recent_clicked(r))
+                return btn
+            except Exception:
+                pass  # fall through to the label chip below
+
+        chip_text = {"text": "TXT", "image": "IMG", "video": "VID", "gif": "GIF"}.get(kind, "?")
+        btn.set_label(chip_text)
+        btn.connect("clicked", lambda _b, r=record: self._on_recent_clicked(r))
+        return btn
+
+    def _on_recent_clicked(self, record) -> None:
+        """Re-render a past recent in the current-result area. Does NOT call
+        `show_finished` (that would re-insert/reorder the recents strip on
+        every click) — it goes straight through `_render_record`, same as
+        `show_finished` does internally, just without the recents side
+        effect."""
+        self._stop_timer()
+        self._render_record(record)
