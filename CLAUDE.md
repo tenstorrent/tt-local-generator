@@ -189,6 +189,33 @@ pure `_resolve(...)`. Design notes:
   `artgen_panel._check_health_bg`. SP-3 retires the vestiges and stands up one
   surviving status control on the service.
 
+## Retiring the vestiges (SP-3, staged migration)
+
+The app is consolidating onto the Create / Discover / Remix shell; the old
+per-medium tabs + ControlPanel + ArtgenPanel + Generative-Art tab + duplicate
+server UI are being retired in stages (delete last, only once every capability
+has a new home). Decisions: server control -> a compact top-bar `Servers ▾`
+wired to `ModelStatusService`; migrate (not drop) seed-image/i2i, "Inspire me"
+prompt-gen, attractor/TT-TV launch, the generation queue, and the status
+bar/server-log.
+
+- **SP-3a done (v0.34.0): `_on_generate` decoupled from ControlPanel.** It takes
+  `video_model_key`/`image_model_key`/`animatediff_args` params and reads NO
+  `self._controls.get_*` for model selection; module defaults `_DEFAULT_VIDEO_KEY`
+  /`_DEFAULT_IMAGE_KEY`/`_ANIMATEDIFF_DEFAULTS` mirror ControlPanel's old defaults.
+  All callers (legacy generate/enqueue, Create `_create_generate_native`, queue,
+  attractor) pass the model explicitly; the Create `_controls._video_model` sync
+  hack (v0.27.1) is gone. The legacy generate call site + the attractor path still
+  read `_controls` (legitimately — those ARE ControlPanel-driven); they go with
+  ControlPanel in SP-3d, where the attractor also needs a new model source.
+- **Open decision for SP-3c/3d:** native AnimateDiff (ControlPanel video-model
+  `"animatediff"` + `get_animatediff_args`) is distinct from the artgen
+  `animatediff` plugin — migrate into Create or drop when ControlPanel is deleted?
+- **Remaining:** SP-3b top-bar Servers control + status bar + log; SP-3c migrate
+  seed-image/Inspire-me/attractor/queue into Create; SP-3d delete the vestiges +
+  the 3 legacy pollers (`_health_loop`, `_refresh_servers_popover`,
+  `artgen_panel._check_health_bg`).
+
 ## Version discipline
 
 **Always increment the version when landing changes.** The version in `VERSION`

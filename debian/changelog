@@ -1,3 +1,16 @@
+tt-local-generator (0.34.0) noble; urgency=medium
+
+  * Internal: generation is decoupled from the ControlPanel. `_on_generate`
+    now takes the model as explicit parameters instead of reading it off the
+    (soon-to-be-retired) left ControlPanel, and the Create video path no longer
+    needs its model-sync workaround. No user-visible behavior change -- every
+    path (Create, legacy panel, queue, TT-TV) builds the same model as before.
+    This is the prerequisite for retiring the legacy panels (the app is moving
+    to the Create / Discover / Remix shell). A restored pre-upgrade AnimateDiff
+    queue item now falls back to complete default args instead of erroring.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 04:00:00 -0700
+
 tt-local-generator (0.33.0) noble; urgency=medium
 
   * Create now reads the single source of truth. Model rows in the scoped
