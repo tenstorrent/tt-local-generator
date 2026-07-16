@@ -8220,6 +8220,7 @@ class MainWindow(Gtk.ApplicationWindow):
             on_inspiration=self._on_loop_nav_remix,
             on_create=self._on_create_generate,
             status_service=self._status_service,
+            inspire_fn=self._create_inspire_fn,
         )
         # CreateView is a tall vertical surface (doors + role zones + model
         # door + CTA). Unlike the gallery children (which scroll internally),
@@ -9982,6 +9983,35 @@ class MainWindow(Gtk.ApplicationWindow):
         print(f"[tt-gen] Prompt generation error: {msg}", file=sys.stderr)
         self._controls.set_inspire_error(msg)
         return False
+
+    def _create_inspire_fn(self, prompt_type, on_result, on_error) -> None:
+        # (prompt_type: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
+        """CreateView's "Inspire me" seam (SP-3c-3) — the SAME prompt-gen
+        path `_on_inspire` above drives for the legacy ControlPanel button
+        (`prompt_client.generate_prompt`, the `generate_prompt.py` three-tier
+        algo/markov/LLM-polish generator), just with generic on_result/
+        on_error callbacks instead of ControlPanel's hardcoded
+        `set_inspire_result`/`set_inspire_error` — CreateView is not
+        ControlPanel, so it can't reuse those methods directly, but it must
+        never reimplement the generator itself.
+
+        Runs `generate_prompt()` in a background thread (it can block on a
+        network call to the prompt server) and posts the outcome back via
+        `GLib.idle_add`, per the GTK threading rule in CLAUDE.md. Empty seed
+        text (unlike `_on_inspire`'s seed_text) — CreateView's Inspire button
+        always generates a fresh prompt rather than polishing the current
+        brief; see `CreateView._on_inspire_clicked`.
+        """
+        system_prompt = self._prompt_gen_system_prompt
+
+        def run():
+            try:
+                text = prompt_client.generate_prompt(prompt_type, "", system_prompt)
+                GLib.idle_add(on_result, text)
+            except Exception as e:  # noqa: BLE001 - fail-soft, mirrors _on_inspire
+                GLib.idle_add(on_error, str(e))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ── Theme Set ──────────────────────────────────────────────────────────────
 

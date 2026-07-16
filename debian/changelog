@@ -1,3 +1,24 @@
+tt-local-generator (0.38.0) noble; urgency=medium
+
+  * Create's brief zone gains a one-tap "Inspire me" prompt generator
+    (SP-3c-3) -- fills the current prompt entry via the existing three-tier
+    prompt-gen path (`generate_prompt.py`/prompt-server, the same call
+    ControlPanel's legacy "Inspire me" button already made), async off the
+    GTK main thread with results posted back via `GLib.idle_add`, fail-soft
+    on error (button re-enables, no crash if the server is down).
+  * Deliberately DISTINCT from the "Start with inspiration" door, which still
+    hands off entirely to the Muse -- this new button fills the brief in
+    place instead. Injected as `CreateView`'s new `inspire_fn` seam
+    (default `None` -> no button at all, so pre-3c-3 callers/tests are
+    unaffected); `MainWindow` wires it to a new `_create_inspire_fn` that
+    reuses `prompt_client.generate_prompt()`, the exact function
+    `MainWindow._on_inspire` already calls for `ControlPanel`.
+  * The prompt type sent to the generator is derived from the active
+    medium (image/video/animate); an artgen medium (no image/video/animate
+    id) falls back to "video", `generate_prompt.py`'s own CLI default.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 09:00:00 -0700
+
 tt-local-generator (0.37.0) noble; urgency=medium
 
   * Native AnimateDiff is now generatable from Create's Video medium (SP-3c-2)

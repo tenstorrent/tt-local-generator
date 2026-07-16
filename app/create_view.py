@@ -81,6 +81,7 @@ exercised by the injected-fake test path.
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from pathlib import Path
@@ -132,6 +133,21 @@ _MODEL_STATUS_CAPABILITY: "dict[str, str]" = {
     "video": "video",
     "animate": "animate",
 }
+
+# SP-3c-3: native-medium id -> the `source` string `prompt_client.
+# generate_prompt()` (app/generate_prompt.py's three-tier generator) expects.
+# Same id-keyed shape as `_MODEL_STATUS_CAPABILITY` above (and for the same
+# reason — "animate"'s `medium.kind` is "gif", not "animate"). Every artgen
+# medium's id is a generator name (verse/ansi/landscape/…), not one of
+# generate_prompt.py's known types, so it is deliberately absent here —
+# `_inspire_prompt_type` falls back to "video" (generate_prompt.py's own CLI
+# default) for those, and for the "no active medium yet" edge case.
+_INSPIRE_PROMPT_TYPE: "dict[str, str]" = {
+    "image": "image",
+    "video": "video",
+    "animate": "animate",
+}
+_INSPIRE_PROMPT_TYPE_DEFAULT = "video"
 
 
 def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
@@ -466,6 +482,25 @@ _CSS = b"""
     border-color: #4FD1C5;
 }
 
+/* -- Inspire-me button (SP-3c-3) -- deliberately NOT .create-cta-btn's look:
+   that solid-teal fill is reserved for the "Create" CTA. This is a small,
+   outlined companion button next to the brief entry. ---------------------- */
+.create-inspire-btn {
+    background-color: #1A3C47;
+    color: #4FD1C5;
+    border: 1px solid #2D5566;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+.create-inspire-btn:hover {
+    border-color: #4FD1C5;
+    color: #81E6D9;
+}
+.create-inspire-btn:disabled {
+    color: #607D8B;
+}
+
 /* -- Create CTA --------------------------------------------------------------- */
 .create-cta-row {
     padding-top: 4px;
@@ -730,6 +765,7 @@ class CreateView(Gtk.Box):
         on_create: Optional[Callable[[Medium, dict], None]] = None,
         on_inspiration: Optional[Callable[[], None]] = None,
         status_service: "Optional[object]" = None,
+        inspire_fn: "Optional[Callable[[str, Callable[[str], None], Callable[[str], None]], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
@@ -739,6 +775,20 @@ class CreateView(Gtk.Box):
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
         self._on_inspiration = on_inspiration
+        # SP-3c-3 "Inspire me" seam — DISTINCT from `on_inspiration` above
+        # (the inspiration DOOR, which hands off entirely to the Muse).
+        # `inspire_fn(prompt_type, on_result, on_error)` reuses the exact
+        # `generate_prompt.py`/prompt-server path ControlPanel's own
+        # "Inspire me" button already drives (see `MainWindow._on_inspire`
+        # for the legacy callback shape this mirrors) — it is expected to run
+        # off the GTK main thread and call back via `GLib.idle_add`, but
+        # CreateView's own `_on_inspire_result`/`_on_inspire_error` wrap the
+        # widget mutation in another `GLib.idle_add` regardless, so a
+        # same-thread (test) fake is just as safe as a real background
+        # thread. `None` (the default) means "no button at all" — see
+        # `_build_idea_row`.
+        self._inspire_fn = inspire_fn
+        self._inspire_generating = False
         # ModelStatusService (SP-2 Task 1/2): MainWindow constructs and starts
         # the single service instance and passes it in so CreateView doesn't
         # build its own competing poller. Accepts a bare `object` type hint
@@ -979,10 +1029,101 @@ class CreateView(Gtk.Box):
         entry.set_hexpand(True)
         entry.add_css_class("create-idea-entry")
         self._prompt_entry = entry
-
         row.append(entry)
+
+        # SP-3c-3 "Inspire me": a small, distinctly-styled button (never the
+        # CTA's `.create-cta-btn` look — that's reserved for "✨ Create") that
+        # fills THIS entry via `self._inspire_fn`. Migration-safe: no
+        # `inspire_fn` injected -> no button at all, so pre-3c-3 tests that
+        # never pass it see byte-identical idea-row contents.
+        if self._inspire_fn is not None:
+            inspire_btn = Gtk.Button(label="✨ Inspire me")
+            inspire_btn.add_css_class("create-inspire-btn")
+            inspire_btn.set_tooltip_text(
+                "Generate a fresh prompt for the current medium and fill it in above."
+            )
+            inspire_btn.connect("clicked", self._on_inspire_clicked)
+            self._inspire_btn = inspire_btn
+            row.append(inspire_btn)
+        else:
+            self._inspire_btn = None
+
         self._idea_row = row
         return row
+
+    # ── Inspire-me prompt-gen (SP-3c-3) ──────────────────────────────────────
+
+    def _inspire_prompt_type(self) -> str:
+        """The `prompt_client.generate_prompt()` "source" string for the
+        currently-active medium — image/video/animate map 1:1 via
+        `_INSPIRE_PROMPT_TYPE`; an artgen medium (or no active medium yet)
+        falls back to `_INSPIRE_PROMPT_TYPE_DEFAULT` ("video", matching
+        `generate_prompt.py`'s own CLI default)."""
+        medium = self._active_medium
+        if medium is None:
+            return _INSPIRE_PROMPT_TYPE_DEFAULT
+        return _INSPIRE_PROMPT_TYPE.get(medium.id, _INSPIRE_PROMPT_TYPE_DEFAULT)
+
+    def _on_inspire_clicked(self, _btn) -> None:
+        """Fire `self._inspire_fn`, showing a loading state while it runs.
+
+        Fail-soft by construction: no `inspire_fn` injected is a no-op (the
+        button wouldn't exist to click anyway, but this guards a direct call
+        too — see the migration-safe test); an `inspire_fn` that raises
+        SYNCHRONOUSLY (e.g. a thread failing to spawn) is caught here so a
+        misbehaving seam can never crash Create, mirroring the fail-soft
+        contract `MainWindow._on_inspire`/`set_inspire_error` already uphold
+        for the legacy ControlPanel button.
+        """
+        if self._inspire_fn is None or self._inspire_generating:
+            return
+        prompt_type = self._inspire_prompt_type()
+        self._set_inspire_generating(True)
+        try:
+            self._inspire_fn(prompt_type, self._on_inspire_result, self._on_inspire_error)
+        except Exception as e:  # noqa: BLE001 - fail-soft, see docstring
+            self._on_inspire_error(str(e))
+
+    def _on_inspire_result(self, text: str) -> None:
+        """`inspire_fn`'s success callback — may be invoked from any thread,
+        so the actual widget mutation is posted via `GLib.idle_add` (GTK
+        threading rule, CLAUDE.md)."""
+        GLib.idle_add(self._apply_inspire_result, text)
+
+    def _apply_inspire_result(self, text: str) -> bool:
+        """Runs on the GTK main thread — fill the brief and restore the
+        button. Returns False so `GLib.idle_add` fires it exactly once."""
+        self._prompt_entry.set_text(text)
+        self._set_inspire_generating(False)
+        return False
+
+    def _on_inspire_error(self, msg: str) -> None:
+        """`inspire_fn`'s failure callback — same any-thread contract as
+        `_on_inspire_result`."""
+        GLib.idle_add(self._apply_inspire_error, msg)
+
+    def _apply_inspire_error(self, msg: str) -> bool:
+        """Runs on the GTK main thread — log and restore the button. The
+        brief is left untouched (never overwritten with an error message)."""
+        print(f"[tt-gen] Create inspire-me error: {msg}", file=sys.stderr)
+        self._set_inspire_generating(False)
+        return False
+
+    def _set_inspire_generating(self, generating: bool) -> None:
+        """Toggle the inspire button's loading state. A no-op when the
+        button doesn't exist (defensive — `_on_inspire_clicked` already
+        guards `inspire_fn is None`, but this keeps the setter itself safe
+        to call from anywhere)."""
+        self._inspire_generating = generating
+        btn = getattr(self, "_inspire_btn", None)
+        if btn is None:
+            return
+        if generating:
+            btn.set_label("⏳ Generating…")
+            btn.set_sensitive(False)
+        else:
+            btn.set_label("✨ Inspire me")
+            btn.set_sensitive(True)
 
     # ── Model door: grouped, wrapping model grid (Task 7) ───────────────────
 

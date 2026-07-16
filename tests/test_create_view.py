@@ -699,6 +699,122 @@ def test_inspiration_door_is_safe_with_no_callback(monkeypatch):
     assert view._entry_mode == "inspiration"
 
 
+# ── Inspire-me prompt-gen (SP-3c-3) ──────────────────────────────────────
+#
+# Distinct from the "inspiration" door above (-> Muse hand-off): this is a
+# one-tap button in the brief zone (the idea door's `_prompt_entry`) that
+# fills the CURRENT brief via the existing prompt-gen path
+# (generate_prompt.py / prompt-server), injected as `inspire_fn` so these
+# tests never touch a real subprocess, network call, or thread. Migration-
+# safe: `inspire_fn=None` (the default) means no button at all.
+
+class _FakeInspire:
+    """Records `inspire_fn(prompt_type, on_result, on_error)` calls without
+    firing either callback — lets a test drive the loading state and then
+    manually invoke the callback it wants, mirroring how the real seam
+    (MainWindow._create_inspire_fn) calls back asynchronously from a
+    background thread."""
+
+    def __init__(self):
+        self.calls = []  # list of (prompt_type, on_result, on_error)
+
+    def __call__(self, prompt_type, on_result, on_error):
+        self.calls.append((prompt_type, on_result, on_error))
+
+
+def test_inspire_button_absent_without_inspire_fn(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert getattr(view, "_inspire_btn", None) is None
+
+
+def test_inspire_button_present_with_inspire_fn(monkeypatch):
+    view = _make_view(monkeypatch, inspire_fn=_FakeInspire())
+    assert view._inspire_btn is not None
+    assert isinstance(view._inspire_btn, Gtk.Button)
+
+
+def test_inspire_click_calls_inspire_fn_with_prompt_type_for_active_medium(monkeypatch):
+    """Default-active medium in `_fake_mediums` is "image" -> prompt_type "image"."""
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+
+    view._inspire_btn.emit("clicked")
+
+    assert len(fake.calls) == 1
+    prompt_type, _on_result, _on_error = fake.calls[0]
+    assert prompt_type == "image"
+
+
+def test_inspire_click_derives_prompt_type_from_video_medium(monkeypatch):
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+
+    view._chip_buttons["video"].set_active(True)
+    view._inspire_btn.emit("clicked")
+
+    assert fake.calls[-1][0] == "video"
+
+
+def test_inspire_click_falls_back_to_a_sensible_default_for_artgen(monkeypatch):
+    """Artgen mediums (e.g. "verse") have no image/video/animate id -- the
+    prompt-gen source must still be one `generate_prompt.py` understands."""
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+
+    view._chip_buttons["verse"].set_active(True)
+    view._inspire_btn.emit("clicked")
+
+    assert fake.calls[-1][0] in ("video", "image", "animate")
+
+
+def test_inspire_result_fills_prompt_entry_and_reenables_button(monkeypatch):
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+
+    view._inspire_btn.emit("clicked")
+    assert view._inspire_btn.get_sensitive() is False  # loading state
+
+    _prompt_type, on_result, _on_error = fake.calls[0]
+    on_result("a golden fox in a neon forest")
+
+    assert view._prompt_entry.get_text() == "a golden fox in a neon forest"
+    assert view._inspire_btn.get_sensitive() is True
+
+
+def test_inspire_error_is_fail_soft(monkeypatch):
+    """A prompt-gen failure must re-enable the button and never raise --
+    same fail-soft contract ControlPanel's `set_inspire_error` upholds."""
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+
+    view._inspire_btn.emit("clicked")
+    _prompt_type, _on_result, on_error = fake.calls[0]
+
+    on_error("prompt server is down")  # must not raise
+
+    assert view._inspire_btn.get_sensitive() is True
+    assert view._prompt_entry.get_text() == ""  # untouched on error
+
+
+def test_inspire_click_is_a_noop_without_inspire_fn(monkeypatch):
+    """inspire_fn=None -> no button exists, so there is nothing to click; a
+    direct call to the click handler (defensive) must also never raise."""
+    view = _make_view(monkeypatch)
+    view._on_inspire_clicked(None)  # must not raise
+
+
+def test_inspire_fn_raising_synchronously_is_fail_soft(monkeypatch):
+    """If the injected inspire_fn itself raises before ever calling a
+    callback (e.g. thread spawn failure), the button must still recover."""
+    def _boom(prompt_type, on_result, on_error):
+        raise RuntimeError("boom")
+
+    view = _make_view(monkeypatch, inspire_fn=_boom)
+    view._inspire_btn.emit("clicked")  # must not raise
+
+    assert view._inspire_btn.get_sensitive() is True
+
+
 # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 #
 # The flat, always-visible "live-model strip" (and the Task 7 model-door
