@@ -1566,6 +1566,16 @@ _IMAGE_MODEL_IDS: dict = {
 _IMAGE_MODEL_ID_TO_KEY: dict = {v: k for k, v in _IMAGE_MODEL_IDS.items()}
 _VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
 
+# SP-3a (decouple `_on_generate` from ControlPanel): the short-key fallbacks
+# `_on_generate` uses when a caller supplies neither an explicit
+# `video_model_key`/`image_model_key` nor a `model_id` it can resolve. These
+# mirror ControlPanel's own fresh-session defaults (`self._video_model =
+# "animatediff"`, `self._image_model = "flux"` in `ControlPanel.__init__`) so
+# a caller that omits model selection entirely still behaves the way it did
+# before `_on_generate` read those defaults off `self._controls`.
+_DEFAULT_VIDEO_KEY = "animatediff"
+_DEFAULT_IMAGE_KEY = "flux"
+
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
 # handled by the health check).
@@ -1673,6 +1683,16 @@ class _QueueItem:
     model_id: str = ""               # specific model within the category, e.g. "wan2", "mochi", "flux"
     job_id_override: str = ""        # non-empty → recovery item; skip submission, poll this job ID directly
     from_attractor: bool = False     # True → enqueued by TT-TV auto-gen; purged on attractor close
+    # SP-3a (decouple `_on_generate` from ControlPanel): captured at enqueue
+    # time (from whichever ControlPanel getter the enqueuing call site already
+    # had in hand) so `_start_next_queued` can replay the job without itself
+    # reading `self._controls` — `model_id` alone isn't enough because it's
+    # already a SHORT key (e.g. "wan2"), not the CANONICAL id that
+    # `_VIDEO_MODEL_ID_TO_KEY`/`_IMAGE_MODEL_ID_TO_KEY` invert, so those maps
+    # can't total-ly derive it back.
+    video_model_key: "str | None" = None    # e.g. "wan2" | "mochi" | "skyreels" | "animatediff"
+    image_model_key: "str | None" = None    # e.g. "flux" | "sdxl" | "z-image-turbo" | "motif"
+    animatediff_args: "dict | None" = None  # snapshot of get_animatediff_args() when relevant
 
 
 # ── Forge plugin transform helpers ────────────────────────────────────────────
@@ -6480,6 +6500,15 @@ class ControlPanel(Gtk.Box):
 
         Used by MainWindow._on_theme_queue_shots() to build enqueue args for
         each of the 5 theme shots without disturbing the prompt buffer.
+
+        SP-3a (decouple `_on_generate` from ControlPanel): also returns
+        `video_model_key`/`image_model_key`/`animatediff_args` — the same
+        values `_on_action_clicked` resolves for its own generate/enqueue
+        call — so `_on_theme_queue_shots` can forward them to `_on_enqueue`
+        without itself reading `self._controls`. Populated unconditionally
+        (not gated on `self._model_source`) since `_on_generate` only ever
+        consults the one matching its own `model_source` dispatch; the other
+        is simply unused, exactly like `current_model_id` today.
         """
         if self._model_source == "video":
             current_model_id = self._video_model
@@ -6498,6 +6527,9 @@ class ControlPanel(Gtk.Box):
             "ref_char_path":  "",   # character image uses seed_image_path
             "animate_mode":   self._animate_mode,
             "model_id":       current_model_id,
+            "video_model_key": self._video_model,
+            "image_model_key": self._image_model,
+            "animatediff_args": self.get_animatediff_args(),
         }
 
     # ── Button handlers ────────────────────────────────────────────────────────
@@ -6546,10 +6578,23 @@ class ControlPanel(Gtk.Box):
         # Clear the prompt fields so the user can type the next one immediately.
         # This happens only on explicit user click, never on auto-queue or attractor paths.
         self.clear_prompt()
+        # SP-3a: `_on_generate`/`_on_enqueue` no longer read model selection
+        # off `self._controls` themselves — this IS ControlPanel's own
+        # generate/enqueue button, so it's the one legitimate remaining place
+        # that reads `self._video_model`/`self._image_model`/
+        # `get_animatediff_args()` directly (goes away with ControlPanel in
+        # SP-3d). Passed unconditionally for the same reason as
+        # `get_generation_defaults()` above — the unused one is simply
+        # ignored by whichever branch `_on_generate` takes.
+        model_kwargs = dict(
+            video_model_key=self._video_model,
+            image_model_key=self._image_model,
+            animatediff_args=self.get_animatediff_args(),
+        )
         if self._busy:
-            self._on_enqueue(*args)
+            self._on_enqueue(*args, **model_kwargs)
         else:
-            self._on_generate(*args)
+            self._on_generate(*args, **model_kwargs)
 
     # ── Queue display ──────────────────────────────────────────────────────────
 
@@ -9901,6 +9946,12 @@ class MainWindow(Gtk.ApplicationWindow):
                 defaults["ref_char_path"],
                 defaults["animate_mode"],
                 defaults["model_id"],
+                # SP-3a: forwarded straight from ControlPanel's own
+                # get_generation_defaults() dict — this method never reads
+                # self._controls itself.
+                video_model_key=defaults["video_model_key"],
+                image_model_key=defaults["image_model_key"],
+                animatediff_args=defaults["animatediff_args"],
             )
 
         # Start the queue if nothing is currently generating
@@ -10181,17 +10232,34 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
+        # SP-3a: attractor/TT-TV jobs have no per-item model selection of
+        # their own (attractor.py always passes model_id="") — the only
+        # source of truth for "which video/image model" is ControlPanel's
+        # current selection, read once here (same moment `_on_generate`
+        # would have read it before this task) and threaded through
+        # explicitly, whether the job runs immediately or is queued.
+        video_model_key = self._controls.get_video_model()
+        image_model_key = self._controls.get_image_model()
+        animatediff_args = (
+            self._controls.get_animatediff_args() if video_model_key == "animatediff" else None
+        )
         if self._worker and self._worker.is_alive():
             self._queue.insert(0, _QueueItem(prompt, neg, steps, seed, seed_image_path,
                                               model_source, guidance_scale,
                                               ref_video_path, ref_char_path,
-                                              animate_mode, model_id))
+                                              animate_mode, model_id,
+                                              video_model_key=video_model_key,
+                                              image_model_key=image_model_key,
+                                              animatediff_args=animatediff_args))
             self._persist_queue()
             self._update_queue_display()
         else:
             self._on_generate(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale, ref_video_path,
-                              ref_char_path, animate_mode, model_id)
+                              ref_char_path, animate_mode, model_id,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
 
     def _on_attractor_generate(self, prompt, neg, steps, seed, seed_image_path="",
                                 model_source="video", guidance_scale=3.5,
@@ -10206,18 +10274,32 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
+        # SP-3a: same reasoning as _on_attractor_priority_enqueue above —
+        # read ControlPanel's current model selection once, here, and pass
+        # it through explicitly rather than letting _on_generate read it.
+        video_model_key = self._controls.get_video_model()
+        image_model_key = self._controls.get_image_model()
+        animatediff_args = (
+            self._controls.get_animatediff_args() if video_model_key == "animatediff" else None
+        )
         if self._worker and self._worker.is_alive():
             item = _QueueItem(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale,
                               ref_video_path, ref_char_path, animate_mode,
-                              model_id, from_attractor=True)
+                              model_id, from_attractor=True,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
             self._queue.append(item)
             self._persist_queue()
             self._update_queue_display()
         else:
             self._on_generate(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale, ref_video_path,
-                              ref_char_path, animate_mode, model_id)
+                              ref_char_path, animate_mode, model_id,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
 
     def _update_attractor_btn(self) -> None:
         """Enable/disable the Attractor button based on whether any media exists.
@@ -10286,7 +10368,23 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
                      ref_video_path="", ref_char_path="",
-                     animate_mode="animation", model_id="") -> None:
+                     animate_mode="animation", model_id="",
+                     video_model_key: "str | None" = None,
+                     image_model_key: "str | None" = None,
+                     animatediff_args: "dict | None" = None) -> None:
+        """
+        SP-3a (decouple from ControlPanel): model SELECTION is entirely
+        explicit-param driven — `video_model_key`/`image_model_key`/
+        `animatediff_args` — this method never reads
+        `self._controls.get_video_model()`/`get_image_model()`/
+        `get_animatediff_args()`. Every caller (the legacy ControlPanel
+        generate/enqueue button, Create's `_create_generate_native`, the
+        queue's `_start_next_queued`, and attractor/TT-TV) resolves and
+        passes these itself — see each caller for where its value comes
+        from. `self._controls.set_busy(...)` and other non-model-selection
+        ControlPanel calls are untouched; they go away only when
+        ControlPanel itself is deleted (SP-3d).
+        """
         if self._worker and self._worker.is_alive():
             self._fail_create_job("A generation is already running.")
             return
@@ -10319,7 +10417,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
 
         if model_source == "image":
-            img_model_key = model_id or self._controls.get_image_model()
+            img_model_key = model_id or image_model_key or _DEFAULT_IMAGE_KEY
             model_name = _IMAGE_MODEL_IDS.get(img_model_key, "flux.1-schnell")
             self._set_status(f"Generating image with {model_name}…")
             # SDXL (cpp_server) uses a different default guidance scale and
@@ -10357,10 +10455,25 @@ class MainWindow(Gtk.ApplicationWindow):
                 model="wan2.2-animate-14b",
             )
         else:
-            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
+            # SP-3a: resolve the effective video key from the explicit param
+            # first, then a canonical-id `model_id` (kept for callers that
+            # only have the canonical id in hand — `_VIDEO_MODEL_ID_TO_KEY`
+            # inverts CANONICAL id -> short key, so this only fires when
+            # `model_id` happens to be canonical; the SHORT-key `model_id`
+            # convention used everywhere else in this file falls through to
+            # the medium default here, same as `self._controls.get_video_model()`
+            # would have on a fresh/unrecognized session), then the medium
+            # default — never `self._controls`. Reassigning the parameter
+            # itself (rather than introducing a new local name) keeps every
+            # other reference to `video_model_key` below unchanged.
+            video_model_key = (
+                video_model_key
+                or _VIDEO_MODEL_ID_TO_KEY.get(model_id)
+                or _DEFAULT_VIDEO_KEY
+            )  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
-                ad = self._controls.get_animatediff_args()
+                ad = animatediff_args or {}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
                 # exclusive Blackhole access and should not be blocked by a running server.
                 if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:
@@ -10574,6 +10687,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 model_source="image",
                 guidance_scale=float(params.get("guidance_scale", 3.5)),
                 model_id=model_key,
+                # SP-3a: passed explicitly now that _on_generate no longer
+                # reads self._controls.get_image_model() itself.
+                image_model_key=model_key,
             )
         elif medium.id == "animate":
             # AnimateGenerationWorker (via _on_generate's animate branch)
@@ -10592,29 +10708,18 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         else:  # "video"
             model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
-            # FIX 1 (task-8 review — silently-wrong-worker bug): `_on_generate`'s
-            # video branch does NOT read `model_id` to decide which worker to
-            # run — it reads `self._controls.get_video_model()` (the OLD
-            # ControlPanel dropdown), which DEFAULTS to "animatediff" on a
-            # fresh session until a health check finds a running video server.
-            # So without syncing it first, choosing Wan2.2/Mochi in CreateView
-            # would silently run AnimateDiff. Set the control's video-model key
-            # directly BEFORE the call so `get_video_model()` returns it. This
-            # stays additive — it touches neither `_on_generate`'s body nor
-            # worker code.
-            #
-            # We set `_video_model` DIRECTLY rather than via `_set_model()`:
-            # `_set_model` is NOT a no-op when the (permanently-mounted, still
-            # reachable) legacy ControlPanel's own `_model_source != "video"`
-            # — with `_model_source == "image"` (reachable with zero clicks
-            # when `last_successful_deployment` was an image model), it would
-            # take its `elif ... == "image"` branch and clobber `_image_model`
-            # with a video key like "wan2", so a later click on the legacy
-            # Image tab would silently fall back to FLUX / launch the Wan2.2
-            # start script. Its only other effect is cosmetic source-desc/
-            # start-button labels on a surface the user isn't looking at, so
-            # dropping it entirely is both safe and correct.
-            self._controls._video_model = model_key
+            # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
+            # used to pick the video worker from `self._controls.get_video_model()`
+            # regardless of `model_id` — which DEFAULTS to "animatediff" on a
+            # fresh session until a health check finds a running video server —
+            # so choosing Wan2.2/Mochi here would silently run AnimateDiff
+            # unless CreateView first synced `self._controls._video_model`
+            # (the v0.27.1 "FIX 1" hack, previously here). `_on_generate` now
+            # takes `video_model_key` as an explicit param and no longer reads
+            # `self._controls` for it at all, so that sync is unnecessary —
+            # passing the medium's own resolved key directly is sufficient and
+            # cannot clobber the legacy Image tab's `_image_model` the way the
+            # old `_set_model()` route could.
             self._on_generate(
                 prompt,
                 params.get("negative_prompt", ""),
@@ -10622,6 +10727,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 int(params.get("seed", -1)),
                 model_source="video",
                 model_id=model_key,
+                video_model_key=model_key,
             )
             # NOTE (remaining concern, see task-8-report.md):
             # VideoParamPanel.collect()'s "num_frames" has no destination in
@@ -11035,6 +11141,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 "animate_mode": item.animate_mode,
                 "model_id": item.model_id,
                 "job_id_override": item.job_id_override,
+                # SP-3a: persisted so a restored queue (after a crash/restart)
+                # still replays without _start_next_queued reading
+                # self._controls (all the AD arg values are plain
+                # str/float/bool/None — JSON-safe).
+                "video_model_key": item.video_model_key,
+                "image_model_key": item.image_model_key,
+                "animatediff_args": item.animatediff_args,
             }
             for item in self._queue
             if not item.from_attractor
@@ -11066,6 +11179,9 @@ class MainWindow(Gtk.ApplicationWindow):
                     ref_char_path=d.get("ref_char_path", ""),
                     animate_mode=d.get("animate_mode", "animation"),
                     model_id=d.get("model_id", ""),
+                    video_model_key=d.get("video_model_key"),
+                    image_model_key=d.get("image_model_key"),
+                    animatediff_args=d.get("animatediff_args"),
                     job_id_override=override,
                 ))
             except Exception:
@@ -11116,13 +11232,23 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,
                     ref_video_path="", ref_char_path="",
-                    animate_mode="animation", model_id="") -> None:
+                    animate_mode="animation", model_id="",
+                    video_model_key: "str | None" = None,
+                    image_model_key: "str | None" = None,
+                    animatediff_args: "dict | None" = None) -> None:
         if not self._check_disk_space():
             return
+        # SP-3a: the three model-selection kwargs are captured by the CALLER
+        # (ControlPanel's own button, or _on_theme_queue_shots forwarding
+        # ControlPanel's get_generation_defaults()) — this method just stores
+        # them on the item so _start_next_queued can replay faithfully
+        # without itself reading self._controls.
         self._queue.append(_QueueItem(prompt, neg, steps, seed, seed_image_path,
                                       model_source, guidance_scale,
                                       ref_video_path, ref_char_path, animate_mode,
-                                      model_id))
+                                      model_id, video_model_key=video_model_key,
+                                      image_model_key=image_model_key,
+                                      animatediff_args=animatediff_args))
         self._persist_queue()
         self._update_queue_display()
         # Do NOT call clear_prompt() here — clearing is handled by
@@ -11172,11 +11298,16 @@ class MainWindow(Gtk.ApplicationWindow):
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
         self._set_status(f"Auto-starting next queued prompt{suffix}…")
+        # SP-3a: replay the model selection captured on the item at enqueue
+        # time — this method never reads self._controls.
         self._on_generate(item.prompt, item.negative_prompt,
                           item.steps, item.seed, item.seed_image_path,
                           item.model_source, item.guidance_scale,
                           item.ref_video_path, item.ref_char_path, item.animate_mode,
-                          item.model_id)
+                          item.model_id,
+                          video_model_key=item.video_model_key,
+                          image_model_key=item.image_model_key,
+                          animatediff_args=item.animatediff_args)
         return True
 
     # ── Recovery ───────────────────────────────────────────────────────────────

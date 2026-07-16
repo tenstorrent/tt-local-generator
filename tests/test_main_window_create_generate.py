@@ -59,32 +59,37 @@ class _ImmediateThread:
 
 
 class _FakeControls:
-    """Minimal stand-in reproducing the legacy `ControlPanel`'s REAL
-    `_set_model` source-gated branching (main_window.py) — the exact behavior
-    a MagicMock hides and that FIX 1's re-review side-effect hinged on.
+    """Stand-in proving `_create_generate_native`'s video branch no longer
+    touches ControlPanel's model state at all (SP-3a decouple).
 
-    The key faithful detail: `_set_model` is NOT a no-op when
-    `_model_source != "video"` — with `_model_source == "image"` it clobbers
-    `_image_model` with whatever key it's handed. So a video-model key routed
-    through `_set_model` while the (permanently-mounted, still-reachable)
-    control is in image mode would corrupt the legacy Image tab's model
-    selection. These tests use this stand-in so re-introducing that
-    `_set_model` call would fail loudly.
+    This class used to reproduce ControlPanel's REAL `_set_model`
+    source-gated clobber bug (FIX 1: routing a video-model key through
+    `_set_model` while `_model_source == "image"` would corrupt the legacy
+    Image tab's `_image_model`) so the fix — setting `_video_model` directly
+    — could be proven. SP-3a deleted that whole sync (`_on_generate` now
+    takes `video_model_key` as an explicit param instead of reading
+    `self._controls.get_video_model()`), so `_set_model`/`get_video_model`
+    now raise: re-introducing either the old sync-hack write or a read-back
+    would fail these tests loudly. `get_image_model` still works — read by
+    the harness to prove an unrelated video Create job never touches it.
     """
 
     def __init__(self, model_source: str) -> None:
         self._model_source = model_source
         self._image_model = "flux"        # a valid image key (the default)
-        self._video_model = "animatediff"  # the fresh-session default that started the bug
+        self._video_model = "animatediff"  # untouched sentinel — no branch may reassign this
 
     def _set_model(self, model: str) -> None:
-        if self._model_source == "video":
-            self._video_model = model
-        elif self._model_source == "image":
-            self._image_model = model  # <-- the clobber FIX 1's re-review caught
+        raise AssertionError(
+            "_create_generate_native must not sync ControlPanel's model "
+            "state anymore — SP-3a removed the v0.27.1 hack"
+        )
 
     def get_video_model(self) -> str:
-        return self._video_model
+        raise AssertionError(
+            "_create_generate_native must not read _controls.get_video_model() "
+            "— SP-3a: video_model_key is passed to _on_generate explicitly"
+        )
 
     def get_image_model(self) -> str:
         return self._image_model
@@ -100,10 +105,11 @@ def _make_mw(monkeypatch):
     obj._on_generate = MagicMock()
     obj._set_status = MagicMock()
     obj._artgen_panel = None  # absent by default; artgen-done test overrides
-    # `_create_generate_native`'s video branch syncs the OLD ControlPanel's
-    # model selection before calling `_on_generate` (FIX 1). A MagicMock is
-    # enough for the image/animate branches (which never touch it) and lets
-    # the video tests assert the sync happened.
+    # SP-3a: `_create_generate_native` no longer touches `self._controls` at
+    # all (the model key is passed to `_on_generate` explicitly) — a
+    # MagicMock is fine here for every branch. Tests that want to PROVE
+    # `_controls` is untouched swap in `_FakeControls` (below), whose
+    # `_set_model`/`get_video_model` raise.
     obj._controls = MagicMock()
     # `_on_create_generate`'s re-entrancy guard (review fix, task-3-report.md)
     # reads this unconditionally at the very top of the method, before the
@@ -197,53 +203,48 @@ def test_video_medium_routes_to_on_generate_with_model_source_video(monkeypatch)
     assert kwargs["model_id"] == "mochi"
 
 
-def test_video_medium_syncs_video_model_before_generate(monkeypatch):
-    """FIX 1 (silently-wrong-worker bug): `_on_generate`'s video branch picks
-    the worker from `self._controls.get_video_model()`, NOT `model_id`. That
-    field defaults to "animatediff" on a fresh session — so CreateView MUST
-    set the control's video model to the chosen model BEFORE `_on_generate`,
-    or Wan2.2/Mochi silently run AnimateDiff. Uses the REAL-branching stand-in
-    (source already "video") and asserts the value was in place before the
-    generation call fired."""
+def test_video_medium_no_longer_syncs_or_reads_controls_video_model(monkeypatch):
+    """SP-3a (decouple `_on_generate` from ControlPanel): the v0.27.1 "FIX 1"
+    sync hack — `_create_generate_native` setting `self._controls._video_model`
+    before calling `_on_generate` so its (now-deleted) internal
+    `self._controls.get_video_model()` read would pick up the right key — is
+    gone. `_on_generate` now takes `video_model_key` as an explicit param, so
+    `_create_generate_native` neither writes nor reads ControlPanel's model
+    state at all. `_FakeControls` (`_set_model`/`get_video_model` raise)
+    proves that; the resolved short key still reaches `_on_generate` via the
+    new kwarg."""
     obj = _make_mw(monkeypatch)
     obj._controls = _FakeControls("video")
 
-    seen_before_generate = {}
-    obj._on_generate.side_effect = (
-        lambda *a, **k: seen_before_generate.update(video_model=obj._controls.get_video_model())
-    )
-
     obj._on_create_generate(_VIDEO_MEDIUM, {"model": "wan2.2-t2v"})
 
-    # canonical "wan2.2-t2v" -> short key "wan2", in place before _on_generate.
-    assert seen_before_generate == {"video_model": "wan2"}
-    assert obj._controls.get_video_model() == "wan2"
+    # canonical "wan2.2-t2v" -> short key "wan2", passed explicitly.
     obj._on_generate.assert_called_once()
+    assert obj._on_generate.call_args.kwargs["video_model_key"] == "wan2"
+    assert obj._on_generate.call_args.kwargs["model_id"] == "wan2"
+    # The sentinel proves _video_model was never reassigned (no sync hack).
+    assert obj._controls._video_model == "animatediff"
 
 
-def test_video_medium_does_not_clobber_image_model_in_image_source(monkeypatch):
-    """FIX 1 re-review (side-effect bug): syncing the video model must NOT
-    corrupt the legacy Image tab. With the control in `_model_source ==
-    "image"` (reachable with zero clicks when `last_successful_deployment` was
-    an image model), routing the video key through `_set_model` would take its
-    image branch and clobber `_image_model` with "wan2" — so a later click on
-    the still-mounted Image tab would silently fall back to FLUX / launch the
-    Wan2.2 script. The fix sets `_video_model` DIRECTLY (never `_set_model`),
-    so `get_video_model()` becomes "wan2" while `_image_model` is untouched.
-
-    This FAILS against the pre-fix 37eaaa9 code (which called `_set_model`)
-    and passes after."""
+def test_video_medium_does_not_touch_image_model_in_image_source(monkeypatch):
+    """Regression guard for the FIX-1-era bug this replaces: even with the
+    control in `_model_source == "image"` (zero-click-reachable at startup
+    when `last_successful_deployment` was an image model), a video Create job
+    must not touch `_image_model`. Trivially true post-SP-3a since
+    `_create_generate_native`'s video branch never calls into `_controls` at
+    all — kept as an explicit regression guard against that coupling coming
+    back."""
     obj = _make_mw(monkeypatch)
     obj._controls = _FakeControls("image")  # zero-click-reachable startup state
 
     obj._on_create_generate(_VIDEO_MEDIUM, {"model": "wan2.2-t2v"})
 
-    # (a) the video worker selection is correct...
-    assert obj._controls.get_video_model() == "wan2"
-    # (b) ...and the legacy image-model selection is UNTOUCHED (not "wan2").
-    assert obj._controls.get_image_model() == "flux"
+    # (a) the video worker selection is correct, passed explicitly...
     obj._on_generate.assert_called_once()
+    assert obj._on_generate.call_args.kwargs["video_model_key"] == "wan2"
     assert obj._on_generate.call_args.kwargs["model_source"] == "video"
+    # (b) ...and the legacy image-model selection is UNTOUCHED (still "flux").
+    assert obj._controls.get_image_model() == "flux"
 
 
 def test_animate_medium_routes_to_on_generate_with_ref_paths_and_mode(monkeypatch):
@@ -850,10 +851,16 @@ def test_worker_already_running_early_return_clears_create_job_and_shows_error(m
 def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(monkeypatch):
     """Same invariant for the AnimateDiff chip-busy guard deep in the video
     branch — currently unreachable via Create's scoped video-model dropdown,
-    but fixed for consistency per the review note."""
+    but fixed for consistency per the review note.
+
+    SP-3a: `_on_generate` no longer reads `self._controls.get_video_model()`/
+    `get_animatediff_args()` to decide this branch — the AD key and args are
+    now passed as explicit `video_model_key`/`animatediff_args` kwargs,
+    exactly as `_start_next_queued`/the legacy ControlPanel button do."""
     obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
-    obj._controls.get_video_model.return_value = "animatediff"
-    obj._controls.get_animatediff_args.return_value = {
+    obj._controls.get_video_model.side_effect = AssertionError("must not read")
+    obj._controls.get_animatediff_args.side_effect = AssertionError("must not read")
+    animatediff_args = {
         "mode": "blackhole", "negative_prompt": "", "temporal_alpha": 0.0,
         "lightning": False, "lightning_steps": 0, "multi_chip": False,
         "device_id": 0, "chain_from": None, "chain_save": False,
@@ -867,7 +874,9 @@ def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(mo
     obj._create_job_active = True
     fake_create_view._result_panel.show_pending("prompt", _VIDEO_MEDIUM)
 
-    obj._on_generate("prompt", "", 20, -1, model_source="video")
+    obj._on_generate("prompt", "", 20, -1, model_source="video",
+                      video_model_key="animatediff",
+                      animatediff_args=animatediff_args)
 
     assert obj._create_job_active is False
     assert fake_create_view._result_panel.calls[-1][0] == "show_error"
