@@ -1576,6 +1576,38 @@ _VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
 _DEFAULT_VIDEO_KEY = "animatediff"
 _DEFAULT_IMAGE_KEY = "flux"
 
+# SP-3a follow-up fix (review finding): `_on_generate`'s AnimateDiff branch
+# indexes every one of these keys directly (`ad["mode"]`, `ad["chain_save"]`,
+# ...). Before this task, `ad` always came from a fresh
+# `self._controls.get_animatediff_args()` call, which — reading real GTK
+# widget state — ALWAYS returns every key. Now `ad` can be a caller-supplied
+# `animatediff_args` param that's `None` (a caller that never had AnimateDiff
+# in scope, e.g. an AnimateDiff `_QueueItem` persisted by a PRE-SP-3a build
+# and reloaded by `_restore_queue`, whose `queue.json` predates the
+# `"animatediff_args"` key entirely) or a partial dict. `_on_generate` merges
+# this default dict under whatever the caller passed
+# (`{**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}`) so a missing or
+# partial dict can never `KeyError`, while a full dict passes through
+# unchanged (caller values win). Values mirror
+# `ControlPanel._build_animatediff_box()`'s widget defaults exactly (see
+# `ControlPanel.get_animatediff_args()` a few hundred lines below — read that
+# method, not this comment, if the two ever drift).
+_ANIMATEDIFF_DEFAULTS: dict = dict(
+    mode="blackhole",
+    negative_prompt="blurry, low quality",
+    temporal_alpha=0.35,
+    lightning=False,
+    lightning_steps=4,
+    multi_chip=True,
+    device_id=None,
+    chain_from=None,
+    chain_save=False,
+    chain_alpha=0.6,
+    motion_adapter=None,
+    motion_adapter_alpha=1.0,
+    motion_adapter_skip=None,
+)
+
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
 # handled by the health check).
@@ -10473,7 +10505,12 @@ class MainWindow(Gtk.ApplicationWindow):
             )  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
-                ad = animatediff_args or {}
+                # Review fix: merge under the defaults rather than `animatediff_args
+                # or {}` — a None/partial dict (e.g. a PRE-SP-3a `queue.json`
+                # AnimateDiff item, restored with no "animatediff_args" key at
+                # all) must not KeyError on the `ad["..."]` indexing below. A
+                # full dict passes through unchanged (its values win).
+                ad = {**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
                 # exclusive Blackhole access and should not be blocked by a running server.
                 if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:

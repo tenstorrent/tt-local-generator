@@ -236,6 +236,141 @@ def test_on_generate_default_video_key_matches_old_controls_default(monkeypatch)
     assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
 
 
+# ── Review fix: animatediff_args must default, never KeyError ──────────────
+#
+# Before SP-3a, `_on_generate` always got `ad` from a fresh
+# `self._controls.get_animatediff_args()` call, which reads real GTK widget
+# state and therefore ALWAYS returns every key. Post-SP-3a, `ad` can come
+# from a caller-supplied `animatediff_args` param that's `None` (e.g. a
+# `_QueueItem` restored from a PRE-SP-3a `queue.json`, whose persisted dicts
+# never had an `"animatediff_args"` key at all — `_restore_queue`'s
+# `d.get("animatediff_args")` then yields `None`). Fixed by merging under
+# `_ANIMATEDIFF_DEFAULTS` inside `_on_generate` rather than `animatediff_args
+# or {}`.
+
+
+def test_on_generate_animatediff_none_args_uses_defaults_not_keyerror(monkeypatch):
+    """The direct regression case: `_on_generate` called with
+    `video_model_key="animatediff"` and `animatediff_args=None` must build the
+    worker from `_ANIMATEDIFF_DEFAULTS`, not raise `KeyError`.
+
+    FAILS against pre-fix 1e4c83b (`ad = animatediff_args or {}` then
+    `ad["mode"]` -> `KeyError: 'mode'`); passes after."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+
+    obj._on_generate("a prompt", "", 20, -1, model_source="video",
+                      video_model_key="animatediff",
+                      animatediff_args=None)
+
+    assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
+    assert obj._worker_gen._mode == mw._ANIMATEDIFF_DEFAULTS["mode"]
+    assert obj._worker_gen._negative_prompt == mw._ANIMATEDIFF_DEFAULTS["negative_prompt"]
+    assert obj._worker_gen._temporal_alpha == mw._ANIMATEDIFF_DEFAULTS["temporal_alpha"]
+    assert obj._worker_gen._multi_chip == mw._ANIMATEDIFF_DEFAULTS["multi_chip"]
+    # `_on_generate` derives the worker's `chain_save` kwarg from a session
+    # temp-file PATH when `ad["chain_save"]` is truthy, `None` otherwise — the
+    # default `chain_save=False` means no path is derived.
+    assert obj._worker_gen._chain_save is None
+    assert obj._worker_gen._chain_alpha == mw._ANIMATEDIFF_DEFAULTS["chain_alpha"]
+    assert obj._worker_gen._motion_adapter_alpha == mw._ANIMATEDIFF_DEFAULTS["motion_adapter_alpha"]
+
+
+def test_on_generate_animatediff_partial_args_fills_missing_keys(monkeypatch):
+    """A partial dict (e.g. a future caller that only cares about `mode`)
+    must not KeyError on the keys it omitted — those fall back to
+    `_ANIMATEDIFF_DEFAULTS`, while the supplied key wins."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+
+    obj._on_generate("a prompt", "", 20, -1, model_source="video",
+                      video_model_key="animatediff",
+                      animatediff_args={"mode": "cpu"})
+
+    assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
+    assert obj._worker_gen._mode == "cpu"  # supplied value wins
+    assert obj._worker_gen._chain_alpha == mw._ANIMATEDIFF_DEFAULTS["chain_alpha"]  # filled in
+
+
+def test_on_generate_animatediff_full_args_pass_through_unchanged(monkeypatch):
+    """Parity: a FULLY populated `animatediff_args` dict (the normal case —
+    every real caller supplies one) passes through the merge unaffected;
+    every value is the caller's, not a default."""
+    obj = _make_mw(monkeypatch)
+    ad_args = _full_animatediff_args(
+        mode="sim", temporal_alpha=0.91, chain_save=True, chain_alpha=0.11,
+        multi_chip=False, lightning=True, lightning_steps=8,
+    )
+
+    obj._on_generate("a prompt", "", 20, -1, model_source="video",
+                      video_model_key="animatediff",
+                      animatediff_args=ad_args)
+
+    assert obj._worker_gen._mode == "sim"
+    assert obj._worker_gen._temporal_alpha == 0.91
+    # `ad["chain_save"]=True` -> `_on_generate` derives a session temp-file
+    # path for the worker's `chain_save` kwarg (not the boolean itself).
+    assert obj._worker_gen._chain_save is not None
+    assert obj._worker_gen._chain_alpha == 0.11
+    assert obj._worker_gen._multi_chip is False
+    assert obj._worker_gen._lightning is True
+    assert obj._worker_gen._lightning_steps == 8
+
+
+def test_queue_replay_of_legacy_restored_animatediff_item_uses_defaults(monkeypatch):
+    """End-to-end failure scenario from the review: a `_QueueItem` built the
+    way `_restore_queue` would build one from a PRE-SP-3a `queue.json` entry
+    (no `"animatediff_args"` key at all -> `d.get("animatediff_args")` is
+    `None`) must drain via `_start_next_queued` -> `_on_generate` without
+    raising `KeyError`.
+
+    FAILS against pre-fix 1e4c83b; passes after."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+    obj._queue.append(mw._QueueItem(
+        prompt="a prompt", negative_prompt="", steps=20, seed=-1,
+        model_source="video", model_id="animatediff",
+        video_model_key="animatediff",  # _restore_queue derives this the same way
+        animatediff_args=None,          # <- the regression: legacy JSON lacked this key
+    ))
+
+    result = obj._start_next_queued()
+
+    assert result is True
+    assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
+    assert obj._worker_gen._mode == mw._ANIMATEDIFF_DEFAULTS["mode"]
+
+
+def test_restore_queue_from_legacy_json_missing_animatediff_key_drains_cleanly(monkeypatch):
+    """Same scenario, but driven through the REAL `_restore_queue` with a
+    dict shaped exactly like a pre-SP-3a `queue.json` entry — no
+    "video_model_key"/"image_model_key"/"animatediff_args" keys at all — to
+    prove the whole crash-restart-and-drain path is robust, not just
+    `_start_next_queued` in isolation."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+    obj._restore_queue = mw.MainWindow._restore_queue.__get__(obj)
+    legacy_entry = {
+        "prompt": "a prompt", "negative_prompt": "", "steps": 20, "seed": -1,
+        "seed_image_path": "", "model_source": "video", "guidance_scale": 3.5,
+        "ref_video_path": "", "ref_char_path": "", "animate_mode": "animation",
+        "model_id": "animatediff", "job_id_override": "",
+        # deliberately NO "video_model_key"/"image_model_key"/"animatediff_args" —
+        # matches a queue.json written before those fields existed.
+    }
+    obj._store.load_queue = MagicMock(return_value=[legacy_entry])
+    obj._store.all_records = MagicMock(return_value=[])
+
+    # `_restore_queue` auto-drains via `GLib.idle_add(self._start_next_queued)`
+    # when idle (monkeypatched to run inline in `_make_mw`) — this exercises
+    # the exact restart -> restore -> drain path from the review's failure
+    # scenario, not just a hand-built `_QueueItem`.
+    obj._restore_queue()
+
+    assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
+    assert obj._worker_gen._mode == mw._ANIMATEDIFF_DEFAULTS["mode"]
+
+
 # ── Legacy ControlPanel generate/enqueue button: the ONE legitimate read ────
 
 
