@@ -8132,13 +8132,17 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._ctrl_wrapper.append(ctrl_scroll)
         self._ctrl_wrapper.append(self._controls.footer_box)
-        # Standalone Servers control's status bar + log (SP-3b Task 2) —
-        # mounted here instead of ControlPanel's own (now-hidden)
-        # `_server_status_box`/`_srv_log_revealer`. `ServersControl` already
-        # bundles its status-bar widget and log revealer into one Box (see
-        # servers_control.py's __init__), so mounting the whole widget here
-        # is the only way to place both without re-parenting either child.
-        self._ctrl_wrapper.append(self._servers_control)
+        # NOTE: ServersControl's log/status-bar are deliberately NOT mounted
+        # into `_ctrl_wrapper` (see the fix applied after the first review of
+        # this task — task-2-report.md's "Issue 1"). `_ctrl_wrapper` is
+        # ControlPanel's left-panel wrapper: it's hidden whenever the loop
+        # nav is in Discover mode (`_on_loop_nav_discover` /
+        # `_on_source_change`'s artgen-tab hide both call
+        # `_ctrl_wrapper.set_visible(False)`) and it is deleted entirely in
+        # SP-3d alongside ControlPanel. Server management must survive both
+        # of those, so `self._servers_control.log_widget` is instead mounted
+        # into `root_box` itself, right next to `_hw_statusbar` (see below) —
+        # a persistent, always-present container that outlives ControlPanel.
 
         outer_paned.set_start_child(self._ctrl_wrapper)
         outer_paned.set_shrink_start_child(False)
@@ -8352,9 +8356,32 @@ class MainWindow(Gtk.ApplicationWindow):
         outer_paned.set_end_child(inner_paned)
         outer_paned.set_shrink_end_child(False)
 
+        # Standalone Servers control's server-log revealer (SP-3b Task 2,
+        # fixed after review) — mounted directly into `root_box`, a
+        # persistent container that survives both Discover-mode's
+        # `_ctrl_wrapper.set_visible(False)` and ControlPanel's eventual
+        # deletion in SP-3d (see the `_ctrl_wrapper` comment above for why
+        # it couldn't live there). Deliberately mounts ONLY `log_widget`, not
+        # `status_bar` — see servers_control.py's module docstring and
+        # task-2-report.md's "Issue 2": this window already has an aggregate
+        # server dot below (`_hw_statusbar`, fed by the older per-tab health
+        # loop), and showing ServersControl's OWN aggregate dot too would
+        # put two disagreeing "is a server on" answers on screen at once.
+        # Collapsed (invisible) by default — a `Gtk.Revealer` with
+        # reveal_child=False — so it costs no vertical space until a
+        # start/stop/restart actually streams output into it.
+        root_box.append(self._servers_control.log_widget)
+
         # ── Hardware / infra status bar (pinned to window bottom) ─────────────
         # Clicking the server segment opens a popover with Start / Stop controls.
         # start_cb captures self._controls so it always reads the current source.
+        # TODO(SP-3d): once `_health_loop` (the per-active-tab boolean health
+        # poller this bar's dot is fed from today, via `update_server`/
+        # `update_capability`) is retired, re-point this dot at the same
+        # `ModelStatusService` snapshot `ServersControl` already reads, so
+        # the single remaining aggregate server dot in the whole window is
+        # driven by the single remaining source of truth. Not done now —
+        # out of scope for this task; `_StatusBar` itself is untouched here.
         self._hw_statusbar = _StatusBar(
             start_cb=lambda: self._on_start_server(self._controls.get_model_source()),
             stop_cb=self._on_stop_server,
@@ -11214,7 +11241,10 @@ class MainWindow(Gtk.ApplicationWindow):
     # -> script -> key resolution needed here, unlike _on_start_server/
     # _on_stop_server above). They otherwise mirror ControlPanel.
     # _on_servers_action's worker (same _sm.start/stop/restart(key) calls,
-    # same note_starting/note_stopping hooks), but:
+    # same note_starting/note_stopping hooks, noted only AFTER the real
+    # server_manager call succeeds — same ordering _on_servers_action uses,
+    # so a synchronous `_sm.*` failure never tells the status service a
+    # launch is in progress that never actually started), but:
     #   - route log/launching feedback to ServersControl instead of
     #     ControlPanel's now-unmounted popover dots + busy-lock buttons.
     #   - do NOT run their own "poll until healthy" loop — ServersControl's
@@ -11224,16 +11254,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_servers_control_start(self, key: str) -> None:
         """Start one managed service by its server_manager key."""
-        try:
-            self._status_service.note_starting(key)
-        except Exception:
-            pass
         self._servers_control.set_server_launching(key, True)
         self._servers_control.append_server_log(f"Starting {key}…")
 
         def run() -> None:
             try:
                 _sm.start(key, gui=True)
+                try:
+                    self._status_service.note_starting(key)
+                except Exception:
+                    pass
             except Exception as e:
                 GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
             finally:
@@ -11243,16 +11273,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_servers_control_stop(self, key: str) -> None:
         """Stop one managed service by its server_manager key."""
-        try:
-            self._status_service.note_stopping(key)
-        except Exception:
-            pass
         self._servers_control.set_server_launching(key, True)
         self._servers_control.append_server_log(f"Stopping {key}…")
 
         def run() -> None:
             try:
                 _sm.stop(key)
+                try:
+                    self._status_service.note_stopping(key)
+                except Exception:
+                    pass
             except Exception as e:
                 GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
             finally:
@@ -11262,16 +11292,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_servers_control_restart(self, key: str) -> None:
         """Restart one managed service by its server_manager key."""
-        try:
-            self._status_service.note_starting(key)
-        except Exception:
-            pass
         self._servers_control.set_server_launching(key, True)
         self._servers_control.append_server_log(f"Restarting {key}…")
 
         def run() -> None:
             try:
                 _sm.restart(key, gui=True)
+                try:
+                    self._status_service.note_starting(key)
+                except Exception:
+                    pass
             except Exception as e:
                 GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
             finally:
@@ -11851,6 +11881,13 @@ class MainWindow(Gtk.ApplicationWindow):
             GLib.source_remove(self._flash_restore_id)
         self._health_stop.set()
         self._status_service.stop()
+        # ServersControl's own `unrealize`-triggered cleanup (see
+        # servers_control.py's __init__) only fires if it's ever mounted
+        # itself; since only its `servers_button`/`log_widget` sub-widgets
+        # are mounted (not `self`), that signal may never fire — close()
+        # explicitly here so its status_service subscription is always torn
+        # down alongside the service it subscribes to.
+        self._servers_control.close()
         if self._pg_stop:
             self._pg_stop.set()
         self._hw_statusbar.stop()

@@ -55,6 +55,33 @@ def test_constructs_standalone():
     assert c.servers_button is not None and c.status_bar is not None
 
 
+def test_log_widget_property_exists_independent_of_status_bar():
+    """Post-Task-2-review addition: `log_widget` is a third, independent
+    mountable widget (distinct from `status_bar`), added so a caller can
+    mount the log without also pulling in the aggregate status-bar dot --
+    see task-2-report.md's "Issue 2" for why MainWindow needs this split."""
+    c = sc.ServersControl(
+        _svc({}), on_start=lambda k: None, on_stop=lambda k: None, on_restart=lambda k: None
+    )
+    assert c.log_widget is not None
+    assert c.log_widget is not c.status_bar
+
+
+def test_public_widgets_unparented_at_construction():
+    """None of servers_button / status_bar / log_widget are pre-parented
+    into `self` (the ServersControl Gtk.Box) or into each other -- each is
+    independently placeable by the caller, which is what makes it possible
+    for MainWindow to mount `servers_button` + `log_widget` while leaving
+    `status_bar` unmounted entirely (avoiding a second aggregate server
+    dot -- see task-2-report.md's "Issue 1"/"Issue 2")."""
+    c = sc.ServersControl(
+        _svc({}), on_start=lambda k: None, on_stop=lambda k: None, on_restart=lambda k: None
+    )
+    assert c.servers_button.get_parent() is None
+    assert c.status_bar.get_parent() is None
+    assert c.log_widget.get_parent() is None
+
+
 def test_popover_dots_from_snapshot():
     c = sc.ServersControl(
         _svc({"flux": ms.Status.READY, "wan2.2": ms.Status.STARTING}),

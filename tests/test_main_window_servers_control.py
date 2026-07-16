@@ -76,12 +76,71 @@ def test_servers_button_mounted_in_top_bar():
     assert "main_toolbar.append(self._servers_control.servers_button)" in _SRC
 
 
-def test_servers_control_mounted_in_footer():
-    # ServersControl bundles its own status-bar widget + log revealer into
-    # one Box in its own __init__ (servers_control.py), so mounting the
-    # whole widget is the only way to place both without re-parenting
-    # either child out from under the other.
-    assert "self._ctrl_wrapper.append(self._servers_control)" in _SRC
+def test_log_widget_mounted_in_persistent_root_box():
+    """Post-review fix (Issue 1): `log_widget` must be mounted directly on
+    `root_box` -- a container that survives Discover mode's
+    `_ctrl_wrapper.set_visible(False)` and ControlPanel's eventual SP-3d
+    deletion -- not into `_ctrl_wrapper` (ControlPanel's own left-panel
+    wrapper, which is hidden/deleted in exactly those two situations)."""
+    assert "root_box.append(self._servers_control.log_widget)" in _SRC
+
+
+def test_servers_control_not_mounted_into_ctrl_wrapper():
+    """Issue 1 regression guard: the original (wrong) fix mounted the whole
+    `self._servers_control` widget into `_ctrl_wrapper`. That line must never
+    come back -- `_ctrl_wrapper` is hidden in Discover mode
+    (`_on_loop_nav_discover`) and in the artgen tab (`_on_source_change`),
+    and is deleted entirely alongside ControlPanel in SP-3d."""
+    assert "self._ctrl_wrapper.append(self._servers_control)" not in _SRC
+
+
+def test_status_bar_never_mounted_anywhere():
+    """Issue 2 regression guard: ServersControl's own aggregate server dot
+    (`.status_bar`) must never be mounted anywhere in MainWindow. The window
+    already has one aggregate server dot (`_hw_statusbar`/`_StatusBar`, fed
+    by the older per-tab health loop) -- mounting a second, differently-
+    sourced dot is the exact "two disagreeing sources of truth" bug this
+    whole program (ModelStatusService) exists to eliminate."""
+    assert "self._servers_control.status_bar" not in _SRC
+
+
+def test_only_one_aggregate_status_bar_constructed():
+    """Exactly one `_StatusBar` instance is ever constructed in
+    main_window.py -- the pre-existing `self._hw_statusbar` -- confirming
+    ServersControl's status_bar isn't wrapped into a second one under a
+    different name. (`_StatusBar(` alone would also match the class's own
+    `class _StatusBar(Gtk.Box):` definition line, hence the more specific
+    `= _StatusBar(` construction-call pattern.)"""
+    assert _SRC.count("= _StatusBar(") == 1
+
+
+def test_servers_control_closed_on_window_close():
+    """`self` (the ServersControl Gtk.Box) is no longer guaranteed to ever
+    be mounted -- only its servers_button/log_widget sub-widgets are -- so
+    its own `unrealize`-triggered cleanup (see servers_control.py) may never
+    fire. do_close_request must explicitly call close() so the
+    status_service subscription is always torn down when the window closes."""
+    start = _SRC.index("def do_close_request(self) -> bool:")
+    body = _SRC[start:]
+    assert "self._servers_control.close()" in body
+    assert "self._status_service.stop()" in body  # still present, unrelated
+
+
+def test_note_ordering_matches_legacy_on_servers_action():
+    """Issue 3: note_starting/note_stopping must be textually AFTER the real
+    _sm.start/stop/restart(key, ...) call inside each callback's body,
+    mirroring ControlPanel._on_servers_action's ordering -- a synchronous
+    _sm.* failure must never have already told the status service a
+    launch/stop began."""
+    for name, sm_call, note_call in (
+        ("_on_servers_control_start", "_sm.start(key, gui=True)", "self._status_service.note_starting(key)"),
+        ("_on_servers_control_stop", "_sm.stop(key)", "self._status_service.note_stopping(key)"),
+        ("_on_servers_control_restart", "_sm.restart(key, gui=True)", "self._status_service.note_starting(key)"),
+    ):
+        start = _SRC.index(f"def {name}(self, key: str) -> None:")
+        end = _SRC.index("\n    def ", start + 1)
+        body = _SRC[start:end]
+        assert body.index(sm_call) < body.index(note_call), name
 
 
 def test_single_servers_control_mounted():
@@ -246,3 +305,49 @@ def test_servers_control_callback_note_failure_does_not_block_start(monkeypatch)
     fmw._status_service = _BoomRecorder()
     fmw._on_servers_control_start("wan2.2")
     assert calls["start"] == [("wan2.2", True)]
+
+
+def test_note_starting_never_fires_when_sm_start_raises(monkeypatch):
+    """Issue 3 behavioral counterpart: if the REAL _sm.start(...) call raises
+    synchronously, note_starting must never have fired -- the status
+    service must not be told a launch began that never actually happened.
+    (Complements test_note_ordering_matches_legacy_on_servers_action, which
+    only checks textual order; this proves the runtime effect.)"""
+    fmw, calls = _make_main_window_double(monkeypatch)
+    import main_window as mw
+
+    def _boom(key, gui=True):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mw._sm, "start", _boom)
+    fmw._on_servers_control_start("wan2.2")
+    assert fmw._status_service.starting == []
+    assert any("Error" in line for line in fmw._servers_control.log_lines)
+
+
+# ── Behavioral: ServersControl's three widgets are independently mountable ──
+
+def test_servers_control_widgets_unparented_at_construction():
+    """Post-review fix (Issue 1/2): ServersControl no longer bundles its
+    status-bar widget + log revealer inside `self` (the ServersControl
+    Gtk.Box itself). Constructing a real ServersControl against a minimal
+    fake status_service (cheap -- no MainWindow/ControlPanel needed) and
+    checking each public widget has no parent proves all three
+    (servers_button / status_bar / log_widget) are genuinely independent and
+    freely placeable -- the structural property that makes the Issue 1 fix
+    (mount log_widget alone, elsewhere) possible at all."""
+    import servers_control as sc
+
+    class _FakeService:
+        def snapshot(self):
+            return {}
+
+        def subscribe(self, cb):
+            return lambda: None
+
+    c = sc.ServersControl(
+        _FakeService(), on_start=lambda k: None, on_stop=lambda k: None, on_restart=lambda k: None
+    )
+    assert c.servers_button.get_parent() is None
+    assert c.status_bar.get_parent() is None
+    assert c.log_widget.get_parent() is None

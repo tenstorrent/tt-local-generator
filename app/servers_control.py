@@ -45,6 +45,20 @@ Queue/disk/chip segments are likewise NOT polled here: `set_status_segments()`
 is the only way they change. The caller owns whatever polling/timers feed it
 (mirroring how `_StatusBar.update_queue()`/`_refresh_disk()` were pure setters
 from their caller's point of view — just consolidated behind one method here).
+
+`servers_button` / `status_bar` / `log_widget` are three INDEPENDENT widgets,
+not one bundled unit — none of them are pre-parented into `self` (this
+`Gtk.Box` subclass exists only to keep the constructor/property/test-helper
+surface stable; it is not itself mounted anywhere in the current wiring). A
+caller is free to mount any subset in whatever locations make sense. Task 2
+(`MainWindow`) mounts `servers_button` + `log_widget` only — deliberately
+NOT `status_bar` — because the window already has its own aggregate server
+dot (`_StatusBar`/`_hw_statusbar`, fed by the older per-tab health loop);
+mounting this widget's `status_bar` too would put two disagreeing "is a
+server on" dots on screen at once, the exact bug this module's single-
+source-of-truth design exists to prevent. See task-2-report.md's "Issue 2"
+for the review finding that caught this, and CLAUDE.md's "artgen LLM
+endpoint discovery" section for the historical precedent of that bug class.
 """
 
 import gi
@@ -179,8 +193,22 @@ class ServersControl(Gtk.Box):
         self._status_bar_widget = self._build_status_bar()
         self._log_revealer = self._build_log_revealer()
 
-        self.append(self._status_bar_widget)
-        self.append(self._log_revealer)
+        # Deliberately NOT appended to `self` (SP-3b Task 2 fix, post-review):
+        # `servers_button`, `status_bar`, and `log_widget` are three
+        # independently-mountable widgets, not one bundled unit. MainWindow
+        # mounts `servers_button` in its top toolbar and `log_widget` in a
+        # persistent footer, but does NOT mount `status_bar` at all --
+        # the window already has its own aggregate server dot
+        # (`_StatusBar`/`_hw_statusbar`), and showing this widget's dot too
+        # would be exactly the two-disagreeing-sources-of-truth bug this
+        # program exists to eliminate (see CLAUDE.md's "artgen LLM endpoint
+        # discovery" section for the historical precedent). `status_bar`
+        # stays a real, working widget (queue/disk/chip segments still
+        # settable via `set_status_segments`) for whichever future caller
+        # wants it -- it's just unparented until someone does.
+        # `self` (this Gtk.Box) is therefore never itself added to a window
+        # in the current wiring; it remains a Gtk.Box subclass only so its
+        # constructor signature/properties/test helpers stay unchanged.
 
         # Subscribe LAST — once every widget _on_snapshot() touches exists,
         # so a status_service implementation that notifies synchronously
@@ -194,10 +222,11 @@ class ServersControl(Gtk.Box):
         # the fake service used in tests, never).
         self._on_snapshot(self._snapshot)
 
-        # Cleanup: unsubscribe when the widget leaves the widget tree so a
-        # torn-down ServersControl doesn't keep receiving snapshots (and
-        # keep the status_service's subscriber list from growing unbounded
-        # across e.g. repeated dialog open/close cycles).
+        # Cleanup: unsubscribe when `self` leaves the widget tree. This is a
+        # defensive fallback only -- since `self` is no longer guaranteed to
+        # ever be mounted (see above), the primary cleanup path is now the
+        # owner calling `close()` explicitly (MainWindow does this from
+        # `do_close_request`, alongside `self._status_service.stop()`).
         self.connect("unrealize", lambda *_a: self.close())
 
     # ------------------------------------------------------------------
@@ -210,8 +239,24 @@ class ServersControl(Gtk.Box):
 
     @property
     def status_bar(self) -> Gtk.Widget:
-        """Server dot + queue/disk/chip segments, meant for the footer."""
+        """Server dot + queue/disk/chip segments.
+
+        Not mounted anywhere by MainWindow today (see the __init__ comment
+        above) -- kept as a real, independent widget in case a future caller
+        wants an aggregate dot + queue/disk/chip segments without the
+        window's existing `_hw_statusbar`/`_StatusBar` dashboard.
+        """
         return self._status_bar_widget
+
+    @property
+    def log_widget(self) -> Gtk.Widget:
+        """The collapsible server-log revealer, independent of `status_bar`.
+
+        Mount this (not `status_bar`) wherever the app wants start/stop/
+        restart log output to stream -- e.g. MainWindow mounts it in a
+        persistent, always-present location (not inside anything that gets
+        hidden per-mode or deleted alongside ControlPanel)."""
+        return self._log_revealer
 
     # ------------------------------------------------------------------
     # Popover construction (adapted from ControlPanel._build_servers_popover)
