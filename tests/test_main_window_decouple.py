@@ -123,6 +123,11 @@ def _make_mw(monkeypatch):
     obj._controls.get_animatediff_args.side_effect = AssertionError(
         "must not read _controls.get_animatediff_args() in this path"
     )
+    # SP-3c-5: attractor/TT-TV's model source is now `ModelStatusService`,
+    # not ControlPanel — a fake standing in for it, defaulting to "nothing
+    # running" (None) so tests that don't care get the medium default keys.
+    obj._status_service = MagicMock()
+    obj._status_service.running_or_starting.return_value = None
     obj._client = MagicMock()
     obj._store = MagicMock()
     obj._worker = None
@@ -149,6 +154,7 @@ def _make_mw(monkeypatch):
         "_start_next_queued",
         "_on_attractor_generate",
         "_on_attractor_priority_enqueue",
+        "_resolve_attractor_model",
         "_on_enqueue",
     ):
         setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
@@ -503,37 +509,37 @@ def test_queue_replay_animatediff_item_uses_stored_args(monkeypatch):
     assert obj._worker_gen._mode == "cpu"
 
 
-# ── Attractor/TT-TV: reads ControlPanel once, at the same call-time as before ──
+# ── Attractor/TT-TV: SP-3c-5 — model resolved via ModelStatusService, ──────
+# ── never ControlPanel (superseded by tests/test_main_window_attractor_    ──
+# ── model_source.py, which covers `_resolve_attractor_model` itself in     ──
+# ── depth; these three keep the original "idle vs busy vs priority-enqueue"──
+# ── call shapes exercised end-to-end).                                     ──
 
 
-def test_attractor_generate_idle_path_reads_controls_once_and_passes_through(monkeypatch):
+def test_attractor_generate_idle_path_resolves_via_status_service(monkeypatch):
     """`_on_attractor_generate`'s worker-idle branch calls `_on_generate`
     directly (attractor.py always passes `model_id=""`) — the resolved
-    `video_model_key` must come from `self._controls.get_video_model()` read
-    HERE (not inside `_on_generate`, which still must not read it itself)."""
+    `video_model_key` must come from `ModelStatusService.running_or_starting`
+    (via `_resolve_attractor_model`), never `self._controls`."""
     obj = _make_mw(monkeypatch)
-    obj._controls.get_video_model.side_effect = None
-    obj._controls.get_video_model.return_value = "mochi"
-    obj._controls.get_image_model.side_effect = None
-    obj._controls.get_image_model.return_value = "flux"
+    obj._status_service.running_or_starting.return_value = "mochi"
 
     obj._on_attractor_generate("a prompt", "", 20, -1, model_source="video",
                                 model_id="")
 
+    obj._status_service.running_or_starting.assert_called_once_with("video")
     assert type(obj._worker_gen).__name__ == "GenerationWorker"
     assert obj._worker_gen._model == "mochi-1-preview"
 
 
 def test_attractor_generate_busy_path_stores_captured_model_on_queue_item(monkeypatch):
-    """When the worker is busy, the same ControlPanel-read values are
+    """When the worker is busy, the status-service-resolved values are
     captured onto the `_QueueItem` (tagged `from_attractor=True`) so a later
-    `_start_next_queued()` replays faithfully without re-reading
-    `self._controls` (which may have changed by then)."""
+    `_start_next_queued()` replays faithfully without re-resolving (the
+    running model may have changed by then)."""
+    import main_window as mw
     obj = _make_mw(monkeypatch)
-    obj._controls.get_video_model.side_effect = None
-    obj._controls.get_video_model.return_value = "skyreels"
-    obj._controls.get_image_model.side_effect = None
-    obj._controls.get_image_model.return_value = "flux"
+    obj._status_service.running_or_starting.return_value = "skyreels"
     busy_worker = MagicMock()
     busy_worker.is_alive.return_value = True
     obj._worker = busy_worker
@@ -545,14 +551,13 @@ def test_attractor_generate_busy_path_stores_captured_model_on_queue_item(monkey
     item = obj._queue[0]
     assert item.from_attractor is True
     assert item.video_model_key == "skyreels"
-    assert item.image_model_key == "flux"
+    assert item.image_model_key == mw._DEFAULT_IMAGE_KEY
 
     # Faithful replay: drain the queue with the worker now idle. Re-point the
-    # (already-asserted-not-called-again) controls getters back to raising,
-    # proving replay uses the ITEM's captured fields, not a fresh read.
+    # status service to a DIFFERENT running model, proving replay uses the
+    # ITEM's captured fields, not a fresh resolve.
     obj._worker = None
-    obj._controls.get_video_model.side_effect = AssertionError("must not re-read")
-    obj._controls.get_image_model.side_effect = AssertionError("must not re-read")
+    obj._status_service.running_or_starting.return_value = "flux"
 
     obj._start_next_queued()
 
@@ -561,10 +566,7 @@ def test_attractor_generate_busy_path_stores_captured_model_on_queue_item(monkey
 
 def test_attractor_priority_enqueue_busy_path_stores_captured_model(monkeypatch):
     obj = _make_mw(monkeypatch)
-    obj._controls.get_video_model.side_effect = None
-    obj._controls.get_video_model.return_value = "wan2"
-    obj._controls.get_image_model.side_effect = None
-    obj._controls.get_image_model.return_value = "flux"
+    obj._status_service.running_or_starting.return_value = "wan2.2"
     busy_worker = MagicMock()
     busy_worker.is_alive.return_value = True
     obj._worker = busy_worker
@@ -573,3 +575,15 @@ def test_attractor_priority_enqueue_busy_path_stores_captured_model(monkeypatch)
 
     assert len(obj._queue) == 1
     assert obj._queue[0].video_model_key == "wan2"
+
+
+def test_attractor_priority_enqueue_no_controls_reads(monkeypatch):
+    """Zero `self._controls.get_*` reads anywhere in the attractor path —
+    `obj._controls` getters all raise (per `_make_mw`); a passing call here
+    proves `_on_attractor_priority_enqueue` never touches them."""
+    obj = _make_mw(monkeypatch)
+    obj._status_service.running_or_starting.return_value = None
+
+    obj._on_attractor_priority_enqueue("a prompt", model_source="image")
+
+    obj._status_service.running_or_starting.assert_called_once_with("image")

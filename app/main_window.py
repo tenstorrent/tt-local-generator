@@ -10373,6 +10373,64 @@ class MainWindow(Gtk.ApplicationWindow):
             self._update_queue_display()
             self._set_status(f"TT-TV closed — {purged} queued auto-gen job{'s' if purged != 1 else ''} cancelled")
 
+    def _resolve_attractor_model(self, model_source: str):
+        """SP-3c-5: resolve which model attractor/TT-TV auto-gen should use
+        for `model_source`, WITHOUT reading ControlPanel (which SP-3d
+        deletes).
+
+        Attractor jobs carry no model selection of their own — `attractor.py`
+        always passes `model_id=""` — so before this task the only source of
+        truth was ControlPanel's live `get_video_model()`/`get_image_model()`/
+        `get_animatediff_args()`. That's replaced here with the SAME "is a
+        model on" authority CLAUDE.md documents for this repo:
+        `ModelStatusService.running_or_starting(capability)` — the identical
+        call CreateView's auto-select and the health dot already use — so the
+        attractor auto-generates with whatever model is currently RUNNING
+        (READY, or else STARTING) for the capability, consistent with SP-2's
+        auto-select philosophy.
+
+        `running_or_starting` returns a `server_manager` key (e.g. "wan2.2",
+        "flux", "animate") or `None` if nothing is running/starting for that
+        capability. `_SERVER_KEY_TO_SOURCE_MODEL` — the same map
+        `MainWindow.__init__` already uses to pre-select the source tab/model
+        from `last_successful_deployment` — converts that key into the
+        (model_source, model_key) pair used everywhere else in this file.
+        `model_source == "animate"` has no video/image model key of its own
+        (`_on_generate`'s animate branch never reads either), so the "animate"
+        entry's empty model key is harmless — both return values stay at
+        their medium defaults.
+
+        No server running/starting for the capability (or an unrecognized
+        key) falls back to each medium's documented default —
+        `_DEFAULT_VIDEO_KEY`/`_DEFAULT_IMAGE_KEY`, the exact same fallback
+        `_on_generate` itself uses when a caller passes no model at all
+        (mirrors ControlPanel's fresh-session default of "animatediff").
+
+        Returns `(video_model_key, image_model_key, animatediff_args)` — the
+        three values `_on_attractor_generate`/`_on_attractor_priority_enqueue`
+        thread straight through to `_on_generate`/`_QueueItem` unchanged.
+        """
+        capability = {"video": "video", "image": "image", "animate": "animate"}.get(
+            model_source, "video"
+        )
+        server_key = self._status_service.running_or_starting(capability)
+        src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(server_key, (None, None))
+
+        video_model_key = _DEFAULT_VIDEO_KEY
+        image_model_key = _DEFAULT_IMAGE_KEY
+        if src == "video" and mdl:
+            video_model_key = mdl
+        elif src == "image" and mdl:
+            image_model_key = mdl
+        # src == "animate" (or nothing running): video_model_key/
+        # image_model_key stay at their defaults — irrelevant for the
+        # "animate" model_source, which never reads either.
+
+        animatediff_args = (
+            dict(_ANIMATEDIFF_DEFAULTS) if video_model_key == "animatediff" else None
+        )
+        return video_model_key, image_model_key, animatediff_args
+
     def _on_attractor_priority_enqueue(self, prompt, neg="", steps=30, seed=-1,
                                         seed_image_path="", model_source="video",
                                         guidance_scale=5.0, ref_video_path="",
@@ -10385,16 +10443,15 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
-        # SP-3a: attractor/TT-TV jobs have no per-item model selection of
-        # their own (attractor.py always passes model_id="") — the only
-        # source of truth for "which video/image model" is ControlPanel's
-        # current selection, read once here (same moment `_on_generate`
-        # would have read it before this task) and threaded through
-        # explicitly, whether the job runs immediately or is queued.
-        video_model_key = self._controls.get_video_model()
-        image_model_key = self._controls.get_image_model()
-        animatediff_args = (
-            self._controls.get_animatediff_args() if video_model_key == "animatediff" else None
+        # SP-3c-5: attractor/TT-TV jobs have no per-item model selection of
+        # their own (attractor.py always passes model_id="") — resolved via
+        # `_resolve_attractor_model` (the shared ModelStatusService, not
+        # ControlPanel — see that method's docstring for the full reasoning)
+        # once here, at the same call-time `_on_generate` would have read it
+        # before SP-3a, and threaded through explicitly whether the job runs
+        # immediately or is queued.
+        video_model_key, image_model_key, animatediff_args = (
+            self._resolve_attractor_model(model_source)
         )
         if self._worker and self._worker.is_alive():
             self._queue.insert(0, _QueueItem(prompt, neg, steps, seed, seed_image_path,
@@ -10427,13 +10484,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
-        # SP-3a: same reasoning as _on_attractor_priority_enqueue above —
-        # read ControlPanel's current model selection once, here, and pass
-        # it through explicitly rather than letting _on_generate read it.
-        video_model_key = self._controls.get_video_model()
-        image_model_key = self._controls.get_image_model()
-        animatediff_args = (
-            self._controls.get_animatediff_args() if video_model_key == "animatediff" else None
+        # SP-3c-5: same reasoning as `_on_attractor_priority_enqueue` above —
+        # resolve via `_resolve_attractor_model` (ModelStatusService, not
+        # ControlPanel) once, here, and pass it through explicitly rather
+        # than letting `_on_generate` read it.
+        video_model_key, image_model_key, animatediff_args = (
+            self._resolve_attractor_model(model_source)
         )
         if self._worker and self._worker.is_alive():
             item = _QueueItem(prompt, neg, steps, seed, seed_image_path,

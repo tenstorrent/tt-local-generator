@@ -1,3 +1,29 @@
+tt-local-generator (0.40.0) noble; urgency=medium
+
+  * SP-3c-5: attractor/TT-TV auto-gen now sources its model from
+    `ModelStatusService` -- the same "is a model on" authority CreateView's
+    auto-select and the health dot already use -- instead of the legacy
+    ControlPanel selection. `_on_attractor_generate`/
+    `_on_attractor_priority_enqueue` no longer read
+    `self._controls.get_video_model()`/`get_image_model()`/
+    `get_animatediff_args()` at all; a new `_resolve_attractor_model(
+    model_source)` helper calls `ModelStatusService.running_or_starting(
+    capability)`, maps the returned server key to a video/image model key via
+    `_SERVER_KEY_TO_SOURCE_MODEL` (the same map used for
+    last-successful-deployment pre-selection), and falls back to each
+    medium's documented default key (`_DEFAULT_VIDEO_KEY`/
+    `_DEFAULT_IMAGE_KEY`) when nothing is running/starting. AnimateDiff args
+    now come from `_ANIMATEDIFF_DEFAULTS` rather than a live ControlPanel
+    read. Behavior change (intended): attractor auto-gen previously used
+    whatever model was manually selected in ControlPanel; it now uses
+    whatever model is currently RUNNING, consistent with SP-2's auto-select
+    philosophy -- and this makes the attractor launch fully independent of
+    ControlPanel, ready for its deletion in SP-3d. The launch affordance
+    itself (`_attractor_btn`, MainWindow's toolbar "Watch TT-TV" button) was
+    already ControlPanel-independent -- verified, not touched.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 12:00:00 -0700
+
 tt-local-generator (0.39.1) noble; urgency=medium
 
   * Fix: a Create click while busy (SP-3c-4's enqueue path) could crash the
