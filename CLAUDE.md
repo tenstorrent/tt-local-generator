@@ -208,13 +208,23 @@ bar/server-log.
   hack (v0.27.1) is gone. The legacy generate call site + the attractor path still
   read `_controls` (legitimately — those ARE ControlPanel-driven); they go with
   ControlPanel in SP-3d, where the attractor also needs a new model source.
-- **Open decision for SP-3c/3d:** native AnimateDiff (ControlPanel video-model
-  `"animatediff"` + `get_animatediff_args`) is distinct from the artgen
-  `animatediff` plugin — migrate into Create or drop when ControlPanel is deleted?
-- **Remaining:** SP-3b top-bar Servers control + status bar + log; SP-3c migrate
-  seed-image/Inspire-me/attractor/queue into Create; SP-3d delete the vestiges +
-  the 3 legacy pollers (`_health_loop`, `_refresh_servers_popover`,
-  `artgen_panel._check_health_bg`).
+- **SP-3b done (v0.35.0): standalone `ServersControl`** (`app/servers_control.py`)
+  — `Servers ▾` popover (start/stop/restart, 3-state dots from the service via
+  `subscribe`, not polling) + server-log, lifted out of ControlPanel and mounted
+  persistently (`servers_button` in the top bar; `log_widget` on `root_box` — NOT
+  under `_ctrl_wrapper`, so it survives Discover + the SP-3d delete). ControlPanel's
+  `_servers_btn`/`_server_status_box`/`_srv_log` are hidden; `_refresh_servers_popover`
+  poll is unreachable (2 of 3 legacy pollers effectively gone). One aggregate dot
+  = the bottom `_hw_statusbar` (a `TODO(SP-3d)` marks re-pointing it at the service
+  when `_health_loop` retires).
+- **DECIDED: native AnimateDiff MIGRATES into Create** (never drop) — distinct
+  from the artgen `animatediff` plugin (also kept). SP-3c gives Create a native
+  AnimateDiff path carrying full `get_animatediff_args` config.
+- **Remaining:** SP-3c migrate seed-image/i2i + Inspire-me + attractor/TT-TV +
+  queue + native AnimateDiff into Create; SP-3d delete the vestiges (ControlPanel/
+  ArtgenPanel/medium-tabs/Gen-Art tab) + retire `_health_loop` (re-point
+  `_hw_statusbar` to the service) & `artgen_panel._check_health_bg`, and give the
+  attractor a non-ControlPanel model source.
 
 ## Version discipline
 

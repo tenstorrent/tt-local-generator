@@ -1,13 +1,15 @@
 tt-local-generator (0.35.0) noble; urgency=medium
 
-  * New standalone `ServersControl` widget (app/servers_control.py): the
-    "Servers ▾" popover (grouped by capability, per-service start/stop/
-    restart), the status bar (server dot + queue/disk/chip segments), and the
-    server-log revealer, extracted from ControlPanel with no ControlPanel or
-    MainWindow dependency. Renders 3-state dots (off / starting / ready) from
-    a `model_status.ModelStatusService` snapshot via `subscribe()` -- no
-    polling of its own. Not yet wired into MainWindow (next step); the
-    existing ControlPanel-owned equivalents keep running unchanged until then.
+  * Server management moved to a standalone control on the single source of
+    truth. A new `Servers ▾` top-bar control (app/servers_control.py) owns the
+    start/stop/restart popover -- with 3-state dots (off/starting/ready) read
+    from the ModelStatusService, not its own poll -- plus the server-log stream,
+    lifted out of the legacy left ControlPanel and mounted persistently (it
+    survives Discover mode and the panel's eventual removal). One aggregate
+    status dot remains (the bottom status bar); the panel's duplicate server
+    widgets are hidden. Behavior unchanged -- starting/stopping a server works
+    as before and now feeds the shared status service. Groundwork for retiring
+    the legacy panels.
 
  -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 05:00:00 -0700
 
