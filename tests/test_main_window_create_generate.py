@@ -105,6 +105,12 @@ def _make_mw(monkeypatch):
     # enough for the image/animate branches (which never touch it) and lets
     # the video tests assert the sync happened.
     obj._controls = MagicMock()
+    # `_on_create_generate`'s re-entrancy guard (review fix, task-3-report.md)
+    # reads this unconditionally at the very top of the method, before the
+    # try/except that used to be the only place Create-job state was
+    # touched — so every harness building a real `_on_create_generate` call
+    # must initialize it now, mirroring `MainWindow.__init__`'s own default.
+    obj._create_job_active = False
 
     for name in (
         "_on_create_generate",
@@ -893,6 +899,88 @@ def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch)
     assert len(fake_gallery.add_pending_calls) == 1
     # ...and the panel was NOT touched again by it — no state bled forward.
     assert fake_create_view._result_panel.calls == calls_after_failure
+
+
+# ── Whole-slice review fix: three more `_create_job_active` lifecycle gaps ──
+#
+# FINDING A (Important) — a second Create click while a job is already
+# running (the Create CTA is never disabled mid-generation) would re-enter
+# `_on_create_generate` -> `_begin_create_job`, overwriting the FIRST job's
+# pending display, and if the second call's dispatch then hit
+# `_on_generate`'s worker-busy guard, `_fail_create_job` would clear
+# `_create_job_active` out from under the still-running first job — so the
+# first job's own `_on_finished` would see the flag already False and never
+# forward to the panel. Fixed by a re-entrancy guard at the very top of
+# `_on_create_generate`.
+#
+# FINDING B (Important) — `_on_create_generate`'s `except Exception` ran
+# AFTER `_begin_create_job` already set the flag + shown "pending", but only
+# set a status message — leaving the flag stuck True (and the panel stuck
+# "Generating…") on any synchronous dispatch exception. Fixed by calling
+# `_fail_create_job` in that except.
+#
+# FINDING C (Minor) — `_create_generate_artgen`'s `if not generator: return`
+# also ran after `_begin_create_job`, without clearing the flag. Unreachable
+# today (discover_mediums always sets a generator) but fixed for the same
+# "every terminal path clears the flag" consistency.
+
+def test_reentrant_create_call_while_job_active_is_ignored(monkeypatch):
+    """A second Create click while `_create_job_active` is already True must
+    be a no-op for Create-job state: no second `_begin_create_job`/pending
+    display, the running job's flag is left alone, and no dispatch happens."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True  # simulates a first job already in flight
+    obj._create_generate_native = MagicMock()  # spy: dispatch must never run
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "second click",
+                                             "model": "flux.1-schnell"})
+
+    obj._create_generate_native.assert_not_called()
+    # No second show_pending (or any other panel call) — the first job's
+    # pending display (whatever it was) is untouched by this call.
+    assert fake_create_view._result_panel.calls == []
+    # The flag is exactly as it was — still True, i.e. NOT cleared out from
+    # under the (simulated) still-running first job.
+    assert obj._create_job_active is True
+    obj._set_status.assert_called_with("A generation is already running…")
+
+
+def test_dispatch_exception_clears_create_job_and_shows_error(monkeypatch):
+    """A synchronous exception during dispatch (worker constructor raising,
+    a bad int()/float() param parse, etc.) must not leave the flag stuck
+    True / the panel stuck "pending" — `_fail_create_job` must run in the
+    `except` clause."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+
+    def _boom(_medium, _params):
+        raise RuntimeError("worker constructor exploded")
+
+    obj._create_generate_native = _boom
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    assert obj._create_job_active is False
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    # The existing status-bar message is still set (unchanged behavior).
+    obj._set_status.assert_called_with(
+        "Couldn't start generation: worker constructor exploded"
+    )
+
+
+def test_artgen_no_generator_clears_create_job_and_shows_error(monkeypatch):
+    """The artgen "no generator mapped" terminal path must also clear the
+    flag it set via `_begin_create_job`, even though it's unreachable via
+    `discover_mediums` today."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    bad_medium = Medium(id="mystery", label="Mystery", icon="?", kind="text",
+                        source="artgen", generator=None)
+
+    obj._on_create_generate(bad_medium, {})
+
+    assert obj._create_job_active is False
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    obj._set_status.assert_called_with("No artgen generator mapped for Mystery.")
 
 
 # ── In-place Create results: artgen generation lifecycle → result panel ─────

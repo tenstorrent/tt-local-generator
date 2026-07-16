@@ -10446,7 +10446,21 @@ class MainWindow(Gtk.ApplicationWindow):
         Fails soft everywhere: a bad/missing medium mapping, a failed
         subprocess, or any other exception surfaces as a status-bar message
         — a Create-surface click must never be able to crash the app.
+
+        Re-entrancy guard: if a Create job is already in flight
+        (`_create_job_active`), a second click (the Create CTA isn't
+        disabled while generating) must NOT be allowed to re-enter
+        `_begin_create_job` — that would overwrite the first job's pending
+        display in the panel, and if the second call's dispatch then hits
+        `_on_generate`'s worker-busy guard, `_fail_create_job` would clear
+        the flag out from under the FIRST job, which is still running (its
+        `_on_finished` would then see the flag already False and never
+        update the panel). So bail out here, before touching any Create-job
+        state, whenever one is already active.
         """
+        if self._create_job_active:
+            self._set_status("A generation is already running…")
+            return
         try:
             if medium.source == "native":
                 self._begin_create_job(medium, params)
@@ -10457,6 +10471,17 @@ class MainWindow(Gtk.ApplicationWindow):
             else:
                 self._set_status(f"Don't know how to generate a {medium.label} yet.")
         except Exception as exc:
+            # A synchronous exception anywhere in dispatch (a worker
+            # constructor raising, `_gallery_for_type` raising, a bad
+            # int()/float() param parse in `_create_generate_native`, ...)
+            # happens AFTER `_begin_create_job` already set the flag + shown
+            # "pending" — without clearing it here, the panel would stay
+            # stuck on "Generating…" forever and the flag would bleed into
+            # whatever job runs next. `_fail_create_job` is a no-op if no
+            # Create job was actually started (e.g. the `else` branch above
+            # never calls `_begin_create_job`), so it's safe to call
+            # unconditionally.
+            self._fail_create_job(str(exc))
             self._set_status(f"Couldn't start generation: {exc}")
 
     def _begin_create_job(self, medium, params: dict) -> None:
@@ -10582,7 +10607,14 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         generator = medium.generator
         if not generator:
-            self._set_status(f"No artgen generator mapped for {medium.label}.")
+            msg = f"No artgen generator mapped for {medium.label}."
+            self._set_status(msg)
+            # _begin_create_job already set _create_job_active + shown
+            # "pending" before this method was called — this terminal path
+            # must clear it too (unreachable today since discover_mediums
+            # always sets a generator, but every terminal path should leave
+            # the flag consistent, not just the common ones).
+            self._fail_create_job(msg)
             return
 
         prompt = params.get("prompt", "")
