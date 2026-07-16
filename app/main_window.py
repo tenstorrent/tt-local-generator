@@ -48,6 +48,7 @@ from create_view import CreateView
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
 from model_status import ModelStatusService
+from servers_control import ServersControl
 from worker import (
     AnimateDiffGenerationWorker,
     AnimateGenerationWorker,
@@ -8031,6 +8032,30 @@ class MainWindow(Gtk.ApplicationWindow):
         # above — it's injected here as a plain attribute post-construction.
         self._controls._status_service = self._status_service
 
+        # ── Standalone Servers control (SP-3b Task 2) ─────────────────────────
+        # Replaces ControlPanel's "Servers ▾" popover, server-status box, and
+        # server-log revealer with a single MainWindow-owned widget driven by
+        # ModelStatusService (3-state dots via subscribe(), not a standalone
+        # poll). The three callbacks below reuse the exact key-resolution +
+        # note_starting/note_stopping pattern ControlPanel._on_servers_action
+        # already used for its (now-unmounted) popover, so start/stop/restart
+        # behavior is unchanged — only the widget + log destination moved.
+        self._servers_control = ServersControl(
+            self._status_service,
+            on_start=self._on_servers_control_start,
+            on_stop=self._on_servers_control_stop,
+            on_restart=self._on_servers_control_restart,
+        )
+        # Hide ControlPanel's now-redundant server widgets so exactly one
+        # Servers control + one status bar are ever visible. Note:
+        # `_server_status_box` was already hidden by ControlPanel._build()
+        # itself (its dot/model-label/Start/Stop moved into the old
+        # `_StatusBar` popover); it's re-asserted here defensively so this
+        # invariant doesn't silently depend on that older, unrelated change.
+        self._controls._servers_btn.set_visible(False)
+        self._controls._server_status_box.set_visible(False)
+        self._controls._srv_log_revealer.set_visible(False)
+
         # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
         # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
         # 2026-07-13-create-surface-design.md). Appended FIRST so it sits above
@@ -8076,6 +8101,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
         main_toolbar.append(self._pipelines_btn)
 
+        # Standalone Servers control's "Servers ▾" button (SP-3b Task 2) —
+        # mounted here instead of ControlPanel's own (now-hidden) one, next
+        # to the loop nav / Pipelines entry.
+        main_toolbar.append(self._servers_control.servers_button)
+
         root_box.append(main_toolbar)
 
         # ── App menu bar ──────────────────────────────────────────────────────
@@ -8102,6 +8132,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._ctrl_wrapper.append(ctrl_scroll)
         self._ctrl_wrapper.append(self._controls.footer_box)
+        # Standalone Servers control's status bar + log (SP-3b Task 2) —
+        # mounted here instead of ControlPanel's own (now-hidden)
+        # `_server_status_box`/`_srv_log_revealer`. `ServersControl` already
+        # bundles its status-bar widget and log revealer into one Box (see
+        # servers_control.py's __init__), so mounting the whole widget here
+        # is the only way to place both without re-parenting either child.
+        self._ctrl_wrapper.append(self._servers_control)
 
         outer_paned.set_start_child(self._ctrl_wrapper)
         outer_paned.set_shrink_start_child(False)
@@ -10990,6 +11027,7 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         script_path = str(Path(__file__).parent.parent / "bin" / script_name)
 
+        server_key = None
         try:
             server_key = _server_key_for_script(script_name)
             if server_key:
@@ -10997,8 +11035,15 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
 
-        self._controls.set_server_launching(True, clear_log=True)
-        self._controls.append_server_log(f"Starting {label} server ({script_name} --gui)…")
+        # `append_server_log`/`set_server_launching` route to the standalone
+        # ServersControl widget (SP-3b Task 2) rather than ControlPanel's now-
+        # unmounted equivalents. ServersControl tracks "launching" per key, so
+        # fall back to the script name when a server_manager key can't be
+        # resolved — the log still streams and the panel still reveals/
+        # settles correctly either way (see ServersControl.set_server_launching).
+        launch_key = server_key or script_name
+        self._servers_control.set_server_launching(launch_key, True)
+        self._servers_control.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
         self._hw_statusbar.update_starting()
         if a := self.lookup_action("recover-jobs"):
@@ -11018,30 +11063,32 @@ class MainWindow(Gtk.ApplicationWindow):
                 _detected_log_file: "str | None" = None
                 for line in proc.stdout:
                     stripped = line.rstrip()
-                    GLib.idle_add(self._controls.append_server_log, stripped)
+                    GLib.idle_add(self._servers_control.append_server_log, stripped)
                     # The start script prints "Log file: /path/to/workflow.log" just
                     # before it exits in --gui mode.  Capture it so we can tail it.
                     if stripped.startswith("Log file: "):
                         _detected_log_file = stripped[len("Log file: "):]
                 proc.wait()
                 if proc.returncode != 0:
-                    GLib.idle_add(self._controls.append_server_log,
+                    GLib.idle_add(self._servers_control.append_server_log,
                                   f"Script exited with code {proc.returncode}")
                     GLib.idle_add(self._set_status, "Server start script failed — check log")
-                    GLib.idle_add(self._controls.set_server_launching, False)
+                    GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
                     GLib.idle_add(self._hw_statusbar.update_error, "start failed — click for log")
                 else:
                     GLib.idle_add(self._set_status,
                                   f"{label} server started — waiting for health check…")
-                    # Leave the log panel open; set_server_state(True, ...) will collapse it.
-                    # If the script handed off to a Docker log file, tail it so the user
-                    # can see server startup progress without leaving the app.
+                    # Leave the log panel open; ServersControl auto-collapses it once
+                    # ModelStatusService reports `launch_key` READY in a snapshot (see
+                    # ServersControl._refresh_launching). If the script handed off to
+                    # a Docker log file, tail it so the user can see server startup
+                    # progress without leaving the app.
                     if _detected_log_file:
                         GLib.idle_add(self._start_log_tail, _detected_log_file)
             except Exception as e:
-                GLib.idle_add(self._controls.append_server_log, f"Error: {e}")
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
                 GLib.idle_add(self._set_status, f"Server start error: {e}")
-                GLib.idle_add(self._controls.set_server_launching, False)
+                GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
             finally:
                 self._server_proc = None
 
@@ -11065,7 +11112,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # Show a visual separator in the log panel so the user knows we switched sources
         GLib.idle_add(
-            self._controls.append_server_log,
+            self._servers_control.append_server_log,
             f"─── tailing {log_path.split('/')[-1]} ───",
         )
 
@@ -11079,7 +11126,7 @@ class MainWindow(Gtk.ApplicationWindow):
                         if line:
                             stripped = line.rstrip()
                             GLib.idle_add(
-                                self._controls.append_server_log, stripped
+                                self._servers_control.append_server_log, stripped
                             )
                             # Update the phase label in the status bar when we
                             # recognise a known milestone in the server log.
@@ -11088,7 +11135,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                 GLib.idle_add(self._hw_statusbar.set_phase, phase)
             except OSError as e:
                 GLib.idle_add(
-                    self._controls.append_server_log, f"[log tail error: {e}]"
+                    self._servers_control.append_server_log, f"[log tail error: {e}]"
                 )
 
         threading.Thread(target=tail, daemon=True).start()
@@ -11108,6 +11155,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # _on_start_server would resolve what to *start* for the panel's
         # current source/model selection, so note_stopping targets the right
         # key rather than guessing.
+        server_key = None
         try:
             _stop_source = self._controls.get_model_source()
             if _stop_source == "video":
@@ -11125,8 +11173,11 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
 
-        self._controls.set_server_launching(True, clear_log=True)
-        self._controls.append_server_log("Stopping inference server…")
+        # See _on_start_server's comment: routes to ServersControl (SP-3b Task
+        # 2) instead of ControlPanel's now-unmounted log/launching widgets.
+        launch_key = server_key or "stop"
+        self._servers_control.set_server_launching(launch_key, True)
+        self._servers_control.append_server_log("Stopping inference server…")
         self._set_status("Stopping inference server…")
         self._hw_statusbar.update_starting()
         if a := self.lookup_action("recover-jobs"):
@@ -11144,14 +11195,87 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._server_proc = proc
                 output = proc.communicate()[0]
                 for line in output.splitlines():
-                    GLib.idle_add(self._controls.append_server_log, line)
+                    GLib.idle_add(self._servers_control.append_server_log, line)
                 GLib.idle_add(self._set_status, "Server stopped.")
             except Exception as e:
-                GLib.idle_add(self._controls.append_server_log, f"Error: {e}")
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
                 GLib.idle_add(self._set_status, f"Server stop error: {e}")
             finally:
                 self._server_proc = None
-                GLib.idle_add(self._controls.set_server_launching, False)
+                GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ── Standalone ServersControl callbacks (SP-3b Task 2) ─────────────────────
+    #
+    # Wired as ServersControl(on_start=, on_stop=, on_restart=) in _build_ui().
+    # Each callback receives a `server_manager.SERVERS` key directly (the
+    # popover row already knows exactly which service it is — no model_source
+    # -> script -> key resolution needed here, unlike _on_start_server/
+    # _on_stop_server above). They otherwise mirror ControlPanel.
+    # _on_servers_action's worker (same _sm.start/stop/restart(key) calls,
+    # same note_starting/note_stopping hooks), but:
+    #   - route log/launching feedback to ServersControl instead of
+    #     ControlPanel's now-unmounted popover dots + busy-lock buttons.
+    #   - do NOT run their own "poll until healthy" loop — ServersControl's
+    #     row dots and log-auto-collapse already come from subscribing to
+    #     `self._status_service`, whose own poll thread is what will surface
+    #     READY (see task-1-report.md's "Design decisions" section).
+
+    def _on_servers_control_start(self, key: str) -> None:
+        """Start one managed service by its server_manager key."""
+        try:
+            self._status_service.note_starting(key)
+        except Exception:
+            pass
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Starting {key}…")
+
+        def run() -> None:
+            try:
+                _sm.start(key, gui=True)
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_servers_control_stop(self, key: str) -> None:
+        """Stop one managed service by its server_manager key."""
+        try:
+            self._status_service.note_stopping(key)
+        except Exception:
+            pass
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Stopping {key}…")
+
+        def run() -> None:
+            try:
+                _sm.stop(key)
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_servers_control_restart(self, key: str) -> None:
+        """Restart one managed service by its server_manager key."""
+        try:
+            self._status_service.note_starting(key)
+        except Exception:
+            pass
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Restarting {key}…")
+
+        def run() -> None:
+            try:
+                _sm.restart(key, gui=True)
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
 
         threading.Thread(target=run, daemon=True).start()
 
