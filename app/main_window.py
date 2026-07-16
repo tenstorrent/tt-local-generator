@@ -8048,7 +8048,17 @@ class MainWindow(Gtk.ApplicationWindow):
             on_inspiration=self._on_loop_nav_remix,
             on_create=self._on_create_generate,
         )
-        self._gallery_stack.add_named(self._create_view, "create")
+        # CreateView is a tall vertical surface (doors + role zones + model
+        # door + CTA). Unlike the gallery children (which scroll internally),
+        # it must be wrapped in a vertical scroller or its lower elements —
+        # including the Create button — become unreachable when the content is
+        # taller than the window. Horizontal never scrolls: CreateView already
+        # clamps its own width via gtk_layout.wrap_centered.
+        create_scroll = Gtk.ScrolledWindow()
+        create_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        create_scroll.set_vexpand(True)
+        create_scroll.set_child(self._create_view)
+        self._gallery_stack.add_named(create_scroll, "create")
 
         self._gallery_stack.set_visible_child_name("video")
 

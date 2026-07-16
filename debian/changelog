@@ -1,3 +1,14 @@
+tt-local-generator (0.30.2) noble; urgency=medium
+
+  * Create surface is now vertically scrollable. CreateView was mounted
+    directly in the gallery stack with no vertical scroller, so once its
+    content (doors + role zones + model door + Create button) was taller than
+    the window, the lower elements -- including the Create button -- became
+    unreachable. It's now wrapped in a vertical ScrolledWindow (horizontal
+    stays width-clamped by gtk_layout.wrap_centered).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 22:00:00 -0700
+
 tt-local-generator (0.30.1) noble; urgency=medium
 
   * Showcase: emoji/symbol art now renders as color glyphs in the gallery

@@ -26,7 +26,12 @@ def test_create_view_is_imported():
 
 def test_create_view_is_constructed_and_mounted_as_gallery_stack_child():
     assert "self._create_view = CreateView(" in _SRC
-    assert 'self._gallery_stack.add_named(self._create_view, "create")' in _SRC
+    # CreateView is mounted inside a vertical ScrolledWindow (so its lower
+    # elements — incl. the Create button — stay reachable when the surface is
+    # taller than the window); that scroller is the "create" stack child.
+    assert "create_scroll = Gtk.ScrolledWindow()" in _SRC
+    assert "create_scroll.set_child(self._create_view)" in _SRC
+    assert 'self._gallery_stack.add_named(create_scroll, "create")' in _SRC
 
 
 def test_create_view_inspiration_door_wired_to_muse_bridge():
