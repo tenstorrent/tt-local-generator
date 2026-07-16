@@ -622,6 +622,7 @@ def _make_mw_lifecycle(monkeypatch):
         "_on_create_artgen_done",
         "_on_create_artgen_error",
         "_begin_create_job",
+        "_fail_create_job",
         "_on_generate",
         "_on_progress",
         "_on_finished",
@@ -788,3 +789,107 @@ def test_panel_error_never_blocks_generation(monkeypatch):
     assert obj._gen_gallery is fake_gallery
     for call in obj._set_status.call_args_list:
         assert "Couldn't start generation" not in call.args[0]
+
+
+# ── Review fix: _on_generate early returns must clear Create-job state ──────
+#
+# Bug found in review of commit 18b4486: `_begin_create_job` sets
+# `_create_job_active = True` and shows "pending" in the panel BEFORE
+# `_on_generate` runs — but `_on_generate` has several early returns (worker
+# already running, disk space critically low, AnimateDiff chip-busy) that
+# fire before any Create-aware logic. Left as-is, a Create job that hits one
+# of these would leave the panel stuck on "Generating…" forever AND leave
+# `_create_job_active` stuck True — the window-global flag then causes the
+# NEXT unrelated (non-Create) job to wrongly skip its own gallery pending
+# card and have its progress/finished/error misrouted into the stale Create
+# panel. `_fail_create_job(reason)` fixes this: called at every early
+# return, it clears the flag and shows the reason as an error in the panel
+# (a no-op when no Create job is active, so non-Create early returns are
+# unaffected).
+
+def test_disk_space_early_return_clears_create_job_and_shows_error(monkeypatch):
+    """A Create job that dies on the disk-space guard must not leave the
+    panel stuck "pending" or the flag stuck True."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._check_disk_space = MagicMock(return_value=False)
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    # Not stuck: flag cleared, panel moved off "pending" into "error".
+    assert obj._create_job_active is False
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    # No worker/gallery pending card was ever created — the guard fired
+    # before any of that setup.
+    assert fake_gallery.add_pending_calls == []
+    assert obj._gen_gallery is None
+
+
+def test_worker_already_running_early_return_clears_create_job_and_shows_error(monkeypatch):
+    """Same invariant for the worker-already-alive guard."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    busy_worker = MagicMock()
+    busy_worker.is_alive.return_value = True
+    obj._worker = busy_worker
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    assert obj._create_job_active is False
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    assert fake_gallery.add_pending_calls == []
+    assert obj._gen_gallery is None
+
+
+def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(monkeypatch):
+    """Same invariant for the AnimateDiff chip-busy guard deep in the video
+    branch — currently unreachable via Create's scoped video-model dropdown,
+    but fixed for consistency per the review note."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._controls.get_video_model.return_value = "animatediff"
+    obj._controls.get_animatediff_args.return_value = {
+        "mode": "blackhole", "negative_prompt": "", "temporal_alpha": 0.0,
+        "lightning": False, "lightning_steps": 0, "multi_chip": False,
+        "device_id": 0, "chain_from": None, "chain_save": False,
+        "chain_alpha": 0.0, "motion_adapter": None, "motion_adapter_alpha": 0.0,
+        "motion_adapter_skip": 0,
+    }
+    obj._controls._server_ready = True
+    obj._count_blackhole_chips = MagicMock(return_value=1)
+    obj._running_model = "Wan2.2"
+    # Simulate having already dispatched through _begin_create_job.
+    obj._create_job_active = True
+    fake_create_view._result_panel.show_pending("prompt", _VIDEO_MEDIUM)
+
+    obj._on_generate("prompt", "", 20, -1, model_source="video")
+
+    assert obj._create_job_active is False
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+
+
+def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch):
+    """Regression: after a Create job dies on an early return (and gets
+    cleaned up by `_fail_create_job`), the NEXT unrelated non-Create job must
+    behave completely normally — its own gallery pending card added, and the
+    (stale) Create panel left untouched. Proves no window-global state-bleed
+    survives the failed Create job."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._check_disk_space = MagicMock(return_value=False)
+
+    # First: a Create job that dies on the disk-space guard.
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+    assert obj._create_job_active is False
+    calls_after_failure = list(fake_create_view._result_panel.calls)
+
+    # Disk space recovers; an unrelated (non-Create) job runs next — e.g. the
+    # attractor/TT-TV loop or the manual queue, neither of which ever touches
+    # `_create_job_active`.
+    obj._check_disk_space = MagicMock(return_value=True)
+    obj._on_generate("unrelated attractor prompt", "", 20, -1,
+                     model_source="image", model_id="flux")
+
+    # The non-Create job got its own gallery pending card, exactly as today...
+    assert len(fake_gallery.add_pending_calls) == 1
+    # ...and the panel was NOT touched again by it — no state bled forward.
+    assert fake_create_view._result_panel.calls == calls_after_failure

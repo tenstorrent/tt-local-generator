@@ -10208,13 +10208,44 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         return True
 
+    def _fail_create_job(self, reason: str) -> None:
+        """Clear Create-job state and surface *reason* in the inline result
+        panel when `_on_generate` bails out via an early return before doing
+        any actual work.
+
+        Without this, a Create-launched job that hits one of `_on_generate`'s
+        early-return guards (worker-already-running, disk space, AnimateDiff
+        chip-busy) would leave `_create_job_active` stuck True forever — the
+        panel would sit on "Generating…" with no way to clear, and because
+        the flag is window-global, the very NEXT unrelated job (attractor/
+        TT-TV/queue) would then wrongly skip its own gallery pending card and
+        have its progress/finished/error misrouted into this stale Create
+        panel until some later job happened to complete normally and clear
+        the flag. Called at every early return in `_on_generate` that can
+        fire for a Create-originated job, mirroring `_begin_create_job`'s
+        try/except discipline (a panel error must never break anything else).
+        A no-op when no Create job is active, so non-Create early returns are
+        unaffected.
+        """
+        if not self._create_job_active:
+            return
+        try:
+            self._create_view._result_panel.show_error(reason)
+        except Exception:
+            pass
+        self._create_job_active = False
+
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
                      ref_video_path="", ref_char_path="",
                      animate_mode="animation", model_id="") -> None:
         if self._worker and self._worker.is_alive():
+            self._fail_create_job("A generation is already running.")
             return
         if not self._check_disk_space():
+            self._fail_create_job(
+                "Disk space critically low — generation paused. Free up space to continue."
+            )
             return
 
         # Inhibit screensaver if the user has that preference enabled.
@@ -10286,13 +10317,15 @@ class MainWindow(Gtk.ApplicationWindow):
                 # exclusive Blackhole access and should not be blocked by a running server.
                 if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:
                     model_lbl = self._running_model or "a model"
-                    self._gen_gallery.remove_pending()
-                    self._gen_gallery = None
-                    self._controls.set_busy(False)
-                    self._set_status(
+                    busy_msg = (
                         f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
                         "your Blackhole chip is busy. Stop the server first, then try again."
                     )
+                    self._gen_gallery.remove_pending()
+                    self._gen_gallery = None
+                    self._controls.set_busy(False)
+                    self._set_status(busy_msg)
+                    self._fail_create_job(busy_msg)
                     return
                 self._set_status(f"Starting AnimateDiff generation ({ad['mode']})…")
                 # Auto-derive chain_save path from a session temp file when requested.
