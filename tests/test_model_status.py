@@ -103,3 +103,53 @@ def test_tick_app_started_then_ready(monkeypatch):
     svc._health_fn = lambda: {"flux": True}
     svc._tick()
     assert svc.status("flux") == ms.Status.READY and "flux" not in svc._starting
+
+
+# ---------------------------------------------------------------------------
+# Task 3: poll-thread lifecycle + subscribe/unsubscribe + change-only notify
+# ---------------------------------------------------------------------------
+
+def test_subscribe_fires_only_on_change():
+    svc = _svc({"flux": False})
+    seen = []
+    svc.subscribe(lambda snap: seen.append(snap))
+    svc._tick()  # OFF (change from empty) -> fires
+    n = len(seen)
+    svc._tick()  # no change -> no fire
+    assert len(seen) == n
+    svc._health_fn = lambda: {"flux": True}
+    svc._tick()  # change -> fires
+    assert len(seen) == n + 1
+
+
+def test_unsubscribe_stops_calls():
+    svc = _svc({"flux": False})
+    seen = []
+    off = svc.subscribe(lambda s: seen.append(s))
+    svc._tick()
+    c = len(seen)
+    off()
+    svc._health_fn = lambda: {"flux": True}
+    svc._tick()
+    assert len(seen) == c
+    off()  # idempotent -- calling again must not raise
+
+
+def test_raising_subscriber_does_not_break_others():
+    svc = _svc({"flux": False})
+    good = []
+    svc.subscribe(lambda s: (_ for _ in ()).throw(RuntimeError()))
+    svc.subscribe(lambda s: good.append(s))
+    svc._tick()
+    assert good
+
+
+def test_start_is_idempotent_and_stop_ends():
+    svc = _svc({}, )
+    svc._poll_interval = 0.01
+    svc.start()
+    t = svc._thread
+    svc.start()
+    assert svc._thread is t and t.is_alive()
+    svc.stop()
+    assert not t.is_alive()

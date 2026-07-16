@@ -294,12 +294,22 @@ class ModelStatusService:
     # ------------------------------------------------------------------
     def _tick(self) -> None:
         """Recompute every `server_manager.SERVERS` key's `Status` and store
-        the result. This is the method the (not-yet-implemented) poll thread
-        calls on a timer; it is also safe to call directly (as the tests do)
-        for a synchronous, deterministic single reconciliation pass.
+        the result. This is the method the poll thread (`_run`) calls on a
+        timer; it is also safe to call directly (as the tests do) for a
+        synchronous, deterministic single reconciliation pass.
 
         `server_manager` is imported lazily here (not at module load time) to
         keep this module standalone-importable per the module docstring.
+
+        Locking discipline (Task 3): all the I/O-shaped work above this
+        method's final block — `health_fn()`, `detect_fn()`, and every
+        `_safe_port_probe()` call inside the loop — happens with *no* lock
+        held. Those calls can be slow (HTTP requests, socket connects) or, in
+        a real deployment, block on the network; holding `self._lock` across
+        them would stall `note_starting()`/`note_stopping()`/`snapshot()`
+        calls from any other thread for the duration. Only the final
+        read-compare-mutate-swap of `_starting`/`_ready_at`/`_statuses` needs
+        the lock, since that's the only part touching shared state.
         """
         import server_manager
 
@@ -323,7 +333,15 @@ class ModelStatusService:
             artgen_up = False
 
         now = self._clock()
-        new_statuses: "dict[str, Status]" = {}
+
+        # -- I/O phase: no lock held -----------------------------------
+        # `healthy`/`port_open` per key depend only on `health` (already
+        # fetched above) and `sdef.capabilities` (static) — none of that is
+        # shared mutable state, so this loop, including every
+        # `_safe_port_probe()` socket connect, runs lock-free. Probing is
+        # skipped once a key is already known healthy (matches the prior
+        # behavior: `False if healthy else self._safe_port_probe(key)`).
+        per_key: "dict[str, tuple[bool, bool]]" = {}
         for key, sdef in server_manager.SERVERS.items():
             # artgen/prompt backends share one port (8002) and are detected
             # via detect_fn's /v1/models sweep rather than server_manager's
@@ -334,35 +352,71 @@ class ModelStatusService:
             healthy = health.get(key, False) or (
                 artgen_up and bool(set(sdef.capabilities) & {"artgen", "prompt"})
             )
-            starting_at = self._starting.get(key)
             port_open = False if healthy else self._safe_port_probe(key)
-            st = self._resolve(healthy, starting_at, port_open, now, self._start_timeout)
+            per_key[key] = (healthy, port_open)
 
-            if st == Status.READY:
-                self._starting.pop(key, None)
-                self._ready_at.setdefault(key, now)
-            else:
-                self._ready_at.pop(key, None)
-
-            new_statuses[key] = st
-
+        # -- state phase: lock held, no I/O -----------------------------
+        # Only `self._starting`/`self._ready_at` (read+mutate) and
+        # `self._statuses` (compare+swap) are shared state; everything here
+        # is pure dict bookkeeping plus the side-effect-free `_resolve()`
+        # call, so it's safe (and fast) to do under the lock.
+        changed = False
         with self._lock:
+            new_statuses: "dict[str, Status]" = {}
+            for key, (healthy, port_open) in per_key.items():
+                starting_at = self._starting.get(key)
+                st = self._resolve(
+                    healthy, starting_at, port_open, now, self._start_timeout
+                )
+
+                if st == Status.READY:
+                    self._starting.pop(key, None)
+                    self._ready_at.setdefault(key, now)
+                else:
+                    self._ready_at.pop(key, None)
+
+                new_statuses[key] = st
+
+            if new_statuses != self._statuses:
+                changed = True
             self._statuses = new_statuses
 
-        self._notify()
+        # `_notify()` must run after the lock is released: it calls
+        # `snapshot()`, which re-acquires `self._lock` — holding it here
+        # would deadlock (or, for an RLock, just be needless nesting).
+        if changed:
+            self._notify()
 
     # ------------------------------------------------------------------
     # Subscriber fan-out
     # ------------------------------------------------------------------
+    def subscribe(self, cb: "Callable[[dict], None]") -> "Callable[[], None]":
+        """Register `cb` to be called with `snapshot()` whenever the resolved
+        status map changes. Returns an unsubscribe closure.
+
+        The returned closure is idempotent: calling it more than once (e.g.
+        once from a widget's cleanup handler and again from a defensive
+        `finally`) is safe — `list.remove` only runs if `cb` is still
+        present.
+        """
+        self._subscribers.append(cb)
+
+        def _unsubscribe() -> None:
+            try:
+                self._subscribers.remove(cb)
+            except ValueError:
+                pass  # already unsubscribed -- idempotent no-op
+
+        return _unsubscribe
+
     def _notify(self) -> None:
         """Push a fresh snapshot to every registered subscriber.
 
         Taking the snapshot once (rather than per-callback) means every
         subscriber sees the same consistent view even if `_tick()` runs again
-        concurrently on the poll thread. `subscribe()` doesn't exist until
-        Task 3, so `self._subscribers` is always empty today — this makes
-        `_notify()` a harmless no-op that's still safe (and correct) to call
-        unconditionally at the end of every tick.
+        concurrently on the poll thread. Each callback is isolated in its own
+        try/except so one raising subscriber can't prevent the others from
+        being notified.
         """
         snap = self.snapshot()
         for cb in list(self._subscribers):
@@ -370,3 +424,43 @@ class ModelStatusService:
                 cb(snap)
             except Exception:
                 log.exception("model_status subscriber callback raised")
+
+    # ------------------------------------------------------------------
+    # Poll-thread lifecycle
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        """Start the background poll thread, calling `_tick()` every
+        `poll_interval` seconds.
+
+        Idempotent: if a thread already exists and is alive, this is a
+        no-op — calling `start()` twice (e.g. once from app startup and once
+        from a settings-change handler) never spawns a second poller.
+        """
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the poll thread to exit and wait (briefly) for it to do so.
+
+        Safe to call even if `start()` was never called, or if the thread has
+        already exited on its own — `_thread` is checked for both existence
+        and liveness before joining.
+        """
+        self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        """Poll-thread body: tick, then sleep-or-wake on `_stop`.
+
+        `self._stop.wait(timeout)` is used instead of `time.sleep(timeout)`
+        so `stop()` interrupts the wait immediately rather than leaving the
+        thread asleep for up to `poll_interval` seconds after being asked to
+        exit.
+        """
+        while not self._stop.is_set():
+            self._tick()
+            self._stop.wait(self._poll_interval)
