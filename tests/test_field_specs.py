@@ -66,9 +66,13 @@ def test_image_panel_model_spec_choices():
 
 
 def test_collect_unchanged_image():
-    # collect() must still produce the legacy dict shape.
+    # collect() must still produce the legacy dict shape, plus SP-3c-1's
+    # migration-safe `seed_image_path` addition (defaults to "").
     d = cpp.ImageParamPanel().collect()
-    assert set(d) == {"negative_prompt", "num_inference_steps", "seed", "guidance_scale", "model"}
+    assert set(d) == {
+        "negative_prompt", "num_inference_steps", "seed", "guidance_scale", "model",
+        "seed_image_path",
+    }
 
 
 # ── VideoParamPanel ───────────────────────────────────────────────────────────

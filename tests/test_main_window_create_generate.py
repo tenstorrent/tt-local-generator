@@ -180,6 +180,33 @@ def test_image_medium_unknown_model_falls_back_to_flux_key(monkeypatch):
     assert kwargs["model_id"] == "flux"
 
 
+def test_image_medium_forwards_seed_image_path(monkeypatch):
+    """SP-3c-1: ImageParamPanel.collect()'s `seed_image_path` (from its
+    SeedImageWell) must reach `_on_generate` so i2i generation actually gets
+    the conditioning image."""
+    obj = _make_mw(monkeypatch)
+    params = {"model": "flux.1-schnell", "seed_image_path": "/tmp/a-seed.png"}
+
+    obj._on_create_generate(_IMAGE_MEDIUM, params)
+
+    _args, kwargs = obj._on_generate.call_args
+    assert kwargs["seed_image_path"] == "/tmp/a-seed.png"
+
+
+def test_image_medium_defaults_seed_image_path_to_empty_string(monkeypatch):
+    """MIGRATION-SAFE: a panel/caller that never supplies `seed_image_path`
+    (e.g. before SeedImageWell existed) must still produce "" — the exact
+    default that preserves today's text-to-image behavior — not raise or
+    forward `None`."""
+    obj = _make_mw(monkeypatch)
+    params = {"model": "flux.1-schnell"}  # no seed_image_path key at all
+
+    obj._on_create_generate(_IMAGE_MEDIUM, params)
+
+    _args, kwargs = obj._on_generate.call_args
+    assert kwargs["seed_image_path"] == ""
+
+
 def test_video_medium_routes_to_on_generate_with_model_source_video(monkeypatch):
     obj = _make_mw(monkeypatch)
     params = {
@@ -201,6 +228,35 @@ def test_video_medium_routes_to_on_generate_with_model_source_video(monkeypatch)
     assert args[3] == 7
     assert kwargs["model_source"] == "video"
     assert kwargs["model_id"] == "mochi"
+
+
+def test_video_medium_forwards_seed_image_path(monkeypatch):
+    """SP-3c-1: VideoParamPanel.collect()'s `seed_image_path` must reach
+    `_on_generate` — this is what makes the re-enabled SkyReels-I2V model
+    actually able to receive its required conditioning image (the base64-
+    encode block in `_on_generate`'s video branch reads this parameter for
+    `video_model_key == "skyreels"`)."""
+    obj = _make_mw(monkeypatch)
+    params = {"model": "skyreels-v2-i2v-14b-540p", "seed_image_path": "/tmp/character.png"}
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    _args, kwargs = obj._on_generate.call_args
+    assert kwargs["video_model_key"] == "skyreels"
+    assert kwargs["seed_image_path"] == "/tmp/character.png"
+
+
+def test_video_medium_defaults_seed_image_path_to_empty_string(monkeypatch):
+    """MIGRATION-SAFE: no `seed_image_path` in params -> "" reaches
+    `_on_generate`, preserving today's exact text-to-video behavior for
+    wan2/mochi."""
+    obj = _make_mw(monkeypatch)
+    params = {"model": "wan2.2-t2v"}  # no seed_image_path key at all
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    _args, kwargs = obj._on_generate.call_args
+    assert kwargs["seed_image_path"] == ""
 
 
 def test_video_medium_no_longer_syncs_or_reads_controls_video_model(monkeypatch):

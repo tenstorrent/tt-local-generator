@@ -1,3 +1,21 @@
+tt-local-generator (0.36.0) noble; urgency=medium
+
+  * Create gains a seed-image well for image-to-image / image-conditioned
+    generation (SP-3c-1). A new reusable `SeedImageWell` widget (adapted from
+    ControlPanel's inline seed-thumbnail well, but with no app-state
+    dependency -- a plain async `Gtk.FileDialog` plus a file-drop target
+    instead of the full gallery picker) is now built into both the Image and
+    Video Create panels; click to browse, drag a file onto it, or right-click
+    to clear. `seed_image_path` flows through `collect()` ->
+    `_create_generate_native` -> `_on_generate` unchanged when empty, so
+    plain text-to-image/video generation behaves exactly as before.
+  * SkyReels-V2-I2V-14B-540P is re-enabled in the Video medium's model list.
+    It was pulled in v0.27.1 because the Video door couldn't supply the
+    conditioning image the I2V model requires; it can now, via the new seed
+    well.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 06:00:00 -0700
+
 tt-local-generator (0.35.0) noble; urgency=medium
 
   * Server management moved to a standalone control on the single source of

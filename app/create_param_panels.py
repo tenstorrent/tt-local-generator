@@ -32,23 +32,31 @@ path.
 prompt entry owns the prompt text, not this panel — see `create_view.py`):
 
     {"negative_prompt": str, "num_inference_steps": int, "seed": int,
-     "guidance_scale": float, "model": str}
+     "guidance_scale": float, "model": str, "seed_image_path": str}
 
 Defaults mirror `ControlPanel.__init__`'s image defaults (`main_window.py`:
 `_steps=20`, `_seed=-1`, `_guidance=3.5`, `_image_model="flux"`, `_neg=""`)
 so the two surfaces agree on a first-run experience even though no code is
-shared.
+shared. `seed_image_path` (SP-3c-1, `.superpowers/sdd/task-1-brief.md`)
+defaults to "" — a migration-safe addition; an empty path preserves today's
+exact text-to-image behavior, and only image-to-image generation needs it
+non-empty. `VideoParamPanel.collect()` gained the identical
+`seed_image_path` key the same task, for the same reason plus re-enabling
+SkyReels-I2V (an image-to-video model that needs a conditioning image).
 """
 from __future__ import annotations
 
 import argparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+gi.require_version("Gdk", "4.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, Gio, GdkPixbuf, Gtk  # noqa: E402
 
 import field_roles
 
@@ -140,6 +148,179 @@ class CreateParamPanel(ABC):
         return getattr(self, "_rows", {}).get(key)
 
 
+def _load_pixbuf(path: str, width: int, height: int) -> "Optional[GdkPixbuf.Pixbuf]":
+    """Load *path* scaled to fit within width×height, preserving aspect ratio.
+
+    A small local counterpart to `main_window._load_pixbuf` — duplicated
+    rather than imported (this module must never import from `main_window`;
+    that direction already runs the other way) so `SeedImageWell` below has
+    no ControlPanel dependency at all. Returns `None` on any failure (missing
+    file, unreadable image format, …) so a caller can fall back to a
+    placeholder instead of raising.
+    """
+    try:
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, True)
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SeedImageWell (SP-3c-1: docs/superpowers/specs/2026-07-13-sp3c-migrate-into-
+# create-design.md, section 3c-1) — a small, reusable seed-image / i2i
+# conditioning-image well shared by `ImageParamPanel` and `VideoParamPanel`.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Adapted from ControlPanel's `_seed_thumb_box` (main_window.py, ~line 4250):
+# same visual contract (a small square thumbnail; left-click to browse;
+# right-click to clear) but a DELIBERATELY LEANER implementation.
+# ControlPanel's well opens a full `PickerPopover` (Gallery + Disk tabs,
+# needs a live `_store`/history-record reference it reads at click time) —
+# this widget has NO app-state dependencies at all, so its click handler
+# opens a plain `Gtk.FileDialog` instead: async `open()` + `open_finish()`
+# wrapped in try/except, per CLAUDE.md's FileDialog gotcha, exactly mirroring
+# the existing `AnimateParamPanel._on_pick_ref_video`/`_on_pick_ref_image`
+# precedent already in this module. A `Gtk.DropTarget` additionally accepts
+# one dropped file (e.g. dragged in from a file manager).
+class SeedImageWell(Gtk.Box):
+    """Click-to-browse / drop-to-set / right-click-to-clear seed-image well.
+
+    Public API: `path() -> str`, `set_path(path)`, `clear()`. `set_path("")`
+    and `clear()` are equivalent. A path that isn't a regular file (a
+    directory, or one that has since vanished) is silently rejected back to
+    "" — mirrors ControlPanel's `_set_seed_image` guard: a directory passes
+    `Path.exists()` but not `Path.is_file()`, and handing one to a worker's
+    `read_bytes()` call raises at generation time instead of failing here,
+    where the mistake is cheap and obvious.
+    """
+
+    def __init__(self, size: int = 40) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._path: str = ""
+        self._size = size
+        self.set_size_request(size, size)
+        self.add_css_class("seed-image-well")
+        self._set_empty_tooltip()
+
+        self.append(self._build_placeholder())
+
+        # Left-click: open a plain Gtk.FileDialog (async, per CLAUDE.md).
+        click = Gtk.GestureClick()
+        click.set_button(1)  # primary mouse button
+        click.connect("released", lambda _g, _n, _x, _y: self._open_file_dialog())
+        self.add_controller(click)
+
+        # Right-click: clear the current seed image.
+        rclick = Gtk.GestureClick()
+        rclick.set_button(3)  # secondary mouse button
+        rclick.connect("released", lambda _g, _n, _x, _y: self.clear())
+        self.add_controller(rclick)
+
+        # Drop target: accepts one dropped file (e.g. from a file manager).
+        # Gio.File is the type GTK4 resolves a single-file drop to on every
+        # desktop this app targets (Nautilus, Files, GNOME/KDE file pickers).
+        drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
+        drop.connect("drop", self._on_drop)
+        self.add_controller(drop)
+
+    # ── public API (consumed by ImageParamPanel/VideoParamPanel.collect()) ──
+
+    def path(self) -> str:
+        """Current seed image path, or "" when none is set."""
+        return self._path
+
+    def set_path(self, path: str) -> None:
+        """Set the seed image path and refresh the thumbnail in place.
+
+        See the class docstring for the directory/missing-file guard.
+        """
+        if path and not Path(path).is_file():
+            path = ""
+        self._path = path
+        self._refresh_thumbnail()
+
+    def clear(self) -> None:
+        """Clear the current seed image. Equivalent to `set_path("")`."""
+        self.set_path("")
+
+    # ── internals ─────────────────────────────────────────────────────────────
+
+    def _build_placeholder(self) -> Gtk.Label:
+        lbl = Gtk.Label(label="\U0001f5bc")  # picture-frame glyph
+        lbl.set_vexpand(True)
+        lbl.set_valign(Gtk.Align.CENTER)
+        return lbl
+
+    def _refresh_thumbnail(self) -> None:
+        """Replace every child with either a scaled thumbnail Picture or the
+        placeholder icon, mirroring `ControlPanel._set_seed_image`'s well
+        update (main_window.py)."""
+        child = self.get_first_child()
+        while child is not None:
+            self.remove(child)
+            child = self.get_first_child()
+
+        if self._path:
+            interior = max(self._size - 4, 8)
+            pb = _load_pixbuf(self._path, interior, interior)
+            if pb is not None:
+                img = Gtk.Picture.new_for_pixbuf(pb)
+                img.set_size_request(interior, interior)
+                img.set_can_shrink(False)
+                img.set_vexpand(True)
+                self.append(img)
+            else:
+                # Pixbuf load failed (unreadable/corrupt file) — a
+                # question-mark placeholder, same fallback ControlPanel uses.
+                lbl = Gtk.Label(label="?")
+                lbl.set_vexpand(True)
+                lbl.set_valign(Gtk.Align.CENTER)
+                self.append(lbl)
+            self.add_css_class("has-seed")
+            self.set_tooltip_text("Seed image set — right-click to clear")
+        else:
+            self.append(self._build_placeholder())
+            self.remove_css_class("has-seed")
+            self._set_empty_tooltip()
+
+    def _set_empty_tooltip(self) -> None:
+        self.set_tooltip_text(
+            "Seed image — click to browse, right-click to clear\n"
+            "Drop an image file here to use as seed image"
+        )
+
+    def _open_file_dialog(self) -> None:
+        dlg = Gtk.FileDialog()
+        dlg.set_title("Select seed image")
+        # Derive the transient parent from the live widget tree at click
+        # time (not a cached reference) — matches AnimateParamPanel's
+        # `_on_pick_ref_video`/`_on_pick_ref_image` rationale: once a
+        # RoleZonePanel re-parents this well elsewhere, `get_root()` still
+        # resolves to the real window as long as the well itself is mounted.
+        dlg.open(self.get_root(), None, self._on_file_picked)
+
+    def _on_file_picked(self, dlg: "Gtk.FileDialog", result: "Gio.AsyncResult") -> None:
+        try:
+            gfile = dlg.open_finish(result)
+        except Exception:
+            return  # user cancelled — leave the existing seed untouched
+        if gfile is not None:
+            path = gfile.get_path()
+            if path:
+                self.set_path(path)
+
+    def _on_drop(self, _target: "Gtk.DropTarget", value: "Gio.File", _x: float, _y: float) -> bool:
+        """`Gtk.DropTarget` "drop" signal handler. *value* is a `Gio.File`
+        (the single type this target was constructed with)."""
+        try:
+            path = value.get_path() if value is not None else None
+        except Exception:
+            path = None
+        if path:
+            self.set_path(path)
+            return True
+        return False
+
+
 # Image model dropdown choices: (internal key, human label), display order.
 # Mirrors ControlPanel's `_build_image_model_row` entries (main_window.py) —
 # duplicated, not imported, per the module docstring's CRITICAL STRATEGY note.
@@ -180,6 +361,10 @@ class ImageParamPanel(CreateParamPanel):
         self._guidance_adj: Optional[Gtk.Adjustment] = None
         self._model_dropdown: Optional[Gtk.DropDown] = None
         self._neg_entry: Optional[Gtk.Entry] = None
+        # SP-3c-1: seed / i2i conditioning image well (empty path = today's
+        # unchanged text-to-image behavior — see `SeedImageWell`'s own
+        # docstring above and this class's `collect()`).
+        self._seed_well: Optional[SeedImageWell] = None
         # key -> built row widget, populated by build(). Lets RoleZonePanel
         # (Task 5) re-parent an already-built row into a zone by field key
         # via the base class's `_row_for` — see that method's docstring.
@@ -192,6 +377,10 @@ class ImageParamPanel(CreateParamPanel):
         box.add_css_class("image-param-panel")
 
         self._rows = {}
+        seed_image_row = self._build_seed_image_row()
+        box.append(seed_image_row)
+        self._rows["seed_image_path"] = seed_image_row
+
         steps_row = self._build_steps_row()
         box.append(steps_row)
         self._rows["num_inference_steps"] = steps_row
@@ -221,7 +410,11 @@ class ImageParamPanel(CreateParamPanel):
 
         Falls back to the documented defaults for any widget that (for
         whatever reason) was never built — `collect()` should never raise
-        even if called before `build()`.
+        even if called before `build()`. `seed_image_path` defaults to ""
+        (no well built / no image chosen) — this is a MIGRATION-SAFE
+        addition (SP-3c-1): an empty seed path preserves today's exact
+        text-to-image behavior, only image-conditioned (i2i) generation
+        needs it non-empty.
         """
         return {
             "negative_prompt": self._neg_entry.get_text() if self._neg_entry is not None else "",
@@ -233,6 +426,7 @@ class ImageParamPanel(CreateParamPanel):
                 float(self._guidance_adj.get_value()) if self._guidance_adj is not None else 3.5
             ),
             "model": self._selected_model_id(),
+            "seed_image_path": self._seed_well.path() if self._seed_well is not None else "",
         }
 
     def field_specs(self) -> "list[FieldSpec]":
@@ -244,6 +438,14 @@ class ImageParamPanel(CreateParamPanel):
         later task's caller (see `FieldSpec.kind`'s docstring note). Every
         other key uses `classify_native(key)` unmodified so the roles agree
         with the shared vocabulary `field_roles.py` defines for native panels.
+
+        `seed_image_path` (SP-3c-1) is classified the same way
+        `AnimateParamPanel` classifies its `reference_video_path`/
+        `reference_image_path` fields: `kind="path"` (a path-picker widget,
+        not plain text) with an explicit `FieldRole(ROLE_BRIEF, MARK_WORDS)`
+        — a seed image is user-supplied creative input the model conditions
+        on (i2i), the same "raw material" role a text brief plays, not a
+        control dial.
         """
         return [
             FieldSpec(
@@ -269,6 +471,11 @@ class ImageParamPanel(CreateParamPanel):
                 role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
                 choices=_IMAGE_MODEL_CHOICES,
             ),
+            FieldSpec(
+                key="seed_image_path", label="Seed image", kind="path", default="",
+                role=field_roles.FieldRole(field_roles.ROLE_BRIEF, field_roles.MARK_WORDS),
+                tooltip="optional — starting image for image-to-image",
+            ),
         ]
 
     # ── Internals ─────────────────────────────────────────────────────────────
@@ -290,6 +497,16 @@ class ImageParamPanel(CreateParamPanel):
         label.set_xalign(0.0)
         label.set_size_request(120, -1)
         row.append(label)
+        return row
+
+    def _build_seed_image_row(self) -> Gtk.Box:
+        row = self._row("Seed image")
+        self._seed_well = SeedImageWell()
+        row.append(self._seed_well)
+        hint = Gtk.Label(label="optional — image-to-image starting point")
+        hint.add_css_class("image-param-hint")
+        hint.set_xalign(0.0)
+        row.append(hint)
         return row
 
     def _build_steps_row(self) -> Gtk.Box:
@@ -371,24 +588,28 @@ class ImageParamPanel(CreateParamPanel):
 # `_ALL_VIDEO_MODEL_ENTRIES` (main_window.py) for the three shared entries —
 # duplicated, not imported, per the module docstring's CRITICAL STRATEGY note.
 #
-# SkyReels is deliberately OMITTED: `skyreels-v2-i2v-14b-540p` is an
-# image-to-video model that requires a conditioning (character/seed) image,
-# but the Video door is text-to-video oriented and collects NO image input —
-# `_create_generate_native`'s video branch would hand the I2V model
-# `seed_image_path=""`, so it can only fail. Offering it here is a trap. Re-add
-# it once the Create surface grows an image-seeded video path that can supply
-# the conditioning image this model needs.
+# SkyReels-V2-I2V-14B-540P — RE-ENABLED (SP-3c-1). It was omitted from
+# v0.27.1 through v0.35.x because it's an image-to-video model requiring a
+# conditioning (character/seed) image, and the Video door collected NO image
+# input at all — `_create_generate_native`'s video branch would have handed
+# the I2V model `seed_image_path=""`, which can only fail server-side.
+# `VideoParamPanel` now owns a `SeedImageWell` (same as `ImageParamPanel`;
+# see that widget's docstring above), so a conditioning image IS available
+# here — offering the choice is no longer a trap.
 _VIDEO_MODEL_CHOICES: "list[tuple[str, str]]" = [
     ("wan2", "Wan2.2 — 720p video"),
     ("mochi", "Mochi-1 — 480×848 video"),
+    ("skyreels", "SkyReels-V2-I2V — 960×544 (needs a seed image)"),
 ]
 
 # Internal key -> server-side model id string, passed as `model=` to
 # GenerationWorker. Mirrors ControlPanel's `_VIDEO_MODEL_IDS` (minus the
-# animatediff entry, excluded above, and skyreels — see the choices note).
+# animatediff entry, excluded above — animatediff runs through a completely
+# different, serverless code path, see the choices note).
 _VIDEO_MODEL_IDS: "dict[str, str]" = {
     "wan2": "wan2.2-t2v",
     "mochi": "mochi-1-preview",
+    "skyreels": "skyreels-v2-i2v-14b-540p",
 }
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
@@ -424,6 +645,10 @@ class VideoParamPanel(CreateParamPanel):
         self._model_dropdown: Optional[Gtk.DropDown] = None
         self._frames_adj: Optional[Gtk.Adjustment] = None
         self._neg_entry: Optional[Gtk.Entry] = None
+        # SP-3c-1: seed image well — required for SkyReels-I2V, optional
+        # (i2v-style conditioning) for the other video models. Empty path
+        # preserves today's exact text-to-video behavior.
+        self._seed_well: Optional[SeedImageWell] = None
         # key -> built row widget, populated by build() — see ImageParamPanel's
         # `_rows` for the rationale (RoleZonePanel re-parenting, Task 5).
         self._rows: "dict[str, Gtk.Widget]" = {}
@@ -435,6 +660,10 @@ class VideoParamPanel(CreateParamPanel):
         box.add_css_class("video-param-panel")
 
         self._rows = {}
+        seed_image_row = self._build_seed_image_row()
+        box.append(seed_image_row)
+        self._rows["seed_image_path"] = seed_image_row
+
         steps_row = self._build_steps_row()
         box.append(steps_row)
         self._rows["num_inference_steps"] = steps_row
@@ -464,7 +693,9 @@ class VideoParamPanel(CreateParamPanel):
 
         Falls back to the documented defaults for any widget that was never
         built — `collect()` should never raise even if called before
-        `build()`.
+        `build()`. `seed_image_path` defaults to "" (MIGRATION-SAFE, SP-3c-1):
+        an empty path preserves today's exact text-to-video behavior for
+        wan2/mochi; only SkyReels-I2V requires it non-empty.
         """
         return {
             "negative_prompt": self._neg_entry.get_text() if self._neg_entry is not None else "",
@@ -474,6 +705,7 @@ class VideoParamPanel(CreateParamPanel):
             "seed": int(self._seed_adj.get_value()) if self._seed_adj is not None else -1,
             "model": self._selected_model_id(),
             "num_frames": self._selected_num_frames(),
+            "seed_image_path": self._seed_well.path() if self._seed_well is not None else "",
         }
 
     def field_specs(self) -> "list[FieldSpec]":
@@ -485,6 +717,8 @@ class VideoParamPanel(CreateParamPanel):
         is metadata-invisible here — the spec's `default` is the widget's
         starting value (0), matching the other native panels' convention of
         describing the built default, not the collect()-time semantics.
+        `seed_image_path` mirrors `ImageParamPanel`'s own spec for the same
+        field (see that class's `field_specs()` docstring for the rationale).
         """
         return [
             FieldSpec(
@@ -510,6 +744,11 @@ class VideoParamPanel(CreateParamPanel):
                 key="model", label="Model", kind="model", default=_DEFAULT_VIDEO_MODEL_KEY,
                 role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
                 choices=_VIDEO_MODEL_CHOICES,
+            ),
+            FieldSpec(
+                key="seed_image_path", label="Seed image", kind="path", default="",
+                role=field_roles.FieldRole(field_roles.ROLE_BRIEF, field_roles.MARK_WORDS),
+                tooltip="required for SkyReels-I2V; optional otherwise",
             ),
         ]
 
@@ -540,6 +779,16 @@ class VideoParamPanel(CreateParamPanel):
         label.set_xalign(0.0)
         label.set_size_request(120, -1)
         row.append(label)
+        return row
+
+    def _build_seed_image_row(self) -> Gtk.Box:
+        row = self._row("Seed image")
+        self._seed_well = SeedImageWell()
+        row.append(self._seed_well)
+        hint = Gtk.Label(label="required for SkyReels-I2V; optional otherwise")
+        hint.add_css_class("video-param-hint")
+        hint.set_xalign(0.0)
+        row.append(hint)
         return row
 
     def _build_steps_row(self) -> Gtk.Box:

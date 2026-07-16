@@ -146,10 +146,12 @@ def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
     `_ANIMATE_MODEL_ID`, which this function reads rather than re-deriving.
 
     Returns `None` for a server key with no equivalent in the panel's own
-    choices (e.g. "skyreels" — VideoParamPanel deliberately excludes it, see
-    that class's module comment) or for a non-native medium (artgen has no
-    "model" field at all) — callers must treat `None` as "don't offer this
-    key for this medium", never guess a fallback.
+    choices (a future server key the panel hasn't been taught about yet) or
+    for a non-native medium (artgen has no "model" field at all) — callers
+    must treat `None` as "don't offer this key for this medium", never guess
+    a fallback. As of SP-3c-1, "skyreels" DOES resolve here (VideoParamPanel
+    gained a `SeedImageWell`, so the I2V model is no longer a guaranteed-fail
+    trap — see `create_param_panels._VIDEO_MODEL_IDS`'s comment).
     """
     if medium.id == "image":
         return _IMAGE_MODEL_IDS.get(server_key)
@@ -325,6 +327,25 @@ _CSS = b"""
 .image-param-input:focus-within {
     border-color: #4FD1C5;
 }
+.image-param-hint {
+    color: #607D8B;
+    font-size: 11px;
+}
+
+/* -- SeedImageWell (SP-3c-1) -- shared by ImageParamPanel + VideoParamPanel;
+   one namespace since it's the exact same widget class in both panels. ---- */
+.seed-image-well {
+    background-color: #1A3C47;
+    color: #607D8B;
+    border: 1px dashed #2D5566;
+    border-radius: 4px;
+}
+.seed-image-well:hover {
+    border-color: #4FD1C5;
+}
+.seed-image-well.has-seed {
+    border: 1px solid #4FD1C5;
+}
 
 /* -- VideoParamPanel (Task 5) -- same look as ImageParamPanel, own namespace
    so a later change to one never accidentally reskins the other. -------- */
@@ -346,6 +367,10 @@ _CSS = b"""
 }
 .video-param-input:focus-within {
     border-color: #4FD1C5;
+}
+.video-param-hint {
+    color: #607D8B;
+    font-size: 11px;
 }
 
 /* -- AnimateParamPanel (Task 5) ---------------------------------------------- */
@@ -1108,10 +1133,10 @@ class CreateView(Gtk.Box):
         """Select *key*'s entry in the scoped `_model_dropdown`, if present.
 
         A no-op (not an error) when *key* isn't among the active medium's
-        currently scoped entries — e.g. a canonical-id-excluded key
-        (`_canonical_model_id_for` deliberately excludes "skyreels", see that
-        function's docstring) still routes to the Video medium correctly; it
-        just can't be pre-selected in the dropdown.
+        currently scoped entries — e.g. a server key `_canonical_model_id_for`
+        can't resolve for this medium (see that function's docstring) still
+        routes to the Video medium correctly; it just can't be pre-selected
+        in the dropdown.
         """
         entries = getattr(self, "_model_dropdown_entries", [])
         for idx, (entry_key, _canonical, _label) in enumerate(entries):
@@ -1139,9 +1164,10 @@ class CreateView(Gtk.Box):
         its chip button fires the SAME `_select_medium` -> `_swap_panel` path
         a manual chip click does (repopulating the scoped dropdown as a side
         effect); the dropdown is then pre-selected to *key* when practical
-        (`_preselect_model_key` — "when practical" because a canonical-id-
-        excluded key like "skyreels" has nothing to pre-select). Either way
-        the Idea door toggle is activated last (`_set_entry_mode("idea")`).
+        (`_preselect_model_key` — "when practical" because a key
+        `_canonical_model_id_for` can't resolve has nothing to pre-select).
+        Either way the Idea door toggle is activated last
+        (`_set_entry_mode("idea")`).
         """
         # Text cards (chat LLMs / prompt-server): never resolve a medium —
         # just move the user into the Idea flow, active medium untouched. A
@@ -1309,11 +1335,11 @@ class CreateView(Gtk.Box):
         For a native medium with a real model field (image/video/animate),
         an entry is included only when `_canonical_model_id_for` resolves a
         value for it — this keeps every SELECTABLE entry able to produce a
-        real "model" value in `_collect_params` (see that function and
-        `_canonical_model_id_for`'s docstring for why e.g. "skyreels" is
-        correctly absent from the video dropdown). For an artgen medium (no
-        "model" field at all) every scoped key is listed for information —
-        selecting one has no effect on `collect()`.
+        real "model" value in `_collect_params` (see that function's
+        docstring for the one case, today, where a server key has no panel
+        equivalent). For an artgen medium (no "model" field at all) every
+        scoped key is listed for information — selecting one has no effect
+        on `collect()`.
 
         Health dots are rendered via `_model_dot_glyph` (SP-2 Task 2) — when
         a `ModelStatusService` is injected it reads the 3-state snapshot

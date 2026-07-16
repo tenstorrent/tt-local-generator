@@ -89,6 +89,7 @@ _IMAGE_DEFAULTS = {
     "seed": -1,
     "guidance_scale": 3.5,
     "model": "flux.1-schnell",
+    "seed_image_path": "",
 }
 
 # The exact default dict `VideoParamPanel.collect()` returns for a freshly
@@ -104,6 +105,7 @@ _VIDEO_DEFAULTS = {
     "seed": -1,
     "model": "wan2.2-t2v",
     "num_frames": None,
+    "seed_image_path": "",
 }
 
 # The exact default dict `AnimateParamPanel.collect()` returns for a freshly
@@ -448,6 +450,7 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
         "seed": 42,
         "guidance_scale": 7.0,
         "model": "stable-diffusion-xl-base-1.0",
+        "seed_image_path": "",
     }
 
 
@@ -501,9 +504,10 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
     panel._neg_entry.set_text("blurry, watermark")
     panel._steps_adj.set_value(40)
     panel._seed_adj.set_value(101)
-    # Scoped dropdown (Task 6): server_manager order is wan2.2, mochi, skyreels;
-    # skyreels has no canonical-id mapping (I2V, excluded — see
-    # _canonical_model_id_for) so the dropdown only ever offers [wan2.2, mochi].
+    # Scoped dropdown (Task 6, SP-3c-1): server_manager order is
+    # wan2.2, mochi, skyreels — all three now have a canonical-id mapping
+    # (SkyReels-I2V re-enabled once VideoParamPanel gained a SeedImageWell),
+    # so the dropdown offers [wan2.2, mochi, skyreels]; index 1 is mochi.
     view._model_dropdown.set_selected(1)  # mochi
     panel._frames_adj.set_value(65)
 
@@ -515,6 +519,7 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
         "seed": 101,
         "model": "mochi-1-preview",
         "num_frames": 65,
+        "seed_image_path": "",
     }
 
 
@@ -746,15 +751,16 @@ def test_model_dropdown_default_selection_yields_image_default_model_id(monkeypa
     assert canonical == "flux.1-schnell"
 
 
-def test_video_scoped_dropdown_excludes_skyreels(monkeypatch):
-    """VideoParamPanel deliberately excludes SkyReels (I2V, no seed image —
-    see that class's module comment); the scoped dropdown must not offer a
-    key that can't produce a valid "model" value for the video medium."""
+def test_video_scoped_dropdown_includes_skyreels(monkeypatch):
+    """SP-3c-1 re-enables SkyReels-I2V: VideoParamPanel now owns a
+    `SeedImageWell` (same widget as ImageParamPanel), so the I2V model can be
+    supplied a conditioning image and is no longer a guaranteed-fail trap —
+    the scoped dropdown must offer it like any other video model."""
     view = _make_view(monkeypatch)
     view._chip_buttons["video"].set_active(True)
 
     canonicals = {c for _k, c, _l in view._model_dropdown_entries}
-    assert "skyreels-v2-i2v-14b-540p" not in canonicals
+    assert "skyreels-v2-i2v-14b-540p" in canonicals
 
 
 def test_model_health_reflects_running_vs_not(monkeypatch):
@@ -1371,19 +1377,20 @@ def test_image_param_panel_build_returns_a_widget_with_controls():
     widget = panel.build()
 
     assert isinstance(widget, Gtk.Widget)
-    # Five rows: steps, seed, guidance scale, model, negative prompt.
+    # Six rows: seed image, steps, seed, guidance scale, model, negative prompt.
     rows = []
     child = widget.get_first_child()
     while child is not None:
         rows.append(child)
         child = child.get_next_sibling()
-    assert len(rows) == 5
+    assert len(rows) == 6
     # The widgets collect() reads must actually exist after build().
     assert panel._steps_adj is not None
     assert panel._seed_adj is not None
     assert panel._guidance_adj is not None
     assert panel._model_dropdown is not None
     assert panel._neg_entry is not None
+    assert panel._seed_well is not None
 
 
 def test_image_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
@@ -1395,6 +1402,7 @@ def test_image_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
     # no less.
     assert set(panel.collect().keys()) == {
         "negative_prompt", "num_inference_steps", "seed", "guidance_scale", "model",
+        "seed_image_path",
     }
 
 
@@ -1414,6 +1422,7 @@ def test_image_param_panel_collect_reflects_changed_widget_values():
         "seed": 777,
         "guidance_scale": 9.5,
         "model": "motif-image-6b-preview",
+        "seed_image_path": "",
     }
 
 
@@ -1450,18 +1459,19 @@ def test_video_param_panel_build_returns_a_widget_with_controls():
     widget = panel.build()
 
     assert isinstance(widget, Gtk.Widget)
-    # Five rows: steps, seed, model, num_frames, negative prompt.
+    # Six rows: seed image, steps, seed, model, num_frames, negative prompt.
     rows = []
     child = widget.get_first_child()
     while child is not None:
         rows.append(child)
         child = child.get_next_sibling()
-    assert len(rows) == 5
+    assert len(rows) == 6
     assert panel._steps_adj is not None
     assert panel._seed_adj is not None
     assert panel._model_dropdown is not None
     assert panel._frames_adj is not None
     assert panel._neg_entry is not None
+    assert panel._seed_well is not None
 
 
 def test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
@@ -1471,6 +1481,7 @@ def test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
     assert panel.collect() == _VIDEO_DEFAULTS
     assert set(panel.collect().keys()) == {
         "negative_prompt", "num_inference_steps", "seed", "model", "num_frames",
+        "seed_image_path",
     }
 
 
@@ -1490,6 +1501,7 @@ def test_video_param_panel_collect_reflects_changed_widget_values():
         "seed": 9,
         "model": "mochi-1-preview",
         "num_frames": 49,
+        "seed_image_path": "",
     }
 
 
@@ -1503,22 +1515,42 @@ def test_video_param_panel_num_frames_zero_collects_as_none():
     assert panel.collect()["num_frames"] is None
 
 
-def test_video_param_panel_model_dropdown_covers_both_choices():
-    """SkyReels (I2V, needs a conditioning image the text-to-video Video door
-    doesn't collect) was removed — only the two text-to-video models remain."""
+def test_video_param_panel_model_dropdown_covers_all_three_choices():
+    """SP-3c-1: SkyReels-I2V is back — VideoParamPanel now owns a
+    `SeedImageWell` that can supply the conditioning image it needs, so all
+    three video models (wan2/mochi/skyreels) are selectable."""
     panel = VideoParamPanel()
     panel.build()
 
     expected = {
         0: "wan2.2-t2v",
         1: "mochi-1-preview",
+        2: "skyreels-v2-i2v-14b-540p",
     }
     for idx, model_id in expected.items():
         panel._model_dropdown.set_selected(idx)
         assert panel.collect()["model"] == model_id
-    # SkyReels is gone: there is no third choice to select.
-    assert panel._model_dropdown.get_model().get_n_items() == 2
-    assert "skyreels-v2-i2v-14b-540p" not in _VIDEO_MODEL_IDS.values()
+    assert panel._model_dropdown.get_model().get_n_items() == 3
+    assert "skyreels-v2-i2v-14b-540p" in _VIDEO_MODEL_IDS.values()
+
+
+def test_video_param_panel_seed_well_supplies_skyreels_conditioning_image(tmp_path):
+    """The re-enabled SkyReels-I2V choice is only useful once a seed image is
+    actually set — proves the well's path reaches collect() regardless of
+    which model is selected (VideoParamPanel doesn't gate seed_image_path on
+    the model choice; `_create_generate_native`/the worker decide what to do
+    with an empty one)."""
+    panel = VideoParamPanel()
+    panel.build()
+    panel._model_dropdown.set_selected(2)  # skyreels
+
+    img_path = tmp_path / "character.png"
+    img_path.write_bytes(b"\x89PNG\r\n\x1a\n")  # minimal PNG header, enough to be a real file
+    panel._seed_well.set_path(str(img_path))
+
+    collected = panel.collect()
+    assert collected["model"] == "skyreels-v2-i2v-14b-540p"
+    assert collected["seed_image_path"] == str(img_path)
 
 
 def test_video_param_panel_collect_before_build_degrades_to_defaults():

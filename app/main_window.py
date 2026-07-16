@@ -10785,6 +10785,10 @@ class MainWindow(Gtk.ApplicationWindow):
                 params.get("negative_prompt", ""),
                 int(params.get("num_inference_steps", 20)),
                 int(params.get("seed", -1)),
+                # SP-3c-1: ImageParamPanel's SeedImageWell — "" (the default
+                # when no image is chosen) preserves today's exact
+                # text-to-image behavior; a non-empty path drives i2i.
+                seed_image_path=params.get("seed_image_path", ""),
                 model_source="image",
                 guidance_scale=float(params.get("guidance_scale", 3.5)),
                 model_id=model_key,
@@ -10826,6 +10830,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 params.get("negative_prompt", ""),
                 int(params.get("num_inference_steps", 20)),
                 int(params.get("seed", -1)),
+                # SP-3c-1: VideoParamPanel's SeedImageWell — "" preserves
+                # today's exact text-to-video behavior for wan2/mochi;
+                # SkyReels-I2V (re-enabled this same task) needs it non-empty.
+                # `_on_generate`'s video branch already knows how to send this
+                # to the server for `video_model_key == "skyreels"` — see the
+                # base64-encode block further down that method.
+                seed_image_path=params.get("seed_image_path", ""),
                 model_source="video",
                 model_id=model_key,
                 video_model_key=model_key,
