@@ -103,6 +103,7 @@ from create_param_panels import (  # noqa: E402
     RoleZonePanel,
     VideoParamPanel,
 )
+from model_status import Status  # noqa: E402
 
 # Video-only alias: server_manager's key for the Wan2.2 text-to-video service
 # is "wan2.2", but VideoParamPanel's own internal short key (and therefore
@@ -695,15 +696,37 @@ class CreateView(Gtk.Box):
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
         self._on_inspiration = on_inspiration
-        # ModelStatusService (SP-2 Task 1): injected but not yet consumed here
-        # -- MainWindow constructs and starts the single service instance and
-        # passes it in so CreateView doesn't build its own competing poller.
-        # Subscribing to it for live status dots / auto-select is Task 2/3;
-        # this task only wires the plumbing through so the app stays
-        # constructible with the service present. Accepts a bare `object`
-        # type hint (not `ModelStatusService`) to avoid importing that module
-        # into create_view.py before it's actually used.
+        # ModelStatusService (SP-2 Task 1/2): MainWindow constructs and starts
+        # the single service instance and passes it in so CreateView doesn't
+        # build its own competing poller. Accepts a bare `object` type hint
+        # (not `ModelStatusService`) so a test fake need not subclass the real
+        # service.
         self._status_service = status_service
+        # Last snapshot pushed by the service (key -> Status). Stays `{}`
+        # when no service is injected -- the boolean `_model_health` path
+        # (below) is what drives dots in that case instead.
+        self._status_snapshot: dict = {}
+        # Unsubscribe closure returned by `status_service.subscribe()`, or
+        # None when there's no service (or after `_on_unrealize` has already
+        # torn it down). Checked instead of blindly calling so `unrealize`
+        # firing twice -- or a status_service=None CreateView -- never
+        # raises.
+        self._status_unsub: Optional[Callable[[], None]] = None
+        if self._status_service is not None:
+            # Seed synchronously from the service's current state so the
+            # very first render (chip row / model door built below, before
+            # any snapshot could possibly have been pushed) already shows
+            # real dots instead of a blank "all OFF" flash.
+            self._status_snapshot = self._status_service.snapshot()
+            self._status_unsub = self._status_service.subscribe(
+                lambda snap: GLib.idle_add(self._on_status_snapshot, snap)
+            )
+        # Unsubscribe when this widget is torn down -- guards both the
+        # status_service=None case and a double `unrealize` fire (GTK can
+        # emit it more than once during some teardown paths); the
+        # subscribe() closure is independently idempotent (model_status.py)
+        # but `_on_unrealize` also self-guards via `_status_unsub`.
+        self.connect("unrealize", self._on_unrealize)
 
         self._entry_mode = "idea"
         self._active_medium: Optional[Medium] = None
@@ -762,7 +785,13 @@ class CreateView(Gtk.Box):
         # docstring) now that the clamped content is two panes, not one.
         self.append(gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH))
 
-        self._refresh_model_health_async()
+        # The boolean poller is the pre-Task-2 fallback: only start it when
+        # no ModelStatusService was injected -- when one is present it (and
+        # its own background poll thread, started by MainWindow) is the
+        # single source of truth, and running both would let the two dot
+        # surfaces disagree depending on which one last wrote _model_health.
+        if self._status_service is None:
+            self._refresh_model_health_async()
 
     def _build_panes(self, form_pane: Gtk.Widget, result_pane: Gtk.Widget) -> Gtk.FlowBox:
         """Wrap *form_pane* and *result_pane* as the two children of a
@@ -1008,15 +1037,22 @@ class CreateView(Gtk.Box):
     def _build_model_card(self, key: str) -> Gtk.Widget:
         """One clickable model card: a live-status dot + the model's label.
 
-        Health reuses `self._model_health` — the SAME source Task 6's scoped
-        dropdown reads (`_populate_model_dropdown`) — so a card's dot can
-        never disagree with the dropdown's dot for the same server key (the
-        same "single source of truth" discipline CLAUDE.md documents for the
-        artgen panel's own health dot).
+        The dot glyph is routed through `_model_dot_glyph` — the SAME helper
+        Task 6's scoped dropdown reads (`_populate_model_dropdown`) — so a
+        card's dot can never disagree with the dropdown's dot for the same
+        server key (the same "single source of truth" discipline CLAUDE.md
+        documents for the artgen panel's own health dot). `_model_dot_glyph`
+        itself picks the 3-state `ModelStatusService` snapshot when one is
+        injected, else falls back to the pre-Task-2 boolean `_model_health`
+        map. `running` (used only for the on/off CSS classes below) is
+        derived from the glyph rather than re-reading health directly, so it
+        stays true exactly when the glyph is "●" — byte-identical to the old
+        boolean behavior in the status_service=None case.
         """
         sdef = server_manager.SERVERS.get(key)
         label_text = sdef.label if sdef is not None else key
-        running = self._model_health.get(key, False)
+        dot_glyph = self._model_dot_glyph(key)
+        running = dot_glyph == "●"
 
         btn = Gtk.Button()
         btn.add_css_class("create-model-chip")
@@ -1024,7 +1060,7 @@ class CreateView(Gtk.Box):
         btn.set_tooltip_text(label_text)
 
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        dot = Gtk.Label(label="●" if running else "○")
+        dot = Gtk.Label(label=dot_glyph)
         dot.add_css_class("create-model-dot-on" if running else "create-model-dot-off")
         content.append(dot)
 
@@ -1261,10 +1297,13 @@ class CreateView(Gtk.Box):
         "model" field at all) every scoped key is listed for information —
         selecting one has no effect on `collect()`.
 
-        Health dots reuse `self._model_health` (kept fresh by
-        `_refresh_model_health_async`/`_apply_model_health`) — "if practical,
-        else just labels" per the task brief; a key absent from the health
-        map (never checked yet) just shows the "offline" dot.
+        Health dots are rendered via `_model_dot_glyph` (SP-2 Task 2) — when
+        a `ModelStatusService` is injected it reads the 3-state snapshot
+        (●/◐/◌), else it falls back to the pre-Task-2 boolean
+        `self._model_health` map (kept fresh by `_refresh_model_health_async`/
+        `_apply_model_health`) — "if practical, else just labels" per the
+        task brief; a key absent from either map (never checked yet) just
+        shows the "offline"/"off" dot.
 
         **Selection is preserved across repopulation** by SERVER KEY, not by
         index. Repopulation fires both on a medium swap AND on the async
@@ -1300,8 +1339,7 @@ class CreateView(Gtk.Box):
                 continue
             sdef = server_manager.SERVERS.get(key)
             label_text = sdef.label if sdef is not None else key
-            running = self._model_health.get(key, False)
-            dot = "●" if running else "○"
+            dot = self._model_dot_glyph(key)
             labels.append(f"{dot} {label_text}")
             entries.append((key, canonical, label_text))
 
@@ -1365,6 +1403,67 @@ class CreateView(Gtk.Box):
             self._populate_model_dropdown(self._active_medium)
         self._refresh_model_door()
         return GLib.SOURCE_REMOVE
+
+    # ── ModelStatusService (SP-2 Task 2): 3-state dots ───────────────────────
+
+    def _status_glyph(self, status: "Status") -> str:
+        """Map a `model_status.Status` to its dot glyph: READY -> "●" (ready),
+        STARTING -> "◐" (half-lit, coming up), anything else (OFF/ERROR) ->
+        "◌" (hollow, not available). ERROR folds into the same glyph as OFF
+        deliberately — from a "can I generate with this right now" glance,
+        a model that errored out is exactly as unusable as one that's off;
+        the distinction only matters to whoever's debugging the backend, not
+        to this at-a-glance dot."""
+        if status == Status.READY:
+            return "●"
+        if status == Status.STARTING:
+            return "◐"
+        return "◌"
+
+    def _model_dot_glyph(self, key: str) -> str:
+        """Single source of truth for a `server_manager` key's dot glyph —
+        both the scoped dropdown's rows (`_populate_model_dropdown`) and the
+        Model-door cards (`_build_model_card`) call this instead of each
+        rolling their own health lookup, so the two surfaces can never
+        disagree for the same key (mirrors the artgen panel's health-dot
+        discipline documented in CLAUDE.md).
+
+        When a `ModelStatusService` is injected it is the sole source: looks
+        `key` up in the last-pushed `_status_snapshot`, defaulting an unknown
+        key to OFF (never polled yet reads the same as "off"). When no
+        service is injected, falls back to the pre-Task-2 boolean
+        `_model_health` map — byte-identical to the old inline
+        `"●" if running else "○"` logic, so the status_service=None path is
+        unchanged."""
+        if self._status_service is not None:
+            status = self._status_snapshot.get(key, Status.OFF)
+            return self._status_glyph(status)
+        return "●" if self._model_health.get(key, False) else "○"
+
+    def _on_status_snapshot(self, snap: dict) -> bool:
+        """`GLib.idle_add` target for the service's `subscribe()` callback —
+        runs on the main thread. Stores the fresh snapshot and re-renders
+        both dot surfaces (scoped dropdown + Model-door cards) so neither one
+        goes stale relative to the other. Returns `GLib.SOURCE_REMOVE`
+        (`False`) since this fires once per pushed snapshot, not on a
+        repeating `GLib` timer (mirrors `_apply_model_health`'s return)."""
+        self._status_snapshot = dict(snap or {})
+        if self._active_medium is not None:
+            self._populate_model_dropdown(self._active_medium)
+        self._refresh_model_door()
+        return GLib.SOURCE_REMOVE
+
+    def _on_unrealize(self, *_args) -> None:
+        """Unsubscribe from the status service when this widget is torn down,
+        so a long-lived `ModelStatusService` never keeps calling back into a
+        destroyed `CreateView`. Guards both "no service was ever injected"
+        and "already unsubscribed" (GTK can fire `unrealize` more than once
+        in some teardown paths) by clearing `_status_unsub` to None right
+        after calling it."""
+        unsub = self._status_unsub
+        if unsub is not None:
+            self._status_unsub = None
+            unsub()
 
     def _server_key_to_medium_id(self, key: str) -> Optional[str]:
         """Model door: map a `server_manager` key to the Medium id it implies.

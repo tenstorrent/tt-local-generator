@@ -67,6 +67,7 @@ from create_param_panels import (
     VideoParamPanel,
 )
 from create_view import CreateResultPanel
+from model_status import Status
 
 
 def _panel_of(view):
@@ -185,13 +186,46 @@ def test_create_view_builds(monkeypatch):
     assert isinstance(view, Gtk.Box)
 
 
+class _FakeStatusService:
+    """Minimal stand-in for `model_status.ModelStatusService` exposing
+    exactly the surface CreateView consumes (`snapshot()`/`subscribe(cb)`),
+    plus a `push()` test helper that mimics `_notify()` fanning a fresh
+    snapshot out to subscribers. Never touches real health checks, sockets,
+    or subprocesses — matches the fake-service discipline task-2-brief.md
+    calls for."""
+
+    def __init__(self, initial: "dict | None" = None):
+        self._snapshot = dict(initial or {})
+        self.subscribers: list = []
+        self.unsubscribed: list = []
+
+    def snapshot(self) -> dict:
+        return dict(self._snapshot)
+
+    def subscribe(self, cb):
+        self.subscribers.append(cb)
+
+        def _unsub() -> None:
+            self.unsubscribed.append(cb)
+            if cb in self.subscribers:
+                self.subscribers.remove(cb)
+
+        return _unsub
+
+    def push(self, snap: dict) -> None:
+        """Simulate a poll tick landing: store the new snapshot and fan it
+        out to every subscriber, exactly like the real service's `_tick()`
+        -> `_notify()`."""
+        self._snapshot = dict(snap)
+        for cb in list(self.subscribers):
+            cb(self.snapshot())
+
+
 def test_create_view_accepts_and_stores_status_service(monkeypatch):
-    """SP-2 Task 1: MainWindow injects its single ModelStatusService instance
-    via `status_service=`. A fake stand-in (not a real ModelStatusService) is
-    enough here — this only guards the plumbing (accepted kwarg, stored
-    attribute), not the subscribe/dots/auto-select behavior that lands in
-    Task 2/3."""
-    fake_service = object()
+    """SP-2 Task 1/2: MainWindow injects its single ModelStatusService
+    instance via `status_service=`. Uses the fake service (not a bare
+    `object()`) since Task 2 now subscribes to it during construction."""
+    fake_service = _FakeStatusService()
     view = _make_view(monkeypatch, status_service=fake_service)
     assert view._status_service is fake_service
 
@@ -199,6 +233,91 @@ def test_create_view_accepts_and_stores_status_service(monkeypatch):
 def test_create_view_status_service_defaults_to_none(monkeypatch):
     view = _make_view(monkeypatch)
     assert view._status_service is None
+
+
+# ── SP-2 Task 2: 3-state status dots from ModelStatusService ────────────
+
+def test_status_glyph_mapping(make_create_view):
+    cv = make_create_view()
+    assert cv._status_glyph(Status.READY) == "●"      # ●
+    assert cv._status_glyph(Status.STARTING) == "◐"   # ◐
+    assert cv._status_glyph(Status.OFF) == "◌"        # ◌
+    assert cv._status_glyph(Status.ERROR) == "◌"       # ◌ (ERROR folds to the same "not ready" glyph)
+
+
+def test_subscribes_when_service_present(monkeypatch):
+    fake_service = _FakeStatusService({"flux": Status.READY})
+    view = _make_view(monkeypatch, status_service=fake_service)
+    assert len(fake_service.subscribers) == 1
+    # Seeded from snapshot() at construction time, before any push().
+    assert view._status_snapshot == {"flux": Status.READY}
+
+
+def test_service_present_skips_boolean_health_poller(monkeypatch):
+    """When a status_service is injected, the legacy boolean `health_fn`
+    poller must never run — the service is the single source of truth."""
+    calls = []
+
+    def _health():
+        calls.append(1)
+        return {"wan2.2": True}
+
+    fake_service = _FakeStatusService()
+    _make_view(monkeypatch, status_service=fake_service, health_fn=_health)
+    assert calls == []
+
+
+def test_snapshot_updates_dropdown_dot_glyphs(monkeypatch):
+    """Pushing a fresh snapshot re-renders the scoped dropdown's dots (image
+    medium is default-active; "flux" is one of its keys)."""
+    fake_service = _FakeStatusService({"flux": Status.STARTING})
+    view = _make_view(monkeypatch, status_service=fake_service)
+
+    model = view._model_dropdown.get_model()
+    labels = [model.get_string(i) for i in range(model.get_n_items())]
+    assert any(label.startswith("◐ ") for label in labels)  # ◐
+
+    fake_service.push({"flux": Status.READY, "sdxl": Status.STARTING})
+
+    model2 = view._model_dropdown.get_model()
+    labels2 = [model2.get_string(i) for i in range(model2.get_n_items())]
+    assert any(label.startswith("● ") for label in labels2)  # ●
+
+
+def test_model_dot_glyph_routes_dropdown_and_door_through_one_helper(monkeypatch):
+    fake_service = _FakeStatusService({"flux": Status.READY, "sdxl": Status.OFF})
+    view = _make_view(monkeypatch, status_service=fake_service)
+    assert view._model_dot_glyph("flux") == "●"
+    assert view._model_dot_glyph("sdxl") == "◌"
+    assert view._model_dot_glyph("never-seen-key") == "◌"  # defaults to OFF
+
+
+def test_no_service_uses_boolean_fallback(make_create_view):
+    cv = make_create_view()  # status_service=None
+    assert cv._status_service is None  # existing _model_health path intact
+    assert cv._model_health == {"wan2.2": True, "flux": False}
+    assert cv._model_dot_glyph("wan2.2") == "●"
+    assert cv._model_dot_glyph("flux") == "○"  # ○ boolean-off, not ◌
+
+
+def test_unrealize_unsubscribes_from_status_service(monkeypatch):
+    fake_service = _FakeStatusService()
+    view = _make_view(monkeypatch, status_service=fake_service)
+    assert len(fake_service.subscribers) == 1
+
+    view.emit("unrealize")
+
+    assert len(fake_service.unsubscribed) == 1
+    assert len(fake_service.subscribers) == 0
+
+    # Idempotent: firing unrealize again must not raise (no double-unsub
+    # crash on an already-cleared `_status_unsub`).
+    view.emit("unrealize")
+
+
+def test_unrealize_with_no_status_service_is_a_noop(make_create_view):
+    cv = make_create_view()
+    cv.emit("unrealize")  # must not raise
 
 
 # ── Medium chips ──────────────────────────────────────────────────────────
