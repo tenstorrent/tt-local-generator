@@ -15,38 +15,33 @@ model: `server_manager.status_all()` (health_url ping) for the managed
 video/image servers, `artgen.detect_artgen_endpoint()` (port sweep + /v1/models
 probe) for chat-LLM backends, and ad-hoc port checks for anything started
 outside the app. `ModelStatusService` is the single place that reconciles all
-three into one `Status` per key, polled on a background thread (added in a
-later task) and exposed via `snapshot()`/`status()` for any UI to render.
+three into one `Status` per key, polled on a background thread and exposed via
+`snapshot()`/`status()`/the capability helpers for any UI to render.
 
-Task scope (SP-1 Task 1)
--------------------------
-This first task lays the *pure* foundation only:
+What's here (SP-1, complete)
+----------------------------
+This module now implements the full SP-1 slice, end to end:
   - the `Status` enum,
   - `ModelStatusService.__init__` with injected dependencies (so tests never
     touch real subprocesses, sockets, or the network),
   - the bookkeeping methods `note_starting` / `note_stopping` / `snapshot` /
     `status`,
-  - the static, side-effect-free `_resolve()` state machine.
-
-Task scope (SP-1 Task 2)
--------------------------
-This task adds the single-tick reconciliation logic that actually drives
-`_resolve()`:
+  - the static, side-effect-free `_resolve()` state machine,
   - `_tick()` — merges `health_fn()` (per-key health map), `detect_fn()`
     (artgen/chat-LLM endpoint detection — marks every `artgen`/`prompt`
     capability key healthy when a chat endpoint is found, since those
     backends share one port and one detector), and the port probe, then
-    stores one `Status` per `server_manager.SERVERS` key.
+    stores one `Status` per `server_manager.SERVERS` key,
   - `_default_port_probe()` — a real (if best-effort) TCP `connect_ex` probe
-    against the host/port parsed out of each server's `health_url`.
-  - `_notify()` — fans a fresh `snapshot()` out to any subscribers. No
-    subscribers exist yet (Task 3 adds `subscribe()`), so today this is a
-    harmless no-op called once per tick; change-only gating (only notify when
-    the resolved map actually differs from the prior tick) is also Task 3's
-    job, not this one's.
-
-The background poll thread, `subscribe()`, and capability-aware helpers are
-still not implemented — they land in Tasks 3-4.
+    against the host/port parsed out of each server's `health_url`,
+  - `subscribe()` / `_notify()` — registers callbacks that receive a fresh
+    `snapshot()` whenever `_tick()`'s resolved map actually changes
+    (change-only gating; no fan-out on a no-op tick),
+  - `start()` / `stop()` / `_run()` — a background poll thread that calls
+    `_tick()` every `poll_interval` seconds until `stop()` is called,
+  - `ready_keys()` / `starting_keys()` / `running_or_starting()` —
+    capability-aware query helpers (e.g. "which READY key provides `image`,
+    most-recently-ready first") consumed by SP-2's Create auto-select.
 
 Lazy imports (CRITICAL)
 -----------------------
@@ -109,11 +104,11 @@ class ModelStatusService:
     port_probe : Callable[[str], bool], optional
         Given a key, returns whether *some* process appears to be listening
         for it (used to infer STARTING before a health check ever succeeds).
-        Defaults to `self._default_port_probe` (not yet implemented in this
-        task — a later task wires it to real port numbers).
+        Defaults to `self._default_port_probe`, a real TCP `connect_ex`
+        probe against the port parsed out of the key's `health_url`.
     poll_interval : float
-        Seconds between background poll ticks (consumed by the poll thread,
-        added in a later task).
+        Seconds between background poll ticks, consumed by the poll thread
+        (`start()`/`_run()`).
     start_timeout : float
         Seconds after `note_starting()` before an unhealthy, still-starting
         key is considered ERROR instead of STARTING.
@@ -147,26 +142,25 @@ class ModelStatusService:
         self._start_timeout = start_timeout
 
         # -- internal state --------------------------------------------
-        # Last-resolved status per key, refreshed each poll tick (added in
-        # a later task). Read via snapshot()/status().
+        # Last-resolved status per key, refreshed each poll tick (_tick()).
+        # Read via snapshot()/status().
         self._statuses: "dict[str, Status]" = {}
         # key -> clock() timestamp when note_starting() was called; absence
         # means "not currently known to be starting" (per _resolve's
         # `starting_at is None` branch).
         self._starting: "dict[str, float]" = {}
         # key -> clock() timestamp when the key was first observed READY;
-        # reserved for later tasks (e.g. "just became ready" transitions).
+        # used by ready_keys() to sort "most recently became ready first".
         self._ready_at: "dict[str, float]" = {}
-        # Callbacks registered via subscribe() (Task 2+); not populated or
-        # invoked by this task.
+        # Callbacks registered via subscribe(); fanned out by _notify()
+        # whenever a poll tick's resolved map actually changes.
         self._subscribers: list = []
         # Guards _statuses/_starting/_ready_at against concurrent access
-        # from the poll thread (added later) and the calling thread.
+        # from the poll thread (started by start()) and the calling thread.
         self._lock = threading.Lock()
-        # Background poll thread handle; created by a later task's start()
-        # method. None until then.
+        # Background poll thread handle; created by start(). None until then.
         self._thread: Optional[threading.Thread] = None
-        # Signaled to ask the (not-yet-implemented) poll thread to exit.
+        # Signaled by stop() to ask the poll thread (_run()) to exit.
         self._stop = threading.Event()
 
     # ------------------------------------------------------------------
@@ -432,28 +426,43 @@ class ModelStatusService:
     # model should the capability picker default to right now" without
     # needing to know server_manager keys or poll internals itself.
 
+    def _locked_state(self) -> "tuple[dict, dict]":
+        """Copy `_statuses` and `_ready_at` together under one lock hold.
+
+        `ready_keys`/`starting_keys` both filter `_statuses` by capability,
+        and `ready_keys` additionally sorts by `_ready_at`. Reading the two
+        dicts via two separate `self._lock` acquisitions (as the first cut of
+        these helpers did — `snapshot()` for the former, a standalone
+        `with self._lock:` for the latter) can interleave with a poll-thread
+        `_tick()` in between the two reads, pairing a status from tick N+1
+        with a `_ready_at` timestamp from tick N. That torn view is bounded
+        (it can only produce a stale sort key, never a wrong READY/STARTING
+        classification or a crash — `_tick()` only ever adds/removes
+        `_ready_at` entries in lockstep with `_statuses` under its own lock
+        hold), but it's avoidable for free: take the lock once here and hand
+        back plain-dict copies, so every caller works from one consistent
+        snapshot. No I/O happens under the lock — the `server_manager` import
+        and capability lookups always happen after this returns.
+        """
+        with self._lock:
+            return dict(self._statuses), dict(self._ready_at)
+
     def ready_keys(self, capability: str) -> "list[str]":
         """Return every key currently READY that provides `capability`,
         sorted most-recently-ready first.
 
-        Built over `snapshot()` (a locked copy of `_statuses`) rather than
-        touching `_statuses` directly, per the module's "read via the public
-        surface" convention. `_ready_at` is read once under `self._lock` so
-        the sort uses a single consistent view instead of racing the poll
-        thread key-by-key.
-
         `server_manager` is imported lazily (see module docstring) — every
-        key in `snapshot()` originates from a `_tick()` pass that iterated
-        `server_manager.SERVERS`, so `SERVERS[k]` is always present here.
+        key in `_locked_state()`'s statuses originates from a `_tick()` pass
+        that iterated `server_manager.SERVERS`, so `SERVERS[k]` is always
+        present here.
         """
-        import server_manager
+        statuses, ready_at = self._locked_state()
 
-        with self._lock:
-            ready_at = dict(self._ready_at)
+        import server_manager
 
         keys = [
             k
-            for k, st in self.snapshot().items()
+            for k, st in statuses.items()
             if st == Status.READY and capability in server_manager.SERVERS[k].capabilities
         ]
         keys.sort(key=lambda k: ready_at.get(k, 0.0), reverse=True)
@@ -462,17 +471,21 @@ class ModelStatusService:
     def starting_keys(self, capability: str) -> "list[str]":
         """Return every key currently STARTING that provides `capability`.
 
-        No ordering guarantee beyond `snapshot()`'s dict iteration order
-        (insertion order, which matches `server_manager.SERVERS` — see
-        `_tick()`) since "most recently starting" isn't tracked (only
-        `_ready_at` is); callers needing "the" starting key just want *a*
-        plausible one, per `running_or_starting`.
+        No ordering guarantee beyond dict iteration order (insertion order,
+        which matches `server_manager.SERVERS` — see `_tick()`) since "most
+        recently starting" isn't tracked (only `_ready_at` is); callers
+        needing "the" starting key just want *a* plausible one, per
+        `running_or_starting`. Uses `_locked_state()` (rather than a bare
+        `snapshot()` call) purely for consistency with `ready_keys` — the
+        `_ready_at` copy it also returns goes unused here.
         """
+        statuses, _ready_at = self._locked_state()
+
         import server_manager
 
         return [
             k
-            for k, st in self.snapshot().items()
+            for k, st in statuses.items()
             if st == Status.STARTING and capability in server_manager.SERVERS[k].capabilities
         ]
 
