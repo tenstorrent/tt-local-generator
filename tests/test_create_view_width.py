@@ -100,11 +100,22 @@ def test_surface_is_width_clamped(make_create_view):
 
 # ── Additional coverage ───────────────────────────────────────────────────
 
-def test_width_clamp_wraps_a_max_width_bin_with_the_shared_content_ceiling(make_create_view):
+def test_width_clamp_wraps_a_max_width_bin_with_a_real_ceiling(make_create_view):
     """The wrapper CreateView installs must actually be a `MaxWidthBin`
-    carrying the shared `gtk_layout.CONTENT_MAX_WIDTH` ceiling, not merely
-    something that happens to satisfy `_is_width_clamped`'s isinstance check
-    via an unrelated subclass."""
+    carrying a genuine numeric ceiling, not merely something that happens to
+    satisfy `_is_width_clamped`'s isinstance check via an unrelated subclass.
+
+    Updated by Task 2 ("in-place Create results",
+    .superpowers/sdd/task-2-brief.md): the clamped content is now TWO panes
+    side by side (the form column + `CreateResultPanel`, wrapped in a
+    `Gtk.FlowBox` — see `test_create_view.py`'s two-pane tests), not the form
+    alone, so the ceiling was deliberately raised past the shared
+    `gtk_layout.CONTENT_MAX_WIDTH` (960px, sized for one pane) to
+    `create_view._TWO_PANE_MAX_WIDTH` (1440px) — see that constant's
+    docstring for why this is safe (a ceiling, never a forced minimum; the
+    FlowBox reflows to one column long before a window could approach it)."""
+    import create_view
+
     cv = make_create_view()
 
     child = cv.get_first_child()
@@ -115,7 +126,7 @@ def test_width_clamp_wraps_a_max_width_bin_with_the_shared_content_ceiling(make_
         child = child.get_next_sibling()
 
     assert found is not None
-    assert found._max_width == gtk_layout.CONTENT_MAX_WIDTH
+    assert found._max_width == create_view._TWO_PANE_MAX_WIDTH
 
 
 def test_create_view_remains_a_plain_gtk_box_for_existing_mount_callers(make_create_view):

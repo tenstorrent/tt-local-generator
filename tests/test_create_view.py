@@ -66,6 +66,7 @@ from create_param_panels import (
     RoleZonePanel,
     VideoParamPanel,
 )
+from create_view import CreateResultPanel
 
 
 def _panel_of(view):
@@ -163,6 +164,18 @@ def _make_view(monkeypatch, **kwargs):
     kwargs.setdefault("mediums_fn", _fake_mediums)
     kwargs.setdefault("health_fn", _fake_health)
     return CreateView(**kwargs)
+
+
+@pytest.fixture
+def make_create_view(monkeypatch):
+    """Factory fixture matching the one in tests/test_create_view_width.py —
+    duplicated here (rather than shared via conftest.py) to match this
+    file's existing `_make_view` helper convention; both build a fully-
+    injected, hermetic CreateView via the same `_make_view` helper so there
+    is exactly one code path for "how do I build a test CreateView"."""
+    def _factory(**kwargs):
+        return _make_view(monkeypatch, **kwargs)
+    return _factory
 
 
 # ── Construction ──────────────────────────────────────────────────────────
@@ -1646,6 +1659,85 @@ def _import_lines(src: str) -> list:
         if stripped.startswith("import ") or stripped.startswith("from "):
             lines.append(stripped)
     return lines
+
+
+
+# ── Two-pane responsive layout (Task 2, "in-place Create results":
+# .superpowers/sdd/task-2-brief.md) ──────────────────────────────────────
+#
+# CreateView's existing form column (doors/idea row/model door/chips/scoped
+# dropdown/panel host/CTA — everything built above) becomes ONE of two
+# children in a responsive `Gtk.FlowBox`, alongside a fresh
+# `CreateResultPanel` (Task 1, standalone until now). `min_children_per_line
+# =1` / `max_children_per_line=2` makes the FlowBox lay the two panes side
+# by side on a wide window and stack them (form first) on a narrow one, with
+# no manual resize handling — the same wrapping mechanism already used for
+# the chip row / model door sections, just with two children instead of N.
+# The whole thing stays inside the existing `wrap_centered` clamp, so
+# `_is_width_clamped()` keeps returning True unchanged.
+
+def test_create_view_has_result_panel(make_create_view):
+    """Step-1 brief test, verbatim (task-2-brief.md)."""
+    cv = make_create_view()
+    import create_view as m
+    assert isinstance(cv._result_panel, m.CreateResultPanel)
+
+
+def test_panes_in_wrapping_container_not_hbox(make_create_view):
+    """Step-1 brief test, verbatim (task-2-brief.md): the form+result live
+    in a FlowBox (wraps) — never a fixed horizontal Box."""
+    cv = make_create_view()
+    assert cv._panes_wrap()
+
+
+def test_surface_still_width_clamped(make_create_view):
+    """Step-1 brief test, verbatim (task-2-brief.md): unchanged from prior
+    work — some ancestor in the built tree is still a MaxWidthBin."""
+    assert make_create_view()._is_width_clamped()
+
+
+def test_result_panel_starts_in_empty_state(make_create_view):
+    """The panel is present but not yet wired to generation (Tasks 3-4) —
+    it must show its own default "empty" state, not a pending/error state
+    that would imply a generation already happened."""
+    cv = make_create_view()
+    assert cv._result_panel.state == "empty"
+
+
+def test_panes_container_is_a_flowbox_with_two_children(make_create_view):
+    """The two-pane container itself (not just `_panes_wrap()`'s boolean)
+    is a real `Gtk.FlowBox` holding exactly the form column and the result
+    panel — proves the reflow settings apply to the actual pair, not some
+    unrelated FlowBox elsewhere in the tree."""
+    cv = make_create_view()
+    assert isinstance(cv._panes, Gtk.FlowBox)
+    assert cv._panes.get_min_children_per_line() == 1
+    assert cv._panes.get_max_children_per_line() == 2
+    assert cv._panes.get_homogeneous() is False
+    assert cv._panes.get_selection_mode() == Gtk.SelectionMode.NONE
+
+    children = []
+    child = cv._panes.get_first_child()
+    while child is not None:
+        children.append(child)
+        child = child.get_next_sibling()
+    assert len(children) == 2
+    # One FlowBoxChild wraps the result panel; the other wraps the form
+    # column (a plain Gtk.Box — not itself the result panel).
+    inner = [c.get_child() for c in children]
+    assert cv._result_panel in inner
+
+
+def test_existing_form_widgets_still_reachable_in_two_pane_layout(make_create_view):
+    """Wrapping the form column as one FlowBox child must not rebuild or
+    detach its widgets — the exact same `_cta_btn`/`_chip_buttons` instances
+    from before this task must still be part of the live tree, so every
+    existing CTA/chip/dropdown test keeps working unmodified."""
+    cv = make_create_view()
+    assert isinstance(cv._cta_btn, Gtk.Button)
+    assert cv._cta_btn.get_parent() is not None
+    for btn in cv._chip_buttons.values():
+        assert btn.get_parent() is not None
 
 
 def test_create_param_panels_module_does_not_import_main_window_or_worker():

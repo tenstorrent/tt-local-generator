@@ -175,6 +175,19 @@ _CAPABILITY_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
 _MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Animate", "Text")
 
 
+# Two-pane responsive layout (Task 2, "in-place Create results":
+# .superpowers/sdd/task-2-brief.md). The form column and `CreateResultPanel`
+# sit side by side once there's enough width for both — `wrap_centered`'s
+# shared default (`gtk_layout.CONTENT_MAX_WIDTH`, 960px) was sized for the
+# form ALONE (pre-Task-2) and is too tight for two comfortable panes, so the
+# whole surface's ceiling is raised here. This is safe precisely because the
+# clamp is a CEILING, not a fixed width (see `gtk_layout.MaxWidthBin`'s
+# docstring): a window narrower than this never gets forced wide — the
+# `Gtk.FlowBox` two-pane container (`_build_panes`) reflows to one column
+# per line long before the window could ever approach this cap.
+_TWO_PANE_MAX_WIDTH = 1440
+
+
 # Native medium id -> its real CreateParamPanel class. `_swap_panel` mounts
 # a fresh instance of the mapped class for any native medium listed here;
 # every other medium (artgen, or a future native medium not yet ported)
@@ -597,6 +610,19 @@ _CSS = b"""
 .create-result-recent-btn:hover {
     border-color: #4FD1C5;
 }
+
+/* -- Two-pane responsive layout (Task 2, in-place Create results) -- the
+   form column (.create-form-pane) and CreateResultPanel side by side in a
+   wrapping Gtk.FlowBox (.create-panes). No fixed widths here on purpose:
+   each pane's own natural/hexpand settings (see CreateView._build_panes)
+   decide sizing; this class only adds a little breathing room between the
+   two panes and above/below the row. --------------------------------- */
+.create-panes {
+    padding: 4px 0;
+}
+.create-form-pane {
+    padding: 0 8px 0 0;
+}
 """
 
 _css_applied = False
@@ -701,6 +727,7 @@ class CreateView(Gtk.Box):
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         content.add_css_class("create-view-content")
+        content.add_css_class("create-form-pane")
         content.append(self._build_doors_row())
         content.append(self._build_idea_row())
         content.append(self._build_model_door_row())
@@ -709,13 +736,53 @@ class CreateView(Gtk.Box):
         content.append(self._panel_host)
         content.append(self._build_cta_row())
 
+        # Two-pane responsive layout (Task 2): the form column built above
+        # becomes one child of a Gtk.FlowBox, alongside a fresh
+        # CreateResultPanel (Task 1 — standalone until this task). See
+        # `_build_panes` for the reflow settings and `_panes_wrap` for the
+        # test seam.
+        self._result_panel = CreateResultPanel()
+        panes = self._build_panes(content, self._result_panel)
+
         # Width clamp (fix: content sprawling edge-to-edge / overflowing on a
         # wide window) — `self` stays a plain Gtk.Box so every existing caller
         # (main_window.py mounts `self._create_view` directly) is unaffected;
-        # only what's INSIDE it is now capped to a comfortable column.
-        self.append(gtk_layout.wrap_centered(content))
+        # only what's INSIDE it is now capped to a comfortable column. The
+        # cap is raised to `_TWO_PANE_MAX_WIDTH` (see that constant's
+        # docstring) now that the clamped content is two panes, not one.
+        self.append(gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH))
 
         self._refresh_model_health_async()
+
+    def _build_panes(self, form_pane: Gtk.Widget, result_pane: Gtk.Widget) -> Gtk.FlowBox:
+        """Wrap *form_pane* and *result_pane* as the two children of a
+        `Gtk.FlowBox` that lays them out side by side on a wide window and
+        stacks them (form first — `Gtk.FlowBox` preserves append order) on a
+        narrow one, with no manual resize handling.
+
+        `min_children_per_line=1` / `max_children_per_line=2` is exactly the
+        brief's spec: never more than 2 columns, and 1 is always allowed (the
+        stacked case). `homogeneous=False` lets the two panes have different
+        natural widths instead of being forced equal — the form pane keeps
+        its own natural width; `result_pane.set_hexpand(True)` lets the
+        result panel fill whatever width remains in its own FlowBox cell.
+        `selection_mode=NONE` matches every other FlowBox in this file (the
+        chip row, the model door's per-group flows) — these are layout
+        containers, not selectable lists.
+        """
+        panes = Gtk.FlowBox()
+        panes.set_selection_mode(Gtk.SelectionMode.NONE)
+        panes.set_min_children_per_line(1)
+        panes.set_max_children_per_line(2)
+        panes.set_homogeneous(False)
+        panes.add_css_class("create-panes")
+
+        result_pane.set_hexpand(True)
+        panes.append(form_pane)
+        panes.append(result_pane)
+
+        self._panes = panes
+        return panes
 
     # ── Width clamp test helper ──────────────────────────────────────────────
 
@@ -730,6 +797,13 @@ class CreateView(Gtk.Box):
                 return True
             child = child.get_next_sibling()
         return False
+
+    def _panes_wrap(self) -> bool:
+        """True if the two-pane container (form + `CreateResultPanel`) is a
+        `Gtk.FlowBox` — a wrapping/reflowing container, never a fixed-
+        direction `Gtk.Box` that could overflow the window (Task 2's
+        two-pane responsive layout)."""
+        return isinstance(getattr(self, "_panes", None), Gtk.FlowBox)
 
     # ── Doors row (idea default / model / inspiration) ──────────────────────
 
