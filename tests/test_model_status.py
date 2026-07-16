@@ -153,3 +153,32 @@ def test_start_is_idempotent_and_stop_ends():
     assert svc._thread is t and t.is_alive()
     svc.stop()
     assert not t.is_alive()
+
+
+# ---------------------------------------------------------------------------
+# Task 4: capability query helpers -- ready_keys/starting_keys/running_or_starting
+# ---------------------------------------------------------------------------
+
+def test_ready_keys_filtered_by_capability_recent_first():
+    # two image servers ready at different times -> most-recently-ready first
+    svc = _svc({"flux": True, "sdxl": True})
+    svc._clock = lambda: 100.0; svc._tick()   # both ready ~100
+    # force sdxl to look more-recently-ready
+    svc._ready_at["sdxl"] = 200.0; svc._ready_at["flux"] = 100.0
+    ks = svc.ready_keys("image")
+    assert ks[0] == "sdxl" and "flux" in ks
+
+
+def test_running_or_starting_prefers_ready():
+    svc = _svc({"wan2.2": True}); svc._tick()
+    assert svc.running_or_starting("video") == "wan2.2"
+
+
+def test_running_or_starting_falls_back_to_starting():
+    svc = _svc({"mochi": False}, ports={"mochi": True}); svc._tick()
+    assert svc.running_or_starting("video") == "mochi"
+
+
+def test_running_or_starting_none_when_all_off():
+    svc = _svc({}); svc._tick()
+    assert svc.running_or_starting("video") is None

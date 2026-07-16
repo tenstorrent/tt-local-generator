@@ -426,6 +426,74 @@ class ModelStatusService:
                 log.exception("model_status subscriber callback raised")
 
     # ------------------------------------------------------------------
+    # Capability query helpers (SP-1 Task 4)
+    # ------------------------------------------------------------------
+    # These are what SP-2's Create auto-select consumes to answer "which
+    # model should the capability picker default to right now" without
+    # needing to know server_manager keys or poll internals itself.
+
+    def ready_keys(self, capability: str) -> "list[str]":
+        """Return every key currently READY that provides `capability`,
+        sorted most-recently-ready first.
+
+        Built over `snapshot()` (a locked copy of `_statuses`) rather than
+        touching `_statuses` directly, per the module's "read via the public
+        surface" convention. `_ready_at` is read once under `self._lock` so
+        the sort uses a single consistent view instead of racing the poll
+        thread key-by-key.
+
+        `server_manager` is imported lazily (see module docstring) — every
+        key in `snapshot()` originates from a `_tick()` pass that iterated
+        `server_manager.SERVERS`, so `SERVERS[k]` is always present here.
+        """
+        import server_manager
+
+        with self._lock:
+            ready_at = dict(self._ready_at)
+
+        keys = [
+            k
+            for k, st in self.snapshot().items()
+            if st == Status.READY and capability in server_manager.SERVERS[k].capabilities
+        ]
+        keys.sort(key=lambda k: ready_at.get(k, 0.0), reverse=True)
+        return keys
+
+    def starting_keys(self, capability: str) -> "list[str]":
+        """Return every key currently STARTING that provides `capability`.
+
+        No ordering guarantee beyond `snapshot()`'s dict iteration order
+        (insertion order, which matches `server_manager.SERVERS` — see
+        `_tick()`) since "most recently starting" isn't tracked (only
+        `_ready_at` is); callers needing "the" starting key just want *a*
+        plausible one, per `running_or_starting`.
+        """
+        import server_manager
+
+        return [
+            k
+            for k, st in self.snapshot().items()
+            if st == Status.STARTING and capability in server_manager.SERVERS[k].capabilities
+        ]
+
+    def running_or_starting(self, capability: str) -> "Optional[str]":
+        """Return the best current key for `capability`: a READY key (most
+        recently ready) if any exist, else a STARTING key, else None.
+
+        This is the single call SP-2's Create auto-select needs — "what
+        should the capability picker point at right now" — without having to
+        call `ready_keys`/`starting_keys` itself and duplicate the
+        ready-beats-starting-beats-nothing preference order.
+        """
+        ready = self.ready_keys(capability)
+        if ready:
+            return ready[0]
+        starting = self.starting_keys(capability)
+        if starting:
+            return starting[0]
+        return None
+
+    # ------------------------------------------------------------------
     # Poll-thread lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
