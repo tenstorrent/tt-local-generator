@@ -185,6 +185,22 @@ def test_create_view_builds(monkeypatch):
     assert isinstance(view, Gtk.Box)
 
 
+def test_create_view_accepts_and_stores_status_service(monkeypatch):
+    """SP-2 Task 1: MainWindow injects its single ModelStatusService instance
+    via `status_service=`. A fake stand-in (not a real ModelStatusService) is
+    enough here — this only guards the plumbing (accepted kwarg, stored
+    attribute), not the subscribe/dots/auto-select behavior that lands in
+    Task 2/3."""
+    fake_service = object()
+    view = _make_view(monkeypatch, status_service=fake_service)
+    assert view._status_service is fake_service
+
+
+def test_create_view_status_service_defaults_to_none(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert view._status_service is None
+
+
 # ── Medium chips ──────────────────────────────────────────────────────────
 
 def test_chips_render_one_per_medium(monkeypatch):

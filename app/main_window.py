@@ -47,6 +47,7 @@ import artgen_kind
 from create_view import CreateView
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
+from model_status import ModelStatusService
 from worker import (
     AnimateDiffGenerationWorker,
     AnimateGenerationWorker,
@@ -1520,6 +1521,24 @@ _SERVER_SCRIPTS: dict = {
     ("image",   "motif"):          ("start_motif.sh",           "Motif image (P300X2)"),
     ("animate", ""):               ("start_animate.sh",         "Wan2.2-Animate"),
 }
+
+
+def _server_key_for_script(script_name: str) -> "str | None":
+    """Reverse-lookup a `server_manager.SERVERS` key from its launch script.
+
+    `_on_start_server`/`_on_stop_server` below resolve *which script* to run
+    from `_SERVER_SCRIPTS` (keyed by model_source/model_key, the legacy
+    Video/Image tab vocabulary) rather than a `server_manager.SERVERS` key
+    directly. `ModelStatusService.note_starting`/`note_stopping` need the
+    latter, so this bridges the two by matching on `ServerDef.script` — every
+    script in `_SERVER_SCRIPTS` corresponds to exactly one `SERVERS` entry.
+    Returns None (rather than raising) if no match is found, since a bad
+    match must never break the start/stop flow that calls it.
+    """
+    for key, sdef in _sm.SERVERS.items():
+        if sdef.script == script_name:
+            return key
+    return None
 
 # Maps short model keys to canonical model ID strings used in GenerationRecord.
 _VIDEO_MODEL_IDS: dict = {
@@ -5531,10 +5550,22 @@ class ControlPanel(Gtk.Box):
             try:
                 if action == "start":
                     _sm.start(key, gui=True)
+                    try:
+                        self._status_service.note_starting(key)
+                    except Exception:
+                        pass
                 elif action == "stop":
                     _sm.stop(key)
+                    try:
+                        self._status_service.note_stopping(key)
+                    except Exception:
+                        pass
                 elif action == "restart":
                     _sm.restart(key, gui=True)
+                    try:
+                        self._status_service.note_starting(key)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -7839,6 +7870,15 @@ class MainWindow(Gtk.ApplicationWindow):
         # the Pipelines toggle (see _on_source_change / _on_pipelines_toggled).
         self._pipelines_toggle_syncing = False
 
+        # ModelStatusService (SP-2 Task 1): the single "is a model on" poller,
+        # unifying server_manager health, artgen endpoint detection, and port
+        # probing behind one status map. Constructed and started here, BEFORE
+        # `_build_ui()` (which constructs CreateView below), so the service
+        # instance exists in time to be injected into CreateView. Stopped in
+        # `do_close_request` alongside the other background pollers.
+        self._status_service = ModelStatusService()
+        self._status_service.start()
+
         self._build_ui()
         # Now that _build_ui() has constructed everything the loop nav's
         # "toggled" handlers touch (_gallery_stack, _ctrl_wrapper, _detail_wrap,
@@ -8054,6 +8094,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._create_view = CreateView(
             on_inspiration=self._on_loop_nav_remix,
             on_create=self._on_create_generate,
+            status_service=self._status_service,
         )
         # CreateView is a tall vertical surface (doors + role zones + model
         # door + CTA). Unlike the gallery children (which scroll internally),
@@ -10799,6 +10840,13 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         script_path = str(Path(__file__).parent.parent / "bin" / script_name)
 
+        try:
+            server_key = _server_key_for_script(script_name)
+            if server_key:
+                self._status_service.note_starting(server_key)
+        except Exception:
+            pass
+
         self._controls.set_server_launching(True, clear_log=True)
         self._controls.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
@@ -10903,6 +10951,29 @@ class MainWindow(Gtk.ApplicationWindow):
             self._log_tail_stop = None
         # Both video and image use the same Docker image, so either script can stop it.
         script_path = str(Path(__file__).parent.parent / "bin" / "start_wan_qb2.sh")
+
+        # There's no model_source argument here (unlike _on_start_server) since
+        # any script stops the one shared port-8000 container. Resolve "which
+        # server_manager key is presumably running" the same way
+        # _on_start_server would resolve what to *start* for the panel's
+        # current source/model selection, so note_stopping targets the right
+        # key rather than guessing.
+        try:
+            _stop_source = self._controls.get_model_source()
+            if _stop_source == "video":
+                _stop_model_key = self._controls.get_video_model()
+            elif _stop_source == "image":
+                _stop_model_key = self._controls.get_image_model()
+            else:
+                _stop_model_key = ""
+            _stop_script_name, _ = _SERVER_SCRIPTS.get(
+                (_stop_source, _stop_model_key), ("start_wan.sh", "Wan2.2 video")
+            )
+            server_key = _server_key_for_script(_stop_script_name)
+            if server_key:
+                self._status_service.note_stopping(server_key)
+        except Exception:
+            pass
 
         self._controls.set_server_launching(True, clear_log=True)
         self._controls.append_server_log("Stopping inference server…")
@@ -11480,6 +11551,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._flash_restore_id:
             GLib.source_remove(self._flash_restore_id)
         self._health_stop.set()
+        self._status_service.stop()
         if self._pg_stop:
             self._pg_stop.set()
         self._hw_statusbar.stop()

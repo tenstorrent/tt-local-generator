@@ -685,6 +685,7 @@ class CreateView(Gtk.Box):
         health_fn: Optional[Callable[[], dict]] = None,
         on_create: Optional[Callable[[Medium, dict], None]] = None,
         on_inspiration: Optional[Callable[[], None]] = None,
+        status_service: "Optional[object]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
@@ -694,6 +695,15 @@ class CreateView(Gtk.Box):
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
         self._on_inspiration = on_inspiration
+        # ModelStatusService (SP-2 Task 1): injected but not yet consumed here
+        # -- MainWindow constructs and starts the single service instance and
+        # passes it in so CreateView doesn't build its own competing poller.
+        # Subscribing to it for live status dots / auto-select is Task 2/3;
+        # this task only wires the plumbing through so the app stays
+        # constructible with the service present. Accepts a bare `object`
+        # type hint (not `ModelStatusService`) to avoid importing that module
+        # into create_view.py before it's actually used.
+        self._status_service = status_service
 
         self._entry_mode = "idea"
         self._active_medium: Optional[Medium] = None
