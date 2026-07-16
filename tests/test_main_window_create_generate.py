@@ -476,3 +476,315 @@ def test_unknown_medium_source_fails_soft(monkeypatch):
     obj._on_create_generate(weird_medium, {})
 
     obj._set_status.assert_called_with("Don't know how to generate a Future Thing yet.")
+
+
+# ── In-place Create results: native generation lifecycle → result panel ─────
+#
+# (task-3-brief.md) A Create-originated native (image/video/animate) job must
+# drive `self._create_view._result_panel` (a `create_view.CreateResultPanel`)
+# through pending -> progress* -> finished|error, and skip the gallery's own
+# PendingCard (the panel owns that UI for Create jobs instead) — while the
+# finished record must still reach the gallery/store exactly as it does for
+# a non-Create job (attractor/TT-TV/queue), which must remain UNAFFECTED.
+#
+# This harness binds the REAL `_on_generate`/`_on_progress`/`_on_finished`/
+# `_on_error` (unlike `_make_mw` above, which mocks `_on_generate` out because
+# that file's job is dispatch/translation, not the generation lifecycle
+# itself). `threading.Thread` is stubbed to NEVER run its target — these
+# tests only care about the synchronous state established before the worker
+# thread would start (gallery/panel wiring), not about a real worker actually
+# executing (which would need a live server).
+
+class _NoOpThread:
+    """threading.Thread stand-in whose start() does nothing. Unlike
+    `_ImmediateThread` above (which runs its target synchronously — used by
+    the artgen tests, whose target is fully mocked-safe), `_on_generate`'s
+    thread target calls a REAL `GenerationWorker.run_with_callbacks`, which
+    would attempt a real HTTP request. These lifecycle tests only assert on
+    state set up before the thread is started, so the target is never run."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        pass  # deliberately never runs self._target
+
+
+class _FakeResultPanel:
+    """Records every call CreateResultPanel would receive, in order, as
+    `(method_name, *args)` tuples — mirrors the brief's
+    `mw._create_view._result_panel.calls` seam."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def show_pending(self, prompt, medium=None):
+        self.calls.append(("show_pending", prompt, medium))
+
+    def show_progress(self, message):
+        self.calls.append(("show_progress", message))
+
+    def show_finished(self, record):
+        self.calls.append(("show_finished", record))
+
+    def show_error(self, message):
+        self.calls.append(("show_error", message))
+
+
+class _FakeCreateView:
+    def __init__(self) -> None:
+        self._result_panel = _FakeResultPanel()
+
+
+class _FakeGallery:
+    """Stand-in for `GalleryWidget` recording only the calls these tests
+    care about: whether a pending card was added, and whether a finished
+    record reached the gallery (the persistence invariant)."""
+
+    def __init__(self) -> None:
+        self.add_pending_calls: list = []
+        self.replace_calls: list = []
+        self.remove_pending_calls = 0
+
+    def add_pending_card(self, prompt="", model_source="video"):
+        self.add_pending_calls.append((prompt, model_source))
+        return MagicMock()
+
+    def replace_pending_with(self, record):
+        # Real `GalleryWidget.replace_pending_with` degrades gracefully when
+        # there's no pending card to replace — it inserts the record as a
+        # normal card instead (verified by reading main_window.py directly).
+        # This fake mirrors that: it always records the record regardless of
+        # whether a pending card exists, matching the real persistence path.
+        self.replace_calls.append(record)
+
+    def remove_pending(self):
+        self.remove_pending_calls += 1
+
+
+class _FakeRecord:
+    """Duck-typed stand-in for `history_store.GenerationRecord` — only the
+    attributes `_on_finished` actually reads."""
+
+    def __init__(self) -> None:
+        self.id = "rec-1"
+        self.media_type = "image"
+        self.media_file_path = "/tmp/fake_record.png"
+        self.duration_s = 1.5
+
+
+def _fake_record() -> _FakeRecord:
+    return _FakeRecord()
+
+
+def _make_mw_lifecycle(monkeypatch):
+    """Minimal MainWindow exposing the real generation lifecycle methods
+    (`_on_create_generate` through `_on_generate`/`_on_progress`/
+    `_on_finished`/`_on_error`), with every collaborator they touch stubbed
+    to a lightweight fake/mock so no real GTK widgets, disk I/O, or network
+    calls happen."""
+    import main_window as mw
+
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+
+    obj._set_status = MagicMock()
+    obj._controls = MagicMock()
+    obj._client = MagicMock()
+    obj._store = MagicMock()
+    obj._worker = None
+    obj._worker_gen = None
+    obj._gen_gallery = None
+    obj._gen_completed_count = 0
+    obj._last_error_log_path = None
+    obj._attractor_win = None
+    obj._create_job_active = False
+    obj._artgen_panel = None
+
+    fake_gallery = _FakeGallery()
+    obj._gallery_for_type = MagicMock(return_value=fake_gallery)
+    obj._active_gallery = MagicMock(return_value=fake_gallery)
+    obj._check_disk_space = MagicMock(return_value=True)
+    obj._screensaver_inhibit = MagicMock()
+    obj._screensaver_uninhibit = MagicMock()
+    obj._start_next_queued = MagicMock()
+    obj._update_attractor_btn = MagicMock()
+    obj._rebuild_playlists_menu = MagicMock()
+    obj._count_blackhole_chips = MagicMock(return_value=0)
+
+    fake_create_view = _FakeCreateView()
+    obj._create_view = fake_create_view
+
+    for name in (
+        "_on_create_generate",
+        "_create_generate_native",
+        "_create_generate_artgen",
+        "_on_create_artgen_done",
+        "_on_create_artgen_error",
+        "_begin_create_job",
+        "_on_generate",
+        "_on_progress",
+        "_on_finished",
+        "_on_error",
+    ):
+        setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
+
+    monkeypatch.setattr(mw.threading, "Thread", _NoOpThread)
+    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    return obj, fake_gallery, fake_create_view
+
+
+def test_create_native_job_shows_pending_in_panel(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    assert fake_create_view._result_panel.calls[0] == (
+        "show_pending", "a lighthouse at dawn", _IMAGE_MEDIUM
+    )
+    assert obj._create_job_active is True
+
+
+def test_create_job_skips_gallery_pending_card(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    # The panel owns pending UI for Create jobs — the gallery must NOT get
+    # its own redundant PendingCard.
+    assert fake_gallery.add_pending_calls == []
+    # ...but `_gen_gallery` is still set, so the finished record can still
+    # land in the right gallery/store on completion.
+    assert obj._gen_gallery is fake_gallery
+
+
+def test_non_create_job_still_adds_gallery_pending_card(monkeypatch):
+    """Migration-safety: a non-Create job (attractor/TT-TV/queue) must be
+    completely unaffected — it still gets the gallery's own pending card and
+    never touches the panel."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    assert obj._create_job_active is False
+
+    obj._on_generate("a train through the mountains", "", 20, -1,
+                     model_source="image", model_id="flux")
+
+    assert len(fake_gallery.add_pending_calls) == 1
+    assert fake_create_view._result_panel.calls == []
+
+
+def test_progress_forwards_to_panel_when_create_job_active(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+
+    obj._on_progress("Generating image with flux.1-schnell…", None)
+
+    assert fake_create_view._result_panel.calls == [
+        ("show_progress", "Generating image with flux.1-schnell…")
+    ]
+
+
+def test_progress_does_not_touch_panel_for_non_create_job(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    assert obj._create_job_active is False
+
+    obj._on_progress("Generating…", MagicMock())
+
+    assert fake_create_view._result_panel.calls == []
+
+
+def test_finished_forwards_to_panel_and_still_hits_store(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+    obj._gen_gallery = fake_gallery
+    record = _fake_record()
+
+    obj._on_finished(record)
+
+    assert tuple(c[0] for c in fake_create_view._result_panel.calls[-1:]) == ("show_finished",)
+    assert fake_create_view._result_panel.calls[-1][1] is record
+    # Flag cleared once the job completes.
+    assert obj._create_job_active is False
+    # Persistence path still ran — the record reached the gallery exactly as
+    # it does today, even though no pending card existed to "replace".
+    assert fake_gallery.replace_calls == [record]
+
+
+def test_non_create_job_does_not_touch_panel(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = False
+    obj._gen_gallery = fake_gallery
+    record = _fake_record()
+
+    obj._on_finished(record)
+
+    assert fake_create_view._result_panel.calls == []
+    # Persistence is identical regardless of Create involvement.
+    assert fake_gallery.replace_calls == [record]
+
+
+def test_error_forwards_to_panel_and_clears_flag(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+    obj._gen_gallery = fake_gallery
+
+    obj._on_error("Worker crashed: boom")
+
+    assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    assert obj._create_job_active is False
+
+
+def test_error_does_not_touch_panel_for_non_create_job(monkeypatch):
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = False
+    obj._gen_gallery = fake_gallery
+
+    obj._on_error("Worker crashed: boom")
+
+    assert fake_create_view._result_panel.calls == []
+
+
+def test_end_to_end_create_native_job_lifecycle_persists_without_pending_card(monkeypatch):
+    """Full lifecycle in one test: dispatch through `_on_create_generate`
+    (which internally calls the REAL `_on_generate`), then simulate the
+    worker callbacks that would normally fire from the background thread.
+    Confirms the whole chain — pending shown in panel, no gallery pending
+    card, record still reaches the gallery/store, flag cleared at the end."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+    assert obj._create_job_active is True
+    assert fake_gallery.add_pending_calls == []
+
+    record = _fake_record()
+    obj._on_finished(record)
+
+    assert fake_gallery.replace_calls == [record]
+    assert obj._create_job_active is False
+    method_names = [c[0] for c in fake_create_view._result_panel.calls]
+    assert method_names == ["show_pending", "show_finished"]
+
+
+def test_panel_error_never_blocks_generation(monkeypatch):
+    """A raising CreateResultPanel must never prevent generation from
+    starting — `_begin_create_job` wraps the panel call in try/except."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("panel exploded")
+
+    fake_create_view._result_panel.show_pending = _boom
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "a lighthouse at dawn",
+                                             "model": "flux.1-schnell"})
+
+    assert obj._create_job_active is True
+    # Generation itself proceeded past the panel call (gen_gallery got set,
+    # meaning _on_generate ran) and no "Couldn't start generation" status was
+    # ever set — the exception never propagated past _begin_create_job.
+    assert obj._gen_gallery is fake_gallery
+    for call in obj._set_status.call_args_list:
+        assert "Couldn't start generation" not in call.args[0]

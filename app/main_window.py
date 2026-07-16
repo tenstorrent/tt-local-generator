@@ -7809,6 +7809,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # Track which gallery owns the current pending card (set in _on_generate,
         # used in _on_finished/_on_error to update the right gallery).
         self._gen_gallery = None
+        # True while a generation launched from the Create surface is in
+        # flight — set in _on_create_generate, cleared in _on_finished/
+        # _on_error. When True, _on_generate skips the gallery's own pending
+        # card (CreateResultPanel owns that UI instead) and the worker
+        # callbacks (_on_progress/_on_finished/_on_error) also forward to
+        # `self._create_view._result_panel`.
+        self._create_job_active = False
         self._auto_tab_switched = False  # True after first model detection auto-switch
         self._pg_stop: "threading.Event | None" = None  # set when prompt gen poll starts
         self._log_tail_stop: "threading.Event | None" = None  # set to stop server log tail
@@ -10219,7 +10226,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # Add the pending card to the gallery that matches the generation type,
         # and remember that gallery so _on_finished/_on_error update the right one.
         self._gen_gallery = self._gallery_for_type(model_source)
-        pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
+        # Create-originated jobs already show their own pending state in the
+        # inline CreateResultPanel (_begin_create_job) — skip the redundant
+        # gallery pending card for them. `_gen_gallery` is still set above so
+        # the finished record lands in the correct gallery/store either way.
+        if self._create_job_active:
+            pending = None
+        else:
+            pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
         self._controls.set_busy(True)
         # Do NOT call clear_prompt() here — the user may have typed a prompt they
         # haven't submitted yet, and auto-queue/attractor calls should not wipe it.
@@ -10402,13 +10416,31 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         try:
             if medium.source == "native":
+                self._begin_create_job(medium, params)
                 self._create_generate_native(medium, params)
             elif medium.source == "artgen":
+                self._begin_create_job(medium, params)
                 self._create_generate_artgen(medium, params)
             else:
                 self._set_status(f"Don't know how to generate a {medium.label} yet.")
         except Exception as exc:
             self._set_status(f"Couldn't start generation: {exc}")
+
+    def _begin_create_job(self, medium, params: dict) -> None:
+        """Mark a Create-originated generation as active and put the inline
+        result panel (`self._create_view._result_panel`) into its "pending"
+        state before dispatching to the real generation path.
+
+        Shared by both the native and artgen branches of `_on_create_generate`
+        (artgen's own finished/error forwarding is Task 4 — showing pending
+        here for artgen too is harmless and desired now). Wrapped in its own
+        try/except: a panel/widget error must never block generation itself.
+        """
+        self._create_job_active = True
+        try:
+            self._create_view._result_panel.show_pending(params.get("prompt", ""), medium)
+        except Exception:
+            pass
 
     def _create_generate_native(self, medium, params: dict) -> None:
         """Translate a native medium's `CreateParamPanel.collect()` dict into
@@ -11250,14 +11282,31 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Worker callbacks (all called on main thread via GLib.idle_add) ─────────
 
-    def _on_progress(self, message: str, pending: PendingCard) -> bool:
+    def _on_progress(self, message: str, pending: "PendingCard | None") -> bool:
         self._set_status(message)
-        pending.update_status(message)
+        if pending is not None:
+            pending.update_status(message)
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_progress(message)
+            except Exception:
+                pass
         return False
 
     def _on_finished(self, record: GenerationRecord) -> bool:
         gallery = self._gen_gallery or self._gallery_for_type(record.media_type)
+        # `replace_pending_with` degrades gracefully when there's no pending
+        # card to replace (the Create-job case, where _on_generate skipped
+        # add_pending_card): it falls through to inserting the record as a
+        # normal card instead, so persistence/gallery display is identical
+        # either way.
         gallery.replace_pending_with(record)
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:
+                pass
+            self._create_job_active = False
         self._gen_gallery = None
         self._controls.set_busy(False)
         self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
@@ -11294,6 +11343,12 @@ class MainWindow(Gtk.ApplicationWindow):
         short = shorten_error(message)
         suffix = " — click for log" if self._last_error_log_path else ""
         self._set_status(f"Error: {short}{suffix}")
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_error(message)
+            except Exception:
+                pass
+            self._create_job_active = False
         self._start_next_queued()
         return False
 
