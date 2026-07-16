@@ -10849,6 +10849,24 @@ class MainWindow(Gtk.ApplicationWindow):
             # passing the medium's own resolved key directly is sufficient and
             # cannot clobber the legacy Image tab's `_image_model` the way the
             # old `_set_model()` route could.
+            #
+            # SP-3c-2 (native AnimateDiff in Create): only build/forward
+            # `animatediff_args` when AnimateDiff is actually the selected
+            # video model — every other model keeps the pre-existing
+            # `animatediff_args=None` default, byte-identical to before this
+            # task (parity). `VideoParamPanel.collect()`'s own
+            # "animatediff_args" is already complete (every widget has a real
+            # default — see that method's docstring), but the merge over
+            # `_ANIMATEDIFF_DEFAULTS` here is a defensive belt-and-suspenders:
+            # any caller that reaches this branch with a partial/missing dict
+            # (e.g. a hand-built `params` in a test, or a future caller that
+            # doesn't go through VideoParamPanel at all) still gets a dict
+            # `_on_generate`'s `ad["..."]` indexing can never KeyError on.
+            animatediff_args = None
+            if model_key == "animatediff":
+                animatediff_args = {
+                    **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
+                }
             self._on_generate(
                 prompt,
                 params.get("negative_prompt", ""),
@@ -10864,6 +10882,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 model_source="video",
                 model_id=model_key,
                 video_model_key=model_key,
+                animatediff_args=animatediff_args,
             )
             # NOTE (remaining concern, see task-8-report.md):
             # VideoParamPanel.collect()'s "num_frames" has no destination in

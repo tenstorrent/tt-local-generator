@@ -303,6 +303,112 @@ def test_video_medium_does_not_touch_image_model_in_image_source(monkeypatch):
     assert obj._controls.get_image_model() == "flux"
 
 
+# ── Native AnimateDiff routing (SP-3c-2) ─────────────────────────────────────
+#
+# Distinct from the artgen `animatediff` plugin medium (source="artgen",
+# generator="animatediff" — see `_ANIMATEDIFF_MEDIUM`/
+# `test_artgen_animatediff_skips_empty_append_flags` further down, which
+# shells out via `tt-ctl artgen animatediff`). THIS is the native, serverless
+# AnimateDiff v0.9 path selectable from Create's Video medium
+# (`create_param_panels.VideoParamPanel`'s "animatediff" model choice).
+
+
+def test_video_medium_animatediff_selected_routes_with_complete_args(monkeypatch):
+    """Selecting AnimateDiff (canonical id "animatediff-blackhole", the value
+    `create_view._collect_params` writes into "model" once the scoped
+    dropdown's AnimateDiff entry is chosen — see test_create_view.py's
+    `test_collect_params_model_animatediff`) must resolve to
+    `video_model_key="animatediff"` and a COMPLETE `animatediff_args` dict —
+    every `_ANIMATEDIFF_DEFAULTS` key present — with the panel's own value
+    (here just `temporal_alpha`, simulating a partial dict) applied over the
+    defaults."""
+    import main_window as mw
+
+    obj = _make_mw(monkeypatch)
+    params = {
+        "prompt": "a glitchy dance loop",
+        "model": "animatediff-blackhole",
+        "num_inference_steps": 20,
+        "seed": -1,
+        "animatediff_args": {"temporal_alpha": 0.9},
+    }
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    obj._on_generate.assert_called_once()
+    kwargs = obj._on_generate.call_args.kwargs
+    assert kwargs["video_model_key"] == "animatediff"
+    assert kwargs["model_id"] == "animatediff"
+    ad = kwargs["animatediff_args"]
+    assert set(ad) == set(mw._ANIMATEDIFF_DEFAULTS)
+    # The panel-supplied value wins...
+    assert ad["temporal_alpha"] == 0.9
+    # ...every other key falls back to the documented default.
+    for key, default_value in mw._ANIMATEDIFF_DEFAULTS.items():
+        if key == "temporal_alpha":
+            continue
+        assert ad[key] == default_value
+
+
+def test_video_medium_animatediff_with_full_panel_args_passes_through_unchanged(monkeypatch):
+    """A COMPLETE `animatediff_args` (what `VideoParamPanel.collect()` always
+    actually produces — see that method's docstring) merges over
+    `_ANIMATEDIFF_DEFAULTS` as a pure no-op: every value is the caller's,
+    none silently reset to a default."""
+    import main_window as mw
+
+    obj = _make_mw(monkeypatch)
+    full_args = {
+        "mode": "cpu", "negative_prompt": "oversaturated", "temporal_alpha": 0.5,
+        "lightning": True, "lightning_steps": 8, "multi_chip": False,
+        "device_id": 2, "chain_from": "/tmp/latents.chain.pt", "chain_save": True,
+        "chain_alpha": 0.4, "motion_adapter": "", "motion_adapter_alpha": 0.8,
+        "motion_adapter_skip": ["up2"],
+    }
+    assert set(full_args) == set(mw._ANIMATEDIFF_DEFAULTS)  # test itself stays honest
+    params = {"model": "animatediff-blackhole", "animatediff_args": full_args}
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    kwargs = obj._on_generate.call_args.kwargs
+    assert kwargs["animatediff_args"] == full_args
+
+
+def test_video_medium_animatediff_with_no_args_key_still_gets_complete_defaults(monkeypatch):
+    """A caller that selects AnimateDiff but supplies no "animatediff_args"
+    key at all (defensive — shouldn't happen via VideoParamPanel, which
+    always includes it, but must never KeyError downstream in
+    `_on_generate`'s `ad["..."]` indexing) still gets the full default dict."""
+    import main_window as mw
+
+    obj = _make_mw(monkeypatch)
+    params = {"model": "animatediff-blackhole"}  # no "animatediff_args" key
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    kwargs = obj._on_generate.call_args.kwargs
+    assert kwargs["video_model_key"] == "animatediff"
+    assert kwargs["animatediff_args"] == mw._ANIMATEDIFF_DEFAULTS
+
+
+def test_non_animatediff_video_model_passes_animatediff_args_as_none(monkeypatch):
+    """Parity guard: a non-AnimateDiff video model must route EXACTLY as
+    before this task — `animatediff_args` stays `None` (the pre-existing
+    `_on_generate` default), never a dict, even if `params` happens to carry
+    a stray "animatediff_args" key (e.g. a stale queue replay)."""
+    obj = _make_mw(monkeypatch)
+    params = {
+        "model": "wan2.2-t2v",
+        "animatediff_args": {"temporal_alpha": 0.1},  # must be ignored
+    }
+
+    obj._on_create_generate(_VIDEO_MEDIUM, params)
+
+    kwargs = obj._on_generate.call_args.kwargs
+    assert kwargs["video_model_key"] == "wan2"
+    assert kwargs["animatediff_args"] is None
+
+
 def test_animate_medium_routes_to_on_generate_with_ref_paths_and_mode(monkeypatch):
     obj = _make_mw(monkeypatch)
     params = {

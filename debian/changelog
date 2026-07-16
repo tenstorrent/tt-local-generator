@@ -1,3 +1,36 @@
+tt-local-generator (0.37.0) noble; urgency=medium
+
+  * Native AnimateDiff is now generatable from Create's Video medium (SP-3c-2)
+    -- distinct from the artgen `animatediff` plugin, which stays a separate,
+    server-driven medium invoked via `tt-ctl artgen animatediff`. This is the
+    hardware-only, serverless AnimateDiff v0.9 path `ControlPanel`'s legacy
+    Video tab has always offered; migrating it into Create was the one thing
+    Taylor explicitly said never to drop.
+  * `VideoParamPanel` (create_param_panels.py) gains an "animatediff" model
+    choice; selecting it reveals a full AnimateDiff options box mirroring
+    `ControlPanel._build_animatediff_box()`/`get_animatediff_args()` field for
+    field -- mode (blackhole/cpu/sim), its own negative prompt, temporal alpha,
+    Lightning mode + conditional distill-steps, multi-chip toggle + device ID,
+    chain-from/chain-save/chain-alpha, and MotionAdapter (enable/skip preset/
+    injection alpha). `collect()`'s new "animatediff_args" key is always a
+    COMPLETE dict (every default present) regardless of which model is
+    selected.
+  * CreateView's scoped Video model dropdown (the one the user actually
+    clicks) now lists AnimateDiff too, even though it has no
+    `server_manager.ServerDef` (it needs no server) -- its dot always reads
+    ready. A new `_sync_panel_model_selection` keeps the mounted
+    `VideoParamPanel`'s own (otherwise page-invisible) model state in lockstep
+    with the scoped dropdown, so the AnimateDiff options box actually shows
+    when the user picks it.
+  * `_create_generate_native`'s video branch routes an AnimateDiff selection
+    to `_on_generate` with `video_model_key="animatediff"` and a
+    `animatediff_args` dict merged over `_ANIMATEDIFF_DEFAULTS` (always
+    complete, panel values win) -- generation itself
+    (`AnimateDiffGenerationWorker`) is untouched. Every other video model
+    keeps `animatediff_args=None`, byte-identical to before this change.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 08:00:00 -0700
+
 tt-local-generator (0.36.1) noble; urgency=medium
 
   * Fix (SP-3c-1 review): Create's SkyReels-I2V model now requires a seed

@@ -78,10 +78,13 @@ class FieldSpec:
       label    — human-readable label (mirrors the panel's own row label,
                  or `_humanize_dest()` for artgen).
       kind     — widget-shape hint: "int" | "float" | "bool" | "choice" |
-                 "str" | "path" | "model". "model" is a deliberate special
-                 case (see module docstring's per-panel notes below) — model
-                 selection is not one of the brief/direction/control zones,
-                 it is handled as its own concern by the caller.
+                 "str" | "path" | "model" | "dict". "model" is a deliberate
+                 special case (see module docstring's per-panel notes below)
+                 — model selection is not one of the brief/direction/control
+                 zones, it is handled as its own concern by the caller.
+                 "dict" (SP-3c-2) covers `VideoParamPanel`'s single
+                 "animatediff_args" field — a cohesive group of sub-controls
+                 collected together rather than each getting its own spec.
       default  — the value this field starts at (mirrors the widget's built
                  default, NOT necessarily `collect()`'s current value).
       role     — a `field_roles.FieldRole` — which zone (brief/direction/
@@ -596,21 +599,73 @@ class ImageParamPanel(CreateParamPanel):
 # `VideoParamPanel` now owns a `SeedImageWell` (same as `ImageParamPanel`;
 # see that widget's docstring above), so a conditioning image IS available
 # here — offering the choice is no longer a trap.
+#
+# SP-3c-2 adds "animatediff" — the NATIVE AnimateDiff v0.9 path (distinct
+# from the artgen `animatediff` plugin medium, which stays a separate,
+# artgen-sourced "gif" medium generating via `tt-ctl artgen animatediff`).
+# Unlike the other three, this one runs through a completely serverless
+# code path (`worker.AnimateDiffGenerationWorker`, no HTTP call at all) —
+# see `_ANIMATEDIFF_DEFAULTS`/`_collect_animatediff_args` below for the full
+# args config this option reveals.
 _VIDEO_MODEL_CHOICES: "list[tuple[str, str]]" = [
     ("wan2", "Wan2.2 — 720p video"),
     ("mochi", "Mochi-1 — 480×848 video"),
     ("skyreels", "SkyReels-V2-I2V — 960×544 (needs a seed image)"),
+    ("animatediff", "AnimateDiff — local, no server needed"),
 ]
 
 # Internal key -> server-side model id string, passed as `model=` to
-# GenerationWorker. Mirrors ControlPanel's `_VIDEO_MODEL_IDS` (minus the
-# animatediff entry, excluded above — animatediff runs through a completely
-# different, serverless code path, see the choices note).
+# GenerationWorker. Mirrors ControlPanel's `_VIDEO_MODEL_IDS` exactly,
+# including the "animatediff" entry (main_window.py's own `_VIDEO_MODEL_IDS`
+# maps it to the same "animatediff-blackhole" id) — SP-3c-2 needs the round
+# trip create_view.py's `_VIDEO_MODEL_ID_TO_KEY` (in main_window.py) inverts
+# to work for AnimateDiff too.
 _VIDEO_MODEL_IDS: "dict[str, str]" = {
     "wan2": "wan2.2-t2v",
     "mochi": "mochi-1-preview",
     "skyreels": "skyreels-v2-i2v-14b-540p",
+    "animatediff": "animatediff-blackhole",
 }
+
+# Dropdown choice lists for the AnimateDiff-specific options box — mirror
+# `ControlPanel._build_animatediff_box()`'s own `_dd(...)` calls exactly
+# (main_window.py ~5155/~5185/~5255).
+_ANIMATEDIFF_MODE_CHOICES: "list[str]" = ["blackhole", "cpu", "sim"]
+_ANIMATEDIFF_LIGHTNING_STEPS_CHOICES: "list[str]" = ["2", "4", "8"]
+_ANIMATEDIFF_MOTION_SKIP_CHOICES: "list[str]" = [
+    "None (full quality)", "Fast (skip up1 up2)", "Balanced (skip up2)",
+]
+# Skip-preset label -> the frame-name list AnimateDiffGenerationWorker
+# expects, mirrors `ControlPanel.get_animatediff_args`'s `_dd_val`/if-elif
+# translation (main_window.py ~5293-5299) exactly.
+_ANIMATEDIFF_MOTION_SKIP_VALUES: "dict[str, Optional[list]]" = {
+    "None (full quality)": None,
+    "Fast (skip up1 up2)": ["up1", "up2"],
+    "Balanced (skip up2)": ["up2"],
+}
+
+# Duplicated from `main_window._ANIMATEDIFF_DEFAULTS` per this module's
+# "duplicate small, stable bits" strategy (see module docstring) — read
+# `ControlPanel.get_animatediff_args()` (main_window.py ~5283) if the two
+# ever need to be reconciled; this dict's keys/values must match it exactly
+# so `_create_generate_native`'s `{**_ANIMATEDIFF_DEFAULTS, **animatediff_args}`
+# merge (main_window.py) never disagrees with what this panel already
+# collects as "complete" on its own.
+_ANIMATEDIFF_DEFAULTS: dict = dict(
+    mode="blackhole",
+    negative_prompt="blurry, low quality",
+    temporal_alpha=0.35,
+    lightning=False,
+    lightning_steps=4,
+    multi_chip=True,
+    device_id=None,
+    chain_from=None,
+    chain_save=False,
+    chain_alpha=0.6,
+    motion_adapter=None,
+    motion_adapter_alpha=1.0,
+    motion_adapter_skip=None,
+)
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
 
@@ -653,6 +708,28 @@ class VideoParamPanel(CreateParamPanel):
         # `_rows` for the rationale (RoleZonePanel re-parenting, Task 5).
         self._rows: "dict[str, Gtk.Widget]" = {}
 
+        # SP-3c-2: native AnimateDiff option's own config widgets — mirror
+        # `ControlPanel._build_animatediff_box()`/`get_animatediff_args()`
+        # field-for-field (main_window.py ~5103/~5283). All are `None` until
+        # `build()` runs; `_collect_animatediff_args()` falls back to
+        # `_ANIMATEDIFF_DEFAULTS` in that case, same "never raise before
+        # build()" contract every other collect() path in this file follows.
+        self._ad_options_row: Optional[Gtk.Widget] = None
+        self._ad_mode: Optional[Gtk.DropDown] = None
+        self._ad_neg_prompt: Optional[Gtk.Entry] = None
+        self._ad_temporal_alpha: Optional[Gtk.SpinButton] = None
+        self._ad_lightning: Optional[Gtk.CheckButton] = None
+        self._ad_lightning_steps: Optional[Gtk.DropDown] = None
+        self._ad_lightning_steps_row: Optional[Gtk.Widget] = None
+        self._ad_multi_chip: Optional[Gtk.CheckButton] = None
+        self._ad_device_id: Optional[Gtk.SpinButton] = None
+        self._ad_chain_from: Optional[Gtk.Entry] = None
+        self._ad_chain_save: Optional[Gtk.CheckButton] = None
+        self._ad_chain_alpha: Optional[Gtk.SpinButton] = None
+        self._ad_motion_adapter: Optional[Gtk.CheckButton] = None
+        self._ad_motion_skip: Optional[Gtk.DropDown] = None
+        self._ad_injection_alpha: Optional[Gtk.SpinButton] = None
+
     # ── CreateParamPanel protocol ────────────────────────────────────────────
 
     def build(self) -> Gtk.Widget:
@@ -684,6 +761,16 @@ class VideoParamPanel(CreateParamPanel):
         box.append(neg_row)
         self._rows["negative_prompt"] = neg_row
 
+        ad_row = self._build_animatediff_options_row()
+        box.append(ad_row)
+        self._rows["animatediff_args"] = ad_row
+
+        # Reflect the model dropdown's BUILT-IN default (see _build_model_row)
+        # immediately, rather than waiting for a first "notify::selected" —
+        # AnimateDiff isn't the default choice, so this is normally a no-op,
+        # but it keeps build() honest if the default ever changes.
+        self._update_animatediff_visibility()
+
         self._widget = box
         return box
 
@@ -696,6 +783,13 @@ class VideoParamPanel(CreateParamPanel):
         `build()`. `seed_image_path` defaults to "" (MIGRATION-SAFE, SP-3c-1):
         an empty path preserves today's exact text-to-video behavior for
         wan2/mochi; only SkyReels-I2V requires it non-empty.
+
+        `animatediff_args` (SP-3c-2) is ALWAYS a complete dict — every
+        `_ANIMATEDIFF_DEFAULTS` key present — regardless of whether
+        AnimateDiff is the currently-selected model, so a caller never has to
+        special-case "panel wasn't showing AnimateDiff" before reading it;
+        `_create_generate_native` (main_window.py) only actually forwards it
+        to `_on_generate` when `model_key == "animatediff"`.
         """
         return {
             "negative_prompt": self._neg_entry.get_text() if self._neg_entry is not None else "",
@@ -706,6 +800,7 @@ class VideoParamPanel(CreateParamPanel):
             "model": self._selected_model_id(),
             "num_frames": self._selected_num_frames(),
             "seed_image_path": self._seed_well.path() if self._seed_well is not None else "",
+            "animatediff_args": self._collect_animatediff_args(),
         }
 
     def field_specs(self) -> "list[FieldSpec]":
@@ -750,6 +845,16 @@ class VideoParamPanel(CreateParamPanel):
                 role=field_roles.FieldRole(field_roles.ROLE_BRIEF, field_roles.MARK_WORDS),
                 tooltip="required for SkyReels-I2V; optional otherwise",
             ),
+            FieldSpec(
+                key="animatediff_args", label="AnimateDiff Options", kind="dict",
+                default=dict(_ANIMATEDIFF_DEFAULTS),
+                role=field_roles.FieldRole(field_roles.ROLE_CONTROL, field_roles.MARK_EXACT),
+                tooltip=(
+                    "AnimateDiff-specific settings (mode, temporal α, lightning, "
+                    "chain continuity, MotionAdapter) — shown only when AnimateDiff "
+                    "is the selected video model"
+                ),
+            ),
         ]
 
     # ── Internals ─────────────────────────────────────────────────────────────
@@ -762,6 +867,42 @@ class VideoParamPanel(CreateParamPanel):
             return _VIDEO_MODEL_IDS[_DEFAULT_VIDEO_MODEL_KEY]
         key, _label = _VIDEO_MODEL_CHOICES[idx]
         return _VIDEO_MODEL_IDS.get(key, _VIDEO_MODEL_IDS[_DEFAULT_VIDEO_MODEL_KEY])
+
+    def _selected_video_key(self) -> str:
+        """The plain internal key ("wan2"/"mochi"/"skyreels"/"animatediff")
+        behind the current model-dropdown selection — unlike
+        `_selected_model_id()`, this is never translated to the canonical
+        server id, so it's what `_update_animatediff_visibility` and
+        `set_selected_model_key` compare against."""
+        if self._model_dropdown is None:
+            return _DEFAULT_VIDEO_MODEL_KEY
+        idx = self._model_dropdown.get_selected()
+        if idx < 0 or idx >= len(_VIDEO_MODEL_CHOICES):
+            return _DEFAULT_VIDEO_MODEL_KEY
+        return _VIDEO_MODEL_CHOICES[idx][0]
+
+    def set_selected_model_key(self, key: str) -> None:
+        """Programmatically select *key* in this panel's OWN model dropdown.
+
+        SP-3c-2: `RoleZonePanel` deliberately never renders a wrapped panel's
+        `kind == "model"` row (see that class's module comment) — the
+        user-visible model picker is CreateView's SCOPED `_model_dropdown`
+        instead. Without this hook this panel's internal model state would
+        sit frozen at its own built-in default (`_DEFAULT_VIDEO_MODEL_KEY`)
+        forever, so the AnimateDiff options box (whose visibility keys off
+        THIS panel's own dropdown, not the scoped one) could never actually
+        appear. CreateView calls this whenever the scoped dropdown's
+        selection changes (see `create_view.py`'s `_sync_panel_model_selection`)
+        so the two stay in lockstep. No-op if the dropdown isn't built yet or
+        *key* isn't one of `_VIDEO_MODEL_CHOICES`.
+        """
+        if self._model_dropdown is None:
+            return
+        for idx, (choice_key, _label) in enumerate(_VIDEO_MODEL_CHOICES):
+            if choice_key == key:
+                self._model_dropdown.set_selected(idx)
+                break
+        self._update_animatediff_visibility()
 
     def _selected_num_frames(self) -> "int | None":
         """0 ("auto"/unset) collects as `None` — `GenerationWorker`'s own
@@ -829,6 +970,13 @@ class VideoParamPanel(CreateParamPanel):
         )
         dropdown.set_selected(default_idx)
         self._model_dropdown = dropdown
+        # SP-3c-2: toggle the AnimateDiff options box's visibility whenever
+        # THIS panel's own (normally-hidden, see set_selected_model_key's
+        # docstring) model selection changes — covers both a direct test
+        # manipulating this widget and `set_selected_model_key`'s own
+        # explicit call to the same toggle (GObject's `notify::selected` is
+        # not guaranteed to fire when the index doesn't actually change).
+        dropdown.connect("notify::selected", lambda *_a: self._update_animatediff_visibility())
         row.append(dropdown)
         return row
 
@@ -856,6 +1004,234 @@ class VideoParamPanel(CreateParamPanel):
         self._neg_entry = entry
         row.append(entry)
         return row
+
+    # ── AnimateDiff options (SP-3c-2) ────────────────────────────────────────
+    #
+    # Mirrors `ControlPanel._build_animatediff_box()` / `get_animatediff_args()`
+    # (main_window.py ~5103-5317) field-for-field. Shown/hidden as one unit —
+    # see `_update_animatediff_visibility` — rather than each individual
+    # sub-control getting its own `FieldSpec`/zone placement, since these are
+    # all one cohesive "AnimateDiff Options" concern (a single `FieldSpec`,
+    # key="animatediff_args", carries the whole group into the Controls zone —
+    # see `field_specs()`).
+
+    def _update_animatediff_visibility(self) -> None:
+        """Show the AnimateDiff options row only when "animatediff" is this
+        panel's own currently-selected model key; hide it for every other
+        video model. Also refreshes the lightning-steps sub-row's visibility
+        (it depends on BOTH the lightning checkbox and the mode dropdown —
+        see `_build_animatediff_options_row`), since a model-key change can
+        indirectly matter there too (defensive; the two dropdowns are
+        independent widgets, so this call is cheap and always safe)."""
+        if self._ad_options_row is not None:
+            self._ad_options_row.set_visible(self._selected_video_key() == "animatediff")
+        self._sync_ad_lightning_steps_visibility()
+
+    def _sync_ad_lightning_steps_visibility(self) -> None:
+        """Mirrors `ControlPanel`'s `_on_ad_lightning_toggled` exactly
+        (main_window.py ~5190-5195): the "Distill steps" row is visible only
+        when Lightning mode is checked AND the AnimateDiff mode dropdown is
+        set to "cpu" (Lightning has no effect on blackhole/sim)."""
+        if self._ad_lightning is None or self._ad_lightning_steps_row is None:
+            return
+        on = self._ad_lightning.get_active()
+        cpu = self._ad_mode is not None and self._ad_dd_val(self._ad_mode) == "cpu"
+        self._ad_lightning_steps_row.set_visible(on and cpu)
+
+    def _ad_dd_val(self, dd: Gtk.DropDown) -> str:
+        """Read a `Gtk.DropDown`'s currently-selected string — mirrors
+        `ControlPanel.get_animatediff_args()`'s local `_dd_val` helper
+        (main_window.py ~5286-5291) exactly."""
+        idx = dd.get_selected()
+        m = dd.get_model()
+        if m and idx < m.get_n_items():
+            return m.get_string(idx)
+        return ""
+
+    def _ad_dd(self, items: "list[str]", default: str) -> Gtk.DropDown:
+        """Build a `Gtk.DropDown` from a plain string list, pre-selecting
+        *default* — mirrors `ControlPanel._build_animatediff_box()`'s local
+        `_dd` helper (main_window.py ~5129-5138) exactly."""
+        sl = Gtk.StringList()
+        for item in items:
+            sl.append(item)
+        dd = Gtk.DropDown(model=sl)
+        try:
+            dd.set_selected(items.index(default))
+        except ValueError:
+            pass
+        return dd
+
+    def _ad_spin(self, lo: float, hi: float, step: float, val: float) -> Gtk.SpinButton:
+        """Mirrors `ControlPanel._build_animatediff_box()`'s local `_spin`
+        helper (main_window.py ~5147-5152) exactly."""
+        adj = Gtk.Adjustment(value=val, lower=lo, upper=hi, step_increment=step)
+        sb = Gtk.SpinButton(adjustment=adj)
+        sb.set_digits(2 if step < 1 else 0)
+        sb.set_size_request(70, -1)
+        return sb
+
+    def _build_animatediff_options_row(self) -> Gtk.Box:
+        """Build the whole AnimateDiff options group as ONE row (a vertical
+        box whose first child is a plain header Label, so `RoleZonePanel.
+        _relabel_row` can still rewrite it with the marker glyph — see that
+        method's "no-op if the row's first child isn't a Gtk.Label" fallback,
+        which this deliberately satisfies).
+
+        Hidden by default (`_update_animatediff_visibility` called at the end
+        of `build()`) since "wan2" is `_DEFAULT_VIDEO_MODEL_KEY`, not
+        "animatediff".
+        """
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        outer.add_css_class("video-param-row")
+        outer.add_css_class("video-animatediff-options")
+
+        header = Gtk.Label(label="AnimateDiff Options")
+        header.set_xalign(0.0)
+        header.add_css_class("video-param-label")
+        outer.append(header)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        content.set_margin_start(8)
+        content.set_margin_top(4)
+
+        def _sub_row(lbl_text: str, widget: Gtk.Widget) -> Gtk.Box:
+            r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            lbl = Gtk.Label(label=lbl_text)
+            lbl.set_xalign(0)
+            lbl.set_hexpand(True)
+            lbl.add_css_class("video-param-hint")
+            r.append(lbl)
+            r.append(widget)
+            return r
+
+        # Mode
+        self._ad_mode = self._ad_dd(_ANIMATEDIFF_MODE_CHOICES, "blackhole")
+        content.append(_sub_row("Mode", self._ad_mode))
+
+        # Negative prompt (AnimateDiff's OWN — distinct from the shared
+        # "negative_prompt" row above, which other video models use).
+        self._ad_neg_prompt = Gtk.Entry()
+        self._ad_neg_prompt.set_placeholder_text("blurry, low quality")
+        self._ad_neg_prompt.set_hexpand(True)
+        content.append(_sub_row("Negative prompt", self._ad_neg_prompt))
+
+        # Temporal alpha
+        self._ad_temporal_alpha = self._ad_spin(0.0, 1.0, 0.05, 0.35)
+        content.append(_sub_row("Temporal α", self._ad_temporal_alpha))
+
+        # Performance
+        self._ad_lightning = Gtk.CheckButton(label="Lightning mode (Euler scheduler)")
+        self._ad_lightning.add_css_class("video-param-hint")
+        content.append(self._ad_lightning)
+
+        self._ad_lightning_steps = self._ad_dd(_ANIMATEDIFF_LIGHTNING_STEPS_CHOICES, "4")
+        self._ad_lightning_steps_row = _sub_row("Distill steps", self._ad_lightning_steps)
+        self._ad_lightning_steps_row.set_visible(False)
+        content.append(self._ad_lightning_steps_row)
+
+        self._ad_lightning.connect(
+            "toggled", lambda *_a: self._sync_ad_lightning_steps_visibility()
+        )
+        self._ad_mode.connect(
+            "notify::selected", lambda *_a: self._sync_ad_lightning_steps_visibility()
+        )
+
+        self._ad_multi_chip = Gtk.CheckButton(label="Use all chips in parallel")
+        self._ad_multi_chip.set_active(True)
+        self._ad_multi_chip.add_css_class("video-param-hint")
+        content.append(self._ad_multi_chip)
+
+        self._ad_device_id = self._ad_spin(-1, 7, 1, -1)
+        self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
+        content.append(_sub_row("Device ID", self._ad_device_id))
+
+        # Chain continuity
+        self._ad_chain_from = Gtk.Entry()
+        self._ad_chain_from.set_placeholder_text("path/to/latents.chain.pt")
+        self._ad_chain_from.set_hexpand(True)
+        chain_pick_btn = Gtk.Button(label="…")
+        chain_pick_btn.add_css_class("video-param-hint")
+        chain_pick_btn.connect("clicked", self._on_ad_chain_from_pick)
+        chain_from_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        chain_from_row.append(self._ad_chain_from)
+        chain_from_row.append(chain_pick_btn)
+        content.append(_sub_row("Chain from (.pt)", chain_from_row))
+
+        self._ad_chain_save = Gtk.CheckButton(label="Save latents for chaining")
+        self._ad_chain_save.add_css_class("video-param-hint")
+        content.append(self._ad_chain_save)
+
+        self._ad_chain_alpha = self._ad_spin(0.0, 1.0, 0.05, 0.6)
+        content.append(_sub_row("Chain α", self._ad_chain_alpha))
+
+        # MotionAdapter
+        self._ad_motion_adapter = Gtk.CheckButton(label="Enable MotionAdapter")
+        self._ad_motion_adapter.add_css_class("video-param-hint")
+        content.append(self._ad_motion_adapter)
+
+        self._ad_motion_skip = self._ad_dd(
+            _ANIMATEDIFF_MOTION_SKIP_CHOICES, "None (full quality)"
+        )
+        content.append(_sub_row("Skip preset", self._ad_motion_skip))
+
+        self._ad_injection_alpha = self._ad_spin(0.0, 1.0, 0.05, 1.0)
+        content.append(_sub_row("Injection α", self._ad_injection_alpha))
+
+        outer.append(content)
+        self._ad_options_row = outer
+        outer.set_visible(False)  # AnimateDiff isn't the default model
+        return outer
+
+    def _on_ad_chain_from_pick(self, _btn: Gtk.Button) -> None:
+        """Open a file-chooser to pick a .chain.pt latents file — same
+        async `Gtk.FileDialog` pattern as `AnimateParamPanel`'s ref-video/
+        ref-image pickers below (per CLAUDE.md's FileDialog gotcha)."""
+        dlg = Gtk.FileDialog()
+        dlg.set_title("Select chain latents (.pt)")
+        parent = _btn.get_root() if _btn is not None else None
+        dlg.open(parent, None, self._on_ad_chain_from_picked)
+
+    def _on_ad_chain_from_picked(self, dlg, result) -> None:
+        try:
+            gfile = dlg.open_finish(result)
+        except Exception:
+            return  # user cancelled — leave the existing entry text untouched
+        if gfile is not None and self._ad_chain_from is not None:
+            path = gfile.get_path()
+            if path:
+                self._ad_chain_from.set_text(path)
+
+    def _collect_animatediff_args(self) -> dict:
+        """Read every AnimateDiff-specific widget into the exact
+        `get_animatediff_args()` shape (main_window.py ~5283) — ALWAYS a
+        complete dict (every key present), whether or not `build()` has run
+        yet (falls back to `_ANIMATEDIFF_DEFAULTS` verbatim) or AnimateDiff
+        is the currently-selected model (the widgets still hold real values
+        either way; only their ENCLOSING row's visibility is gated)."""
+        if self._ad_mode is None:
+            return dict(_ANIMATEDIFF_DEFAULTS)
+
+        skip_preset = self._ad_dd_val(self._ad_motion_skip)
+        motion_skip = _ANIMATEDIFF_MOTION_SKIP_VALUES.get(skip_preset)
+
+        raw_device_id = int(self._ad_device_id.get_value())
+
+        return dict(
+            mode=self._ad_dd_val(self._ad_mode) or "blackhole",
+            negative_prompt=self._ad_neg_prompt.get_text() or "blurry, low quality",
+            temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
+            lightning=self._ad_lightning.get_active(),
+            lightning_steps=int(self._ad_dd_val(self._ad_lightning_steps) or "4"),
+            multi_chip=self._ad_multi_chip.get_active(),
+            device_id=raw_device_id if raw_device_id >= 0 else None,
+            chain_from=self._ad_chain_from.get_text().strip() or None,
+            chain_save=self._ad_chain_save.get_active(),
+            chain_alpha=round(self._ad_chain_alpha.get_value(), 2),
+            motion_adapter="" if self._ad_motion_adapter.get_active() else None,
+            motion_adapter_alpha=round(self._ad_injection_alpha.get_value(), 2),
+            motion_adapter_skip=motion_skip,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

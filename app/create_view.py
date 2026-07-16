@@ -800,6 +800,14 @@ class CreateView(Gtk.Box):
 
         self._model_dropdown = Gtk.DropDown()
         self._model_dropdown.add_css_class("create-model-dropdown")
+        # SP-3c-2: keep the mounted native panel's OWN (otherwise-invisible —
+        # RoleZonePanel skips `kind == "model"` rows) model state in lockstep
+        # with THIS scoped dropdown, the one the user actually sees/clicks.
+        # Today this only matters for VideoParamPanel's AnimateDiff options
+        # box (see `_sync_panel_model_selection`), but is wired generically
+        # so any future panel that exposes `set_selected_model_key` benefits
+        # too.
+        self._model_dropdown.connect("notify::selected", self._on_scoped_model_dropdown_changed)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         content.add_css_class("create-view-content")
@@ -1273,6 +1281,11 @@ class CreateView(Gtk.Box):
             zoned = RoleZonePanel(panel, medium)
             self._panel_host.append(zoned)
             self._active_panel = zoned
+            # SP-3c-2: `_populate_model_dropdown` above already selected the
+            # scoped dropdown's fresh-populate default (or restored/auto-
+            # selected a key) BEFORE this panel existed to sync against —
+            # push that selection into the panel now that it's mounted.
+            self._sync_panel_model_selection()
             return
 
         if medium.source == "artgen" and medium.generator:
@@ -1322,12 +1335,30 @@ class CreateView(Gtk.Box):
         string "artgen" (every artgen generator shares the same chat-LLM
         servers — there's no per-generator server). Anything else (no active
         medium yet, or a future medium kind) returns `[]`.
+
+        SP-3c-2: the "video" medium gets one extra synthetic key,
+        "animatediff", appended after the server-backed ones.
+        `server_manager.servers_for_capability("video")` can never include it
+        — `server_manager.CAPABILITY_LABELS`'s own comment notes AnimateDiff
+        is "hardware-only (no server)", so there is no `ServerDef` to match —
+        but native AnimateDiff still needs a slot in this SCOPED dropdown:
+        it's the one CreateView surface the user actually sees and clicks
+        (`RoleZonePanel` deliberately never renders a wrapped panel's own
+        `kind == "model"` row — see that class's module comment — so
+        `VideoParamPanel`'s internal AnimateDiff choice would otherwise be
+        unreachable). `_canonical_model_id_for`/`_populate_model_dropdown`
+        already know how to resolve and label this key generically (via
+        `create_param_panels._VIDEO_MODEL_IDS`/`server_manager.
+        CAPABILITY_LABELS` respectively) — no special-casing needed there.
         """
         medium = medium if medium is not None else self._active_medium
         if medium is None:
             return []
         cap = "artgen" if medium.source == "artgen" else medium.id
-        return [sdef.key for sdef in server_manager.servers_for_capability(cap)]
+        keys = [sdef.key for sdef in server_manager.servers_for_capability(cap)]
+        if medium.id == "video":
+            keys.append("animatediff")
+        return keys
 
     def _populate_model_dropdown(self, medium: Medium) -> None:
         """Rebuild `self._model_dropdown` to list ONLY *medium*'s own models.
@@ -1394,7 +1425,15 @@ class CreateView(Gtk.Box):
             if is_native_with_model and canonical is None:
                 continue
             sdef = server_manager.SERVERS.get(key)
-            label_text = sdef.label if sdef is not None else key
+            # "animatediff" (SP-3c-2) has no `ServerDef` — fall back to
+            # `server_manager.CAPABILITY_LABELS` (which already carries a
+            # human label for it, "AnimateDiff  (Blackhole)", for exactly
+            # this reason — see that dict's own comment) before falling all
+            # the way back to the bare key.
+            label_text = (
+                sdef.label if sdef is not None
+                else server_manager.CAPABILITY_LABELS.get(key, key)
+            )
             dot = self._model_dot_glyph(key)
             labels.append(f"{dot} {label_text}")
             entries.append((key, canonical, label_text))
@@ -1477,6 +1516,43 @@ class CreateView(Gtk.Box):
             return entries[idx][0]
         return None
 
+    def _on_scoped_model_dropdown_changed(self, _dropdown, _pspec) -> None:
+        """`notify::selected` handler for the scoped `_model_dropdown` — see
+        `_sync_panel_model_selection`."""
+        self._sync_panel_model_selection()
+
+    def _sync_panel_model_selection(self) -> None:
+        """Push the scoped dropdown's current selection into the active
+        native panel's OWN model dropdown (SP-3c-2).
+
+        `RoleZonePanel` deliberately never renders a wrapped panel's own
+        `kind == "model"` row (see that class's module comment) — the
+        user-visible model picker is this SCOPED `_model_dropdown` instead.
+        Without this sync, a panel's internal model state (which some panels
+        use for their OWN purposes beyond just "what canonical id to submit"
+        — e.g. `VideoParamPanel` keys its AnimateDiff-options-box visibility
+        off it) would sit frozen at its own built-in default forever, since
+        nothing else ever touches it. Called both right after a fresh panel
+        is mounted (`_swap_panel`) and on every subsequent scoped-dropdown
+        selection change.
+
+        No-op when there's no active `RoleZonePanel`, the wrapped panel
+        doesn't expose a `set_selected_model_key` hook (only `VideoParamPanel`
+        does today — Image/Animate/Artgen panels are unaffected), or nothing
+        valid is currently selected in the scoped dropdown.
+        """
+        if not isinstance(self._active_panel, RoleZonePanel):
+            return
+        set_key = getattr(self._active_panel._panel, "set_selected_model_key", None)
+        if set_key is None:
+            return
+        key = self._selected_model_key()
+        if key is None:
+            return
+        if self._active_medium is not None and self._active_medium.id == "video":
+            key = _VIDEO_SERVER_KEY_ALIAS.get(key, key)
+        set_key(key)
+
     # ── Model health (feeds the scoped dropdown's status dots) ──────────────
 
     def _refresh_model_health_async(self) -> None:
@@ -1537,7 +1613,16 @@ class CreateView(Gtk.Box):
         service is injected, falls back to the pre-Task-2 boolean
         `_model_health` map — byte-identical to the old inline
         `"●" if running else "○"` logic, so the status_service=None path is
-        unchanged."""
+        unchanged.
+
+        SP-3c-2: "animatediff" always reads READY ("●") — it's hardware-only
+        with no server to start/stop/health-check (see `_scoped_model_keys`'s
+        comment), so showing it as perpetually "offline" (the default for a
+        key neither health source has ever heard of) would be actively
+        misleading — it is, in fact, always ready to generate.
+        """
+        if key == "animatediff":
+            return "●"
         if self._status_service is not None:
             status = self._status_snapshot.get(key, Status.OFF)
             return self._status_glyph(status)

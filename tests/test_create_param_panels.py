@@ -43,7 +43,13 @@ try:
 except Exception:  # pragma: no cover - environment-dependent
     pytest.skip("no GTK display available", allow_module_level=True)
 
-from create_param_panels import ArtgenParamPanel, artgen_bool_flags
+from create_param_panels import (
+    ArtgenParamPanel,
+    VideoParamPanel,
+    _ANIMATEDIFF_DEFAULTS,
+    _VIDEO_MODEL_CHOICES,
+    artgen_bool_flags,
+)
 
 
 def _controls_by_dest(panel: ArtgenParamPanel) -> dict:
@@ -133,3 +139,147 @@ def test_concrete_default_int_zero_still_forwards():
     assert count.none_default is False
     count.widget.set_value(0)
     assert panel.collect()["count"] == 0
+
+
+# ── VideoParamPanel: native AnimateDiff option (SP-3c-2) ─────────────────────
+#
+# Migrates AnimateDiff v0.9 (the "native" hardware path — DISTINCT from the
+# artgen `animatediff` plugin medium, which stays a separate generator invoked
+# via `tt-ctl artgen animatediff`) into Create's Video medium. Mirrors
+# `ControlPanel._build_animatediff_box()`/`get_animatediff_args()`
+# (main_window.py ~5103/~5283) field-for-field — see
+# `.superpowers/sdd/task-2-brief.md`.
+
+
+def _video_model_index(key: str) -> int:
+    for idx, (choice_key, _label) in enumerate(_VIDEO_MODEL_CHOICES):
+        if choice_key == key:
+            return idx
+    raise AssertionError(f"{key!r} not in _VIDEO_MODEL_CHOICES")
+
+
+def test_video_model_choices_include_animatediff():
+    keys = [key for key, _label in _VIDEO_MODEL_CHOICES]
+    assert "animatediff" in keys
+
+
+def test_video_panel_collect_always_includes_complete_animatediff_args():
+    """Regardless of which model is selected, collect()'s "animatediff_args"
+    is a COMPLETE dict — every `_ANIMATEDIFF_DEFAULTS` key present — so a
+    caller (main_window._create_generate_native) never needs to special-case
+    a missing key before forwarding it to `_on_generate`."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    args = panel.collect()["animatediff_args"]
+    assert set(args) == set(_ANIMATEDIFF_DEFAULTS)
+
+
+def test_video_panel_collect_before_build_still_has_complete_animatediff_args():
+    """collect() must never raise even if called before build() — matches
+    every other field's fallback-to-default contract in this panel."""
+    panel = VideoParamPanel()
+    assert panel.collect()["animatediff_args"] == _ANIMATEDIFF_DEFAULTS
+
+
+def test_video_panel_animatediff_options_hidden_by_default():
+    """"wan2" is the panel's built-in default model — the AnimateDiff options
+    row must not be visible until AnimateDiff is actually selected."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    assert panel._ad_options_row.get_visible() is False
+
+
+def test_video_panel_animatediff_options_visible_when_selected():
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+
+    assert panel._ad_options_row.get_visible() is True
+
+
+def test_video_panel_animatediff_options_hidden_again_after_switching_away():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert panel._ad_options_row.get_visible() is True
+
+    panel._model_dropdown.set_selected(_video_model_index("wan2"))
+
+    assert panel._ad_options_row.get_visible() is False
+
+
+def test_video_panel_set_selected_model_key_reveals_animatediff_options():
+    """The programmatic hook CreateView calls to keep this panel's own
+    (otherwise-invisible, see RoleZonePanel's "model" kind skip) model state
+    in sync with the scoped dropdown the user actually sees."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel.set_selected_model_key("animatediff")
+
+    assert panel._ad_options_row.get_visible() is True
+    assert panel._selected_video_key() == "animatediff"
+
+
+def test_video_panel_set_selected_model_key_unknown_key_is_a_noop():
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel.set_selected_model_key("not-a-real-model")
+
+    # Falls back to whatever was already selected (the built-in default).
+    assert panel._selected_video_key() == "wan2"
+
+
+def test_video_panel_animatediff_args_reflect_widget_values():
+    """A round trip: set a handful of AnimateDiff-specific widgets, then
+    confirm collect()'s "animatediff_args" reflects exactly those values
+    (and leaves the rest at their documented defaults)."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    panel._ad_temporal_alpha.set_value(0.7)
+    panel._ad_neg_prompt.set_text("oversaturated")
+    panel._ad_chain_save.set_active(True)
+    panel._ad_multi_chip.set_active(False)
+
+    args = panel.collect()["animatediff_args"]
+    assert args["temporal_alpha"] == 0.7
+    assert args["negative_prompt"] == "oversaturated"
+    assert args["chain_save"] is True
+    assert args["multi_chip"] is False
+    # Untouched fields keep their defaults.
+    assert args["mode"] == "blackhole"
+    assert args["lightning"] is False
+
+
+def test_video_panel_lightning_steps_row_hidden_until_lightning_and_cpu():
+    """Mirrors ControlPanel's own `_on_ad_lightning_toggled`: the Distill
+    steps row only appears when Lightning is ON *and* mode is "cpu"."""
+    panel = VideoParamPanel()
+    panel.build()
+    assert panel._ad_lightning_steps_row.get_visible() is False
+
+    panel._ad_lightning.set_active(True)
+    assert panel._ad_lightning_steps_row.get_visible() is False  # mode still blackhole
+
+    panel._ad_mode.set_selected(_video_model_index_in(["blackhole", "cpu", "sim"], "cpu"))
+    assert panel._ad_lightning_steps_row.get_visible() is True
+
+    panel._ad_lightning.set_active(False)
+    assert panel._ad_lightning_steps_row.get_visible() is False
+
+
+def _video_model_index_in(choices, value):
+    return choices.index(value)
+
+
+def test_video_panel_animatediff_args_role_is_control_exact():
+    import field_roles as fr
+
+    specs = {s.key: s for s in VideoParamPanel().field_specs()}
+    assert specs["animatediff_args"].role == fr.FieldRole(fr.ROLE_CONTROL, fr.MARK_EXACT)
+    assert specs["animatediff_args"].kind == "dict"

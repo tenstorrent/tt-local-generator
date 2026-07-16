@@ -58,6 +58,7 @@ except Exception:  # pragma: no cover - environment-dependent
 
 from create_mediums import Medium
 from create_param_panels import (
+    _ANIMATEDIFF_DEFAULTS,
     _VIDEO_MODEL_IDS,
     AnimateParamPanel,
     ArtgenParamPanel,
@@ -98,7 +99,10 @@ _IMAGE_DEFAULTS = {
 # defaults to None (server/runner default) via a 0="auto" spin sentinel,
 # mirroring the seed field's -1="random" sentinel already used by
 # ImageParamPanel. Steps clamp (12-50) and default (20) mirror
-# `api_client.APIClient.submit`'s server-side clamp.
+# `api_client.APIClient.submit`'s server-side clamp. `animatediff_args`
+# (SP-3c-2, migration-safe addition) is ALWAYS a complete
+# `_ANIMATEDIFF_DEFAULTS` dict regardless of which model is selected — see
+# `VideoParamPanel.collect()`'s docstring.
 _VIDEO_DEFAULTS = {
     "negative_prompt": "",
     "num_inference_steps": 20,
@@ -106,6 +110,7 @@ _VIDEO_DEFAULTS = {
     "model": "wan2.2-t2v",
     "num_frames": None,
     "seed_image_path": "",
+    "animatediff_args": dict(_ANIMATEDIFF_DEFAULTS),
 }
 
 # The exact default dict `AnimateParamPanel.collect()` returns for a freshly
@@ -520,6 +525,7 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
         "model": "mochi-1-preview",
         "num_frames": 65,
         "seed_image_path": "",
+        "animatediff_args": dict(_ANIMATEDIFF_DEFAULTS),
     }
 
 
@@ -761,6 +767,103 @@ def test_video_scoped_dropdown_includes_skyreels(monkeypatch):
 
     canonicals = {c for _k, c, _l in view._model_dropdown_entries}
     assert "skyreels-v2-i2v-14b-540p" in canonicals
+
+
+# ── Native AnimateDiff in the scoped Video dropdown (SP-3c-2) ────────────────
+#
+# AnimateDiff v0.9 is hardware-only (no `server_manager.ServerDef` — see that
+# module's `CAPABILITY_LABELS` comment), so `servers_for_capability("video")`
+# never lists it; `_scoped_model_keys` appends it as a synthetic entry so it's
+# still reachable from the ONE model picker the user actually sees.
+
+
+def test_video_scoped_dropdown_includes_animatediff(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+
+    canonicals = {c for _k, c, _l in view._model_dropdown_entries}
+    assert "animatediff-blackhole" in canonicals
+
+
+def test_animatediff_scoped_dropdown_entry_has_a_readable_label(monkeypatch):
+    """No `ServerDef` backs "animatediff" — the label must still fall back to
+    something human-readable (`server_manager.CAPABILITY_LABELS`), not the
+    bare key."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+
+    labels = {k: label for k, _c, label in view._model_dropdown_entries}
+    assert labels["animatediff"] == "AnimateDiff  (Blackhole)"
+
+
+def test_animatediff_scoped_dropdown_dot_always_ready(monkeypatch):
+    """AnimateDiff needs no server — its dot must read "ready", never
+    "offline", regardless of what `_model_health`/the status service report
+    for every other key (which default an unrecognized key to OFF)."""
+    view = _make_view(monkeypatch)
+    assert view._model_dot_glyph("animatediff") == "●"
+
+
+def _animatediff_index(view):
+    for idx, (key, _canonical, _label) in enumerate(view._model_dropdown_entries):
+        if key == "animatediff":
+            return idx
+    raise AssertionError("animatediff entry not found in video scoped dropdown")
+
+
+def test_collect_params_model_animatediff(monkeypatch):
+    """Selecting AnimateDiff in the SCOPED dropdown (the one the user sees)
+    must produce the "animatediff-blackhole" canonical id in collect_params'
+    "model" — exactly like every other video model choice."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+
+    view._model_dropdown.set_selected(_animatediff_index(view))
+
+    assert view._collect_params()["model"] == "animatediff-blackhole"
+
+
+def test_selecting_animatediff_in_scoped_dropdown_reveals_panel_options(monkeypatch):
+    """The whole point of `_sync_panel_model_selection`: VideoParamPanel's
+    own AnimateDiff-options box (invisible to RoleZonePanel's zone-building —
+    it never renders a `kind == "model"` row) must become visible once the
+    user picks AnimateDiff in the ONE dropdown they actually see."""
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+    panel = _panel_of(view)
+    assert panel._ad_options_row.get_visible() is False
+
+    view._model_dropdown.set_selected(_animatediff_index(view))
+
+    assert panel._ad_options_row.get_visible() is True
+
+
+def test_switching_away_from_animatediff_hides_panel_options_again(monkeypatch):
+    view = _make_view(monkeypatch)
+    view._chip_buttons["video"].set_active(True)
+    panel = _panel_of(view)
+    view._model_dropdown.set_selected(_animatediff_index(view))
+    assert panel._ad_options_row.get_visible() is True
+
+    view._model_dropdown.set_selected(0)  # back to wan2.2
+
+    assert panel._ad_options_row.get_visible() is False
+
+
+def test_animatediff_selection_reaches_on_create_via_cta(monkeypatch):
+    """Full round trip: pick AnimateDiff in the scoped dropdown, click
+    Create, and confirm the params handed to `on_create` carry the
+    AnimateDiff canonical id (main_window._create_generate_native turns this
+    into `video_model_key="animatediff"` — covered in
+    tests/test_main_window_create_generate.py)."""
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["video"].set_active(True)
+
+    view._model_dropdown.set_selected(_animatediff_index(view))
+    view._cta_btn.emit("clicked")
+
+    assert calls[-1][1]["model"] == "animatediff-blackhole"
 
 
 def test_model_health_reflects_running_vs_not(monkeypatch):
@@ -1459,19 +1562,22 @@ def test_video_param_panel_build_returns_a_widget_with_controls():
     widget = panel.build()
 
     assert isinstance(widget, Gtk.Widget)
-    # Six rows: seed image, steps, seed, model, num_frames, negative prompt.
+    # Seven rows: seed image, steps, seed, model, num_frames, negative
+    # prompt, AnimateDiff options (SP-3c-2 — hidden by default, but still one
+    # row of the panel's own root box).
     rows = []
     child = widget.get_first_child()
     while child is not None:
         rows.append(child)
         child = child.get_next_sibling()
-    assert len(rows) == 6
+    assert len(rows) == 7
     assert panel._steps_adj is not None
     assert panel._seed_adj is not None
     assert panel._model_dropdown is not None
     assert panel._frames_adj is not None
     assert panel._neg_entry is not None
     assert panel._seed_well is not None
+    assert panel._ad_options_row is not None
 
 
 def test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
@@ -1481,7 +1587,7 @@ def test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults():
     assert panel.collect() == _VIDEO_DEFAULTS
     assert set(panel.collect().keys()) == {
         "negative_prompt", "num_inference_steps", "seed", "model", "num_frames",
-        "seed_image_path",
+        "seed_image_path", "animatediff_args",
     }
 
 
@@ -1502,6 +1608,7 @@ def test_video_param_panel_collect_reflects_changed_widget_values():
         "model": "mochi-1-preview",
         "num_frames": 49,
         "seed_image_path": "",
+        "animatediff_args": dict(_ANIMATEDIFF_DEFAULTS),
     }
 
 
@@ -1515,10 +1622,11 @@ def test_video_param_panel_num_frames_zero_collects_as_none():
     assert panel.collect()["num_frames"] is None
 
 
-def test_video_param_panel_model_dropdown_covers_all_three_choices():
-    """SP-3c-1: SkyReels-I2V is back — VideoParamPanel now owns a
-    `SeedImageWell` that can supply the conditioning image it needs, so all
-    three video models (wan2/mochi/skyreels) are selectable."""
+def test_video_param_panel_model_dropdown_covers_all_four_choices():
+    """SP-3c-1 re-enabled SkyReels-I2V (VideoParamPanel owns a `SeedImageWell`
+    that can supply its required conditioning image); SP-3c-2 adds native
+    AnimateDiff — all four video models (wan2/mochi/skyreels/animatediff) are
+    selectable."""
     panel = VideoParamPanel()
     panel.build()
 
@@ -1526,12 +1634,14 @@ def test_video_param_panel_model_dropdown_covers_all_three_choices():
         0: "wan2.2-t2v",
         1: "mochi-1-preview",
         2: "skyreels-v2-i2v-14b-540p",
+        3: "animatediff-blackhole",
     }
     for idx, model_id in expected.items():
         panel._model_dropdown.set_selected(idx)
         assert panel.collect()["model"] == model_id
-    assert panel._model_dropdown.get_model().get_n_items() == 3
+    assert panel._model_dropdown.get_model().get_n_items() == 4
     assert "skyreels-v2-i2v-14b-540p" in _VIDEO_MODEL_IDS.values()
+    assert "animatediff-blackhole" in _VIDEO_MODEL_IDS.values()
 
 
 def test_video_param_panel_seed_well_supplies_skyreels_conditioning_image(tmp_path):
