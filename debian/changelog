@@ -1,3 +1,15 @@
+tt-local-generator (0.31.1) noble; urgency=medium
+
+  * In-place Create results: hardened the Create-job state lifecycle after the
+    whole-slice review. A second Create click while a job is running now safely
+    no-ops (a status message) instead of clearing the running job's state out
+    from under it; a synchronous dispatch error now surfaces in the panel and
+    clears state instead of leaving it stuck on 'generating'; and the artgen
+    no-generator path clears state too. So the window-global Create-job flag
+    can never stay stuck or bleed into an unrelated next job.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 01:00:00 -0700
+
 tt-local-generator (0.31.0) noble; urgency=medium
 
   * Create shows your result in place, the instant it's done -- no more
