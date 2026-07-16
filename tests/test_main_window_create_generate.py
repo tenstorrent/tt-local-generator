@@ -703,6 +703,12 @@ class _FakeResultPanel:
 class _FakeCreateView:
     def __init__(self) -> None:
         self._result_panel = _FakeResultPanel()
+        # SP-3c-4: `_refresh_create_queue_display` calls
+        # `self._create_view.refresh_queue(pending, on_cancel)` — a MagicMock
+        # here lets tests assert on the pending-queue payload MainWindow
+        # pushed into CreateView without needing a real `CreateResultPanel`
+        # GTK widget tree.
+        self.refresh_queue = MagicMock()
 
 
 class _FakeGallery:
@@ -781,6 +787,17 @@ def _make_mw_lifecycle(monkeypatch):
     obj._rebuild_playlists_menu = MagicMock()
     obj._count_blackhole_chips = MagicMock(return_value=0)
 
+    # SP-3c-4: the generation queue itself, plus enough of a real widget
+    # tree (`_queue_box`/`_queue_section_lbl` are real GTK widgets — this
+    # module already requires a display, see the probe at the top of the
+    # file — `_hw_statusbar` is a MagicMock since HardwareStatusBar isn't
+    # under test here) that the REAL `_update_queue_display` can run without
+    # touching anything not set up by this harness.
+    obj._queue = []
+    obj._queue_box = Gtk.Box()
+    obj._queue_section_lbl = Gtk.Label()
+    obj._hw_statusbar = MagicMock()
+
     fake_create_view = _FakeCreateView()
     obj._create_view = fake_create_view
 
@@ -788,6 +805,8 @@ def _make_mw_lifecycle(monkeypatch):
         "_on_create_generate",
         "_create_generate_native",
         "_create_generate_artgen",
+        "_native_generate_args",
+        "_create_enqueue_native",
         "_on_create_artgen_done",
         "_on_create_artgen_error",
         "_begin_create_job",
@@ -796,8 +815,17 @@ def _make_mw_lifecycle(monkeypatch):
         "_on_progress",
         "_on_finished",
         "_on_error",
+        "_on_enqueue",
+        "_on_queue_remove",
+        "_persist_queue",
+        "_update_queue_display",
+        "_refresh_create_queue_display",
     ):
         setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
+    # `_start_next_queued` stays the no-op MagicMock set above — enqueue-path
+    # tests must not accidentally auto-drain the queue. The one
+    # faithful-replay test that needs the REAL `_start_next_queued` rebinds
+    # it itself, right before calling it.
 
     monkeypatch.setattr(mw.threading, "Thread", _NoOpThread)
     monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
@@ -1185,13 +1213,16 @@ def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch)
 # today (discover_mediums always sets a generator) but fixed for the same
 # "every terminal path clears the flag" consistency.
 
-def test_reentrant_create_call_while_job_active_is_ignored(monkeypatch):
-    """A second Create click while `_create_job_active` is already True must
-    be a no-op for Create-job state: no second `_begin_create_job`/pending
-    display, the running job's flag is left alone, and no dispatch happens."""
+def test_reentrant_create_call_while_job_active_enqueues_native_medium(monkeypatch):
+    """SP-3c-4: a second Create click for a NATIVE medium while
+    `_create_job_active` is already True must ENQUEUE — not no-op. No second
+    `_begin_create_job`/pending display (the running job's own panel state
+    is untouched), the flag is left alone (still True — it belongs to the
+    FIRST, still-running job), and no `_create_generate_native`/`_on_generate`
+    dispatch happens — the job goes onto `self._queue` instead."""
     obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
     obj._create_job_active = True  # simulates a first job already in flight
-    obj._create_generate_native = MagicMock()  # spy: dispatch must never run
+    obj._create_generate_native = MagicMock()  # spy: the "generate now" path must never run
 
     obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "second click",
                                              "model": "flux.1-schnell"})
@@ -1203,7 +1234,222 @@ def test_reentrant_create_call_while_job_active_is_ignored(monkeypatch):
     # The flag is exactly as it was — still True, i.e. NOT cleared out from
     # under the (simulated) still-running first job.
     assert obj._create_job_active is True
-    obj._set_status.assert_called_with("A generation is already running…")
+    # The job landed on the queue instead of being dropped.
+    assert len(obj._queue) == 1
+    assert obj._queue[0].prompt == "second click"
+    obj._set_status.assert_called_with("Added to queue (1 item queued)")
+
+
+# ── SP-3c-4: generation queue in Create (task-4-brief.md) ───────────────────
+#
+# When `_create_job_active`, a native medium's Create click now enqueues via
+# the SAME `_QueueItem`/`_on_enqueue`/`_persist_queue` machinery the legacy
+# ControlPanel's own Generate-when-busy button already uses (see
+# `_on_action_clicked`'s `self._on_enqueue(*args, **model_kwargs)` branch),
+# instead of the SP-3-era no-op. `_create_enqueue_native` builds the exact
+# same args/kwargs `_create_generate_native` would have passed to
+# `_on_generate` (via the shared `_native_generate_args` helper) so
+# `_start_next_queued` later replays the job faithfully.
+
+def test_create_while_busy_enqueues_image_job_with_faithful_params(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+
+    obj._on_create_generate(_IMAGE_MEDIUM, {
+        "prompt": "a lighthouse at dawn",
+        "negative_prompt": "blurry",
+        "num_inference_steps": 30,
+        "seed": 42,
+        "guidance_scale": 4.2,
+        "model": "motif-image-6b-preview",
+        "seed_image_path": "/tmp/a-seed.png",
+    })
+
+    assert len(obj._queue) == 1
+    item = obj._queue[0]
+    assert item.prompt == "a lighthouse at dawn"
+    assert item.negative_prompt == "blurry"
+    assert item.steps == 30
+    assert item.seed == 42
+    assert item.model_source == "image"
+    assert item.guidance_scale == 4.2
+    assert item.seed_image_path == "/tmp/a-seed.png"
+    # canonical "motif-image-6b-preview" -> short key "motif", same inverse
+    # map `_create_generate_native` uses.
+    assert item.model_id == "motif"
+    assert item.image_model_key == "motif"
+    # Create's own pending-queue display (in the result pane) was refreshed
+    # with the post-enqueue queue.
+    fake_create_view.refresh_queue.assert_called_once()
+    (pushed_items, on_cancel), _kwargs = fake_create_view.refresh_queue.call_args
+    assert pushed_items == obj._queue
+    assert on_cancel is obj._on_queue_remove
+
+
+def test_create_while_busy_enqueues_video_animatediff_job_with_complete_args(monkeypatch):
+    """Faithful replay must cover the SP-3c-2 native AnimateDiff case too —
+    the queued item's `animatediff_args` must be the SAME complete dict
+    `_create_generate_native` would have forwarded to `_on_generate`."""
+    import main_window as mw
+
+    obj, _fake_gallery, _fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+
+    obj._on_create_generate(_VIDEO_MEDIUM, {
+        "prompt": "a glitchy dance loop",
+        "model": "animatediff-blackhole",
+        "num_inference_steps": 20,
+        "seed": -1,
+        "animatediff_args": {"temporal_alpha": 0.9},
+    })
+
+    assert len(obj._queue) == 1
+    item = obj._queue[0]
+    assert item.model_source == "video"
+    assert item.video_model_key == "animatediff"
+    assert item.model_id == "animatediff"
+    assert set(item.animatediff_args) == set(mw._ANIMATEDIFF_DEFAULTS)
+    assert item.animatediff_args["temporal_alpha"] == 0.9
+
+
+def test_create_while_busy_skyreels_guard_blocks_enqueue_without_touching_active_job(monkeypatch):
+    """The SkyReels-I2V "no seed image" guard must still fire on the busy
+    (enqueue) path — but unlike the not-busy path, it must NOT call
+    `_fail_create_job`: that would wrongly clear the flag/show an error in
+    the panel for the FIRST job, which is still running and has nothing to
+    do with this rejected enqueue attempt."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+
+    obj._on_create_generate(_VIDEO_MEDIUM, {
+        "prompt": "a dancer",
+        "model": "skyreels-v2-i2v-14b-540p",
+        # no seed_image_path
+    })
+
+    assert obj._queue == []
+    assert obj._create_job_active is True  # untouched — still the first job's flag
+    assert fake_create_view._result_panel.calls == []  # no show_error from _fail_create_job
+    obj._set_status.assert_called_with(
+        "SkyReels I2V requires a starting image — add one to the "
+        "seed image well before generating."
+    )
+
+
+def test_create_while_busy_animate_medium_enqueues_too(monkeypatch):
+    """The Animate medium's translation (no negative_prompt, ref paths) must
+    enqueue faithfully as well — not just image/video."""
+    obj, _fake_gallery, _fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+
+    obj._on_create_generate(_ANIMATE_MEDIUM, {
+        "prompt": "dance like nobody's watching",
+        "num_inference_steps": 18,
+        "seed": 5,
+        "reference_video_path": "/tmp/motion.mp4",
+        "reference_image_path": "/tmp/char.png",
+        "animate_mode": "replacement",
+    })
+
+    assert len(obj._queue) == 1
+    item = obj._queue[0]
+    assert item.model_source == "animate"
+    assert item.negative_prompt == ""
+    assert item.ref_video_path == "/tmp/motion.mp4"
+    assert item.ref_char_path == "/tmp/char.png"
+    assert item.animate_mode == "replacement"
+
+
+def test_create_while_busy_artgen_medium_shows_status_not_enqueue(monkeypatch):
+    """Artgen mediums have no `_QueueItem` equivalent (their generation path
+    shells out to `tt-ctl`, never through `_on_generate`/`self._queue`) — a
+    second artgen click while busy must still surface an informative status
+    message rather than silently enqueuing nothing or re-entering
+    `_begin_create_job` (which would clobber the running job's panel)."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+    obj._create_generate_artgen = MagicMock()
+
+    obj._on_create_generate(_VERSE_MEDIUM, {"prompt": "winter forges"})
+
+    obj._create_generate_artgen.assert_not_called()
+    assert obj._queue == []
+    assert fake_create_view._result_panel.calls == []
+    assert obj._create_job_active is True
+    obj._set_status.assert_called_with(
+        "A generation is already running — Verse can't be queued yet; "
+        "try again once it finishes."
+    )
+
+
+def test_queue_cancel_removes_item_and_refreshes_create_display(monkeypatch):
+    """The cancel callback CreateView's queue rows call
+    (`fake_create_view.refresh_queue`'s second arg, `_on_queue_remove`) must
+    pop the right item, persist, and push the updated (now-empty) queue back
+    into CreateView."""
+    obj, _fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "first", "model": "flux.1-schnell"})
+    obj._on_create_generate(_IMAGE_MEDIUM, {"prompt": "second", "model": "flux.1-schnell"})
+    assert len(obj._queue) == 2
+
+    # The cancel callback CreateView was handed (identical every call).
+    on_cancel = fake_create_view.refresh_queue.call_args.args[1]
+    on_cancel(0)  # cancel the FIRST queued item ("first")
+
+    assert len(obj._queue) == 1
+    assert obj._queue[0].prompt == "second"
+    # Refreshed again after the cancel, now with just the remaining item.
+    last_pushed = fake_create_view.refresh_queue.call_args.args[0]
+    assert [i.prompt for i in last_pushed] == ["second"]
+
+
+def test_faithful_replay_drains_enqueued_native_job_into_on_generate(monkeypatch):
+    """The whole point of SP-3c-4: an enqueued Create job, once drained by
+    `_start_next_queued`, must call `_on_generate` with the SAME args/kwargs
+    `_create_generate_native` would have used immediately — model/seed-image/
+    animatediff_args all faithfully replayed, not just the prompt."""
+    import main_window as mw
+
+    obj, _fake_gallery, _fake_create_view = _make_mw_lifecycle(monkeypatch)
+    obj._create_job_active = True  # a first job is "running"
+
+    obj._on_create_generate(_VIDEO_MEDIUM, {
+        "prompt": "a train through the mountains",
+        "negative_prompt": "static",
+        "num_inference_steps": 25,
+        "seed": 7,
+        "model": "skyreels-v2-i2v-14b-540p",
+        "seed_image_path": "/tmp/character.png",
+    })
+    assert len(obj._queue) == 1
+
+    # The first job "finishes": _on_finished/_on_error would normally clear
+    # this and null out the worker — simulate that directly.
+    obj._create_job_active = False
+    obj._worker = None
+    obj._on_generate = MagicMock()  # swap the real bound method for a spy
+    obj._start_next_queued = getattr(mw.MainWindow, "_start_next_queued").__get__(obj)
+
+    obj._start_next_queued()
+
+    obj._on_generate.assert_called_once()
+    args, kwargs = obj._on_generate.call_args
+    # `_start_next_queued` replays every `_QueueItem` field POSITIONALLY
+    # (except the three model-selection kwargs) — mirrors `_on_generate`'s
+    # own positional signature (prompt, neg, steps, seed, seed_image_path,
+    # model_source, guidance_scale, ref_video_path, ref_char_path,
+    # animate_mode, model_id).
+    assert args[0] == "a train through the mountains"
+    assert args[1] == "static"
+    assert args[2] == 25
+    assert args[3] == 7
+    assert args[4] == "/tmp/character.png"   # seed_image_path
+    assert args[5] == "video"                # model_source
+    assert args[10] == "skyreels"            # model_id
+    assert kwargs["video_model_key"] == "skyreels"
+    # Queue is empty again after the drain.
+    assert obj._queue == []
 
 
 def test_dispatch_exception_clears_create_job_and_shows_error(monkeypatch):

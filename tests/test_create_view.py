@@ -2200,6 +2200,29 @@ def test_result_panel_starts_in_empty_state(make_create_view):
     assert cv._result_panel.state == "empty"
 
 
+# ── Pending-queue display forwarding (SP-3c-4, task-4-brief.md) ─────────────
+#
+# `CreateView.refresh_queue` is MainWindow's seam for pushing the generation
+# queue into the result pane's pending list — a thin forward to
+# `CreateResultPanel.set_queue` so MainWindow never reaches into
+# `self._create_view._result_panel` directly.
+
+def test_refresh_queue_forwards_to_result_panel(make_create_view):
+    cv = make_create_view()
+
+    class _Item:
+        def __init__(self, prompt):
+            self.prompt = prompt
+
+    items = [_Item("a castle"), _Item("a lighthouse")]
+    on_cancel = lambda i: None  # noqa: E731
+
+    cv.refresh_queue(items, on_cancel)
+
+    assert cv._result_panel.queue_count() == 2
+    assert cv._result_panel._on_queue_cancel is on_cancel
+
+
 def test_panes_container_is_a_flowbox_with_two_children(make_create_view):
     """The two-pane container itself (not just `_panes_wrap()`'s boolean)
     is a real `Gtk.FlowBox` holding exactly the form column and the result

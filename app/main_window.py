@@ -1728,6 +1728,25 @@ class _QueueItem:
     animatediff_args: "dict | None" = None  # snapshot of get_animatediff_args() when relevant
 
 
+class _NativeGenerateGuardError(Exception):
+    """Raised by `MainWindow._native_generate_args` when a native medium's
+    collected params fail a hard pre-flight guard (currently only the
+    SkyReels-I2V "no seed image" case) and neither `_on_generate` nor
+    `_on_enqueue` should be called at all.
+
+    Deliberately just a message-carrying exception rather than a return-None
+    sentinel: `_create_generate_native` (the not-busy path) and
+    `_create_enqueue_native` (SP-3c-4's busy-path enqueue) need to react
+    DIFFERENTLY to the same guard failure — the former is the active job
+    itself, so it clears `_create_job_active` via `_fail_create_job`; the
+    latter is a REJECTED enqueue attempt for a job that never became active,
+    so it must leave the currently-running job's flag alone and only show a
+    status message. Keeping the guard logic itself in one place
+    (`_native_generate_args`) means both call sites can't drift out of sync
+    on what "invalid" means.
+    """
+
+
 # ── Forge plugin transform helpers ────────────────────────────────────────────
 
 _TRANSFORM_AVAIL: "dict[str, bool]" = {}
@@ -8222,6 +8241,14 @@ class MainWindow(Gtk.ApplicationWindow):
             status_service=self._status_service,
             inspire_fn=self._create_inspire_fn,
         )
+        # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
+        # `self._create_view` existed) may already have repopulated
+        # `self._queue` from a crash/restart — `_refresh_create_queue_display`
+        # no-op'd at that point (`getattr(self, "_create_view", None)` was
+        # None). Sync the Create surface's pending-queue display now that the
+        # view exists, so a restored queue shows up there too, not just in
+        # the legacy queue box.
+        self._refresh_create_queue_display()
         # CreateView is a tall vertical surface (doors + role zones + model
         # door + CTA). Unlike the gallery children (which scroll internally),
         # it must be wrapped in a vertical scroller or its lower elements —
@@ -10739,19 +10766,36 @@ class MainWindow(Gtk.ApplicationWindow):
         subprocess, or any other exception surfaces as a status-bar message
         — a Create-surface click must never be able to crash the app.
 
-        Re-entrancy guard: if a Create job is already in flight
+        Re-entrancy: if a Create job is already in flight
         (`_create_job_active`), a second click (the Create CTA isn't
         disabled while generating) must NOT be allowed to re-enter
         `_begin_create_job` — that would overwrite the first job's pending
-        display in the panel, and if the second call's dispatch then hits
+        display in the panel, and if the second call's dispatch then hit
         `_on_generate`'s worker-busy guard, `_fail_create_job` would clear
         the flag out from under the FIRST job, which is still running (its
         `_on_finished` would then see the flag already False and never
-        update the panel). So bail out here, before touching any Create-job
-        state, whenever one is already active.
+        update the panel). So this never touches `_begin_create_job`/
+        `_create_job_active` while a job is already active.
+
+        SP-3c-4: a second click for a NATIVE medium no longer no-ops — it
+        ENQUEUES via `_create_enqueue_native` (the same `_QueueItem`/
+        `_on_enqueue`/`_persist_queue` machinery the legacy ControlPanel's
+        own Generate-when-busy button already uses), so `_start_next_queued`
+        replays it once the running job finishes. Artgen mediums have no
+        equivalent queue item type (their generation path shells out to
+        `tt-ctl` directly, never through `_on_generate`/`self._queue`), so a
+        second artgen click while busy still shows a status message rather
+        than silently dropping the request or (worse) re-entering
+        `_begin_create_job` and clobbering the running job's panel state.
         """
         if self._create_job_active:
-            self._set_status("A generation is already running…")
+            if medium.source == "native":
+                self._create_enqueue_native(medium, params)
+            else:
+                self._set_status(
+                    "A generation is already running — "
+                    f"{medium.label} can't be queued yet; try again once it finishes."
+                )
             return
         try:
             if medium.source == "native":
@@ -10792,10 +10836,11 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
 
-    def _create_generate_native(self, medium, params: dict) -> None:
+    def _native_generate_args(self, medium, params: dict):
         """Translate a native medium's `CreateParamPanel.collect()` dict into
-        the exact `_on_generate(...)` call the old ControlPanel/source-toggle
-        UI already makes for that medium.
+        the exact positional args + kwargs `_on_generate`/`_on_enqueue` share
+        (identical signatures) for that medium — the same call the old
+        ControlPanel/source-toggle UI already makes.
 
         `params["model"]` (from `ImageParamPanel`/`VideoParamPanel`) is
         already the CANONICAL server-side model id (e.g. "flux.1-schnell") —
@@ -10805,16 +10850,27 @@ class MainWindow(Gtk.ApplicationWindow):
         before the call. An unrecognized canonical id (e.g. an injected fake
         in a test) falls back to each medium's documented default key rather
         than raising.
+
+        Returns `(args, kwargs)`. Raises `_NativeGenerateGuardError(message)`
+        when a hard pre-flight guard blocks generation entirely (currently
+        only SkyReels-I2V with no seed image) — this method never touches
+        `self._set_status`/`_fail_create_job`/`_create_job_active` itself so
+        it's equally reusable by `_create_generate_native` (the not-busy
+        path, which owns the active job and clears its flag on a guard
+        failure) and `_create_enqueue_native` (SP-3c-4's busy-path enqueue,
+        which must NOT touch the already-running job's flag).
         """
         prompt = params.get("prompt", "")
 
         if medium.id == "image":
             model_key = _IMAGE_MODEL_ID_TO_KEY.get(params.get("model", ""), "flux")
-            self._on_generate(
+            args = (
                 prompt,
                 params.get("negative_prompt", ""),
                 int(params.get("num_inference_steps", 20)),
                 int(params.get("seed", -1)),
+            )
+            kwargs = dict(
                 # SP-3c-1: ImageParamPanel's SeedImageWell — "" (the default
                 # when no image is chosen) preserves today's exact
                 # text-to-image behavior; a non-empty path drives i2i.
@@ -10826,103 +10882,153 @@ class MainWindow(Gtk.ApplicationWindow):
                 # reads self._controls.get_image_model() itself.
                 image_model_key=model_key,
             )
-        elif medium.id == "animate":
+            return args, kwargs
+
+        if medium.id == "animate":
             # AnimateGenerationWorker (via _on_generate's animate branch)
             # takes no negative_prompt at all — pass "" for the positional
             # `neg` slot, matching what the old ControlPanel's Animate tab
             # already sends.
-            self._on_generate(
+            args = (
                 prompt,
                 "",
                 int(params.get("num_inference_steps", 20)),
                 int(params.get("seed", -1)),
+            )
+            kwargs = dict(
+                # `_on_generate`'s own default is also "" — set explicitly
+                # (rather than omitted, as the pre-Task-4 code did) only
+                # because `_on_enqueue` has NO default for this parameter
+                # (unlike `_on_generate`), so a caller sharing this dict with
+                # both must always supply it. Same value either way — no
+                # behavior change for the not-busy path.
+                seed_image_path="",
                 model_source="animate",
                 ref_video_path=params.get("reference_video_path", ""),
                 ref_char_path=params.get("reference_image_path", ""),
                 animate_mode=params.get("animate_mode", "animation"),
             )
-        else:  # "video"
-            model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
-            # SP-3c-1 review fix (Important): SkyReels-I2V requires a
-            # conditioning image — the exact reason it was pulled from the
-            # Video door in v0.27.1 (see `_VIDEO_MODEL_IDS`'s module comment
-            # in create_param_panels.py). Re-enabling it in the model list
-            # without also gating generation here would let a user submit an
-            # I2V request with `seed_image_path=""`, which can only fail
-            # server-side with no explanation — mirrors ControlPanel's own
-            # guard (`_seed_image_required()` + `_on_action_clicked`'s check,
-            # ~line 6579) so both surfaces enforce the same rule. Blocked
-            # BEFORE calling `_on_generate` at all — no worker is started.
-            if model_key == "skyreels" and not params.get("seed_image_path"):
-                msg = (
-                    "SkyReels I2V requires a starting image — add one to the "
-                    "seed image well before generating."
-                )
-                self._set_status(msg)
-                # `_begin_create_job` already set _create_job_active + showed
-                # "pending" in the result panel before this method was
-                # called (see `_on_create_generate`) — `_fail_create_job`
-                # clears that flag and surfaces the error in the same panel,
-                # mirroring `_create_generate_artgen`'s "no generator mapped"
-                # early-return pattern.
-                self._fail_create_job(msg)
-                return
-            # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
-            # used to pick the video worker from `self._controls.get_video_model()`
-            # regardless of `model_id` — which DEFAULTS to "animatediff" on a
-            # fresh session until a health check finds a running video server —
-            # so choosing Wan2.2/Mochi here would silently run AnimateDiff
-            # unless CreateView first synced `self._controls._video_model`
-            # (the v0.27.1 "FIX 1" hack, previously here). `_on_generate` now
-            # takes `video_model_key` as an explicit param and no longer reads
-            # `self._controls` for it at all, so that sync is unnecessary —
-            # passing the medium's own resolved key directly is sufficient and
-            # cannot clobber the legacy Image tab's `_image_model` the way the
-            # old `_set_model()` route could.
-            #
-            # SP-3c-2 (native AnimateDiff in Create): only build/forward
-            # `animatediff_args` when AnimateDiff is actually the selected
-            # video model — every other model keeps the pre-existing
-            # `animatediff_args=None` default, byte-identical to before this
-            # task (parity). `VideoParamPanel.collect()`'s own
-            # "animatediff_args" is already complete (every widget has a real
-            # default — see that method's docstring), but the merge over
-            # `_ANIMATEDIFF_DEFAULTS` here is a defensive belt-and-suspenders:
-            # any caller that reaches this branch with a partial/missing dict
-            # (e.g. a hand-built `params` in a test, or a future caller that
-            # doesn't go through VideoParamPanel at all) still gets a dict
-            # `_on_generate`'s `ad["..."]` indexing can never KeyError on.
-            animatediff_args = None
-            if model_key == "animatediff":
-                animatediff_args = {
-                    **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
-                }
-            self._on_generate(
-                prompt,
-                params.get("negative_prompt", ""),
-                int(params.get("num_inference_steps", 20)),
-                int(params.get("seed", -1)),
-                # SP-3c-1: VideoParamPanel's SeedImageWell — "" preserves
-                # today's exact text-to-video behavior for wan2/mochi;
-                # SkyReels-I2V (re-enabled this same task) needs it non-empty.
-                # `_on_generate`'s video branch already knows how to send this
-                # to the server for `video_model_key == "skyreels"` — see the
-                # base64-encode block further down that method.
-                seed_image_path=params.get("seed_image_path", ""),
-                model_source="video",
-                model_id=model_key,
-                video_model_key=model_key,
-                animatediff_args=animatediff_args,
+            return args, kwargs
+
+        # "video"
+        model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+        # SP-3c-1 review fix (Important): SkyReels-I2V requires a
+        # conditioning image — the exact reason it was pulled from the
+        # Video door in v0.27.1 (see `_VIDEO_MODEL_IDS`'s module comment in
+        # create_param_panels.py). Re-enabling it in the model list without
+        # also gating generation here would let a user submit an I2V request
+        # with `seed_image_path=""`, which can only fail server-side with no
+        # explanation — mirrors ControlPanel's own guard
+        # (`_seed_image_required()` + `_on_action_clicked`'s check, ~line
+        # 6579) so both surfaces enforce the same rule. Blocked BEFORE
+        # calling `_on_generate`/`_on_enqueue` at all — no worker is started
+        # and nothing is queued.
+        if model_key == "skyreels" and not params.get("seed_image_path"):
+            raise _NativeGenerateGuardError(
+                "SkyReels I2V requires a starting image — add one to the "
+                "seed image well before generating."
             )
-            # NOTE (remaining concern, see task-8-report.md):
-            # VideoParamPanel.collect()'s "num_frames" has no destination in
-            # `_on_generate` — that method derives num_frames internally from
-            # generation_config.clip_frames + the Preferences "clip length
-            # slot" setting, not from a parameter. Reusing `_on_generate`
-            # verbatim (required — never reimplement worker launching) means
-            # CreateView's frame-count spinner is currently cosmetic for the
-            # video medium. Out of scope to fix here (would require changing
-            # the one function every rule says must stay untouched).
+        # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
+        # used to pick the video worker from `self._controls.get_video_model()`
+        # regardless of `model_id` — which DEFAULTS to "animatediff" on a
+        # fresh session until a health check finds a running video server —
+        # so choosing Wan2.2/Mochi here would silently run AnimateDiff unless
+        # CreateView first synced `self._controls._video_model` (the v0.27.1
+        # "FIX 1" hack, previously here). `_on_generate` now takes
+        # `video_model_key` as an explicit param and no longer reads
+        # `self._controls` for it at all, so that sync is unnecessary —
+        # passing the medium's own resolved key directly is sufficient and
+        # cannot clobber the legacy Image tab's `_image_model` the way the
+        # old `_set_model()` route could.
+        #
+        # SP-3c-2 (native AnimateDiff in Create): only build/forward
+        # `animatediff_args` when AnimateDiff is actually the selected video
+        # model — every other model keeps the pre-existing
+        # `animatediff_args=None` default, byte-identical to before this task
+        # (parity). `VideoParamPanel.collect()`'s own "animatediff_args" is
+        # already complete (every widget has a real default — see that
+        # method's docstring), but the merge over `_ANIMATEDIFF_DEFAULTS`
+        # here is a defensive belt-and-suspenders: any caller that reaches
+        # this branch with a partial/missing dict (e.g. a hand-built
+        # `params` in a test, or a future caller that doesn't go through
+        # VideoParamPanel at all) still gets a dict `_on_generate`'s
+        # `ad["..."]` indexing can never KeyError on.
+        animatediff_args = None
+        if model_key == "animatediff":
+            animatediff_args = {
+                **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
+            }
+        args = (
+            prompt,
+            params.get("negative_prompt", ""),
+            int(params.get("num_inference_steps", 20)),
+            int(params.get("seed", -1)),
+        )
+        kwargs = dict(
+            # SP-3c-1: VideoParamPanel's SeedImageWell — "" preserves today's
+            # exact text-to-video behavior for wan2/mochi; SkyReels-I2V
+            # (re-enabled this same task) needs it non-empty. `_on_generate`'s
+            # video branch already knows how to send this to the server for
+            # `video_model_key == "skyreels"` — see the base64-encode block
+            # further down that method.
+            seed_image_path=params.get("seed_image_path", ""),
+            model_source="video",
+            model_id=model_key,
+            video_model_key=model_key,
+            animatediff_args=animatediff_args,
+        )
+        # NOTE (remaining concern, see task-8-report.md):
+        # VideoParamPanel.collect()'s "num_frames" has no destination in
+        # `_on_generate` — that method derives num_frames internally from
+        # generation_config.clip_frames + the Preferences "clip length slot"
+        # setting, not from a parameter. Reusing `_on_generate` verbatim
+        # (required — never reimplement worker launching) means CreateView's
+        # frame-count spinner is currently cosmetic for the video medium.
+        # Out of scope to fix here (would require changing the one function
+        # every rule says must stay untouched).
+        return args, kwargs
+
+    def _create_generate_native(self, medium, params: dict) -> None:
+        """Not-busy path: build this native medium's `_on_generate(...)` call
+        via `_native_generate_args` and dispatch it immediately — this IS the
+        active Create job (`_begin_create_job` already ran), so a guard
+        failure clears its flag via `_fail_create_job`."""
+        try:
+            args, kwargs = self._native_generate_args(medium, params)
+        except _NativeGenerateGuardError as exc:
+            msg = str(exc)
+            self._set_status(msg)
+            # `_begin_create_job` already set _create_job_active + showed
+            # "pending" in the result panel before this method was called
+            # (see `_on_create_generate`) — `_fail_create_job` clears that
+            # flag and surfaces the error in the same panel, mirroring
+            # `_create_generate_artgen`'s "no generator mapped" early-return
+            # pattern.
+            self._fail_create_job(msg)
+            return
+        self._on_generate(*args, **kwargs)
+
+    def _create_enqueue_native(self, medium, params: dict) -> None:
+        """SP-3c-4: busy path for a native medium — a Create job is already
+        running (`_create_job_active`), so instead of generating now this
+        ENQUEUES via the exact same machinery the legacy ControlPanel's own
+        Generate-when-busy button uses (`_on_enqueue` -> `_QueueItem` ->
+        `_persist_queue`/`_update_queue_display`). `_start_next_queued` later
+        drains the item straight into `_on_generate` with these SAME args/
+        kwargs (model/seed-image/animatediff_args all captured on the
+        `_QueueItem`), so the queued job replays faithfully — identical to
+        what would have happened had it been allowed to generate immediately.
+
+        Unlike `_create_generate_native`, a guard failure here must NOT touch
+        `_create_job_active` or the result panel — that state belongs to the
+        job that's still running, not to this (rejected) enqueue attempt.
+        """
+        try:
+            args, kwargs = self._native_generate_args(medium, params)
+        except _NativeGenerateGuardError as exc:
+            self._set_status(str(exc))
+            return
+        self._on_enqueue(*args, **kwargs)
 
     def _create_generate_artgen(self, medium, params: dict) -> None:
         """Artgen mediums generate the SAME way `pipeline_engine`'s
@@ -11503,6 +11609,43 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_visible(has)
         # Keep the hardware status bar queue counter in sync.
         self._hw_statusbar.update_queue(len(self._queue))
+        # SP-3c-4: keep Create's own pending-queue display (in the inline
+        # result pane, near the recents strip) in sync too — every call site
+        # that mutates `self._queue` already routes through this method
+        # (enqueue, cancel, drain, restore), so one call here covers all of
+        # them without touching each call site individually.
+        self._refresh_create_queue_display()
+
+    def _refresh_create_queue_display(self) -> None:
+        """Push the current `self._queue` into CreateView's pending-queue
+        display (`CreateResultPanel.set_queue`, near the recents strip).
+
+        Wrapped in `GLib.idle_add`: `_update_queue_display` (this method's
+        only caller) is itself only ever called from the main thread today,
+        but a couple of its own callers are reached via worker-thread
+        callbacks that already forward through `GLib.idle_add` themselves
+        (see `_start_next_queued`'s callers) — scheduling here too costs
+        nothing when already on the main thread and removes any doubt for a
+        future caller that isn't. The whole body is try/except'd, matching
+        `_begin_create_job`/`_fail_create_job`'s discipline: a panel/widget
+        error must never break the underlying queue mutation that triggered
+        the refresh. A no-op before `self._create_view` exists (e.g. very
+        early startup) or if CreateView doesn't expose `refresh_queue` (a
+        minimal test double).
+        """
+        create_view = getattr(self, "_create_view", None)
+        if create_view is None:
+            return
+        pending = list(self._queue)
+
+        def _do() -> bool:
+            try:
+                create_view.refresh_queue(pending, self._on_queue_remove)
+            except Exception:
+                pass
+            return False
+
+        GLib.idle_add(_do)
 
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,

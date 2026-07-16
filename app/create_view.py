@@ -675,6 +675,27 @@ _CSS = b"""
     font-size: 12px;
     padding: 6px;
 }
+/* -- Pending-queue display (SP-3c-4, task-4-brief.md) -- the this-session
+   Create job queue, shown between the current result and the recents strip:
+   one row per `_QueueItem` still waiting to run, each with a cancel (X)
+   button. Deliberately understated (muted colors, no border) next to the
+   current-result box above it -- these are QUEUED, not yet running. ---- */
+.create-result-queue {
+    padding: 2px 0 4px 0;
+}
+.create-result-queue-row {
+    padding: 2px 4px;
+}
+.create-result-queue-prompt {
+    color: #A9C1C6;
+    font-size: 12px;
+}
+.create-result-queue-cancel-btn {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+    color: #FF9E8A;
+}
 .create-result-recents {
     padding: 6px 0 0 0;
 }
@@ -923,6 +944,19 @@ class CreateView(Gtk.Box):
 
         self._panes = panes
         return panes
+
+    # ── Pending-queue display (SP-3c-4, task-4-brief.md) ────────────────────
+
+    def refresh_queue(self, items: "list", on_cancel: "Callable[[int], None]") -> None:
+        """MainWindow's seam for pushing the current generation queue
+        (`self._queue`) into the result pane's pending list, near the
+        recents strip. Thin forwarding to `CreateResultPanel.set_queue` —
+        kept as its own CreateView method (rather than making MainWindow
+        reach into `self._create_view._result_panel` directly) so a future
+        change to where/how the queue renders inside CreateView only touches
+        this one seam.
+        """
+        self._result_panel.set_queue(items, on_cancel)
 
     # ── Width clamp test helper ──────────────────────────────────────────────
 
@@ -2013,6 +2047,17 @@ class CreateResultPanel(Gtk.Box):
         self._current_box.add_css_class("create-result-current")
         self.append(self._current_box)
 
+        # SP-3c-4: this-session pending-queue display, between the current
+        # result and the recents strip -- see `set_queue`. Empty (and
+        # invisible via `set_queue`'s own visibility toggle) until MainWindow
+        # first calls `set_queue` with a non-empty list.
+        self._queue_items: list = []
+        self._on_queue_cancel: "Optional[Callable[[int], None]]" = None
+        self._queue_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._queue_box.add_css_class("create-result-queue")
+        self._queue_box.set_visible(False)
+        self.append(self._queue_box)
+
         self._recents_flow = Gtk.FlowBox()
         self._recents_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self._recents_flow.set_max_children_per_line(_RECENTS_MAX)
@@ -2029,6 +2074,11 @@ class CreateResultPanel(Gtk.Box):
 
     def recents_count(self) -> int:
         return len(self._recents)
+
+    def queue_count(self) -> int:
+        """Test seam: number of items currently rendered in the pending-queue
+        display (mirrors `recents_count()`)."""
+        return len(self._queue_items)
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -2237,6 +2287,63 @@ class CreateResultPanel(Gtk.Box):
         label = Gtk.Label(label=msg)
         label.add_css_class("create-result-placeholder")
         return label
+
+    # ── Pending-queue display (SP-3c-4) ─────────────────────────────────────
+
+    def set_queue(self, items: "list", on_cancel: "Callable[[int], None]") -> None:
+        """Render the this-session pending Create-job queue: one row per
+        item (its `.prompt`, duck-typed — a real `main_window._QueueItem`
+        or any stand-in with a `.prompt` attribute both work) with a cancel
+        (X) button that calls `on_cancel(index)` -- MainWindow wires this to
+        `_on_queue_remove`, which pops `self._queue[index]`, persists, and
+        calls back into this same method via `_refresh_create_queue_display`
+        so the display reflects the post-removal queue.
+
+        Hidden entirely (`set_visible(False)`) when *items* is empty -- an
+        idle Create surface with no queue shows nothing extra, matching the
+        legacy queue box's own `has = bool(self._queue)` visibility rule.
+        Called fresh on every queue mutation (enqueue/cancel/drain/restore),
+        so it always rebuilds from scratch rather than diffing.
+        """
+        self._queue_items = list(items)
+        self._on_queue_cancel = on_cancel
+        self._rebuild_queue_box()
+
+    def _rebuild_queue_box(self) -> None:
+        child = self._queue_box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._queue_box.remove(child)
+            child = nxt
+
+        for i, item in enumerate(self._queue_items):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            row.add_css_class("create-result-queue-row")
+
+            prompt = getattr(item, "prompt", "") or ""
+            short = prompt if len(prompt) <= 50 else prompt[:50] + "…"
+            lbl = Gtk.Label(label=f"{i + 1}. {short}" if short else f"{i + 1}. (queued)")
+            lbl.set_xalign(0.0)
+            lbl.set_hexpand(True)
+            lbl.set_wrap(True)
+            lbl.add_css_class("create-result-queue-prompt")
+            if prompt:
+                lbl.set_tooltip_text(prompt)
+            row.append(lbl)
+
+            cancel_btn = Gtk.Button(label="✕")
+            cancel_btn.add_css_class("create-result-queue-cancel-btn")
+            cancel_btn.set_tooltip_text("Remove from queue")
+            cancel_btn.connect("clicked", lambda _b, idx=i: self._on_cancel_clicked(idx))
+            row.append(cancel_btn)
+
+            self._queue_box.append(row)
+
+        self._queue_box.set_visible(bool(self._queue_items))
+
+    def _on_cancel_clicked(self, index: int) -> None:
+        if self._on_queue_cancel is not None:
+            self._on_queue_cancel(index)
 
     # ── Recents strip ────────────────────────────────────────────────────────
 

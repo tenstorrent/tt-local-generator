@@ -1,3 +1,35 @@
+tt-local-generator (0.39.0) noble; urgency=medium
+
+  * A second Create click while a job is already running now ENQUEUES
+    (SP-3c-4) instead of the SP-3-era no-op ("A generation is already
+    running..."). Native mediums (image/video/animate) enqueue via the exact
+    same `_QueueItem`/`_on_enqueue`/`_persist_queue` machinery the legacy
+    ControlPanel's own Generate-when-busy button already uses, so
+    `_start_next_queued` drains the queued job into `_on_generate` with the
+    SAME params -- model, seed image, animatediff_args -- once the running
+    job finishes. Artgen mediums (verse/ansi/landscape/...) have no
+    equivalent queue-item type -- their generation path shells out to
+    `tt-ctl` directly, never through `_on_generate` -- so a second artgen
+    click while busy still shows an informative status message rather than
+    enqueuing nothing or clobbering the running job's panel state.
+  * `main_window._native_generate_args` extracts the per-medium
+    params-to-`_on_generate`-args translation `_create_generate_native`
+    already did into a shared helper, reused by both the not-busy
+    ("generate now") and busy ("enqueue") paths -- guard failures (the
+    SkyReels-I2V missing-seed-image case) surface identically either way,
+    but only the not-busy path clears `_create_job_active` on one, since the
+    busy path's rejected enqueue attempt must never touch the still-running
+    job's flag.
+  * Create's result pane (near the recents strip) now shows the pending
+    queue: `CreateResultPanel.set_queue`/`queue_count()` render one row per
+    queued item with a cancel (X) button; `CreateView.refresh_queue` is the
+    forwarding seam MainWindow calls (via `_refresh_create_queue_display`,
+    wrapped in `GLib.idle_add`) every time `_update_queue_display` runs, so
+    the Create surface and the legacy queue box never disagree about what's
+    queued.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 10:00:00 -0700
+
 tt-local-generator (0.38.0) noble; urgency=medium
 
   * Create's brief zone gains a one-tap "Inspire me" prompt generator
