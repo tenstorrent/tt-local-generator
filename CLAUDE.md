@@ -173,9 +173,21 @@ pure `_resolve(...)`. Design notes:
   notifications; a raising subscriber never breaks the loop.
 - **Consumers**: `snapshot()`/`status(key)`/`subscribe(cb)` and capability helpers
   `ready_keys(cap)` (most-recently-ready first) / `starting_keys(cap)` /
-  `running_or_starting(cap)`. SP-2 wires the surfaces (footer row, statusbar,
-  Servers popover, CreateView dropdown+door, artgen panel) to it -- retiring the
-  four ad-hoc pollers -- and Create auto-selects `running_or_starting(medium cap)`.
+  `running_or_starting(cap)`.
+- **SP-2 wiring (v0.33.0):** `MainWindow` constructs + `start()`s the service on
+  open, `stop()`s it in `do_close_request`, hooks `note_starting`/`note_stopping`
+  at the server start/stop sites, and injects it into `CreateView`
+  (`status_service=`). CreateView subscribes (poll-thread callback -> `GLib.idle_add`
+  -> `_on_status_snapshot`), renders 3-state dots (◌/◐/●) via `_status_glyph` +
+  `_model_dot_glyph` on both the scoped dropdown and the Model door, and
+  auto-selects `running_or_starting(cap)` in `_populate_model_dropdown` (cap keyed
+  by `medium.id` -- the Animate medium's `kind` is "gif"; only in the fresh-populate
+  branch so a manual pick is preserved per the v0.28.1 fix). `status_service=None`
+  keeps CreateView's old boolean `status_all` fallback (tests/standalone).
+- **Still on their own pollers until SP-3 deletes them:** `MainWindow._health_loop`
+  (footer row + statusbar), `_refresh_servers_popover` (Servers popover),
+  `artgen_panel._check_health_bg`. SP-3 retires the vestiges and stands up one
+  surviving status control on the service.
 
 ## Version discipline
 
@@ -477,8 +489,13 @@ xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/ -q
 ```
 
 `xvfb-run` is pre-installed on Ubuntu 24.04 (`apt install xvfb` if missing).
-One pre-existing failure (`test_forge_transforms::test_on_transform_finished_appends_and_refreshes`)
-and one environment skip (`test_regression_guards` when `docs/assets/` is absent) are expected.
+Two pre-existing, environment-level flakes are expected and should be deselected
+in full-suite runs (both pass in isolation / are unrelated to app code):
+`test_forge_transforms::test_on_transform_finished_appends_and_refreshes`, and
+`test_pipeline_engine.py::test_run_plugin_loads_and_calls_real_module` (a
+`cffi`/`cairosvg` version-mismatch that only surfaces under full-suite import
+ordering). Plus one environment skip (`test_regression_guards` when
+`docs/assets/` is absent).
 
 Tests are in `tests/` at repo root. Each file does `sys.path.insert(0, str(Path(__file__).parent.parent / "app"))` to import from `app/`. Tests mock all subprocess and network calls.
 

@@ -1,3 +1,19 @@
+tt-local-generator (0.33.0) noble; urgency=medium
+
+  * Create now reads the single source of truth. Model rows in the scoped
+    dropdown and the "Start with a model" door show a three-state loading dot
+    -- off / starting / ready -- fed by the ModelStatusService (v0.32.0), so
+    what's actually running is visible at a glance and never disagrees between
+    the two. When you pick a medium, Create auto-selects whatever model is
+    already running (or starting) for it -- falling back to the medium default
+    when nothing is up, and never overriding a model you picked by hand.
+  * App-initiated server start/stop now feed the service's starting state
+    (with an inferred-starting backstop for anything started outside the app).
+    The legacy per-medium health indicators still run on their own until those
+    surfaces are retired (next step).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 03:00:00 -0700
+
 tt-local-generator (0.32.0) noble; urgency=medium
 
   * New GUI-free `ModelStatusService` (app/model_status.py): one poll loop that
