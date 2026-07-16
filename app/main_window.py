@@ -7946,6 +7946,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # Wire the history store so the SHOT panel seed buttons can read history.
         # (ControlPanel._get_history_records uses self._store via this attribute.)
         self._controls._store = self._store
+        # Wire the single ModelStatusService instance so ControlPanel's
+        # Servers-popover start/stop/restart actions (_on_servers_action) can
+        # note_starting/note_stopping on it. ControlPanel.__init__ never sets
+        # this attribute itself and MainWindow constructs the service after
+        # ControlPanel would otherwise need it, so — same idiom as _store
+        # above — it's injected here as a plain attribute post-construction.
+        self._controls._status_service = self._status_service
 
         # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
         # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
