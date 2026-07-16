@@ -56,3 +56,50 @@ def test_no_gtk_import():
 
     importlib.import_module("model_status")
     assert "gi" not in sys.modules or True  # model_status itself must not import gi
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _tick() — merge health + artgen detect + port probe -> statuses
+# ---------------------------------------------------------------------------
+
+def _svc(health, detect=(None, None), ports=None, now=100.0):
+    ports = ports or {}
+    return ms.ModelStatusService(
+        health_fn=lambda: dict(health),
+        detect_fn=lambda: detect,
+        port_probe=lambda key: ports.get(key, False),
+        clock=lambda: now,
+    )
+
+
+def test_tick_healthy_key_ready():
+    svc = _svc({"wan2.2": True})
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.READY
+
+
+def test_tick_artgen_detect_marks_artgen_keys_ready():
+    # health says all False, but detect finds a chat endpoint -> artgen/prompt keys READY
+    svc = _svc({}, detect=("http://localhost:8002", "Qwen3-8B"))
+    svc._tick()
+    import server_manager as sm
+
+    art = [k for k, d in sm.SERVERS.items() if "artgen" in d.capabilities]
+    assert art and all(svc.status(k) == ms.Status.READY for k in art)
+
+
+def test_tick_inferred_starting_from_port(monkeypatch):
+    svc = _svc({"flux": False}, ports={"flux": True})
+    svc._tick()
+    assert svc.status("flux") == ms.Status.STARTING
+
+
+def test_tick_app_started_then_ready(monkeypatch):
+    svc = _svc({"flux": False}, now=100.0)
+    svc.note_starting("flux")
+    svc._tick()
+    assert svc.status("flux") == ms.Status.STARTING
+
+    svc._health_fn = lambda: {"flux": True}
+    svc._tick()
+    assert svc.status("flux") == ms.Status.READY and "flux" not in svc._starting

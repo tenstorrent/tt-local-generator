@@ -28,10 +28,25 @@ This first task lays the *pure* foundation only:
     `status`,
   - the static, side-effect-free `_resolve()` state machine.
 
+Task scope (SP-1 Task 2)
+-------------------------
+This task adds the single-tick reconciliation logic that actually drives
+`_resolve()`:
+  - `_tick()` — merges `health_fn()` (per-key health map), `detect_fn()`
+    (artgen/chat-LLM endpoint detection — marks every `artgen`/`prompt`
+    capability key healthy when a chat endpoint is found, since those
+    backends share one port and one detector), and the port probe, then
+    stores one `Status` per `server_manager.SERVERS` key.
+  - `_default_port_probe()` — a real (if best-effort) TCP `connect_ex` probe
+    against the host/port parsed out of each server's `health_url`.
+  - `_notify()` — fans a fresh `snapshot()` out to any subscribers. No
+    subscribers exist yet (Task 3 adds `subscribe()`), so today this is a
+    harmless no-op called once per tick; change-only gating (only notify when
+    the resolved map actually differs from the prior tick) is also Task 3's
+    job, not this one's.
+
 The background poll thread, `subscribe()`, and capability-aware helpers are
-deliberately NOT implemented here — they land in Tasks 2-4. `_tick` is not
-implemented yet either; nothing currently calls `_resolve` except tests and
-(eventually) `_tick`.
+still not implemented — they land in Tasks 3-4.
 
 Lazy imports (CRITICAL)
 -----------------------
@@ -45,10 +60,15 @@ callables actually run (i.e. only if the caller doesn't inject their own
 `health_fn`/`detect_fn`).
 """
 
+import logging
+import socket
 import threading
 import time
+import urllib.parse
 from enum import Enum
 from typing import Callable, Optional
+
+log = logging.getLogger(__name__)
 
 
 class Status(str, Enum):
@@ -114,17 +134,17 @@ class ModelStatusService:
         # who injects their own health_fn never triggers the import at all,
         # and even the default only imports on first call, not on
         # construction.
-        self.health_fn = health_fn or (
+        self._health_fn = health_fn or (
             lambda: __import__("server_manager").status_all()
         )
         # Lazy-default detect_fn: same reasoning for the artgen package.
-        self.detect_fn = detect_fn or (
+        self._detect_fn = detect_fn or (
             lambda: __import__("artgen").detect_artgen_endpoint()
         )
-        self.clock = clock or time.monotonic
-        self.port_probe = port_probe or self._default_port_probe
-        self.poll_interval = poll_interval
-        self.start_timeout = start_timeout
+        self._clock = clock or time.monotonic
+        self._port_probe = port_probe or self._default_port_probe
+        self._poll_interval = poll_interval
+        self._start_timeout = start_timeout
 
         # -- internal state --------------------------------------------
         # Last-resolved status per key, refreshed each poll tick (added in
@@ -160,7 +180,7 @@ class ModelStatusService:
         next poll tick, before any health check has had a chance to succeed.
         """
         with self._lock:
-            self._starting[key] = self.clock()
+            self._starting[key] = self._clock()
 
     def note_stopping(self, key: str) -> None:
         """Record that `key` was just told to stop.
@@ -230,14 +250,123 @@ class ModelStatusService:
     # Default port probe
     # ------------------------------------------------------------------
     def _default_port_probe(self, key: str) -> bool:
-        """Best-effort default port_probe: no port table exists yet in this
-        task, so nothing can be inferred from a key alone. Returns False
-        (never infers STARTING-by-port) until a later task wires this up to
-        real per-service port numbers.
+        """Best-effort default port_probe: real TCP `connect_ex` against the
+        host/port parsed out of `server_manager.SERVERS[key].health_url`.
 
-        Kept as a plain TCP-connect stub (rather than a `NotImplementedError`)
-        so the service is still fully constructible and usable — with the
-        port-inference branch of `_resolve` simply never triggering — before
-        that wiring lands.
+        This is deliberately *not* an HTTP request — a bare TCP connect is
+        enough to infer "something is listening" (the STARTING-by-port branch
+        of `_resolve`) without waiting on a slow/hanging HTTP response from a
+        server that's still loading weights. A 250ms timeout keeps a single
+        tick fast even if the target host silently drops SYNs (firewalled,
+        wrong host, etc.) rather than actively refusing the connection.
+
+        Returns False if `health_url` has no explicit port (nothing to probe)
+        or if any exception occurs while resolving/connecting — a probe
+        failure must never propagate and break the whole tick.
         """
-        return False
+        import server_manager
+
+        u = urllib.parse.urlparse(server_manager.SERVERS[key].health_url)
+        host = u.hostname or "127.0.0.1"
+        port = u.port
+        if not port:
+            return False
+        s = socket.socket()
+        s.settimeout(0.25)
+        try:
+            return s.connect_ex((host, port)) == 0
+        finally:
+            s.close()
+
+    def _safe_port_probe(self, key: str) -> bool:
+        """Wraps the (possibly injected) `port_probe` callable so a bad probe
+        — real or fake — can never raise out of `_tick()` and abort the whole
+        reconciliation pass for every other key.
+        """
+        try:
+            return self._port_probe(key)
+        except Exception:
+            log.debug("port_probe failed for %r", key, exc_info=True)
+            return False
+
+    # ------------------------------------------------------------------
+    # Reconciliation tick
+    # ------------------------------------------------------------------
+    def _tick(self) -> None:
+        """Recompute every `server_manager.SERVERS` key's `Status` and store
+        the result. This is the method the (not-yet-implemented) poll thread
+        calls on a timer; it is also safe to call directly (as the tests do)
+        for a synchronous, deterministic single reconciliation pass.
+
+        `server_manager` is imported lazily here (not at module load time) to
+        keep this module standalone-importable per the module docstring.
+        """
+        import server_manager
+
+        try:
+            health = dict(self._health_fn() or {})
+        except Exception:
+            # A broken health_fn (network hiccup, bad server, etc.) degrades
+            # to "nothing is healthy" rather than crashing the tick — every
+            # key falls through to the starting-bookkeeping/port-probe
+            # branches of _resolve() instead.
+            log.debug("health_fn failed", exc_info=True)
+            health = {}
+
+        try:
+            base, _model_id = self._detect_fn()
+            artgen_up = base is not None
+        except Exception:
+            # Same reasoning: a broken artgen detector just means "no chat
+            # endpoint found this tick", not a crash.
+            log.debug("detect_fn failed", exc_info=True)
+            artgen_up = False
+
+        now = self._clock()
+        new_statuses: "dict[str, Status]" = {}
+        for key, sdef in server_manager.SERVERS.items():
+            # artgen/prompt backends share one port (8002) and are detected
+            # via detect_fn's /v1/models sweep rather than server_manager's
+            # per-key health_url ping (see artgen.detect_artgen_endpoint() and
+            # the module docstring's "Why this exists" section) — so a found
+            # chat endpoint marks every artgen/prompt-capability key healthy,
+            # regardless of what health_fn itself reported for that key.
+            healthy = health.get(key, False) or (
+                artgen_up and bool(set(sdef.capabilities) & {"artgen", "prompt"})
+            )
+            starting_at = self._starting.get(key)
+            port_open = False if healthy else self._safe_port_probe(key)
+            st = self._resolve(healthy, starting_at, port_open, now, self._start_timeout)
+
+            if st == Status.READY:
+                self._starting.pop(key, None)
+                self._ready_at.setdefault(key, now)
+            else:
+                self._ready_at.pop(key, None)
+
+            new_statuses[key] = st
+
+        with self._lock:
+            self._statuses = new_statuses
+
+        self._notify()
+
+    # ------------------------------------------------------------------
+    # Subscriber fan-out
+    # ------------------------------------------------------------------
+    def _notify(self) -> None:
+        """Push a fresh snapshot to every registered subscriber.
+
+        Taking the snapshot once (rather than per-callback) means every
+        subscriber sees the same consistent view even if `_tick()` runs again
+        concurrently on the poll thread. `subscribe()` doesn't exist until
+        Task 3, so `self._subscribers` is always empty today — this makes
+        `_notify()` a harmless no-op that's still safe (and correct) to call
+        unconditionally at the end of every tick.
+        """
+        snap = self.snapshot()
+        for cb in list(self._subscribers):
+            try:
+                cb(snap)
+            except Exception:
+                log.exception("model_status subscriber callback raised")
