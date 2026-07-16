@@ -1,21 +1,21 @@
 tt-local-generator (0.31.0) noble; urgency=medium
 
-  * Create surface: artgen (verse/ansi/landscape/…) jobs now resolve in the
-    inline result panel. `_begin_create_job` already put the panel into
-    "pending" for artgen jobs (Task 3), but nothing ever called
-    `show_finished`/`show_error` on that path, so the panel sat on
-    "Generating…" forever and the window-global Create-job flag stayed
-    stuck True, silently breaking the next unrelated job. `_create_generate_
-    artgen`'s worker thread now forwards its media-store record to
-    `show_finished` on success and reuses `_fail_create_job` on any failure
-    (bad generator, non-zero `tt-ctl` exit, or any other exception) --
-    resolving the panel/flag on every terminal path. Also aliases the
-    freshly-built `MediaRecord` with a `media_file_path` attribute so the
-    panel's artifact renderer (which reads that name, matching
-    `GenerationRecord`'s native-path property) can actually display the
-    artgen artifact instead of a "not found" placeholder.
+  * Create shows your result in place, the instant it's done -- no more
+    hunting for it in the gallery. Create is now a two-pane surface (form
+    beside a live result panel; the panes sit side-by-side on a wide window
+    and stack on a narrow one, never overflowing). Hitting Create shows a live
+    pending state (spinner + elapsed) right there, resolving in place to the
+    finished image / video / text the moment it completes, and prepending to a
+    short recents strip of this session's Create outputs. Works for both
+    native (image/video/animate) and artgen jobs.
+  * Every result still saves to history and appears in Discover exactly as
+    before -- the inline panel is immediate feedback, not a replacement.
+    Non-Create generation (attractor / TT-TV / queue) is unaffected. Early
+    returns in the generation path (server busy, low disk) now surface an
+    error in the panel and clear state instead of leaving it stuck on
+    'generating'.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 16 Jul 2026 00:00:00 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 13 Jul 2026 23:00:00 -0700
 
 tt-local-generator (0.30.2) noble; urgency=medium
 

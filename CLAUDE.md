@@ -126,6 +126,30 @@ run reproduces exactly). Known follow-up: `ModifierPills` re-reads
 `config/prompt_chips.yaml` per render (fail-soft, uncached) on both surfaces --
 cache `load_chips_for_kind` if render latency ever matters.
 
+**In-place results (v0.31.0).** Create is a two-pane surface: the form beside a
+`CreateResultPanel` (`app/create_view.py`), laid out in a `Gtk.FlowBox`
+(min1/max2 per line) so it's side-by-side when wide and stacked when narrow,
+inside `wrap_centered` at `_TWO_PANE_MAX_WIDTH` (1440, a true ceiling -> no
+overflow). Hitting Create shows a live pending state in the panel (spinner +
+elapsed), resolving in place to the finished image/video/text the instant it's
+done, and prepending to a session recents strip (cap 6). This is the
+[[project-see-result-immediately]] principle. Wiring: `main_window` marks a
+Create-launched job with `self._create_job_active` and forwards the lifecycle to
+`self._create_view._result_panel` -- native jobs via `_on_generate`'s
+progress/finished/error callbacks (the gallery pending card is SKIPPED for
+Create jobs, but the finished record still lands in the gallery/store, so
+Discover is unchanged -- the panel is additive), artgen jobs via
+`_on_create_artgen_finished`/`_fail_create_job` on the `tt-ctl` worker thread.
+**Every terminal path clears the flag** -- `_fail_create_job(reason)` is called
+on all `_on_generate` early returns (server busy / low disk / AnimateDiff-busy)
+and on artgen failure, so the panel never stays stuck on "pending" and the
+window-global flag never bleeds into an unrelated next job. Non-Create jobs
+(attractor/TT-TV/queue) never touch the panel and keep their gallery pending
+card. Note: the artgen `MediaRecord` gets a `media_file_path` alias set so the
+panel's renderer (which reads that name, matching `GenerationRecord`) resolves
+the artifact; `MediaStore.add` reads only declared fields, so it's inert for
+persistence.
+
 ## Version discipline
 
 **Always increment the version when landing changes.** The version in `VERSION`
