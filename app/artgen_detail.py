@@ -23,393 +23,25 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("WebKit", "6.0")
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, WebKit
+from gi.repository import Gio, GLib, Gtk, Pango, WebKit
 
 from media_store import media_store as _ms, MediaRecord
 
 # ── Reading-view helpers ──────────────────────────────────────────────────────
-
-_READING_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html { background: #1A3C47; min-height: 100%; }
-body {
-    background: #1A3C47;
-    font-family: system-ui, 'Fira Sans', 'Liberation Sans', 'Noto Sans', sans-serif;
-    font-size: 18px;
-    line-height: 1.82;
-    color: #E8F0F2;
-    -webkit-font-smoothing: antialiased;
-    padding: 56px 24px 80px;
-}
-.content {
-    max-width: 720px;
-    margin: 0 auto;
-}
-h1 {
-    font-size: 1.65em; font-weight: 700; color: #4FD1C5;
-    letter-spacing: -0.01em;
-    border-bottom: 1px solid rgba(79,209,197,0.25);
-    padding-bottom: 12px; margin-bottom: 24px; margin-top: 0;
-}
-h2 { font-size: 1.25em; font-weight: 600; color: #81E6D9; margin-top: 36px; margin-bottom: 12px; }
-h3 { font-size: 1.08em; font-weight: 600; color: #B0C4DE; margin-top: 28px; margin-bottom: 8px; }
-h4 { font-size: 0.95em; font-weight: 600; color: #8EACC0; text-transform: uppercase;
-     letter-spacing: 0.06em; margin-top: 24px; margin-bottom: 6px; }
-p { margin-bottom: 18px; }
-strong { font-weight: 700; color: #F0F7FA; }
-em { font-style: italic; color: #EC96B8; }
-a { color: #4FD1C5; text-decoration: underline; text-decoration-thickness: 1px; }
-code {
-    font-family: 'JetBrains Mono', 'Fira Code', 'Liberation Mono', monospace;
-    font-size: 0.86em; background: #0F2A35; color: #4FD1C5;
-    padding: 2px 7px; border-radius: 4px;
-}
-pre {
-    background: #0F2A35; border-left: 3px solid #4FD1C5;
-    padding: 18px 22px; border-radius: 0 6px 6px 0;
-    overflow-x: auto; margin-bottom: 22px;
-    white-space: pre-wrap; word-wrap: break-word;
-}
-pre code { background: none; padding: 0; color: #E8F0F2; font-size: 0.90em; line-height: 1.6; }
-blockquote {
-    border-left: 3px solid #4FD1C5; margin: 24px 0;
-    padding: 6px 0 6px 24px; color: #B0C4DE; font-style: italic;
-    font-size: 1.05em;
-}
-hr { border: none; border-top: 1px solid rgba(79,209,197,0.2); margin: 36px 0; }
-ul, ol { padding-left: 28px; margin-bottom: 18px; }
-li { margin-bottom: 7px; }
-li > p { margin-bottom: 8px; }
-table {
-    width: 100%; border-collapse: collapse; margin-bottom: 22px;
-    font-size: 0.93em;
-}
-th {
-    background: #0F2A35; color: #4FD1C5; font-weight: 600;
-    padding: 10px 14px; text-align: left; letter-spacing: 0.03em;
-    border-bottom: 2px solid rgba(79,209,197,0.4);
-}
-td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.07); color: #D8E8EC; }
-tr:hover td { background: rgba(79,209,197,0.05); }
-"""
-
-_PALETTE_CSS = """
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { background: #0F2A35; }
-body {
-    font-family: system-ui, 'Fira Sans', 'Liberation Sans', sans-serif;
-    font-size: 15px; line-height: 1.6; color: #E8F0F2;
-    padding: 0 0 48px;
-    -webkit-font-smoothing: antialiased;
-}
-.strip { display: flex; width: 100%; height: 80px; }
-.strip-seg { flex: 1; }
-.info { max-width: 680px; margin: 0 auto; padding: 32px 36px 0; }
-h1 { font-size: 1.5em; font-weight: 700; color: #4FD1C5; margin-bottom: 12px; }
-.lore {
-    font-size: 15px; line-height: 1.7; color: #B0C4DE;
-    font-style: italic; margin-bottom: 28px;
-    border-left: 3px solid rgba(79,209,197,0.35); padding-left: 16px;
-}
-.swatches {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 12px;
-}
-.swatch {
-    border-radius: 8px; overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-}
-.swatch-block { width: 100%; height: 80px; }
-.swatch-label {
-    background: rgba(15,42,53,0.85); padding: 8px 10px;
-}
-.swatch-hex {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 12px; font-weight: 600; color: #E8F0F2;
-    letter-spacing: 0.05em;
-}
-.swatch-role { font-size: 11px; color: #607D8B; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
-"""
-
-_HTML_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><style>{css}</style></head>
-<body><div class="content">{body}</div></body>
-</html>"""
-
-
-def _luminance(hex_color: str) -> float:
-    """Approximate relative luminance of a hex color (0=black, 1=white)."""
-    h = hex_color.lstrip("#")
-    if len(h) != 6:
-        return 0.5
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
-
-
-def _palette_to_html(data: dict) -> str:
-    """Build a palette-viewer HTML page from the parsed palette JSON."""
-    import html as _html
-    name = _html.escape(data.get("name", "Palette"))
-    lore = _html.escape(data.get("lore", ""))
-    colors = data.get("colors", [])
-
-    strip_segs = "".join(
-        f'<div class="strip-seg" style="background:{c.get("hex","#888")};"></div>'
-        for c in colors
-    )
-
-    swatch_cards = []
-    for c in colors:
-        hex_val = c.get("hex", "#888888")
-        role = _html.escape(c.get("role", ""))
-        swatch_cards.append(
-            f'<div class="swatch">'
-            f'<div class="swatch-block" style="background:{hex_val};"></div>'
-            f'<div class="swatch-label">'
-            f'<div class="swatch-hex">{_html.escape(hex_val)}</div>'
-            f'<div class="swatch-role">{role}</div>'
-            f'</div></div>'
-        )
-
-    body = (
-        f'<div class="strip">{strip_segs}</div>'
-        f'<div class="info">'
-        f'<h1>{name}</h1>'
-        f'<p class="lore">{lore}</p>'
-        f'<div class="swatches">{"".join(swatch_cards)}</div>'
-        f'</div>'
-    )
-    return _HTML_TEMPLATE.format(css=_PALETTE_CSS, body=body)
-
-
-_MD_EXTENSIONS = ["fenced_code", "nl2br", "tables", "sane_lists", "smarty", "attr_list"]
-
-# Extra CSS layered on top of _READING_CSS for verse/haiku content.
-_VERSE_CSS_EXTRA = """
-.content { text-align: center; max-width: 560px; }
-h1 { text-align: center; border-bottom: none; margin-bottom: 48px; }
-p {
-    font-size: 1.15em;
-    line-height: 2.1;
-    margin-bottom: 36px;
-    font-style: italic;
-    color: #C8DDE5;
-}
-"""
-
-
-def _derive_title(gen_type: str, params: dict) -> str:
-    """Compute a human-readable document title from generator type + params."""
-    if gen_type == "verse":
-        form = params.get("form", "verse").capitalize()
-        theme = params.get("theme", "")
-        return f"{form} — {theme}" if theme else form
-    if gen_type == "freeform":
-        prompt = params.get("freeform", "")
-        return (prompt[:72] + "…") if len(prompt) > 72 else prompt
-    if gen_type == "ansi":
-        return params.get("subject", "")
-    return ""
-
-
-def _md_to_html(text: str, title: str = "", verse_mode: bool = False) -> str:
-    """Convert markdown text to a themed HTML document for the reading view."""
-
-    # Strip outer triple-backtick fence that LLMs sometimes add around their output.
-    stripped = text.strip()
-    if stripped.startswith("```") and stripped.endswith("```"):
-        inner = stripped[3:]
-        if inner.startswith("\n"):
-            inner = inner[1:]
-        # Remove trailing fence
-        inner = inner[:inner.rfind("```")].rstrip()
-        text = inner
-
-    # Dedent: if every non-empty line has consistent leading whitespace, strip it.
-    # This catches LLM outputs indented with 4 spaces (which markdown reads as code).
-    lines = text.splitlines()
-    non_empty = [l for l in lines if l.strip()]
-    if non_empty:
-        common = len(non_empty[0]) - len(non_empty[0].lstrip())
-        if common > 0 and all(l.startswith(" " * common) for l in non_empty):
-            text = "\n".join(l[common:] if l.strip() else l for l in lines)
-
-    # Prepend title as H1 unless the text already starts with a heading.
-    if title and not text.lstrip().startswith("#"):
-        import html as _html
-        text = f"# {_html.escape(title)}\n\n{text}"
-
-    try:
-        import markdown as _markdown
-        exts = _MD_EXTENSIONS[:]
-        while exts:
-            try:
-                body = _markdown.markdown(text, extensions=exts)
-                break
-            except Exception:
-                exts.pop()
-        else:
-            import html as _html
-            body = f"<pre>{_html.escape(text)}</pre>"
-    except Exception:
-        import html as _html
-        body = f"<pre>{_html.escape(text)}</pre>"
-
-    css = _READING_CSS + (_VERSE_CSS_EXTRA if verse_mode else "")
-    return _HTML_TEMPLATE.format(css=css, body=body)
-
-
-# xterm-256 default colour table (indices 0-255) — same as in artgen_gallery
-def _build_ansi_pal() -> list[str]:
-    sys16 = [
-        "#000000","#AA0000","#00AA00","#AA5500","#0000AA","#AA00AA","#00AAAA","#AAAAAA",
-        "#555555","#FF5555","#55FF55","#FFFF55","#5555FF","#FF55FF","#55FFFF","#FFFFFF",
-    ]
-    pal: list[str] = list(sys16)
-    for r6 in range(6):
-        for g6 in range(6):
-            for b6 in range(6):
-                cv = lambda x: 0 if x == 0 else 55 + x * 40
-                pal.append("#{:02x}{:02x}{:02x}".format(cv(r6), cv(g6), cv(b6)))
-    for k in range(24):
-        v = 8 + k * 10
-        pal.append("#{:02x}{:02x}{:02x}".format(v, v, v))
-    return pal
-
-_ANSI_PAL = _build_ansi_pal()
-
-
-def _ansi_to_html(text: str) -> str:
-    """
-    Convert ANSI escape sequences to a full-viewport CSS-grid HTML document.
-    Each pixel cell becomes a <div> coloured by its pixel colour; the grid
-    fills 100vw × 100vh so the art always fills the entire detail view.
-
-    Handles both pixel formats:
-      • Foreground+block: \\033[38;5;Nm█  (current format — uses fg colour)
-      • Background+space: \\033[48;5;Nm   (legacy format — uses bg colour)
-
-    SGR codes handled: 0 (reset), 30-37/90-97 (8-colour fg),
-    38;5;N/38;2;R;G;B (256/truecolour fg), 40-47/100-107 (8-colour bg),
-    48;5;N/48;2;R;G;B (256/truecolour bg).
-    """
-    import re
-
-    # Normalise escape variants to actual ESC byte.
-    text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b")
-    text = text.replace("\\e", "\x1b").replace("^[", "\x1b")
-    text = re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
-
-    DEFAULT = "#000000"
-    bg = DEFAULT
-    fg = DEFAULT
-    grid: list[list[str]] = [[]]
-
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
-            j = i + 2
-            while j < n and text[j] not in "ABCDEFGHJKSTfm":
-                j += 1
-            if j < n and text[j] == "m":
-                params = text[i + 2 : j]
-                nums: list[int] = []
-                for p in (params.split(";") if params else []):
-                    try:
-                        nums.append(int(p))
-                    except ValueError:
-                        nums.append(0)
-                if not nums:
-                    nums = [0]
-                k = 0
-                while k < len(nums):
-                    v = nums[k]
-                    if v == 0:
-                        bg = DEFAULT
-                        fg = DEFAULT
-                    elif 30 <= v <= 37:
-                        fg = _ANSI_PAL[v - 30]
-                    elif 90 <= v <= 97:
-                        fg = _ANSI_PAL[v - 90 + 8]
-                    elif v == 38:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            fg = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            fg = "#{:02x}{:02x}{:02x}".format(
-                                max(0, min(255, nums[k + 2])),
-                                max(0, min(255, nums[k + 3])),
-                                max(0, min(255, nums[k + 4])),
-                            )
-                            k += 4
-                    elif 40 <= v <= 47:
-                        bg = _ANSI_PAL[v - 40]
-                    elif 100 <= v <= 107:
-                        bg = _ANSI_PAL[v - 100 + 8]
-                    elif v == 48:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            bg = _ANSI_PAL[max(0, min(255, nums[k + 2]))]
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            bg = "#{:02x}{:02x}{:02x}".format(
-                                max(0, min(255, nums[k + 2])),
-                                max(0, min(255, nums[k + 3])),
-                                max(0, min(255, nums[k + 4])),
-                            )
-                            k += 4
-                    k += 1
-            i = j + 1
-        elif ch == "\n":
-            grid.append([])
-            bg = DEFAULT
-            fg = DEFAULT
-            i += 1
-        elif ch == "\r":
-            i += 1
-        else:
-            # █ (U+2588): foreground+block format — use fg as the pixel colour.
-            # Space: background-only format — use bg.
-            # Other printable chars: treat as block, use fg.
-            if ch == " ":
-                grid[-1].append(bg)
-            else:
-                grid[-1].append(fg)
-            i += 1
-
-    # Drop empty trailing rows
-    while grid and not grid[-1]:
-        grid.pop()
-
-    if not grid:
-        return "<html><body style='background:#000'></body></html>"
-
-    num_rows = len(grid)
-    num_cols = max((len(r) for r in grid), default=1)
-
-    # Build one <div> per cell; empty cells default to black.
-    cells: list[str] = []
-    for row in grid:
-        for j in range(num_cols):
-            colour = row[j] if j < len(row) else DEFAULT
-            cells.append(f'<div style="background:{colour}"></div>')
-
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
-        "*{margin:0;padding:0;box-sizing:border-box}"
-        "html,body{width:100%;height:100%;background:#000;overflow:hidden}"
-        f"#g{{display:grid;width:100%;height:100%;"
-        f"grid-template-columns:repeat({num_cols},1fr);"
-        f"grid-template-rows:repeat({num_rows},1fr)}}"
-        "</style></head><body>"
-        f'<div id="g">{"".join(cells)}</div>'
-        "</body></html>"
-    )
+# Moved to artgen_render.py (v0.48.0, media-showcase-everywhere Task 1) --
+# aliased here under their old private names so the rest of this file (and
+# any other module that imported them from here) doesn't need to change.
+# `artgen_watch.py` used to import these FROM this module; it now imports
+# them directly from artgen_render, so no back-compat re-export is needed
+# for external callers -- these aliases exist purely to keep this file's own
+# call sites (_render(), below) unchanged.
+from artgen_render import (
+    ansi_to_html as _ansi_to_html,
+    palette_to_html as _palette_to_html,
+    md_to_html as _md_to_html,
+    derive_title as _derive_title,
+    drive_gif_animation as _drive_gif_animation,
+)
 
 
 class ArtgenDetail(Gtk.Box):
@@ -722,38 +354,21 @@ class ArtgenDetail(Gtk.Box):
             self._pending_html = None
 
     def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
-        """Drive an animated GIF on a Gtk.Picture via GdkPixbufAnimationIter.
+        """Drive an animated GIF on a Gtk.Picture via the shared driver.
 
-        Cancels any running animation before starting the new one.
+        Cancels any running animation before starting the new one. Delegates
+        to `artgen_render.drive_gif_animation` (shared with
+        `ArtgenWatch._animate_gif`) so the two panes' identical
+        GdkPixbufAnimationIter drivers can't drift apart.
         """
         if self._gif_timer_id is not None:
             GLib.source_remove(self._gif_timer_id)
             self._gif_timer_id = None
 
-        try:
-            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
-        except Exception:
-            return
+        def _on_timer_id(tid: "int | None") -> None:
+            self._gif_timer_id = tid
 
-        if anim.is_static_image():
-            pic.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
-            return
-
-        it = anim.get_iter(None)
-
-        def tick() -> bool:
-            it.advance(None)
-            pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
-            delay = it.get_delay_time()
-            if delay < 0:
-                self._gif_timer_id = None
-                return GLib.SOURCE_REMOVE
-            self._gif_timer_id = GLib.timeout_add(max(delay, 10), tick)
-            return GLib.SOURCE_REMOVE
-
-        pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
-        delay = max(it.get_delay_time(), 10)
-        self._gif_timer_id = GLib.timeout_add(delay, tick)
+        _drive_gif_animation(pic, path, _on_timer_id)
 
     # ── Handlers ──────────────────────────────────────────────────────────────
 

@@ -17,12 +17,12 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
 from artgen_detail import ArtgenDetail
+from artgen_render import AnimatedGifWidget as _AnimatedGifWidget
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -338,56 +338,12 @@ def _ansi_preview_widget(text: str) -> Gtk.DrawingArea:
 
 
 # ── Animated GIF card ─────────────────────────────────────────────────────────
-
-class _AnimatedGifWidget(Gtk.Picture):
-    """Gtk.Picture that self-drives a GdkPixbufAnimationIter loop.
-
-    Cancels its own timer when unrealized so it doesn't fire after removal.
-    """
-
-    def __init__(self, path: str):
-        super().__init__()
-        self._timer_id: "int | None" = None
-        self._iter: "GdkPixbuf.PixbufAnimationIter | None" = None
-        self.set_hexpand(True)
-        self.set_vexpand(True)
-        self.set_content_fit(Gtk.ContentFit.COVER)
-        self.connect("unrealize", self._on_unrealize)
-        try:
-            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
-        except Exception:
-            return
-        if anim.is_static_image():
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
-            return
-        it = anim.get_iter(None)
-        self._iter = it
-        pb = it.get_pixbuf()
-        if pb:
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
-        delay = max(it.get_delay_time(), 10)
-        self._timer_id = GLib.timeout_add(delay, self._tick)
-
-    def _tick(self) -> bool:
-        if self._iter is None:
-            self._timer_id = None
-            return GLib.SOURCE_REMOVE
-        self._iter.advance(None)
-        pb = self._iter.get_pixbuf()
-        if pb is not None:
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
-        delay = self._iter.get_delay_time()
-        if delay < 0:
-            self._timer_id = None
-            return GLib.SOURCE_REMOVE
-        self._timer_id = GLib.timeout_add(max(delay, 10), self._tick)
-        return GLib.SOURCE_REMOVE
-
-    def _on_unrealize(self, _widget) -> None:
-        if self._timer_id is not None:
-            GLib.source_remove(self._timer_id)
-            self._timer_id = None
-        self._iter = None
+# `_AnimatedGifWidget` moved to artgen_render.py (v0.48.0, media-showcase-
+# everywhere Task 1) as the public `AnimatedGifWidget` -- imported and
+# re-exported under this module's old private name above so every existing
+# caller (create_view.py's result-panel gif branch, this module's own hover
+# swap below, and the perf-regression / create-result-panel tests) is
+# untouched.
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────

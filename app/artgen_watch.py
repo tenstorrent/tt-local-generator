@@ -24,9 +24,15 @@ try:
     _WEBKIT_OK = True
 except Exception:
     _WEBKIT_OK = False
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Gdk, Gio, GLib, Gtk
 
-from artgen_detail import _ansi_to_html, _palette_to_html, _md_to_html, _derive_title
+from artgen_render import (
+    ansi_to_html as _ansi_to_html,
+    palette_to_html as _palette_to_html,
+    md_to_html as _md_to_html,
+    derive_title as _derive_title,
+    drive_gif_animation as _drive_gif_animation,
+)
 from media_store import media_store as _ms, MediaRecord
 
 _DWELL_DEFAULT = 10   # seconds between auto-advances
@@ -273,37 +279,20 @@ class ArtgenWatch(Gtk.Overlay):
             self._art_stack.set_visible_child_name("text")
 
     def _animate_gif(self, pic: Gtk.Picture, path: str) -> None:
-        """Drive an animated GIF on a Gtk.Picture using GdkPixbufAnimationIter.
+        """Drive an animated GIF on a Gtk.Picture via the shared driver.
 
         Cancels any in-progress timer before starting a new loop so switching
-        records doesn't leave orphaned timers running.
+        records doesn't leave orphaned timers running. Delegates to
+        `artgen_render.drive_gif_animation` (shared with
+        `ArtgenDetail._animate_gif`) so the two panes' identical
+        GdkPixbufAnimationIter drivers can't drift apart.
         """
         self._stop_gif_timer()
 
-        try:
-            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
-        except Exception:
-            return
+        def _on_timer_id(tid: "int | None") -> None:
+            self._gif_timer_id = tid
 
-        if anim.is_static_image():
-            pic.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
-            return
-
-        it = anim.get_iter(None)
-
-        def tick() -> bool:
-            it.advance(None)
-            pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
-            delay = it.get_delay_time()
-            if delay < 0:
-                self._gif_timer_id = None
-                return GLib.SOURCE_REMOVE
-            self._gif_timer_id = GLib.timeout_add(max(delay, 10), tick)
-            return GLib.SOURCE_REMOVE
-
-        delay = max(it.get_delay_time(), 10)
-        self._gif_timer_id = GLib.timeout_add(delay, tick)
-        pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
+        _drive_gif_animation(pic, path, _on_timer_id)
 
     # ── Timers ────────────────────────────────────────────────────────────────
 
