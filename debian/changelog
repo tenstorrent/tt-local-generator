@@ -1,3 +1,56 @@
+tt-local-generator (0.46.0) noble; urgency=medium
+
+  * SP-3d-5 (`.superpowers/sdd/sp3d-audit.md`, task-5-brief.md, the FINALE of
+    the coherent-shell program's SP-3 stage): deleted `ControlPanel` (the
+    legacy left-panel prompt form/queue/server-status widget, ~2650 lines),
+    `AdvancedSettingsDialog` (its only client), the medium-tab source toggle
+    UI, and the Generative-Art tab. The app now rests entirely on the
+    Create/Discover/Remix shell. `ArtgenPanel`'s generation sidebar (redundant
+    with Create's own artgen mediums) and its standalone `_check_health_bg`
+    poller are deleted with the class; the "artgen" `_gallery_stack` page is
+    now the standalone `ArtgenGallery` it always wrapped, wired the same way
+    the three native `GalleryWidget`s already are, so Discover keeps browsing
+    artgen media unchanged. `_on_source_change` is replaced by
+    `_sync_gallery_to_source`/`_uncheck_pipelines_toggle_if_active` (the same
+    gallery-switch/context-menu/pipelines-toggle behavior, minus the
+    ControlPanel-era "collapse the left/right panes for artgen" special case,
+    which no longer applies now that "artgen" is a plain gallery page). The
+    orphaned `_MODEL_TO_SOURCE`/`_MODEL_TO_VIDEO_KEY`/`_MODEL_DISPLAY_SERVER`/
+    `_MODEL_TO_SERVER_KEY`/`_MODEL_TO_CAP`/`_MODEL_TO_IMAGE_KEY` module-level
+    dicts (read only by ControlPanel's own internals) are removed too.
+  * ACCEPTED, FLAGGED loss: the artgen **auto-generate** feature (the
+    `art-autogen`/`art-autogen-delay` menu actions and their
+    `ArtgenPanel.toggle_auto_gen`/`set_auto_gen_delay` handlers) is removed —
+    it was ArtgenPanel-sidebar-only and overlapped the surviving TT-TV
+    attractor. Recoverable from git history if ever wanted back.
+  * DISCOVERED GAP (not scoped by the SP-3d audit): the quick "🔀 Remix"
+    popover (`RemixPopover` -> `MainWindow._dispatch_remix` ->
+    `remix_dispatch.dispatch_remix`, predating the Create/Discover/Remix
+    shell) depended on `ControlPanel.switch_to_source`/`populate_prompts` and
+    `ArtgenPanel.set_generator`/`set_theme` for its "reimagine as X in the
+    current tab" behavior. Rather than leave a dangling call into deleted
+    classes, `_dispatch_remix` now opens Pipeline Studio's Muse seeded with
+    the popover's resolved artifact — the same bridge "🧩 Remix as
+    pipeline…" already uses. `remix_dispatch.dispatch_remix` itself is
+    untouched (still unit-tested against mocks) but is no longer called from
+    `main_window.py`. ACCEPTED, FLAGGED UX regression: the popover's own
+    target-type switch and single-step "regenerate inline, stay on this tab"
+    behavior is gone.
+  * Updated tests: removed test_animatediff_panel_multichip.py/
+    test_artgen_concurrency.py/test_artgen_panel_codeart.py/
+    test_artgen_panel_health.py/test_servers_popover_discovery.py/
+    test_servers_popover_focus.py (all tested ControlPanel/ArtgenPanel
+    internals with no surviving equivalent); trimmed ControlPanel-only
+    sections from test_context_menu.py, test_artgen_pipeline_bridge.py,
+    test_main_window_decouple.py, test_main_window_servers_control.py,
+    test_main_window_status_service.py; updated
+    test_main_window_pipelines.py/test_main_window_loop_nav.py/
+    test_main_window_shell_layout.py/test_main_window_create_view_mount.py
+    for the `_ctrl_wrapper`/`_on_source_change`/`ArtgenPanel` deletions. Full
+    suite green (1651 passed, 1 skipped, 2 known-flake deselected).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 15:00:00 -0700
+
 tt-local-generator (0.45.0) noble; urgency=medium
 
   * SP-3d-6 (`.superpowers/sdd/sp3d-audit.md` §4, task-6-brief.md): retired the

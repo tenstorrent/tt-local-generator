@@ -2,8 +2,16 @@
 
 ArtgenGallery/ArtgenDetail grow a parallel `on_remix_as_pipeline` seam next to
 the existing `on_remix` (RemixPopover) seam, and a "🧩 Remix as pipeline…"
-button next to the existing "🔀 Remix" affordance. `ArtgenPanel` forwards its
-own `on_remix_as_pipeline` the same way it already forwards `on_remix`.
+button next to the existing "🔀 Remix" affordance.
+
+SP-3d-5: `ArtgenPanel` (which used to forward its own `on_remix_as_pipeline`
+the same way it forwarded `on_remix`) is deleted — main_window.py now wires
+`self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline`
+directly, the same pattern the three native `GalleryWidget`s already use (see
+`test_main_window_create_view_mount.py` /
+`test_main_window_pipelines.py::test_main_window_wires_artgen_gallery_on_remix_as_pipeline_source`
+for the main_window-level wiring guard). The ArtgenGallery/ArtgenDetail tests
+below are unaffected by that deletion.
 
 Creating GTK widgets needs a display; the full suite runs under xvfb. When no
 display is available this module skips itself (matches the repo's headless
@@ -13,7 +21,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -142,45 +149,3 @@ def test_detail_existing_remix_seam_untouched(tmp_path):
 
     assert pipeline_calls == [rec]
     assert remix_calls == []
-
-
-# ── ArtgenPanel forwarding ────────────────────────────────────────────────────
-
-def test_artgen_panel_forwards_remix_as_pipeline_to_owner_callback():
-    """_on_remix_as_pipeline_record calls self.on_remix_as_pipeline(rec) when set,
-    mirroring _on_remix_record's forwarding of on_remix."""
-    import artgen_panel
-
-    panel = artgen_panel.ArtgenPanel.__new__(artgen_panel.ArtgenPanel)
-    calls = []
-    panel.on_remix_as_pipeline = lambda r: calls.append(r)
-    rec = object()
-
-    artgen_panel.ArtgenPanel._on_remix_as_pipeline_record(panel, rec)
-
-    assert calls == [rec]
-
-
-def test_artgen_panel_remix_as_pipeline_noop_without_owner_callback():
-    import artgen_panel
-
-    panel = artgen_panel.ArtgenPanel.__new__(artgen_panel.ArtgenPanel)
-    panel.on_remix_as_pipeline = None
-
-    artgen_panel.ArtgenPanel._on_remix_as_pipeline_record(panel, object())  # must not raise
-
-
-def test_artgen_panel_build_wires_gallery_and_detail_seams():
-    """_build() wires self._gallery.on_remix_as_pipeline and
-    self._detail.on_remix_as_pipeline to the panel's forwarding handler, the
-    same way it already wires on_remix for both."""
-    import artgen_panel
-
-    with patch("artgen.detect_artgen_endpoint", return_value=(None, None)):
-        panel = artgen_panel.ArtgenPanel()
-
-    assert panel._gallery.on_remix_as_pipeline == panel._on_remix_as_pipeline_record
-    assert panel._detail.on_remix_as_pipeline == panel._on_remix_as_pipeline_record
-    # Existing on_remix wiring must be untouched.
-    assert panel._gallery.on_remix == panel._on_remix_record
-    assert panel._detail.on_remix == panel._on_remix_record

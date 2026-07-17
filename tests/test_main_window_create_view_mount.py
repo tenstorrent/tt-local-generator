@@ -65,12 +65,14 @@ def test_loop_nav_create_now_routes_to_create_view():
     assert '_gallery_stack.set_visible_child_name("create")' in body
 
 
-def test_control_panel_and_old_galleries_still_constructed():
-    """Migration-safety guard: ControlPanel + the old medium galleries must
-    still be built and mounted — Task 8's switchover subset explicitly DEFERS
-    deleting them (that's a later task, only after a real-generation smoke
-    test on hardware). This just guards against an over-eager deletion."""
+def test_native_galleries_and_artgen_gallery_still_constructed():
+    """SP-3d-5 update: ControlPanel itself is deleted (Task 8's switchover
+    subset deferred that; this repo's SP-3d-5 is the "later task" it
+    referred to), but the three native-medium galleries + the artgen gallery
+    Discover browses are unaffected — still built and mounted, just via the
+    standalone `ArtgenGallery` instead of `ArtgenPanel` for the "artgen" page."""
     assert 'self._gallery_stack.add_named(self._video_gallery, "video")' in _SRC
     assert 'self._gallery_stack.add_named(self._animate_gallery, "animate")' in _SRC
     assert 'self._gallery_stack.add_named(self._image_gallery, "image")' in _SRC
-    assert 'self._gallery_stack.add_named(self._artgen_panel, "artgen")' in _SRC
+    assert 'self._gallery_stack.add_named(self._artgen_gallery, "artgen")' in _SRC
+    assert "class ControlPanel(Gtk.Box):" not in _SRC

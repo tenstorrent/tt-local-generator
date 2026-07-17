@@ -55,14 +55,12 @@ def _make_mw(tmp_path, monkeypatch):
     obj._gallery_stack = Gtk.Stack()
     obj._gallery_stack.add_named(Gtk.Box(), "video")
     obj._gallery_stack.set_visible_child_name("video")
-    obj._ctrl_wrapper = Gtk.Box()
-    obj._ctrl_wrapper.set_visible(True)
     obj._detail_wrap = Gtk.Box()
     obj._detail_wrap.set_visible(True)
 
-    fake_controls = MagicMock()
-    fake_controls.get_model_source.return_value = "video"
-    obj._controls = fake_controls
+    # SP-3d-3/5: `_current_medium_source()` replaced ControlPanel's
+    # `get_model_source()`; ControlPanel itself is deleted (SP-3d-5).
+    obj._current_medium_source = MagicMock(return_value="video")
 
     obj._gallery_stack.add_named(Gtk.Box(), "create")
 
@@ -74,7 +72,8 @@ def _make_mw(tmp_path, monkeypatch):
         "_show_pipelines",
         "_hide_pipelines",
         "_on_pipelines_toggled",
-        "_on_source_change",
+        "_sync_gallery_to_source",
+        "_uncheck_pipelines_toggle_if_active",
         "_build_loop_nav",
         "_on_loop_nav_create",
         "_on_loop_nav_discover",
@@ -155,41 +154,36 @@ def test_loop_nav_create_unchecks_pipelines_toggle(tmp_path, monkeypatch):
 
 
 def test_loop_nav_discover_routes_to_gallery_full_width(tmp_path, monkeypatch):
-    """Discover (absorbs Curate): browse+collect the gallery, generation
-    controls collapsed, with the star/playlist/detail actions intact — this is
-    where you curate as you find things."""
+    """Discover (absorbs Curate): browse+collect the current medium's gallery,
+    with the star/playlist/detail actions intact — this is where you curate
+    as you find things. (SP-3d-5: ControlPanel's `_ctrl_wrapper` — the
+    generation-controls pane this used to also assert collapsed — is deleted
+    alongside the class; there is no longer a separate controls pane to
+    collapse.)"""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
     obj._loop_nav["discover"].set_active(True)
 
     assert obj._gallery_stack.get_visible_child_name() == "video"
-    assert obj._ctrl_wrapper.get_visible() is False
     assert obj._detail_wrap.get_visible() is True
 
 
-def test_loop_nav_discover_then_create_restores_control_pane(tmp_path, monkeypatch):
-    """Whole-branch review fix: Discover collapses `_ctrl_wrapper`; returning to
-    Create must restore it (and `_detail_wrap`) to the startup Create state
-    (both visible) — otherwise Create's layout stays diverged from startup
-    after any Discover visit."""
+def test_loop_nav_discover_then_create_restores_detail_pane(tmp_path, monkeypatch):
+    """Returning to Create after Discover must leave `_detail_wrap` visible,
+    matching the startup Create state — this only actually changes anything
+    once Pipelines has been visited (which collapses it), but this guards
+    that Create's own handler always re-asserts it visible regardless."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    # Startup Create state (the harness seeds both panes visible, matching
-    # `_build_ui`'s GTK4 default + startup `_on_loop_nav_create`).
-    startup_ctrl = obj._ctrl_wrapper.get_visible()
-    startup_detail = obj._detail_wrap.get_visible()
-    assert startup_ctrl is True
+    assert obj._detail_wrap.get_visible() is True
 
     obj._loop_nav["discover"].set_active(True)
-    assert obj._ctrl_wrapper.get_visible() is False  # Discover collapsed it
-
     obj._loop_nav["create"].set_active(True)
 
     assert obj._gallery_stack.get_visible_child_name() == "create"
-    assert obj._ctrl_wrapper.get_visible() == startup_ctrl
-    assert obj._detail_wrap.get_visible() == startup_detail
+    assert obj._detail_wrap.get_visible() is True
 
 
 def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):

@@ -377,81 +377,12 @@ def test_restore_queue_from_legacy_json_missing_animatediff_key_drains_cleanly(m
     assert obj._worker_gen._mode == mw._ANIMATEDIFF_DEFAULTS["mode"]
 
 
-# ── Legacy ControlPanel generate/enqueue button: the ONE legitimate read ────
-
-
-def _make_fake_button_self(*, model_source="video", busy=False):
-    """A bare stand-in for `self` inside `ControlPanel._on_action_clicked`/
-    `get_generation_defaults` — both are plain functions that only touch
-    attributes/callables on `self`, so a `types.SimpleNamespace` with those
-    attributes pre-populated is enough; no real GTK ControlPanel needed."""
-    fs = types.SimpleNamespace()
-    fs._get_prompt = lambda: "a prompt"
-    fs._model_source = model_source
-    fs._seed_image_required = lambda: False
-    fs._seed_image_path = ""
-    fs._video_model = "mochi"
-    fs._image_model = "motif"
-    fs._sync_neg_from_widget = lambda: None
-    fs._neg = "blurry"
-    fs._steps = 20
-    fs._seed = -1
-    fs._guidance = 3.5
-    fs._animate_mode = "animation"
-    fs.clear_prompt = MagicMock()
-    fs._busy = busy
-    fs._on_enqueue = MagicMock()
-    fs._on_generate = MagicMock()
-    fs.get_animatediff_args = MagicMock(return_value=_full_animatediff_args())
-    return fs
-
-
-def test_legacy_button_generate_passes_model_params_from_controls():
-    """`ControlPanel._on_action_clicked`'s idle-branch call to `_on_generate`
-    is the one legitimate remaining `self._controls`-equivalent read (it's
-    ControlPanel's own attributes) — it must resolve and pass
-    `video_model_key`/`image_model_key`/`animatediff_args` explicitly."""
-    import main_window as mw
-    fs = _make_fake_button_self(model_source="video", busy=False)
-
-    mw.ControlPanel._on_action_clicked.__get__(fs)(None)
-
-    fs._on_generate.assert_called_once()
-    fs._on_enqueue.assert_not_called()
-    kwargs = fs._on_generate.call_args.kwargs
-    assert kwargs["video_model_key"] == "mochi"
-    assert kwargs["image_model_key"] == "motif"
-    assert kwargs["animatediff_args"]["mode"] == "sim"
-
-
-def test_legacy_button_enqueue_passes_model_params_from_controls():
-    """Same, but the busy-branch -> `_on_enqueue` call (Add to Queue)."""
-    import main_window as mw
-    fs = _make_fake_button_self(model_source="image", busy=True)
-
-    mw.ControlPanel._on_action_clicked.__get__(fs)(None)
-
-    fs._on_enqueue.assert_called_once()
-    fs._on_generate.assert_not_called()
-    kwargs = fs._on_enqueue.call_args.kwargs
-    assert kwargs["video_model_key"] == "mochi"
-    assert kwargs["image_model_key"] == "motif"
-    assert kwargs["animatediff_args"]["mode"] == "sim"
-
-
-def test_get_generation_defaults_includes_model_params():
-    """`get_generation_defaults()` (used by `_on_theme_queue_shots`) now also
-    returns `video_model_key`/`image_model_key`/`animatediff_args` so that
-    caller never needs to read `self._controls` directly either."""
-    import main_window as mw
-    fs = _make_fake_button_self(model_source="video")
-
-    defaults = mw.ControlPanel.get_generation_defaults.__get__(fs)()
-
-    assert defaults["video_model_key"] == "mochi"
-    assert defaults["image_model_key"] == "motif"
-    assert defaults["animatediff_args"]["mode"] == "sim"
-    assert defaults["model_id"] == "mochi"  # unchanged pre-existing behavior
+# Legacy ControlPanel generate/enqueue button tests (`_on_action_clicked`/
+# `get_generation_defaults`) removed SP-3d-5 — ControlPanel is deleted, and
+# `_on_theme_queue_shots` (the other caller of `get_generation_defaults`) was
+# deleted alongside it (see main_window.py's "Prompt gen launcher" section);
+# Create's own theme-set/generate paths (`_on_create_theme_set`/
+# `_native_generate_args`) are covered in tests/test_main_window_create_generate.py.
 
 
 # ── Queue replay: `_start_next_queued` uses the item, not live `_controls` ──

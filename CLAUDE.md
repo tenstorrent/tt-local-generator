@@ -189,15 +189,16 @@ pure `_resolve(...)`. Design notes:
   `artgen_panel._check_health_bg`. SP-3 retires the vestiges and stands up one
   surviving status control on the service.
 
-## Retiring the vestiges (SP-3, staged migration)
+## Retiring the vestiges (SP-3, DONE — v0.46.0)
 
-The app is consolidating onto the Create / Discover / Remix shell; the old
-per-medium tabs + ControlPanel + ArtgenPanel + Generative-Art tab + duplicate
-server UI are being retired in stages (delete last, only once every capability
-has a new home). Decisions: server control -> a compact top-bar `Servers ▾`
-wired to `ModelStatusService`; migrate (not drop) seed-image/i2i, "Inspire me"
-prompt-gen, attractor/TT-TV launch, the generation queue, and the status
-bar/server-log.
+The app now rests entirely on the Create / Discover / Remix shell. The old
+per-medium tabs + ControlPanel + ArtgenPanel's generation sidebar +
+Generative-Art tab + duplicate server UI — all staged for deletion "only once
+every capability has a new home" — are gone. Decisions honored: server
+control is the compact top-bar `Servers ▾` wired to `ModelStatusService`;
+seed-image/i2i, "Inspire me" prompt-gen, attractor/TT-TV launch, the
+generation queue, and the status bar/server-log were all migrated (not
+dropped) before their old homes were deleted.
 
 - **SP-3a done (v0.34.0): `_on_generate` decoupled from ControlPanel.** It takes
   `video_model_key`/`image_model_key`/`animatediff_args` params and reads NO
@@ -238,13 +239,42 @@ bar/server-log.
   `_render_status_snapshot`), resolving the `TODO(SP-3d)` marker at its
   construction site — the same aggregation policy `ServersControl` uses
   (READY > STARTING > ERROR > OFF), grouped by `server_manager.
-  servers_for_capability`. `artgen_panel._check_health_bg` is untouched (goes
-  with `ArtgenPanel` in 3d-5).
-- **Remaining: SP-3d-5** — delete `ControlPanel`/`ArtgenPanel`/medium-tabs/
-  Gen-Art tab outright (every `self._controls.*` health-path read is gone as
-  of 3d-6, so this is now "remove an isolated dead subtree" per the audit),
-  and give the attractor's model source its final non-ControlPanel wiring if
-  anything is still pending after 3d-1/3d-2's rehoming.
+  servers_for_capability`.
+- **SP-3d-5 done (v0.46.0), the FINALE — `ControlPanel`/`ArtgenPanel`/
+  medium-tabs/Gen-Art tab deleted outright.** `ControlPanel` (~2650 lines) +
+  `AdvancedSettingsDialog` (its only client) + the medium-tab source toggle +
+  the Generative-Art tab are gone; every remaining `self._controls.*` read
+  was legacy-only (theme/inspire/prompt-gen setters, SHOT panel, startup
+  pre-select) and went with it. `ArtgenPanel`'s generation sidebar (redundant
+  with Create's own artgen mediums) and its `_check_health_bg` poller are
+  deleted with the class; Discover's "artgen" `_gallery_stack` page is now
+  the standalone `ArtgenGallery` it always wrapped (`self._artgen_gallery`),
+  wired identically to the three native `GalleryWidget`s. `_on_source_change`
+  is replaced by `_sync_gallery_to_source`/`_uncheck_pipelines_toggle_if_active`
+  — same gallery-switch/context-menu/pipelines-toggle behavior, minus the
+  ControlPanel-era "collapse the left/right panes for artgen" special case
+  (moot now that "artgen" is a plain gallery page, not a wide sidebar+preview
+  layout). Orphaned module-level dicts (`_MODEL_TO_SOURCE`/`_MODEL_TO_VIDEO_KEY`/
+  `_MODEL_DISPLAY_SERVER`/`_MODEL_TO_SERVER_KEY`/`_MODEL_TO_CAP`/
+  `_MODEL_TO_IMAGE_KEY`) removed too.
+  - **ACCEPTED, FLAGGED loss:** artgen **auto-generate** (`art-autogen`/
+    `art-autogen-delay` menu actions, `ArtgenPanel.toggle_auto_gen`/
+    `set_auto_gen_delay`) is gone — ArtgenPanel-sidebar-only, overlapped the
+    surviving TT-TV attractor. Recoverable from git if wanted back.
+  - **DISCOVERED GAP the SP-3d audit missed:** the quick "🔀 Remix" popover
+    (`RemixPopover` → `MainWindow._dispatch_remix` →
+    `remix_dispatch.dispatch_remix`, a pre-Create-shell feature from
+    `docs/superpowers/specs/2026-05-26-remix-ui-design.md`) depended on
+    `ControlPanel.switch_to_source`/`populate_prompts` and
+    `ArtgenPanel.set_generator`/`set_theme`. `_dispatch_remix` now opens
+    Pipeline Studio's Muse seeded with the popover's resolved artifact instead
+    (the same bridge "🧩 Remix as pipeline…" uses) rather than leave a
+    dangling call into deleted classes — an ACCEPTED, FLAGGED UX regression
+    (loses the popover's own target-type switch + inline single-step
+    regenerate). `remix_dispatch.dispatch_remix` itself is untouched and still
+    unit-tested, just no longer called from `main_window.py`.
+  - Full details, every deleted symbol's grep-clean proof, and every test
+    file touched: `.superpowers/sdd/task-5-report.md`.
 
 ## Version discipline
 

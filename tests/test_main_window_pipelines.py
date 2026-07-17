@@ -2,14 +2,16 @@
 Tests for mounting Pipeline Studio (Discover+Open) in the main window
 (SP-C Phase 1, Task 5).
 
-Constructing the full `MainWindow` (ControlPanel, GalleryWidget, DetailPanel,
-history load, health workers, ...) is heavy and network/disk dependent, so —
-mirroring the existing pattern in tests/test_main_window_animate_inputs.py —
-these tests build a minimal `MainWindow` via `__new__` with `Gtk.ApplicationWindow
+Constructing the full `MainWindow` (GalleryWidget, DetailPanel, history load,
+health workers, ...) is heavy and network/disk dependent, so — mirroring the
+existing pattern in tests/test_main_window_animate_inputs.py — these tests
+build a minimal `MainWindow` via `__new__` with `Gtk.ApplicationWindow
 .__init__` patched out, then hand-populate only the handful of real Gtk widgets
 and collaborators the seam under test (`_show_pipelines` / `_hide_pipelines` /
-`_on_pipelines_toggled`) actually touches: `_gallery_stack`, `_ctrl_wrapper`,
-`_detail_wrap`, and a stand-in `_controls` exposing `get_model_source()`.
+`_on_pipelines_toggled`) actually touches: `_gallery_stack` and `_detail_wrap`.
+`_current_medium_source` (SP-3d-3, replacing ControlPanel's
+`get_model_source()` — ControlPanel itself is deleted, SP-3d-5) is stubbed
+directly rather than via a `_controls` stand-in.
 
 `PipelineStore.list_runs` is monkeypatched to a small fixture (following
 tests/test_pipeline_studio.py's own convention of pointing pipeline_store's
@@ -55,20 +57,21 @@ def _make_mw(tmp_path, monkeypatch):
     obj._gallery_stack = Gtk.Stack()
     obj._gallery_stack.add_named(Gtk.Box(), "video")
     obj._gallery_stack.set_visible_child_name("video")
-    obj._ctrl_wrapper = Gtk.Box()
-    obj._ctrl_wrapper.set_visible(True)
     obj._detail_wrap = Gtk.Box()
     obj._detail_wrap.set_visible(True)
 
-    fake_controls = MagicMock()
-    fake_controls.get_model_source.return_value = "video"
-    obj._controls = fake_controls
+    # SP-3d-3/5: `_current_medium_source()` replaced ControlPanel's
+    # `get_model_source()` as the "what am I currently making" source;
+    # ControlPanel itself is deleted (SP-3d-5), so stub the new method
+    # directly instead of a `_controls` stand-in.
+    obj._current_medium_source = MagicMock(return_value="video")
 
     # Bind the real (unbound) methods under test so `self` resolves correctly.
     obj._show_pipelines = mw.MainWindow._show_pipelines.__get__(obj)
     obj._hide_pipelines = mw.MainWindow._hide_pipelines.__get__(obj)
     obj._on_pipelines_toggled = mw.MainWindow._on_pipelines_toggled.__get__(obj)
-    obj._on_source_change = mw.MainWindow._on_source_change.__get__(obj)
+    obj._sync_gallery_to_source = mw.MainWindow._sync_gallery_to_source.__get__(obj)
+    obj._uncheck_pipelines_toggle_if_active = mw.MainWindow._uncheck_pipelines_toggle_if_active.__get__(obj)
     obj._rebuild_context_menu = MagicMock()
     obj.lookup_action = MagicMock(return_value=None)
 
@@ -87,8 +90,8 @@ def test_show_pipelines_lazily_constructs_pipeline_studio(tmp_path, monkeypatch)
     assert isinstance(obj._pipeline_studio, PipelineStudio)
     assert obj._gallery_stack.get_child_by_name("pipelines") is obj._pipeline_studio
     assert obj._gallery_stack.get_visible_child_name() == "pipelines"
-    # Pipeline Studio is full-width, like artgen mode: side panels collapse.
-    assert obj._ctrl_wrapper.get_visible() is False
+    # Pipeline Studio is full-width: the detail pane collapses (ControlPanel's
+    # `_ctrl_wrapper`, which used to collapse alongside it, is deleted SP-3d-5).
     assert obj._detail_wrap.get_visible() is False
 
 
@@ -112,7 +115,6 @@ def test_hide_pipelines_restores_current_source_view(tmp_path, monkeypatch):
     obj._hide_pipelines()
 
     assert obj._gallery_stack.get_visible_child_name() == "video"
-    assert obj._ctrl_wrapper.get_visible() is True
     assert obj._detail_wrap.get_visible() is True
 
 
@@ -149,15 +151,18 @@ def test_reentering_pipelines_resets_inner_stack_to_discover(tmp_path, monkeypat
 
 
 def test_source_change_unchecks_pipelines_toggle(tmp_path, monkeypatch):
-    """Selecting a source tab while Pipelines is showing must visually uncheck
-    the Pipelines toggle button, making the two mutually exclusive.
+    """Switching the gallery to a medium page while Pipelines is showing must
+    visually uncheck the Pipelines toggle button, making the two mutually
+    exclusive.
 
     Regression: previously the toggle stayed "checked" after a source tab was
     clicked — the gallery correctly switched away from Pipelines, but the
     toolbar button only self-corrected the next time Pipelines itself was
     clicked. Wired via the button's real "toggled" signal (not a direct call)
-    so this also proves the fix doesn't recurse back into _hide_pipelines /
-    _on_source_change when the toggle is flipped off programmatically.
+    so this also proves the fix doesn't recurse back into `_hide_pipelines` /
+    `_sync_gallery_to_source` (SP-3d-5: replaces ControlPanel-era
+    `_on_source_change`, deleted with the class) when the toggle is flipped
+    off programmatically.
     """
     obj = _make_mw(tmp_path, monkeypatch)
     obj._pipelines_btn = Gtk.ToggleButton()
@@ -167,8 +172,9 @@ def test_source_change_unchecks_pipelines_toggle(tmp_path, monkeypatch):
     assert obj._gallery_stack.get_visible_child_name() == "pipelines"
     assert obj._pipelines_btn.get_active() is True
 
-    # Simulate clicking the "video" source tab while Pipelines is showing.
-    obj._on_source_change("video")
+    # Simulate landing on the "video" medium page while Pipelines is showing
+    # (what _hide_pipelines does via _current_medium_source()).
+    obj._sync_gallery_to_source("video")
 
     assert obj._gallery_stack.get_visible_child_name() == "video"
     assert obj._pipelines_btn.get_active() is False
@@ -523,13 +529,19 @@ def test_remix_as_pipeline_generation_record_path_unaffected_by_media_record_bra
     )
 
 
-def test_main_window_wires_artgen_panel_on_remix_as_pipeline_source():
+def test_main_window_wires_artgen_gallery_on_remix_as_pipeline_source():
     """Regression guard: main_window.py must wire
-    `self._artgen_panel.on_remix_as_pipeline = self._remix_as_pipeline`
+    `self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline`
     right after the existing `on_remix` wiring (mirrors
     test_workflow_popover_not_imported_at_startup's source-text style — a
     full MainWindow() construction is too heavy/network-dependent to build
-    in tests, see the module docstring above)."""
+    in tests, see the module docstring above).
+
+    SP-3d-5: `ArtgenPanel` is deleted — Discover's artgen gallery page is now
+    the standalone `ArtgenGallery`, wired the same way the three native
+    `GalleryWidget`s already are.
+    """
     src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
-    assert "self._artgen_panel.on_remix = self._on_remix_card" in src
-    assert "self._artgen_panel.on_remix_as_pipeline = self._remix_as_pipeline" in src
+    assert "self._artgen_gallery.on_remix = self._on_remix_card" in src
+    assert "self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline" in src
+    assert "class ArtgenPanel(Gtk.Box):" not in src

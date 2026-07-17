@@ -149,45 +149,29 @@ def test_note_ordering_matches_legacy_on_servers_action():
 
 
 def test_single_servers_control_mounted():
-    """ControlPanel's own Servers ▾ button / server-status box / server-log
-    revealer are explicitly hidden right after ServersControl is
-    constructed, so exactly one Servers control + one status bar are ever
-    visible -- no ControlPanel duplicate."""
-    construct_idx = _SRC.index("self._servers_control = ServersControl(")
-    tail = _SRC[construct_idx:construct_idx + 1500]
-    assert "self._controls._servers_btn.set_visible(False)" in tail
-    assert "self._controls._server_status_box.set_visible(False)" in tail
-    assert "self._controls._srv_log_revealer.set_visible(False)" in tail
-    # ControlPanel itself is still constructed (deletion is SP-3d-5) but, as
-    # of SP-3d-4, its toolbar/footer are no longer mounted anywhere in the
-    # window at all -- generate/queue/source-toggle aren't migrated, but
-    # they're simply unreachable now rather than merely having their
-    # server-specific pieces hidden.
-    assert "self._controls = ControlPanel(" in _SRC
-    assert "main_toolbar = self._controls.toolbar_box" not in _SRC
-    assert "self._ctrl_wrapper.append(self._controls.footer_box)" not in _SRC
+    """SP-3d-5: ControlPanel -- and the servers_btn/server_status_box/
+    srv_log_revealer hide-calls that used to run right after ServersControl
+    was constructed (SP-3b state) -- is deleted entirely. ServersControl is
+    now the ONLY servers control the window builds; there is no ControlPanel
+    duplicate to hide because there is no ControlPanel."""
+    assert "self._controls = ControlPanel(" not in _SRC
+    assert "class ControlPanel(Gtk.Box):" not in _SRC
+    assert "self._controls._servers_btn.set_visible(False)" not in _SRC
+    assert "self._controls._server_status_box.set_visible(False)" not in _SRC
+    assert "self._controls._srv_log_revealer.set_visible(False)" not in _SRC
 
 
 def test_refresh_servers_popover_poll_retired():
-    """`ControlPanel._refresh_servers_popover`'s standalone `_sm.status_all()`
-    poll is only ever kicked off by the "Servers ▾" popover's "show" signal
-    (`_on_servers_popover_show`), itself only reachable via a user click on
-    `_servers_btn`. MainWindow now hides that button unconditionally right
-    after constructing ServersControl (see test_single_servers_control_mounted),
-    so the popover can never open and the poll can never run in the live
-    app -- retiring it in practice without deleting the still-intact
-    ControlPanel method (kept per the brief's "don't delete ControlPanel"
-    rule -- it's needed again until SP-3d).
-
-    `ServersControl` itself (the thing the popover is replaced by) never
-    polls at all -- it only ever renders from `status_service.snapshot()`
-    at construction and `subscribe()`s for updates, so there's no
-    replacement poll introduced either.
+    """SP-3d-5: `ControlPanel._refresh_servers_popover` (and the whole class
+    it lived on) is deleted outright -- superseding the SP-3b-era state where
+    it was merely unreachable (hidden button, method still defined, per this
+    test's earlier version). `ServersControl` (the thing the popover is
+    replaced by) never polls at all -- it only ever renders from
+    `status_service.snapshot()` at construction and `subscribe()`s for
+    updates, so there's no replacement poll introduced either.
     """
-    assert "self._controls._servers_btn.set_visible(False)" in _SRC
-    # ControlPanel's method is untouched -- still defined, not deleted.
-    assert "def _refresh_servers_popover(self) -> None:" in _SRC
-    assert "_sm.status_all(timeout=2.0)" in _SRC
+    assert "def _refresh_servers_popover(self) -> None:" not in _SRC
+    assert "_reconcile_artgen_statuses" not in _SRC
     # ServersControl has no polling of its own.
     assert "status_all" not in _SC_SRC
     assert "subscribe(" in _SC_SRC

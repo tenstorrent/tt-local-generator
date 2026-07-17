@@ -7,17 +7,21 @@ mounting ControlPanel's `toolbar_box`/`footer_box` and collapses the 3-pane
 `outer_paned` (controls | gallery | detail) down to a 2-pane `inner_paned`
 (gallery | detail) split.
 
-ControlPanel is NOT deleted by this task (that's SP-3d-5) -- it is still
-constructed, and `_ctrl_wrapper` (its scrollable body's wrapper) is still
-built so the existing `_ctrl_wrapper.set_visible(...)` calls scattered
-through `_on_source_change`/`_show_pipelines`/`_on_loop_nav_create` keep
-working. What changes is that `_ctrl_wrapper` (and, transitively,
-`self._controls.footer_box`, which used to be appended into it) is never
-attached anywhere in the window's widget tree, and ControlPanel's
-`toolbar_box` (logo/title + the now-superseded medium-tab toggle) is never
-read at all -- MainWindow's own three buttons (Watch TT-TV / Pipelines /
-Servers ▾), which used to be appended onto `toolbar_box`, fold directly into
-the loop-nav row instead.
+ControlPanel was NOT deleted by this task (that was SP-3d-5) -- at the time
+this file was written it was still constructed, and `_ctrl_wrapper` (its
+scrollable body's wrapper) was still built so the existing
+`_ctrl_wrapper.set_visible(...)` calls scattered through
+`_on_source_change`/`_show_pipelines`/`_on_loop_nav_create` kept working.
+SP-3d-5 has since deleted ControlPanel, `_ctrl_wrapper`, and
+`_on_source_change` entirely (superseded by `_sync_gallery_to_source`) --
+the handful of tests below that asserted those still-existed are updated to
+assert the opposite. What changes in THIS task is that `_ctrl_wrapper` (and,
+transitively, `self._controls.footer_box`, which used to be appended into
+it) is never attached anywhere in the window's widget tree, and
+ControlPanel's `toolbar_box` (logo/title + the now-superseded medium-tab
+toggle) is never read at all -- MainWindow's own three buttons (Watch TT-TV
+/ Pipelines / Servers ▾), which used to be appended onto `toolbar_box`, fold
+directly into the loop-nav row instead.
 
 Constructing the full `MainWindow` is heavy (see test_main_window_pipelines.py's
 docstring) -- these are source-level guards in the same style as
@@ -92,31 +96,26 @@ def test_inner_paned_appended_directly_to_root_box():
     assert "root_box.append(inner_paned)" in _SRC
 
 
-def test_ctrl_wrapper_still_built_but_never_mounted():
-    """`_ctrl_wrapper` is still constructed (ControlPanel isn't deleted until
-    SP-3d-5, and `_on_source_change`/`_show_pipelines`/`_on_loop_nav_create`
-    still call `.set_visible()` on it) but must never be handed to a
-    container's `append`/`set_start_child`/`set_end_child` anywhere in the
-    file -- it has no parent, so those calls are inert."""
-    assert "self._ctrl_wrapper = Gtk.Box(" in _SRC
+def test_ctrl_wrapper_is_gone():
+    """SP-3d-5 update: `_ctrl_wrapper` (ControlPanel's scrollable-body
+    wrapper -- unmounted since this task, but still constructed until
+    SP-3d-5) is now deleted entirely, along with every `.set_visible()` call
+    on it. Supersedes this file's earlier `test_ctrl_wrapper_still_built_but_
+    never_mounted`, which asserted the opposite (that it WAS still built)."""
+    assert "self._ctrl_wrapper = Gtk.Box(" not in _SRC
+    assert "self._ctrl_wrapper.set_visible(" not in _SRC
     assert ".append(self._ctrl_wrapper)" not in _SRC
     assert ".set_start_child(self._ctrl_wrapper)" not in _SRC
     assert ".set_end_child(self._ctrl_wrapper)" not in _SRC
 
 
-def test_ctrl_wrapper_footer_box_append_removed():
-    """The old `self._ctrl_wrapper.append(self._controls.footer_box)` line
-    (footer_box was ControlPanel's Generate/Cancel/Start-Endless row) must be
-    gone -- footer_box is never mounted anywhere per this task."""
-    assert "self._ctrl_wrapper.append(self._controls.footer_box)" not in _SRC
-
-
-def test_control_panel_still_constructed():
-    """Migration-safety guard, mirroring
-    test_main_window_create_view_mount.py::test_control_panel_and_old_galleries_still_constructed:
-    ControlPanel itself must still be built -- only its toolbar/footer mount
-    points are removed by this task. Deleting the class is SP-3d-5."""
-    assert "self._controls = ControlPanel(" in _SRC
+def test_control_panel_is_gone():
+    """SP-3d-5 update: ControlPanel is deleted entirely (this task only
+    stopped mounting its toolbar/footer; the class itself is gone now).
+    Supersedes this file's earlier `test_control_panel_still_constructed`,
+    which asserted the opposite (that it WAS still built)."""
+    assert "self._controls = ControlPanel(" not in _SRC
+    assert "class ControlPanel(Gtk.Box):" not in _SRC
 
 
 # ── Behavioral: the loop-nav row really is an appendable Gtk widget ────────
