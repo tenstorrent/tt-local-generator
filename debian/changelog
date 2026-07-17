@@ -1,3 +1,61 @@
+tt-local-generator (0.46.2) noble; urgency=medium
+
+  * fix(gallery): media-entry cards are now a UNIFORM, FIXED size, identical
+    across every Discover tab, instead of resizing to content and differing
+    per gallery. Root causes: `GenerationCard` (main_window.py) set a fixed
+    WIDTH but a NATURAL height (`set_size_request(_THUMB_W + 20, -1)`), and
+    its thumbnail zone (`_make_scalable_thumb`) only set a size_request
+    MINIMUM — a Gtk.Picture's own natural size follows the source image's
+    intrinsic aspect ratio (a square 1024x1024 image naturally wants
+    height == width, taller than a 16:9 floor), and Gtk.FlowBox
+    (non-homogeneous) honors that larger natural request, so cards visibly
+    grew/shrank per thumbnail content within a single gallery. Separately,
+    the artgen gallery (`ArtgenGallery` in artgen_gallery.py) used a totally
+    different tile size (110x90) and FlowBox grid settings
+    (min_children_per_line=3) than the native video/image/animate galleries
+    (~220 wide, min=2), so the SAME conceptual grid looked different on the
+    artgen tab.
+  * New `app/gallery_layout.py` — single source of truth for the card tile
+    size (`TILE_W`/`TILE_H` = 220x240, empirically measured as the smallest
+    height that acts as a true ceiling for every GenerationCard variant),
+    the 16:9 thumbnail-zone size (`THUMB_W`/`THUMB_H`), the shared FlowBox
+    grid settings, and `tile_size(density)` for the comfortable/compact
+    density presets (now scaling BOTH dimensions uniformly — the density
+    switch used to leave height at `-1`, silently re-introducing ragged
+    cards at compact density). Also exposes `pin_fixed_zone(child, w, h)` —
+    the one GTK trick (an invisible fixed-size anchor as a Gtk.Overlay's
+    "main child", with the real content layered on top as a non-size-
+    contributing overlay child) that pins a zone's MEASURED size regardless
+    of its content's own aspect ratio/length.
+  * `GenerationCard` now sets `self.set_size_request(TILE_W, TILE_H)` and
+    wraps its whole media/thumbnail Gtk.Stack (`self._media_zone`) in
+    `pin_fixed_zone`, so neither the static thumbnail, the hover-video, nor
+    the GIF page can change the card's footprint. `PendingCard` matches the
+    same fixed tile so a queued job's placeholder is never a different size
+    than the finished card that replaces it.
+  * `ArtgenGallery` cards use the SAME `gallery_layout` tile size and FlowBox
+    settings, and pin their content zone the same way (content_fit switched
+    COVER → CONTAIN to letterbox instead of crop, matching the native
+    galleries). Fixed a hover-swap bug found while wiring this up: the GIF
+    hover/leave handlers used to rip the whole content zone out of the card
+    and replace it with an unpinned widget, so a hovered GIF card could
+    still balloon to the animated widget's own aspect ratio — swaps now
+    happen INSIDE the pinned zone (`remove_overlay`/`add_overlay`) so the
+    tile size never changes across hover. New `ArtgenGallery.set_tile_size`
+    keeps it in sync with `MainWindow._apply_gallery_density`.
+  * Tests (TDD, `tests/test_gallery_card_uniform_size.py`, 9 new tests):
+    GenerationCard and artgen-card fixed-size equality; card size
+    independent of thumbnail content (square/16:9/missing); a genuine
+    MEASURED-height regression check (not just the literal size_request)
+    proving the media zone's natural size is capped, not merely floored;
+    artgen card size independent of content aspect (image/text/empty);
+    FlowBox grid settings identical across galleries; density scaling
+    applied uniformly to the artgen gallery too; and the GIF hover-swap
+    stability check. Full suite green (1668 passed, 1 skipped, 2
+    known-flake deselected).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 18:00:00 -0700
+
 tt-local-generator (0.46.1) noble; urgency=medium
 
   * fix(discover): SP-3d-5 deleted the legacy medium-tab source toggle — the

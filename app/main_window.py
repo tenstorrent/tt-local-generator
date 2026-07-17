@@ -49,6 +49,7 @@ from animate_picker import InputWidget, PickerPopover
 from artgen_gallery import ArtgenGallery
 import artgen_kind
 from create_view import CreateView
+import gallery_layout
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
 from model_status import ModelStatusService, Status
@@ -1468,8 +1469,14 @@ _VIDEO_CHIPS   = _load_chips_safe("video")
 _IMAGE_CHIPS   = _load_chips_safe("image")
 _ANIMATE_CHIPS = _load_chips_safe("animate")
 
-_THUMB_W = 200
-_THUMB_H = 112   # 16:9
+# Gallery-card tile sizing is centralised in gallery_layout.py (shared with
+# artgen_gallery.py -- see its docstring for the "why" of the uniform-size
+# fix). _THUMB_W/_THUMB_H are kept as local aliases since they're referenced
+# throughout this file (ffmpeg thumbnail dims, detail-panel sizing, etc.).
+_THUMB_W = gallery_layout.THUMB_W
+_THUMB_H = gallery_layout.THUMB_H   # 16:9
+_TILE_W = gallery_layout.TILE_W     # fixed OUTER card size -- both dimensions
+_TILE_H = gallery_layout.TILE_H
 _DETAIL_VIDEO_W = 400
 _DETAIL_VIDEO_H = 225
 
@@ -1711,24 +1718,33 @@ def _make_image_widget(path: str, width: int, height: int, placeholder: str = "�
 def _make_scalable_thumb(path: str, min_width: int, min_height: int,
                          placeholder: str = "🎬") -> Gtk.Widget:
     """
-    Load an image for gallery-card thumbnail display.  Unlike _make_image_widget
-    (which pre-scales to exact pixel dimensions), this version loads at the file's
-    native resolution and marks the Picture as expandable, so it fills the width
-    that the FlowBox cell allocates rather than being stuck at a fixed pixel size.
+    Build gallery-card thumbnail CONTENT: a Gtk.Picture that letterboxes
+    (aspect-preserving CONTAIN fit) into whatever area its container
+    allocates, or a placeholder Label if no thumbnail exists.
 
-    can_shrink=True  — widget may be allocated less than the image's natural size
-    hexpand=True     — widget fills the full horizontal cell width
-    size_request     — provides a hard minimum so cards never become too tiny
+    Regression note: this function used to ALSO call
+    `pic.set_size_request(min_width, min_height)` as a hard MINIMUM. That
+    only floors the widget's size — it does not cap it, so a Gtk.Picture's
+    own natural size (computed from the source image's intrinsic aspect
+    ratio when keep_aspect_ratio=True, the default) could still exceed that
+    floor for non-16:9 content (e.g. a square 1024x1024 image naturally
+    wants height == width, not the 16:9 floor), and Gtk.FlowBox
+    (non-homogeneous) honors that larger natural size — this was the root
+    cause of gallery cards growing/shrinking to match thumbnail aspect
+    ratio.  The caller now wraps this widget in
+    `gallery_layout.pin_fixed_zone(widget, THUMB_W, THUMB_H)`, which pins
+    the OUTER container's measured size regardless of this widget's own
+    natural size — so min_width/min_height are unused here and this widget
+    itself must NOT set its own size_request (that would just reintroduce a
+    (harmless, since it's overridden) but confusing floor).  Params are
+    kept for call-site/signature compatibility.
     """
     if path and Path(path).exists():
         pic = Gtk.Picture.new_for_filename(path)
         pic.set_can_shrink(True)
-        pic.set_hexpand(True)
-        pic.set_size_request(min_width, min_height)
+        pic.set_content_fit(Gtk.ContentFit.CONTAIN)
         return pic
     lbl = Gtk.Label(label=placeholder)
-    lbl.set_size_request(min_width, min_height)
-    lbl.set_hexpand(True)
     lbl.add_css_class("muted")
     return lbl
 
@@ -1853,9 +1869,12 @@ class GenerationCard(Gtk.Frame):
         self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
         self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
         self.add_css_class("card")
-        # Minimum card width; FlowBox packs cards at this natural width
-        # and expands them to fill the row, so actual width adapts to the pane size.
-        self.set_size_request(_THUMB_W + 20, -1)
+        # FIXED card tile size — BOTH dimensions, shared with the artgen
+        # gallery via gallery_layout.TILE_W/TILE_H — so every media-entry box
+        # is identical across every Discover tab and never resizes to match
+        # thumbnail content (see gallery_layout.py + _build's media zone,
+        # which pins the thumbnail area's measured size the same way).
+        self.set_size_request(_TILE_W, _TILE_H)
         self.set_hexpand(True)
         self._build()
 
@@ -2028,8 +2047,6 @@ class GenerationCard(Gtk.Frame):
         self._media_stack.set_transition_duration(120)
         self._media_stack.set_hexpand(True)
 
-        # Use _make_scalable_thumb so the thumbnail grows with the card width
-        # instead of being clamped to the fixed _THUMB_W pixel value.
         placeholder = "🖼" if self._record.media_type == "image" else "🎬"
         thumb = _make_scalable_thumb(
             self._record.thumbnail_path if self._record.thumbnail_exists else "",
@@ -2095,7 +2112,17 @@ class GenerationCard(Gtk.Frame):
         # instead of set_file / set_filename directly.
         self._hover_pipeline_open: bool = False
 
-        box.append(self._media_stack)
+        # Pin the media zone's MEASURED size to a fixed THUMB_W x THUMB_H,
+        # regardless of the thumbnail's / hover-video's own aspect ratio —
+        # this is the fix for cards growing/shrinking to match content (a
+        # square image otherwise requests height == width, taller than the
+        # 16:9 floor, and Gtk.FlowBox honors that larger natural request).
+        # See gallery_layout.pin_fixed_zone for the mechanism. Stored as
+        # self._media_zone so tests can assert its measured size directly.
+        self._media_zone = gallery_layout.pin_fixed_zone(
+            self._media_stack, _THUMB_W, _THUMB_H
+        )
+        box.append(self._media_zone)
 
         # Prompt (2-line max, tooltip shows full text)
         prompt_lbl = Gtk.Label(label=self._record.prompt)
@@ -3513,9 +3540,10 @@ class PendingCard(Gtk.Frame):
     def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
-        # Width matches GenerationCard; height is unconstrained but anchored by
-        # the fixed-size visual placeholder below so FlowBox cells stay uniform.
-        self.set_size_request(_THUMB_W + 20, -1)
+        # FIXED tile size, matching GenerationCard exactly (see gallery_layout.py)
+        # so a pending job's placeholder is never a different size than the
+        # finished card that will replace it.
+        self.set_size_request(_TILE_W, _TILE_H)
         self.set_hexpand(True)
         self._start = time.monotonic()
         self._timer_id: Optional[int] = None
@@ -3679,17 +3707,20 @@ class GalleryWidget(Gtk.Box):
         self._scroll.set_hexpand(True)
         self._scroll.set_vexpand(True)
 
+        # FlowBox grid settings -- IDENTICAL to the artgen gallery
+        # (ArtgenGallery._flow in artgen_gallery.py), sourced from
+        # gallery_layout.py so switching Discover tabs never changes the grid.
         self._flow = Gtk.FlowBox()
-        self._flow.set_column_spacing(12)
-        self._flow.set_row_spacing(12)
+        self._flow.set_column_spacing(gallery_layout.FLOW_COLUMN_SPACING)
+        self._flow.set_row_spacing(gallery_layout.FLOW_ROW_SPACING)
         self._flow.set_margin_top(4)
         self._flow.set_margin_bottom(12)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
         self._flow.set_homogeneous(False)   # cards pack at natural width; extra space adds columns
         self._flow.set_selection_mode(Gtk.SelectionMode.NONE)  # selection handled manually
-        self._flow.set_min_children_per_line(2)
-        self._flow.set_max_children_per_line(8)
+        self._flow.set_min_children_per_line(gallery_layout.FLOW_MIN_CHILDREN_PER_LINE)
+        self._flow.set_max_children_per_line(gallery_layout.FLOW_MAX_CHILDREN_PER_LINE)
         self._flow.set_halign(Gtk.Align.FILL)
         self._flow.set_valign(Gtk.Align.START)
         self._scroll.set_child(self._flow)
@@ -6033,12 +6064,24 @@ class MainWindow(Gtk.ApplicationWindow):
         self._apply_gallery_density(val)
 
     def _apply_gallery_density(self, density: str) -> None:
-        """Set card min-width on all video/image/animate GalleryWidget instances and relayout."""
-        card_w = (_THUMB_W + 20) if density == "comfortable" else 160
+        """
+        Resize cards on EVERY gallery (video/image/animate GalleryWidget
+        instances, plus the artgen ArtgenGallery) to the SAME density-scaled
+        tile size, sourced from gallery_layout.tile_size() -- the single
+        source of truth also used to build cards in the first place.  Both
+        dimensions are set (not just width, per the historical bug: `-1`
+        height meant the fix that made cards a FIXED size at "comfortable"
+        density silently reverted to natural/ragged height as soon as the
+        user switched to "compact").
+        """
+        card_w, card_h = gallery_layout.tile_size(density)
         for gallery in (self._video_gallery, self._image_gallery, self._animate_gallery):
             for card in gallery._cards:
-                card.set_size_request(card_w, -1)
+                card.set_size_request(card_w, card_h)
             gallery._relayout()
+        artgen_gallery = getattr(self, "_artgen_gallery", None)
+        if artgen_gallery is not None:
+            artgen_gallery.set_tile_size(card_w, card_h)
 
     # _on_art_autogen_action / _on_art_autogen_delay_action removed SP-3d-5
     # alongside ArtgenPanel (the only thing that implemented toggle_auto_gen/

@@ -21,6 +21,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
+import gallery_layout
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -458,6 +459,13 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
 
 _STARRED_FILTER = "__starred__"
 
+# Natural height of the bottom badge/timestamp bar in _make_card (two
+# single-line, non-wrapping Labels -- deterministic regardless of content).
+# Measured empirically (xvfb) so the content zone above it can be pinned to
+# exactly (tile_h - _BOTTOM_BAR_H), making the WHOLE card's measured size a
+# true ceiling (== gallery_layout.TILE_H) instead of just a floor.
+_BOTTOM_BAR_H = 24
+
 
 class ArtgenGallery(Gtk.Box):
     """
@@ -477,6 +485,11 @@ class ArtgenGallery(Gtk.Box):
         self.on_remix_as_pipeline: Optional[Callable[["MediaRecord"], None]] = None
         self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
+        # Card tile size -- defaults to the SAME fixed tile as the native
+        # video/image/animate galleries (gallery_layout.TILE_W/TILE_H), kept
+        # in sync with gallery density via set_tile_size().
+        self._tile_w = gallery_layout.TILE_W
+        self._tile_h = gallery_layout.TILE_H
         self._build()
 
     # ── Build ─────────────────────────────────────────────────────────────────
@@ -510,12 +523,15 @@ class ArtgenGallery(Gtk.Box):
         scroll.set_vexpand(True)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
+        # FlowBox grid settings -- IDENTICAL to the native video/image/animate
+        # galleries (GalleryWidget._flow in main_window.py), sourced from
+        # gallery_layout.py so switching Discover tabs never changes the grid.
         self._flow = Gtk.FlowBox()
-        self._flow.set_max_children_per_line(8)
-        self._flow.set_min_children_per_line(3)
+        self._flow.set_max_children_per_line(gallery_layout.FLOW_MAX_CHILDREN_PER_LINE)
+        self._flow.set_min_children_per_line(gallery_layout.FLOW_MIN_CHILDREN_PER_LINE)
         self._flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._flow.set_row_spacing(6)
-        self._flow.set_column_spacing(6)
+        self._flow.set_row_spacing(gallery_layout.FLOW_ROW_SPACING)
+        self._flow.set_column_spacing(gallery_layout.FLOW_COLUMN_SPACING)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
         self._flow.set_margin_top(8)
@@ -526,6 +542,25 @@ class ArtgenGallery(Gtk.Box):
         self.append(scroll)
 
     # ── Public ────────────────────────────────────────────────────────────────
+
+    def set_tile_size(self, width: int, height: int) -> None:
+        """
+        Resize every card to width x height and remember it for future cards.
+
+        Mirrors MainWindow._apply_gallery_density's handling of the native
+        video/image/animate galleries (`card.set_size_request(card_w, card_h)`
+        for each already-built card) so switching gallery density resizes
+        the artgen gallery identically instead of leaving it at a stale or
+        differently-hardcoded size.
+        """
+        self._tile_w = width
+        self._tile_h = height
+        child = self._flow.get_first_child()
+        while child is not None:
+            overlay = child.get_child()  # FlowBoxChild wraps our Gtk.Overlay
+            if overlay is not None:
+                overlay.set_size_request(width, height)
+            child = child.get_next_sibling()
 
     def scroll_to_top(self) -> None:
         """Scroll the grid back to the top (call after prepending a new card)."""
@@ -594,17 +629,28 @@ class ArtgenGallery(Gtk.Box):
             self._flow.append(self._make_card(rec))
 
     def _make_card(self, rec: MediaRecord) -> Gtk.Overlay:
+        tile_w, tile_h = self._tile_w, self._tile_h
         overlay = Gtk.Overlay()
-        overlay.set_size_request(110, 90)
+        overlay.set_size_request(tile_w, tile_h)
         overlay._media_id = rec.id  # stash for activation handler
         overlay.add_css_class("artgen-card")
 
-        # Base: art content + bottom bar
+        # Base: art content + bottom bar.  The content widget's own natural
+        # size otherwise follows the underlying artwork's aspect ratio (a
+        # square 1024x1024 palette render vs. a 16:9 ANSI grid vs. a long
+        # text preview each want a different height) -- overlay.set_size_
+        # request above is only a MINIMUM, so without pinning, cards would
+        # balloon per-content just like the pre-fix GenerationCard
+        # (main_window.py) did.  gallery_layout.pin_fixed_zone caps the
+        # content's MEASURED size to a fixed area (tile_h minus the bottom
+        # badge/timestamp bar's own — constant, unwrapped-label — height) so
+        # every artgen card reports the identical size_request regardless of
+        # content, and matches the native galleries' tile size exactly.
         base = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         content = make_card_content(rec)
-        content.set_hexpand(True)
-        content.set_vexpand(True)
-        base.append(content)
+        content_h = max(tile_h - _BOTTOM_BAR_H, 1)
+        content_zone = gallery_layout.pin_fixed_zone(content, tile_w, content_h)
+        base.append(content_zone)
         bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bottom.add_css_class("artgen-card-bottom")
         type_lbl = Gtk.Label(label=(rec.generator_type or "?")[:4])
@@ -709,29 +755,36 @@ class ArtgenGallery(Gtk.Box):
         fp = Path(rec.file_path) if rec.file_path else Path()
         _is_gif = fp.suffix.lower() == ".gif" and fp.exists()
         _thumb_path = rec.thumbnail_path if (rec.thumbnail_path and Path(rec.thumbnail_path).exists()) else None
+        # Tracks the CURRENT overlay child of content_zone (a 1-element list so
+        # the nested closures below can mutate it).  Swapping content in/out of
+        # content_zone itself (remove_overlay/add_overlay) -- rather than
+        # ripping content_zone out of `base` and replacing it with a bare,
+        # unpinned widget as this used to do -- keeps the fixed-size pin
+        # (gallery_layout.pin_fixed_zone) intact across hover in/out, so a
+        # hovered GIF card can't grow/shrink the tile either.
+        _zone_content = [content]
+
+        def _swap_zone_content(new_widget: Gtk.Widget) -> None:
+            new_widget.set_hexpand(True)
+            new_widget.set_vexpand(True)
+            new_widget.set_halign(Gtk.Align.FILL)
+            new_widget.set_valign(Gtk.Align.FILL)
+            content_zone.remove_overlay(_zone_content[0])
+            content_zone.add_overlay(new_widget)
+            _zone_content[0] = new_widget
 
         def _enter_card(*_):
             hover_rev.set_reveal_child(True)
             if _is_gif and _thumb_path:
                 anim = _AnimatedGifWidget(str(fp))
-                anim.set_hexpand(True)
-                anim.set_vexpand(True)
-                old = base.get_first_child()
-                if old is not None:
-                    base.remove(old)
-                base.prepend(anim)
+                _swap_zone_content(anim)
 
         def _leave_card(*_):
             hover_rev.set_reveal_child(False)
             if _is_gif and _thumb_path:
-                first = base.get_first_child()
-                if first is not None:
-                    base.remove(first)
                 still = Gtk.Picture.new_for_filename(_thumb_path)
-                still.set_content_fit(Gtk.ContentFit.COVER)
-                still.set_hexpand(True)
-                still.set_vexpand(True)
-                base.prepend(still)
+                still.set_content_fit(Gtk.ContentFit.CONTAIN)
+                _swap_zone_content(still)
 
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", _enter_card)
