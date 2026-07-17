@@ -73,7 +73,12 @@ def test_server_log_routes_to_servers_control():
 
 
 def test_servers_button_mounted_in_top_bar():
-    assert "main_toolbar.append(self._servers_control.servers_button)" in _SRC
+    """SP-3d-4: ControlPanel's `toolbar_box` (the composite the servers button
+    used to be appended onto, alongside its now-superseded medium-tab toggle)
+    is no longer mounted at all -- the servers button folds directly into the
+    loop-nav row instead, which becomes the window's only top bar."""
+    assert "loop_nav_row.append(self._servers_control.servers_button)" in _SRC
+    assert "main_toolbar.append(self._servers_control.servers_button)" not in _SRC
 
 
 def test_log_widget_mounted_in_persistent_root_box():
@@ -153,12 +158,14 @@ def test_single_servers_control_mounted():
     assert "self._controls._servers_btn.set_visible(False)" in tail
     assert "self._controls._server_status_box.set_visible(False)" in tail
     assert "self._controls._srv_log_revealer.set_visible(False)" in tail
-    # ControlPanel itself is still constructed and its toolbar/footer are
-    # still mounted -- generate/queue/source-toggle aren't migrated until
-    # SP-3c/3d, only the server-specific pieces inside them are hidden.
+    # ControlPanel itself is still constructed (deletion is SP-3d-5) but, as
+    # of SP-3d-4, its toolbar/footer are no longer mounted anywhere in the
+    # window at all -- generate/queue/source-toggle aren't migrated, but
+    # they're simply unreachable now rather than merely having their
+    # server-specific pieces hidden.
     assert "self._controls = ControlPanel(" in _SRC
-    assert "main_toolbar = self._controls.toolbar_box" in _SRC
-    assert "self._ctrl_wrapper.append(self._controls.footer_box)" in _SRC
+    assert "main_toolbar = self._controls.toolbar_box" not in _SRC
+    assert "self._ctrl_wrapper.append(self._controls.footer_box)" not in _SRC
 
 
 def test_refresh_servers_popover_poll_retired():

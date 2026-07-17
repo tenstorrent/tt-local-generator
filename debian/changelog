@@ -1,3 +1,30 @@
+tt-local-generator (0.44.0) noble; urgency=medium
+
+  * SP-3d-4: window-layout restructure (`.superpowers/sdd/sp3d-audit.md` §2,
+    task-4-brief.md) -- the window no longer mounts ControlPanel's
+    `toolbar_box` or `footer_box` anywhere. The three MainWindow-owned
+    buttons that used to be appended onto `toolbar_box` (📺 Watch TT-TV,
+    🧩 Pipelines, Servers ▾) now fold directly into the loop-nav row
+    (`_build_loop_nav()`'s Create/Discover/Remix row), which becomes the
+    window's single, surviving top bar. The 3-pane `outer_paned` (controls |
+    gallery | detail) collapses to a 2-pane layout: `inner_paned`
+    (gallery/CreateView stack | detail panel) is now appended directly to
+    `root_box`. ControlPanel is NOT deleted (that's SP-3d-5) -- it is still
+    constructed, and `_ctrl_wrapper` (its scrollable body's wrapper) is still
+    built so the existing `_ctrl_wrapper.set_visible(...)` calls in
+    `_on_source_change`/`_show_pipelines`/`_on_loop_nav_create` keep working
+    unchanged, but `_ctrl_wrapper` is never attached anywhere in the widget
+    tree, so those calls are now inert no-ops rather than visible layout
+    changes. Verified by hand under Xvfb: Create, Discover, and Remix all
+    render correctly with no blank/broken panes and no missing controls.
+    New source-level + one behavioral guard test
+    (tests/test_main_window_shell_layout.py), plus updates to pre-existing
+    tests (test_main_window_servers_control.py,
+    test_main_window_attractor_model_source.py) whose assertions had
+    hardcoded the old `main_toolbar`/`toolbar_box`/`footer_box` mount points.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 13:00:00 -0700
+
 tt-local-generator (0.43.1) noble; urgency=medium
 
   * SP-3d-3 review fix: `_running_generation_server()` was capability-BLIND --

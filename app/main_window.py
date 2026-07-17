@@ -8105,22 +8105,26 @@ class MainWindow(Gtk.ApplicationWindow):
         # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
         # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
         # 2026-07-13-create-surface-design.md). Appended FIRST so it sits above
-        # everything else, including today's medium toggle (which stays inside
-        # Create for this task — a later slice replaces it with medium chips).
-        # Built here (self._controls already exists) but its default-active
-        # button isn't set yet — that happens at the end of __init__, once
-        # _gallery_stack / _ctrl_wrapper / _detail_wrap / _pipelines_btn (built
-        # further below) exist for the "toggled" handler to touch safely.
-        root_box.append(self._build_loop_nav())
+        # everything else. Built here (self._controls already exists) but its
+        # default-active button isn't set yet — that happens at the end of
+        # __init__, once _gallery_stack / _ctrl_wrapper / _detail_wrap /
+        # _pipelines_btn (built further below) exist for the "toggled" handler
+        # to touch safely.
+        #
+        # SP-3d-4: this row is now the window's ONLY top bar. It used to sit
+        # above a second row — ControlPanel's own `toolbar_box` (logo/title +
+        # the medium-tab source toggle) — onto which MainWindow appended these
+        # same three buttons (Watch TT-TV / Pipelines / Servers ▾). That toggle
+        # is superseded by CreateView's medium doors/chips (see CLAUDE.md's
+        # "Create surface" section), so `toolbar_box` is no longer read or
+        # mounted at all — these MainWindow-owned buttons fold directly into
+        # the loop-nav row instead, which becomes the surviving top bar.
+        loop_nav_row = self._build_loop_nav()
+        root_box.append(loop_nav_row)
 
-        # ── Main toolbar ──────────────────────────────────────────────────────
-        # The toolbar strip is built inside ControlPanel (logo, source toggle,
-        # model selectors).  We append it at the top of root_box and add the
-        # Watch TT-TV button on the right side (after the internal spacer).
         # Build and register menu actions before creating the bar
         self._build_menu_actions()
 
-        main_toolbar = self._controls.toolbar_box
         self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
         self._attractor_btn.add_css_class("attractor-launch-btn")
         self._attractor_btn.set_tooltip_text(
@@ -8129,7 +8133,7 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         self._attractor_btn.set_sensitive(False)
         self._attractor_btn.connect("clicked", self._on_open_attractor)
-        main_toolbar.append(self._attractor_btn)
+        loop_nav_row.append(self._attractor_btn)
 
         # ── Pipelines nav entry ────────────────────────────────────────────────
         # Deliberately NOT part of ControlPanel's video/animate/image/artgen
@@ -8145,14 +8149,12 @@ class MainWindow(Gtk.ApplicationWindow):
             "to see every step (Discover + Open)."
         )
         self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
-        main_toolbar.append(self._pipelines_btn)
+        loop_nav_row.append(self._pipelines_btn)
 
         # Standalone Servers control's "Servers ▾" button (SP-3b Task 2) —
         # mounted here instead of ControlPanel's own (now-hidden) one, next
         # to the loop nav / Pipelines entry.
-        main_toolbar.append(self._servers_control.servers_button)
-
-        root_box.append(main_toolbar)
+        loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
@@ -8160,14 +8162,32 @@ class MainWindow(Gtk.ApplicationWindow):
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
-        # ── Three-pane layout: controls | gallery | detail ────────────────────
-        outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        outer_paned.set_vexpand(True)
-        root_box.append(outer_paned)
+        # ── Two-pane layout: gallery | detail (SP-3d-4) ───────────────────────
+        # Previously a 3-pane split — a horizontal Gtk.Paned whose start
+        # child was `_ctrl_wrapper` (ControlPanel's scrollable body + its
+        # footer_box) and whose end child was this same `inner_paned`
+        # (gallery | detail). Now that ControlPanel's toolbar/footer are no
+        # longer mounted anywhere in the window (folded into the loop-nav row
+        # above / superseded by CreateView), that left pane has nothing to
+        # hold, so the outer split collapses away entirely: `inner_paned`
+        # becomes the window's only paned, appended directly to `root_box`.
+        inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        inner_paned.set_vexpand(True)
+        inner_paned.set_position(480)   # default gallery width before detail panel
+        self._inner_paned = inner_paned  # stored so _on_source_change can adjust split
+        root_box.append(inner_paned)
 
-        # Left pane: scrollable content area on top, pinned footer below.
-        # The footer (Advanced settings + Server status + action buttons) stays
-        # visible at all times; prompt/chips/inspire scroll when the window is short.
+        # `_ctrl_wrapper` (ControlPanel's scrollable body — distinct from its
+        # `toolbar_box`/`footer_box` properties, which this task stops
+        # mounting entirely) is still built here because ControlPanel itself
+        # is still constructed — it is deleted only in SP-3d-5 — and because
+        # `_on_source_change`/`_show_pipelines`/`_on_loop_nav_create` still
+        # call `_ctrl_wrapper.set_visible(...)`. But it is deliberately never
+        # appended anywhere in the window below: with no parent, those calls
+        # are inert no-ops rather than visible layout changes. This is the
+        # "leave ControlPanel constructed but unmounted" fallback the task
+        # brief allows when cleanly splitting `toolbar_box`/`footer_box`
+        # would require touching ControlPanel's own class body.
         ctrl_scroll = Gtk.ScrolledWindow()
         ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ctrl_scroll.set_vexpand(True)
@@ -8177,28 +8197,6 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._ctrl_wrapper.append(ctrl_scroll)
-        self._ctrl_wrapper.append(self._controls.footer_box)
-        # NOTE: ServersControl's log/status-bar are deliberately NOT mounted
-        # into `_ctrl_wrapper` (see the fix applied after the first review of
-        # this task — task-2-report.md's "Issue 1"). `_ctrl_wrapper` is
-        # ControlPanel's left-panel wrapper: it's hidden whenever the loop
-        # nav is in Discover mode (`_on_loop_nav_discover` /
-        # `_on_source_change`'s artgen-tab hide both call
-        # `_ctrl_wrapper.set_visible(False)`) and it is deleted entirely in
-        # SP-3d alongside ControlPanel. Server management must survive both
-        # of those, so `self._servers_control.log_widget` is instead mounted
-        # into `root_box` itself, right next to `_hw_statusbar` (see below) —
-        # a persistent, always-present container that outlives ControlPanel.
-
-        outer_paned.set_start_child(self._ctrl_wrapper)
-        outer_paned.set_shrink_start_child(False)
-        outer_paned.set_resize_start_child(False)
-        outer_paned.set_position(310)   # pin controls to their declared minimum width
-
-        # Inner paned splits gallery (left) from detail panel (right)
-        inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        inner_paned.set_position(480)   # default gallery width before detail panel
-        self._inner_paned = inner_paned  # stored so _on_source_change can adjust split
 
         gallery_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
@@ -8412,9 +8410,6 @@ class MainWindow(Gtk.ApplicationWindow):
 
         inner_paned.set_end_child(self._detail_wrap)
         inner_paned.set_shrink_end_child(False)
-
-        outer_paned.set_end_child(inner_paned)
-        outer_paned.set_shrink_end_child(False)
 
         # Standalone Servers control's server-log revealer (SP-3b Task 2,
         # fixed after review) — mounted directly into `root_box`, a

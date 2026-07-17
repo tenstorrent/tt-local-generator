@@ -322,8 +322,13 @@ def test_attractor_btn_is_a_main_toolbar_button_not_controlpanel():
     TT-TV launch button lives on MainWindow's own toolbar and is wired
     directly to `_on_open_attractor`, independent of ControlPanel's
     `_endless_btn` (an animatediff-only secondary launch that dies with
-    ControlPanel in SP-3d — out of scope here)."""
+    ControlPanel in SP-3d — out of scope here).
+
+    SP-3d-4: "MainWindow's own toolbar" is now the loop-nav row itself --
+    ControlPanel's `toolbar_box` (the composite this button used to be
+    appended onto) is no longer mounted at all."""
     src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
     assert 'self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")' in src
     assert 'self._attractor_btn.connect("clicked", self._on_open_attractor)' in src
-    assert "main_toolbar.append(self._attractor_btn)" in src
+    assert "loop_nav_row.append(self._attractor_btn)" in src
+    assert "main_toolbar.append(self._attractor_btn)" not in src
