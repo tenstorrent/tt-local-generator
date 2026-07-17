@@ -80,6 +80,65 @@ class Status(str, Enum):
     ERROR = "error"
 
 
+def _normalize_model_id(raw: str) -> str:
+    """Last '/'-segment -> lowercase -> strip every non-alphanumeric char.
+
+    e.g. "meta-llama/Llama-3.3-70B-Instruct" -> "llama3370binstruct".
+    Used by `match_model_id` on both the detected id and each candidate's
+    `model_id`/`label`, so punctuation/case/separator differences between
+    what `/v1/models` reports and what we hardcoded never cause a false miss.
+    """
+    tail = raw.rsplit("/", 1)[-1]
+    return "".join(ch for ch in tail.lower() if ch.isalnum())
+
+
+def match_model_id(detected_id: Optional[str], servers: dict) -> Optional[str]:
+    """Map a detected `/v1/models` model-id string to its `server_manager.SERVERS` key.
+
+    Only the shared-port-8002 artgen chat servers (and `prompt-server`, which
+    shares the same "one detector, one endpoint" shape) share a single
+    detector/endpoint, so every entry in that family reads READY together
+    today even though only one model is actually loaded. This function is the
+    piece that lets a caller (SP-2/3 of this program) narrow that down to the
+    one key that is actually running.
+
+    `servers` is a `server_manager.SERVERS`-shaped dict (key -> ServerDef, or
+    any object with `.capabilities`, `.model_id`, `.label`). Only entries whose
+    `capabilities` include "artgen" or "prompt" are considered -- a video/image
+    server is never a valid match even if its label happened to collide.
+
+    Normalization + matching rule (see `_normalize_model_id`): a candidate
+    matches when its normalized form equals the normalized `detected_id`, OR
+    one normalized string is a substring of the other AND the shorter of the
+    two is at least 4 characters (guards against tiny fragments like "7b"
+    matching everything). The first match in `servers` iteration order wins.
+
+    Returns None if `detected_id` is falsy (None or "") or nothing matches.
+    """
+    if not detected_id:
+        return None
+
+    normalized_detected = _normalize_model_id(detected_id)
+
+    for key, sdef in servers.items():
+        if not any(cap in sdef.capabilities for cap in ("artgen", "prompt")):
+            continue
+        candidate_raw = sdef.model_id or sdef.label
+        normalized_candidate = _normalize_model_id(candidate_raw)
+        if normalized_detected == normalized_candidate:
+            return key
+        shorter_len = min(len(normalized_detected), len(normalized_candidate))
+        if shorter_len < 4:
+            continue
+        if (
+            normalized_detected in normalized_candidate
+            or normalized_candidate in normalized_detected
+        ):
+            return key
+
+    return None
+
+
 class ModelStatusService:
     """Polls and reconciles model/server health into a single status map.
 

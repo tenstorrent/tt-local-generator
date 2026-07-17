@@ -59,6 +59,14 @@ class ServerDef:
                    group servers in the UI and label status indicators in
                    capability terms ("Video generation") rather than server terms
                    ("localhost:8000").
+    model_id     — optional: the exact id this server's `/v1/models` endpoint is
+                   expected to report (e.g. "Qwen/Qwen3-8B"). Only meaningful for
+                   the shared-port-8002 artgen chat servers and prompt-server —
+                   `model_status.match_model_id` uses this (falling back to
+                   `label` when unset) to tell which *specific* chat model is
+                   actually running, since all artgen entries share one port and
+                   one detector. Defaults to None so existing ServerDef
+                   construction elsewhere (tests, other call sites) is unaffected.
     """
     key: str          # short CLI name: "wan2.2", "prompt-server"
     label: str        # human-readable display label
@@ -68,6 +76,7 @@ class ServerDef:
     runner_key: Optional[str] = None  # expected runner_in_use value (port-8000 only)
     extra_args: tuple = field(default_factory=tuple)  # model-specific args for start/stop
     capabilities: tuple = field(default_factory=tuple)  # e.g. ("video",), ("artgen",)
+    model_id: Optional[str] = None  # served /v1/models id, e.g. "Qwen/Qwen3-8B"
 
 
 # Human-readable labels for each capability key.
@@ -164,6 +173,7 @@ SERVERS: dict[str, ServerDef] = {
             script="start_prompt_gen.sh",
             health_url="http://localhost:8001/health",
             capabilities=("prompt",),
+            model_id="Qwen/Qwen3-0.6B",
         ),
         # Artgen chat/text LLMs — all share port 8002.  Only one runs at a time.
         # Health checked via the OpenAI-compatible /v1/models endpoint (any 2xx = up).
@@ -175,6 +185,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen3-8B"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen3-8B",
         ),
         ServerDef(
             key="artgen-llama-3.1-8b",
@@ -183,6 +194,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.1-8B-Instruct"),
             capabilities=("artgen",),
+            model_id="meta-llama/Llama-3.1-8B-Instruct",
         ),
         ServerDef(
             key="artgen-qwen2.5-7b",
@@ -191,6 +203,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen2.5-7B-Instruct"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen2.5-7B-Instruct",
         ),
         ServerDef(
             key="artgen-llama-3.3-70b",
@@ -199,6 +212,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.3-70B-Instruct"),
             capabilities=("artgen",),
+            model_id="meta-llama/Llama-3.3-70B-Instruct",
         ),
         ServerDef(
             key="artgen-qwen3-32b",
@@ -207,6 +221,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen3-32B"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen3-32B",
         ),
         ServerDef(
             key="artgen-deepseek-r1-70b",
@@ -215,6 +230,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "DeepSeek-R1-Distill-Llama-70B"),
             capabilities=("artgen",),
+            model_id="deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
         ),
     ]
 }
