@@ -80,8 +80,62 @@ def _rec(tmp_path, kind: str = "image") -> GenerationRecord:
             thumbnail_path="",
             created_at=ts,
         )
+    elif kind == "gif":
+        p = tmp_path / "a.gif"
+        _write_real_gif(p)
+        thumb = tmp_path / "a_thumb.png"
+        thumb.write_bytes(b"\x89PNG\r\n\x1a\n")  # not a real PNG — proves it's unused
+        return GenerationRecord(
+            id=job_id,
+            prompt="a dancing character",
+            negative_prompt="",
+            num_inference_steps=0,
+            seed=-1,
+            video_path=str(p),
+            thumbnail_path=str(thumb),
+            created_at=ts,
+        )
+    elif kind == "gif_missing":
+        # Points at a .gif path that was never actually written to disk.
+        p = tmp_path / "missing.gif"
+        return GenerationRecord(
+            id=job_id,
+            prompt="a dancing character",
+            negative_prompt="",
+            num_inference_steps=0,
+            seed=-1,
+            video_path=str(p),
+            thumbnail_path="",
+            created_at=ts,
+        )
+    elif kind == "video":
+        p = tmp_path / "a.mp4"
+        p.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        thumb = tmp_path / "a_thumb.jpg"
+        thumb.write_bytes(b"\xff\xd8\xff")
+        return GenerationRecord(
+            id=job_id,
+            prompt="a flying car",
+            negative_prompt="",
+            num_inference_steps=20,
+            seed=7,
+            video_path=str(p),
+            thumbnail_path=str(thumb),
+            created_at=ts,
+        )
     else:
         raise ValueError(f"unsupported test kind: {kind}")
+
+
+def _write_real_gif(path: Path) -> None:
+    """Write a tiny real 2-frame animated GIF using PIL (skips the calling
+    test if PIL is unavailable — matches the rest of this module's
+    real-artifact-over-hand-rolled-fake philosophy)."""
+    PIL = pytest.importorskip("PIL", reason="gif rendering tests need PIL")
+    from PIL import Image
+    frame1 = Image.new("RGB", (32, 24), color=(255, 0, 0))
+    frame2 = Image.new("RGB", (32, 24), color=(0, 255, 0))
+    frame1.save(path, format="GIF", save_all=True, append_images=[frame2], duration=100, loop=0)
 
 
 def test_starts_empty():
@@ -149,6 +203,61 @@ def test_missing_file_shows_placeholder_not_broken_image(tmp_path):
     p = cv.CreateResultPanel()
     p.show_finished(rec)
     assert p.state == "finished"  # never raises / never crashes
+
+
+# ── GIF rendering (animated-gif-as-text bug fix) ────────────────────────────
+#
+# Regression coverage for the bug where a gif record's artifact widget was a
+# static `Gtk.Picture` pointed at `thumbnail_path` — which, pre-fix, was
+# itself a PIL text-render of the gif's raw binary bytes (see
+# artgen_thumb.make_thumbnail and CLAUDE.md's root-cause note). The fix:
+# render the ORIGINAL .gif file, animated, via `artgen_gallery`'s
+# self-timer-managing `_AnimatedGifWidget` — never the thumbnail.
+
+def test_gif_record_with_real_file_renders_animated_widget_not_thumbnail(tmp_path):
+    from artgen_gallery import _AnimatedGifWidget
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="gif")
+    widget = p._build_artifact_widget(rec)
+
+    assert isinstance(widget, _AnimatedGifWidget)
+    # Never the old broken behavior: a plain Gtk.Picture pointed at the
+    # (possibly-garbage) thumbnail path, nor a TextView showing raw bytes.
+    assert not isinstance(widget, Gtk.TextView)
+
+
+def test_gif_record_finished_state_is_animated_not_static_picture(tmp_path):
+    """End-to-end through show_finished (not just _build_artifact_widget
+    directly) — proves the real wiring path also animates."""
+    from artgen_gallery import _AnimatedGifWidget
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="gif")
+    p.show_finished(rec)
+    assert p.state == "finished"
+    child = p._current_box.get_first_child()
+    assert isinstance(child, _AnimatedGifWidget)
+
+
+def test_gif_record_missing_file_degrades_to_placeholder_no_crash(tmp_path):
+    from artgen_gallery import _AnimatedGifWidget
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="gif_missing")
+    widget = p._build_artifact_widget(rec)  # must not raise
+    assert not isinstance(widget, _AnimatedGifWidget)
+    assert not isinstance(widget, Gtk.TextView)
+    assert isinstance(widget, Gtk.Label)
+
+
+def test_video_record_still_uses_static_poster(tmp_path):
+    """Video (.mp4) is explicitly OUT of scope for this fix — it keeps the
+    existing static-poster/placeholder behavior."""
+    from artgen_gallery import _AnimatedGifWidget
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="video")
+    widget = p._build_artifact_widget(rec)
+    assert not isinstance(widget, _AnimatedGifWidget)
+    # Static poster: a Gtk.Picture pointed at the thumbnail (unchanged).
+    assert isinstance(widget, Gtk.Picture)
 
 
 def test_clicking_a_recent_rerenders_it(tmp_path):

@@ -2525,7 +2525,41 @@ class CreateResultPanel(Gtk.Box):
             except Exception:
                 pass  # fall through to the placeholder below
 
-        if kind in ("video", "gif") and exists:
+        if kind == "gif" and exists:
+            # Animate the ORIGINAL .gif inline — never the thumbnail. Before
+            # this fix `make_thumbnail` text-rendered every non-svg
+            # extension's raw bytes (see artgen_thumb.py / CLAUDE.md's
+            # root-cause note), so a gif's "thumbnail" could be garbage; even
+            # now that it's a real PIL first-frame render, the whole point
+            # of this branch is to show the ARTIFACT ITSELF moving, not a
+            # static stand-in for it.
+            #
+            # Lazy import: artgen_gallery has no import-time dependency on
+            # create_view (verified — it only imports artgen_detail/
+            # media_store/gallery_layout), so this is safe at module scope
+            # too, but kept lazy/local so a gif is the only code path that
+            # pays for pulling in the gallery module.
+            try:
+                from artgen_gallery import _AnimatedGifWidget
+                anim_widget = _AnimatedGifWidget(path)
+                # _AnimatedGifWidget swallows load failures internally and
+                # simply leaves its paintable unset — detect that case here
+                # so we can degrade to the placeholder instead of showing a
+                # blank tile. (It self-manages its GLib.timeout_add timer via
+                # its own "unrealize" handler, so no timer bookkeeping is
+                # needed on this side — _clear_current's container removal
+                # triggers that cleanup the same way artgen_gallery's own
+                # hover-swap does.)
+                if anim_widget.get_paintable() is not None:
+                    anim_widget.add_css_class("create-result-picture")
+                    return anim_widget
+            except Exception:
+                pass
+            label = Gtk.Label(label="\U0001f3ac Result ready — open to view")
+            label.add_css_class("create-result-placeholder")
+            return label
+
+        if kind == "video" and exists:
             # v1: a poster/thumbnail stands in for the real lazy-stream+loop
             # video widget (GenerationCard's pattern in main_window.py) — an
             # acceptable v1 per the brief. A real inline player is a

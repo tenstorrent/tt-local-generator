@@ -1,3 +1,32 @@
+tt-local-generator (0.47.4) noble; urgency=medium
+
+  * fix(artgen): animated-GIF artifacts (AnimateDiff) no longer render as
+    garbage text. Root cause: `artgen_thumb.make_thumbnail` special-cased
+    only `.svg` -- every other extension, including binary raster files
+    like `.gif`/`.png`, fell into the "Text / ANSI" branch, which read the
+    file's RAW BYTES as UTF-8 and drew them onto a PNG with PIL. An
+    AnimateDiff `.gif`'s stored "thumbnail" was therefore a PIL text-render
+    of its own binary content, which both `CreateResultPanel` and
+    `artgen_gallery` then displayed as the artifact's preview -- "trying to
+    display it as text somehow". Fixed by adding a raster branch (PIL
+    `Image.open` + first-frame `.convert("RGB")` + `.thumbnail((320, 240))`)
+    ahead of the text branch, and by narrowing the text branch to a
+    declared allow-list (`.txt`/`.ans`/`.md`/`.json`) so any other
+    unrecognised/binary extension falls to the placeholder PNG instead of
+    being text-rendered. Also: `CreateResultPanel._build_artifact_widget`'s
+    gif case now animates the ORIGINAL `.gif` inline (via
+    `artgen_gallery._AnimatedGifWidget`, which self-manages its
+    `GLib.timeout_add` frame timer through its own "unrealize" handler)
+    instead of showing a static thumbnail -- never the thumbnail for a gif
+    when the real file is available, degrading to a placeholder label if
+    the file is missing or fails to load. Video (`.mp4`) rendering is
+    unchanged. 8 new tests (`tests/test_artgen_thumb.py`,
+    `tests/test_create_result_panel.py`), TDD red-then-green. Pre-existing
+    gif records on disk still have garbage thumbnails from before this fix
+    -- they regenerate correctly on next generation; not bulk-repaired.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.47.3) noble; urgency=medium
 
   * fix(create): AnimateDiff -- an LLM-free artgen generator -- no longer
