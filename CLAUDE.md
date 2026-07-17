@@ -306,6 +306,23 @@ dropped) before their old homes were deleted.
     (loses the popover's own target-type switch + inline single-step
     regenerate). `remix_dispatch.dispatch_remix` itself is untouched and still
     unit-tested, just no longer called from `main_window.py`.
+  - **ANOTHER GAP the SP-3d audit missed, FIXED in v0.47.2:** "wired
+    identically to the three native `GalleryWidget`s" (line above) was true
+    for `on_remix`/`on_remix_as_pipeline` but NOT for `on_card_activated` —
+    `main_window.py` never set it on `self._artgen_gallery`, so clicking an
+    artgen card silently did nothing (the native galleries' click path goes
+    through `DetailPanel`, which can't render artgen content anyway — SVG/
+    ANSI/palette/markdown). This orphaned `artgen_detail.py`/`ArtgenDetail`
+    entirely (no test file existed for it either). Fixed by making
+    `ArtgenGallery` self-contained again: it now owns an internal grid/detail
+    `Gtk.Stack` and un-orphans `ArtgenDetail` as its own in-page preview
+    (`_on_card_activated` defaults to `show_record` + switching the stack,
+    still calling any externally-wired `on_card_activated` additively;
+    detail delete/star/remix/remix-as-pipeline route back onto the gallery's
+    existing hover-action behavior). No `main_window.py` change was needed —
+    `on_remix`/`on_remix_as_pipeline` already flowed through;
+    `on_card_activated`/`on_card_deleted` staying unset degrades gracefully.
+    See `tests/test_artgen_gallery_preview.py`.
   - Full details, every deleted symbol's grep-clean proof, and every test
     file touched: `.superpowers/sdd/task-5-report.md`.
 

@@ -1,3 +1,22 @@
+tt-local-generator (0.47.2) noble; urgency=medium
+
+  * fix(artgen): restore click-to-preview for generative-art cards.
+    Regression from SP-3d-5 (commit ff1d246): deleting `ArtgenPanel` in
+    favor of the standalone `ArtgenGallery` dropped the `on_card_activated`
+    wiring that used to switch a sub-stack to `ArtgenDetail` -- clicking an
+    artgen card silently did nothing, and `artgen_detail.py` became an
+    orphaned, untested module. `ArtgenGallery` (`app/artgen_gallery.py`) now
+    owns an internal grid/detail `Gtk.Stack` and un-orphans `ArtgenDetail`
+    as its own preview: activating a card shows the record in-page (SVG/
+    ANSI/palette/markdown-aware, filtered to the active chip, with
+    ‹ / › nav and a "← Gallery" back button), wiring detail delete/star/
+    remix/remix-as-pipeline back onto the gallery's existing behavior. The
+    public `on_card_activated` callback attribute is preserved and still
+    fires additively -- no `main_window.py` changes were required. Added
+    `tests/test_artgen_gallery_preview.py` (4 tests, TDD red-then-green).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 14:30:00 -0700
+
 tt-local-generator (0.47.1) noble; urgency=medium
 
   * fix(status): the AGGREGATE "is a model on" surfaces -- the bottom

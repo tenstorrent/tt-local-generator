@@ -22,6 +22,7 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
+from artgen_detail import ArtgenDetail
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -495,6 +496,11 @@ class ArtgenGallery(Gtk.Box):
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
+        # Grid page: filter bar + separator + card grid, exactly as before --
+        # just parented into a page Box instead of directly into `self`, so
+        # it can sit alongside the detail page inside self._stack.
+        grid_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
         # Filter bar
         filter_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         filter_bar.set_margin_start(12)
@@ -515,8 +521,8 @@ class ArtgenGallery(Gtk.Box):
         watch_btn.connect("clicked", self._on_watch_clicked)
         filter_bar.append(watch_btn)
 
-        self.append(filter_bar)
-        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        grid_page.append(filter_bar)
+        grid_page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # Card grid
         scroll = Gtk.ScrolledWindow()
@@ -539,7 +545,26 @@ class ArtgenGallery(Gtk.Box):
         self._flow.connect("child-activated", self._on_card_activated)
         scroll.set_child(self._flow)
         self._scroll = scroll
-        self.append(scroll)
+        grid_page.append(scroll)
+
+        # Detail page: the rich single-artifact viewer (SVG/ANSI/palette/
+        # markdown-aware) that used to live inside the deleted ArtgenPanel.
+        # Un-orphaning artgen_detail.ArtgenDetail is the whole point of this
+        # fix -- see CLAUDE.md's SP-3d-5 section.
+        self._detail = ArtgenDetail()
+        self._detail.set_back_label("← Gallery")
+        self._detail.on_back = self._on_detail_back
+        self._detail.on_deleted = self._on_detail_deleted
+        self._detail.on_starred = self._on_detail_starred
+        self._detail.on_remix = self._on_detail_remix
+        self._detail.on_remix_as_pipeline = self._on_detail_remix_as_pipeline
+
+        self._stack = Gtk.Stack()
+        self._stack.set_vexpand(True)
+        self._stack.add_named(grid_page, "grid")
+        self._stack.add_named(self._detail, "detail")
+        self._stack.set_visible_child_name("grid")
+        self.append(self._stack)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -632,15 +657,22 @@ class ArtgenGallery(Gtk.Box):
 
     # ── Grid ──────────────────────────────────────────────────────────────────
 
+    def _filtered_records(self) -> list[MediaRecord]:
+        """Return self._records narrowed by the active filter chip.
+
+        Shared by _rebuild_grid (what the grid page shows) and
+        _on_card_activated (the nav list ArtgenDetail steps through with
+        ‹ / ›) so the two never disagree about which records are "in view".
+        """
+        if self._active_filter == _STARRED_FILTER:
+            return [r for r in self._records if r.starred]
+        return [r for r in self._records
+                if self._active_filter is None or r.generator_type == self._active_filter]
+
     def _rebuild_grid(self) -> None:
         while child := self._flow.get_first_child():
             self._flow.remove(child)
-        if self._active_filter == _STARRED_FILTER:
-            filtered = [r for r in self._records if r.starred]
-        else:
-            filtered = [r for r in self._records
-                        if self._active_filter is None or r.generator_type == self._active_filter]
-        for rec in filtered:
+        for rec in self._filtered_records():
             self._flow.append(self._make_card(rec))
 
     def _make_card(self, rec: MediaRecord) -> Gtk.Overlay:
@@ -813,9 +845,59 @@ class ArtgenGallery(Gtk.Box):
 
     def _on_card_activated(self, _flow, child) -> None:
         box = child.get_child()
-        if box and hasattr(box, "_media_id") and self.on_card_activated:
-            self.on_card_activated(box._media_id)
+        if not box or not hasattr(box, "_media_id"):
+            return
+        media_id = box._media_id
+
+        # DEFAULT behavior: open the in-page ArtgenDetail preview (this is
+        # what ArtgenPanel used to do before it was deleted in SP-3d-5, and
+        # is the whole point of this fix -- see CLAUDE.md). This is additive:
+        # any externally-wired on_card_activated below still fires too.
+        self._detail.show_record(media_id, self._filtered_records())
+        self._stack.set_visible_child_name("detail")
+
+        if self.on_card_activated:
+            self.on_card_activated(media_id)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:
             self.on_watch_requested(self._active_filter)
+
+    # ── ArtgenDetail callback wiring ──────────────────────────────────────────
+    # These mirror the card hover-action behavior above (_on_star/_on_delete
+    # in _make_card) so starring/deleting from inside the detail view keeps
+    # the grid page's in-memory records/chips in sync.
+
+    def _on_detail_back(self) -> None:
+        self._stack.set_visible_child_name("grid")
+
+    def _on_detail_deleted(self, media_id: str) -> None:
+        # ArtgenDetail already called _ms.delete(media_id) itself before
+        # invoking this callback (see ArtgenDetail._delete_confirmed) --
+        # calling it again is a harmless no-op (MediaStore.delete just
+        # returns False for an already-gone row). Re-issuing it here keeps
+        # this handler correct standing alone, matching the card's own
+        # hover-delete path (_on_delete/_delete_confirmed above).
+        _ms.delete(media_id)
+        self._records = [r for r in self._records if r.id != media_id]
+        self._rebuild_grid()
+        self._rebuild_chips()
+        if self.on_card_deleted:
+            self.on_card_deleted(media_id)
+        self._stack.set_visible_child_name("grid")
+
+    def _on_detail_starred(self, media_id: str, starred: bool) -> None:
+        _ms.star(media_id, starred)
+        for r in self._records:
+            if r.id == media_id:
+                r.starred = int(starred)
+                break
+        self._rebuild_chips()
+
+    def _on_detail_remix(self, rec: MediaRecord) -> None:
+        if self.on_remix:
+            self.on_remix(rec)
+
+    def _on_detail_remix_as_pipeline(self, rec: MediaRecord) -> None:
+        if self.on_remix_as_pipeline:
+            self.on_remix_as_pipeline(rec)
