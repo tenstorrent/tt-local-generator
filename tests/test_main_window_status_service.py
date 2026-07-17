@@ -44,13 +44,17 @@ def test_status_service_constructed_before_create_view():
 
 
 def test_stops_service_on_close():
+    """SP-3d-6 update: the legacy `_health_stop` poller-stop event this test
+    used to check alongside `_status_service.stop()` is retired (see
+    tests/test_main_window_status_service_snapshot.py's
+    `test_legacy_pollers_and_stop_events_are_gone` for the removal guard).
+    `do_close_request` now also unsubscribes `_render_status_snapshot` from
+    the service it's about to stop."""
     assert "self._status_service.stop()" in _SRC
-    # Guard it lands inside do_close_request, alongside the other pollers'
-    # stop signals (self._health_stop.set()), not somewhere unrelated.
     start = _SRC.index("def do_close_request(self) -> bool:")
     body = _SRC[start:]  # do_close_request is the last method in the class
-    assert "self._health_stop.set()" in body
     assert "self._status_service.stop()" in body
+    assert "self._status_unsubscribe()" in body
 
 
 def test_create_view_gets_status_service():

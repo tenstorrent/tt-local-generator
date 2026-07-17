@@ -1,3 +1,44 @@
+tt-local-generator (0.45.0) noble; urgency=medium
+
+  * SP-3d-6 (`.superpowers/sdd/sp3d-audit.md` §4, task-6-brief.md): retired the
+    three legacy health pollers -- `_start_health_worker`/`_health_loop`/
+    `_on_health_result` (port 8000), `_start_prompt_gen_health_worker`/
+    `_prompt_gen_health_loop`/`_on_prompt_gen_health` (port 8001), and
+    `_start_artgen_health_worker`/`_artgen_health_loop`/
+    `_on_artgen_health_result` (port 8002) -- each of which ran its own
+    background thread pinging a different port on its own timer and fed
+    `_hw_statusbar` directly. `ModelStatusService` (SP-2) already reconciles
+    all three signals into one polled, subscribable status map, so those
+    threads were pure duplication of work the service was already doing.
+    `_hw_statusbar` (the bottom-of-window aggregate server dot + per-
+    capability dashboard popover) is now driven ENTIRELY by a single
+    `self._status_service.subscribe(...)` callback
+    (`_on_status_snapshot`/`_render_status_snapshot`), resolving the TODO(SP-3d)
+    marker left at its construction site. Aggregation mirrors
+    `ServersControl._refresh_bar_dot`'s policy (READY > STARTING > ERROR > OFF
+    across every managed key); per-capability rows are grouped via
+    `server_manager.servers_for_capability`. "Recover Jobs" (File menu) is now
+    enabled purely from the service's video/image/animate READY state (no
+    longer reads ControlPanel's `_server_launching`), and the Docker-log-tail
+    auto-stop-on-ready behavior moved into the same snapshot handler. The
+    one-shot AnimateDiff (Blackhole) hardware probe, previously nested inside
+    `_start_artgen_health_worker` (which had no `ModelStatusService`
+    equivalent, since "animatediff" has no `server_manager.SERVERS` entry), is
+    preserved standalone as `_check_animatediff_hardware` -- and its
+    3-tuple-vs-2-tuple `check_hardware()` unpacking bug (present since that
+    return signature was added; every other caller in the codebase already
+    unpacked 3 values) is fixed along the way, so the "animatediff" capability
+    row can finally report real hardware state instead of always reading
+    "unavailable". `do_close_request` no longer tears down three separate
+    stop-events/threads -- just `self._status_unsubscribe()` alongside
+    `self._status_service.stop()`. ControlPanel/ArtgenPanel are untouched
+    (deletion is SP-3d-5, next); this task's whole point was retiring the
+    `_controls.set_server_state`/`_controls._server_launching` reads inside
+    the now-deleted health-result handlers so that deletion has nothing left
+    to trip over. New tests: tests/test_main_window_status_service_snapshot.py.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 14:00:00 -0700
+
 tt-local-generator (0.44.0) noble; urgency=medium
 
   * SP-3d-4: window-layout restructure (`.superpowers/sdd/sp3d-audit.md` §2,

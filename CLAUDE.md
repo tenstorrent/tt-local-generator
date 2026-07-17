@@ -220,11 +220,31 @@ bar/server-log.
 - **DECIDED: native AnimateDiff MIGRATES into Create** (never drop) — distinct
   from the artgen `animatediff` plugin (also kept). SP-3c gives Create a native
   AnimateDiff path carrying full `get_animatediff_args` config.
-- **Remaining:** SP-3c migrate seed-image/i2i + Inspire-me + attractor/TT-TV +
-  queue + native AnimateDiff into Create; SP-3d delete the vestiges (ControlPanel/
-  ArtgenPanel/medium-tabs/Gen-Art tab) + retire `_health_loop` (re-point
-  `_hw_statusbar` to the service) & `artgen_panel._check_health_bg`, and give the
-  attractor a non-ControlPanel model source.
+- **SP-3d done in stages (v0.42.0–v0.44.0):** 3d-1/3d-2 rehomed every
+  SURVIVING `self._controls.*` read onto `ModelStatusService`/CreateView
+  (`_current_medium_source`/`_current_medium_model_key`/
+  `_running_generation_server`/`_resolve_attractor_model`, per
+  `.superpowers/sdd/sp3d-audit.md` §1); 3d-3 deleted the 5 dead `set_busy(...)`
+  call sites; 3d-4 collapsed the window to a 2-pane layout and folded Watch-
+  TT-TV/Pipelines/Servers ▾ into the loop-nav row (ControlPanel's
+  `toolbar_box`/`footer_box` are no longer mounted anywhere, though the class
+  itself is still constructed).
+- **SP-3d-6 done (v0.45.0), executed BEFORE 3d-5 (reorder — the legacy
+  pollers call ControlPanel setters, so they had to retire first):** the
+  three legacy health pollers (`_health_loop`/`_artgen_health_loop`/
+  `_prompt_gen_health_loop`, each its own thread pinging a different port) are
+  gone. `_hw_statusbar` is now driven entirely by
+  `self._status_service.subscribe(...)` (`_on_status_snapshot`/
+  `_render_status_snapshot`), resolving the `TODO(SP-3d)` marker at its
+  construction site — the same aggregation policy `ServersControl` uses
+  (READY > STARTING > ERROR > OFF), grouped by `server_manager.
+  servers_for_capability`. `artgen_panel._check_health_bg` is untouched (goes
+  with `ArtgenPanel` in 3d-5).
+- **Remaining: SP-3d-5** — delete `ControlPanel`/`ArtgenPanel`/medium-tabs/
+  Gen-Art tab outright (every `self._controls.*` health-path read is gone as
+  of 3d-6, so this is now "remove an isolated dead subtree" per the audit),
+  and give the attractor's model source its final non-ControlPanel wiring if
+  anything is still pending after 3d-1/3d-2's rehoming.
 
 ## Version discipline
 

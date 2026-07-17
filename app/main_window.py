@@ -47,7 +47,7 @@ import artgen_kind
 from create_view import CreateView
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
-from model_status import ModelStatusService
+from model_status import ModelStatusService, Status
 from servers_control import ServersControl
 from worker import (
     AnimateDiffGenerationWorker,
@@ -3953,7 +3953,9 @@ class GalleryWidget(Gtk.Box):
 # ── Control panel ──────────────────────────────────────────────────────────────
 
 # Maps server model ID → UI source tab key.
-# Used by both ControlPanel.set_server_state() and MainWindow._on_health_result().
+# Used by ControlPanel.set_server_state() (its own internal re-apply, e.g.
+# :5802) — MainWindow itself no longer reads this since the legacy health
+# poller that used to (_on_health_result) was retired in SP-3d-6.
 _MODEL_TO_SOURCE: dict = {
     "wan2.2-t2v":            "video",
     "mochi-1-preview":       "video",
@@ -5366,8 +5368,14 @@ class ControlPanel(Gtk.Box):
         """Refresh the model badge label and switcher hint button.
 
         Called from the main thread — safe to touch widgets directly.
-        Reads self._shot_server_ready and self._shot_alt_model_key which are
-        written by MainWindow._on_health_result before this is invoked.
+        Reads self._shot_server_ready and self._shot_alt_model_key, which used
+        to be written by MainWindow._on_health_result before this was invoked.
+        SP-3d-6 retired that poller (no CreateView equivalent exists for the
+        SHOT panel — an accepted feature loss per the SP-3d audit, since
+        ControlPanel itself is deleted next in SP-3d-5): both fields are now
+        frozen at whatever value they last held, matching the "no server
+        detected yet" defaults for a ControlPanel instance that no caller
+        updates anymore.
         """
         if not hasattr(self, "_shot_model_lbl"):
             return
@@ -5386,7 +5394,9 @@ class ControlPanel(Gtk.Box):
             self._shot_switcher_btn.set_visible(False)
             # No server running — fall back to AnimateDiff so the user always
             # has a ready generation path without needing to start a server.
-            # When a server comes online, _on_health_result restores the model.
+            # (Previously, when a server came online, _on_health_result would
+            # restore the model — that poller is retired as of SP-3d-6; see
+            # update_shot_panel's docstring.)
             if self._video_model != "animatediff":
                 self._set_model("animatediff")
             else:
@@ -7971,8 +7981,6 @@ class MainWindow(Gtk.ApplicationWindow):
         # callbacks (_on_progress/_on_finished/_on_error) also forward to
         # `self._create_view._result_panel`.
         self._create_job_active = False
-        self._auto_tab_switched = False  # True after first model detection auto-switch
-        self._pg_stop: "threading.Event | None" = None  # set when prompt gen poll starts
         self._log_tail_stop: "threading.Event | None" = None  # set to stop server log tail
         self._attractor_win: "attractor.AttractorWindow | None" = None
         self._prompt_gen_system_prompt: str = self._load_prompt_gen_system()
@@ -8013,9 +8021,25 @@ class MainWindow(Gtk.ApplicationWindow):
         self._load_history()
         self._rebuild_playlists_menu()   # populate Playlists menu after history is loaded
         self._restore_queue()
-        self._start_health_worker()
-        self._start_prompt_gen_health_worker()
-        self._start_artgen_health_worker()
+        # SP-3d-6: `_hw_statusbar` is now driven ENTIRELY by ModelStatusService.
+        # The three legacy pollers that used to feed it (`_health_loop`/
+        # `_artgen_health_loop`/`_prompt_gen_health_loop`, each with its own
+        # background thread hitting a different port) are retired -- one
+        # status dot, one source of truth. Subscribe LAST (mirrors
+        # ServersControl.__init__'s own ordering) so a synchronous notify
+        # from within subscribe() can never hit a half-built widget, then
+        # paint the already-known snapshot immediately since subscribe()
+        # only pushes on the *next* change.
+        self._status_agg_prev = Status.OFF
+        self._status_unsubscribe = self._status_service.subscribe(
+            lambda snap: GLib.idle_add(self._on_status_snapshot, snap)
+        )
+        self._on_status_snapshot(self._status_service.snapshot())
+        # "animatediff" is a hardware capability with no server_manager.SERVERS
+        # entry (see CAPABILITY_LABELS's comment), so ModelStatusService never
+        # resolves a status for it -- check it once, standalone, same as the
+        # old `_start_artgen_health_worker`'s nested one-shot thread did.
+        self._check_animatediff_hardware()
         # Pre-warm transform availability cache off the main thread so the first
         # right-click doesn't block while importing plugin modules (torch etc.).
         threading.Thread(
@@ -8430,13 +8454,16 @@ class MainWindow(Gtk.ApplicationWindow):
         # ── Hardware / infra status bar (pinned to window bottom) ─────────────
         # Clicking the server segment opens a popover with Start / Stop controls.
         # start_cb captures self._controls so it always reads the current source.
-        # TODO(SP-3d): once `_health_loop` (the per-active-tab boolean health
-        # poller this bar's dot is fed from today, via `update_server`/
-        # `update_capability`) is retired, re-point this dot at the same
-        # `ModelStatusService` snapshot `ServersControl` already reads, so
+        # SP-3d-6 (DONE): the per-active-tab boolean health pollers that used to
+        # feed this bar's dot (`_health_loop`/`_artgen_health_loop`/
+        # `_prompt_gen_health_loop`, via `update_server`/`update_capability`)
+        # are retired. `_render_status_snapshot` (subscribed to
+        # `self._status_service` right after `_build_ui()` returns, in
+        # `__init__`) now drives this same dot from the identical
+        # `ModelStatusService` snapshot `ServersControl` already reads --
         # the single remaining aggregate server dot in the whole window is
-        # driven by the single remaining source of truth. Not done now —
-        # out of scope for this task; `_StatusBar` itself is untouched here.
+        # driven by the single remaining source of truth. `_StatusBar` itself
+        # (this class) is unchanged; only its data source changed.
         self._hw_statusbar = _StatusBar(
             start_cb=lambda: self._on_start_server(self._current_medium_source()),
             stop_cb=self._on_stop_server,
@@ -9145,8 +9172,9 @@ class MainWindow(Gtk.ApplicationWindow):
         artgen medium has no real answer for. Naively reusing "artgen" here
         would check `ready_keys("artgen")` (the LLM backend, near-always up)
         instead, wrongly reporting "ready" for a question that doesn't apply.
-        Mirrors the identical `_source != "artgen"` special-case
-        `_on_health_result` already uses for the same reason. Read fresh on
+        Mirrors the identical `_source != "artgen"` special-case the
+        (now-retired, SP-3d-6) `_on_health_result` used for the same reason.
+        Read fresh on
         every call (not captured once) so it stays correct if the active
         medium changes while TT-TV is open, matching the pre-fix closure's
         own live reads.
@@ -9748,133 +9776,144 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_status(f"Loaded {n_local} previous generation(s)")
         self._update_attractor_btn()
 
-    # ── Health worker ──────────────────────────────────────────────────────────
+    # ── ModelStatusService-driven status bar (SP-3d-6) ──────────────────────────
+    #
+    # The three legacy pollers that used to live in this section
+    # (`_start_health_worker`/`_health_loop`/`_on_health_result` for port 8000,
+    # `_start_prompt_gen_health_worker`/`_prompt_gen_health_loop`/
+    # `_on_prompt_gen_health` for port 8001, and
+    # `_start_artgen_health_worker`/`_artgen_health_loop`/
+    # `_on_artgen_health_result` for port 8002) are retired. Each ran its own
+    # background thread pinging a different port on its own timer and fed
+    # `_hw_statusbar` directly; `ModelStatusService` already reconciles all
+    # three into one polled, subscribable status map (see model_status.py's
+    # module docstring), so those threads were pure duplication of work the
+    # service was already doing. `_on_status_snapshot`/`_render_status_snapshot`
+    # below are the single subscribe() callback that replaces all three.
 
-    def _start_health_worker(self) -> None:
-        self._health_stop = threading.Event()
-        self._health_thread = threading.Thread(
-            target=self._health_loop, daemon=True
-        )
-        self._health_thread.start()
-
-    def _health_loop(self) -> None:
-        """Runs on background thread. Posts UI updates via GLib.idle_add.
-
-        Requires two consecutive failed pings before reporting offline so that
-        a single slow response (e.g. TT chip saturated during active inference)
-        doesn't flip the UI dot to red.  A successful ping resets the counter
-        immediately.
-
-        Posts to the main thread on every poll (not just state changes) so that
-        transient exceptions in the idle callback never leave the UI stuck in a
-        stale state indefinitely.
+    def _on_status_snapshot(self, snap: "dict[str, Status]") -> bool:
+        """`ModelStatusService.subscribe()` callback, wrapped in `GLib.idle_add`
+        (see `__init__`) so it always runs on the main thread — fires on every
+        poll tick whose resolved status map actually changed (change-only
+        gating, per model_status.py), plus once at startup via the explicit
+        call right after subscribing (subscribe() only pushes on the *next*
+        change).
         """
-        consecutive_failures = 0
+        if not self._alive:
+            return False
+        self._render_status_snapshot(snap)
+        return False  # one-shot idle callback (re-registered on the next change)
 
-        while not self._health_stop.is_set():
-            ready = self._client.health_check()
-            running_model: "str | None" = None
+    def _render_status_snapshot(self, snap: "dict[str, Status]") -> None:
+        """Re-render `_hw_statusbar` from a fresh `ModelStatusService` snapshot.
 
-            if ready:
-                consecutive_failures = 0
-                running_model = self._client.detect_running_model()
+        Per-capability rows: group `server_manager.SERVERS` by capability via
+        `_sm.servers_for_capability` (same grouping `ServersControl` and the
+        retired `_on_health_result` both used) — READY if any server for that
+        capability is READY (showing its label), else "starting…" if any is
+        STARTING, else offline. "animatediff" is a hardware capability with no
+        `SERVERS` entry (see `_sm.CAPABILITY_LABELS`'s comment) so it's skipped
+        here — `_check_animatediff_hardware` owns that row instead.
+
+        Aggregate dot: READY > STARTING > ERROR > OFF across EVERY key,
+        mirroring `ServersControl._refresh_bar_dot`'s aggregation policy (the
+        `TODO(SP-3d)` this replaces asked for exactly this). STARTING only
+        calls `update_starting()` on the actual transition into that state —
+        `update_starting()` resets the elapsed timer to 0:00 on every call, so
+        calling it on every snapshot while already STARTING would freeze the
+        counter instead of letting it tick.
+        """
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            if cap == "animatediff":
+                continue
+            sdefs = _sm.servers_for_capability(cap)
+            statuses = [snap.get(s.key, Status.OFF) for s in sdefs]
+            ready_sdef = next((s for s in sdefs if snap.get(s.key) == Status.READY), None)
+            if ready_sdef is not None:
+                self._hw_statusbar.update_capability(cap, True, ready_sdef.label)
+            elif Status.STARTING in statuses:
+                self._hw_statusbar.update_capability(cap, False, "starting…")
             else:
-                consecutive_failures += 1
-                if consecutive_failures < 2:
-                    # First miss — don't flip UI yet; wait for the next poll.
-                    self._health_stop.wait(10.0)
-                    continue
+                self._hw_statusbar.update_capability(cap, False, "")
 
-            # Always post so the UI can't get stuck in a stale state.
-            GLib.idle_add(self._on_health_result, ready, running_model)
-            self._health_stop.wait(10.0)
+        values = list(snap.values())
+        if Status.READY in values:
+            agg = Status.READY
+        elif Status.STARTING in values:
+            agg = Status.STARTING
+        elif Status.ERROR in values:
+            agg = Status.ERROR
+        else:
+            agg = Status.OFF
 
-    def _on_health_result(self, ready: bool, running_model: "str | None") -> bool:
-        """Runs on main thread (called by GLib.idle_add)."""
-        try:
-            if not self._alive:
-                return False
-            # Auto-switch source tab on first model detection — once only.
-            if running_model and not self._auto_tab_switched:
-                source = _MODEL_TO_SOURCE.get(running_model)
-                if source and source != self._controls.get_model_source():
-                    self._controls.switch_to_source(source)
-                self._auto_tab_switched = True
+        if agg == Status.READY:
+            self._hw_statusbar.update_server(True, "ready")
+            # A launch script may have handed off to a Docker log tail (see
+            # _start_log_tail) — stop it now that a real health check has
+            # confirmed readiness. Same trigger point the retired
+            # _on_health_result used to own.
+            if self._log_tail_stop:
+                self._log_tail_stop.set()
+                self._log_tail_stop = None
+            if not (self._worker_gen and self._worker_gen._running()):
+                self._set_status("Server ready — enter a prompt and click Generate")
+        elif agg == Status.STARTING:
+            if self._status_agg_prev != Status.STARTING:
+                self._hw_statusbar.update_starting()
+        elif agg == Status.ERROR:
+            self._hw_statusbar.update_error()
+        else:
+            self._hw_statusbar.update_server(False, "offline")
+        self._status_agg_prev = agg
 
-            self._controls.set_server_state(ready, running_model)
+        # Recover Jobs (File menu): enabled iff a media server (video/image/
+        # animate — NOT artgen/prompt, which _on_recover has nothing to do
+        # with) is actually READY. While a launch is in flight the service
+        # itself reports STARTING (via note_starting()), so this naturally
+        # stays disabled until a real health check succeeds — no separate
+        # "is launching" flag needed (the retired _on_health_result read
+        # ControlPanel's own `_server_launching` for this; that dependency is
+        # gone).
+        media_ready = any(
+            snap.get(s.key) == Status.READY
+            for cap in ("video", "image", "animate")
+            for s in _sm.servers_for_capability(cap)
+        )
+        if a := self.lookup_action("recover-jobs"):
+            a.set_enabled(media_ready)
 
-            # Enable Recover Jobs (File menu) whenever the server is reachable,
-            # regardless of which model tab is active or whether a job is running.
-            server_reachable = ready or (running_model is not None)
-            recover_action = self.lookup_action("recover-jobs")
-            if recover_action:
-                recover_action.set_enabled(server_reachable and not self._controls._server_launching)
+    def _check_animatediff_hardware(self) -> None:
+        """One-shot AnimateDiff (Blackhole) hardware capability check.
 
-            # Mirror server health in the hardware status bar.
-            # Skip while a launch/stop script is in flight — the status bar
-            # stays in its "starting…" state (timer ticking) until the
-            # operation finishes, then health results flow through normally.
-            # Also skip when artgen is the active source: the artgen health
-            # loop owns the status bar in that mode (it polls port 8002).
-            _source = self._controls.get_model_source()
-            cap = _MODEL_TO_CAP.get(running_model or "") \
-                  or (_SOURCE_TO_CAP.get(_source, "video") if _source != "artgen" else "video")
-            cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
-            dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
-            display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
-            if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
-                self._hw_statusbar.update_server(ready, dot_text)
-            # Update the capability dashboard row, but never let port-8000 results
-            # overwrite the artgen row — that row is owned by _on_artgen_health_result.
-            if cap != "artgen":
-                self._hw_statusbar.update_capability(cap, ready, display_model or "")
+        "animatediff" has no `server_manager.SERVERS` entry — it's a local
+        hardware capability, not a managed service (see
+        `_sm.CAPABILITY_LABELS`'s comment) — so `ModelStatusService` never
+        resolves a status for it and `_render_status_snapshot` deliberately
+        skips it. This preserves the one-time hardware probe that used to run
+        as a nested thread inside the now-retired `_start_artgen_health_worker`,
+        as its own small background thread; the result is posted back via
+        `GLib.idle_add` per the GTK threading rule.
 
-            if ready:
-                # Stop tailing the Docker log — server is confirmed up
-                if self._log_tail_stop:
-                    self._log_tail_stop.set()
-                    self._log_tail_stop = None
-                if not (self._worker_gen and self._worker_gen._running()):
-                    self._set_status("Server ready — enter a prompt and click Generate")
-                # Persist the server key so the next session can pre-select it.
-                if running_model:
-                    skey = _MODEL_TO_SERVER_KEY.get(running_model)
-                    if skey:
-                        _settings.set("last_successful_deployment", skey)
-
-            # ── Update SHOT panel model badge ─────────────────────────────────
-            # Derive the internal video model key from the server-reported model
-            # ID so the badge always shows what is actually running.
-            if hasattr(self._controls, "update_shot_panel"):
-                video_key = _MODEL_TO_VIDEO_KEY.get(running_model or "") if running_model else None
-                # Fallback: some inference servers (e.g. tt-media-inference-server) don't
-                # implement /v1/models, so running_model is None even when the server is
-                # healthy.  If the server is ready but we can't identify the model, use
-                # the user's preferred_video_model setting (defaulting to "wan2") so the
-                # SHOT panel shows as online rather than "No server · Start one".
-                if ready and video_key is None:
-                    pref = str(_settings.get("preferred_video_model") or "wan2")
-                    video_key = pref if pref in ("wan2", "mochi", "skyreels") else "wan2"
-                    # animatediff doesn't use a server — server-ready path always
-                    # means a network model is running, so wan2 is a safe fallback here.
-                self._controls._shot_server_ready = bool(ready and video_key)
-                if video_key and ready:
-                    # Honour the user's preferred model setting; auto-switch to
-                    # the running model if it differs from what is selected.
-                    pref = str(_settings.get("preferred_video_model") or "")
-                    if pref and pref == video_key:
-                        self._controls._set_model(pref)
-                    elif video_key != self._controls._video_model:
-                        self._controls._set_model(video_key)
-                # No multi-server support in the current architecture, so the
-                # switcher hint is never populated (alt model stays None).
-                self._controls._shot_alt_model_key = None
-                self._controls.update_shot_panel()
-        except Exception as exc:
-            import traceback
-            print(f"[health] _on_health_result error: {exc}", flush=True)
-            traceback.print_exc()
-        return False  # one-shot idle callback
+        NOTE (bug fix while porting): `check_hardware()` returns a 3-tuple
+        `(ok, message, num_chips)` — every other caller in this codebase
+        (`artgen_panel.py`, `worker.py`, `artgen/cli.py`) unpacks all three.
+        The original nested closure this replaces unpacked only `ok, msg =
+        check_hardware()`, which always raised `ValueError` (caught by the
+        blanket `except Exception` right below it) — so the "animatediff"
+        capability row has always shown "unavailable" regardless of real
+        hardware state. Fixed here to unpack the actual 3-tuple.
+        """
+        def _check():
+            try:
+                from artgen.generators.animatediff import check_hardware
+                ok, msg, _num_chips = check_hardware()
+            except Exception:
+                ok, msg = False, "unavailable"
+            GLib.idle_add(
+                self._hw_statusbar.update_capability,
+                "animatediff", ok, msg if ok else "hardware not detected",
+            )
+        threading.Thread(target=_check, daemon=True).start()
 
     def _load_prompt_gen_system(self) -> str:
         """
@@ -9889,110 +9928,6 @@ class MainWindow(Gtk.ApplicationWindow):
             return path.read_text(encoding="utf-8")
         except OSError:
             return ""
-
-    def _start_prompt_gen_health_worker(self) -> None:
-        """Start the background thread that polls the prompt gen server on port 8001."""
-        self._pg_stop = threading.Event()
-        threading.Thread(
-            target=self._prompt_gen_health_loop, daemon=True
-        ).start()
-
-    def _prompt_gen_health_loop(self) -> None:
-        """
-        Runs on background thread.  Polls the prompt gen server every 5 seconds
-        and posts the result to the main thread via GLib.idle_add.
-
-        The health URL is read from server_config at each poll (not cached) so
-        that the Preferences dialog host/port changes and --server at startup
-        are always reflected without a restart.
-        """
-        while not self._pg_stop.wait(5.0):
-            # Read from server_config dynamically — consistent with how the
-            # Servers popover checks health (server_manager._check_sdef).
-            from server_config import server_config as _sc  # noqa: PLC0415
-            url = _sc.base_url("prompt-server")
-            ready = prompt_client.check_health(url)
-            # Also keep the generate_prompt module globals in sync so LLM
-            # polish calls always hit the same host as the health check.
-            if url != self._prompt_server_url:
-                self._prompt_server_url = url
-                prompt_client.configure_llm_url(url)
-            # THREADING: must not touch GTK widgets here — post to main thread
-            GLib.idle_add(self._on_prompt_gen_health, ready)
-
-    def _on_prompt_gen_health(self, ready: bool) -> bool:
-        """Runs on main thread (called by GLib.idle_add)."""
-        if not self._alive:
-            return False
-        self._controls.set_prompt_gen_state(ready)
-        self._hw_statusbar.update_capability(
-            "prompt", ready, "Qwen3-0.6B" if ready else "")
-        return False  # one-shot idle callback
-
-    # ── Artgen server health worker (port 8002) ────────────────────────────────
-
-    def _start_artgen_health_worker(self) -> None:
-        """Start background polling for the artgen LLM server on port 8002."""
-        self._artgen_health_stop = threading.Event()
-        threading.Thread(target=self._artgen_health_loop, daemon=True).start()
-        # AnimateDiff capability is hardware-based (no server).  Check once at startup.
-        def _check_animatediff():
-            try:
-                from artgen.generators.animatediff import check_hardware
-                ok, msg = check_hardware()
-            except Exception:
-                ok, msg = False, "unavailable"
-            GLib.idle_add(self._hw_statusbar.update_capability,
-                          "animatediff", ok, msg if ok else "hardware not detected")
-        threading.Thread(target=_check_animatediff, daemon=True).start()
-
-    def _artgen_health_loop(self) -> None:
-        """Polls port 8002 every 10 s; posts result to main thread via idle_add.
-
-        All artgen-* server definitions share the same health URL
-        (http://localhost:8002/v1/models), so checking any one of them is
-        sufficient.  We also call detect_model() when healthy to show the
-        loaded model name in the status bar.
-        """
-        import artgen as _artgen
-        import server_manager as _sm
-        from server_config import server_config as _sc
-        consecutive_failures = 0
-
-        while not self._artgen_health_stop.is_set():
-            try:
-                ready = _sm.is_healthy("artgen-qwen3-8b", timeout=2.0)
-            except Exception:
-                ready = False
-
-            if ready:
-                consecutive_failures = 0
-                try:
-                    base_url = _sc.base_url("artgen")
-                    model_name = _artgen.detect_model(base_url) or "artgen"
-                except Exception:
-                    model_name = "artgen"
-            else:
-                consecutive_failures += 1
-                model_name = None
-                if consecutive_failures < 2:
-                    self._artgen_health_stop.wait(10.0)
-                    continue
-
-            GLib.idle_add(self._on_artgen_health_result, ready, model_name)
-            self._artgen_health_stop.wait(10.0)
-
-    def _on_artgen_health_result(self, ready: bool, model: "str | None") -> bool:
-        """Runs on main thread. Updates the toolbar status bar when artgen is active."""
-        if not self._alive:
-            return False
-        cap_label = _sm.CAPABILITY_LABELS.get("artgen", "Generative art")
-        dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
-        if self._controls.get_model_source() == "artgen":
-            if not self._controls._server_launching:
-                self._hw_statusbar.update_server(ready, dot_text)
-        self._hw_statusbar.update_capability("artgen", ready, model or "")
-        return False
 
     # ── Remote record localization ──────────────────────────────────────────────
 
@@ -11709,7 +11644,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
         Called after the start script exits and hands off to the Docker log file.
         The tail stops when the health check confirms the server is ready (via
-        _on_health_result setting self._log_tail_stop), or when the server is stopped.
+        `_render_status_snapshot` clearing `self._log_tail_stop` on the
+        ModelStatusService snapshot that first reports READY -- see SP-3d-6),
+        or when the server is stopped.
         """
         # Cancel any previous tail still running (e.g., restart after stop)
         if self._log_tail_stop:
@@ -12490,8 +12427,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
         if self._flash_restore_id:
             GLib.source_remove(self._flash_restore_id)
-        self._health_stop.set()
         self._status_service.stop()
+        # SP-3d-6: the three legacy poller threads (_health_loop/
+        # _artgen_health_loop/_prompt_gen_health_loop) that used to need their
+        # own stop-event teardown here are retired; `_status_unsubscribe()`
+        # tears down `_render_status_snapshot`'s subscription to the service
+        # stopped just above (mirrors `_servers_control.close()` below, which
+        # does the same for its own subscription).
+        self._status_unsubscribe()
         # ServersControl's own `unrealize`-triggered cleanup (see
         # servers_control.py's __init__) only fires if it's ever mounted
         # itself; since only its `servers_button`/`log_widget` sub-widgets
@@ -12499,8 +12442,6 @@ class MainWindow(Gtk.ApplicationWindow):
         # explicitly here so its status_service subscription is always torn
         # down alongside the service it subscribes to.
         self._servers_control.close()
-        if self._pg_stop:
-            self._pg_stop.set()
         self._hw_statusbar.stop()
         if self._log_tail_stop:
             self._log_tail_stop.set()
