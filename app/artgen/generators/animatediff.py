@@ -147,6 +147,15 @@ class AnimateDiffGenerator(ArtGenerator):
     name = "animatediff"
     description = "Blackhole-accelerated animated GIF via TTNN UNet with cross-frame temporal attention"
     output_ext = ".gif"
+    # Bypasses the LLM pipeline entirely (see build_prompt below) — a
+    # self-contained Blackhole diffusion GIF generator, not a chat-LLM
+    # consumer. Overriding the ArtGenerator base's True default lets
+    # pipeline_engine._backend_for skip starting/switching a chat-LLM server
+    # for this generator, and lets create_mediums.default_mediums thread the
+    # same fact into the Create surface's Medium.uses_llm (CreateView's
+    # scoped model dropdown then offers AnimateDiff itself as the model
+    # instead of asking the user to pick a chat model it never uses).
+    uses_llm = False
 
     def build_prompt(self, args) -> str:
         # Not used — animatediff bypasses the LLM pipeline entirely.

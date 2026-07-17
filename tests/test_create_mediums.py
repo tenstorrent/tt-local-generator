@@ -158,3 +158,95 @@ def test_default_mediums_never_crashes_if_artgen_import_fails(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _fake_import)
     mediums = cm.default_mediums()
     assert [m.id for m in mediums] == ["image", "video", "animate"]
+
+
+# ── uses_llm threading (AnimateDiff-model-fix) ────────────────────────────────
+#
+# AnimateDiff is an artgen medium whose generator bypasses the chat LLM
+# entirely (it's a self-contained Blackhole diffusion GIF generator) -- but
+# `CreateView._scoped_model_keys` used to treat every artgen medium as
+# chat-LLM-backed, so its scoped "Model" dropdown asked the user to pick a
+# chat model it never uses. `Medium.uses_llm` is the pure-core piece that
+# threads a generator's real `ArtGenerator.uses_llm` flag through discovery
+# so CreateView can tell the two cases apart. Generalized: applies to ANY
+# LLM-free artgen generator, not just AnimateDiff.
+
+def test_medium_uses_llm_defaults_true():
+    """A bare Medium() with no uses_llm= argument (every existing call site,
+    including every native medium and every pre-existing test fixture) must
+    keep behaving exactly as before -- LLM-backed."""
+    m = cm.Medium(id="widget", label="Widget", icon="⚙", kind="image",
+                  source="native", generator=None)
+    assert m.uses_llm is True
+
+
+def test_discover_mediums_uses_llm_for_marks_generator_false():
+    """A generator the injected `uses_llm_for` callable reports False for
+    gets `uses_llm=False` on its Medium; everything else stays True."""
+    def _uses_llm_for(name):
+        return name != "animatediff"
+
+    mediums = {
+        m.id: m for m in cm.discover_mediums(
+            artgen_names=["verse", "animatediff"], uses_llm_for=_uses_llm_for
+        )
+    }
+    assert mediums["animatediff"].uses_llm is False
+    assert mediums["verse"].uses_llm is True
+
+
+def test_discover_mediums_uses_llm_for_default_true_when_not_provided():
+    """Omitting `uses_llm_for` entirely (every pre-existing caller/test) must
+    default every artgen medium to uses_llm=True -- unaffected by this
+    feature, matching the module's existing "additive, never-break-existing-
+    callers" discipline."""
+    mediums = {
+        m.id: m for m in cm.discover_mediums(artgen_names=["verse", "animatediff"])
+    }
+    assert mediums["verse"].uses_llm is True
+    assert mediums["animatediff"].uses_llm is True
+
+
+def test_discover_mediums_native_mediums_always_uses_llm_true():
+    """Native mediums have no generator at all -- `uses_llm` is unused for
+    them and must stay the True default regardless of `uses_llm_for`."""
+    mediums = cm.discover_mediums(
+        artgen_names=[], uses_llm_for=lambda name: False
+    )
+    assert all(m.uses_llm is True for m in mediums)
+
+
+def test_default_mediums_threads_real_uses_llm_flag(monkeypatch):
+    """The real-deps wrapper must ask each generator's OWN `uses_llm` flag
+    (via `artgen.get(name).uses_llm`, lazy-imported) rather than defaulting
+    every artgen medium to True -- this is the piece that actually threads
+    the AnimateDiff fix into the real Create surface."""
+    import artgen
+
+    class _FakeGen:
+        def __init__(self, uses_llm):
+            self.uses_llm = uses_llm
+
+    fakes = {"verse": _FakeGen(True), "animatediff": _FakeGen(False)}
+    monkeypatch.setattr(artgen, "all_names", lambda: ["verse", "animatediff"])
+    monkeypatch.setattr(artgen, "get", lambda name: fakes[name])
+
+    mediums = {m.id: m for m in cm.default_mediums()}
+    assert mediums["verse"].uses_llm is True
+    assert mediums["animatediff"].uses_llm is False
+
+
+def test_default_mediums_uses_llm_fails_soft_to_true_on_error(monkeypatch):
+    """One bad generator's `.uses_llm` lookup raising must not crash
+    discovery -- fails soft to True (the safe assumption, mirrors
+    `pipeline_engine._artgen_uses_llm`'s own fail-soft default)."""
+    import artgen
+
+    def _boom(name):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(artgen, "all_names", lambda: ["verse"])
+    monkeypatch.setattr(artgen, "get", _boom)
+
+    mediums = {m.id: m for m in cm.default_mediums()}
+    assert mediums["verse"].uses_llm is True

@@ -1159,6 +1159,127 @@ def test_animatediff_selection_reaches_on_create_via_cta(monkeypatch):
     assert calls[-1][1]["model"] == "animatediff-blackhole"
 
 
+# ── LLM-free ARTGEN mediums self-select as their own model ───────────────────
+#
+# Bug report: "in generate if you select animatediff, it asks for a model but
+# it should just select animatediff as the model." Root cause: AnimateDiff is
+# its own artgen medium (source="artgen", generator="animatediff"), and
+# `_scoped_model_keys` used to treat EVERY artgen medium as chat-LLM-backed,
+# listing the chat-LLM servers (Qwen3-8B, Llama-3.3-70B, …) in its scoped
+# dropdown — but AnimateDiff's generator (`uses_llm=False`) bypasses the chat
+# LLM entirely; it IS the model. Generalized via `Medium.uses_llm`: any
+# artgen medium with `uses_llm=False` gets a single self-entry (keyed by its
+# own medium id) instead of the chat-server list, and that entry auto-selects
+# at index 0 (the only entry) — no more asking. `verse` (uses_llm=True,
+# unchanged) is the regression control: its dropdown must still list the
+# chat servers exactly as before.
+#
+# This fixture mirrors the REAL registered "animatediff" artgen generator
+# (plugins/animatediff/plugin.py, loaded into the real artgen registry at
+# import time) so ArtgenParamPanel introspection — and therefore
+# `collect()` — exercises the actual add_args() contract, not a stand-in.
+
+def _fake_mediums_with_llm_free_animatediff():
+    return [
+        Medium(id="image", label="Image", icon="\U0001f5bc️", kind="image",
+               source="native", generator=None),
+        Medium(id="video", label="Video", icon="\U0001f3a5", kind="video",
+               source="native", generator=None),
+        Medium(id="animate", label="Animate", icon="\U0001f483", kind="gif",
+               source="native", generator=None),
+        Medium(id="verse", label="Verse", icon="✍", kind="text",
+               source="artgen", generator="verse"),
+        Medium(id="animatediff", label="AnimateDiff", icon="\U0001f57a",
+               kind="gif", source="artgen", generator="animatediff",
+               uses_llm=False),
+    ]
+
+
+def test_llm_free_artgen_medium_scoped_dropdown_has_exactly_one_self_entry(monkeypatch):
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["animatediff"].set_active(True)
+
+    entries = view._model_dropdown_entries
+    assert len(entries) == 1
+    key, canonical, label = entries[0]
+    assert key == "animatediff"
+    assert canonical is None          # no "model" field for collect() to override
+    assert label == "AnimateDiff"     # medium.label, not a server_manager label
+
+
+def test_llm_free_artgen_medium_scoped_dropdown_excludes_chat_servers(monkeypatch):
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["animatediff"].set_active(True)
+
+    keys = [k for k, _c, _l in view._model_dropdown_entries]
+    labels = [label for _k, _c, label in view._model_dropdown_entries]
+    assert "artgen-qwen3-8b" not in keys
+    assert not any("Qwen3-8B" in label for label in labels)
+
+
+def test_llm_free_artgen_medium_self_entry_dot_is_always_ready(monkeypatch):
+    """`_model_dropdown_entries`' third element is the bare label (no dot —
+    matches the existing "animatediff"/detected-key entries' convention);
+    the rendered dot lives in the Gtk.StringList strings actually shown in
+    the dropdown, so check those (mirrors how the pre-existing native
+    AnimateDiff dot test would, if it inspected the widget instead of
+    calling `_model_dot_glyph` directly)."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["animatediff"].set_active(True)
+
+    model = view._model_dropdown.get_model()
+    rendered = [model.get_string(i) for i in range(model.get_n_items())]
+    assert rendered == ["● AnimateDiff"]
+
+
+def test_llm_free_artgen_medium_self_entry_auto_selected(monkeypatch):
+    """Being the only entry, it auto-selects at index 0 -- this is what
+    satisfies "just select animatediff as the model" (no picker, no choice
+    to make)."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["animatediff"].set_active(True)
+
+    assert view._model_dropdown.get_selected() == 0
+
+
+def test_llm_backed_artgen_medium_scoped_dropdown_still_lists_chat_servers(monkeypatch):
+    """Regression control: verse (uses_llm=True, the pre-existing default)
+    must be completely unaffected -- its dropdown still lists the chat-LLM
+    servers exactly as before this fix."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["verse"].set_active(True)
+
+    keys = [k for k, _c, _l in view._model_dropdown_entries]
+    labels = [label for _k, _c, label in view._model_dropdown_entries]
+    assert "artgen-qwen3-8b" in keys
+    assert any("Qwen3-8B" in label for label in labels)
+
+
+def test_collect_params_unchanged_for_llm_free_artgen_medium(monkeypatch):
+    """collect() for AnimateDiff must be byte-for-byte identical to before
+    this fix: no "model" key is ever introduced (AnimateDiffGenerator's real
+    add_args() never declares one, and the self-entry's canonical is None,
+    so `_collect_params`'s "model" override is a no-op)."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    view._chip_buttons["animatediff"].set_active(True)
+
+    params = view._collect_params()
+    assert "model" not in params
+
+
+def test_model_dot_glyph_does_not_crash_for_llm_free_artgen_self_key(monkeypatch):
+    """No `server_manager.SERVERS` entry (or CAPABILITY_LABELS entry) backs
+    an artgen generator's own name -- `_model_dot_glyph` must handle the
+    self key defensively (mirroring the existing "animatediff"/detected-key
+    special cases) rather than crash or silently read "offline"."""
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_llm_free_animatediff)
+    medium = next(
+        m for m in _fake_mediums_with_llm_free_animatediff() if m.id == "animatediff"
+    )
+
+    assert view._model_dot_glyph("animatediff", medium=medium) == "●"
+
+
 def test_model_health_reflects_running_vs_not(monkeypatch):
     view = _make_view(monkeypatch)
     assert view._model_health == {"wan2.2": True, "flux": False}

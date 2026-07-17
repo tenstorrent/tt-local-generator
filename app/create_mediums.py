@@ -28,7 +28,7 @@ intent_vocab.py (INTENTS/intent_for) — same shape, smaller scope.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,18 @@ class Medium:
                 or "artgen" (routed through an artgen generator).
     generator — the artgen generator name for source="artgen" mediums, else
                 None for native mediums.
+    uses_llm  — whether this medium's generation drives the chat-LLM backend
+                (`artgen.ArtGenerator.uses_llm` for artgen mediums; unused —
+                always the True default — for native mediums, which never
+                touch artgen at all). Defaults True so every existing call
+                site/test (which never passes this) is unaffected. False
+                marks a self-contained artgen generator that bypasses the
+                chat LLM entirely (e.g. AnimateDiff, a Blackhole diffusion
+                GIF generator) — CreateView's scoped model dropdown reads
+                this to decide whether to offer the chat-LLM servers (True,
+                the historical behavior for verse/ansi/landscape/…) or a
+                single self-entry naming the generator itself (False) — see
+                `create_view.CreateView._scoped_model_keys`.
     """
 
     id: str
@@ -57,6 +69,7 @@ class Medium:
     kind: str
     source: str
     generator: Optional[str] = None
+    uses_llm: bool = True
 
 
 # ── Native mediums ─────────────────────────────────────────────────────────
@@ -141,14 +154,22 @@ def discover_mediums(
     *,
     artgen_names,
     native: "list[Medium] | tuple[Medium, ...] | None" = None,
+    uses_llm_for: "Optional[Callable[[str], bool]]" = None,
 ) -> list[Medium]:
     """Return every Medium chip the Create surface should offer.
 
     Pure core: `artgen_names` (an iterable of artgen generator name strings)
-    is the only external input, and it's injected — this function never
-    imports artgen or touches disk/network itself. `native` lets a caller
-    override the default native-medium list (e.g. for tests, or a future
-    slice that adds a new native medium without editing this module).
+    is the only REQUIRED external input, and it's injected — this function
+    never imports artgen or touches disk/network itself. `native` lets a
+    caller override the default native-medium list (e.g. for tests, or a
+    future slice that adds a new native medium without editing this module).
+    `uses_llm_for` is an OPTIONAL injected callable (`name -> bool`) reporting
+    whether a given artgen generator drives the chat-LLM backend — mirrors
+    `artgen.ArtGenerator.uses_llm` (see `Medium.uses_llm`'s docstring for why
+    this matters to CreateView's scoped model dropdown). Omitted entirely
+    (every pre-existing caller) -> every artgen medium gets `uses_llm=True`,
+    byte-identical to pre-this-feature behavior. A per-name call that raises
+    also defaults to True — never let one bad lookup crash discovery.
 
     Order is deterministic: native mediums first (in `native`'s order, or
     the default image/video/animate order), then one Medium per name in
@@ -165,6 +186,8 @@ def discover_mediums(
       - A generator name absent from the label/icon/kind tables -> gets a
         title-cased fallback label, a generic icon, and kind "image" rather
         than crashing or being silently dropped.
+      - A raising `uses_llm_for(name)` -> that one medium defaults to
+        `uses_llm=True` (the safe assumption) instead of crashing discovery.
     """
     mediums: list[Medium] = list(native) if native is not None else list(_NATIVE_MEDIUMS)
 
@@ -178,9 +201,15 @@ def discover_mediums(
             key = str(name)
             label, icon = _ARTGEN_LABELS_ICONS.get(key, (_fallback_label(key), _DEFAULT_ICON))
             kind = _ARTGEN_KIND.get(key, _DEFAULT_KIND)
+            uses_llm = True
+            if uses_llm_for is not None:
+                try:
+                    uses_llm = bool(uses_llm_for(key))
+                except Exception:
+                    uses_llm = True
             mediums.append(Medium(
                 id=key, label=label, icon=icon, kind=kind,
-                source="artgen", generator=key,
+                source="artgen", generator=key, uses_llm=uses_llm,
             ))
         except Exception:
             # One bad entry must not take down discovery of the rest.
@@ -193,16 +222,28 @@ def default_mediums() -> list[Medium]:
     """The real-deps wrapper the Create surface UI actually calls.
 
     Thin by design — all logic lives in `discover_mediums`; this function
-    only wires up the one real dependency (`artgen.all_names()`). Imports
-    artgen lazily, inside the function body, so `create_mediums` itself
-    stays importable (and unit-testable) without pulling in artgen's
-    plugin-loading machinery — and so that a broken/missing artgen package
-    degrades to "just the native mediums" instead of making the whole
-    Create surface unable to even list its chips.
+    only wires up the two real dependencies (`artgen.all_names()` and, per
+    generator, `artgen.get(name).uses_llm`). Imports artgen lazily, inside
+    the function body (and inside the `_uses_llm_for` closure again, for the
+    same reason), so `create_mediums` itself stays importable (and
+    unit-testable) without pulling in artgen's plugin-loading machinery —
+    and so that a broken/missing artgen package degrades to "just the native
+    mediums" instead of making the whole Create surface unable to even list
+    its chips. `_uses_llm_for` mirrors `pipeline_engine._artgen_uses_llm`'s
+    own fail-soft-to-True convention (a broken/missing generator lookup must
+    never crash discovery of the rest of the chip row).
     """
     try:
         import artgen
         names = artgen.all_names()
     except Exception:
         names = []
-    return discover_mediums(artgen_names=names)
+
+    def _uses_llm_for(name: str) -> bool:
+        try:
+            import artgen as _artgen
+            return bool(getattr(_artgen.get(name), "uses_llm", True))
+        except Exception:
+            return True
+
+    return discover_mediums(artgen_names=names, uses_llm_for=_uses_llm_for)

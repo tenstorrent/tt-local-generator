@@ -99,6 +99,27 @@ Text) classified by each `ServerDef.capabilities` via
 regression-guarded). Text cards return to the Idea door without changing the
 active medium.
 
+**LLM-free artgen mediums self-select as their own model (v0.47.3).** Every
+artgen medium used to be treated as chat-LLM-backed by `_scoped_model_keys`
+(cap="artgen" -> list the chat servers) — wrong for a self-contained
+generator like AnimateDiff (Blackhole diffusion GIF, no LLM involved at all).
+`Medium.uses_llm` (`create_mediums.py`, threaded from `ArtGenerator.uses_llm`
+via `discover_mediums`'s `uses_llm_for` param / `default_mediums()`'s real
+`artgen.get(name).uses_llm` lookup) marks this per generator. An artgen
+medium with `uses_llm=False` gets a single self-entry in its scoped dropdown
+(`[medium.id]`, label = `medium.label`, dot always "●", canonical `None` so
+`collect()`'s "model" override stays a no-op) instead of the chat-server
+list — being the only entry, it auto-selects, so the user is never asked to
+pick a model AnimateDiff never uses. LLM-backed artgen mediums (verse/ansi/
+landscape/…) are unaffected. Gotcha found mid-fix: `artgen.get(name)`
+resolves to whatever `plugins/<name>/plugin.py` defines (back-filled by
+`artgen._load_generators()` from `plugin_loader`), NOT the `@register`ed
+class in `app/artgen/generators/<name>.py` — for animatediff, `uses_llm =
+False` had to be set on BOTH classes (the plugin.py one is the one that
+actually matters at runtime; the generators/ one had already-registered
+side effects too, and matches the module the rest of this doc treats as
+canonical for its 3-pass-pipeline / hardware logic).
+
 **Width discipline:** the whole surface is wrapped in
 `gtk_layout.wrap_centered` (`MaxWidthBin`, extracted from `pipeline_studio`), and
 every multi-item row is a wrapping `Gtk.FlowBox` — width overflow is structurally

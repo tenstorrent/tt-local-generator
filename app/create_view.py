@@ -1614,10 +1614,22 @@ class CreateView(Gtk.Box):
         already know how to resolve and label this key generically (via
         `create_param_panels._VIDEO_MODEL_IDS`/`server_manager.
         CAPABILITY_LABELS` respectively) — no special-casing needed there.
+
+        **AnimateDiff-model-fix**: an artgen medium whose generator bypasses
+        the chat LLM entirely (`medium.uses_llm is False` — e.g. the artgen
+        "animatediff" medium; see `Medium.uses_llm`'s docstring) does NOT
+        share the chat-LLM servers with every other artgen medium the way
+        verse/ansi/landscape/… do. It gets a single self-entry, `[medium.id]`
+        — that id equals the generator name for every artgen medium, so it
+        reads as "the medium IS the model". No detected-key entry either:
+        there is nothing running to detect, since this medium never talks to
+        a chat LLM at all.
         """
         medium = medium if medium is not None else self._active_medium
         if medium is None:
             return []
+        if medium.source == "artgen" and not medium.uses_llm:
+            return [medium.id]
         cap = "artgen" if medium.source == "artgen" else medium.id
         keys = [sdef.key for sdef in server_manager.servers_for_capability(cap)]
         if medium.id == "video":
@@ -1713,7 +1725,28 @@ class CreateView(Gtk.Box):
 
         entries: "list[tuple]" = []
         labels: "list[str]" = []
+        llm_free_artgen_self_key = (
+            medium.source == "artgen" and not medium.uses_llm
+        )
         for key in self._scoped_model_keys(medium):
+            if llm_free_artgen_self_key and key == medium.id:
+                # AnimateDiff-model-fix: the ONE entry `_scoped_model_keys`
+                # produces for an LLM-free artgen medium — the generator
+                # itself, standing in for "model". No `ServerDef` and no
+                # `CAPABILITY_LABELS` entry backs a generator name, so this
+                # is handled here rather than falling through to the
+                # SERVERS.get lookup below (`medium.label` — e.g.
+                # "AnimateDiff" — not the bare key, and not the native
+                # video-medium's "AnimateDiff  (Blackhole)" label, which is a
+                # DIFFERENT medium's synthetic key that happens to share this
+                # string). `canonical=None`: artgen mediums have no "model"
+                # field, so `_collect_params`'s override stays a no-op —
+                # `collect()` is unaffected, exactly like every other artgen
+                # medium's dropdown.
+                label_text = medium.label
+                labels.append(f"{self._model_dot_glyph(key, medium=medium)} {label_text}")
+                entries.append((key, None, label_text))
+                continue
             if _is_detected_key(key):
                 # SP-3 Task 3: the synthetic "detected model" entry — never a
                 # real SERVERS key, so it skips `_canonical_model_id_for`/
@@ -1918,7 +1951,7 @@ class CreateView(Gtk.Box):
             return "◐"
         return "◌"
 
-    def _model_dot_glyph(self, key: str) -> str:
+    def _model_dot_glyph(self, key: str, medium: Optional[Medium] = None) -> str:
         """Single source of truth for a `server_manager` key's dot glyph —
         both the scoped dropdown's rows (`_populate_model_dropdown`) and the
         Model-door cards (`_build_model_card`) call this instead of each
@@ -1948,10 +1981,29 @@ class CreateView(Gtk.Box):
         in. It is never looked up in `_status_snapshot`/`_model_health` (a
         raw sentinel string was never, and will never be, a real
         `server_manager.SERVERS`/health-map key).
+
+        AnimateDiff-model-fix: an LLM-free artgen medium's self key (see
+        `_scoped_model_keys`/`_populate_model_dropdown`) ALSO always reads
+        READY ("●") for the same reason — it's a self-contained generator
+        with no server to start/stop/health-check, so "offline" would be
+        just as misleading as it is for the native "animatediff" key above.
+        `medium` is an OPTIONAL param (only `_populate_model_dropdown`'s
+        artgen-medium loop passes it) precisely so this check can confirm
+        *this specific key* is that medium's own self-entry, not merely
+        equal to some other medium's key by coincidence — every other caller
+        (e.g. `_build_model_card`, which only ever passes real
+        `server_manager.SERVERS` keys) is unaffected by leaving it `None`.
         """
         if key == "animatediff":
             return "●"
         if _is_detected_key(key):
+            return "●"
+        if (
+            medium is not None
+            and medium.source == "artgen"
+            and not medium.uses_llm
+            and key == medium.id
+        ):
             return "●"
         if self._status_service is not None:
             status = self._status_snapshot.get(key, Status.OFF)

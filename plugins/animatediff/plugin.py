@@ -41,6 +41,14 @@ class AnimateDiffGenerator(ArtGenerator):
     name = "animatediff"
     description = "Animated GIF generation via TTNN on Blackhole hardware"
     output_ext = ".gif"
+    # This is the class artgen's plugin registry actually instantiates for
+    # "animatediff" (plugin_loader._load_local_generator loads THIS file, not
+    # app/artgen/generators/animatediff.py directly — see that module's own
+    # `uses_llm = False`, which this mirrors for the same reason: AnimateDiff
+    # generates via a subprocess pipeline, never the chat LLM, so
+    # create_mediums.default_mediums()'s `artgen.get("animatediff").uses_llm`
+    # lookup must see False here to thread the fact into the Create surface).
+    uses_llm = False
 
     def add_args(self, parser) -> None:
         parser.add_argument("--prompt", default="a candle flame flickering")

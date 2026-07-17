@@ -89,6 +89,12 @@ class TestVerseGenerator:
             prompt = self.g.build_prompt(args)
             assert len(prompt) > 10
 
+    def test_uses_llm_is_true(self):
+        """Spot check: an ordinary LLM-backed generator must NOT be affected
+        by AnimateDiff's uses_llm=False override -- verse still drives the
+        chat LLM, so its Create-surface medium must still list chat models."""
+        assert self.g.uses_llm is True
+
 
 class TestFreeformGenerator:
     @pytest.fixture(autouse=True)
@@ -329,3 +335,13 @@ class TestAnimateDiffGenerator:
 
     def test_name_is_animatediff(self):
         assert self.g.name == "animatediff"
+
+    def test_uses_llm_is_false(self):
+        """This is the class actually instantiated by artgen's plugin
+        registry (plugin_loader._load_local_generator loads plugin.py, then
+        artgen._load_generators() back-fills _GENERATORS from it) -- so this
+        is the `uses_llm` value create_mediums.default_mediums()'s
+        `uses_llm_for` callback (artgen.get("animatediff").uses_llm) will
+        actually observe at runtime. AnimateDiff generates via a subprocess,
+        never a chat LLM, so this must be False."""
+        assert self.g.uses_llm is False

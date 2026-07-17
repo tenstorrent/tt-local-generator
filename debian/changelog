@@ -1,3 +1,27 @@
+tt-local-generator (0.47.3) noble; urgency=medium
+
+  * fix(create): AnimateDiff -- an LLM-free artgen generator -- no longer
+    asks you to pick a chat model in Create; it selects AnimateDiff itself
+    as the model. Root cause: `CreateView._scoped_model_keys` treated every
+    artgen medium as chat-LLM-backed (cap="artgen" -> the chat-LLM servers),
+    but AnimateDiff's generator bypasses the LLM pipeline entirely and is
+    the model. Generalized via a new `Medium.uses_llm` flag threaded from
+    `ArtGenerator.uses_llm` (`create_mediums.discover_mediums`'s new
+    `uses_llm_for` param, wired for real in `default_mediums()`): an artgen
+    medium with `uses_llm=False` now gets a single self-entry in its scoped
+    dropdown (the generator itself, always "ready", auto-selected) instead
+    of the chat-server list. `AnimateDiffGenerator.uses_llm = False` set on
+    both the canonical implementation (`app/artgen/generators/
+    animatediff.py`) and the plugin-registry class actually instantiated at
+    runtime (`plugins/animatediff/plugin.py`) -- discovered mid-fix that the
+    latter, not the former, is what `artgen.get("animatediff")` resolves to.
+    `collect()` for AnimateDiff is unchanged (still no "model" key); every
+    LLM-backed artgen medium (verse/ansi/landscape/…) is unaffected. 16 new
+    tests (create_mediums, create_view, artgen generators), TDD red-then-
+    green; full suite 1726 passed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 15:30:00 -0700
+
 tt-local-generator (0.47.2) noble; urgency=medium
 
   * fix(artgen): restore click-to-preview for generative-art cards.

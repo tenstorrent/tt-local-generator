@@ -22,6 +22,15 @@ import artgen.generators.animatediff as ad  # noqa: E402  (after sys.path insert
 from artgen import cli as artgen_cli  # noqa: E402
 
 
+def test_uses_llm_is_false():
+    """AnimateDiff bypasses the LLM pipeline entirely (build_prompt raises,
+    generation runs via subprocess) -- ArtGenerator.uses_llm must be
+    overridden to False here so callers (pipeline_engine._backend_for,
+    create_mediums.default_mediums) know not to expect/require a chat-LLM
+    backend for it. Base ArtGenerator defaults uses_llm=True."""
+    assert ad.AnimateDiffGenerator().uses_llm is False
+
+
 def _parse(argv):
     """Build a parser the same way _build_artgen_parser does for animatediff:
     generator-specific flags plus the --output common flag _cmd_animatediff
