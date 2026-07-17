@@ -517,6 +517,26 @@ _CSS = b"""
     background-color: #81E6D9;
 }
 
+/* -- Theme Set button (SP-3d-1) -- migrated from ControlPanel's own "Theme
+   Set" button; outlined companion next to the CTA, same family as the
+   Inspire-me button above but its own class so either can restyle
+   independently. ------------------------------------------------------- */
+.create-theme-set-btn {
+    background-color: #1A3C47;
+    color: #4FD1C5;
+    border: 1px solid #2D5566;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+}
+.create-theme-set-btn:hover {
+    border-color: #4FD1C5;
+    color: #81E6D9;
+}
+.create-theme-set-btn:disabled {
+    color: #607D8B;
+}
+
 /* -- RoleZonePanel zones (Task 6) -- one class per zone so a future change to
    the brief/direction/controls look never has to touch create_param_panels.py
    (which stays GTK-styling-agnostic beyond its own per-field row classes). -- */
@@ -787,6 +807,7 @@ class CreateView(Gtk.Box):
         on_inspiration: Optional[Callable[[], None]] = None,
         status_service: "Optional[object]" = None,
         inspire_fn: "Optional[Callable[[str, Callable[[str], None], Callable[[str], None]], None]]" = None,
+        on_theme_set: Optional[Callable[[Medium, dict], None]] = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
@@ -810,6 +831,20 @@ class CreateView(Gtk.Box):
         # `_build_idea_row`.
         self._inspire_fn = inspire_fn
         self._inspire_generating = False
+        # SP-3d-1 "Theme Set" — migrated from ControlPanel's own "🎬 Theme
+        # Set" button (never dropped, per CLAUDE.md's "user: never drop"
+        # note; see the audit `.superpowers/sdd/sp3d-audit.md` §1). Fired
+        # SYNCHRONOUSLY with `(medium, params)` — the same shape as
+        # `on_create` — rather than the async callback shape `inspire_fn`
+        # uses: MainWindow's implementation (`_on_create_theme_set`) owns the
+        # background thread itself and calls back into `set_theme_queued`/
+        # `set_theme_error` (below) via `GLib.idle_add`, mirroring how
+        # `_begin_create_job`/`_fail_create_job` already reach into
+        # `self._result_panel` directly for the Create CTA. `None` (the
+        # default) means "no button at all" — same migration-safe contract
+        # as `inspire_fn`.
+        self._on_theme_set = on_theme_set
+        self._theme_generating = False
         # ModelStatusService (SP-2 Task 1/2): MainWindow constructs and starts
         # the single service instance and passes it in so CreateView doesn't
         # build its own competing poller. Accepts a bare `object` type hint
@@ -1874,14 +1909,92 @@ class CreateView(Gtk.Box):
         btn.add_css_class("create-cta-btn")
         btn.connect("clicked", self._on_cta_clicked)
         self._cta_btn = btn
-
         row.append(btn)
+
+        # SP-3d-1: Theme Set — generates a coherent N-shot themed batch and
+        # queues it for the active medium, migrated from ControlPanel's own
+        # "🎬 Theme Set" button (never reimplemented — see `_on_theme_set`'s
+        # docstring above). Migration-safe: no `on_theme_set` injected -> no
+        # button at all, mirroring `inspire_fn`'s None-safety, so every
+        # pre-SP-3d-1 test that never passes it sees a byte-identical CTA row.
+        if self._on_theme_set is not None:
+            theme_btn = Gtk.Button(label="\U0001f3ac Theme Set")
+            theme_btn.add_css_class("create-theme-set-btn")
+            theme_btn.set_tooltip_text(
+                "Generate a coherent multi-shot themed batch and queue it "
+                "for the active medium."
+            )
+            theme_btn.connect("clicked", self._on_theme_set_clicked)
+            self._theme_set_btn = theme_btn
+            row.append(theme_btn)
+        else:
+            self._theme_set_btn = None
+
         return row
 
     def _on_cta_clicked(self, _btn: Gtk.Button) -> None:
         if self._on_create is None or self._active_medium is None:
             return
         self._on_create(self._active_medium, self._collect_params())
+
+    # ── Theme Set (SP-3d-1) ────────────────────────────────────────────────
+
+    def _on_theme_set_clicked(self, _btn) -> None:
+        """Fire `self._on_theme_set(medium, params)` for the active medium,
+        showing a busy state on the button while MainWindow's theme-expansion
+        + enqueue work runs (off the GTK main thread on the real seam).
+
+        Fail-soft by construction, mirroring `_on_inspire_clicked`: no seam
+        injected, no active medium yet, or already-in-flight are all no-ops;
+        a synchronous exception from the seam itself (e.g. a thread failing
+        to spawn) is caught here and surfaced through the result panel
+        instead of crashing Create.
+        """
+        if (
+            self._on_theme_set is None
+            or self._active_medium is None
+            or self._theme_generating
+        ):
+            return
+        self._set_theme_generating(True)
+        try:
+            self._on_theme_set(self._active_medium, self._collect_params())
+        except Exception as e:  # noqa: BLE001 - fail-soft, see docstring
+            self.set_theme_error(str(e))
+
+    def _set_theme_generating(self, generating: bool) -> None:
+        """Toggle the Theme Set button's busy state. No-op if the button
+        doesn't exist (migration-safe — mirrors `_set_inspire_generating`)."""
+        self._theme_generating = generating
+        btn = getattr(self, "_theme_set_btn", None)
+        if btn is None:
+            return
+        if generating:
+            btn.set_label("⏳ Thinking…")
+            btn.set_sensitive(False)
+        else:
+            btn.set_label("\U0001f3ac Theme Set")
+            btn.set_sensitive(True)
+
+    def set_theme_queued(self, count: int, theme_label: str) -> None:
+        """MainWindow's success seam (SP-3d-1) — called on the main thread
+        once every shot the theme backend produced has been enqueued via the
+        existing queue path. Only resets the button: the "N shots queued"
+        message itself is MainWindow's own status bar, and the queued items
+        show up in Create's own pending-queue strip (`refresh_queue`) exactly
+        like any other queued job — no separate confirmation UI needed here.
+        """
+        self._set_theme_generating(False)
+
+    def set_theme_error(self, msg: str) -> None:
+        """MainWindow's failure seam (SP-3d-1) — resets the button and
+        surfaces the error in the inline result panel, exactly like a failed
+        Create CTA click already does (`_result_panel.show_error`)."""
+        self._set_theme_generating(False)
+        try:
+            self._result_panel.show_error(f"Theme Set: {msg}")
+        except Exception:
+            pass
 
     def _collect_params(self) -> dict:
         """Delegate to the active medium's mounted `RoleZonePanel`, if one is

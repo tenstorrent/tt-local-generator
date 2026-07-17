@@ -1609,6 +1609,33 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter_skip=None,
 )
 
+
+def _theme_key_from_text(text: str) -> str:
+    """Map free text (Create's brief) to a `generate_theme.THEME_LIBRARY`
+    key by a loose, case-insensitive containment match against each key and
+    its display label.
+
+    SP-3d-1: `generate_theme.generate_theme()` only ever accepts a fixed
+    `theme_key` (or `""` for "pick randomly" — see that function's own
+    docstring); it has no free-text theme parameter to fork or extend. This
+    is how Create's "supply the theme text" launch actually influences which
+    theme gets used, without changing the backend's contract at all — the
+    same `generate_theme.generate_theme(theme_key=..., enhance=True)` call
+    ControlPanel's legacy Theme Set button already made. No match (including
+    an empty/blank brief) returns `""`, which `generate_theme.generate_theme`
+    already treats as "pick randomly" — identical to what ControlPanel's
+    Theme Set button did unconditionally (it never passed a theme_key at
+    all).
+    """
+    needle = (text or "").strip().lower()
+    if not needle:
+        return ""
+    import generate_theme
+    for key, spec in generate_theme.THEME_LIBRARY.items():
+        if key.replace("_", " ") in needle or spec.label.lower() in needle:
+            return key
+    return ""
+
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
 # handled by the health check).
@@ -8240,6 +8267,11 @@ class MainWindow(Gtk.ApplicationWindow):
             on_create=self._on_create_generate,
             status_service=self._status_service,
             inspire_fn=self._create_inspire_fn,
+            # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
+            # below) — reuses `generate_theme.generate_theme()`, the SAME
+            # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
+            # button drove, only the launch UI has moved.
+            on_theme_set=self._on_create_theme_set,
         )
         # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
         # `self._create_view` existed) may already have repopulated
@@ -10110,6 +10142,115 @@ class MainWindow(Gtk.ApplicationWindow):
         # Start the queue if nothing is currently generating
         if not (self._worker and self._worker.is_alive()):
             self._start_next_queued()
+
+    # ── Theme Set — migrated into Create (SP-3d-1) ──────────────────────────────
+    #
+    # `_on_theme`/`_on_theme_result`/`_on_theme_error`/`_on_theme_queue_shots`
+    # above are ControlPanel's ORIGINAL theme path — untouched, still reachable
+    # from the legacy button until ControlPanel itself is deleted (SP-3d-5).
+    # The methods below are CreateView's OWN launch of the exact same backend
+    # (`generate_theme.generate_theme`, imported the identical way `_on_theme`
+    # already does — never forked/reimplemented), wired via CreateView's
+    # `on_theme_set` seam. The one real difference from `_on_theme_queue_shots`
+    # is WHERE the per-shot generation settings come from: ControlPanel's path
+    # reads `self._controls.get_generation_defaults()` (ControlPanel's own
+    # steps/seed/guidance/model state); this path reads CreateView's own
+    # collected params via `_native_generate_args` — the same translation
+    # `_create_enqueue_native` already uses for the Create CTA's busy-path
+    # enqueue — since Create's active medium/settings may not match whatever
+    # ControlPanel's legacy tabs last had selected. Both paths bottom out in
+    # the identical `_on_enqueue` → `_start_next_queued` machinery.
+
+    def _on_create_theme_set(self, medium, params: dict) -> None:
+        """CreateView's `on_theme_set` seam — start a background thematic
+        batch generation for *medium*, using *params* (CreateView's own
+        `_collect_params()` output, the same dict the Create CTA would have
+        sent to `_on_create_generate`) as the per-shot generation settings.
+
+        Only native mediums (image/video/animate) are supported — the same
+        restriction ControlPanel's Theme Set effectively had (its
+        `get_generation_defaults()` only ever populated video/image/animate
+        settings; artgen was never wired to Theme Set either). Fails soft
+        with a status message for anything else.
+
+        `params.get("prompt", "")` (Create's typed brief, plus any applied
+        Direction-zone modifier text) is passed through `_theme_key_from_text`
+        to pick a `generate_theme.THEME_LIBRARY` key when the brief happens
+        to name one (e.g. typing "hitchcock") — otherwise `generate_theme`
+        picks randomly, exactly like ControlPanel's button always did.
+        """
+        if medium.source != "native":
+            self._set_status(
+                f"Theme Set isn't available for {medium.label} yet — try an "
+                "image, video, or animate medium instead."
+            )
+            return
+
+        theme_key = _theme_key_from_text(params.get("prompt", ""))
+
+        def run():
+            try:
+                import generate_theme
+                result = generate_theme.generate_theme(theme_key=theme_key, enhance=True)
+                GLib.idle_add(self._on_create_theme_result, medium, params, result)
+            except Exception as e:  # noqa: BLE001 - fail-soft, mirrors _on_theme
+                import traceback
+                traceback.print_exc()
+                GLib.idle_add(self._on_create_theme_error, str(e))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_create_theme_result(self, medium, params: dict, result: dict) -> bool:
+        """Runs on the main thread — enqueue every shot `generate_theme`
+        produced, exactly the way `_on_theme_queue_shots` enqueues
+        ControlPanel's shots (same `_on_enqueue`/`_start_next_queued`
+        machinery), swapping in each shot's polished prompt over *params* and
+        translating via `_native_generate_args` (see this method group's
+        docstring for why that differs from `get_generation_defaults()`).
+
+        A `_NativeGenerateGuardError` (e.g. SkyReels-I2V with no seed image)
+        stops the batch at that shot and surfaces the message — the same
+        guard `_create_enqueue_native` already enforces for a single Create
+        CTA click applies per-shot here too; whatever queued before the
+        failing shot is left queued, not rolled back.
+        """
+        shots = result.get("shots", [])
+        queued = 0
+        for shot in shots:
+            prompt = shot.get("prompt", shot.get("slug", ""))
+            if not prompt:
+                continue
+            shot_params = {**params, "prompt": prompt}
+            try:
+                args, kwargs = self._native_generate_args(medium, shot_params)
+            except _NativeGenerateGuardError as exc:
+                self._set_status(str(exc))
+                break
+            self._on_enqueue(*args, **kwargs)
+            queued += 1
+
+        theme_label = result.get("theme", "Theme Set")
+        if queued:
+            self._set_status(
+                f"\U0001f3ac {theme_label}: queued {queued} shot(s) for {medium.label}."
+            )
+            # Start the queue if nothing is currently generating — same
+            # not-busy check `_on_theme_queue_shots` already makes.
+            if not (self._worker and self._worker.is_alive()):
+                self._start_next_queued()
+        else:
+            self._set_status(f"\U0001f3ac {theme_label}: nothing to queue.")
+
+        self._create_view.set_theme_queued(queued, theme_label)
+        return False
+
+    def _on_create_theme_error(self, msg: str) -> bool:
+        """Runs on the main thread — log and surface the failure in Create's
+        own result panel (`CreateView.set_theme_error`), mirroring
+        `_on_theme_error`'s fail-soft contract for the legacy button."""
+        print(f"[tt-gen] Create Theme Set error: {msg}", file=sys.stderr)
+        self._create_view.set_theme_error(msg)
+        return False
 
     # ── Playlist selection mode ────────────────────────────────────────────────
 

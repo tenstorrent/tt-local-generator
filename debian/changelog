@@ -1,3 +1,31 @@
+tt-local-generator (0.41.0) noble; urgency=medium
+
+  * SP-3d-1: Theme Set -- generate an N-shot themed batch -- now available
+    from Create, migrated from ControlPanel's own "🎬 Theme Set" button
+    (never dropped, per the "never drop it" instruction; see the SP-3d audit,
+    `.superpowers/sdd/sp3d-audit.md` §1). A new Theme Set button sits next to
+    the Create CTA (`CreateView`'s `on_theme_set` seam, migration-safe: no
+    button at all when not injected); clicking it fires
+    `MainWindow._on_create_theme_set`, which reuses the SAME theme-expansion
+    backend ControlPanel's button always drove (`generate_theme.generate_theme`,
+    imported and called identically -- never forked), then enqueues every
+    resulting shot via the same `_native_generate_args`/`_on_enqueue`/
+    `_start_next_queued` machinery the Create CTA's busy-path enqueue already
+    established (SP-3c-4) -- using Create's OWN collected medium/settings
+    rather than ControlPanel's `get_generation_defaults()`, since Create's
+    active medium may not match whatever ControlPanel's legacy tabs last had
+    selected. A new `_theme_key_from_text()` helper lets a brief that names a
+    known theme (e.g. "hitchcock") select that theme_key instead of a random
+    one -- `generate_theme.generate_theme()`'s own contract is unchanged.
+    Result/error surface through Create itself (`CreateView.set_theme_queued`/
+    `set_theme_error`, the latter routing to the inline result panel's
+    `show_error`) instead of ControlPanel's popover. Native mediums
+    (image/video/animate) only, matching ControlPanel's original scope --
+    artgen mediums show a friendly status message. Groundwork for retiring
+    the legacy ControlPanel Theme Set button in a later SP-3d sub-stage.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 09:00:00 -0700
+
 tt-local-generator (0.40.0) noble; urgency=medium
 
   * SP-3c-5: attractor/TT-TV auto-gen now sources its model from

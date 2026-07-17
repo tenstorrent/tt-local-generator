@@ -815,6 +815,120 @@ def test_inspire_fn_raising_synchronously_is_fail_soft(monkeypatch):
     assert view._inspire_btn.get_sensitive() is True
 
 
+# ── Theme Set (SP-3d-1) ──────────────────────────────────────────────────
+#
+# Migrated from ControlPanel's own "🎬 Theme Set" button (never dropped, per
+# CLAUDE.md's "user: never drop" note). `on_theme_set(medium, params)` fires
+# SYNCHRONOUSLY (same shape as `on_create`) — MainWindow's real seam
+# (`_on_create_theme_set`) owns the background thread + the eventual
+# `set_theme_queued`/`set_theme_error` callback itself, so these tests only
+# need a recording fake, not an async callback pair. Migration-safe:
+# `on_theme_set=None` (the default) means no button at all.
+
+class _FakeThemeSet:
+    """Records `on_theme_set(medium, params)` calls without doing anything
+    else — lets a test drive the button's busy state and then manually call
+    `set_theme_queued`/`set_theme_error` back, mirroring how the real seam
+    (MainWindow._on_create_theme_set) calls back asynchronously once its
+    background thread finishes."""
+
+    def __init__(self):
+        self.calls = []  # list of (medium, params)
+
+    def __call__(self, medium, params):
+        self.calls.append((medium, params))
+
+
+def test_theme_set_button_absent_without_on_theme_set(monkeypatch):
+    view = _make_view(monkeypatch)
+    assert getattr(view, "_theme_set_btn", None) is None
+
+
+def test_theme_set_button_present_with_on_theme_set(monkeypatch):
+    view = _make_view(monkeypatch, on_theme_set=_FakeThemeSet())
+    assert view._theme_set_btn is not None
+    assert isinstance(view._theme_set_btn, Gtk.Button)
+
+
+def test_theme_set_click_calls_seam_with_active_medium_and_collected_params(monkeypatch):
+    """Default-active medium in `_fake_mediums` is "image"."""
+    fake = _FakeThemeSet()
+    view = _make_view(monkeypatch, on_theme_set=fake)
+
+    view._theme_set_btn.emit("clicked")
+
+    assert len(fake.calls) == 1
+    medium, params = fake.calls[0]
+    assert medium.id == "image"
+    assert isinstance(params, dict)
+
+
+def test_theme_set_click_shows_busy_state(monkeypatch):
+    fake = _FakeThemeSet()
+    view = _make_view(monkeypatch, on_theme_set=fake)
+
+    view._theme_set_btn.emit("clicked")
+
+    assert view._theme_set_btn.get_sensitive() is False
+    assert view._theme_generating is True
+
+
+def test_theme_set_click_is_a_noop_without_on_theme_set(monkeypatch):
+    """on_theme_set=None -> no button exists; a direct call to the click
+    handler (defensive) must also never raise."""
+    view = _make_view(monkeypatch)
+    view._on_theme_set_clicked(None)  # must not raise
+
+
+def test_theme_set_click_while_already_generating_does_not_re_fire(monkeypatch):
+    fake = _FakeThemeSet()
+    view = _make_view(monkeypatch, on_theme_set=fake)
+
+    view._theme_set_btn.emit("clicked")
+    view._theme_set_btn.emit("clicked")  # second click while busy
+
+    assert len(fake.calls) == 1
+
+
+def test_theme_set_seam_raising_synchronously_is_fail_soft(monkeypatch):
+    """If the injected seam itself raises before ever calling back (e.g. a
+    thread failing to spawn), the button must still recover and the error
+    must surface through the result panel."""
+    def _boom(medium, params):
+        raise RuntimeError("boom")
+
+    view = _make_view(monkeypatch, on_theme_set=_boom)
+    view._theme_set_btn.emit("clicked")  # must not raise
+
+    assert view._theme_set_btn.get_sensitive() is True
+    assert view._result_panel._state == "error"
+
+
+def test_set_theme_queued_resets_busy_state(monkeypatch):
+    fake = _FakeThemeSet()
+    view = _make_view(monkeypatch, on_theme_set=fake)
+
+    view._theme_set_btn.emit("clicked")
+    assert view._theme_generating is True
+
+    view.set_theme_queued(5, "Hitchcock: Rear Window")
+
+    assert view._theme_generating is False
+    assert view._theme_set_btn.get_sensitive() is True
+
+
+def test_set_theme_error_resets_busy_state_and_shows_result_panel_error(monkeypatch):
+    fake = _FakeThemeSet()
+    view = _make_view(monkeypatch, on_theme_set=fake)
+
+    view._theme_set_btn.emit("clicked")
+    view.set_theme_error("prompt server is down")
+
+    assert view._theme_generating is False
+    assert view._theme_set_btn.get_sensitive() is True
+    assert view._result_panel._state == "error"
+
+
 # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 #
 # The flat, always-visible "live-model strip" (and the Task 7 model-door

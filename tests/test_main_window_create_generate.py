@@ -709,6 +709,12 @@ class _FakeCreateView:
         # pushed into CreateView without needing a real `CreateResultPanel`
         # GTK widget tree.
         self.refresh_queue = MagicMock()
+        # SP-3d-1: `_on_create_theme_result`/`_on_create_theme_error` call
+        # these back on the real `CreateView` to reset its Theme Set button's
+        # busy state — MagicMocks here let tests assert the callback fired
+        # (and with what) without a real GTK widget tree.
+        self.set_theme_queued = MagicMock()
+        self.set_theme_error = MagicMock()
 
 
 class _FakeGallery:
@@ -1630,3 +1636,257 @@ def test_artgen_create_panel_error_does_not_leave_flag_stuck(monkeypatch, tmp_pa
     obj._on_create_generate(_VERSE_MEDIUM, {"prompt": "winter forges"})
 
     assert obj._create_job_active is False
+
+
+# ── Theme Set migrated into Create (SP-3d-1) ─────────────────────────────────
+#
+# ControlPanel's own "🎬 Theme Set" button generated a coherent N-shot
+# themed batch via `generate_theme.generate_theme()` and enqueued all of it
+# using ControlPanel's own settings (`get_generation_defaults()`). CLAUDE.md
+# says explicitly: never drop this feature. These tests cover the Create-
+# surface launch of the SAME backend (`_on_create_theme_set` ->
+# `_on_create_theme_result`), reusing `_native_generate_args`/`_on_enqueue`/
+# `_start_next_queued` — the same enqueue machinery `_create_enqueue_native`
+# (SP-3c-4) already established as Create's own translation layer, since
+# Create's active medium/settings may differ from whatever ControlPanel's
+# legacy tabs last had selected.
+
+_FAKE_THEME_RESULT = {
+    "theme": "Hitchcock: Rear Window",
+    "theme_key": "hitchcock",
+    "source": "algo",
+    "shots": [
+        {"shot": 1, "role": "establish", "prompt": "wide shot, a quiet suburban window",
+         "slug": "wide-shot-1"},
+        {"shot": 2, "role": "develop", "prompt": "a curtain twitches at the window",
+         "slug": "develop-1"},
+        {"shot": 3, "role": "develop", "prompt": "a shadow crosses the blinds",
+         "slug": "develop-2"},
+        {"shot": 4, "role": "climax", "prompt": "extreme close-up, a held breath",
+         "slug": "climax-1"},
+        {"shot": 5, "role": "resolve", "prompt": "the street returns to quiet",
+         "slug": "resolve-1"},
+    ],
+}
+
+
+class _ImmediateThreadRunsTarget:
+    """threading.Thread stand-in that runs its target synchronously.
+
+    Distinct from `_NoOpThread` above (which `_make_mw_lifecycle` installs
+    and deliberately never runs its target — those lifecycle tests only
+    assert on state set up BEFORE the thread starts). Theme Set's background
+    thread must actually execute for these tests to observe the resulting
+    enqueue side effects, mirroring `test_create_view.py`'s
+    `_ImmediateThread`/`test_main_window_create_generate.py`'s own
+    `_make_mw`'s use of the same pattern for the artgen path.
+    """
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def _make_mw_theme(monkeypatch):
+    """`_make_mw_lifecycle`'s harness (real `_native_generate_args`/
+    `_on_enqueue`/queue plumbing, fake gallery/create_view), with the three
+    Theme Set methods bound and Thread swapped for one that actually runs
+    its target so the background theme-expansion call executes inline.
+    """
+    import main_window as mw
+
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    for name in (
+        "_on_create_theme_set",
+        "_on_create_theme_result",
+        "_on_create_theme_error",
+    ):
+        setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
+    monkeypatch.setattr(mw.threading, "Thread", _ImmediateThreadRunsTarget)
+    return obj, fake_gallery, fake_create_view
+
+
+def _patch_generate_theme(monkeypatch, result=None, exc=None):
+    """Patch `generate_theme.generate_theme` (imported lazily inside
+    `_on_create_theme_set`, exactly like `_on_theme` already does) so these
+    tests never touch the real prompt-gen server. Returns the MagicMock spy
+    so a test can assert on how it was called (`theme_key=`/`enhance=`)."""
+    import generate_theme
+    if exc is not None:
+        spy = MagicMock(side_effect=exc)
+    else:
+        spy = MagicMock(return_value=result if result is not None else _FAKE_THEME_RESULT)
+    monkeypatch.setattr(generate_theme, "generate_theme", spy)
+    return spy
+
+
+def test_theme_set_native_medium_enqueues_every_shot(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {
+        "prompt": "a lighthouse at dawn",
+        "model": "flux.1-schnell",
+        "num_inference_steps": 20,
+        "seed": -1,
+        "guidance_scale": 3.5,
+    })
+
+    assert len(obj._queue) == 5
+    prompts = [item.prompt for item in obj._queue]
+    assert prompts == [s["prompt"] for s in _FAKE_THEME_RESULT["shots"]]
+    for item in obj._queue:
+        assert item.model_source == "image"
+        assert item.model_id == "flux"
+        assert item.image_model_key == "flux"
+
+    # Queue was idle (obj._worker is None per _make_mw_lifecycle) -> kicked.
+    obj._start_next_queued.assert_called_once()
+    # Success is surfaced through Create's own seam, not a popover.
+    fake_create_view.set_theme_queued.assert_called_once_with(5, "Hitchcock: Rear Window")
+    fake_create_view.set_theme_error.assert_not_called()
+
+
+def test_theme_set_reuses_generate_theme_backend_verbatim(monkeypatch):
+    """The theme-EXPANSION step must be the real `generate_theme.generate_theme`
+    call — same module, same function, same `enhance=True` default the
+    legacy ControlPanel button already used — never a reimplementation."""
+    obj, _fake_gallery, _fake_create_view = _make_mw_theme(monkeypatch)
+    spy = _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {"prompt": "nothing thematic here",
+                                              "model": "flux.1-schnell"})
+
+    spy.assert_called_once_with(theme_key="", enhance=True)
+
+
+def test_theme_set_brief_naming_a_theme_selects_that_key(monkeypatch):
+    obj, _fake_gallery, _fake_create_view = _make_mw_theme(monkeypatch)
+    spy = _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {"prompt": "give me a Hitchcock vibe",
+                                              "model": "flux.1-schnell"})
+
+    spy.assert_called_once_with(theme_key="hitchcock", enhance=True)
+
+
+def test_theme_set_does_not_read_controlpanel_generation_defaults(monkeypatch):
+    """SP-3d-1: unlike `_on_theme_queue_shots` (ControlPanel's own path),
+    Create's Theme Set must never touch `self._controls` — its settings come
+    from CreateView's own collected params via `_native_generate_args`,
+    exactly like the Create CTA's busy-path enqueue already established."""
+    obj, _fake_gallery, _fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {"prompt": "x", "model": "flux.1-schnell"})
+
+    obj._controls.get_generation_defaults.assert_not_called()
+
+
+def test_theme_set_video_medium_forwards_animatediff_args(monkeypatch):
+    """Same `_native_generate_args` translation as the CTA — an AnimateDiff
+    selection must still forward a complete `animatediff_args` dict for
+    every enqueued shot."""
+    import main_window as mw
+
+    obj, _fake_gallery, _fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_VIDEO_MEDIUM, {
+        "prompt": "a glitchy dance loop",
+        "model": "animatediff-blackhole",
+        "num_inference_steps": 20,
+        "seed": -1,
+        "animatediff_args": {"temporal_alpha": 0.9},
+    })
+
+    assert len(obj._queue) == 5
+    for item in obj._queue:
+        assert item.video_model_key == "animatediff"
+        assert set(item.animatediff_args) == set(mw._ANIMATEDIFF_DEFAULTS)
+        assert item.animatediff_args["temporal_alpha"] == 0.9
+
+
+def test_theme_set_artgen_medium_shows_status_and_does_not_enqueue(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_theme(monkeypatch)
+    spy = _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_VERSE_MEDIUM, {"prompt": "winter forges"})
+
+    spy.assert_not_called()  # never even reaches the theme backend
+    assert obj._queue == []
+    obj._set_status.assert_called_once()
+    assert "Verse" in obj._set_status.call_args[0][0]
+    fake_create_view.set_theme_queued.assert_not_called()
+    fake_create_view.set_theme_error.assert_not_called()
+
+
+def test_theme_set_skyreels_guard_blocks_enqueue(monkeypatch):
+    """SkyReels-I2V requires a seed image — the same guard
+    `_native_generate_args` already raises for the CTA path fires per-shot
+    here too; the first shot to hit it stops the batch."""
+    obj, _fake_gallery, _fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch)
+
+    obj._on_create_theme_set(_VIDEO_MEDIUM, {
+        "prompt": "a dancer",
+        "model": "skyreels-v2-i2v-14b-540p",
+        # no seed_image_path
+    })
+
+    assert obj._queue == []
+    obj._set_status.assert_any_call(
+        "SkyReels I2V requires a starting image — add one to the "
+        "seed image well before generating."
+    )
+
+
+def test_theme_set_backend_failure_surfaces_via_create_view(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch, exc=RuntimeError("prompt server is down"))
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {"prompt": "x", "model": "flux.1-schnell"})
+
+    assert obj._queue == []
+    fake_create_view.set_theme_error.assert_called_once()
+    (msg,), _kwargs = fake_create_view.set_theme_error.call_args
+    assert "prompt server is down" in msg
+    fake_create_view.set_theme_queued.assert_not_called()
+
+
+def test_theme_set_empty_shots_is_a_fail_soft_noop(monkeypatch):
+    obj, _fake_gallery, fake_create_view = _make_mw_theme(monkeypatch)
+    _patch_generate_theme(monkeypatch, result={
+        "theme": "Empty Theme", "theme_key": "empty", "source": "algo", "shots": [],
+    })
+
+    obj._on_create_theme_set(_IMAGE_MEDIUM, {"prompt": "x", "model": "flux.1-schnell"})
+
+    assert obj._queue == []
+    obj._start_next_queued.assert_not_called()
+    fake_create_view.set_theme_queued.assert_called_once_with(0, "Empty Theme")
+
+
+# ── `_theme_key_from_text` (SP-3d-1) ─────────────────────────────────────────
+
+def test_theme_key_from_text_matches_a_known_key(monkeypatch):
+    import main_window as mw
+    assert mw._theme_key_from_text("give me a hitchcock vibe") == "hitchcock"
+
+
+def test_theme_key_from_text_matches_a_display_label(monkeypatch):
+    import main_window as mw
+    assert mw._theme_key_from_text("Tarkovsky: The Zone please") == "tarkovsky"
+
+
+def test_theme_key_from_text_no_match_returns_empty(monkeypatch):
+    import main_window as mw
+    assert mw._theme_key_from_text("a cat playing piano") == ""
+
+
+def test_theme_key_from_text_blank_returns_empty(monkeypatch):
+    import main_window as mw
+    assert mw._theme_key_from_text("") == ""
+    assert mw._theme_key_from_text("   ") == ""
