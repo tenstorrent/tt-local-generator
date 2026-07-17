@@ -548,18 +548,33 @@ class ArtgenGallery(Gtk.Box):
         Resize every card to width x height and remember it for future cards.
 
         Mirrors MainWindow._apply_gallery_density's handling of the native
-        video/image/animate galleries (`card.set_size_request(card_w, card_h)`
-        for each already-built card) so switching gallery density resizes
+        video/image/animate galleries so switching gallery density resizes
         the artgen gallery identically instead of leaving it at a stale or
         differently-hardcoded size.
+
+        `overlay.set_size_request(width, height)` alone is NOT enough to
+        resize an already-built card: it only raises the outer Overlay's
+        minimum-size FLOOR, and `Gtk.Widget.set_size_request()` can never
+        shrink a widget below what its content already needs -- here, the
+        pinned `content_zone` built at the OLD tile size (see `_make_card`)
+        still dominates the measured size, so the card's true rendered size
+        wouldn't change. The fix is to also resize `content_zone`'s pinned
+        anchor in place via `gallery_layout.set_pinned_size()` (see its
+        docstring), recomputing content_h exactly like `_make_card` does so
+        the content zone + the fixed-height bottom badge/timestamp bar still
+        sum to exactly `height`.
         """
         self._tile_w = width
         self._tile_h = height
+        content_h = max(height - _BOTTOM_BAR_H, 1)
         child = self._flow.get_first_child()
         while child is not None:
             overlay = child.get_child()  # FlowBoxChild wraps our Gtk.Overlay
             if overlay is not None:
                 overlay.set_size_request(width, height)
+                content_zone = getattr(overlay, "_content_zone", None)
+                if content_zone is not None:
+                    gallery_layout.set_pinned_size(content_zone, width, content_h)
             child = child.get_next_sibling()
 
     def scroll_to_top(self) -> None:
@@ -650,6 +665,7 @@ class ArtgenGallery(Gtk.Box):
         content = make_card_content(rec)
         content_h = max(tile_h - _BOTTOM_BAR_H, 1)
         content_zone = gallery_layout.pin_fixed_zone(content, tile_w, content_h)
+        overlay._content_zone = content_zone  # stashed so set_tile_size() can resize it in place
         base.append(content_zone)
         bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bottom.add_css_class("artgen-card-bottom")

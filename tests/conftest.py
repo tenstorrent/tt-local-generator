@@ -114,9 +114,23 @@ def _isolate_app_settings(tmp_path, monkeypatch):
     panel for the rest of the session. Re-patching both names EVERY test
     heals that divergence regardless of which object either currently points
     to.
+
+    `main_window._settings` joined the patch list for the gallery-density
+    fix (v0.46.3): `GenerationCard`/`PendingCard`/`_apply_gallery_density`
+    read `_settings.get("gallery_density")` at construction/toggle time via
+    `main_window._gallery_density()`. Without patching this binding too, a
+    test that does `from app_settings import settings as _s; _s.set(...)`
+    (the natural way to drive a specific density in a test) silently talks
+    to the FRESH per-test instance while `main_window`'s own already-bound
+    `_settings` name keeps pointing at whatever object it saw at first
+    import — the exact orphaned-reference failure mode described above, just
+    for a different module. Caught by
+    `test_gallery_card_uniform_size.py::test_generation_card_constructed_while_density_compact_measures_compact`
+    going flaky depending on which other tests ran first in the session.
     """
     import app_settings as _as
     import create_param_panels as _cpp
+    import main_window as _mw
 
     safe_file = tmp_path / "settings.json"
     monkeypatch.setattr(_as, "STORAGE_DIR", tmp_path, raising=False)
@@ -125,3 +139,4 @@ def _isolate_app_settings(tmp_path, monkeypatch):
     fresh = _as.AppSettings()  # loads from safe_file (doesn't exist) -> DEFAULTS
     monkeypatch.setattr(_as, "settings", fresh, raising=False)
     monkeypatch.setattr(_cpp, "_settings", fresh, raising=False)
+    monkeypatch.setattr(_mw, "_settings", fresh, raising=False)

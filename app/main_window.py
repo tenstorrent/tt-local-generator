@@ -1477,6 +1477,24 @@ _THUMB_W = gallery_layout.THUMB_W
 _THUMB_H = gallery_layout.THUMB_H   # 16:9
 _TILE_W = gallery_layout.TILE_W     # fixed OUTER card size -- both dimensions
 _TILE_H = gallery_layout.TILE_H
+
+
+def _gallery_density() -> str:
+    """
+    Return the live gallery-density setting ("comfortable" if never set).
+
+    Single accessor so every card constructor (read at BUILD time) and
+    `_apply_gallery_density` (read at menu-toggle time) resolve the setting
+    identically. "gallery_density" is deliberately absent from
+    `app_settings.DEFAULTS` (it's an opt-in toggle, only written once the
+    user actually switches density via the Discover menu), so a bare
+    `settings.get()` can return `None` — this centralises the
+    `or "comfortable"` fallback in one place instead of repeating it at
+    every call site.
+    """
+    return _settings.get("gallery_density") or "comfortable"
+
+
 _DETAIL_VIDEO_W = 400
 _DETAIL_VIDEO_H = 225
 
@@ -1842,7 +1860,7 @@ def _make_thumbnail_for(image_path: str, thumb_path: str) -> None:
 
 # ── Generation card ────────────────────────────────────────────────────────────
 
-class GenerationCard(Gtk.Frame):
+class GenerationCard(Gtk.Box):
     """
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
@@ -1854,6 +1872,18 @@ class GenerationCard(Gtk.Frame):
     remix_as_pipeline_cb(record) is called when "Remix as pipeline…" is clicked
       (opens Pipeline Studio's Muse scoped to this card's artifact).
     star_cb(record, starred: bool) is called when the star is toggled.
+
+    Base class is `Gtk.Box`, not `Gtk.Frame` (pre-density-fix history): a
+    plain Box has NO intrinsic themed border/chrome of its own (the ".card"
+    CSS class supplies border/radius/padding explicitly), whereas Gtk.Frame
+    draws its OWN ~1px border from GTK's built-in fallback stylesheet even
+    before any custom CSS loads. That extra, undeclared chrome sat on top of
+    whatever `self._card_zone` (see below) pinned the content to, so the
+    card's OWN measured size could never be pinned to an EXACT value -- only
+    to "pinned content size + a couple of untracked chrome pixels". Since
+    switching gallery density needs the card's measured size to land on
+    `gallery_layout.tile_size(density)` exactly (verified in tests via
+    `.measure()`), the base class had to lose that hidden offset.
     """
 
     def __init__(self, record: GenerationRecord, select_cb, delete_cb,
@@ -1870,11 +1900,22 @@ class GenerationCard(Gtk.Frame):
         self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
         self.add_css_class("card")
         # FIXED card tile size — BOTH dimensions, shared with the artgen
-        # gallery via gallery_layout.TILE_W/TILE_H — so every media-entry box
+        # gallery via gallery_layout.tile_size() — so every media-entry box
         # is identical across every Discover tab and never resizes to match
         # thumbnail content (see gallery_layout.py + _build's media zone,
         # which pins the thumbnail area's measured size the same way).
-        self.set_size_request(_TILE_W, _TILE_H)
+        #
+        # Resolved from the LIVE density setting at construction time (not
+        # the hardcoded comfortable constants) so a freshly-built card
+        # honors "compact" immediately if that's already the active density
+        # — previously every new GenerationCard was born at comfortable size
+        # regardless of the saved preference, only fixed up for
+        # ALREADY-BUILT cards (and even that was broken — see
+        # gallery_layout.set_pinned_size's docstring).
+        density = _gallery_density()
+        self._tile_w, self._tile_h = gallery_layout.tile_size(density)
+        self._thumb_w, self._thumb_h = gallery_layout.thumb_size(density)
+        self.set_size_request(self._tile_w, self._tile_h)
         self.set_hexpand(True)
         self._build()
 
@@ -1973,14 +2014,26 @@ class GenerationCard(Gtk.Frame):
         # Wrap the card content in a Gtk.Overlay so the selection checkbox
         # can float in the top-left corner without affecting the card layout.
         overlay = Gtk.Overlay()
-        self.set_child(overlay)
+        self.append(overlay)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
         box.set_margin_start(8)
         box.set_margin_end(8)
-        overlay.set_child(box)
+        # Pin the WHOLE card content's measured size to exactly
+        # (self._tile_w, self._tile_h), the same trick _media_zone below
+        # uses for the thumbnail -- otherwise the outer widget's
+        # set_size_request() above is only a MINIMUM floor, and the prompt/
+        # meta/button rows' own natural sizes (which don't shrink with
+        # density) can exceed a smaller "compact" floor, leaving the card
+        # visibly larger than tile_size("compact") despite the floor being
+        # set correctly. Stored as self._card_zone so _apply_gallery_density
+        # can resize an ALREADY-BUILT card in place via
+        # gallery_layout.set_pinned_size() (see its docstring for why
+        # set_size_request() alone can't do this).
+        self._card_zone = gallery_layout.pin_fixed_zone(box, self._tile_w, self._tile_h)
+        overlay.set_child(self._card_zone)
 
         # Checkbox overlay: hidden until selection mode is activated.
         # Positioned top-left; pointer events are swallowed by the checkbox so
@@ -2050,7 +2103,7 @@ class GenerationCard(Gtk.Frame):
         placeholder = "🖼" if self._record.media_type == "image" else "🎬"
         thumb = _make_scalable_thumb(
             self._record.thumbnail_path if self._record.thumbnail_exists else "",
-            _THUMB_W, _THUMB_H, placeholder,
+            self._thumb_w, self._thumb_h, placeholder,
         )
         self._media_stack.add_named(thumb, "thumb")
 
@@ -2070,7 +2123,7 @@ class GenerationCard(Gtk.Frame):
             # correctly without any GStreamer pipeline.
             self._gif_pic = Gtk.Picture()
             self._gif_pic.set_hexpand(True)
-            self._gif_pic.set_size_request(_THUMB_W, _THUMB_H)
+            self._gif_pic.set_size_request(self._thumb_w, self._thumb_h)
             self._gif_pic.set_content_fit(Gtk.ContentFit.COVER)
             self._media_stack.add_named(self._gif_pic, "video")
             self._hover_video = None
@@ -2085,7 +2138,7 @@ class GenerationCard(Gtk.Frame):
             self._hover_video.set_autoplay(False)
             self._hover_video.set_loop(True)
             self._hover_video.set_hexpand(True)
-            self._hover_video.set_size_request(_THUMB_W, _THUMB_H)
+            self._hover_video.set_size_request(self._thumb_w, self._thumb_h)
             self._media_stack.add_named(self._hover_video, "video")
             self._hover_gst = None   # macOS-only; always None on Linux
         elif self._record.video_exists:
@@ -2094,7 +2147,7 @@ class GenerationCard(Gtk.Frame):
             # without needing to recompile GTK4.
             self._hover_gst = GstPlayer(muted=True)
             self._hover_gst.widget.set_hexpand(True)
-            self._hover_gst.widget.set_size_request(_THUMB_W, _THUMB_H)
+            self._hover_gst.widget.set_size_request(self._thumb_w, self._thumb_h)
             self._media_stack.add_named(self._hover_gst.widget, "video")
             self._hover_video = None
         else:
@@ -2112,15 +2165,18 @@ class GenerationCard(Gtk.Frame):
         # instead of set_file / set_filename directly.
         self._hover_pipeline_open: bool = False
 
-        # Pin the media zone's MEASURED size to a fixed THUMB_W x THUMB_H,
-        # regardless of the thumbnail's / hover-video's own aspect ratio —
-        # this is the fix for cards growing/shrinking to match content (a
-        # square image otherwise requests height == width, taller than the
-        # 16:9 floor, and Gtk.FlowBox honors that larger natural request).
-        # See gallery_layout.pin_fixed_zone for the mechanism. Stored as
-        # self._media_zone so tests can assert its measured size directly.
+        # Pin the media zone's MEASURED size to a fixed self._thumb_w x
+        # self._thumb_h, regardless of the thumbnail's / hover-video's own
+        # aspect ratio — this is the fix for cards growing/shrinking to
+        # match content (a square image otherwise requests height == width,
+        # taller than the 16:9 floor, and Gtk.FlowBox honors that larger
+        # natural request). See gallery_layout.pin_fixed_zone for the
+        # mechanism. Stored as self._media_zone so tests can assert its
+        # measured size directly, and so _apply_gallery_density can resize
+        # it in place via gallery_layout.set_pinned_size() when density
+        # changes after this card is already built.
         self._media_zone = gallery_layout.pin_fixed_zone(
-            self._media_stack, _THUMB_W, _THUMB_H
+            self._media_stack, self._thumb_w, self._thumb_h
         )
         box.append(self._media_zone)
 
@@ -3534,28 +3590,51 @@ class ImageViewerWindow(Gtk.Window):
 
 # ── Pending card ───────────────────────────────────────────────────────────────
 
-class PendingCard(Gtk.Frame):
-    """Animated placeholder card shown while a generation is running."""
+class PendingCard(Gtk.Box):
+    """
+    Animated placeholder card shown while a generation is running.
+
+    Base class is `Gtk.Box`, not `Gtk.Frame` — same reasoning as
+    `GenerationCard` (see its class docstring): Frame's own intrinsic
+    themed border adds a couple of untracked pixels on top of whatever
+    `self._card_zone` pins the content to, which breaks an EXACT match to
+    `gallery_layout.tile_size(density)`.
+    """
 
     def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
-        # FIXED tile size, matching GenerationCard exactly (see gallery_layout.py)
-        # so a pending job's placeholder is never a different size than the
-        # finished card that will replace it.
-        self.set_size_request(_TILE_W, _TILE_H)
+        # FIXED tile size, matching GenerationCard exactly (see
+        # gallery_layout.py) so a pending job's placeholder is never a
+        # different size than the finished card that will replace it.
+        # Resolved from the LIVE density setting at construction time (see
+        # GenerationCard.__init__ for why this matters — a freshly-spawned
+        # PendingCard used to always be comfortable-sized regardless of the
+        # active density).
+        density = _gallery_density()
+        self._tile_w, self._tile_h = gallery_layout.tile_size(density)
+        thumb_w, thumb_h = gallery_layout.thumb_size(density)
+        self.set_size_request(self._tile_w, self._tile_h)
         self.set_hexpand(True)
         self._start = time.monotonic()
         self._timer_id: Optional[int] = None
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.set_child(outer)
+        # Pin the WHOLE card's measured size to exactly (self._tile_w,
+        # self._tile_h) -- same trick as GenerationCard._card_zone (see its
+        # comment) and required for the same reason: the outer
+        # set_size_request() above is only a floor, and the footer/prompt
+        # rows below don't shrink with density on their own. Stored as
+        # self._card_zone so _apply_gallery_density can resize an
+        # ALREADY-BUILT pending card in place.
+        self._card_zone = gallery_layout.pin_fixed_zone(outer, self._tile_w, self._tile_h)
+        self.append(self._card_zone)
 
         # Fixed-size thumbnail area matching GenerationCard's media zone.
         # Anchors the FlowBox cell height so the gallery stays uniform while a
         # job is in progress — the pending card won't be taller than a completed card.
         thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_size_request(thumb_w, thumb_h)
         thumb_area.set_hexpand(False)   # children must not push this box wider
         thumb_area.set_valign(Gtk.Align.CENTER)
         thumb_area.add_css_class("pending-thumb-area")
@@ -5443,7 +5522,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Apply saved gallery density preference on startup.  The default
         # "comfortable" requires no work (it is the widget's natural size);
         # only call _apply_gallery_density when a non-default value was saved.
-        _density = _settings.get("gallery_density") or "comfortable"
+        _density = _gallery_density()
         if _density != "comfortable":
             self._apply_gallery_density(_density)
 
@@ -5722,7 +5801,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add_action(pl_delete)
 
         # ── View: gallery density (radio) ─────────────────────────────────────
-        density_val = _settings.get("gallery_density") or "comfortable"
+        density_val = _gallery_density()
         gallery_density_action = Gio.SimpleAction.new_stateful(
             "gallery-density",
             GLib.VariantType.new("s"),
@@ -6073,10 +6152,30 @@ class MainWindow(Gtk.ApplicationWindow):
         height meant the fix that made cards a FIXED size at "comfortable"
         density silently reverted to natural/ragged height as soon as the
         user switched to "compact").
+
+        Resizing an ALREADY-BUILT card is NOT just `card.set_size_request()`
+        on the outer widget -- that only raises the widget's minimum-size
+        FLOOR, and `Gtk.Widget.set_size_request()` can never shrink a widget
+        below what its content already needs (the pinned zone built at the
+        OLD density still dominates the measured size). The real fix is to
+        resize each card's PINNED zone anchor(s) in place via
+        `gallery_layout.set_pinned_size()` -- see its docstring. Every
+        GenerationCard/PendingCard exposes `._card_zone` (the whole-card
+        pin) and GenerationCard additionally exposes `._media_zone` (the
+        thumbnail sub-zone); `set_size_request()` is still called too, kept
+        in sync purely so `card.get_size_request()` (used by other tests/
+        callers) reports the current density's floor as well.
         """
         card_w, card_h = gallery_layout.tile_size(density)
+        thumb_w, thumb_h = gallery_layout.thumb_size(density)
         for gallery in (self._video_gallery, self._image_gallery, self._animate_gallery):
             for card in gallery._cards:
+                card_zone = getattr(card, "_card_zone", None)
+                if card_zone is not None:
+                    gallery_layout.set_pinned_size(card_zone, card_w, card_h)
+                media_zone = getattr(card, "_media_zone", None)
+                if media_zone is not None:
+                    gallery_layout.set_pinned_size(media_zone, thumb_w, thumb_h)
                 card.set_size_request(card_w, card_h)
             gallery._relayout()
         artgen_gallery = getattr(self, "_artgen_gallery", None)

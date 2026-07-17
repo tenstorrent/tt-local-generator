@@ -1,3 +1,50 @@
+tt-local-generator (0.46.3) noble; urgency=medium
+
+  * fix(gallery): switching gallery density (comfortable <-> compact) now
+    actually resizes ALREADY-RENDERED cards on both the native
+    video/image/animate galleries and the artgen gallery, and freshly-built
+    native cards honor the active density from construction instead of
+    always being born comfortable-sized. Root cause: `ArtgenGallery.
+    set_tile_size` and `MainWindow._apply_gallery_density` called
+    `set_size_request()` on the OUTER card widget to "resize" an
+    already-built card -- but `Gtk.Widget.set_size_request()` can only raise
+    the minimum-size FLOOR, never shrink a widget below what its content
+    already needs, so the pinned zone built at the OLD density (see
+    `gallery_layout.pin_fixed_zone`, introduced in 0.46.0/328efe2) kept
+    dominating the measured size and the switch was a visual no-op.
+  * `gallery_layout.py` gains `thumb_size(density)` (thumbnail sub-zone size,
+    scaled the same as `tile_size()`) and `set_pinned_size(zone, w, h)`,
+    which resizes a `pin_fixed_zone()` zone's ANCHOR in place -- the anchor
+    is a plain childless `Gtk.Box`, so its own measured min/natural size is
+    always exactly its size_request, making this the one operation that
+    actually changes what the zone reports on the next `measure()` pass.
+    `pin_fixed_zone` now stashes its anchor on the returned zone
+    (`zone._pin_anchor`) for `set_pinned_size` to find, and its docstring
+    notes that it mutates the passed-in child's hexpand/vexpand/halign/
+    valign properties.
+  * `GenerationCard`/`PendingCard` (main_window.py) now resolve the live
+    `gallery_density` setting at construction time and switched base class
+    from `Gtk.Frame` to `Gtk.Box` -- Frame draws its own themed border from
+    GTK's built-in fallback stylesheet even before any custom CSS loads,
+    which sat as untracked chrome on top of whatever the pinned zone
+    reported, so the card's own measured size could never land on an EXACT
+    `gallery_layout.tile_size(density)` value. Each card's whole-content box
+    is now wrapped in its own `pin_fixed_zone` (`self._card_zone`), and
+    `_apply_gallery_density`/`ArtgenGallery.set_tile_size` resize each
+    already-built card's `_card_zone` (and `_media_zone`/`_content_zone`
+    thumbnail sub-zone) via `set_pinned_size` instead of only touching the
+    outer widget's floor.
+  * Test fix: `tests/conftest.py`'s `_isolate_app_settings` autouse fixture
+    now also repatches `main_window._settings` to the fresh per-test
+    `AppSettings` instance -- it was patching `app_settings.settings` and
+    `create_param_panels._settings` but not `main_window`'s own
+    already-bound reference, so any test driving `gallery_density` through
+    `app_settings.settings` directly silently diverged from what
+    `main_window.py`'s code actually read, causing order-dependent test
+    flakiness once `GenerationCard`/`PendingCard` started reading it.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 12:48:42 -0700
+
 tt-local-generator (0.46.2) noble; urgency=medium
 
   * fix(gallery): media-entry cards are now a UNIFORM, FIXED size, identical

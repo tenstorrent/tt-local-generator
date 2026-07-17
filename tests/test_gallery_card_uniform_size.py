@@ -302,9 +302,18 @@ def test_flowbox_grid_settings_identical_across_galleries():
 
 @gtk_required
 def test_apply_gallery_density_scales_artgen_gallery_too():
-    """Switching to compact density must resize the artgen gallery's cards to
-    the SAME size as the native galleries, not leave it at a different
-    hardcoded size."""
+    """A card built BEFORE the density switch (a fresh card would trivially
+    pick up the new size at construction) must resize when set_tile_size()
+    is called on an ALREADY-BUILT gallery -- and the resize must show up in
+    the card's MEASURED size, not just get_size_request() (which only
+    echoes back whatever was literally passed to set_size_request() and
+    would pass even if the resize were a complete no-op, per the regression
+    this test used to miss: the card's real content -- the pinned
+    content_zone built at the OLD tile size -- silently kept dominating the
+    measured size)."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
     import gallery_layout as gl
     from artgen_gallery import ArtgenGallery
 
@@ -314,9 +323,221 @@ def test_apply_gallery_density_scales_artgen_gallery_too():
         "_apply_gallery_density can keep it in sync with the native galleries"
     )
 
+    rec = _make_media_record()
+    card = gallery._make_card(rec)
+    # Actually insert into the grid -- set_tile_size() walks self._flow's
+    # children, so an orphan card built via _make_card() alone (never
+    # inserted) would silently be skipped and this test would pass for the
+    # wrong reason.
+    gallery._flow.append(card)
+
+    comfy_w, comfy_h = gl.tile_size("comfortable")
+    min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+    min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, comfy_w)
+    assert (min_w, min_h) == (comfy_w, comfy_h), "card wasn't comfortable-sized before the switch"
+
     compact_w, compact_h = gl.tile_size("compact")
     gallery.set_tile_size(compact_w, compact_h)
 
+    min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+    min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, compact_w)
+    assert (min_w, min_h) == (compact_w, compact_h), (
+        f"already-built artgen card did not shrink to compact: measured "
+        f"({min_w}, {min_h}) != target ({compact_w}, {compact_h})"
+    )
+
+
+@gtk_required
+def test_apply_gallery_density_resizes_already_built_generation_card():
+    """The real bug: MainWindow._apply_gallery_density (called when the user
+    toggles density in the View menu) must resize a GenerationCard that was
+    already built and already showing in the gallery -- not just affect
+    cards built afterward. Exercises the actual method via a bare
+    MainWindow.__new__() instance (the established pattern for unit-testing
+    MainWindow methods without a full app -- see test_main_window_decouple.py
+    / test_forge_transforms.py), so a regression in the real code path (not
+    a hand-rolled reimplementation) is what gets caught."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import main_window as mw
+    import gallery_layout as gl
+    from app_settings import settings as _s
+
+    saved_density = _s.get("gallery_density")
+    try:
+        _s.set("gallery_density", "comfortable")
+        rec = _make_record()
+        card = mw.GenerationCard(rec, select_cb=lambda *_: None, delete_cb=lambda *_: None)
+
+        video_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                          media_type="video")
+        video_gallery._cards.append(card)
+        image_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                          media_type="image")
+        animate_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                            media_type="animate")
+
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+        obj._video_gallery = video_gallery
+        obj._image_gallery = image_gallery
+        obj._animate_gallery = animate_gallery
+        # No self._artgen_gallery -- _apply_gallery_density must tolerate that
+        # (getattr(..., None) guard) exactly like it does in the real app
+        # before Discover's artgen page is constructed.
+
+        comfy_w, comfy_h = gl.tile_size("comfortable")
+        min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+        min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, comfy_w)
+        assert (min_w, min_h) == (comfy_w, comfy_h)
+
+        obj._apply_gallery_density("compact")
+
+        compact_w, compact_h = gl.tile_size("compact")
+        min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+        min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, compact_w)
+        assert (min_w, min_h) == (compact_w, compact_h), (
+            f"already-built GenerationCard did not shrink to compact: "
+            f"measured ({min_w}, {min_h}) != target ({compact_w}, {compact_h})"
+        )
+
+        # Round trip back to comfortable -- must return to the EXACT original
+        # measured size, not some other value settle from the compact pass.
+        obj._apply_gallery_density("comfortable")
+        min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+        min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, comfy_w)
+        assert (min_w, min_h) == (comfy_w, comfy_h), (
+            f"round-trip compact->comfortable did not restore the exact "
+            f"original size: measured ({min_w}, {min_h}) != ({comfy_w}, {comfy_h})"
+        )
+    finally:
+        _s.set("gallery_density", saved_density)
+
+
+@gtk_required
+def test_generation_card_constructed_while_density_compact_measures_compact():
+    """A GenerationCard built WHILE density is already "compact" (e.g. a new
+    generation completing after the user already switched density) must be
+    compact-sized from construction -- previously every new card was born
+    comfortable-sized regardless of the saved preference, only ever fixed
+    up (and even that was broken) for cards that existed before the
+    switch."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import main_window as mw
+    import gallery_layout as gl
+    from app_settings import settings as _s
+
+    saved_density = _s.get("gallery_density")
+    try:
+        _s.set("gallery_density", "compact")
+        rec = _make_record()
+        card = mw.GenerationCard(rec, select_cb=lambda *_: None, delete_cb=lambda *_: None)
+
+        compact_w, compact_h = gl.tile_size("compact")
+        min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+        min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, compact_w)
+        assert (min_w, min_h) == (compact_w, compact_h), (
+            f"GenerationCard built under compact density measured "
+            f"({min_w}, {min_h}) instead of the compact target "
+            f"({compact_w}, {compact_h})"
+        )
+
+        pending = mw.PendingCard(prompt="test", model_source="video")
+        min_w, _, _, _ = pending.measure(Gtk.Orientation.HORIZONTAL, -1)
+        min_h, _, _, _ = pending.measure(Gtk.Orientation.VERTICAL, compact_w)
+        assert (min_w, min_h) == (compact_w, compact_h), (
+            f"PendingCard built under compact density measured "
+            f"({min_w}, {min_h}) instead of the compact target "
+            f"({compact_w}, {compact_h})"
+        )
+    finally:
+        _s.set("gallery_density", saved_density)
+
+
+@gtk_required
+def test_apply_gallery_density_resizes_already_built_artgen_card_via_main_window():
+    """Same as test_apply_gallery_density_resizes_already_built_generation_card
+    but through the artgen path -- MainWindow._apply_gallery_density's call
+    to ArtgenGallery.set_tile_size() must also land on an already-built card."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import main_window as mw
+    import gallery_layout as gl
+    from artgen_gallery import ArtgenGallery
+
+    video_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                      media_type="video")
+    image_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                      media_type="image")
+    animate_gallery = mw.GalleryWidget(select_cb=lambda *_: None, delete_cb=lambda *_: None,
+                                        media_type="animate")
+
+    artgen_gallery = ArtgenGallery()
     rec = _make_media_record()
-    card = gallery._make_card(rec)
-    assert card.get_size_request() == (compact_w, compact_h)
+    card = artgen_gallery._make_card(rec)
+    artgen_gallery._flow.append(card)
+
+    obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._video_gallery = video_gallery
+    obj._image_gallery = image_gallery
+    obj._animate_gallery = animate_gallery
+    obj._artgen_gallery = artgen_gallery
+
+    obj._apply_gallery_density("compact")
+
+    compact_w, compact_h = gl.tile_size("compact")
+    min_w, _, _, _ = card.measure(Gtk.Orientation.HORIZONTAL, -1)
+    min_h, _, _, _ = card.measure(Gtk.Orientation.VERTICAL, compact_w)
+    assert (min_w, min_h) == (compact_w, compact_h)
+
+
+# ── gallery_layout.set_pinned_size() unit tests ───────────────────────────────
+
+@gtk_required
+def test_set_pinned_size_changes_the_zones_measured_size():
+    """The core mechanism this whole fix depends on: resizing a
+    pin_fixed_zone()'s anchor must change what the ZONE measures as, not
+    just what get_size_request() echoes back."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import gallery_layout as gl
+
+    child = Gtk.Box()
+    zone = gl.pin_fixed_zone(child, 200, 100)
+
+    min_w, _, _, _ = zone.measure(Gtk.Orientation.HORIZONTAL, -1)
+    min_h, _, _, _ = zone.measure(Gtk.Orientation.VERTICAL, 200)
+    assert (min_w, min_h) == (200, 100)
+
+    gl.set_pinned_size(zone, 80, 40)
+
+    min_w, _, _, _ = zone.measure(Gtk.Orientation.HORIZONTAL, -1)
+    min_h, _, _, _ = zone.measure(Gtk.Orientation.VERTICAL, 80)
+    assert (min_w, min_h) == (80, 40), (
+        "set_pinned_size() must change the zone's MEASURED size -- the bug "
+        "this whole fix targets is set_size_request() on the wrong widget "
+        "raising only a floor that a stale anchor still exceeds"
+    )
+
+
+@gtk_required
+def test_set_pinned_size_rejects_a_zone_not_built_via_pin_fixed_zone():
+    """A plain Gtk.Overlay (never wrapped via pin_fixed_zone) has no stashed
+    anchor -- set_pinned_size must fail loudly rather than silently no-op,
+    so a future caller mistake is caught immediately instead of quietly
+    reproducing this exact bug."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import gallery_layout as gl
+
+    plain_overlay = Gtk.Overlay()
+    try:
+        gl.set_pinned_size(plain_overlay, 10, 10)
+        assert False, "expected ValueError for a non-pinned zone"
+    except ValueError:
+        pass
