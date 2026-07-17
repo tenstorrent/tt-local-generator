@@ -336,6 +336,9 @@ def test_servers_control_widgets_unparented_at_construction():
         def subscribe(self, cb):
             return lambda: None
 
+        def running_artgen_model(self):
+            return None
+
     c = sc.ServersControl(
         _FakeService(), on_start=lambda k: None, on_stop=lambda k: None, on_restart=lambda k: None
     )

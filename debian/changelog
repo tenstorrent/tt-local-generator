@@ -1,3 +1,24 @@
+tt-local-generator (0.47.1) noble; urgency=medium
+
+  * fix(status): the AGGREGATE "is a model on" surfaces -- the bottom
+    `_hw_statusbar`'s generative-art/"artgen" capability row
+    (`main_window._render_status_snapshot`) and its overall aggregate dot,
+    plus `ServersControl`'s aggregate dot (`_refresh_bar_dot`) -- now read
+    "on" when an unregistered running chat model is detected, matching
+    Create's own "(detected)" selectable entry. Root cause: both surfaces
+    aggregated only per-key `ModelStatusService.snapshot()` statuses, and
+    when the running chat model doesn't match any registered
+    `server_manager.SERVERS` entry, every artgen/prompt key legitimately
+    resolves OFF -- so a genuinely-running, unregistered model read as
+    fully offline everywhere except Create. Fixed by folding
+    `running_artgen_model() is not None` (the single source of truth
+    already used by Create) into both aggregations; a matched running
+    model already resolved READY through the existing per-key path and is
+    unaffected (no regression). No change to per-model dots, generation
+    routing, or CreateView.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 13:36:27 -0700
+
 tt-local-generator (0.47.0) noble; urgency=medium
 
   * feat(create): Create's model-status UI now tracks WHICH chat model is

@@ -27,8 +27,13 @@ import servers_control as sc
 import model_status as ms
 
 
-def _svc(snap):
-    """Minimal fake status_service: snapshot() + subscribe() only."""
+def _svc(snap, artgen_model=None):
+    """Minimal fake status_service: snapshot() + subscribe() + (Task: the
+    "aggregate surfaces reflect an unregistered running chat model" fix)
+    running_artgen_model(), returning `artgen_model` verbatim (an
+    `model_status.ArtgenModelInfo` or None) -- mirrors the real
+    `ModelStatusService`'s method of the same name, the single source of
+    truth for "is a chat model running right now, matched or not"."""
 
     class F:
         def __init__(s):
@@ -40,6 +45,9 @@ def _svc(snap):
         def subscribe(s, cb):
             s._cb = cb
             return lambda: None
+
+        def running_artgen_model(s):
+            return artgen_model
 
     return F()
 
@@ -177,3 +185,57 @@ def test_set_status_segments_none_leaves_unchanged():
     assert c._chip_lbl.get_label() == "65C"
     c.set_status_segments(queue=0)
     assert c._queue_lbl.get_visible() is False
+
+
+# ── Aggregate bar dot reflects an unregistered running chat model ──────────
+#
+# Root cause: `_refresh_bar_dot` aggregates ONLY the per-key `snapshot()`
+# statuses (READY > STARTING > ERROR > OFF across every key). When the
+# running chat-LLM model doesn't match any registered `server_manager.
+# SERVERS` entry (`ArtgenModelInfo.matched_key is None`), every artgen/prompt
+# key legitimately resolves OFF -- so with no OTHER server up, the aggregate
+# read "offline" even though a chat endpoint genuinely answers requests (the
+# same one CreateView already surfaces as a selectable "(detected)" entry).
+# `running_artgen_model() is not None` is the single source of truth that
+# must override this, mirroring the identical fix in
+# `main_window._render_status_snapshot` (its own docstring says the two are
+# meant to mirror each other's aggregation policy).
+
+def test_unregistered_running_model_marks_bar_dot_ready():
+    info = ms.ArtgenModelInfo("qwen3.6-27b", "http://localhost:9001", None)
+    c = sc.ServersControl(
+        _svc({}, artgen_model=info),  # every SERVERS key OFF/absent
+        on_start=lambda k: None,
+        on_stop=lambda k: None,
+        on_restart=lambda k: None,
+    )
+    assert c._bar_dot.get_label() == "●"
+    assert c._bar_lbl.get_label() == "ready"
+
+
+def test_no_running_model_bar_dot_stays_offline():
+    """Regression control: with no chat endpoint up at all, the bar dot
+    must stay offline -- the fix must not force "ready" unconditionally."""
+    c = sc.ServersControl(
+        _svc({}, artgen_model=None),
+        on_start=lambda k: None,
+        on_stop=lambda k: None,
+        on_restart=lambda k: None,
+    )
+    assert c._bar_dot.get_label() == "◌"
+    assert c._bar_lbl.get_label() == "offline"
+
+
+def test_known_matched_running_model_bar_dot_still_ready_no_regression():
+    """A running model that DOES match a registered SERVERS key already
+    resolves READY through the ordinary per-key path -- the new override
+    must be a no-op here, not a source of double-counting or divergence."""
+    info = ms.ArtgenModelInfo("Qwen/Qwen3-8B", "http://localhost:8002", "artgen-qwen3-8b")
+    c = sc.ServersControl(
+        _svc({"artgen-qwen3-8b": ms.Status.READY}, artgen_model=info),
+        on_start=lambda k: None,
+        on_stop=lambda k: None,
+        on_restart=lambda k: None,
+    )
+    assert c._bar_dot.get_label() == "●"
+    assert c._bar_lbl.get_label() == "ready"

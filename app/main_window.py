@@ -7117,7 +7117,22 @@ class MainWindow(Gtk.ApplicationWindow):
         `update_starting()` resets the elapsed timer to 0:00 on every call, so
         calling it on every snapshot while already STARTING would freeze the
         counter instead of letting it tick.
+
+        Unregistered running chat model (bugfix): `snap`'s per-key statuses
+        alone under-report "artgen" when the running chat-LLM backend
+        doesn't match any registered `server_manager.SERVERS` entry
+        (`ModelStatusService.running_artgen_model().matched_key is None`) --
+        every artgen/prompt key legitimately resolves OFF in that case (see
+        `model_status.py`'s `_tick()` docstring), even though a chat endpoint
+        genuinely answers requests and CreateView already surfaces it as a
+        selectable "(detected)" entry. `running_artgen_model() is not None`
+        is the single source of truth for "a chat model is running, matched
+        or not" -- both the "artgen" capability row below AND the overall
+        aggregate dot fold it in, so the two rows painted from the same
+        snapshot never disagree with each other.
         """
+        artgen_model = self._status_service.running_artgen_model()
+
         for cap, cap_label in _sm.CAPABILITY_LABELS.items():
             if cap == "animatediff":
                 continue
@@ -7126,6 +7141,10 @@ class MainWindow(Gtk.ApplicationWindow):
             ready_sdef = next((s for s in sdefs if snap.get(s.key) == Status.READY), None)
             if ready_sdef is not None:
                 self._hw_statusbar.update_capability(cap, True, ready_sdef.label)
+            elif cap == "artgen" and artgen_model is not None:
+                self._hw_statusbar.update_capability(
+                    cap, True, f"{artgen_model.model_id} (detected)"
+                )
             elif Status.STARTING in statuses:
                 self._hw_statusbar.update_capability(cap, False, "starting…")
             else:
@@ -7140,6 +7159,9 @@ class MainWindow(Gtk.ApplicationWindow):
             agg = Status.ERROR
         else:
             agg = Status.OFF
+
+        if agg != Status.READY and artgen_model is not None:
+            agg = Status.READY
 
         if agg == Status.READY:
             self._hw_statusbar.update_server(True, "ready")

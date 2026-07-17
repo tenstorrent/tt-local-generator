@@ -166,9 +166,32 @@ class _FakeEvent:
         self.was_set = True
 
 
-def _make_mw(recover_action=None):
+class _FakeArtgenStatusService:
+    """Stand-in for `ModelStatusService` exposing ONLY `running_artgen_model()`
+    -- the rest of `_render_status_snapshot`'s inputs (the `snap` dict) are
+    fed directly to the method under test, so this fake never needs
+    `snapshot()`/`subscribe()`/etc. Mirrors the fake in
+    tests/test_create_view_detected_model.py's docstring, which notes the
+    real service's `running_artgen_model()` is the single source of truth
+    consulted by every surface that needs "is a chat model running right
+    now, matched or not"."""
+
+    def __init__(self, artgen_model=None):
+        self._artgen_model = artgen_model
+
+    def running_artgen_model(self):
+        return self._artgen_model
+
+
+def _make_mw(recover_action=None, artgen_model=None):
     """Bind the real (unbound) snapshot-rendering methods from MainWindow
-    onto a bare stand-in, per the established `.__get__` pattern."""
+    onto a bare stand-in, per the established `.__get__` pattern.
+
+    `artgen_model` (an `model_status.ArtgenModelInfo` or None) feeds the
+    fake `_status_service.running_artgen_model()` -- see the "aggregate
+    surfaces reflect an unregistered running chat model" fix this arg
+    exists to test.
+    """
     import main_window as mw
 
     class _FakeMainWindow:
@@ -184,6 +207,7 @@ def _make_mw(recover_action=None):
     obj._status_agg_prev = mw.Status.OFF
     obj._recover_action = recover_action if recover_action is not None else _FakeAction()
     obj.lookup_action = lambda name: obj._recover_action if name == "recover-jobs" else None
+    obj._status_service = _FakeArtgenStatusService(artgen_model)
 
     obj._render_status_snapshot = mw.MainWindow._render_status_snapshot.__get__(obj)
     obj._on_status_snapshot = mw.MainWindow._on_status_snapshot.__get__(obj)
@@ -251,6 +275,63 @@ def test_recover_jobs_scoped_to_media_capabilities_not_artgen():
     # Aggregate dot still reflects READY (mirrors ServersControl's own
     # "any key READY" aggregation -- it has no notion of "which capability
     # the user currently cares about" either).
+    assert obj._hw_statusbar.server_calls == [(True, "ready")]
+
+
+def test_unregistered_running_model_marks_artgen_capability_ready():
+    """Fix under test: `ModelStatusService` now tracks the running chat-LLM
+    backend's *matched_key* separately (Task 2 of the running-model
+    program) -- when it's `None` (a model started outside this app, or a
+    new weights repo with no `ServerDef` yet), every artgen `SERVERS` key
+    in the raw `snap` legitimately resolves OFF (see model_status.py's
+    `_tick()` docstring). Before this fix, that made the "artgen" capability
+    row -- and the overall aggregate dot -- read offline even though a chat
+    endpoint IS up and CreateView already surfaces it as a selectable
+    "(detected)" entry. `running_artgen_model() is not None` is the one
+    signal that must override both."""
+    from model_status import ArtgenModelInfo
+
+    info = ArtgenModelInfo("qwen3.6-27b", "http://localhost:9001", None)
+    obj, mw = _make_mw(artgen_model=info)
+    Status = mw.Status
+    # Every server_manager key is OFF/absent -- the exact "unregistered
+    # model running" scenario (match_model_id found no SERVERS key for it).
+    obj._render_status_snapshot({})
+
+    assert ("artgen", True, "qwen3.6-27b (detected)") in obj._hw_statusbar.capability_calls
+    # The overall aggregate dot mirrors ServersControl's own policy (per
+    # this method's own docstring) -- it must also read "ready", not
+    # "offline", so the two rows painted from the same snapshot never
+    # disagree with each other.
+    assert obj._hw_statusbar.server_calls == [(True, "ready")]
+
+
+def test_no_running_model_artgen_capability_stays_offline():
+    """Regression control: with NO chat endpoint up at all
+    (`running_artgen_model()` returns None), the artgen capability row and
+    the aggregate dot must stay offline -- the fix must not make everything
+    read "ready" unconditionally."""
+    obj, mw = _make_mw(artgen_model=None)
+    obj._render_status_snapshot({})
+
+    assert ("artgen", False, "") in obj._hw_statusbar.capability_calls
+    assert obj._hw_statusbar.server_calls == [(False, "offline")]
+
+
+def test_known_matched_model_artgen_capability_ready_no_regression():
+    """A running model that DOES match a registered SERVERS key (the
+    pre-existing, already-working case) must keep showing that server's own
+    label -- the new unregistered-model branch must never run when
+    `ready_sdef` already resolved, and must not change existing behavior for
+    the ordinary path."""
+    from model_status import ArtgenModelInfo
+
+    info = ArtgenModelInfo("Qwen/Qwen3-8B", "http://localhost:8002", "artgen-qwen3-8b")
+    obj, mw = _make_mw(artgen_model=info)
+    Status = mw.Status
+    obj._render_status_snapshot({"artgen-qwen3-8b": Status.READY})
+
+    assert ("artgen", True, "Qwen3-8B") in obj._hw_statusbar.capability_calls
     assert obj._hw_statusbar.server_calls == [(True, "ready")]
 
 

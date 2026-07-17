@@ -482,6 +482,17 @@ class ServersControl(Gtk.Box):
         notion of "the current medium"/"the current tab" the way the old
         per-tab `_StatusBar`/`ControlPanel` did, so the best available signal
         across every managed service is the most useful single dot to show.
+
+        Unregistered running chat model (bugfix): `self._snapshot`'s per-key
+        statuses alone under-report this when the running chat-LLM backend
+        doesn't match any registered `server_manager.SERVERS` entry
+        (`ModelStatusService.running_artgen_model().matched_key is None`) --
+        every artgen/prompt key legitimately resolves OFF in that case (see
+        `model_status.py`'s `_tick()` docstring), even though a chat endpoint
+        genuinely answers requests. `running_artgen_model() is not None` is
+        the single source of truth for "a chat model is running, matched or
+        not", so it overrides the snapshot-only aggregate the same way
+        `main_window._render_status_snapshot`'s mirrored aggregate does.
         """
         values = self._snapshot.values()
         if Status.READY in values:
@@ -492,6 +503,8 @@ class ServersControl(Gtk.Box):
             agg = Status.ERROR
         else:
             agg = Status.OFF
+        if agg != Status.READY and self._status_service.running_artgen_model() is not None:
+            agg = Status.READY
         self._apply_dot(self._bar_dot, _BAR_DOT_CLASS, agg)
         self._bar_lbl.set_label(_BAR_DOT_TEXT[agg])
 
