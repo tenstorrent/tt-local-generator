@@ -398,6 +398,9 @@ scrollbar slider:hover {
 .loop-nav-btn:checked:hover {
     background-color: @tt_accent_light;
 }
+.discover-type-row {
+    padding: 6px 10px 0 10px;
+}
 .server-start-btn {
     background-color: @tt_bg_dark;
     color: @tt_accent;
@@ -5329,6 +5332,22 @@ class MainWindow(Gtk.ApplicationWindow):
         # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously.
         GLib.idle_add(self._artgen_gallery.refresh)
 
+        # ── Discover media-type switcher (SP-3d-6 regression fix) ───────────
+        # SP-3d-5 deleted the legacy medium-tab source toggle -- the ONLY UI
+        # that used to let you pick which gallery `_gallery_stack` showed.
+        # That left Discover pinned to whatever `_current_medium_source()`
+        # (CreateView's active medium) happened to be, with no way to ask for
+        # a different one -- the animate and artgen galleries became
+        # completely unreachable. This row is Discover's OWN switcher (built
+        # once here, like `_build_loop_nav`); it is shown/hidden by
+        # `_on_loop_nav_discover`/`_on_loop_nav_create`/`_on_loop_nav_remix`
+        # below and reuses `_sync_gallery_to_source` unchanged for the actual
+        # stack-switch, so star/playlist/detail/context-menu wiring for
+        # whichever gallery is showing is completely untouched.
+        self._discover_type_row = self._build_discover_type_row()
+        self._discover_type_row.set_visible(False)
+        gallery_wrap.append(self._discover_type_row)
+
         # Create-surface (docs/superpowers/specs/2026-07-13-create-surface-
         # design.md): CreateView is built and mounted here ALONGSIDE the
         # existing medium-tab UI above, as the `_gallery_stack` "create"
@@ -6365,6 +6384,61 @@ class MainWindow(Gtk.ApplicationWindow):
         self._loop_nav_create_btn = create_btn
         return row
 
+    def _build_discover_type_row(self) -> Gtk.Box:
+        """Build the Discover media-type switcher: one toggle per gallery
+        (Video / Image / Animate / Artgen), sharing a single radio group.
+
+        SP-3d-5 deleted the legacy medium-tab source toggle -- the ONLY UI
+        that used to let you choose which gallery `_gallery_stack` showed.
+        Without it, Discover was pinned to whatever `_current_medium_source()`
+        (CreateView's active medium) happened to be, so the animate and
+        artgen galleries became unreachable: there was simply no control left
+        that could ask for them. This row is Discover's OWN switcher -- it
+        does not resurrect ControlPanel or its deleted toggle. Each button's
+        "toggled" handler calls `_sync_gallery_to_source` (unchanged), so the
+        existing star/playlist/detail/context-menu wiring for whichever
+        gallery ends up visible needs no changes.
+
+        Mirrors `_build_loop_nav`'s left/mid/mid/right button-group pattern,
+        reusing the `.source-btn` CSS classes (left over from the deleted
+        medium-tab toggle, otherwise unused since SP-3d-5) rather than
+        inventing new ones.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("discover-type-row")
+
+        # (source key used by _sync_gallery_to_source, button label, edge CSS class)
+        specs = [
+            ("video", "Video", "source-btn-left"),
+            ("image", "Image", "source-btn-mid"),
+            ("animate", "Animate", "source-btn-mid"),
+            ("artgen", "Artgen", "source-btn-right"),
+        ]
+
+        buttons: "dict[str, Gtk.ToggleButton]" = {}
+        group_btn = None
+        for source, label, edge_cls in specs:
+            btn = Gtk.ToggleButton(label=label)
+            btn.add_css_class("source-btn")
+            btn.add_css_class(edge_cls)
+            if group_btn is None:
+                group_btn = btn
+            else:
+                btn.set_group(group_btn)
+            # `src=source` binds each closure to its OWN loop iteration's
+            # value -- without the default arg every button's callback would
+            # close over the same `source` variable and all fire "artgen"
+            # (the loop's final value).
+            btn.connect(
+                "toggled",
+                lambda b, src=source: b.get_active() and self._sync_gallery_to_source(src),
+            )
+            row.append(btn)
+            buttons[source] = btn
+
+        self._discover_type_buttons = buttons
+        return row
+
     def _on_loop_nav_create(self) -> None:
         """Create: the unified Create surface (CreateView).
 
@@ -6383,6 +6457,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # this restored.
         self._detail_wrap.set_visible(True)
 
+        # SP-3d-6: the Discover-only media-type switcher must not linger
+        # underneath Create.
+        self._hide_discover_type_row()
+
     def _on_loop_nav_discover(self) -> None:
         """Discover (absorbs Curate): browse AND collect what you've made — the
         gallery, full-width, with the star/playlist/detail actions you use to
@@ -6391,8 +6469,37 @@ class MainWindow(Gtk.ApplicationWindow):
         pipeline discovery (Pipeline Studio's Discover) stays reachable via the
         🧩 Pipelines toggle; a later slice unifies artifact- and project-browse
         under this one Discover.
+
+        SP-3d-6 regression fix: also shows `_discover_type_row` (the
+        Video/Image/Animate/Artgen switcher SP-3d-5 left with no replacement)
+        and syncs its active button to `_current_medium_source()` so Discover
+        opens on a sensible gallery rather than always defaulting blind. The
+        row's own button clicks drive the gallery from here on — this method
+        only sets the STARTING point each time Discover is (re-)entered.
         """
-        self._sync_gallery_to_source(self._current_medium_source())
+        source = self._current_medium_source()
+        self._sync_gallery_to_source(source)
+
+        row = getattr(self, "_discover_type_row", None)
+        if row is not None:
+            row.set_visible(True)
+        btn = getattr(self, "_discover_type_buttons", {}).get(source)
+        if btn is not None and not btn.get_active():
+            # Triggers "toggled" -> _sync_gallery_to_source(source) again;
+            # harmless repeat of the call two lines above, but also correctly
+            # unchecks whichever OTHER type button was left active from a
+            # previous Discover visit (same `set_group` radio behavior the
+            # loop nav buttons rely on).
+            btn.set_active(True)
+
+    def _hide_discover_type_row(self) -> None:
+        """Hide the Discover media-type switcher (see `_build_discover_type_row`).
+        Shared by `_on_loop_nav_create`/`_on_loop_nav_remix` — the switcher is
+        Discover-only and must not overlap either surface. No-op if the row
+        hasn't been built (e.g. minimal test harnesses)."""
+        row = getattr(self, "_discover_type_row", None)
+        if row is not None:
+            row.set_visible(False)
 
     def _on_loop_nav_remix(self) -> None:
         """Remix: Pipeline Studio's Muse, unseeded — reuses the exact
@@ -6407,6 +6514,10 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_pipelines()
 
         self._pipeline_studio.show_muse(seed_artifact=None)
+
+        # SP-3d-6: the Discover-only media-type switcher must not linger
+        # underneath Remix.
+        self._hide_discover_type_row()
 
     # ── Pipeline Studio (Discover + Open) ───────────────────────────────────────
 

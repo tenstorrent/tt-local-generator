@@ -1,3 +1,35 @@
+tt-local-generator (0.46.1) noble; urgency=medium
+
+  * fix(discover): SP-3d-5 deleted the legacy medium-tab source toggle — the
+    ONLY UI that let you pick which gallery `_gallery_stack` showed — leaving
+    `_on_loop_nav_discover` pinned to whatever `_current_medium_source()`
+    (CreateView's active medium) happened to be. The animate and artgen
+    galleries became completely unreachable in Discover: there was no
+    control left that could ask for them, only for whichever medium Create
+    was scoped to. Added a Discover-owned media-type switcher
+    (`_build_discover_type_row`/`_discover_type_row`/`_discover_type_buttons`)
+    — one radio-group `Gtk.ToggleButton` per gallery (Video/Image/Animate/
+    Artgen, reusing the vestigial `.source-btn` CSS classes), mounted above
+    `_gallery_stack`. Each button drives the existing (unchanged)
+    `_sync_gallery_to_source`, so star/playlist/detail/context-menu wiring
+    for whichever gallery ends up visible needed no changes. Shown and
+    defaulted to `_current_medium_source()` by `_on_loop_nav_discover`;
+    hidden by `_on_loop_nav_create`/`_on_loop_nav_remix` (new shared
+    `_hide_discover_type_row` helper) so it never overlaps Create or Remix.
+    This is a NEW Discover-owned switcher, not a resurrection of
+    ControlPanel or its deleted toggle.
+  * Tests (TDD, `tests/test_main_window_loop_nav.py`): extended the loop-nav
+    harness with `_gallery_stack` children for "image"/"animate"/"artgen"
+    (previously only "video"/"create" existed) and a pre-built
+    `_discover_type_row`; added 9 new tests covering row construction, the
+    default-hidden state before Discover is entered, the row appearing (and
+    its active button matching `_current_medium_source()`) on entering
+    Discover, clicking the artgen/animate buttons switching
+    `_gallery_stack`, and the row hiding again in Create/Remix. Full suite
+    green (1659 passed, 1 skipped, 2 known-flake deselected).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 16:00:00 -0700
+
 tt-local-generator (0.46.0) noble; urgency=medium
 
   * SP-3d-5 (`.superpowers/sdd/sp3d-audit.md`, task-5-brief.md, the FINALE of

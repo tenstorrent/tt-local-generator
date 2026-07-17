@@ -54,6 +54,14 @@ def _make_mw(tmp_path, monkeypatch):
     obj._pipeline_studio = None
     obj._gallery_stack = Gtk.Stack()
     obj._gallery_stack.add_named(Gtk.Box(), "video")
+    # SP-3d-6 regression fix: the switcher under test targets all four
+    # galleries, not just "video" -- give the harness real named children
+    # for "image"/"animate"/"artgen" too so `set_visible_child_name` (called
+    # by `_sync_gallery_to_source`, which the switcher's buttons drive) has
+    # somewhere real to land instead of silently no-op'ing on a missing name.
+    obj._gallery_stack.add_named(Gtk.Box(), "image")
+    obj._gallery_stack.add_named(Gtk.Box(), "animate")
+    obj._gallery_stack.add_named(Gtk.Box(), "artgen")
     obj._gallery_stack.set_visible_child_name("video")
     obj._detail_wrap = Gtk.Box()
     obj._detail_wrap.set_visible(True)
@@ -75,12 +83,23 @@ def _make_mw(tmp_path, monkeypatch):
         "_sync_gallery_to_source",
         "_uncheck_pipelines_toggle_if_active",
         "_build_loop_nav",
+        "_build_discover_type_row",
         "_on_loop_nav_create",
         "_on_loop_nav_discover",
         "_on_loop_nav_remix",
     ):
         setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
     obj._pipelines_btn.connect("toggled", obj._on_pipelines_toggled)
+
+    # SP-3d-6 regression fix harness: real `_build_ui()` constructs
+    # `_discover_type_row` once up front (mirroring `_build_loop_nav`) and
+    # stores it on `self` before the loop nav's default-active button is
+    # ever toggled -- reproduce that here so `_on_loop_nav_discover` (which
+    # only reads `self._discover_type_row`/`self._discover_type_buttons` via
+    # `getattr(..., None)`, never builds them itself) has something real to
+    # show/hide.
+    obj._discover_type_row = obj._build_discover_type_row()
+    obj._discover_type_row.set_visible(False)
 
     obj._rebuild_context_menu = MagicMock()
     obj.lookup_action = MagicMock(return_value=None)
@@ -211,3 +230,107 @@ def test_loop_nav_remix_reuses_pipeline_studio_instance(tmp_path, monkeypatch):
 
     assert obj._pipeline_studio is first
     assert obj._pipeline_studio.stack.get_visible_child_name() == "muse"
+
+
+# ── Discover media-type switcher (SP-3d-6 regression fix) ───────────────────
+#
+# SP-3d-5 deleted the legacy medium-tab source toggle -- the only UI that let
+# you pick which gallery `_gallery_stack` showed while browsing. That left
+# Discover pinned to whatever `_current_medium_source()` (CreateView's active
+# medium) happened to be, so the animate and artgen galleries became
+# unreachable: there was no way to ask Discover to show them. These tests
+# drive the new Discover-owned `_discover_type_row` switcher that restores
+# that browsing capability without resurrecting ControlPanel.
+
+
+def test_build_discover_type_row_exposes_keyed_buttons(tmp_path, monkeypatch):
+    """_build_discover_type_row returns a row and exposes one toggle per
+    gallery, keyed the same way `_sync_gallery_to_source` expects."""
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    row = obj._build_discover_type_row()
+
+    assert isinstance(row, Gtk.Widget)
+    assert set(obj._discover_type_buttons.keys()) == {"video", "image", "animate", "artgen"}
+    for btn in obj._discover_type_buttons.values():
+        assert isinstance(btn, Gtk.ToggleButton)
+
+
+def test_discover_type_row_hidden_before_discover_entered(tmp_path, monkeypatch):
+    """The switcher starts hidden -- Create is the loop's default landing
+    movement, and the row must not show up underneath it."""
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    assert obj._discover_type_row.get_visible() is False
+
+
+def test_entering_discover_shows_type_row(tmp_path, monkeypatch):
+    """Activating Discover reveals the switcher."""
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    obj._on_loop_nav_discover()
+
+    assert obj._discover_type_row.get_visible() is True
+
+
+def test_entering_discover_defaults_active_type_to_current_medium_source(tmp_path, monkeypatch):
+    """On entering Discover, the type button matching
+    `_current_medium_source()` is the one that reads active -- Discover opens
+    on a sensible gallery, not always "video"."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._current_medium_source = MagicMock(return_value="animate")
+
+    obj._on_loop_nav_discover()
+
+    assert obj._discover_type_buttons["animate"].get_active() is True
+    assert obj._discover_type_buttons["video"].get_active() is False
+    assert obj._gallery_stack.get_visible_child_name() == "animate"
+
+
+def test_clicking_artgen_type_button_switches_gallery(tmp_path, monkeypatch):
+    """Clicking the Artgen type button switches `_gallery_stack` to "artgen"
+    -- this is the regression: previously there was no way to reach the
+    artgen gallery from Discover at all."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._on_loop_nav_discover()
+
+    obj._discover_type_buttons["artgen"].set_active(True)
+
+    assert obj._gallery_stack.get_visible_child_name() == "artgen"
+
+
+def test_clicking_animate_type_button_switches_gallery(tmp_path, monkeypatch):
+    """Clicking the Animate type button switches `_gallery_stack` to
+    "animate" -- also unreachable before this fix."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._on_loop_nav_discover()
+
+    obj._discover_type_buttons["animate"].set_active(True)
+
+    assert obj._gallery_stack.get_visible_child_name() == "animate"
+
+
+def test_discover_type_row_hidden_in_create(tmp_path, monkeypatch):
+    """Leaving Discover for Create hides the switcher -- it must not overlap
+    the Create surface."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+    obj._on_loop_nav_discover()
+    assert obj._discover_type_row.get_visible() is True
+
+    obj._loop_nav["create"].set_active(True)
+
+    assert obj._discover_type_row.get_visible() is False
+
+
+def test_discover_type_row_hidden_in_remix(tmp_path, monkeypatch):
+    """Leaving Discover for Remix hides the switcher -- it must not overlap
+    the Remix/Muse surface."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+    obj._on_loop_nav_discover()
+    assert obj._discover_type_row.get_visible() is True
+
+    obj._loop_nav["remix"].set_active(True)
+
+    assert obj._discover_type_row.get_visible() is False
