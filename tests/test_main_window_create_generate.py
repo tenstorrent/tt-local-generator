@@ -771,6 +771,16 @@ def _make_mw_lifecycle(monkeypatch):
 
     obj._set_status = MagicMock()
     obj._controls = MagicMock()
+    # SP-3d-3: `_on_generate`'s AnimateDiff-blackhole chip-busy guard now
+    # reads `ModelStatusService` (`_running_generation_server()`, via
+    # `self._status_service.ready_keys(cap)`) instead of ControlPanel's own
+    # `_server_ready`/`_running_model` — a bare MagicMock's `.ready_keys()`
+    # would default to a truthy auto-mock, so pin it to "nothing ready" for
+    # every test that doesn't explicitly care (the animatediff mode defaults
+    # to "blackhole", so ANY video-medium job with no explicit override
+    # reaches this guard's condition-check, even when it never trips).
+    obj._status_service = MagicMock()
+    obj._status_service.ready_keys.return_value = []
     obj._client = MagicMock()
     obj._store = MagicMock()
     obj._worker = None
@@ -1142,7 +1152,13 @@ def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(mo
     SP-3a: `_on_generate` no longer reads `self._controls.get_video_model()`/
     `get_animatediff_args()` to decide this branch — the AD key and args are
     now passed as explicit `video_model_key`/`animatediff_args` kwargs,
-    exactly as `_start_next_queued`/the legacy ControlPanel button do."""
+    exactly as `_start_next_queued`/the legacy ControlPanel button do.
+
+    SP-3d-3: the guard's "is a server occupying the chip" check moved from
+    ControlPanel's own `_server_ready`/`_running_model` attributes to
+    `ModelStatusService` (`_running_generation_server()`, reading
+    `self._status_service.ready_keys(cap)`) — a server READY for the "video"
+    capability trips the guard exactly like the old `_server_ready` flag did."""
     obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
     obj._controls.get_video_model.side_effect = AssertionError("must not read")
     obj._controls.get_animatediff_args.side_effect = AssertionError("must not read")
@@ -1153,9 +1169,10 @@ def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(mo
         "chain_alpha": 0.0, "motion_adapter": None, "motion_adapter_alpha": 0.0,
         "motion_adapter_skip": 0,
     }
-    obj._controls._server_ready = True
+    obj._status_service.ready_keys = MagicMock(
+        side_effect=lambda cap: ["wan2.2"] if cap == "video" else []
+    )
     obj._count_blackhole_chips = MagicMock(return_value=1)
-    obj._running_model = "Wan2.2"
     # Simulate having already dispatched through _begin_create_job.
     obj._create_job_active = True
     fake_create_view._result_panel.show_pending("prompt", _VIDEO_MEDIUM)
@@ -1166,6 +1183,13 @@ def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(mo
 
     assert obj._create_job_active is False
     assert fake_create_view._result_panel.calls[-1][0] == "show_error"
+    # The busy message names the server occupying the chip via
+    # `server_manager.SERVERS["wan2.2"].label`, not a bare "Wan2.2" string —
+    # proves the label came from `_display_label_for_server_key`, not a
+    # leftover ControlPanel/MainWindow `_running_model` read.
+    import server_manager
+    error_msg = fake_create_view._result_panel.calls[-1][1]
+    assert server_manager.SERVERS["wan2.2"].label in error_msg
 
 
 def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch):

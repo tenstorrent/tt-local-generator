@@ -8443,7 +8443,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # driven by the single remaining source of truth. Not done now —
         # out of scope for this task; `_StatusBar` itself is untouched here.
         self._hw_statusbar = _StatusBar(
-            start_cb=lambda: self._on_start_server(self._controls.get_model_source()),
+            start_cb=lambda: self._on_start_server(self._current_medium_source()),
             stop_cb=self._on_stop_server,
         )
         root_box.append(self._hw_statusbar)
@@ -9007,11 +9007,117 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as exc:
             print(f"[tt-gen] screensaver uninhibit failed: {exc}", file=sys.stderr)
 
+    # ── Medium/source resolution (SP-3d-3) ──────────────────────────────────────
+    #
+    # Every surviving caller that used to ask ControlPanel "what am I
+    # currently making" (`get_model_source()`/`get_video_model()`/
+    # `get_image_model()`) now asks CreateView instead, via
+    # `CreateView._active_medium` — the same "what medium is active" state
+    # Create's own scoped dropdown/model door already track. This is NOT a
+    # literal drop-in: `Medium.id` is the legacy "video"/"image"/"animate"
+    # vocabulary for native mediums, but is the artgen GENERATOR NAME
+    # ("verse", "ansi", "animatediff", …) for artgen mediums — every one of
+    # those folds to the single legacy string "artgen" here, per the audit's
+    # explicit direction (`.superpowers/sdd/sp3d-audit.md` §1). Callers that
+    # need the finer-grained "is the AnimateDiff generator specifically
+    # active" distinction (TT-TV's local/no-server special case) use
+    # `_active_medium_is_animatediff()` below instead of/alongside this.
+    #
+    # `CreateView._active_medium` persists even when Create isn't the visible
+    # surface (Discover/Pipelines showing) — it's only ever reassigned by a
+    # medium pick, never cleared on navigation — so this remains meaningful
+    # from any surface. A missing `_create_view` (unit-test harnesses that
+    # don't build one) or no medium picked yet both fall back to "video",
+    # matching ControlPanel's own original default.
+
+    def _current_medium_source(self) -> str:
+        """Legacy "video"/"image"/"animate"/"artgen" vocabulary, derived from
+        CreateView's active medium instead of `self._controls.get_model_source()`
+        (SP-3d-3 — ControlPanel is being deleted; nothing surviving may read it)."""
+        create_view = getattr(self, "_create_view", None)
+        medium = getattr(create_view, "_active_medium", None) if create_view is not None else None
+        if medium is None:
+            return "video"  # matches ControlPanel's original default
+        return "artgen" if medium.source == "artgen" else medium.id
+
+    def _active_medium_is_animatediff(self) -> bool:
+        """True when CreateView's active medium is specifically the
+        AnimateDiff artgen generator (source="artgen", id="animatediff").
+
+        AnimateDiff moved from a video-tab sub-model (the old
+        `get_model_source()=="video" and get_video_model()=="animatediff"`
+        combination) to its own Create medium chip — this is the equivalent
+        check for callers (TT-TV launch/status, the attractor button) that
+        need the distinction `_current_medium_source()` above deliberately
+        collapses away (it folds every artgen medium, including this one, to
+        the single string "artgen")."""
+        create_view = getattr(self, "_create_view", None)
+        medium = getattr(create_view, "_active_medium", None) if create_view is not None else None
+        return medium is not None and medium.source == "artgen" and medium.id == "animatediff"
+
+    def _current_medium_model_key(self, model_source: str) -> str:
+        """Short video/image model key ("wan2"/"mochi"/"skyreels" or
+        "flux"/"sdxl"/"z-image-turbo"/"motif") for the CURRENT medium,
+        sourced from CreateView's scoped model dropdown instead of
+        `self._controls.get_video_model()`/`get_image_model()` (SP-3d-3).
+
+        `CreateView._selected_model_key()` returns a `server_manager` key
+        (e.g. "wan2.2") — `_SERVER_KEY_TO_SOURCE_MODEL` (the same map
+        `MainWindow.__init__`'s startup pre-select and
+        `_resolve_attractor_model` already use — see that method's
+        docstring) converts it into the (source, short_key) pair
+        `_SERVER_SCRIPTS` is keyed by. Falls back to each medium's
+        documented default key (mirrors `_on_generate`'s own fallback) when
+        CreateView has no selection yet, the selected key isn't recognized,
+        or it resolves to a different source than `model_source` (e.g. the
+        active medium is "image" but a caller asks for "video" — shouldn't
+        happen in practice, but must never silently hand back the wrong
+        model's key). Returns "" for any other `model_source` (mirrors the
+        pre-existing `_on_start_server`/`_on_stop_server` else-branch)."""
+        create_view = getattr(self, "_create_view", None)
+        try:
+            server_key = create_view._selected_model_key() if create_view is not None else None
+        except Exception:
+            server_key = None
+        src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(server_key, (None, None))
+        if model_source == "video":
+            return mdl if src == "video" and mdl else _DEFAULT_VIDEO_KEY
+        if model_source == "image":
+            return mdl if src == "image" and mdl else _DEFAULT_IMAGE_KEY
+        return ""
+
+    def _running_generation_server(self) -> "tuple[bool, Optional[str]]":
+        """(is a video/image server currently READY, its server_manager key),
+        from `ModelStatusService` (SP-3d-3) — replaces ControlPanel's own
+        `_server_ready`/`_running_model` attributes (fed by the now-legacy
+        `_health_loop`) for the two surviving readers: `_on_open_attractor`'s
+        TT-TV status line, and `_on_generate`'s AnimateDiff-blackhole
+        chip-busy guard. Prefers READY over STARTING (`ready_keys`, not
+        `running_or_starting`) — a server still loading hasn't actually
+        claimed the chip yet, so the guard/status line should only fire once
+        a server has actually finished coming up."""
+        for cap in ("video", "image"):
+            ready = self._status_service.ready_keys(cap)
+            if ready:
+                return True, ready[0]
+        return False, None
+
+    def _display_label_for_server_key(self, server_key: "Optional[str]") -> "Optional[str]":
+        """Human label (`server_manager.ServerDef.label`) for a server key, or
+        `None` if `server_key` is falsy — mirrors the previous
+        `_MODEL_DISPLAY_SERVER.get(self._controls._running_model or "", self._controls._running_model)`
+        behavior (also `None`) for "nothing currently running"."""
+        if not server_key:
+            return None
+        import server_manager
+        sdef = server_manager.SERVERS.get(server_key)
+        return sdef.label if sdef is not None else server_key
+
     # ── Gallery helpers ────────────────────────────────────────────────────────
 
     def _active_gallery(self) -> "GalleryWidget":
         """Return the gallery that matches the currently selected generation source."""
-        return self._gallery_for_type(self._controls.get_model_source())
+        return self._gallery_for_type(self._current_medium_source())
 
     def _gallery_for_type(self, media_type: str) -> "GalleryWidget":
         """Return the gallery for the given media_type string."""
@@ -9177,7 +9283,7 @@ class MainWindow(Gtk.ApplicationWindow):
         🧩 Pipelines toggle; a later slice unifies artifact- and project-browse
         under this one Discover.
         """
-        self._on_source_change(self._controls.get_model_source())
+        self._on_source_change(self._current_medium_source())
         self._ctrl_wrapper.set_visible(False)
 
     def _on_loop_nav_remix(self) -> None:
@@ -9232,14 +9338,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._detail_wrap.set_visible(False)
 
     def _hide_pipelines(self) -> None:
-        """Restore whatever the ControlPanel's active generation source was.
+        """Restore whatever CreateView's active medium was (SP-3d-3: no
+        longer ControlPanel's `_model_source` — see `_current_medium_source`).
 
         Reuses `_on_source_change` (unchanged by this feature) rather than
         duplicating its gallery/ctrl-panel/detail-panel visibility rules, so
         leaving Pipelines always lands back in a state `_on_source_change`
-        already knows how to produce for the current `_model_source`.
+        already knows how to produce for the current medium.
         """
-        self._on_source_change(self._controls.get_model_source())
+        self._on_source_change(self._current_medium_source())
 
     # Maps GenerationRecord.media_type -> the "kind" vocabulary Pipeline Studio's
     # Muse expects for a seed_artifact. Anything absent from this table (e.g.
@@ -10432,11 +10539,15 @@ class MainWindow(Gtk.ApplicationWindow):
             records = all_records
             auto_generate = True
 
-        current_source = self._controls.get_model_source()
-        # AnimateDiff is a video-tab model but needs its own model_source so the
-        # generation loop uses the "animatediff" prompt vocabulary and the server
-        # health check is bypassed (AnimateDiff runs locally, no server needed).
-        if current_source == "video" and self._controls.get_video_model() == "animatediff":
+        current_source = self._current_medium_source()
+        # AnimateDiff moved from a video-tab sub-model to its own Create
+        # medium chip (an artgen generator, source="artgen" id="animatediff")
+        # — override the generic artgen folding above (SP-3d-3:
+        # `_current_medium_source` always folds artgen mediums to "artgen")
+        # so the generation loop still uses the dedicated "animatediff"
+        # prompt vocabulary and the server-health gate stays bypassed
+        # (AnimateDiff runs locally, no server needed), exactly as before.
+        if self._active_medium_is_animatediff():
             current_source = "animatediff"
 
         try:
@@ -10456,14 +10567,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
                 get_server_status=lambda: (
                     # AnimateDiff runs locally — no server needed — treat as ready.
-                    self._controls._server_ready
-                    or self._controls.get_video_model() == "animatediff",
+                    self._running_generation_server()[0]
+                    or self._active_medium_is_animatediff(),
                     # Display name shown in the TT-TV status bar.
                     "AnimateDiff (local)"
-                    if self._controls.get_video_model() == "animatediff"
-                    else _MODEL_DISPLAY_SERVER.get(
-                        self._controls._running_model or "",
-                        self._controls._running_model,
+                    if self._active_medium_is_animatediff()
+                    else self._display_label_for_server_key(
+                        self._running_generation_server()[1]
                     ),
                 ),
                 playlist_id=playlist_id,
@@ -10656,13 +10766,12 @@ class MainWindow(Gtk.ApplicationWindow):
 
         AnimateDiff generates locally without a server and can seed TT-TV from
         scratch, so we enable the button even when no prior records exist.
+        SP-3d-3: "is AnimateDiff active" is now `_active_medium_is_animatediff()`
+        (CreateView's active medium), not ControlPanel's
+        `get_model_source()=="video" and get_video_model()=="animatediff"`.
         """
         has_media = len(self._store.all_records()) > 0
-        is_animatediff = (
-            self._controls.get_model_source() == "video"
-            and self._controls.get_video_model() == "animatediff"
-        )
-        self._attractor_btn.set_sensitive(has_media or is_animatediff)
+        self._attractor_btn.set_sensitive(has_media or self._active_medium_is_animatediff())
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
@@ -10731,9 +10840,13 @@ class MainWindow(Gtk.ApplicationWindow):
         generate/enqueue button, Create's `_create_generate_native`, the
         queue's `_start_next_queued`, and attractor/TT-TV) resolves and
         passes these itself — see each caller for where its value comes
-        from. `self._controls.set_busy(...)` and other non-model-selection
-        ControlPanel calls are untouched; they go away only when
-        ControlPanel itself is deleted (SP-3d).
+        from. SP-3d-3: the `set_busy` calls ControlPanel used to receive here
+        are gone (audit-confirmed dead weight — it only ever drove
+        ControlPanel's own Generate/Cancel buttons; nothing surviving reads
+        `_controls._busy`), and the
+        AnimateDiff-blackhole chip-busy guard below now reads
+        `ModelStatusService` via `_running_generation_server()` instead of
+        ControlPanel's own server-ready/running-model polling attributes.
         """
         if self._worker and self._worker.is_alive():
             self._fail_create_job("A generation is already running.")
@@ -10761,7 +10874,6 @@ class MainWindow(Gtk.ApplicationWindow):
             pending = None
         else:
             pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
-        self._controls.set_busy(True)
         # Do NOT call clear_prompt() here — the user may have typed a prompt they
         # haven't submitted yet, and auto-queue/attractor calls should not wipe it.
         # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
@@ -10830,19 +10942,25 @@ class MainWindow(Gtk.ApplicationWindow):
                 # full dict passes through unchanged (its values win).
                 ad = {**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
-                # exclusive Blackhole access and should not be blocked by a running server.
-                if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:
-                    model_lbl = self._running_model or "a model"
-                    busy_msg = (
-                        f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
-                        "your Blackhole chip is busy. Stop the server first, then try again."
-                    )
-                    self._gen_gallery.remove_pending()
-                    self._gen_gallery = None
-                    self._controls.set_busy(False)
-                    self._set_status(busy_msg)
-                    self._fail_create_job(busy_msg)
-                    return
+                # exclusive Blackhole access and should not be blocked by a running
+                # server — the `ad["mode"] == "blackhole"` check below is deliberately
+                # first so `_running_generation_server()` (and therefore
+                # `self._status_service`) is never consulted for cpu/sim, matching
+                # the reachability of ControlPanel's server-ready attribute this
+                # guard used to read directly (SP-3d-3: rehomed onto `ModelStatusService`).
+                if ad["mode"] == "blackhole":
+                    server_ready, server_key = self._running_generation_server()
+                    if server_ready and self._count_blackhole_chips() == 1:
+                        model_lbl = self._display_label_for_server_key(server_key) or "a model"
+                        busy_msg = (
+                            f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
+                            "your Blackhole chip is busy. Stop the server first, then try again."
+                        )
+                        self._gen_gallery.remove_pending()
+                        self._gen_gallery = None
+                        self._set_status(busy_msg)
+                        self._fail_create_job(busy_msg)
+                        return
                 self._set_status(f"Starting AnimateDiff generation ({ad['mode']})…")
                 # Auto-derive chain_save path from a session temp file when requested.
                 chain_save_path = None
@@ -11442,13 +11560,14 @@ class MainWindow(Gtk.ApplicationWindow):
     # ── Server start / stop ────────────────────────────────────────────────────
 
     def _on_start_server(self, model_source: str) -> None:
-        """Launch the server script matching the current source + model selection."""
-        if model_source == "video":
-            model_key = self._controls.get_video_model()
-        elif model_source == "image":
-            model_key = self._controls.get_image_model()
-        else:
-            model_key = ""
+        """Launch the server script matching the current source + model selection.
+
+        SP-3d-3: `model_key` is resolved via `_current_medium_model_key`
+        (CreateView's scoped model dropdown, translated through
+        `_SERVER_KEY_TO_SOURCE_MODEL`) instead of
+        `self._controls.get_video_model()`/`get_image_model()`.
+        """
+        model_key = self._current_medium_model_key(model_source)
 
         script_name, label = _SERVER_SCRIPTS.get(
             (model_source, model_key), ("start_wan.sh", "Wan2.2 video")
@@ -11580,18 +11699,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # There's no model_source argument here (unlike _on_start_server) since
         # any script stops the one shared port-8000 container. Resolve "which
         # server_manager key is presumably running" the same way
-        # _on_start_server would resolve what to *start* for the panel's
-        # current source/model selection, so note_stopping targets the right
-        # key rather than guessing.
+        # _on_start_server would resolve what to *start* for the current
+        # medium's source/model selection (SP-3d-3: CreateView, not
+        # ControlPanel), so note_stopping targets the right key rather than
+        # guessing.
         server_key = None
         try:
-            _stop_source = self._controls.get_model_source()
-            if _stop_source == "video":
-                _stop_model_key = self._controls.get_video_model()
-            elif _stop_source == "image":
-                _stop_model_key = self._controls.get_image_model()
-            else:
-                _stop_model_key = ""
+            _stop_source = self._current_medium_source()
+            _stop_model_key = self._current_medium_model_key(_stop_source)
             _stop_script_name, _ = _SERVER_SCRIPTS.get(
                 (_stop_source, _stop_model_key), ("start_wan.sh", "Wan2.2 video")
             )
@@ -12204,7 +12319,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_gallery = self._video_gallery
         pending = self._video_gallery.add_pending_card()
         pending.update_status(f"Recovering {job_id[:8]}… ({status})")
-        self._controls.set_busy(True)
 
         gen = GenerationWorker(
             client=self._client,
@@ -12257,7 +12371,6 @@ class MainWindow(Gtk.ApplicationWindow):
                 pass
             self._create_job_active = False
         self._gen_gallery = None
-        self._controls.set_busy(False)
         self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
         # Refresh "Repeat last" availability now that history has at least one record.
         self._controls._apply_seed_mode_from_settings()
@@ -12286,7 +12399,6 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery = self._gen_gallery or self._active_gallery()
         gallery.remove_pending()
         self._gen_gallery = None
-        self._controls.set_busy(False)
         self._screensaver_uninhibit()
         self._last_error_log_path = detect_log_path(message)
         short = shorten_error(message)

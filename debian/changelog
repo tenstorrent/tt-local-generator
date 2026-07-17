@@ -1,3 +1,42 @@
+tt-local-generator (0.43.0) noble; urgency=medium
+
+  * SP-3d-3: rehomed every SURVIVING `self._controls.*` hook off ControlPanel
+    (`.superpowers/sdd/sp3d-audit.md` §1) -- the prerequisite for deleting the
+    class outright in 3d-5. ControlPanel itself is untouched (still
+    constructed, still the legacy tabs' generation surface) -- only its
+    SURVIVING external callers change. A new `_current_medium_source()`
+    (MainWindow) translates `CreateView._active_medium` into the legacy
+    "video"/"image"/"animate"/"artgen" vocabulary (every artgen medium,
+    including the AnimateDiff generator, folds to "artgen" here; a companion
+    `_active_medium_is_animatediff()` gives callers that need that finer
+    distinction, e.g. TT-TV, their own check), replacing
+    `ControlPanel.get_model_source()` at `_active_gallery`,
+    `_on_loop_nav_discover`, `_hide_pipelines`, `_on_open_attractor`,
+    `_update_attractor_btn`, `_on_start_server`/`_on_stop_server`, and the
+    `_hw_statusbar` Start button's callback. A new
+    `_current_medium_model_key()` resolves the scoped model dropdown's
+    selection (`CreateView._selected_model_key()`, a `server_manager` key)
+    through the existing `_SERVER_KEY_TO_SOURCE_MODEL` map (already used by
+    `_resolve_attractor_model`) in place of `get_video_model()`/
+    `get_image_model()`. TT-TV's server-status line and `_on_generate`'s
+    AnimateDiff-blackhole chip-busy guard move onto `ModelStatusService` via
+    two more new helpers, `_running_generation_server()` and
+    `_display_label_for_server_key()`, replacing ControlPanel's own
+    `_server_ready`/`_running_model` polling attributes (fed by the
+    now-legacy `_health_loop`). The 6 `set_busy(...)` calls (1 definition +
+    5 external call sites) are deleted outright -- audit-confirmed dead
+    weight: `ControlPanel.set_busy` only ever toggled its own Generate/Cancel
+    buttons, and nothing surviving ever read `_controls._busy`. Every other
+    `self._controls.*` reference left in main_window.py is inside
+    `_on_health_result`/`_on_artgen_health_result`/`_on_inspire` or one of
+    ControlPanel's own startup/injection lines -- all audit-classified
+    LEGACY-ONLY, retiring alongside `_health_loop`/`_artgen_health_loop`/
+    ControlPanel itself in later SP-3d sub-stages, deliberately left alone
+    by this task. See `.superpowers/sdd/task-3-report.md` for the full
+    per-member table and the final zero-SURVIVING-reads grep.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 11:00:00 -0700
+
 tt-local-generator (0.42.0) noble; urgency=medium
 
   * SP-3d-2: Repeat-Last seed mode migrated into Create's Controls zone,
