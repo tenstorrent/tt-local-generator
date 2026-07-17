@@ -1,3 +1,33 @@
+tt-local-generator (0.43.1) noble; urgency=medium
+
+  * SP-3d-3 review fix: `_running_generation_server()` was capability-BLIND --
+    it checked `ready_keys("video")` then `ready_keys("image")` unconditionally
+    regardless of what the caller actually cared about. Since every
+    video/image/animate/skyreels `ServerDef` shares ONE port (8000) and is
+    mutually exclusive with the others, this meant a caller asking "is video
+    ready" would wrongly see "ready" whenever an UNRELATED capability's model
+    (e.g. FLUX, "image") happened to be loaded instead -- a real regression
+    versus ControlPanel's old `_server_ready`, which was mismatch-aware (see
+    `ControlPanel.set_server_state`'s `mismatch = source_for_model !=
+    current_source` check). Two reachable bugs: TT-TV's `get_server_status`
+    would report "ready" and auto-generate video prompts against a FLUX
+    server (failing every attempt while showing "ready"), and `_on_generate`'s
+    AnimateDiff-blackhole chip-busy guard could misfire off an unrelated
+    capability's loaded model. Fixed: `_running_generation_server(capability)`
+    now takes an explicit capability and checks ONLY that one. Threaded
+    through both call sites -- a new `_attractor_capability()` derives the
+    capability from the current medium (mirroring the AnimateDiff/artgen
+    special-cases `_on_health_result` already used), and the AnimateDiff-
+    blackhole guard now passes `"video"` explicitly (it's a video-capability
+    model, and that branch only ever runs for `model_source == "video"`).
+    `_on_open_attractor`'s inline `get_server_status` lambda was also
+    extracted into a real method, `_attractor_server_status`, so this
+    capability-scoping is independently testable without constructing a real
+    `attractor.AttractorWindow`. New regression tests confirmed failing
+    against the pre-fix code (capability-blind) and passing post-fix.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 12:00:00 -0700
+
 tt-local-generator (0.43.0) noble; urgency=medium
 
   * SP-3d-3: rehomed every SURVIVING `self._controls.*` hook off ControlPanel

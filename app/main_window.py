@@ -9086,20 +9086,35 @@ class MainWindow(Gtk.ApplicationWindow):
             return mdl if src == "image" and mdl else _DEFAULT_IMAGE_KEY
         return ""
 
-    def _running_generation_server(self) -> "tuple[bool, Optional[str]]":
-        """(is a video/image server currently READY, its server_manager key),
-        from `ModelStatusService` (SP-3d-3) — replaces ControlPanel's own
-        `_server_ready`/`_running_model` attributes (fed by the now-legacy
+    def _running_generation_server(self, capability: str) -> "tuple[bool, Optional[str]]":
+        """(is a server currently READY for `capability`, its server_manager
+        key), from `ModelStatusService` (SP-3d-3) — replaces ControlPanel's
+        own `_server_ready`/`_running_model` attributes (fed by the now-legacy
         `_health_loop`) for the two surviving readers: `_on_open_attractor`'s
         TT-TV status line, and `_on_generate`'s AnimateDiff-blackhole
         chip-busy guard. Prefers READY over STARTING (`ready_keys`, not
         `running_or_starting`) — a server still loading hasn't actually
         claimed the chip yet, so the guard/status line should only fire once
-        a server has actually finished coming up."""
-        for cap in ("video", "image"):
-            ready = self._status_service.ready_keys(cap)
-            if ready:
-                return True, ready[0]
+        a server has actually finished coming up.
+
+        CAPABILITY-AWARE (SP-3d-3 review fix): video/image/animate/skyreels
+        `ServerDef`s all share ONE port (8000) and are mutually exclusive —
+        only one model is ever loaded at a time. An earlier version of this
+        helper checked every capability unconditionally and returned "ready"
+        as long as ANY of them was up, even when the loaded model belonged to
+        an UNRELATED capability (e.g. FLUX/image loaded while the caller's
+        context is "video") — a real regression versus the old
+        `ControlPanel._server_ready`, which went False on exactly this
+        mismatch (see `ControlPanel.set_server_state`'s
+        `mismatch = source_for_model != current_source` check). Scoping the
+        `ready_keys()` lookup to the SINGLE capability the caller cares about
+        restores that mismatch-aware behavior for free: a mismatched loaded
+        model simply isn't in `ready_keys(capability)`, so this correctly
+        returns `(False, None)`.
+        """
+        ready = self._status_service.ready_keys(capability)
+        if ready:
+            return True, ready[0]
         return False, None
 
     def _display_label_for_server_key(self, server_key: "Optional[str]") -> "Optional[str]":
@@ -9112,6 +9127,61 @@ class MainWindow(Gtk.ApplicationWindow):
         import server_manager
         sdef = server_manager.SERVERS.get(server_key)
         return sdef.label if sdef is not None else server_key
+
+    def _attractor_capability(self) -> str:
+        """The `ModelStatusService` capability TT-TV's server-status line
+        (`_on_open_attractor`'s `get_server_status` closure, extracted to
+        `_attractor_server_status`) should check RIGHT NOW (SP-3d-3 review
+        fix — see `_running_generation_server`'s docstring for why this must
+        be capability-scoped, not "any of video/image").
+
+        Mirrors `_on_open_attractor`'s own AnimateDiff override: when the
+        AnimateDiff generator medium is active, the effective source is
+        "animatediff", which has no `_SOURCE_TO_CAP` entry — falling back to
+        "video" exactly matches ControlPanel's old behavior (its own
+        `_model_source` stayed "video" for the AnimateDiff sub-model; it
+        never became "animatediff" itself).
+
+        "artgen" is deliberately special-cased to "video" too, rather than
+        reusing `_SOURCE_TO_CAP["artgen"]` ("artgen" — the CAPABILITY
+        DASHBOARD's row for the chat-LLM backends on port 8002): this method
+        answers a different question — "is the port-8000 generation server
+        (video/image/animate) currently occupying the chip" — which an
+        artgen medium has no real answer for. Naively reusing "artgen" here
+        would check `ready_keys("artgen")` (the LLM backend, near-always up)
+        instead, wrongly reporting "ready" for a question that doesn't apply.
+        Mirrors the identical `_source != "artgen"` special-case
+        `_on_health_result` already uses for the same reason. Read fresh on
+        every call (not captured once) so it stays correct if the active
+        medium changes while TT-TV is open, matching the pre-fix closure's
+        own live reads.
+        """
+        source = "animatediff" if self._active_medium_is_animatediff() else self._current_medium_source()
+        if source == "artgen":
+            return "video"
+        return _SOURCE_TO_CAP.get(source, "video")
+
+    def _attractor_server_status(self) -> "tuple[bool, Optional[str]]":
+        """`get_server_status` callback handed to `attractor.AttractorWindow`
+        (`_on_open_attractor`) — extracted to a real method (rather than an
+        inline lambda) so it's independently testable without constructing
+        a real `AttractorWindow`.
+
+        SP-3d-3 review fix: capability-scoped via `_attractor_capability()`
+        (not "any of video/image" — see `_running_generation_server`'s
+        docstring) so a MISMATCHED loaded model (e.g. FLUX/image up while
+        this medium is "video") correctly reports NOT ready, restoring
+        ControlPanel's old mismatch-aware `_server_ready` behavior. AnimateDiff
+        runs locally — no server needed — so it's always treated as ready
+        regardless of what `_running_generation_server` reports.
+        """
+        ready, server_key = self._running_generation_server(self._attractor_capability())
+        is_animatediff = self._active_medium_is_animatediff()
+        return (
+            ready or is_animatediff,
+            "AnimateDiff (local)" if is_animatediff
+            else self._display_label_for_server_key(server_key),
+        )
 
     # ── Gallery helpers ────────────────────────────────────────────────────────
 
@@ -10565,17 +10635,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     else None
                 ),
                 get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
-                get_server_status=lambda: (
-                    # AnimateDiff runs locally — no server needed — treat as ready.
-                    self._running_generation_server()[0]
-                    or self._active_medium_is_animatediff(),
-                    # Display name shown in the TT-TV status bar.
-                    "AnimateDiff (local)"
-                    if self._active_medium_is_animatediff()
-                    else self._display_label_for_server_key(
-                        self._running_generation_server()[1]
-                    ),
-                ),
+                get_server_status=self._attractor_server_status,
                 playlist_id=playlist_id,
                 auto_generate=auto_generate,
                 get_playlists=lambda: (
@@ -10948,8 +11008,14 @@ class MainWindow(Gtk.ApplicationWindow):
                 # `self._status_service`) is never consulted for cpu/sim, matching
                 # the reachability of ControlPanel's server-ready attribute this
                 # guard used to read directly (SP-3d-3: rehomed onto `ModelStatusService`).
+                # Capability is "video" (SP-3d-3 review fix, not "any of
+                # video/image") — AnimateDiff is a video-capability model, and
+                # this branch only runs for `model_source == "video"` anyway
+                # (the only caller of `_on_generate`'s video branch), matching
+                # ControlPanel's old `_server_ready`, which was scoped to
+                # whatever the CURRENT source was, never any unrelated one.
                 if ad["mode"] == "blackhole":
-                    server_ready, server_key = self._running_generation_server()
+                    server_ready, server_key = self._running_generation_server("video")
                     if server_ready and self._count_blackhole_chips() == 1:
                         model_lbl = self._display_label_for_server_key(server_key) or "a model"
                         busy_msg = (

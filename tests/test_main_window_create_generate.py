@@ -1192,6 +1192,40 @@ def test_animatediff_chip_busy_early_return_clears_create_job_and_shows_error(mo
     assert server_manager.SERVERS["wan2.2"].label in error_msg
 
 
+def test_animatediff_chip_busy_guard_ignores_mismatched_capability(monkeypatch):
+    """SP-3d-3 review-fix regression: the ONLY model READY is FLUX (an
+    "image"-capability server) — the AnimateDiff-blackhole guard is
+    "video"-capability-scoped, so this must NOT trip it, even though chip
+    count == 1. Pre-fix, `_running_generation_server()` checked "video" OR
+    "image" unconditionally and would have wrongly reported ready here,
+    falsely blocking the generation. Post-fix: capability="video" explicitly
+    -> not ready -> generation proceeds normally (no early return)."""
+    obj, fake_gallery, fake_create_view = _make_mw_lifecycle(monkeypatch)
+    animatediff_args = {
+        "mode": "blackhole", "negative_prompt": "", "temporal_alpha": 0.0,
+        "lightning": False, "lightning_steps": 0, "multi_chip": False,
+        "device_id": 0, "chain_from": None, "chain_save": False,
+        "chain_alpha": 0.0, "motion_adapter": None, "motion_adapter_alpha": 0.0,
+        "motion_adapter_skip": 0,
+    }
+    # Only "image" is ready (FLUX) -- "video" has nothing ready/starting.
+    obj._status_service.ready_keys = MagicMock(
+        side_effect=lambda cap: ["flux"] if cap == "image" else []
+    )
+    obj._count_blackhole_chips = MagicMock(return_value=1)
+    obj._create_job_active = True
+    fake_create_view._result_panel.show_pending("prompt", _VIDEO_MEDIUM)
+
+    obj._on_generate("prompt", "", 20, -1, model_source="video",
+                      video_model_key="animatediff",
+                      animatediff_args=animatediff_args)
+
+    # The guard did NOT trip: no early return, no show_error, generation
+    # actually started (an AnimateDiffGenerationWorker was built).
+    assert not any(c[0] == "show_error" for c in fake_create_view._result_panel.calls)
+    assert type(obj._worker_gen).__name__ == "AnimateDiffGenerationWorker"
+
+
 def test_early_return_does_not_bleed_state_into_next_non_create_job(monkeypatch):
     """Regression: after a Create job dies on an early return (and gets
     cleaned up by `_fail_create_job`), the NEXT unrelated non-Create job must

@@ -116,6 +116,8 @@ def _make_mw(monkeypatch, create_view=None):
         "_current_medium_model_key",
         "_running_generation_server",
         "_display_label_for_server_key",
+        "_attractor_capability",
+        "_attractor_server_status",
         "_active_gallery",
         "_gallery_for_type",
         "_on_start_server",
@@ -255,28 +257,52 @@ def test_animate_source_returns_empty_string(monkeypatch):
 
 
 # ── `_running_generation_server` / `_display_label_for_server_key` ─────────
+#
+# CAPABILITY-AWARE (SP-3d-3 review fix): an earlier version of this helper
+# took no capability argument and checked "video" then "image" unconditionally
+# — since every video/image/animate/skyreels ServerDef shares ONE port (8000)
+# and is mutually exclusive with the others, that meant a caller asking about
+# "video" would wrongly see "ready" whenever an unrelated model (e.g. FLUX,
+# an image-capability server) happened to be loaded instead. The fix takes an
+# explicit `capability` and checks ONLY that one, so a mismatched loaded model
+# correctly resolves to "not ready" — restoring `ControlPanel._server_ready`'s
+# old mismatch-aware behavior (see `ControlPanel.set_server_state`'s
+# `mismatch = source_for_model != current_source` check).
 
 
-def test_running_generation_server_prefers_video_capability(monkeypatch):
+def test_running_generation_server_checks_only_the_requested_capability(monkeypatch):
     obj = _make_mw(monkeypatch)
     obj._status_service.ready_keys = MagicMock(
-        side_effect=lambda cap: ["wan2.2"] if cap == "video" else ["motif"]
+        side_effect=lambda cap: ["wan2.2"] if cap == "video" else []
     )
-    assert obj._running_generation_server() == (True, "wan2.2")
+    assert obj._running_generation_server("video") == (True, "wan2.2")
 
 
-def test_running_generation_server_falls_back_to_image_capability(monkeypatch):
+def test_running_generation_server_image_capability(monkeypatch):
     obj = _make_mw(monkeypatch)
     obj._status_service.ready_keys = MagicMock(
-        side_effect=lambda cap: [] if cap == "video" else ["flux"]
+        side_effect=lambda cap: ["flux"] if cap == "image" else []
     )
-    assert obj._running_generation_server() == (True, "flux")
+    assert obj._running_generation_server("image") == (True, "flux")
+
+
+def test_running_generation_server_mismatched_capability_is_not_ready(monkeypatch):
+    """THE regression this fix targets: an image model (FLUX) is READY, but
+    the caller asks about "video" — must NOT report ready, unlike the
+    pre-fix version (which checked "video" OR "image" unconditionally and
+    would have wrongly returned `(True, "flux")` here)."""
+    obj = _make_mw(monkeypatch)
+    obj._status_service.ready_keys = MagicMock(
+        side_effect=lambda cap: ["flux"] if cap == "image" else []
+    )
+    assert obj._running_generation_server("video") == (False, None)
 
 
 def test_running_generation_server_nothing_ready(monkeypatch):
     obj = _make_mw(monkeypatch)
     obj._status_service.ready_keys.return_value = []
-    assert obj._running_generation_server() == (False, None)
+    assert obj._running_generation_server("video") == (False, None)
+    assert obj._running_generation_server("image") == (False, None)
 
 
 def test_display_label_for_known_server_key(monkeypatch):
@@ -294,6 +320,97 @@ def test_display_label_for_falsy_key_returns_none(monkeypatch):
     obj = _make_mw(monkeypatch)
     assert obj._display_label_for_server_key(None) is None
     assert obj._display_label_for_server_key("") is None
+
+
+# ── `_attractor_capability` — the medium -> capability translation TT-TV's
+# server-status line uses to scope `_running_generation_server` ────────────
+
+
+def test_attractor_capability_native_video_medium(monkeypatch):
+    medium = Medium(id="video", label="Video", icon="x", kind="video", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    assert obj._attractor_capability() == "video"
+
+
+def test_attractor_capability_native_image_medium(monkeypatch):
+    medium = Medium(id="image", label="Image", icon="x", kind="image", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    assert obj._attractor_capability() == "image"
+
+
+def test_attractor_capability_native_animate_medium(monkeypatch):
+    medium = Medium(id="animate", label="Animate", icon="x", kind="gif", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    assert obj._attractor_capability() == "animate"
+
+
+def test_attractor_capability_animatediff_medium_falls_back_to_video(monkeypatch):
+    """Mirrors ControlPanel's old behavior: AnimateDiff was a video-tab
+    sub-model, so its capability was always "video", never "animatediff"
+    (which isn't a real ModelStatusService/server_manager capability)."""
+    medium = Medium(id="animatediff", label="AnimateDiff", icon="🕺", kind="gif",
+                     source="artgen", generator="animatediff")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    assert obj._attractor_capability() == "video"
+
+
+def test_attractor_capability_generic_artgen_medium_falls_back_to_video(monkeypatch):
+    """A non-AnimateDiff artgen medium (e.g. "verse") must NOT resolve to the
+    "artgen" capability -- that's the chat-LLM backend on port 8002 (almost
+    always up), an unrelated question from "is the port-8000 generation
+    server occupying the chip." Falls back to "video", same special-case
+    `_on_health_result` already uses for exactly this reason."""
+    medium = Medium(id="verse", label="Verse", icon="x", kind="text", source="artgen",
+                     generator="verse")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    assert obj._attractor_capability() == "video"
+
+
+# ── `_attractor_server_status` — TT-TV's `get_server_status` callback ──────
+#
+# Extracted from `_on_open_attractor`'s inline lambda into a real method so
+# it's testable without constructing a real `attractor.AttractorWindow`.
+
+
+def test_attractor_server_status_ready_when_capability_matches(monkeypatch):
+    medium = Medium(id="video", label="Video", icon="x", kind="video", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    obj._status_service.ready_keys = MagicMock(
+        side_effect=lambda cap: ["wan2.2"] if cap == "video" else []
+    )
+    import server_manager
+    ready, label = obj._attractor_server_status()
+    assert ready is True
+    assert label == server_manager.SERVERS["wan2.2"].label
+
+
+def test_attractor_server_status_not_ready_on_capability_mismatch(monkeypatch):
+    """THE end-to-end regression this fix targets: the active medium is
+    "video", but the ONLY model READY is FLUX (an "image" capability server)
+    — pre-fix, `_running_generation_server` checked "video" OR "image"
+    unconditionally and would have wrongly reported "ready" here (TT-TV would
+    show ready and auto-generate video prompts against a FLUX server, failing
+    every attempt). Post-fix: capability-scoped to "video" -> not ready."""
+    medium = Medium(id="video", label="Video", icon="x", kind="video", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    obj._status_service.ready_keys = MagicMock(
+        side_effect=lambda cap: ["flux"] if cap == "image" else []
+    )
+    ready, label = obj._attractor_server_status()
+    assert ready is False
+    assert label is None
+
+
+def test_attractor_server_status_animatediff_always_ready_regardless_of_server(monkeypatch):
+    """AnimateDiff runs locally -- no server needed -- so it's "ready"
+    regardless of what ModelStatusService reports (even nothing at all)."""
+    medium = Medium(id="animatediff", label="AnimateDiff", icon="🕺", kind="gif",
+                     source="artgen", generator="animatediff")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(active_medium=medium))
+    obj._status_service.ready_keys.return_value = []
+    ready, label = obj._attractor_server_status()
+    assert ready is True
+    assert label == "AnimateDiff (local)"
 
 
 # ── `_active_gallery` — no longer reads `_controls.get_model_source()` ─────
@@ -399,7 +516,24 @@ def test_on_open_attractor_never_reads_controls_for_source_or_status():
     assert "self._controls._running_model" not in body
     assert "self._current_medium_source()" in body
     assert "self._active_medium_is_animatediff()" in body
-    assert "self._running_generation_server()" in body
+    # SP-3d-3 review fix: the get_server_status closure was extracted to a
+    # real (testable) method, `_attractor_server_status` — see the
+    # `test_attractor_server_status_*` tests above for its capability-scoped
+    # behavior.
+    assert "get_server_status=self._attractor_server_status" in body
+
+
+def test_attractor_server_status_never_reads_controls_and_is_capability_scoped():
+    """The extracted method itself (not just `_on_open_attractor`'s call
+    site) must never fall back to ControlPanel, and must call
+    `_running_generation_server` with an explicit capability argument, not
+    the old capability-blind no-arg form."""
+    start = _SRC.index("    def _attractor_server_status(self)")
+    end = _SRC.index("\n    def ", start + 1)
+    body = _SRC[start:end]
+    assert "self._controls" not in body
+    assert "self._running_generation_server(self._attractor_capability())" in body
+    assert "self._running_generation_server()" not in body
 
 
 def test_update_attractor_btn_never_reads_controls():
@@ -417,7 +551,11 @@ def test_on_generate_animatediff_guard_never_reads_controls_server_ready():
     body = _SRC[start:end]
     assert "self._controls._server_ready" not in body
     assert "self._running_model" not in body  # the pre-existing undefined-attribute bug
-    assert "self._running_generation_server()" in body
+    # SP-3d-3 review fix: capability-scoped to "video" explicitly (not the
+    # old capability-blind no-arg call) — AnimateDiff is a video-capability
+    # model and this branch only ever runs for model_source == "video".
+    assert 'self._running_generation_server("video")' in body
+    assert "self._running_generation_server()" not in body
 
 
 def test_set_busy_calls_are_gone():
