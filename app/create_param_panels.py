@@ -59,6 +59,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, Gio, GdkPixbuf, Gtk  # noqa: E402
 
 import field_roles
+from app_settings import settings as _settings
 
 
 @dataclass
@@ -324,6 +325,165 @@ class SeedImageWell(Gtk.Box):
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SeedModeControl (SP-3d-2: docs/superpowers/specs/2026-07-17-sp3d-delete-
+# vestiges-design.md, section 3d-2; `.superpowers/sdd/task-2-brief.md`) --
+# random / repeat-last / keep-this seed mode, shared by every native Create
+# param panel that exposes a seed field (Image/Video/Animate).
+#
+# Migrates ControlPanel's three-way seed-mode toggle (main_window.py's
+# `_seed_random_btn`/`_seed_repeat_btn`/`_seed_keep_btn` radio group,
+# `_on_seed_mode`, `_apply_seed_mode_from_settings`, ~line 5024-5140) into
+# Create so the feature survives ControlPanel's eventual deletion (SP-3d --
+# CLAUDE.md/the audit call this out explicitly as a "never drop" migration,
+# not a silent feature loss).
+#
+# Persists to the EXACT SAME `seed_mode` settings key ControlPanel reads and
+# writes (`app_settings.DEFAULTS["seed_mode"]`) -- not a forked "create seed
+# mode" key -- so the two surfaces always agree on which mode is active:
+# picking "Repeat last" here and later opening the legacy ControlPanel (or
+# vice versa) shows the same mode selected.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (internal key, dropdown label) -- persisted value uses ControlPanel's own
+# vocabulary ("random"/"repeat"/"keep") so `_settings.get("seed_mode")` means
+# the same thing on both surfaces.
+_SEED_MODE_CHOICES: "list[tuple[str, str]]" = [
+    ("random", "\U0001f3b2 Random"),
+    ("repeat", "\U0001f501 Repeat last"),
+    ("keep", "\U0001f4cc Keep this"),
+]
+_SEED_MODE_KEYS: "list[str]" = [key for key, _label in _SEED_MODE_CHOICES]
+_DEFAULT_SEED_MODE = "random"
+
+
+def _last_used_seed() -> int:
+    """Return the seed of the most recently generated record, or -1 (the
+    "random" sentinel) when there is no history yet.
+
+    Mirrors ControlPanel's `_on_seed_mode`/`_apply_seed_mode_from_settings`
+    "repeat" branch (main_window.py ~5066-5140) EXACTLY: same source (a fresh
+    `HistoryStore()` -- `HistoryStore.all_records()` proxies straight through
+    to the singleton `media_store.media_store`, so a fresh instance here sees
+    the IDENTICAL records ControlPanel's own `self._store` does, no forked
+    persistence), same derivation (sort ascending by `created_at`, take the
+    last one). Fails soft to -1 on any error (store not yet initialised,
+    corrupt record, etc.) -- same fallback ControlPanel uses when "repeat" is
+    requested with empty history.
+    """
+    try:
+        from history_store import HistoryStore
+        recs = HistoryStore().all_records()
+    except Exception:
+        return -1
+    if not recs:
+        return -1
+    try:
+        last = sorted(recs, key=lambda r: getattr(r, "created_at", ""))[-1]
+        seed = getattr(last, "seed", -1)
+        return int(seed) if seed is not None else -1
+    except Exception:
+        return -1
+
+
+class SeedModeControl(Gtk.Box):
+    """Compact random/repeat-last/keep selector -- a single `Gtk.DropDown`,
+    not ControlPanel's three separate toggle buttons, to fit the Controls
+    zone's one-row-per-field layout.
+
+    `on_change`, if given, is called with the new mode string every time the
+    user picks a different entry -- panels use it to write-through "random"'s
+    -1 sentinel into their own seed Adjustment immediately (see
+    `ImageParamPanel._on_seed_mode_changed` and its Video/Animate mirrors).
+    "repeat" is deliberately NOT resolved here or via write-through: the
+    "last used seed" can change between mode-selection and the next Create
+    click (e.g. another medium finishes generating in the background), so it
+    is re-resolved fresh at `collect()` time instead (see `_collect_seed`).
+
+    MIGRATION-SAFE: a panel that never builds this control has `_seed_mode is
+    None`, and `_collect_seed(seed_adj, None)` falls back to reading the seed
+    Adjustment's raw value unchanged -- the exact pre-existing behaviour.
+    """
+
+    def __init__(
+        self,
+        on_change: "Optional[callable]" = None,
+        css_class: str = "",
+    ) -> None:
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add_css_class("seed-mode-control")
+        self._on_change = on_change
+
+        labels = [label for _key, label in _SEED_MODE_CHOICES]
+        self._dropdown = Gtk.DropDown(model=Gtk.StringList.new(labels))
+        if css_class:
+            self._dropdown.add_css_class(css_class)
+        self._dropdown.set_tooltip_text(
+            "Random: a new seed every generation\n"
+            "Repeat last: reuse the most recently generated seed\n"
+            "Keep this: use the seed value typed in the field"
+        )
+        self.append(self._dropdown)
+
+        # Initialise from the SAME settings key ControlPanel persists to (see
+        # module comment above) -- an unknown/corrupt saved value falls back
+        # to "random", matching `_DEFAULT_SEED_MODE`/`app_settings.DEFAULTS`.
+        saved_mode = str(_settings.get("seed_mode") or _DEFAULT_SEED_MODE)
+        if saved_mode not in _SEED_MODE_KEYS:
+            saved_mode = _DEFAULT_SEED_MODE
+        self._mode = saved_mode
+        self._dropdown.set_selected(_SEED_MODE_KEYS.index(saved_mode))
+
+        # Connected AFTER set_selected() above so construction-time init
+        # doesn't immediately re-fire on_change/re-persist the value it just
+        # read from settings.
+        self._dropdown.connect("notify::selected", self._on_dropdown_changed)
+
+    @property
+    def mode(self) -> str:
+        """Current mode string -- one of "random"/"repeat"/"keep"."""
+        return self._mode
+
+    def _on_dropdown_changed(self, dropdown: Gtk.DropDown, _pspec) -> None:
+        idx = dropdown.get_selected()
+        if idx < 0 or idx >= len(_SEED_MODE_KEYS):
+            return
+        mode = _SEED_MODE_KEYS[idx]
+        self._mode = mode
+        # Persist to the SAME key ControlPanel's own `_on_seed_mode`
+        # (main_window.py) reads/writes -- reusing the existing key/logic,
+        # not forking a parallel "create seed mode" setting.
+        _settings.set("seed_mode", mode)
+        if self._on_change is not None:
+            try:
+                self._on_change(mode)
+            except Exception:
+                pass  # fail-soft: a broken write-through must not crash the UI
+
+
+def _collect_seed(
+    seed_adj: "Optional[Gtk.Adjustment]",
+    seed_mode: "Optional[SeedModeControl]",
+) -> int:
+    """Resolve the seed value `collect()` should forward, given a panel's own
+    seed Adjustment and (optional) `SeedModeControl`.
+
+    Every case but "repeat" simply reads the Adjustment's raw value -- this
+    is the exact PRE-EXISTING behaviour (no mode concept at all), which is
+    why it's also what a panel with no `SeedModeControl` built yet falls back
+    to. "random" doesn't need a special case here: selecting it write-throughs
+    the Adjustment to -1 immediately (see `SeedModeControl`'s docstring), so
+    reading the Adjustment already returns -1 for it. "keep" IS "read the
+    Adjustment" by definition -- the seed field itself is the fixed value.
+    Only "repeat" needs live resolution here, since the most-recently-used
+    seed can change between mode-selection and this call.
+    """
+    fixed = int(seed_adj.get_value()) if seed_adj is not None else -1
+    if seed_mode is not None and seed_mode.mode == "repeat":
+        return _last_used_seed()
+    return fixed
+
+
 # Image model dropdown choices: (internal key, human label), display order.
 # Mirrors ControlPanel's `_build_image_model_row` entries (main_window.py) —
 # duplicated, not imported, per the module docstring's CRITICAL STRATEGY note.
@@ -368,6 +528,10 @@ class ImageParamPanel(CreateParamPanel):
         # unchanged text-to-image behavior — see `SeedImageWell`'s own
         # docstring above and this class's `collect()`).
         self._seed_well: Optional[SeedImageWell] = None
+        # SP-3d-2: random/repeat-last/keep seed mode, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring above and
+        # `_resolved_seed()`/`collect()` below.
+        self._seed_mode: Optional[SeedModeControl] = None
         # key -> built row widget, populated by build(). Lets RoleZonePanel
         # (Task 5) re-parent an already-built row into a zone by field key
         # via the base class's `_row_for` — see that method's docstring.
@@ -417,14 +581,19 @@ class ImageParamPanel(CreateParamPanel):
         (no well built / no image chosen) — this is a MIGRATION-SAFE
         addition (SP-3c-1): an empty seed path preserves today's exact
         text-to-image behavior, only image-conditioned (i2i) generation
-        needs it non-empty.
+        needs it non-empty. `seed` (SP-3d-2) is resolved through
+        `_collect_seed` per the active `SeedModeControl` mode — see that
+        function's docstring; a panel built before this task (or with the
+        control never built) falls back to the Adjustment's raw value
+        unchanged, so the default random/-1 case is byte-for-byte identical
+        to before.
         """
         return {
             "negative_prompt": self._neg_entry.get_text() if self._neg_entry is not None else "",
             "num_inference_steps": (
                 int(self._steps_adj.get_value()) if self._steps_adj is not None else 20
             ),
-            "seed": int(self._seed_adj.get_value()) if self._seed_adj is not None else -1,
+            "seed": _collect_seed(self._seed_adj, self._seed_mode),
             "guidance_scale": (
                 float(self._guidance_adj.get_value()) if self._guidance_adj is not None else 3.5
             ),
@@ -536,7 +705,23 @@ class ImageParamPanel(CreateParamPanel):
         spin.add_css_class("image-param-input")
         spin.set_tooltip_text("-1 = random seed")
         row.append(spin)
+
+        # SP-3d-2: random/repeat-last/keep mode selector, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring.
+        self._seed_mode = SeedModeControl(
+            on_change=self._on_seed_mode_changed, css_class="image-param-input"
+        )
+        row.append(self._seed_mode)
         return row
+
+    def _on_seed_mode_changed(self, mode: str) -> None:
+        """Write-through for "random": immediately reset the spin to -1 so a
+        stale "keep" value can never leak into a "random" generation.
+        "repeat" and "keep" leave the spin untouched — "repeat" is resolved
+        dynamically at `collect()` time (see `_collect_seed`), and "keep" IS
+        the spin's own value by definition."""
+        if mode == "random" and self._seed_adj is not None:
+            self._seed_adj.set_value(-1)
 
     def _build_guidance_row(self) -> Gtk.Box:
         row = self._row("Guidance scale")
@@ -704,6 +889,9 @@ class VideoParamPanel(CreateParamPanel):
         # (i2v-style conditioning) for the other video models. Empty path
         # preserves today's exact text-to-video behavior.
         self._seed_well: Optional[SeedImageWell] = None
+        # SP-3d-2: random/repeat-last/keep seed mode, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring.
+        self._seed_mode: Optional[SeedModeControl] = None
         # key -> built row widget, populated by build() — see ImageParamPanel's
         # `_rows` for the rationale (RoleZonePanel re-parenting, Task 5).
         self._rows: "dict[str, Gtk.Widget]" = {}
@@ -790,13 +978,17 @@ class VideoParamPanel(CreateParamPanel):
         special-case "panel wasn't showing AnimateDiff" before reading it;
         `_create_generate_native` (main_window.py) only actually forwards it
         to `_on_generate` when `model_key == "animatediff"`.
+
+        `seed` (SP-3d-2) is resolved through `_collect_seed` per the active
+        `SeedModeControl` mode — see `ImageParamPanel.collect()`'s docstring
+        for the same migration-safety note.
         """
         return {
             "negative_prompt": self._neg_entry.get_text() if self._neg_entry is not None else "",
             "num_inference_steps": (
                 int(self._steps_adj.get_value()) if self._steps_adj is not None else 20
             ),
-            "seed": int(self._seed_adj.get_value()) if self._seed_adj is not None else -1,
+            "seed": _collect_seed(self._seed_adj, self._seed_mode),
             "model": self._selected_model_id(),
             "num_frames": self._selected_num_frames(),
             "seed_image_path": self._seed_well.path() if self._seed_well is not None else "",
@@ -956,7 +1148,20 @@ class VideoParamPanel(CreateParamPanel):
         spin.add_css_class("video-param-input")
         spin.set_tooltip_text("-1 = random seed")
         row.append(spin)
+
+        # SP-3d-2: random/repeat-last/keep mode selector, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring.
+        self._seed_mode = SeedModeControl(
+            on_change=self._on_seed_mode_changed, css_class="video-param-input"
+        )
+        row.append(self._seed_mode)
         return row
+
+    def _on_seed_mode_changed(self, mode: str) -> None:
+        """Write-through for "random" — see `ImageParamPanel`'s identical
+        method for the full rationale."""
+        if mode == "random" and self._seed_adj is not None:
+            self._seed_adj.set_value(-1)
 
     def _build_model_row(self) -> Gtk.Box:
         row = self._row("Model")
@@ -1268,6 +1473,9 @@ class AnimateParamPanel(CreateParamPanel):
         self._mode_repl_btn: Optional[Gtk.ToggleButton] = None
         self._steps_adj: Optional[Gtk.Adjustment] = None
         self._seed_adj: Optional[Gtk.Adjustment] = None
+        # SP-3d-2: random/repeat-last/keep seed mode, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring.
+        self._seed_mode: Optional[SeedModeControl] = None
         # Mirrors CreateView's `_entry_mode` pattern: a plain attribute kept
         # in sync by the toggle group's "toggled" handler, read by collect()
         # rather than re-deriving it from widget state on every read.
@@ -1315,7 +1523,9 @@ class AnimateParamPanel(CreateParamPanel):
 
         Falls back to the documented defaults for any widget that was never
         built — `collect()` should never raise even if called before
-        `build()`.
+        `build()`. `seed` (SP-3d-2) is resolved through `_collect_seed` per
+        the active `SeedModeControl` mode — see `ImageParamPanel.collect()`'s
+        docstring for the same migration-safety note.
         """
         return {
             "reference_video_path": (
@@ -1327,7 +1537,7 @@ class AnimateParamPanel(CreateParamPanel):
             "num_inference_steps": (
                 int(self._steps_adj.get_value()) if self._steps_adj is not None else 20
             ),
-            "seed": int(self._seed_adj.get_value()) if self._seed_adj is not None else -1,
+            "seed": _collect_seed(self._seed_adj, self._seed_mode),
             "animate_mode": self._animate_mode,
             "model": _ANIMATE_MODEL_ID,
         }
@@ -1489,7 +1699,20 @@ class AnimateParamPanel(CreateParamPanel):
         spin.add_css_class("animate-param-input")
         spin.set_tooltip_text("-1 = random seed")
         row.append(spin)
+
+        # SP-3d-2: random/repeat-last/keep mode selector, migrated from
+        # ControlPanel — see `SeedModeControl`'s docstring.
+        self._seed_mode = SeedModeControl(
+            on_change=self._on_seed_mode_changed, css_class="animate-param-input"
+        )
+        row.append(self._seed_mode)
         return row
+
+    def _on_seed_mode_changed(self, mode: str) -> None:
+        """Write-through for "random" — see `ImageParamPanel`'s identical
+        method for the full rationale."""
+        if mode == "random" and self._seed_adj is not None:
+            self._seed_adj.set_value(-1)
 
     # ── File pickers (GTK4 async Gtk.FileDialog, per CLAUDE.md) ──────────────
 

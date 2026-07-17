@@ -77,3 +77,51 @@ def _isolate_media_store(tmp_path, monkeypatch):
     # rooted under tmp_path, regardless of which module imported it first.
     store = _ms.MediaStore(safe_dir / "media.db")
     monkeypatch.setattr(_ms, "_media_store_singleton", store, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_settings(tmp_path, monkeypatch):
+    """Redirect app_settings' module-level singleton to tmp_path, and reset
+    its in-memory state to DEFAULTS, for every test.
+
+    Added for SP-3d-2 (Create's random/repeat-last/keep seed-mode control,
+    `app/create_param_panels.py`'s `SeedModeControl`), the first Create-surface
+    code to read/write `app_settings.settings` at all (`seed_mode`). Without
+    this, a test that builds an Image/Video/Animate panel and never touches
+    the seed-mode dropdown would silently pick up WHATEVER `seed_mode` happens
+    to be persisted in the real `~/.local/share/tt-video-gen/settings.json` on
+    the machine running the tests — nondeterministic and, if that value ever
+    becomes "repeat" (one click in the real app), would flip `collect()`'s
+    "seed" to a real history-derived number for every test that doesn't
+    explicitly select a mode, breaking them without any code change. Mirrors
+    `_isolate_pipeline_store`/`_isolate_media_store` above: prevents test runs
+    from writing into (or reading stale state from) the real settings file.
+
+    A fresh `AppSettings()` instance is built (tmp-backed, so it loads as pure
+    DEFAULTS) and assigned to EVERY already-imported module-level binding, not
+    just `app_settings.settings` itself. This matters because
+    `test_app_settings.py::test_new_create_zone_defaults` does
+    `importlib.reload(app_settings)`, which re-executes the module body and
+    rebinds `app_settings.settings` to a BRAND NEW object — permanently
+    orphaning any `from app_settings import settings as X` reference another
+    module already bound at import time (e.g. `create_param_panels._settings`,
+    captured once at test-collection time, long before any test body runs).
+    After that reload, mutating `app_settings.settings`'s `_data` in place (as
+    an earlier version of this fixture did) only reaches the NEW object —
+    `create_param_panels._settings` keeps pointing at the OLD, permanently
+    un-reset one, so seed-mode state written through it (e.g. by one test
+    selecting "repeat") silently leaks into every later test's freshly-built
+    panel for the rest of the session. Re-patching both names EVERY test
+    heals that divergence regardless of which object either currently points
+    to.
+    """
+    import app_settings as _as
+    import create_param_panels as _cpp
+
+    safe_file = tmp_path / "settings.json"
+    monkeypatch.setattr(_as, "STORAGE_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(_as, "SETTINGS_FILE", safe_file, raising=False)
+
+    fresh = _as.AppSettings()  # loads from safe_file (doesn't exist) -> DEFAULTS
+    monkeypatch.setattr(_as, "settings", fresh, raising=False)
+    monkeypatch.setattr(_cpp, "_settings", fresh, raising=False)

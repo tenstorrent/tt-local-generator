@@ -44,10 +44,14 @@ except Exception:  # pragma: no cover - environment-dependent
     pytest.skip("no GTK display available", allow_module_level=True)
 
 from create_param_panels import (
+    AnimateParamPanel,
     ArtgenParamPanel,
+    ImageParamPanel,
     VideoParamPanel,
     _ANIMATEDIFF_DEFAULTS,
+    _SEED_MODE_KEYS,
     _VIDEO_MODEL_CHOICES,
+    _collect_seed,
     artgen_bool_flags,
 )
 
@@ -283,3 +287,189 @@ def test_video_panel_animatediff_args_role_is_control_exact():
     specs = {s.key: s for s in VideoParamPanel().field_specs()}
     assert specs["animatediff_args"].role == fr.FieldRole(fr.ROLE_CONTROL, fr.MARK_EXACT)
     assert specs["animatediff_args"].kind == "dict"
+
+
+# ── SeedModeControl: random / repeat-last / keep (SP-3d-2) ──────────────────
+#
+# Migrates ControlPanel's three-way seed-mode toggle (main_window.py's
+# `_seed_random_btn`/`_seed_repeat_btn`/`_seed_keep_btn`, `_on_seed_mode`,
+# `_apply_seed_mode_from_settings`) into Create's Controls zone — see
+# `.superpowers/sdd/task-2-brief.md` and `create_param_panels.SeedModeControl`'s
+# own docstring for the full design rationale. `tests/conftest.py`'s
+# `_isolate_app_settings` fixture (added alongside this task) guarantees
+# `_settings.get("seed_mode")` starts at the DEFAULTS value ("random") for
+# every test here, regardless of what's persisted in the real app's settings
+# file on whatever machine runs the suite.
+
+def _select_seed_mode(panel, mode: str) -> None:
+    """Drive *panel*'s built `SeedModeControl` dropdown to *mode* — mirrors a
+    real user picking an entry (fires the same "notify::selected" handler
+    that persists to settings and write-throughs "random")."""
+    idx = _SEED_MODE_KEYS.index(mode)
+    panel._seed_mode._dropdown.set_selected(idx)
+
+
+def test_collect_seed_helper_defaults_to_negative_one_with_nothing_built():
+    """`_collect_seed(None, None)` — the state before `build()` runs, or for
+    a hypothetical panel that never builds a seed field at all — must fall
+    back to -1, exactly the pre-existing "no seed widget" contract every
+    other `collect()` fallback in this module follows."""
+    assert _collect_seed(None, None) == -1
+
+
+def test_seed_mode_selector_is_built_inside_the_seed_row():
+    """The mode selector must live INSIDE the same row `_rows["seed"]` maps
+    to, not as a separate field — this is what makes it ride along with the
+    "seed" field's existing ROLE_CONTROL classification into RoleZonePanel's
+    collapsed Controls zone for free, with no new FieldSpec needed."""
+    panel = ImageParamPanel()
+    panel.build()
+
+    assert panel._seed_mode is not None
+    row = panel._row_for("seed")
+    assert row is not None
+
+    # Walk the row's children looking for the SeedModeControl instance.
+    found = False
+    child = row.get_first_child()
+    while child is not None:
+        if child is panel._seed_mode:
+            found = True
+        child = child.get_next_sibling()
+    assert found
+
+
+def test_seed_mode_defaults_to_random_and_collect_is_unchanged():
+    """MIGRATION-SAFE default case: a freshly built panel, mode untouched,
+    collects seed=-1 — byte-for-byte the same value/type as before this
+    control existed."""
+    panel = ImageParamPanel()
+    panel.build()
+
+    assert panel._seed_mode.mode == "random"
+    assert panel.collect()["seed"] == -1
+    assert isinstance(panel.collect()["seed"], int)
+
+
+def test_seed_mode_random_write_throughs_spin_to_negative_one():
+    """Selecting "Random" after the spin holds some other value immediately
+    resets it to -1 (write-through) — so "random" truly means "a new seed
+    every generation" even if the spin previously held a "keep" value."""
+    panel = ImageParamPanel()
+    panel.build()
+
+    _select_seed_mode(panel, "keep")
+    panel._seed_adj.set_value(99)
+    assert panel.collect()["seed"] == 99
+
+    _select_seed_mode(panel, "random")
+
+    assert panel._seed_adj.get_value() == -1
+    assert panel.collect()["seed"] == -1
+
+
+def test_seed_mode_keep_uses_the_seed_field_value():
+    """"keep"/fixed: the seed spin IS the source of truth — collect() must
+    forward exactly what's typed in, unmodified."""
+    panel = ImageParamPanel()
+    panel.build()
+
+    _select_seed_mode(panel, "keep")
+    panel._seed_adj.set_value(555)
+
+    assert panel.collect()["seed"] == 555
+
+
+def test_seed_mode_repeat_reproduces_the_last_generated_seed():
+    """"repeat-last": collect() resolves to the SAME history-store-derived
+    value ControlPanel's own "repeat" mode uses — a fresh `HistoryStore()`
+    reading the most recent record, not a separate/forked persistence path.
+    Overrides whatever the spin itself currently displays."""
+    from history_store import GenerationRecord, HistoryStore
+
+    HistoryStore().append(
+        GenerationRecord.new(
+            job_id="job-1", prompt="a fox", negative_prompt="",
+            num_inference_steps=20, seed=42424,
+        )
+    )
+
+    panel = ImageParamPanel()
+    panel.build()
+    panel._seed_adj.set_value(1)  # deliberately different — must be overridden
+
+    _select_seed_mode(panel, "repeat")
+
+    assert panel.collect()["seed"] == 42424
+
+
+def test_seed_mode_repeat_falls_back_to_random_with_no_history():
+    """No history yet — "repeat" resolves to -1, the same fallback
+    ControlPanel's own `_on_seed_mode`/`_apply_seed_mode_from_settings`
+    "repeat" branch uses when there is nothing to repeat."""
+    panel = ImageParamPanel()
+    panel.build()
+
+    _select_seed_mode(panel, "repeat")
+
+    assert panel.collect()["seed"] == -1
+
+
+def test_seed_mode_persists_to_the_shared_settings_key():
+    """Picking a mode writes to the SAME `seed_mode` settings key
+    ControlPanel's own `_on_seed_mode` uses — not a forked "create seed
+    mode" key — so the two surfaces always agree on the active mode."""
+    from app_settings import settings as _settings
+
+    panel = ImageParamPanel()
+    panel.build()
+
+    for mode in ("keep", "repeat", "random"):
+        _select_seed_mode(panel, mode)
+        assert _settings.get("seed_mode") == mode
+
+
+def test_seed_mode_control_initialises_from_previously_saved_settings():
+    """A panel built AFTER some other surface (or an earlier Create session)
+    already saved a mode must start showing that mode, not always "random" —
+    this is what lets Create and the legacy ControlPanel agree on the active
+    mode across sessions/surfaces."""
+    from app_settings import settings as _settings
+
+    _settings.set("seed_mode", "keep")
+
+    panel = ImageParamPanel()
+    panel.build()
+
+    assert panel._seed_mode.mode == "keep"
+
+
+# ── The same control, reused by Video/Animate (not a separate implementation) ─
+
+def test_video_panel_seed_mode_repeat_reproduces_the_last_generated_seed():
+    from history_store import GenerationRecord, HistoryStore
+
+    HistoryStore().append(
+        GenerationRecord.new(
+            job_id="job-2", prompt="a river", negative_prompt="",
+            num_inference_steps=20, seed=98765,
+        )
+    )
+
+    panel = VideoParamPanel()
+    panel.build()
+    _select_seed_mode(panel, "repeat")
+
+    assert panel.collect()["seed"] == 98765
+
+
+def test_animate_panel_seed_mode_random_write_throughs_spin_to_negative_one():
+    panel = AnimateParamPanel()
+    panel.build()
+
+    _select_seed_mode(panel, "keep")
+    panel._seed_adj.set_value(7)
+    _select_seed_mode(panel, "random")
+
+    assert panel._seed_adj.get_value() == -1
+    assert panel.collect()["seed"] == -1

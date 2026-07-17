@@ -459,6 +459,69 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
     }
 
 
+# ── Seed-mode selector in the Controls zone (SP-3d-2) ────────────────────────
+#
+# Migrates ControlPanel's random/repeat-last/keep seed toggle into Create —
+# `.superpowers/sdd/task-2-brief.md`. The control itself
+# (`create_param_panels.SeedModeControl`) is unit-tested in
+# `test_create_param_panels.py`; these tests confirm it actually reaches the
+# user through CreateView's real mounting path (RoleZonePanel's collapsed
+# Controls expander), not just in isolation.
+
+def test_seed_mode_selector_reaches_the_controls_expander_when_mounted(monkeypatch):
+    """The mounted (RoleZonePanel-wrapped) ImageParamPanel's seed-mode
+    dropdown must be reachable inside the real Controls expander CreateView
+    shows — not just present on the unwrapped panel."""
+    from create_param_panels import RoleZonePanel
+
+    view = _make_view(monkeypatch)
+    zone = view._active_panel
+    assert isinstance(zone, RoleZonePanel)
+    panel = _panel_of(view)
+    assert isinstance(panel, ImageParamPanel)
+    assert panel._seed_mode is not None
+
+    controls_child = zone._controls_expander.get_child()
+
+    def _contains(container, target) -> bool:
+        if container is target:
+            return True
+        child = container.get_first_child() if hasattr(container, "get_first_child") else None
+        while child is not None:
+            if _contains(child, target):
+                return True
+            child = child.get_next_sibling()
+        return False
+
+    assert _contains(controls_child, panel._seed_mode)
+
+
+def test_cta_repeat_last_seed_mode_reproduces_the_last_generated_seed(monkeypatch):
+    """End-to-end through CreateView's real CTA: picking "Repeat last" then
+    clicking Create must forward the most recently generated seed, the SAME
+    history-derived value ControlPanel's own "repeat" mode resolves to."""
+    from history_store import GenerationRecord, HistoryStore
+    from create_param_panels import _SEED_MODE_KEYS
+
+    HistoryStore().append(
+        GenerationRecord.new(
+            job_id="job-cta-1", prompt="a lighthouse", negative_prompt="",
+            num_inference_steps=20, seed=13131,
+        )
+    )
+
+    calls = []
+    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    panel = _panel_of(view)
+    assert isinstance(panel, ImageParamPanel)
+
+    panel._seed_mode._dropdown.set_selected(_SEED_MODE_KEYS.index("repeat"))
+
+    view._cta_btn.emit("clicked")
+
+    assert calls[0][1]["seed"] == 13131
+
+
 # ── Video param panel wiring (Task 5) ────────────────────────────────────
 
 def test_selecting_video_medium_mounts_real_video_param_panel(monkeypatch):

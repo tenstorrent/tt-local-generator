@@ -389,6 +389,13 @@ _CSS = b"""
     font-size: 11px;
 }
 
+/* -- SeedModeControl (SP-3d-2) -- random/repeat-last/keep dropdown, shared by
+   Image/Video/Animate's seed rows. Small left margin separates it from the
+   seed spin it sits beside within the same row. --------------------------- */
+.seed-mode-control {
+    margin-left: 6px;
+}
+
 /* -- AnimateParamPanel (Task 5) ---------------------------------------------- */
 .animate-param-panel {
     padding: 2px 0;

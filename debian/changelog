@@ -1,3 +1,36 @@
+tt-local-generator (0.42.0) noble; urgency=medium
+
+  * SP-3d-2: Repeat-Last seed mode migrated into Create's Controls zone,
+    alongside random/keep -- the seed feature ControlPanel's
+    `_seed_random_btn`/`_seed_repeat_btn`/`_seed_keep_btn` toggle group,
+    `_on_seed_mode`, and `_apply_seed_mode_from_settings` provided
+    (main_window.py ~5024-5140), never dropped per the SP-3d audit
+    (`.superpowers/sdd/sp3d-audit.md` §1's explicit flag). Image/Video/Animate
+    param panels (`app/create_param_panels.py`) each gain a compact
+    `SeedModeControl` -- a `Gtk.DropDown` (Random / Repeat last / Keep this)
+    sitting beside the seed spin in the SAME row, so it rides the seed
+    field's existing ROLE_CONTROL classification straight into RoleZonePanel's
+    collapsed Controls expander with no new FieldSpec needed. Persists to the
+    EXACT SAME `seed_mode` settings key ControlPanel reads/writes -- Create
+    and the legacy panel always agree on which mode is active. "Random"
+    write-throughs the seed spin to -1 the moment it's selected; "Repeat
+    last" re-resolves the most recently generated seed (via a fresh
+    `HistoryStore()`, the SAME source ControlPanel's own "repeat" branch
+    reads -- not a forked last-seed persistence) fresh at every `collect()`
+    call, since the "last" seed can change between mode-selection and the
+    next Create click; "Keep this" is simply the spin's own typed value.
+    MIGRATION-SAFE: a panel with the control untouched (mode="random",
+    nothing typed into the spin) collects seed=-1, byte-for-byte identical
+    to before this task. Added `tests/conftest.py`'s `_isolate_app_settings`
+    autouse fixture so every test gets a deterministic, tmp-backed settings
+    singleton -- fixes a latent cross-test leak where
+    `test_app_settings.py`'s `importlib.reload(app_settings)` orphaned any
+    already-bound `from app_settings import settings as X` reference (e.g.
+    `create_param_panels._settings`, captured at collection time), letting
+    one test's seed-mode selection silently bleed into later tests' panels.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 10:00:00 -0700
+
 tt-local-generator (0.41.0) noble; urgency=medium
 
   * SP-3d-1: Theme Set -- generate an N-shot themed batch -- now available
