@@ -1,3 +1,32 @@
+tt-local-generator (0.47.0) noble; urgency=medium
+
+  * feat(create): Create's model-status UI now tracks WHICH chat model is
+    actually running, not just "is some artgen endpoint up" -- the READY dot
+    next to a text/artgen model (scoped dropdown row + Model-door card) now
+    marks ONLY the one model `ModelStatusService.running_artgen_model()`
+    resolves to (via Task 1/2's `match_model_id`); every other artgen/prompt
+    entry correctly shows offline instead of the old blanket "any chat
+    endpoint up -> every entry reads ready" behavior.
+  * A running chat model that matches no registered `server_manager.SERVERS`
+    entry (e.g. a user hand-started `qwen3.6-27b` on a stray port) now
+    appears as its own SELECTABLE "<model-id> (detected)" entry, with a READY
+    dot, in BOTH the Text/artgen scoped dropdown and the Model door's "Text"
+    group -- `app/create_view.py`'s `_detected_model_key()` is the single
+    source of truth all three surfaces (`_scoped_model_keys`,
+    `_model_door_groups`, `_autoselect_running_model_index`) read, keyed by
+    a `__detected__:<model_id>` sentinel that never collides with a real
+    SERVERS key. Auto-select on a fresh medium populate now prefers this
+    detected entry when the running model is unmatched, the matched key when
+    it is known, and the old index-0 default otherwise -- a manual pick is
+    still preserved across same-medium refreshes.
+  * Purely display/selection -- generation routing is untouched (artgen still
+    routes through `detect_artgen_endpoint()`), and the synthetic entry never
+    introduces a "model" field into an artgen medium's `collect()` output; a
+    regression test asserts the collected params dict is byte-identical with
+    and without a detected entry present.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 13:20:16 -0700
+
 tt-local-generator (0.46.3) noble; urgency=medium
 
   * fix(gallery): switching gallery density (comfortable <-> compact) now

@@ -116,6 +116,33 @@ from model_status import Status  # noqa: E402
 # is the only translation table the scoped dropdown needs.
 _VIDEO_SERVER_KEY_ALIAS: "dict[str, str]" = {"wan2.2": "wan2"}
 
+# SP-3 Task 3 ("running chat model identity"): sentinel key prefix for a
+# running chat-LLM model that `ModelStatusService.running_artgen_model()`
+# reports with `matched_key=None` — i.e. something IS running (started
+# outside this app, or a weights repo with no `ServerDef` yet) but it isn't
+# any registered `server_manager.SERVERS` entry. Prefixing with a string that
+# can never collide with a real SERVERS key (those are short slugs like
+# "flux"/"artgen-qwen3-8b") lets every place that does a `SERVERS.get(key)`
+# lookup treat it as "not found" (`None`) safely, while `.startswith(...)`
+# checks (`_model_dot_glyph`, the dropdown/door builders) recognize and
+# special-case it instead of falling through to a raw, unlabeled key.
+_DETECTED_KEY_PREFIX = "__detected__:"
+
+
+def _is_detected_key(key: Optional[str]) -> bool:
+    """True for a synthetic "detected model" sentinel key (see
+    `_DETECTED_KEY_PREFIX`), False for a real `server_manager.SERVERS` key or
+    `None`."""
+    return bool(key) and key.startswith(_DETECTED_KEY_PREFIX)
+
+
+def _detected_key_model_id(key: str) -> str:
+    """Strip `_DETECTED_KEY_PREFIX` off a sentinel key, recovering the raw
+    `model_id` string `ArtgenModelInfo` reported. Caller must have already
+    confirmed `_is_detected_key(key)`."""
+    return key[len(_DETECTED_KEY_PREFIX):]
+
+
 # SP-2 Task 3: native-medium id -> the capability string `ModelStatusService`
 # expects (matches `server_manager.ServerDef.capabilities` verbatim). This is
 # keyed by `medium.id`, NOT `medium.kind` — the native "animate" medium's
@@ -1250,12 +1277,23 @@ class CreateView(Gtk.Box):
         empty groups" requirement. Purely a function of `SERVERS` +
         capabilities (no `mediums_fn()` I/O) since the classification-by-
         capability fix.
+
+        SP-3 Task 3: when `_detected_model_key()` returns a sentinel (an
+        UNMATCHED chat model is currently running), it's appended to "Text"
+        — the same group every registered chat-LLM/prompt server lands in
+        (`_CAPABILITY_TO_MODEL_DOOR_GROUP`'s "artgen"/"prompt" -> "Text"
+        rows) — after the real SERVERS keys, so it never needs its own
+        `mediums_fn()`-independent classification rule.
         """
         groups: "dict[str, list[str]]" = {g: [] for g in _MODEL_DOOR_GROUP_ORDER}
         for key in server_manager.SERVERS:
             group = self._classify_server_key_for_model_door(key)
             groups.setdefault(group, [])
             groups[group].append(key)
+        detected_key = self._detected_model_key()
+        if detected_key is not None:
+            groups.setdefault("Text", [])
+            groups["Text"].append(detected_key)
         return {g: keys for g, keys in groups.items() if keys}
 
     def _build_model_door(self) -> Gtk.Widget:
@@ -1316,9 +1354,18 @@ class CreateView(Gtk.Box):
         derived from the glyph rather than re-reading health directly, so it
         stays true exactly when the glyph is "●" — byte-identical to the old
         boolean behavior in the status_service=None case.
+
+        SP-3 Task 3: a `_DETECTED_KEY_PREFIX` sentinel key has no `ServerDef`
+        (it was never a real SERVERS entry) — its label is built directly
+        from the model id it carries, suffixed " (detected)" so the card
+        reads unambiguously as "this is running, but not one of ours" rather
+        than looking like an ordinary registered model.
         """
-        sdef = server_manager.SERVERS.get(key)
-        label_text = sdef.label if sdef is not None else key
+        if _is_detected_key(key):
+            label_text = f"{_detected_key_model_id(key)} (detected)"
+        else:
+            sdef = server_manager.SERVERS.get(key)
+            label_text = sdef.label if sdef is not None else key
         dot_glyph = self._model_dot_glyph(key)
         running = dot_glyph == "●"
 
@@ -1575,7 +1622,36 @@ class CreateView(Gtk.Box):
         keys = [sdef.key for sdef in server_manager.servers_for_capability(cap)]
         if medium.id == "video":
             keys.append("animatediff")
+        if medium.source == "artgen":
+            detected_key = self._detected_model_key()
+            if detected_key is not None:
+                keys.append(detected_key)
         return keys
+
+    def _detected_model_key(self) -> Optional[str]:
+        """SP-3 Task 3: the sentinel key (`_DETECTED_KEY_PREFIX` + model id)
+        for the currently-running chat-LLM model, IF AND ONLY IF it doesn't
+        match any registered `server_manager.SERVERS` entry — `None` in every
+        other case (no status service injected, nothing running, the
+        service call raises, or the running model DOES match a known key —
+        Task 2 already makes that key's own dot read READY, so no synthetic
+        entry is needed).
+
+        Single source of truth for "is there a detected-but-unregistered
+        model right now" — `_scoped_model_keys` (dropdown), `_model_door_groups`
+        (Model door "Text" group), and `_autoselect_running_model_index` all
+        call this instead of each re-deriving it from `running_artgen_model()`
+        their own way, so the three surfaces can never disagree.
+        """
+        if self._status_service is None:
+            return None
+        try:
+            info = self._status_service.running_artgen_model()
+        except Exception:
+            return None
+        if info is None or info.matched_key is not None:
+            return None
+        return f"{_DETECTED_KEY_PREFIX}{info.model_id}"
 
     def _populate_model_dropdown(self, medium: Medium) -> None:
         """Rebuild `self._model_dropdown` to list ONLY *medium*'s own models.
@@ -1638,6 +1714,19 @@ class CreateView(Gtk.Box):
         entries: "list[tuple]" = []
         labels: "list[str]" = []
         for key in self._scoped_model_keys(medium):
+            if _is_detected_key(key):
+                # SP-3 Task 3: the synthetic "detected model" entry — never a
+                # real SERVERS key, so it skips `_canonical_model_id_for`/
+                # `SERVERS.get` entirely. `canonical=None` means "no model
+                # override for collect()" (see `_collect_params`'s "model"
+                # override, which is a no-op when canonical is None) — this
+                # is what keeps the entry inert for artgen mediums (the only
+                # medium kind that can ever produce this key; native mediums
+                # never call `_detected_model_key`, see `_scoped_model_keys`).
+                label_text = f"{_detected_key_model_id(key)} (detected)"
+                labels.append(f"{self._model_dot_glyph(key)} {label_text}")
+                entries.append((key, None, label_text))
+                continue
             canonical = _canonical_model_id_for(medium, key)
             if is_native_with_model and canonical is None:
                 continue
@@ -1696,22 +1785,35 @@ class CreateView(Gtk.Box):
 
         Falls back to `0` in every case that isn't a clean "yes, auto-select
         this": no `_status_service` injected (byte-identical to pre-Task-3
-        behavior), *medium* has no capability (artgen mediums — no model
-        dropdown semantics), the service has nothing running/starting for
-        that capability, or the key it returns isn't one of *entries* (e.g.
-        it maps to a server key this medium's dropdown doesn't scope, or
-        (defensively) the service call itself raises) — never guess, just use
-        the existing default.
+        behavior), *medium* has no capability (a future non-native,
+        non-artgen medium kind — no model dropdown semantics), the service
+        has nothing running/starting for that capability, or the key it
+        returns isn't one of *entries* (e.g. it maps to a server key this
+        medium's dropdown doesn't scope, or (defensively) the service call
+        itself raises) — never guess, just use the existing default.
+
+        SP-3 Task 3: an artgen medium's capability is the fixed "artgen"
+        string (mirrors `_scoped_model_keys`'s own capability lookup, not
+        `_MODEL_STATUS_CAPABILITY` — that map is native-medium-only, see its
+        own comment). `running_or_starting("artgen")` already resolves to
+        the ONE matched key Task 2's per-model readiness marks READY, so a
+        KNOWN running model auto-selects exactly as before. When the running
+        model is UNMATCHED (`running_or_starting` finds no READY/STARTING
+        artgen key at all — every registered artgen entry is OFF), fall back
+        to `_detected_model_key()`'s synthetic entry instead of leaving the
+        selection at the arbitrary index-0 default.
         """
         if self._status_service is None:
             return 0
-        cap = _MODEL_STATUS_CAPABILITY.get(medium.id)
+        cap = "artgen" if medium.source == "artgen" else _MODEL_STATUS_CAPABILITY.get(medium.id)
         if cap is None:
             return 0
         try:
             running_key = self._status_service.running_or_starting(cap)
         except Exception:
-            return 0
+            running_key = None
+        if running_key is None and medium.source == "artgen":
+            running_key = self._detected_model_key()
         if running_key is None:
             return 0
         for idx, (entry_key, _canonical, _label) in enumerate(entries):
@@ -1837,8 +1939,19 @@ class CreateView(Gtk.Box):
         comment), so showing it as perpetually "offline" (the default for a
         key neither health source has ever heard of) would be actively
         misleading — it is, in fact, always ready to generate.
+
+        SP-3 Task 3: a `_DETECTED_KEY_PREFIX` sentinel key ALSO always reads
+        READY ("●") — same reasoning as animatediff: `_detected_model_key`
+        (the only place that ever produces this key) already only returns
+        one when `running_artgen_model()` reports something IS currently
+        running, so there is nothing to poll and no other state it could be
+        in. It is never looked up in `_status_snapshot`/`_model_health` (a
+        raw sentinel string was never, and will never be, a real
+        `server_manager.SERVERS`/health-map key).
         """
         if key == "animatediff":
+            return "●"
+        if _is_detected_key(key):
             return "●"
         if self._status_service is not None:
             status = self._status_snapshot.get(key, Status.OFF)

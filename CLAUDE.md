@@ -188,6 +188,39 @@ pure `_resolve(...)`. Design notes:
   (footer row + statusbar), `_refresh_servers_popover` (Servers popover),
   `artgen_panel._check_health_bg`. SP-3 retires the vestiges and stands up one
   surviving status control on the service.
+- **Running chat model identity (v0.47.0, 3 tasks).** The old artgen/prompt
+  reconciliation marked EVERY `("artgen","prompt")`-capability key READY the
+  moment any chat endpoint answered `/v1/models` anywhere — a Qwen3-8B on
+  port 8002 made Qwen3-32B/Llama-3.3-70B/etc. all read "ready" too, even
+  though only one was actually loaded. Fixed end to end:
+  - **Task 1** — `match_model_id(detected_id, servers)` (`app/model_status.py`)
+    normalizes both the detected `/v1/models` id and each candidate
+    `ServerDef.model_id`/`label` (last `/`-segment, lowercased, punctuation
+    stripped) and resolves the ONE `server_manager.SERVERS` key that
+    detected id belongs to, or `None` if it matches nothing registered.
+  - **Task 2** — `_tick()` calls `match_model_id` once per poll and only
+    marks *that* key detect-healthy; every other artgen/prompt key falls
+    back to its own (normally-absent) `health_fn` entry, so per-model
+    readiness is now correct. The resolved identity is exposed via
+    `running_artgen_model() -> ArtgenModelInfo(model_id, url, matched_key) |
+    None` (`matched_key` is `None` for a model started outside this app that
+    doesn't match any `ServerDef` — "something IS running, we just don't
+    have a name for it").
+  - **Task 3** — `CreateView` surfaces this: `_model_dot_glyph` (already
+    per-key) now lights ● for only the matched server; when
+    `running_artgen_model().matched_key is None`,
+    `_detected_model_key()` synthesizes a `__detected__:<model_id>` sentinel
+    that `_scoped_model_keys`/`_model_door_groups` inject as ONE additional
+    SELECTABLE entry — labeled `"<model_id> (detected)"`, always ●, in both
+    the Text/artgen scoped dropdown and the Model door's "Text" group.
+    `_autoselect_running_model_index` prefers the matched key when known,
+    else this synthetic entry, on a fresh medium populate (manual picks
+    still survive same-medium refreshes, per the v0.28.1 fix). The sentinel
+    is display/selection-only: it carries `canonical=None` in
+    `_model_dropdown_entries`, and artgen mediums never have a "model" key
+    in `collect()` at all, so it can never leak into a generation call —
+    guarded by a collect()-equality test
+    (`tests/test_create_view_detected_model.py`).
 
 ## Retiring the vestiges (SP-3, DONE — v0.46.0)
 
