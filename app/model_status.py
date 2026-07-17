@@ -60,10 +60,32 @@ import socket
 import threading
 import time
 import urllib.parse
+from collections import namedtuple
 from enum import Enum
 from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
+
+
+ArtgenModelInfo = namedtuple("ArtgenModelInfo", "model_id url matched_key")
+"""The currently-running chat-LLM backend, as resolved by the most recent
+`_tick()`.
+
+`model_id`   — the id string the endpoint's `/v1/models` reported (e.g.
+               "Qwen/Qwen3-8B", or an arbitrary string for a model started
+               outside this app that `match_model_id` doesn't recognize).
+`url`        — the base URL `detect_fn()` found it on.
+`matched_key`— the `server_manager.SERVERS` key `match_model_id` resolved
+               `model_id` to, or `None` when the running model doesn't match
+               any registered artgen/prompt ServerDef (e.g. started with a
+               weights repo we don't have a ServerDef for). A `None` here is
+               the "surface an unregistered model" signal for the UI (Task 3
+               of this program) -- something IS running, we just don't have a
+               name for it in our own catalog.
+
+Returned by `ModelStatusService.running_artgen_model()`; `None` (not this
+namedtuple) when no chat endpoint is up at all -- see that method's docstring.
+"""
 
 
 class Status(str, Enum):
@@ -211,6 +233,14 @@ class ModelStatusService:
         # key -> clock() timestamp when the key was first observed READY;
         # used by ready_keys() to sort "most recently became ready first".
         self._ready_at: "dict[str, float]" = {}
+        # The running chat-LLM backend as of the last _tick(), or all-None
+        # when no chat endpoint was found. Set/read only under self._lock;
+        # exposed read-only via running_artgen_model(). See _tick()'s
+        # "artgen detect + match" phase for how these are (re)computed each
+        # poll, and ArtgenModelInfo's docstring for what each field means.
+        self._artgen_model_id: Optional[str] = None
+        self._artgen_url: Optional[str] = None
+        self._artgen_matched_key: Optional[str] = None
         # Callbacks registered via subscribe(); fanned out by _notify()
         # whenever a poll tick's resolved map actually changes.
         self._subscribers: list = []
@@ -263,6 +293,24 @@ class ModelStatusService:
         """
         with self._lock:
             return self._statuses.get(key, Status.OFF)
+
+    def running_artgen_model(self) -> Optional[ArtgenModelInfo]:
+        """Return the currently-running chat-LLM backend as of the last
+        `_tick()`, or `None` if no chat endpoint is up at all.
+
+        `matched_key` on the returned `ArtgenModelInfo` is `None` when the
+        running model doesn't correspond to any `server_manager.SERVERS`
+        entry `match_model_id` recognizes -- i.e. something IS running (a
+        model started outside this app, or a new weights repo we haven't
+        added a ServerDef for yet), we just can't name it in our own catalog.
+        This is what Task 3's UI surfaces as "unregistered model running".
+        """
+        with self._lock:
+            if self._artgen_url is None or self._artgen_model_id is None:
+                return None
+            return ArtgenModelInfo(
+                self._artgen_model_id, self._artgen_url, self._artgen_matched_key
+            )
 
     # ------------------------------------------------------------------
     # Pure resolver
@@ -361,8 +409,20 @@ class ModelStatusService:
         a real deployment, block on the network; holding `self._lock` across
         them would stall `note_starting()`/`note_stopping()`/`snapshot()`
         calls from any other thread for the duration. Only the final
-        read-compare-mutate-swap of `_starting`/`_ready_at`/`_statuses` needs
-        the lock, since that's the only part touching shared state.
+        read-compare-mutate-swap of `_starting`/`_ready_at`/`_statuses`/the
+        running-artgen-model fields needs the lock, since that's the only
+        part touching shared state.
+
+        Model-specific artgen/prompt readiness (Task 2): a found chat
+        endpoint no longer marks EVERY artgen/prompt-capability key healthy.
+        `match_model_id` (Task 1) resolves the detected model id to the one
+        `server_manager.SERVERS` key it actually belongs to (or `None` if it
+        doesn't match anything we know about); only that key is treated as
+        detect-healthy. Every other artgen/prompt key falls back to its own
+        `health_fn` entry (normally absent/False for the shared-port-8002
+        family, so it resolves OFF) — this is the fix for the prior
+        blanket-marking bug where a Qwen3-8B endpoint on 8002 read every
+        other artgen entry (Qwen3-32B, Llama-3.3-70B, ...) as READY too.
         """
         import server_manager
 
@@ -377,13 +437,18 @@ class ModelStatusService:
             health = {}
 
         try:
-            base, _model_id = self._detect_fn()
-            artgen_up = base is not None
+            base, model_id = self._detect_fn()
         except Exception:
             # Same reasoning: a broken artgen detector just means "no chat
             # endpoint found this tick", not a crash.
             log.debug("detect_fn failed", exc_info=True)
-            artgen_up = False
+            base, model_id = None, None
+
+        # `matched` is the single server_manager.SERVERS key (or None) that
+        # the detected model id belongs to -- computed once here, used both
+        # to gate per-key detect-healthiness below and to populate the
+        # running-artgen-model bookkeeping under the lock.
+        matched = match_model_id(model_id, server_manager.SERVERS) if base is not None else None
 
         now = self._clock()
 
@@ -396,23 +461,21 @@ class ModelStatusService:
         # behavior: `False if healthy else self._safe_port_probe(key)`).
         per_key: "dict[str, tuple[bool, bool]]" = {}
         for key, sdef in server_manager.SERVERS.items():
-            # artgen/prompt backends share one port (8002) and are detected
-            # via detect_fn's /v1/models sweep rather than server_manager's
-            # per-key health_url ping (see artgen.detect_artgen_endpoint() and
-            # the module docstring's "Why this exists" section) — so a found
-            # chat endpoint marks every artgen/prompt-capability key healthy,
-            # regardless of what health_fn itself reported for that key.
-            healthy = health.get(key, False) or (
-                artgen_up and bool(set(sdef.capabilities) & {"artgen", "prompt"})
-            )
+            # A found chat endpoint only makes THIS key detect-healthy when
+            # match_model_id resolved the detected id to exactly this key --
+            # every other artgen/prompt key relies solely on its own
+            # health_fn entry (see the docstring note above for why this
+            # replaced the old blanket "any artgen/prompt key" behavior).
+            healthy = health.get(key, False) or (key == matched)
             port_open = False if healthy else self._safe_port_probe(key)
             per_key[key] = (healthy, port_open)
 
         # -- state phase: lock held, no I/O -----------------------------
-        # Only `self._starting`/`self._ready_at` (read+mutate) and
-        # `self._statuses` (compare+swap) are shared state; everything here
-        # is pure dict bookkeeping plus the side-effect-free `_resolve()`
-        # call, so it's safe (and fast) to do under the lock.
+        # Only `self._starting`/`self._ready_at` (read+mutate),
+        # `self._statuses` (compare+swap), and the running-artgen-model
+        # fields (compare+swap) are shared state; everything here is pure
+        # dict/tuple bookkeeping plus the side-effect-free `_resolve()` call,
+        # so it's safe (and fast) to do under the lock.
         changed = False
         with self._lock:
             new_statuses: "dict[str, Status]" = {}
@@ -433,6 +496,29 @@ class ModelStatusService:
             if new_statuses != self._statuses:
                 changed = True
             self._statuses = new_statuses
+
+            # Running-artgen-model bookkeeping: cleared to all-None when no
+            # chat endpoint was found this tick (base is None); otherwise
+            # store the detected id/url plus whichever key (if any) it
+            # matched. Folded into the same `changed` flag as _statuses so a
+            # subscriber is notified when the running model appears/changes/
+            # disappears even on a tick where no per-key Status flips at all
+            # (e.g. two different UNMATCHED model ids in a row -- every
+            # artgen key stays OFF both times, but the running model itself
+            # changed and callers surfacing "what's running" need to hear
+            # about it).
+            new_model_id = model_id if base is not None else None
+            new_url = base
+            new_matched_key = matched if base is not None else None
+            new_running = (new_model_id, new_url, new_matched_key)
+            old_running = (
+                self._artgen_model_id,
+                self._artgen_url,
+                self._artgen_matched_key,
+            )
+            if new_running != old_running:
+                changed = True
+            self._artgen_model_id, self._artgen_url, self._artgen_matched_key = new_running
 
         # `_notify()` must run after the lock is released: it calls
         # `snapshot()`, which re-acquires `self._lock` — holding it here

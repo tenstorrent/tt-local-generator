@@ -78,14 +78,25 @@ def test_tick_healthy_key_ready():
     assert svc.status("wan2.2") == ms.Status.READY
 
 
-def test_tick_artgen_detect_marks_artgen_keys_ready():
-    # health says all False, but detect finds a chat endpoint -> artgen/prompt keys READY
+def test_tick_artgen_detect_marks_matched_key_ready():
+    # BEHAVIOR CHANGE (Task 2, model_status.py): a detected chat endpoint used
+    # to mark EVERY artgen/prompt-capability key READY (all of them share
+    # port 8002 and one detector). That was a bug -- only one model is ever
+    # actually loaded. Now `match_model_id` (Task 1) resolves the detected id
+    # to the ONE server_manager.SERVERS key it belongs to, and only that key
+    # goes READY off of the sweep; every other artgen key falls back to its
+    # own (absent/False) health_fn entry and stays OFF. See
+    # tests/test_model_status_running_model.py for the full model-specific
+    # behavior (including running_artgen_model()).
     svc = _svc({}, detect=("http://localhost:8002", "Qwen3-8B"))
     svc._tick()
     import server_manager as sm
 
     art = [k for k, d in sm.SERVERS.items() if "artgen" in d.capabilities]
-    assert art and all(svc.status(k) == ms.Status.READY for k in art)
+    assert svc.status("artgen-qwen3-8b") == ms.Status.READY
+    assert art and all(
+        svc.status(k) == ms.Status.OFF for k in art if k != "artgen-qwen3-8b"
+    )
 
 
 def test_tick_inferred_starting_from_port(monkeypatch):
