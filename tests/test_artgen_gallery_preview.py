@@ -42,6 +42,21 @@ gtk_required = pytest.mark.skipif(
 )
 
 
+def _pump():
+    """Drain pending GLib idle callbacks.
+
+    `ArtgenGallery._on_card_activated` DEFERS the grid->detail switch to a
+    `GLib.idle_add` callback (crash fix v0.48.2 -- switching synchronously
+    inside the FlowBox `child-activated` handler unmapped the just-activated
+    card mid-geometry-pass, aborting with a `gtk_widget_compute_point`
+    assertion). So the switch is observable only after the idle queue runs.
+    """
+    from gi.repository import GLib
+    ctx = GLib.MainContext.default()
+    while ctx.pending():
+        ctx.iteration(False)
+
+
 def _make_media_record(tmp_path: Path, **kwargs) -> "object":
     """Build a MediaRecord backed by a real .txt file on disk (verse-style
     content), so ArtgenDetail._render's fp.read_text() call has something
@@ -100,6 +115,7 @@ def test_activating_a_card_opens_detail_page_with_no_external_wiring(tmp_path):
     assert child is not None, "expected a FlowBoxChild for the seeded record"
 
     gallery._on_card_activated(gallery._flow, child)
+    _pump()
 
     assert gallery._stack.get_visible_child_name() == "detail", (
         "activating a card must switch the internal stack to the detail page"
@@ -107,6 +123,33 @@ def test_activating_a_card_opens_detail_page_with_no_external_wiring(tmp_path):
     assert gallery._detail._records[gallery._detail._idx].id == rec.id, (
         "ArtgenDetail must be showing the activated record"
     )
+
+
+@gtk_required
+def test_card_activation_defers_stack_switch_to_idle(tmp_path):
+    """Crash fix (v0.48.2): the grid->detail switch must NOT happen
+    synchronously inside the `child-activated` handler -- doing so unmaps the
+    just-activated card while GTK is still computing its geometry, aborting
+    with `gtk_widget_compute_point: assertion 'GTK_IS_WIDGET (widget)'`.
+    So immediately after `_on_card_activated` the grid is still shown; only
+    after the idle queue drains does it switch to detail."""
+    import media_store as ms_mod
+    from artgen_gallery import ArtgenGallery
+
+    rec = _make_media_record(tmp_path)
+    ms_mod.media_store.add(rec)
+
+    gallery = ArtgenGallery()
+    gallery.refresh()
+    child = _find_child_for(gallery, rec.id)
+
+    gallery._on_card_activated(gallery._flow, child)
+    # Synchronous: still on the grid (the switch was deferred, not run inline).
+    assert gallery._stack.get_visible_child_name() == "grid", (
+        "the stack switch must be deferred out of the child-activated handler"
+    )
+    _pump()
+    assert gallery._stack.get_visible_child_name() == "detail"
 
 
 @gtk_required
@@ -121,6 +164,7 @@ def test_on_back_returns_to_grid_page(tmp_path):
     gallery.refresh()
     child = _find_child_for(gallery, rec.id)
     gallery._on_card_activated(gallery._flow, child)
+    _pump()
     assert gallery._stack.get_visible_child_name() == "detail"
 
     gallery._detail.on_back()
@@ -146,6 +190,7 @@ def test_external_on_card_activated_still_fires_additively(tmp_path):
 
     child = _find_child_for(gallery, rec.id)
     gallery._on_card_activated(gallery._flow, child)
+    _pump()
 
     assert seen == [rec.id], "external on_card_activated callback must still fire"
     assert gallery._stack.get_visible_child_name() == "detail", (
@@ -174,6 +219,7 @@ def test_activation_respects_active_filter_for_detail_record_list(tmp_path):
     child = _find_child_for(gallery, rec_a.id)
     assert child is not None
     gallery._on_card_activated(gallery._flow, child)
+    _pump()
 
     ids_in_detail = [r.id for r in gallery._detail._records]
     assert ids_in_detail == [rec_a.id], (

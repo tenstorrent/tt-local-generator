@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
@@ -693,6 +693,12 @@ class ArtgenGallery(Gtk.Box):
         _zone_content = [content]
 
         def _swap_zone_content(new_widget: Gtk.Widget) -> None:
+            # Defensive (v0.48.2): a motion "leave" can fire after the card
+            # has been detached (grid rebuilt, or the stack switched to the
+            # detail page and back). Mutating the overlay of a card that's no
+            # longer in the widget tree churns layout on a dead widget; bail.
+            if content_zone.get_parent() is None or _zone_content[0] is None:
+                return
             new_widget.set_hexpand(True)
             new_widget.set_vexpand(True)
             new_widget.set_halign(Gtk.Align.FILL)
@@ -733,11 +739,27 @@ class ArtgenGallery(Gtk.Box):
         # what ArtgenPanel used to do before it was deleted in SP-3d-5, and
         # is the whole point of this fix -- see CLAUDE.md). This is additive:
         # any externally-wired on_card_activated below still fires too.
-        self._detail.show_record(media_id, self._filtered_records())
-        self._stack.set_visible_child_name("detail")
+        #
+        # CRASH FIX (v0.48.2): the grid->detail switch is DEFERRED to an idle
+        # callback rather than run synchronously here. `set_visible_child_name`
+        # unmaps the grid page -- including the very FlowBoxChild we're inside
+        # the "child-activated" handler for -- while GTK is still running its
+        # post-activation scroll-to / focus / tooltip geometry pass on that
+        # child. That pass calls `gtk_widget_compute_point` on the child; once
+        # it's unmapped/reparented mid-pass the widget is no longer live and
+        # GTK aborts with `gtk_widget_compute_point: assertion 'GTK_IS_WIDGET
+        # (widget)' failed` (reported opening an AnimateDiff GIF from Discover).
+        # Deferring to idle lets GTK finish that pass before we hide the grid.
+        # (The native GalleryWidget never hit this: it renders detail in a
+        # side panel and keeps the grid mapped.)
+        def _open() -> bool:
+            self._detail.show_record(media_id, self._filtered_records())
+            self._stack.set_visible_child_name("detail")
+            if self.on_card_activated:
+                self.on_card_activated(media_id)
+            return GLib.SOURCE_REMOVE
 
-        if self.on_card_activated:
-            self.on_card_activated(media_id)
+        GLib.idle_add(_open)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:

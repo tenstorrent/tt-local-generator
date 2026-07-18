@@ -83,7 +83,45 @@ except (ValueError, OSError):
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Gio, GdkPixbuf
+from gi.repository import Gtk, Gio, GdkPixbuf, GLib
+
+# Dump a native traceback on any hard crash (SIGSEGV/SIGABRT), including a
+# GTK abort under `G_DEBUG=fatal-criticals`. Always on — harmless and makes
+# field crashes diagnosable without a rebuild.
+import faulthandler as _faulthandler
+_faulthandler.enable()
+
+
+def _install_critical_stack_dumper() -> None:
+    """Opt-in (`TTLG_DEBUG_CRITICALS=1`): print the Python stack whenever a
+    GTK/GDK/GLib CRITICAL or WARNING fires.
+
+    A `Gtk-CRITICAL` (e.g. `gtk_widget_compute_point: assertion 'GTK_IS_WIDGET
+    (widget)' failed`) is normally non-fatal and prints no Python frame, so
+    it's impossible to tell WHICH widget/callback triggered it. This handler
+    prints the live Python call stack at the moment of the log, pinpointing the
+    exact app line. Gated behind an env var so normal runs stay quiet.
+    """
+    if not os.environ.get("TTLG_DEBUG_CRITICALS"):
+        return
+    import traceback
+
+    levels = (
+        GLib.LogLevelFlags.LEVEL_CRITICAL
+        | GLib.LogLevelFlags.LEVEL_WARNING
+        | GLib.LogLevelFlags.FLAG_FATAL
+        | GLib.LogLevelFlags.FLAG_RECURSION
+    )
+
+    def _handler(domain, level, message, _user_data=None):
+        sys.stderr.write(f"\n=== {domain} {level.value_nicks if hasattr(level, 'value_nicks') else level}: {message}\n")
+        traceback.print_stack()
+        sys.stderr.flush()
+
+    for _domain in ("Gtk", "Gdk", "GLib", "GLib-GObject", "Pango",
+                    "GdkPixbuf", "Graphene", "Gsk"):
+        GLib.log_set_handler(_domain, levels, _handler)
+
 
 from main_window import MainWindow
 
@@ -150,6 +188,8 @@ def main():
     )
     # GTK consumes its own argv; parse known args only so GTK flags don't cause errors
     args, gtk_args = parser.parse_known_args()
+
+    _install_critical_stack_dumper()
 
     app = Gtk.Application(application_id="ai.tenstorrent.tt-video-gen")
     # Allow multiple instances — avoids silent no-op when an existing session-bus

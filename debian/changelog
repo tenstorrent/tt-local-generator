@@ -1,3 +1,22 @@
+tt-local-generator (0.48.2) noble; urgency=medium
+
+  * fix(artgen): opening an AnimateDiff GIF (or any artgen item) from Discover
+    could crash the app with `Gtk-CRITICAL: gtk_widget_compute_point:
+    assertion 'GTK_IS_WIDGET (widget)' failed`. `ArtgenGallery._on_card_activated`
+    switched its internal grid->detail stack SYNCHRONOUSLY inside the FlowBox
+    `child-activated` handler, unmapping the just-activated card while GTK was
+    still running its post-activation scroll-to / focus / tooltip geometry pass
+    on that card (which calls `gtk_widget_compute_point` on it). The switch is
+    now deferred via `GLib.idle_add` so GTK finishes that pass before the grid
+    is hidden. The gif hover-swap also gained a guard so a motion "leave" firing
+    after the card has left the widget tree can't churn layout on a dead widget.
+  * debug: `app/main.py` now enables `faulthandler` unconditionally (native
+    traceback on any hard crash) and, under `TTLG_DEBUG_CRITICALS=1`, prints the
+    live Python stack at every GTK/GDK/GLib CRITICAL/WARNING -- so a normally
+    non-fatal, frame-less `Gtk-CRITICAL` can be pinpointed to the exact app line.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 18 Jul 2026 06:45:00 +0000
+
 tt-local-generator (0.48.1) noble; urgency=medium
 
   * fix(tttv): TT-TV no longer leaves a gif-decode timer running on a hidden
