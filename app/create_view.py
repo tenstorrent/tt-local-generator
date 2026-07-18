@@ -81,6 +81,7 @@ exercised by the injected-fake test path.
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -89,11 +90,14 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+gi.require_version("WebKit", "6.0")
+from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 
+import artgen_render  # noqa: E402
 import gtk_layout  # noqa: E402
 import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
+from create_mediums import _ARTGEN_KIND  # noqa: E402
 from create_param_panels import (  # noqa: E402
     _ANIMATE_MODEL_ID,
     _IMAGE_MODEL_IDS,
@@ -728,6 +732,11 @@ _CSS = b"""
     font-family: monospace;
     font-size: 12px;
     padding: 6px;
+}
+.create-result-reading {
+    border: 1px solid #2D5566;
+    border-radius: 4px;
+    min-height: 220px;
 }
 /* -- Pending-queue display (SP-3c-4, task-4-brief.md) -- the this-session
    Create job queue, shown between the current result and the recents strip:
@@ -2262,21 +2271,42 @@ class CreateView(Gtk.Box):
 _RECENTS_MAX = 6
 
 # Extension sets used to classify a result artifact's kind for rendering.
-# Deliberately narrow (matches the brief exactly) — an unrecognised extension
-# falls through to the honest "unknown" placeholder rather than guessing.
+# Task 2 (media-showcase-everywhere, docs/superpowers/specs/
+# 2026-07-17-media-showcase-everywhere-design.md) widened this from
+# image/video/gif/text to the full "one small stable vocabulary per media
+# type" contract: every artgen output format gets its own kind so
+# `_build_artifact_widget` can pick the right renderer (a raster/vector
+# Gtk.Picture, or a WebKit reading view built from `artgen_render`) instead
+# of falling through to the "Result file not found" placeholder for a
+# perfectly valid, existing file.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 _VIDEO_EXTS = {".mp4"}
 _GIF_EXTS = {".gif"}
-_TEXT_EXTS = {".txt", ".ans"}
+_SVG_EXTS = {".svg"}
+_ANSI_EXTS = {".ans"}
+_PALETTE_EXTS = {".json"}
+_CODE_EXTS = {".py"}
+_TEXT_EXTS = {".txt", ".md"}
 
 
-def _artifact_kind(path: str) -> str:
-    """Classify an artifact path's rendering kind by file extension.
+def _artifact_kind(path: str, generator_type: "Optional[str]" = None) -> str:
+    """Classify an artifact path's rendering kind.
 
-    Returns one of "image" | "video" | "gif" | "text" | "unknown". Never
-    raises — an empty path or an unrecognised extension both map to
-    "unknown", which `CreateResultPanel._build_artifact_widget` renders as an
-    honest placeholder (never a broken-image icon).
+    Returns one of "image" | "video" | "gif" | "svg" | "ansi" | "palette" |
+    "code" | "text" | "unknown". Never raises — an empty path maps straight
+    to "unknown".
+
+    Extension is the PRIMARY signal (it never lies about what format the
+    file actually is — the ansi generator always writes `.ans`, palette
+    always writes `.json`, codeart always writes `.py`, etc. — see each
+    generator's own `output_ext`). Only when the extension is missing or not
+    one of the recognised set do we fall back to `generator_type`, resolved
+    through `create_mediums._ARTGEN_KIND` (the SAME table that already
+    classifies a generator's Medium chip) collapsed to this function's finer
+    vocabulary. This is deliberately NOT a second hand-maintained
+    generator-name -> kind table — reusing `_ARTGEN_KIND` means a new
+    generator can never register a Medium chip kind that this function
+    doesn't already agree with, even in the fallback path.
     """
     if not path:
         return "unknown"
@@ -2287,9 +2317,80 @@ def _artifact_kind(path: str) -> str:
         return "video"
     if ext in _GIF_EXTS:
         return "gif"
+    if ext in _SVG_EXTS:
+        return "svg"
+    if ext in _ANSI_EXTS:
+        return "ansi"
+    if ext in _PALETTE_EXTS:
+        return "palette"
+    if ext in _CODE_EXTS:
+        return "code"
     if ext in _TEXT_EXTS:
         return "text"
+
+    # Extension unrecognised (or absent) — fall back to the generator's own
+    # declared coarse kind so a known generator with an unusual/missing
+    # extension still gets SOME rich rendering rather than "unknown".
+    if generator_type:
+        coarse = _ARTGEN_KIND.get(generator_type)
+        if coarse in ("text", "image", "gif"):
+            return coarse
     return "unknown"
+
+
+def _build_reading_webview(html: str) -> Gtk.Widget:
+    """Build a WebKit "reading" view pre-loaded with `html`.
+
+    Mirrors `ArtgenDetail._load_html`/`_on_webview_realize`'s realize-
+    deferral: `WebKit.WebView.load_html()` called before the widget is
+    realized is a silent no-op that leaves the view permanently blank.
+    `ArtgenDetail` handles this with a mutable `_pending_html` slot because
+    it reuses ONE persistent WebView across every record; here a fresh
+    WebView is built per call, so the pending HTML can simply live in this
+    closure instead of an instance attribute — same fix, simpler because
+    the lifetime is 1:1 with the widget.
+    """
+    webview = WebKit.WebView()
+    try:
+        webview.get_settings().set_enable_javascript(False)
+    except Exception:
+        pass  # never let a settings lookup failure block rendering
+    webview.set_hexpand(True)
+    webview.set_vexpand(True)
+    webview.add_css_class("create-result-reading")
+
+    if webview.get_realized():
+        webview.load_html(html, "about:blank")
+    else:
+        webview.connect("realize", lambda _w: webview.load_html(html, "about:blank"))
+    return webview
+
+
+# Kind -> recents-strip chip label for kinds whose label doesn't depend on
+# `generator_type`. "text" is handled specially in `_recent_chip_label`
+# below (verse gets its own "Verse" label instead of the generic "TXT").
+_CHIP_LABELS: dict[str, str] = {
+    "image": "IMG",
+    "video": "VID",
+    "gif": "GIF",
+    "svg": "SVG",
+    "ansi": "ANSI",
+    "palette": "Palette",
+    "code": "Code",
+    "text": "TXT",
+}
+
+
+def _recent_chip_label(kind: str, generator_type: "Optional[str]") -> str:
+    """Compact type label for a recents-strip chip. Never returns a bare
+    "?" for any of this module's recognised kinds — only a truly "unknown"
+    kind (no extension match, no generator-type fallback) falls through to
+    that. "verse" gets its own label since it's the one generator whose
+    identity (a poem) is more informative to the user than its generic
+    kind ("text", shared with freeform)."""
+    if kind == "text" and generator_type == "verse":
+        return "Verse"
+    return _CHIP_LABELS.get(kind, "?")
 
 
 class CreateResultPanel(Gtk.Box):
@@ -2513,10 +2614,11 @@ class CreateResultPanel(Gtk.Box):
         degrades to an honest placeholder label — never a broken-image icon
         (the brief's explicit requirement)."""
         path = getattr(record, "media_file_path", "") or ""
-        kind = _artifact_kind(path)
+        gen_type = getattr(record, "generator_type", None)
+        kind = _artifact_kind(path, gen_type)
         exists = bool(path) and Path(path).exists()
 
-        if kind == "image" and exists:
+        if kind in ("image", "svg") and exists:
             try:
                 pic = Gtk.Picture.new_for_filename(path)
                 pic.set_can_shrink(True)
@@ -2577,24 +2679,41 @@ class CreateResultPanel(Gtk.Box):
             label.add_css_class("create-result-placeholder")
             return label
 
-        if kind == "text" and exists:
+        if kind in ("ansi", "palette", "code", "text") and exists:
+            # Every "reading" kind renders through `artgen_render`'s themed
+            # HTML builders in a WebKit reading view — mirrors
+            # `ArtgenDetail._render`'s dispatch exactly, just built fresh per
+            # widget instead of driving one persistent WebView. Never a raw
+            # `Gtk.TextView` of escape codes / unformatted prose (the bug
+            # this task fixes).
             try:
-                text = Path(path).read_text(encoding="utf-8", errors="replace")
+                raw = Path(path).read_text(encoding="utf-8", errors="replace")
             except Exception:
-                text = ""
-            scroller = Gtk.ScrolledWindow()
-            scroller.set_min_content_height(160)
-            scroller.set_vexpand(True)
-            scroller.add_css_class("create-result-text-scroll")
-            buf = Gtk.TextBuffer()
-            buf.set_text(text)
-            view = Gtk.TextView(buffer=buf)
-            view.set_editable(False)
-            view.set_cursor_visible(False)
-            view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-            view.add_css_class("create-result-text-view")
-            scroller.set_child(view)
-            return scroller
+                raw = ""
+            params = getattr(record, "params_dict", None) or {}
+            doc_title = artgen_render.derive_title(gen_type or "", params)
+
+            if kind == "ansi":
+                html = artgen_render.ansi_to_html(raw)
+            elif kind == "palette":
+                try:
+                    data = json.loads(raw)
+                    html = (
+                        artgen_render.palette_to_html(data)
+                        if isinstance(data, dict) and "colors" in data
+                        else artgen_render.md_to_html(raw, title=doc_title)
+                    )
+                except Exception:
+                    html = artgen_render.md_to_html(raw, title=doc_title)
+            elif kind == "code":
+                html = artgen_render.code_to_html(raw, title=doc_title)
+            else:  # "text" — .txt/.md, verse gets its centered-poem CSS
+                html = artgen_render.md_to_html(
+                    raw, title=doc_title, verse_mode=(gen_type == "verse")
+                )
+
+            webview = _build_reading_webview(html)
+            return webview
 
         # Missing file, unreadable file, or an unrecognised extension — an
         # honest placeholder, distinguishing "no path at all" from "path set
@@ -2684,20 +2803,22 @@ class CreateResultPanel(Gtk.Box):
             self._recents_flow.append(self._build_recent_card(rec))
 
     def _build_recent_card(self, record) -> Gtk.Widget:
-        """One clickable recent: a small thumbnail (image/video/gif) or a
-        plain kind-label chip (text, or anything unreadable) — clicking it
-        re-renders that record in the current-result area."""
+        """One clickable recent: a small thumbnail (image/video/gif/svg) or a
+        kind-labeled chip (ansi/palette/code/text, or anything unreadable) —
+        clicking it re-renders that record in the current-result area. Never
+        a bare "?" chip for a recognised kind — see `_recent_chip_label`."""
         btn = Gtk.Button()
         btn.add_css_class("create-result-recent-btn")
         btn.set_tooltip_text(getattr(record, "prompt", "") or "")
 
         media_path = getattr(record, "media_file_path", "") or ""
-        kind = _artifact_kind(media_path)
+        gen_type = getattr(record, "generator_type", None)
+        kind = _artifact_kind(media_path, gen_type)
         thumb_path = getattr(record, "thumbnail_path", "") or ""
-        if not thumb_path and kind == "image":
-            thumb_path = media_path  # images have no separate thumbnail file
+        if not thumb_path and kind in ("image", "svg"):
+            thumb_path = media_path  # image/svg have no separate thumbnail file
 
-        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif"):
+        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif", "svg"):
             try:
                 pic = Gtk.Picture.new_for_filename(thumb_path)
                 pic.set_can_shrink(True)
@@ -2708,8 +2829,7 @@ class CreateResultPanel(Gtk.Box):
             except Exception:
                 pass  # fall through to the label chip below
 
-        chip_text = {"text": "TXT", "image": "IMG", "video": "VID", "gif": "GIF"}.get(kind, "?")
-        btn.set_label(chip_text)
+        btn.set_label(_recent_chip_label(kind, gen_type))
         btn.connect("clicked", lambda _b, r=record: self._on_recent_clicked(r))
         return btn
 

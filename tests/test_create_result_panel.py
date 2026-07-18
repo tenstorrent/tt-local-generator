@@ -19,6 +19,7 @@ own headless fallback).
 """
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -32,13 +33,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 try:
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gtk
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import Gtk, WebKit
     Gtk.Entry()  # probe: raises without a usable display
 except Exception:  # pragma: no cover - environment-dependent
     pytest.skip("no GTK display available", allow_module_level=True)
 
 import create_view as cv
 from history_store import GenerationRecord
+from media_store import MediaRecord
 
 
 def _rec(tmp_path, kind: str = "image") -> GenerationRecord:
@@ -136,6 +139,45 @@ def _write_real_gif(path: Path) -> None:
     frame1 = Image.new("RGB", (32, 24), color=(255, 0, 0))
     frame2 = Image.new("RGB", (32, 24), color=(0, 255, 0))
     frame1.save(path, format="GIF", save_all=True, append_images=[frame2], duration=100, loop=0)
+
+
+def _artgen_rec(
+    tmp_path,
+    *,
+    generator_type: str,
+    ext: str,
+    content: str,
+    thumb_path: str = "",
+    prompt: str = "an artifact",
+    params: "dict | None" = None,
+) -> MediaRecord:
+    """Build a `media_store.MediaRecord` standing in for a finished artgen
+    job, pointing at a real tmp file written with `content` at `ext`.
+
+    `media_file_path` is set as a plain instance attribute AFTER
+    construction, mirroring exactly what production code does for a real
+    artgen record (`main_window.py`'s `rec.media_file_path = str(out_path)`,
+    see CLAUDE.md's "In-place results" section) — it is NOT a `MediaRecord`
+    dataclass field, so `CreateResultPanel` reads it via `getattr(...)` and
+    a test that skipped this step would silently exercise the "no path at
+    all" placeholder branch instead of the kind it meant to test.
+    """
+    p = tmp_path / f"artifact{ext}"
+    p.write_text(content, encoding="utf-8")
+    rec = MediaRecord(
+        id=str(uuid.uuid4()),
+        media_type="artgen",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        file_path=str(p),
+        thumbnail_path=thumb_path,
+        prompt=prompt,
+        model_id="",
+        generator_type=generator_type,
+        params=json.dumps(params or {}),
+        starred=0,
+    )
+    rec.media_file_path = str(p)
+    return rec
 
 
 def test_starts_empty():
@@ -277,6 +319,154 @@ def test_pending_timer_cancelled_on_state_change(tmp_path):
     assert p._timer_id is not None
     p.show_finished(_rec(tmp_path))
     assert p._timer_id is None
+
+
+# ── Task 2: every artgen kind showcased richly (SDD task-2-brief.md,
+# docs/superpowers/specs/2026-07-17-media-showcase-everywhere-design.md) ────
+#
+# Before this fix, `_artifact_kind` only recognised image/.mp4/.gif/.txt/.ans
+# — a successful `.svg` (5 generators), `.json` (palette), or `.py` (codeart)
+# generation claimed "Result file not found" despite the file existing right
+# there on disk, `.ans` rendered as raw escape-code gibberish in a
+# `Gtk.TextView`, and `.md`/verse rendered as unformatted plain text. These
+# tests build a record per kind pointing at a REAL tmp artifact file (never
+# a hand-rolled fake) and assert the rich widget, never the placeholder.
+
+def test_svg_record_renders_vector_picture_not_placeholder(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="landscape", ext=".svg",
+        content='<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+                '<rect width="10" height="10" fill="red"/></svg>',
+    )
+    widget = p._build_artifact_widget(rec)
+    assert isinstance(widget, Gtk.Picture)
+    assert not isinstance(widget, Gtk.Label)
+
+
+def test_palette_json_record_renders_reading_view_not_placeholder(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="palette", ext=".json",
+        content=json.dumps({
+            "name": "Sunset", "lore": "warm dusk",
+            "colors": [{"hex": "#ff4400", "role": "primary"}],
+        }),
+    )
+    widget = p._build_artifact_widget(rec)
+    assert isinstance(widget, WebKit.WebView)
+    assert not isinstance(widget, Gtk.Label)
+
+
+def test_ansi_record_renders_reading_view_not_raw_textview(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="ansi", ext=".ans",
+        content="\x1b[38;5;196m█\x1b[38;5;46m█\n",
+    )
+    widget = p._build_artifact_widget(rec)
+    assert isinstance(widget, WebKit.WebView)
+    # The old bug: raw escape codes dumped into a plain Gtk.TextView.
+    assert not isinstance(widget, Gtk.TextView)
+
+
+def test_verse_txt_record_renders_formatted_reading_view(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="verse", ext=".txt",
+        content="Roses are red\nViolets are blue",
+        params={"form": "couplet", "theme": "love"},
+    )
+    widget = p._build_artifact_widget(rec)
+    assert isinstance(widget, WebKit.WebView)
+    assert not isinstance(widget, Gtk.TextView)
+
+
+def test_codeart_py_record_renders_monospace_reading_view(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="codeart", ext=".py",
+        content="def recurse(n):\n    return recurse(n - 1)\n",
+    )
+    widget = p._build_artifact_widget(rec)
+    assert isinstance(widget, WebKit.WebView)
+    assert not isinstance(widget, Gtk.TextView)
+
+
+@pytest.mark.parametrize("generator_type,ext,content", [
+    ("landscape", ".svg", '<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+    ("palette", ".json", '{"name":"x","colors":[]}'),
+    ("ansi", ".ans", "\x1b[38;5;196m█\n"),
+    ("verse", ".txt", "a poem"),
+    ("codeart", ".py", "x = 1\n"),
+])
+def test_every_existing_kind_never_shows_not_found_placeholder(
+    tmp_path, generator_type, ext, content
+):
+    """CRITICAL: for ANY kind whose file EXISTS, `_build_artifact_widget`
+    must never return the "Result file not found" placeholder label — the
+    core bug this task fixes."""
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(tmp_path, generator_type=generator_type, ext=ext, content=content)
+    widget = p._build_artifact_widget(rec)  # must not raise
+    if isinstance(widget, Gtk.Label):
+        assert widget.get_label() != "Result file not found."
+
+
+def test_missing_artgen_file_still_shows_honest_placeholder(tmp_path):
+    """The ONE case that legitimately still shows the placeholder: a
+    genuinely-absent file — never a false negative for a file that exists,
+    but also never silently swallowed for one that truly doesn't."""
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(tmp_path, generator_type="ansi", ext=".ans", content="x")
+    Path(rec.media_file_path).unlink()
+    widget = p._build_artifact_widget(rec)  # must not raise
+    assert isinstance(widget, Gtk.Label)
+    assert widget.get_label() == "Result file not found."
+
+
+# ── Recents strip: real thumbnails for image/gif/svg, labeled chips (never
+# a bare "?") for ansi/palette/text/code ────────────────────────────────────
+
+def test_recent_card_svg_shows_thumbnail_widget(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="landscape", ext=".svg",
+        content='<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    )
+    card = p._build_recent_card(rec)
+    assert isinstance(card.get_child(), Gtk.Picture)
+
+
+def test_recent_card_verse_shows_verse_labeled_chip_not_bare_question_mark(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(tmp_path, generator_type="verse", ext=".txt", content="a poem")
+    card = p._build_recent_card(rec)
+    assert card.get_label() == "Verse"
+
+
+def test_recent_card_ansi_shows_ansi_labeled_chip_not_bare_question_mark(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(tmp_path, generator_type="ansi", ext=".ans", content="x")
+    card = p._build_recent_card(rec)
+    assert card.get_label() == "ANSI"
+
+
+def test_recent_card_palette_shows_palette_labeled_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(
+        tmp_path, generator_type="palette", ext=".json",
+        content='{"name":"x","colors":[]}',
+    )
+    card = p._build_recent_card(rec)
+    assert card.get_label() == "Palette"
+
+
+def test_recent_card_codeart_shows_code_labeled_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _artgen_rec(tmp_path, generator_type="codeart", ext=".py", content="x = 1\n")
+    card = p._build_recent_card(rec)
+    assert card.get_label() == "Code"
 
 
 # ── Pending-queue display (SP-3c-4, task-4-brief.md) ────────────────────────
