@@ -5614,13 +5614,9 @@ class MainWindow(Gtk.ApplicationWindow):
         _detail_close_btn = Gtk.Button(label="✕")
         _detail_close_btn.add_css_class("flat")
         _detail_close_btn.set_tooltip_text("Close detail pane")
-        _detail_close_btn.connect("clicked", lambda _: (
-            self._detail_wrap.set_visible(False),
-            setattr(self, "_detail_visible", False),
-            self._inner_paned.set_position(
-                self._inner_paned.get_allocation().width
-            ) if hasattr(self, "_inner_paned") else None,
-        ))
+        _detail_close_btn.connect(
+            "clicked", lambda _: self._set_detail_pane_visible(False)
+        )
         _detail_close_bar.append(_detail_close_btn)
         self._detail_wrap.append(_detail_close_bar)
 
@@ -6127,12 +6123,41 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._prefs_dialog._director_drop.set_selected(i)
                     break
 
+    def _set_detail_pane_visible(self, visible: bool) -> None:
+        """Show/hide the detail pane and keep `self._detail_visible` in sync.
+
+        Unify-gallery-interaction-pattern Task 1: single source of truth for
+        detail-pane visibility, replacing two call sites (the ✕ dismiss-bar
+        button and `win.toggle-detail`) that each used to reach for the
+        widget themselves — one via `self._detail_wrap` directly (the ✕
+        button's inline lambda), the other via `self._detail.get_parent()`
+        (`_on_toggle_detail`, below). The `get_parent()` route is an
+        assumption that breaks once a later task inserts a `Gtk.Stack`
+        between `_detail_wrap` and `self._detail` to host a second renderer
+        — at that point `self._detail.get_parent()` returns the new Stack,
+        not `_detail_wrap`, so hiding "the detail pane" would actually hide
+        just the Stack (a fixed-size child) while `_detail_wrap` — and the
+        space it occupies in `inner_paned` — stayed put. Targeting
+        `_detail_wrap` directly here removes that assumption for both
+        callers up front.
+
+        Hiding also snaps `inner_paned`'s divider to the window's full
+        allocated width — the same repositioning the ✕ button always did —
+        so the gallery reclaims the space immediately instead of leaving a
+        collapsed-but-still-reserved sliver. Showing does not reposition the
+        paned (this mirrors prior behavior: `_on_toggle_detail` never
+        repositioned it either, only the ✕ button's hide path did).
+        """
+        self._detail_visible = visible
+        self._detail_wrap.set_visible(visible)
+        if not visible and hasattr(self, "_inner_paned"):
+            self._inner_paned.set_position(
+                self._inner_paned.get_allocation().width
+            )
+
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
-        self._detail_visible = not self._detail_visible
+        self._set_detail_pane_visible(not self._detail_visible)
         action.set_state(GLib.Variant("b", self._detail_visible))
-        # self._detail's parent is detail_wrap (the Box containing detail + queue).
-        # Hiding it collapses the entire right panel of the inner paned.
-        self._detail.get_parent().set_visible(self._detail_visible)
 
     def _on_gallery_density_action(self, action: Gio.SimpleAction,
                                     param: GLib.Variant) -> None:
@@ -6416,11 +6441,29 @@ class MainWindow(Gtk.ApplicationWindow):
         return self._gallery_for_type(self._current_medium_source())
 
     def _gallery_for_type(self, media_type: str) -> "GalleryWidget":
-        """Return the gallery for the given media_type string."""
+        """Return the gallery for the given media_type string.
+
+        Unify-gallery-interaction-pattern Task 1: "artgen" is deliberately
+        NOT one of the branches below. `ArtgenGallery` (`self._artgen_gallery`)
+        does not implement `GalleryWidget`'s API (`all_cards()`/
+        `delete_card()`/`replace_pending_with()`/...) — before this guard, an
+        "artgen" media_type silently fell through to `_video_gallery`, a
+        latent misroute that would only surface as an AttributeError deep
+        inside whatever caller then tried to use the returned object as a
+        `GalleryWidget`. Raising here makes the misroute loud at the call
+        site instead. Callers that want the artgen gallery must reach for
+        `self._artgen_gallery` directly (it isn't reachable through this
+        helper at all).
+        """
         if media_type == "image":
             return self._image_gallery
         if media_type == "animate":
             return self._animate_gallery
+        if media_type == "artgen":
+            raise ValueError(
+                "ArtgenGallery does not implement GalleryWidget's API; "
+                "use self._artgen_gallery directly"
+            )
         return self._video_gallery
 
     def _uncheck_pipelines_toggle_if_active(self) -> None:
