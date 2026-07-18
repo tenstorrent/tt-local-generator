@@ -1,3 +1,21 @@
+tt-local-generator (0.48.3) noble; urgency=medium
+
+  * fix(artgen): DEFINITIVE fix for the crash opening an AnimateDiff GIF (or any
+    artgen item) from Discover. faulthandler pinpointed a SEGFAULT at
+    `ArtgenGallery`'s `set_visible_child_name("detail")`: the internal Gtk.Stack
+    UNMAPS the grid page on switch, and unmapping the grid while its just-clicked,
+    focused FlowBoxChild sits in a ScrolledWindow makes GTK run a scroll-to-focus
+    `gtk_widget_compute_point` pass on a widget whose ancestor chain is being torn
+    down -> NULL widget -> segfault. The v0.48.2 idle-deferral didn't help because
+    the UNMAP itself is the trigger, whenever it runs. Replaced the Gtk.Stack with
+    a Gtk.Overlay: the grid is the always-mapped main child (dimmed to opacity 0
+    when the detail is shown) and the detail is an overlay child on top -- so the
+    grid is never unmapped and GTK never runs geometry on a torn-down child. The
+    native GalleryWidget never hit this (it keeps its grid mapped and shows detail
+    in a side panel).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 07:05:00 +0000
+
 tt-local-generator (0.48.2) noble; urgency=medium
 
   * fix(artgen): opening an AnimateDiff GIF (or any artgen item) from Discover

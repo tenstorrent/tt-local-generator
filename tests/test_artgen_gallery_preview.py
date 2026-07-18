@@ -8,9 +8,10 @@ fires on click but only forwards to `self.on_card_activated` -- which
 `main_window.py` never sets for the artgen gallery -- so clicks silently did
 nothing and `ArtgenDetail` became an orphaned, untested class.
 
-Fix: `ArtgenGallery` now owns an internal Gtk.Stack ("grid" / "detail") and
-shows its own `ArtgenDetail` by default on activation, while still calling
-any externally-wired `on_card_activated` (additive, not exclusive).
+Fix: `ArtgenGallery` shows its own `ArtgenDetail` on activation (still
+calling any externally-wired `on_card_activated`, additive). The detail is an
+Overlay child on top of the always-mapped grid (v0.48.3) -- NOT a Gtk.Stack,
+which would unmap the grid and segfault; see test_card_activation_keeps_grid_mapped.
 
 Run under xvfb (GTK4 widgets need a real display):
     xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_artgen_gallery_preview.py -v
@@ -40,21 +41,6 @@ def _gtk_available() -> bool:
 gtk_required = pytest.mark.skipif(
     not _gtk_available(), reason="GTK4 display not available"
 )
-
-
-def _pump():
-    """Drain pending GLib idle callbacks.
-
-    `ArtgenGallery._on_card_activated` DEFERS the grid->detail switch to a
-    `GLib.idle_add` callback (crash fix v0.48.2 -- switching synchronously
-    inside the FlowBox `child-activated` handler unmapped the just-activated
-    card mid-geometry-pass, aborting with a `gtk_widget_compute_point`
-    assertion). So the switch is observable only after the idle queue runs.
-    """
-    from gi.repository import GLib
-    ctx = GLib.MainContext.default()
-    while ctx.pending():
-        ctx.iteration(False)
 
 
 def _make_media_record(tmp_path: Path, **kwargs) -> "object":
@@ -109,15 +95,14 @@ def test_activating_a_card_opens_detail_page_with_no_external_wiring(tmp_path):
     assert gallery.on_card_activated is None, "test assumes no external wiring"
     gallery.refresh()
 
-    assert gallery._stack.get_visible_child_name() == "grid"
+    assert gallery._detail_shown() is False
 
     child = _find_child_for(gallery, rec.id)
     assert child is not None, "expected a FlowBoxChild for the seeded record"
 
     gallery._on_card_activated(gallery._flow, child)
-    _pump()
 
-    assert gallery._stack.get_visible_child_name() == "detail", (
+    assert gallery._detail_shown() is True, (
         "activating a card must switch the internal stack to the detail page"
     )
     assert gallery._detail._records[gallery._detail._idx].id == rec.id, (
@@ -126,13 +111,16 @@ def test_activating_a_card_opens_detail_page_with_no_external_wiring(tmp_path):
 
 
 @gtk_required
-def test_card_activation_defers_stack_switch_to_idle(tmp_path):
-    """Crash fix (v0.48.2): the grid->detail switch must NOT happen
-    synchronously inside the `child-activated` handler -- doing so unmaps the
-    just-activated card while GTK is still computing its geometry, aborting
-    with `gtk_widget_compute_point: assertion 'GTK_IS_WIDGET (widget)'`.
-    So immediately after `_on_card_activated` the grid is still shown; only
-    after the idle queue drains does it switch to detail."""
+def test_card_activation_keeps_grid_mapped(tmp_path):
+    """Crash fix (v0.48.3): opening the detail must NOT unmap the grid.
+
+    A Gtk.Stack unmaps its hidden child on switch; unmapping the grid while its
+    just-clicked, focused FlowBoxChild lives in a ScrolledWindow made GTK run a
+    scroll-to-focus `gtk_widget_compute_point` pass on a torn-down widget ->
+    SEGFAULT (confirmed via faulthandler opening an AnimateDiff GIF from
+    Discover). The fix hosts grid+detail in a Gtk.Overlay: the grid stays MAPPED
+    at all times (dimmed to opacity 0 when the detail is up), so no geometry
+    ever runs on a torn-down grid child."""
     import media_store as ms_mod
     from artgen_gallery import ArtgenGallery
 
@@ -144,12 +132,22 @@ def test_card_activation_defers_stack_switch_to_idle(tmp_path):
     child = _find_child_for(gallery, rec.id)
 
     gallery._on_card_activated(gallery._flow, child)
-    # Synchronous: still on the grid (the switch was deferred, not run inline).
-    assert gallery._stack.get_visible_child_name() == "grid", (
-        "the stack switch must be deferred out of the child-activated handler"
+
+    assert gallery._detail_shown() is True
+    # The grid page is still MAPPED (the whole point -- never unmapped), just
+    # dimmed out of sight behind the detail overlay.
+    assert gallery._grid_page.get_mapped() or not gallery.get_mapped(), (
+        "grid page must remain mapped when the detail is shown (never unmapped)"
     )
-    _pump()
-    assert gallery._stack.get_visible_child_name() == "detail"
+    assert gallery._grid_page.get_opacity() == 0.0
+    # And it is NOT a Gtk.Stack (which would unmap it) -- it's an Overlay.
+    import gi
+    from gi.repository import Gtk
+    assert isinstance(gallery._detail_overlay, Gtk.Overlay)
+
+    gallery._detail.on_back()
+    assert gallery._detail_shown() is False
+    assert gallery._grid_page.get_opacity() == 1.0
 
 
 @gtk_required
@@ -164,12 +162,11 @@ def test_on_back_returns_to_grid_page(tmp_path):
     gallery.refresh()
     child = _find_child_for(gallery, rec.id)
     gallery._on_card_activated(gallery._flow, child)
-    _pump()
-    assert gallery._stack.get_visible_child_name() == "detail"
+    assert gallery._detail_shown() is True
 
     gallery._detail.on_back()
 
-    assert gallery._stack.get_visible_child_name() == "grid"
+    assert gallery._detail_shown() is False
 
 
 @gtk_required
@@ -190,10 +187,9 @@ def test_external_on_card_activated_still_fires_additively(tmp_path):
 
     child = _find_child_for(gallery, rec.id)
     gallery._on_card_activated(gallery._flow, child)
-    _pump()
 
     assert seen == [rec.id], "external on_card_activated callback must still fire"
-    assert gallery._stack.get_visible_child_name() == "detail", (
+    assert gallery._detail_shown() is True, (
         "internal preview must still open even with external wiring present"
     )
 
@@ -219,7 +215,6 @@ def test_activation_respects_active_filter_for_detail_record_list(tmp_path):
     child = _find_child_for(gallery, rec_a.id)
     assert child is not None
     gallery._on_card_activated(gallery._flow, child)
-    _pump()
 
     ids_in_detail = [r.id for r in gallery._detail._records]
     assert ids_in_detail == [rec_a.id], (

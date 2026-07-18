@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk
+from gi.repository import Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
@@ -439,12 +439,41 @@ class ArtgenGallery(Gtk.Box):
         self._detail.on_remix = self._on_detail_remix
         self._detail.on_remix_as_pipeline = self._on_detail_remix_as_pipeline
 
-        self._stack = Gtk.Stack()
-        self._stack.set_vexpand(True)
-        self._stack.add_named(grid_page, "grid")
-        self._stack.add_named(self._detail, "detail")
-        self._stack.set_visible_child_name("grid")
-        self.append(self._stack)
+        # CRASH FIX (v0.48.3): use a Gtk.Overlay, NOT a Gtk.Stack, to host the
+        # grid + detail. A Gtk.Stack UNMAPS its hidden child on switch; unmapping
+        # the grid page while its just-clicked FlowBoxChild is still the focused
+        # child of a ScrolledWindow makes GTK run a scroll-to-focus geometry pass
+        # (`gtk_widget_compute_point`) on a widget whose ancestor chain is being
+        # torn down -> NULL widget -> SEGFAULT (confirmed via faulthandler:
+        # crash at `set_visible_child_name`, opening an AnimateDiff GIF from
+        # Discover). The native GalleryWidget never crashes because it never
+        # unmaps the grid. So: the grid is the always-mapped Overlay main child;
+        # the detail is an overlay child shown ON TOP. Switching to detail sets
+        # the grid's opacity to 0 (invisible but still MAPPED -> no teardown, no
+        # compute_point crash, and nothing bleeds through the detail) and reveals
+        # the detail; going back reverses it.
+        self._grid_page = grid_page
+        self._detail.set_visible(False)
+        self._detail.set_hexpand(True)
+        self._detail.set_vexpand(True)
+        self._detail_overlay = Gtk.Overlay()
+        self._detail_overlay.set_vexpand(True)
+        self._detail_overlay.set_child(grid_page)
+        self._detail_overlay.add_overlay(self._detail)
+        self.append(self._detail_overlay)
+
+    def _show_detail(self, shown: bool) -> None:
+        """Show/hide the in-page detail overlay WITHOUT unmapping the grid.
+
+        `test seam + single source of truth` for the grid<->detail toggle: the
+        grid stays mapped at all times (opacity 0 when the detail is up) so GTK
+        never runs geometry on a torn-down grid child -- see the Overlay comment
+        in `_build` for the segfault this avoids."""
+        self._detail.set_visible(shown)
+        self._grid_page.set_opacity(0.0 if shown else 1.0)
+
+    def _detail_shown(self) -> bool:
+        return self._detail.get_visible()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -740,26 +769,17 @@ class ArtgenGallery(Gtk.Box):
         # is the whole point of this fix -- see CLAUDE.md). This is additive:
         # any externally-wired on_card_activated below still fires too.
         #
-        # CRASH FIX (v0.48.2): the grid->detail switch is DEFERRED to an idle
-        # callback rather than run synchronously here. `set_visible_child_name`
-        # unmaps the grid page -- including the very FlowBoxChild we're inside
-        # the "child-activated" handler for -- while GTK is still running its
-        # post-activation scroll-to / focus / tooltip geometry pass on that
-        # child. That pass calls `gtk_widget_compute_point` on the child; once
-        # it's unmapped/reparented mid-pass the widget is no longer live and
-        # GTK aborts with `gtk_widget_compute_point: assertion 'GTK_IS_WIDGET
-        # (widget)' failed` (reported opening an AnimateDiff GIF from Discover).
-        # Deferring to idle lets GTK finish that pass before we hide the grid.
-        # (The native GalleryWidget never hit this: it renders detail in a
-        # side panel and keeps the grid mapped.)
-        def _open() -> bool:
-            self._detail.show_record(media_id, self._filtered_records())
-            self._stack.set_visible_child_name("detail")
-            if self.on_card_activated:
-                self.on_card_activated(media_id)
-            return GLib.SOURCE_REMOVE
-
-        GLib.idle_add(_open)
+        # Safe to run synchronously here (v0.48.3): `_show_detail` reveals an
+        # Overlay child and only DIMS the grid (opacity 0) instead of unmapping
+        # it, so the just-activated FlowBoxChild stays live in a mapped tree --
+        # no `gtk_widget_compute_point` on a torn-down widget, no segfault (see
+        # the Overlay comment in `_build`). The earlier v0.48.2 idle-deferral
+        # was insufficient because the crash was the UNMAP itself, whenever it
+        # ran -- not the timing of the switch.
+        self._detail.show_record(media_id, self._filtered_records())
+        self._show_detail(True)
+        if self.on_card_activated:
+            self.on_card_activated(media_id)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:
@@ -771,7 +791,7 @@ class ArtgenGallery(Gtk.Box):
     # the grid page's in-memory records/chips in sync.
 
     def _on_detail_back(self) -> None:
-        self._stack.set_visible_child_name("grid")
+        self._show_detail(False)
 
     def _on_detail_deleted(self, media_id: str) -> None:
         # ArtgenDetail already called _ms.delete(media_id) itself before
@@ -786,7 +806,7 @@ class ArtgenGallery(Gtk.Box):
         self._rebuild_chips()
         if self.on_card_deleted:
             self.on_card_deleted(media_id)
-        self._stack.set_visible_child_name("grid")
+        self._show_detail(False)
 
     def _on_detail_starred(self, media_id: str, starred: bool) -> None:
         _ms.star(media_id, starred)
