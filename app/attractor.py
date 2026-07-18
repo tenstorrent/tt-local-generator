@@ -39,6 +39,13 @@ from gi.repository import GLib, Gio, Gtk, Pango  # noqa: E402
 import prompt_client  # noqa: E402
 from app_settings import settings as _settings  # noqa: E402
 from history_store import STORAGE_DIR as _STORAGE_DIR  # noqa: E402
+# Shared artgen rendering (media-showcase-everywhere, Task 1): the single
+# ANSI parser (understands BOTH the current fg+block and legacy bg+space
+# escape formats) and the self-managed GdkPixbufAnimationIter gif widget.
+# Replaces attractor's own bespoke ANSI parser (which only understood the
+# legacy format -- see _load_artgen_ansi below) and the fragile GStreamer
+# Gtk.Video path for animated gifs.
+from artgen_render import parse_ansi_grid, AnimatedGifWidget  # noqa: E402
 
 _DISK_SPACE_MIN_BYTES = 18 * 1024 ** 3   # 18 GB — pause TT-TV generation below this
 
@@ -554,6 +561,24 @@ def _load_artgen_text(box: Gtk.Box, file_path: str) -> None:
     box.append(scroll)
 
 
+def _load_animated_gif(box: Gtk.Box, file_path: str) -> None:
+    """Render an animated GIF into *box* via the shared GdkPixbufAnimationIter
+    widget (`AnimatedGifWidget`) instead of GStreamer/`Gtk.Video`.
+
+    Used for both artgen AnimateDiff gifs (previously frozen on frame 1 by
+    the "unknown extension -> static thumbnail" fallback) and native
+    `media_type == "animatediff"` records (previously routed through the
+    fragile Gtk.Video GStreamer path -- documented unreliable for gif in
+    main_window.py:2110). `_clear_box` unparents any prior child first,
+    which fires that widget's own "unrealize" handler and cancels its GLib
+    timer -- no manual timer bookkeeping needed here, matching how
+    `create_view.CreateResultPanel` and `artgen_gallery` swap this widget
+    in and out.
+    """
+    _clear_box(box)
+    box.append(AnimatedGifWidget(file_path))
+
+
 class _ColorSwatchArea(Gtk.DrawingArea):
     """Full-width color swatch strip — used for palette artgen display in TT-TV."""
 
@@ -633,55 +658,27 @@ def _load_artgen_palette(box: Gtk.Box, file_path: str) -> None:
         box.append(lore_lbl)
 
 
-# xterm-256 standard colors (indices 0-15)
-_XTERM_STANDARD: list = [
-    (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
-    (0, 0, 128), (128, 0, 128), (0, 128, 128), (192, 192, 192),
-    (128, 128, 128), (255, 0, 0), (0, 255, 0), (255, 255, 0),
-    (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
-]
-_XTERM_CUBE_STEPS: list = [0, 95, 135, 175, 215, 255]
+def _ansi_grid_to_rgb_rows(grid: list) -> list:
+    """Convert `artgen_render.parse_ansi_grid`'s `(char, fg_hex, bg_hex)` cell
+    grid into the rectangular `(r, g, b)` rows `_AnsiCanvas` paints.
 
-
-def _xterm256_to_rgb(n: int) -> tuple:
-    """Convert an xterm-256 color index to (r, g, b) ints 0-255."""
-    if n < 16:
-        return _XTERM_STANDARD[n]
-    if n < 232:
-        n -= 16
-        r = n // 36
-        g = (n // 6) % 6
-        b = n % 6
-        return (_XTERM_CUBE_STEPS[r], _XTERM_CUBE_STEPS[g], _XTERM_CUBE_STEPS[b])
-    v = 8 + (n - 232) * 10
-    return (v, v, v)
-
-
-def _parse_ansi_grid(text: str) -> list:
-    """Parse ANSI xterm-256 background-color pixel art into a 2-D list of
-    (r, g, b) tuples.  Handles both ESC[48;5;Nm (256-color) and ESC[4Xm
-    (16-color) background codes.
-
-    Some generators write the octal escape as bare ASCII digits "033[" (no
-    actual ESC byte, no backslash).  Normalise those to a real ESC byte before
-    pattern matching so both variants are accepted.
+    Parsing the ANSI escape sequences themselves is delegated entirely to the
+    shared, single-source-of-truth parser in `artgen_render.py` (handles both
+    the current fg+block and legacy bg+space pixel formats) -- this function
+    only decides which color CHANNEL to paint per cell, mirroring
+    `artgen_render.ansi_to_html`'s rule exactly: a space character shows its
+    background color (the legacy bg+space format); any other character shows
+    its foreground color (the current fg+block format). A cell with no color
+    on the relevant channel (still at its default, or just SGR-0 reset)
+    paints black.
     """
-    import re as _re
-    # Normalise bare octal "033[" → ESC byte (some LLM/generator output)
-    text = _re.sub(r"(?<!\x1b)033\[", "\x1b[", text)
     rows: list = []
-    for line in text.splitlines():
-        pixels: list = []
-        # Match ESC[48;5;Nm (256-color background) followed by one space pixel
-        for m in _re.finditer(r"\x1b\[48;5;(\d+)m ", line):
-            pixels.append(_xterm256_to_rgb(int(m.group(1))))
-        # Fall back to ESC[4Xm 16-color backgrounds if no 256-color found
-        if not pixels:
-            for m in _re.finditer(r"\x1b\[4(\d)m ", line):
-                idx = int(m.group(1))
-                pixels.append(_xterm256_to_rgb(idx))
-        if pixels:
-            rows.append(pixels)
+    for row in grid:
+        pixels = []
+        for ch, fg, bg in row:
+            colour_hex = bg if ch == " " else fg
+            pixels.append(_parse_hex_color(colour_hex) if colour_hex else (0, 0, 0))
+        rows.append(pixels)
     return rows
 
 
@@ -713,15 +710,23 @@ class _AnsiCanvas(Gtk.DrawingArea):
 
 
 def _load_artgen_ansi(box: Gtk.Box, file_path: str) -> None:
-    """Render an ANSI pixel-art artifact into *box* using a cairo DrawingArea."""
+    """Render an ANSI pixel-art artifact into *box* using a cairo DrawingArea.
+
+    Parsing is delegated to `artgen_render.parse_ansi_grid` -- the single
+    place that understands ANSI escape sequences -- so this can never drift
+    from the `ansi` generator again. This used to be a bespoke regex that
+    only matched the legacy `\\x1b[48;5;Nm ` (bg+space) format, which meant
+    every artifact the generator's CURRENT `\\x1b[38;5;Nm█` (fg+block) format
+    produced parsed to an empty grid and fell back to raw escape-code text.
+    """
     _clear_box(box)
     try:
         text = Path(file_path).read_text(encoding="utf-8", errors="replace")
     except Exception:
         text = ""
-    rows = _parse_ansi_grid(text)
-    if rows:
-        canvas = _AnsiCanvas(rows)
+    grid = parse_ansi_grid(text)
+    if grid:
+        canvas = _AnsiCanvas(_ansi_grid_to_rgb_rows(grid))
         box.append(canvas)
     else:
         # No parseable ANSI — fall back to raw text so something shows.
@@ -1555,6 +1560,14 @@ class AttractorWindow(Gtk.Window):
                 _load_artgen_text(slot._text_box, file_path)
                 slot._picture.set_visible(False)
                 slot._text_box.set_visible(True)
+            elif ext == ".gif":
+                # Artgen AnimateDiff gif: animate via the shared
+                # GdkPixbufAnimationIter widget instead of falling through to
+                # the "unknown extension -> static thumbnail" branch below,
+                # which froze every artgen gif on frame 1.
+                _load_animated_gif(slot._text_box, file_path)
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(True)
             elif thumb_path and Path(thumb_path).exists():
                 # Unknown extension but has a rendered thumbnail — show it.
                 slot._picture.set_filename(thumb_path)
@@ -1575,6 +1588,23 @@ class AttractorWindow(Gtk.Window):
             if path:
                 slot._picture.set_filename(path)
             slot._picture.set_visible(True)
+        elif media_type == "animatediff":
+            # Native AnimateDiff gif: animate via the shared
+            # GdkPixbufAnimationIter widget, same as artgen gifs -- NOT the
+            # fragile GStreamer Gtk.Video path (documented unreliable for gif
+            # in main_window.py:2110). Identical on Linux and macOS since it
+            # never touches GStreamer/_USE_SYSTEM_PLAYER.
+            slot._video.set_visible(False)
+            if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
+                slot._gst_player.close()
+                slot._gst_player.widget.set_visible(False)
+            slot._picture.set_visible(False)
+            path = getattr(record, "video_path", None)
+            if path:
+                _load_animated_gif(slot._text_box, path)
+                slot._text_box.set_visible(True)
+            else:
+                slot._text_box.set_visible(False)
         elif _USE_SYSTEM_PLAYER:
             # macOS video: use GstPlayer (gtk4paintablesink → Gtk.Picture).
             # Gtk.Video has no backend on the Homebrew GTK4 bottle.
