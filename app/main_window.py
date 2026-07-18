@@ -47,6 +47,7 @@ from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_gallery import ArtgenGallery
+from artgen_detail import ArtgenDetail
 import artgen_kind
 from create_view import CreateView
 import gallery_layout
@@ -5588,6 +5589,25 @@ class MainWindow(Gtk.ApplicationWindow):
             star_cb=self._on_star,
         )
 
+        # Unify-gallery-interaction-pattern Task 2: the right-hand detail pane
+        # is now a dual-renderer container -- a Gtk.Stack holding both
+        # `DetailPanel` (native video/image/animate records, unchanged above)
+        # and `ArtgenDetail` (artgen records). This task only builds+wires
+        # the container; nothing drives it from artgen clicks yet (that's
+        # Task 3) -- `set_visible_child_name("native")` below keeps native
+        # behavior a no-op. `on_back`/`on_deleted`/`on_starred` are left
+        # unwired here since they need `self._artgen_gallery`, which doesn't
+        # exist yet at this point in `__init__` -- Task 3 wires those once it
+        # rewires the artgen gallery<->detail flow.
+        self._artgen_detail = ArtgenDetail()
+        self._artgen_detail.on_remix = self._on_remix_card
+        self._artgen_detail.on_remix_as_pipeline = self._remix_as_pipeline
+
+        self._right_stack = Gtk.Stack()
+        self._right_stack.add_named(self._detail, "native")
+        self._right_stack.add_named(self._artgen_detail, "artgen")
+        self._right_stack.set_visible_child_name("native")
+
         # Queue display lives below the detail/preview panel on the right side.
         self._queue_section_lbl = Gtk.Label(label="QUEUED PROMPTS")
         self._queue_section_lbl.add_css_class("section-label")
@@ -5620,7 +5640,7 @@ class MainWindow(Gtk.ApplicationWindow):
         _detail_close_bar.append(_detail_close_btn)
         self._detail_wrap.append(_detail_close_bar)
 
-        self._detail_wrap.append(self._detail)
+        self._detail_wrap.append(self._right_stack)
         self._detail_wrap.append(self._queue_section_lbl)
         self._detail_wrap.append(self._queue_box)
 
