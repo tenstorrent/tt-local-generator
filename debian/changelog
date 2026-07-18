@@ -1,3 +1,25 @@
+tt-local-generator (0.48.4) noble; urgency=medium
+
+  * fix(artgen): ROOT-CAUSE fix for the crash opening an AnimateDiff GIF from
+    Discover -- a use-after-free, reproduced and verified fixed on a real
+    display. The card's hover-preview swaps the static thumbnail for a live
+    `AnimatedGifWidget` via `content_zone.remove_overlay(old)`, which unparents
+    and (nothing else holding a ref) FREES the outgoing widget. That free ran
+    INSIDE the motion/click signal-dispatch, leaving a dangling widget pointer
+    in GTK's in-flight layout machinery; a following `gtk_widget_compute_point`
+    then dereferenced freed memory -> `GTK_IS_WIDGET` assertion + nondeterministic
+    SEGFAULT. The overlay swap is now deferred to a `GLib.idle_add` callback so
+    the current dispatch fully unwinds before anything is freed (add-before-remove,
+    with a re-check for a detached card). Verified: hover->click->back cycles that
+    previously crashed on the first click now survive with zero criticals.
+    (Prior v0.48.2/0.48.3 attempts addressed the grid-unmap path -- real but not
+    THIS crash; the definitive cause was the hover-swap free, found via a
+    faulthandler C backtrace + an xdotool reproduction on the live display.)
+  * The always-on `faulthandler` + `TTLG_DEBUG_CRITICALS` instrumentation added
+    in 0.48.2 (which pinpointed this) is retained.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 15:00:00 +0000
+
 tt-local-generator (0.48.3) noble; urgency=medium
 
   * fix(artgen): DEFINITIVE fix for the crash opening an AnimateDiff GIF (or any

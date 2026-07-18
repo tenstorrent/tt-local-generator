@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
@@ -722,19 +722,38 @@ class ArtgenGallery(Gtk.Box):
         _zone_content = [content]
 
         def _swap_zone_content(new_widget: Gtk.Widget) -> None:
-            # Defensive (v0.48.2): a motion "leave" can fire after the card
-            # has been detached (grid rebuilt, or the stack switched to the
-            # detail page and back). Mutating the overlay of a card that's no
-            # longer in the widget tree churns layout on a dead widget; bail.
-            if content_zone.get_parent() is None or _zone_content[0] is None:
-                return
+            # CRASH FIX (v0.48.4): the actual overlay mutation is DEFERRED to an
+            # idle callback. `remove_overlay(old)` unparents (and, since nothing
+            # else holds a ref, FREES) the outgoing widget. Doing that free while
+            # GTK is still mid signal-dispatch on this card -- which is exactly
+            # when the motion "enter"/"leave" and click handlers run -- leaves a
+            # dangling widget pointer in GTK's in-flight layout/event machinery,
+            # so a subsequent `gtk_widget_compute_point` dereferences freed
+            # memory: `assertion 'GTK_IS_WIDGET (widget)' failed` then a
+            # nondeterministic SEGFAULT (reproduced: hover an AnimateDiff GIF
+            # card -> live-gif swap -> click -> crash). Running the swap at idle
+            # lets the current dispatch fully unwind before anything is freed.
             new_widget.set_hexpand(True)
             new_widget.set_vexpand(True)
             new_widget.set_halign(Gtk.Align.FILL)
             new_widget.set_valign(Gtk.Align.FILL)
-            content_zone.remove_overlay(_zone_content[0])
-            content_zone.add_overlay(new_widget)
-            _zone_content[0] = new_widget
+
+            def _do_swap() -> bool:
+                # Re-check at idle time: the card may have been detached (grid
+                # rebuilt) or already swapped to this very widget in between.
+                if content_zone.get_parent() is None or _zone_content[0] is None:
+                    return False
+                old = _zone_content[0]
+                if old is new_widget:
+                    return False
+                # add BEFORE remove so the zone always has a child, then free
+                # the outgoing widget now that no dispatch is on the stack.
+                content_zone.add_overlay(new_widget)
+                content_zone.remove_overlay(old)
+                _zone_content[0] = new_widget
+                return False
+
+            GLib.idle_add(_do_swap)
 
         def _enter_card(*_):
             hover_rev.set_reveal_child(True)
