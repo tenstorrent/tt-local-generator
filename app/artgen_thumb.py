@@ -9,6 +9,7 @@ don't bleed into the pure-storage module.
 """
 from __future__ import annotations
 
+import json
 import logging
 import struct
 import uuid
@@ -28,7 +29,19 @@ ARTGEN_THUMB_DIR = ARTGEN_DIR / "thumbnails"
 # treated as opaque binary — it must NEVER be text-rendered (that was the
 # gif-shows-as-garbage-text bug: every non-svg extension fell into the text
 # branch, including binary raster files like `.gif`/`.png`).
-_TEXT_EXTS = {".txt", ".ans", ".md", ".json"}
+#
+# `.json` (palette) and `.ans` (ansi) are DELIBERATELY not blanket members of
+# this set even though they're UTF-8 text: each gets its own real raster
+# render below (a swatch grid / a color grid) BEFORE this branch is reached,
+# because rendering their raw syntax as prose is exactly the
+# "garbage-text-PNG" bug this module exists to avoid (see CLAUDE.md's
+# media-showcase-everywhere note). `.json` still falls through to this
+# generic text branch when it ISN'T a colors-palette (plain JSON is
+# legitimately fine to preview as text); `.ans` never falls through here —
+# an unparseable/empty `.ans` degrades to the honest placeholder instead,
+# because raw ANSI escape bytes read as "text" is unreadable garbage, not a
+# real preview.
+_TEXT_EXTS = {".txt", ".md", ".json", ".py"}
 
 # Raster image extensions PIL can open directly — includes `.gif`, whose
 # first frame is used for the thumbnail (a still is the correct "preview"
@@ -58,8 +71,22 @@ def make_thumbnail(src: Path, dst: Path) -> Path:
                       cursor). Falls back to the placeholder PNG on failure —
                       NEVER to the text-render branch (a `.gif`/`.png`/etc.
                       is opaque binary, not text).
-    .txt/.ans/.md/.json → PIL monospace text render of the file's UTF-8
-                      content, same as before.
+    .json (palette) → parses `{"colors": [{"hex": ...}, ...]}` (media-showcase-
+                      everywhere Task 4) and draws a real swatch-grid PNG via
+                      PIL. Falls through to the generic text render below if
+                      the JSON isn't a colors-palette (plain JSON is fine to
+                      preview as text) or parsing fails.
+    .ans (ansi)    → parses via the shared `artgen_render.parse_ansi_grid`
+                      (the single place that understands both ANSI pixel
+                      formats — see that module's docstring) and draws a real
+                      color-grid PNG via PIL. NEVER falls back to text-render
+                      of the raw escape bytes on failure/empty — that's the
+                      exact "garbage baked into a PNG" bug this fixes — it
+                      falls back to the honest placeholder instead.
+    .txt/.md/.py   → PIL monospace text render of the file's UTF-8 content
+                      (genuine text/source; `.py` codeart previously fell all
+                      the way through to the placeholder because it wasn't in
+                      the allow-list, not because binary-safety demanded it).
     anything else  → a 1×1 grey placeholder PNG. Previously every
                       unrecognised extension fell into the text-render
                       branch and got its raw binary bytes decoded as
@@ -115,6 +142,38 @@ def make_thumbnail(src: Path, dst: Path) -> Path:
         _write_placeholder_png(dst)
         return dst
 
+    # Palette JSON: a real swatch-grid render. Falls through to the generic
+    # text branch below (still member of _TEXT_EXTS) if this isn't actually
+    # a colors-palette — plain JSON is legitimately fine to text-preview.
+    if ext == ".json":
+        try:
+            raw = src.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw)
+            colors = _extract_palette_hexes(data)
+            if colors:
+                _render_palette_png(colors, dst)
+                return dst
+        except Exception as exc:
+            logging.debug("make_thumbnail: palette swatch render failed for %s: %s", src, exc)
+        # Not a colors-palette (or parse failed) — fall through to the
+        # generic text branch, which handles .json as plain text.
+
+    # ANSI art: a real color-grid render via the shared parser. Never falls
+    # back to raw-escape text-render — that's the exact bug being fixed —
+    # so failure/empty content degrades straight to the placeholder.
+    if ext == ".ans":
+        try:
+            raw = src.read_text(encoding="utf-8", errors="replace")
+            from artgen_render import parse_ansi_grid
+            grid = parse_ansi_grid(raw)
+            if grid:
+                _render_ansi_grid_png(grid, dst)
+                return dst
+        except Exception as exc:
+            logging.debug("make_thumbnail: ansi grid render failed for %s: %s", src, exc)
+        _write_placeholder_png(dst)
+        return dst
+
     # Text (a deliberately narrow allow-list — see _TEXT_EXTS above)
     if ext in _TEXT_EXTS:
         try:
@@ -140,6 +199,89 @@ def make_thumbnail(src: Path, dst: Path) -> Path:
     # text-render of raw bytes.
     _write_placeholder_png(dst)
     return dst
+
+
+def _extract_palette_hexes(data) -> list[str]:
+    """Pull a flat list of "#RRGGBB" strings out of a palette-JSON payload.
+
+    Accepts both the real generator schema (`palette.py`:
+    `colors: [{"hex": "#RRGGBB", "role": "..."}, ...]`) and a plain
+    `colors: ["#RRGGBB", ...]` list of bare hex strings. Returns an empty
+    list (never raises) for anything that isn't a colors-palette, so the
+    caller can cleanly fall through to the generic text render.
+    """
+    if not isinstance(data, dict):
+        return []
+    colors = data.get("colors")
+    if not isinstance(colors, list):
+        return []
+    hexes: list[str] = []
+    for item in colors:
+        if isinstance(item, dict):
+            hx = item.get("hex")
+        elif isinstance(item, str):
+            hx = item
+        else:
+            hx = None
+        if isinstance(hx, str) and hx.startswith("#") and len(hx) in (4, 7):
+            hexes.append(hx)
+    return hexes
+
+
+def _render_palette_png(colors: list[str], dst: Path) -> None:
+    """Draw a real swatch-grid PNG (equal-width vertical strips, one per
+    color) — the raster-thumbnail counterpart to
+    `artgen_render.palette_to_html`'s `.strip` HTML element."""
+    from PIL import Image, ImageDraw
+    w, h = 320, 120
+    img = Image.new("RGB", (w, h), color=(15, 42, 53))
+    draw = ImageDraw.Draw(img)
+    n = len(colors)
+    seg_w = w / n
+    for i, hx in enumerate(colors):
+        x0 = int(i * seg_w)
+        x1 = int((i + 1) * seg_w) if i < n - 1 else w
+        draw.rectangle([x0, 0, x1, h], fill=hx)
+    img.save(str(dst))
+
+
+# Default cell color for an ANSI grid cell with no explicit fg/bg on the
+# relevant channel — mirrors `artgen_render.ansi_to_html`'s DEFAULT.
+_ANSI_GRID_DEFAULT_HEX = "#000000"
+
+
+def _render_ansi_grid_png(grid: list[list[tuple]], dst: Path) -> None:
+    """Draw a real color-grid PNG from a parsed ANSI grid (a list of rows of
+    `(char, fg_hex, bg_hex)` cells — see `artgen_render.parse_ansi_grid`).
+
+    Color resolution mirrors `artgen_render.ansi_to_html` exactly: a space
+    character uses the cell's background color (the legacy bg+space pixel
+    format); any other character uses the foreground color (the current
+    fg+block format). An unset channel defaults to black.
+    """
+    from PIL import Image, ImageDraw
+    w, h = 320, 240
+    img = Image.new("RGB", (w, h), color=(0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    num_rows = len(grid)
+    num_cols = max((len(row) for row in grid), default=1)
+    if num_rows == 0 or num_cols == 0:
+        img.save(str(dst))
+        return
+
+    cell_w = w / num_cols
+    cell_h = h / num_rows
+    for row_i, row in enumerate(grid):
+        for col_i, (ch, fg, bg) in enumerate(row):
+            color = bg if ch == " " else fg
+            if color is None:
+                color = _ANSI_GRID_DEFAULT_HEX
+            x0 = col_i * cell_w
+            y0 = row_i * cell_h
+            draw.rectangle([x0, y0, x0 + cell_w + 0.5, y0 + cell_h + 0.5], fill=color)
+
+    img.save(str(dst))
 
 
 def _write_placeholder_png(path: Path) -> None:

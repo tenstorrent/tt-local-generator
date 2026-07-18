@@ -23,6 +23,7 @@ from media_store import media_store as _ms, MediaRecord
 import gallery_layout
 from artgen_detail import ArtgenDetail
 from artgen_render import AnimatedGifWidget as _AnimatedGifWidget
+from artgen_render import parse_ansi_grid
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -187,123 +188,46 @@ def _text_preview_widget(text: str) -> Gtk.Box:
 
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
+#
+# Parsing lives in `artgen_render.parse_ansi_grid` (media-showcase-everywhere
+# Task 1/4) — this module used to carry its own bespoke escape-sequence
+# walker + xterm-256 table (the THIRD copy of ANSI-parsing logic the design
+# audit found, after artgen_detail/watch's and TT-TV attractor's). Deleted in
+# favor of delegating to the shared parser below, so a fourth drift point
+# can never appear.
 
-# xterm-256 color table: indices 0-255 → (r, g, b) in 0-255 range
-def _build_xterm256() -> list[tuple[int, int, int]]:
-    # 0-15: system colors (standard + bright)
-    sys16 = [
-        (0,0,0),(170,0,0),(0,170,0),(170,85,0),(0,0,170),(170,0,170),(0,170,170),(170,170,170),
-        (85,85,85),(255,85,85),(85,255,85),(255,255,85),(85,85,255),(255,85,255),(85,255,255),(255,255,255),
-    ]
-    table: list[tuple[int,int,int]] = list(sys16)
-    # 16-231: 6×6×6 color cube
-    for r6 in range(6):
-        for g6 in range(6):
-            for b6 in range(6):
-                def cv(x: int) -> int: return 0 if x == 0 else 55 + x * 40
-                table.append((cv(r6), cv(g6), cv(b6)))
-    # 232-255: grayscale
-    for k in range(24):
-        v = 8 + k * 10
-        table.append((v, v, v))
-    return table
-
-_XTERM256 = _build_xterm256()
-
-
-def _xterm_rgb01(n: int) -> tuple[float, float, float]:
-    r, g, b = _XTERM256[max(0, min(255, n))]
-    return r / 255, g / 255, b / 255
+_ANSI_CELL_DEFAULT: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 def _parse_ansi_cells(
     text: str,
     max_cols: int = 100,
     max_rows: int = 50,
-) -> list[tuple[int, int, tuple[float,float,float]]]:
+) -> list[tuple[int, int, tuple[float, float, float]]]:
     """
     Walk ANSI escape sequences and return (row, col, display_rgb) for every
-    character cell.  Handles both old format (\033[48;5;Nm SPACE, bg+space) and
-    new format (\033[38;5;Nm BLOCK, fg+block) — whichever color is non-default
-    wins, with bg taking priority when both are set.
-    Handles: SGR 0 (reset), 30-37/90-97 fg, 38;5;N / 38;2;R;G;B fg-256/truecolor,
-             40-47/100-107 bg, 48;5;N / 48;2;R;G;B bg-256/truecolor.
+    character cell, via the shared `artgen_render.parse_ansi_grid` — the
+    single place that understands both the legacy bg+space format
+    (`\\x1b[48;5;Nm `) and the current fg+block format the `ansi` generator
+    actually emits (`\\x1b[38;5;Nm█`).
+
+    Color resolution mirrors `artgen_render.ansi_to_html`: a space character
+    uses the cell's background color; any other character uses the
+    foreground color; an unset channel defaults to black. Cells are clipped
+    to `max_cols`/`max_rows` (this widget only ever draws a small preview
+    tile, unlike the full-viewport detail view).
     """
-    DEFAULT: tuple[float,float,float] = (0.0, 0.0, 0.0)
-    fg: tuple[float,float,float] = DEFAULT
-    bg: tuple[float,float,float] = DEFAULT
-    row = col = 0
-    cells: list[tuple[int,int,tuple[float,float,float]]] = []
-    i = 0
-
-    # Normalise escape variants to actual ESC byte (handles files saved before fix).
-    if "\x1b" not in text:
-        import re as _re
-        text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b").replace("^[", "\x1b")
-        text = _re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
-
-    n = len(text)
-    while i < n:
-        ch = text[i]
-
-        if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
-            j = i + 2
-            while j < n and text[j] not in "ABCDEFGHJKSTfm":
-                j += 1
-            if j < n and text[j] == "m":
-                parts = text[i + 2 : j].split(";")
-                nums: list[int] = []
-                for p in parts:
-                    try:
-                        nums.append(int(p))
-                    except ValueError:
-                        nums.append(0)
-                k = 0
-                while k < len(nums):
-                    v = nums[k]
-                    if v == 0:
-                        fg = DEFAULT
-                        bg = DEFAULT
-                    elif 30 <= v <= 37:
-                        fg = _xterm_rgb01(v - 30)
-                    elif 90 <= v <= 97:
-                        fg = _xterm_rgb01(v - 90 + 8)
-                    elif v == 38:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            fg = _xterm_rgb01(nums[k + 2])
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            fg = (nums[k+2]/255, nums[k+3]/255, nums[k+4]/255)
-                            k += 4
-                    elif 40 <= v <= 47:
-                        bg = _xterm_rgb01(v - 40)
-                    elif 100 <= v <= 107:
-                        bg = _xterm_rgb01(v - 100 + 8)
-                    elif v == 48:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            bg = _xterm_rgb01(nums[k + 2])
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            bg = (nums[k+2]/255, nums[k+3]/255, nums[k+4]/255)
-                            k += 4
-                    k += 1
-            i = j + 1
-
-        elif ch == "\r":
-            col = 0
-            i += 1
-        elif ch == "\n":
-            row += 1
-            col = 0
-            i += 1
-        else:
-            if row < max_rows and col < max_cols:
-                # Use bg when set (old format); fall back to fg (new \033[38;5;Nm█ format).
-                color = bg if bg != DEFAULT else fg
-                cells.append((row, col, color))
-            col += 1
-            i += 1
-
+    grid = parse_ansi_grid(text)
+    cells: list[tuple[int, int, tuple[float, float, float]]] = []
+    for row_i, row in enumerate(grid):
+        if row_i >= max_rows:
+            break
+        for col_i, (ch, fg, bg) in enumerate(row):
+            if col_i >= max_cols:
+                break
+            color_hex = bg if ch == " " else fg
+            color = _hex_to_rgb01(color_hex) if color_hex else _ANSI_CELL_DEFAULT
+            cells.append((row_i, col_i, color))
     return cells
 
 

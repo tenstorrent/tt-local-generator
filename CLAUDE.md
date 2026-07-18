@@ -63,6 +63,73 @@ token budget.
 (51, 87), toxic green (46, 82), hot magenta (201, 199), gold (226, 220). Zone rules
 constrain rows 1-2 and 18-20 to near-black void (232–234), rows 3-17 to the neon subject.
 
+## Media showcase everywhere (`app/artgen_render.py`, v0.48.0)
+
+A full media-type × display-context audit found the rich rendering logic for
+each artgen kind — ANSI grid parsing, palette swatches, the animated-gif
+driver, codeart/markdown formatting — copy-pasted across 3-4 places
+(`artgen_detail.py`, `artgen_watch.py`, `artgen_gallery.py`, TT-TV's
+`attractor.py`) and drifted apart. Worst case: TT-TV's ANSI parser only
+understood the legacy `\x1b[48;5;Nm ` (bg+space) escape form, so every ANSI
+artifact made with the current generator (which emits only
+`\x1b[38;5;Nm█`, fg+block) rendered as raw escape-code gibberish — a live
+bug, not a hypothetical one.
+
+**`app/artgen_render.py` is now the single leaf module** every context
+imports from — it may import `gi`/Gtk/GdkPixbuf/GLib and stdlib only, and
+must never import `artgen_detail`/`artgen_watch`/`artgen_gallery`/
+`create_view`/`attractor` (the reverse is fine; that would be a cycle). It
+provides:
+- `parse_ansi_grid(raw) -> list[list[(char, fg_hex_or_None, bg_hex_or_None)]]`
+  — the ONE parser that understands BOTH ANSI pixel formats the `ansi`
+  generator has emitted over time (legacy bg+space and current fg+block),
+  plus 8/16-color SGR, 256-color, truecolor, and SGR-0 reset. Every other
+  ANSI-consuming context builds on this instead of re-walking escape codes.
+- `ansi_to_html`, `palette_to_html`, `md_to_html`, `code_to_html` — HTML
+  document builders for the "reading view" (`code_to_html` is deliberately
+  NOT routed through `md_to_html`'s prose/markdown pipeline — that dedents
+  and reflows text, which destroys Python's syntactically-significant
+  whitespace; codeart gets a plain HTML-escaped `<pre>` instead).
+- `derive_title`, `luminance` — small pure helpers shared by detail views.
+- `AnimatedGifWidget` (a self-driving `Gtk.Picture` that cancels its own
+  `GLib.timeout_add` timer on unrealize) and `drive_gif_animation` (the
+  same iterator-driving logic for callers that reuse one persistent
+  `Gtk.Picture` across records, e.g. `ArtgenDetail`/`ArtgenWatch`).
+
+**The per-context showcase guarantee:** every one of `CreateResultPanel`
+(`create_view.py`), `ArtgenDetail`, `ArtgenWatch`, `artgen_gallery`'s card
+content (`make_card_content`), and the TT-TV attractor now renders each
+artgen media type's RICH form — vector `Gtk.Picture` for svg, swatch grid
+for palette json, colored character grid for ansi, formatted reading view
+for verse/md, monospace indentation-preserved view for codeart `.py`,
+animated `GdkPixbufAnimationIter` for gif (never the GStreamer `Gtk.Video`
+path, which is documented elsewhere in this file as unreliable for gif) —
+in every context, not just the one context someone happened to build first.
+`CreateResultPanel` in particular never shows "Result file not found" for
+an artgen kind that actually generated successfully.
+
+**Known, accepted static-degrade:** `pipeline_studio`'s node/hero
+thumbnails and `pipeline_portfolio_view` are a fast, fixed-contract pixbuf-
+grid surface — a placeholder/static tile for non-raster artgen types there
+is intentional, not a gap to close. They may eventually call
+`artgen_thumb.make_thumbnail` for a nicer static tile, but full rich/
+animated rendering doesn't fit that contract and is out of scope.
+
+**`artgen_thumb.make_thumbnail` now produces real thumbnails for every
+type it's asked to preview**, not just raster/svg: `.json` (palette) parses
+`colors: [{"hex": ...}, ...]` and draws a real swatch-grid PNG; `.ans`
+parses via `parse_ansi_grid` and draws a real color-grid PNG (never falls
+back to text-rendering the raw escape bytes — an unparseable/empty `.ans`
+degrades straight to the honest placeholder instead); `.py` codeart (and
+`.md`) get the existing monospace text-render (previously `.py` wasn't in
+the text allow-list at all and fell all the way through to the grey 1×1
+placeholder). Before this, `.json`/`.ans` fell into the generic text branch
+and got their raw syntax/escape bytes text-rendered as if they were prose
+— exactly the kind of garbage-PNG bug this module exists to prevent for
+binary formats; any blind `thumbnail_path` consumer (the Create recents
+strip, the attractor's slot fallback, pipeline-studio previews) now gets an
+honest preview.
+
 ## Create surface (role zones, scoped models, modifier pills)
 
 The **Create** loop-nav verb opens `CreateView` (`app/create_view.py`), the

@@ -1,3 +1,56 @@
+tt-local-generator (0.48.0) noble; urgency=medium
+
+  * feat(render): media-showcase-everywhere -- every artgen media type now
+    shows its rich, specific form in every context it appears, instead of
+    silently degrading in whichever context nobody had gotten around to
+    yet. A full media-type x display-context audit found the rich rendering
+    logic (ANSI grid parsing, palette swatches, gif animation, codeart/
+    markdown formatting) copy-pasted across 3-4 places and drifted apart --
+    this release extracts it ONCE into a new leaf module, `app/artgen_render.py`
+    (`parse_ansi_grid`, `ansi_to_html`, `palette_to_html`, `md_to_html`,
+    `code_to_html`, `derive_title`, `luminance`, `AnimatedGifWidget`,
+    `drive_gif_animation`), and has every consumer use it:
+    - `CreateResultPanel` (the FIRST place a user sees their creation) no
+      longer claims "Result file not found" for successful `.svg`/`.json`
+      (palette)/`.py` (codeart) generations, and no longer shows `.ans`/
+      `.md`/verse as raw/unformatted text -- every artgen kind now gets its
+      correct rich widget (vector Picture, swatch grid, monospace code view,
+      colored ANSI grid, formatted reading view). Recents strip degrades to
+      a type-appropriate mini-preview, never a bare "?" chip.
+    - TT-TV (`attractor.py`) animates BOTH artgen AnimateDiff `.gif`s (never
+      animated before -- froze on frame 1) and native gifs (moved off the
+      GStreamer `Gtk.Video` path documented elsewhere as unreliable for gif,
+      onto `GdkPixbufAnimationIter`), and fixes a LIVE BUG where every ANSI
+      artifact made with the current generator rendered as raw escape-code
+      gibberish on TT-TV (the attractor's bespoke parser only understood the
+      legacy `\x1b[48;5;Nm ` bg+space form; the generator has emitted only
+      `\x1b[38;5;Nm█` fg+block for some time -- `parse_ansi_grid` is now the
+      single place that understands BOTH forms, so this can't drift again).
+    - `artgen_thumb.make_thumbnail` no longer bakes garbage thumbnails for
+      palette `.json` (raw JSON syntax text-rendered as if it were prose) or
+      `.ans` (raw escape bytes text-rendered) -- both now get a real raster
+      render (a swatch-grid PNG / a color-grid PNG) via the shared parser,
+      so any blind `thumbnail_path` consumer (recents strip, attractor
+      fallback, pipeline-studio node previews) gets an honest preview
+      instead. `.py` codeart, which previously fell all the way through to
+      the grey 1x1 placeholder (not in the text-render allow-list at all),
+      now gets its correct monospace source-code thumbnail.
+    - `artgen_gallery.py`'s standalone cairo-based ANSI card preview -- the
+      THIRD independent copy of ANSI-parsing logic the audit found -- now
+      delegates to the same shared `parse_ansi_grid`, closing the last
+      drift point; its bespoke escape-sequence walker and xterm-256 table
+      are deleted.
+    Generation, `collect()`, and pipeline-studio's node/hero thumbnails are
+    unchanged by design (pipeline-studio's fixed-contract fast pixbuf-grid
+    surface is an intentional static-degrade, not in scope). 44 new tests
+    across the four tasks (artgen_render extraction, CreateResultPanel,
+    attractor, artgen_thumb/artgen_gallery dedup) took the suite from 1734
+    to 1778 passing, TDD red-then-green throughout; `ArtgenDetail`/
+    `ArtgenWatch` output is preserved exactly (delegation only,
+    regression-tested).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.47.4) noble; urgency=medium
 
   * fix(artgen): animated-GIF artifacts (AnimateDiff) no longer render as
