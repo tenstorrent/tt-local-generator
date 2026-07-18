@@ -175,3 +175,88 @@ def test_load_slot_image_media_type_unchanged(tmp_path):
     assert slot._picture.get_visible()
     assert not slot._text_box.get_visible()
     assert not slot._video.get_visible()
+
+
+# ── Bug: gif-decode timer must stop when a slot swaps away from a gif ──────
+#
+# AnimatedGifWidget only cancels its GLib.timeout_add decode timer on
+# "unrealize" (see artgen_render.AnimatedGifWidget._on_unrealize). That signal
+# only fires for a widget that was actually realized -- i.e. actually part of
+# a shown/mapped window, not merely constructed in memory. So this test (unlike
+# the others in this file) must present a real Gtk.Window and pump the GLib
+# main context, or the assertions would pass trivially without exercising the
+# real bug (set_visible(False) never unrealizes a widget either way).
+def _pump(n=30):
+    """Iterate the default GLib main context to let GTK realize/unrealize
+    widgets and process idle callbacks."""
+    from gi.repository import GLib
+    ctx = GLib.MainContext.default()
+    for _ in range(n):
+        ctx.iteration(False)
+
+
+def test_load_slot_swap_from_gif_to_image_stops_gif_timer(tmp_path):
+    """Loading an image into a slot that last showed a gif must cancel the
+    prior AnimatedGifWidget's decode timer, not just hide it via
+    set_visible(False) (which does not unrealize the child)."""
+    _require_gtk_display()
+    import attractor
+    from artgen_render import AnimatedGifWidget
+    from gi.repository import Gtk
+
+    gif_path = _make_gif(tmp_path)
+    png_path = tmp_path / "still.png"
+    try:
+        from PIL import Image
+        Image.new("RGB", (4, 4), (0, 0, 255)).save(png_path)
+    except ImportError:
+        pytest.skip("PIL not available")
+
+    slot = attractor.AttractorWindow._make_slot(None)
+
+    # Present the slot in a real window so realize/unrealize actually fire
+    # (a bare Gtk.Box() that's never shown never realizes its children).
+    win = Gtk.Window()
+    win.set_child(slot)
+    win.present()
+    _pump()
+
+    # 1) Load the gif -- an AnimatedGifWidget with a live timer gets parented
+    #    into slot._text_box.
+    gif_record = MagicMock()
+    gif_record.media_type = "animatediff"
+    gif_record.video_path = str(gif_path)
+    attractor.AttractorWindow._load_slot(MagicMock(), slot, gif_record)
+    _pump()
+
+    gif_widget = slot._text_box.get_first_child()
+    assert isinstance(gif_widget, AnimatedGifWidget)
+    assert gif_widget._timer_id is not None, (
+        "expected a running gif-decode timer after loading the gif"
+    )
+
+    # 2) Load an image into the SAME slot.
+    image_record = MagicMock()
+    image_record.media_type = "image"
+    image_record.thumbnail_path = str(png_path)
+    image_record.image_path = str(png_path)
+    attractor.AttractorWindow._load_slot(MagicMock(), slot, image_record)
+    _pump()
+
+    # The old gif widget must be fully torn down: unrealized (timer
+    # cancelled) and no longer parented in the slot at all.
+    assert gif_widget._timer_id is None, (
+        "gif-decode timer must be cancelled once the slot swaps to an image "
+        "-- set_visible(False) alone does not unrealize the child, so the "
+        "timer would otherwise keep firing on a hidden widget forever"
+    )
+    assert gif_widget.get_parent() is None, (
+        "the old AnimatedGifWidget must be unparented, not merely hidden"
+    )
+
+    # The new image content must still load correctly.
+    assert slot._picture.get_visible()
+    assert not slot._text_box.get_visible()
+
+    win.destroy()
+    _pump()

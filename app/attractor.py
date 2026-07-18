@@ -1532,6 +1532,22 @@ class AttractorWindow(Gtk.Window):
                           EOS fires the _on_gst_eos callback, which triggers advance.
         """
         media_type = getattr(record, "media_type", "video")
+
+        # Unconditionally clear the text/gif box before dispatching on the new
+        # record's media type. If the slot's LAST load was a gif, `_text_box`
+        # may still hold a live AnimatedGifWidget whose GLib.timeout_add
+        # decode timer only stops on "unrealize" -- and every non-gif branch
+        # below merely does `slot._text_box.set_visible(False)`, which hides
+        # the widget without unparenting it, so the timer would otherwise
+        # keep firing (and calling set_paintable on a hidden widget) forever.
+        # `_clear_box` unparents any child, firing unrealize and cancelling
+        # the timer. This is a no-op when `_text_box` is already empty or
+        # about to be cleared again by the branch's own helper (_load_artgen_
+        # text/_load_artgen_palette/_load_artgen_ansi/_load_animated_gif all
+        # call `_clear_box` themselves before appending), so it's safe to run
+        # on every call regardless of the branch taken below.
+        _clear_box(slot._text_box)
+
         if media_type == "artgen":
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
@@ -1685,8 +1701,10 @@ class AttractorWindow(Gtk.Window):
                 image_dwell_ms, self._on_advance_timer
             )
         elif getattr(record, "media_type", "video") == "animatediff":
-            # Animated GIFs: GStreamer loops them indefinitely instead of emitting
-            # notify::ended, so use a fixed dwell timer to advance after one loop.
+            # Animated GIFs: rendered via GdkPixbufAnimationIter/AnimatedGifWidget
+            # (see _load_animated_gif), which loops indefinitely on its own GLib
+            # timer and never emits a "finished" signal, so use a fixed dwell
+            # timer to advance after one loop.
             # Default: 15 s (enough to see the full loop at least once for 8-frame GIFs).
             gif_dwell_ms = int(_settings.get("tttv_gif_dwell_s") * 1000)
             self._pending_advance_source = GLib.timeout_add(

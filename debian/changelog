@@ -1,3 +1,26 @@
+tt-local-generator (0.48.1) noble; urgency=medium
+
+  * fix(tttv): TT-TV no longer leaves a gif-decode timer running on a hidden
+    slot after switching a slot from a GIF to other media. `attractor.py`'s
+    `_load_slot` hid a previously-shown `AnimatedGifWidget` via
+    `slot._text_box.set_visible(False)` when a slot reloaded with a non-gif
+    (image/video), but `set_visible(False)` does not unrealize the child, so
+    the widget's `GLib.timeout_add` gif-decode timer kept firing and calling
+    `set_paintable` on a hidden widget indefinitely (bounded to <=2 across
+    the A/B slots, self-healing on the next gif load, but a violation of the
+    "gif timers cancel on clear/replace/unrealize" invariant on the always-on
+    kiosk surface). `_load_slot` now unconditionally `_clear_box`es the text/
+    gif box before dispatching on the new record's media type, unparenting
+    (and thus unrealizing) any stale `AnimatedGifWidget` so its timer is
+    cancelled. Also corrects a stale comment claiming GStreamer loops native
+    animatediff gifs; they render via GdkPixbufAnimationIter/AnimatedGifWidget.
+    New regression test presents a real `Gtk.Window` and pumps the GLib main
+    context so the widget actually realizes/unrealizes (a bare, never-shown
+    `Gtk.Box` never fires "unrealize" on `remove()`), confirming the fix TDD
+    red-then-green; full suite 1779 passing (was 1778).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 17 Jul 2026 17:37:58 -0700
+
 tt-local-generator (0.48.0) noble; urgency=medium
 
   * feat(render): media-showcase-everywhere -- every artgen media type now
