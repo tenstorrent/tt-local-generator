@@ -130,6 +130,45 @@ binary formats; any blind `thumbnail_path` consumer (the Create recents
 strip, the attractor's slot fallback, pipeline-studio previews) now gets an
 honest preview.
 
+## Unified gallery interaction (v0.49.0)
+
+All galleries — native `GalleryWidget` (video/image/animate) AND `ArtgenGallery`
+— now share ONE interaction model: browse thumbnails → hover-preview →
+**single-click opens the detail in the shared right pane** → **double-click (or
+the pane's `⛶ Fullscreen` button) opens a maximized full-screen view**.
+
+- **Dual-renderer right pane.** `MainWindow._detail_wrap` holds `self._right_stack`
+  (a `Gtk.Stack`): child `"native"` = `self._detail` (`DetailPanel`, video/image/gif),
+  child `"artgen"` = `self._artgen_detail` (a shared `ArtgenDetail`). Native card
+  selection (`_on_card_selected`) shows `"native"`; artgen selection
+  (`_on_artgen_card_selected`, wired via `ArtgenGallery.on_card_activated`) shows
+  `"artgen"`. `_set_detail_pane_visible` (Task 1) is the single visibility toggle
+  (the ✕ dismiss bar + `win.toggle-detail` both route through it) — do NOT assume
+  `self._detail.get_parent() is _detail_wrap` anymore (the Stack sits between them).
+- **Artgen off the in-page overlay.** `ArtgenGallery` is grid-only again; the
+  `_detail_overlay`/`_grid_page`/`_show_detail` crash-workaround is gone. The right
+  pane is a *sibling subtree* of the grid, so switching it never unmaps a
+  `FlowBoxChild` mid-dispatch (the segfault class the overlay existed for). Artgen
+  card clicks now use the SAME mechanism as native cards: `_flow` is
+  `SelectionMode.NONE` + one `Gtk.GestureClick` per card (single → `on_card_activated`,
+  double → `ArtgenViewerWindow`) — no more FlowBox `child-activated`.
+- **Full-screen.** Native video/image via `VideoPlayerWindow`/`ImageViewerWindow`
+  (double-click a card or the pane's ⛶). **GIFs animate full-screen**:
+  `VideoPlayerWindow` has a GIF branch using `artgen_render.AnimatedGifWidget`
+  (`GdkPixbufAnimationIter`) instead of the seek-unreliable `Gtk.Video`. Artgen
+  media uses the net-new **`app/artgen_viewer.py::ArtgenViewerWindow`**
+  (svg/gif/ansi/palette/verse/markdown/code), which shares ONE ext→renderer
+  dispatch with `ArtgenDetail` via `artgen_render` (no duplicated render logic;
+  WebKit reading-views use the realize-deferral pattern).
+- `ArtgenDetail` gained the `⛶ Fullscreen` button and dropped its vestigial
+  "← Gallery" back button (the grid is always visible on the left now); its
+  `on_back` callback survives only to collapse the pane when a delete empties the
+  list. Switching the right pane away from artgen calls `ArtgenDetail.pause_animation()`
+  so a hidden artgen GIF's timer doesn't tick forever. Delete-sync is asymmetric:
+  grid hover-🗑 (`_on_artgen_card_deleted`) only clears the pane if it shows that
+  record; the detail's own 🗑 (`_on_artgen_detail_deleted`) calls
+  `ArtgenGallery.remove_record` to sync the grid.
+
 ## Create surface (role zones, scoped models, modifier pills)
 
 The **Create** loop-nav verb opens `CreateView` (`app/create_view.py`), the

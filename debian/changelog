@@ -1,3 +1,31 @@
+tt-local-generator (0.49.0) noble; urgency=medium
+
+  * feat(gallery): unified interaction pattern across ALL galleries (native
+    video/image/animate AND artgen). Both now behave identically: browse
+    thumbnails -> hover-preview -> SINGLE-click opens the detail in the shared
+    RIGHT pane -> DOUBLE-click (or the pane's "⛶ Fullscreen" button) opens a
+    maximized full-screen view.
+    - The right detail pane is now a dual renderer (`_right_stack`, a Gtk.Stack):
+      `DetailPanel` for native records, a shared `ArtgenDetail` for artgen records.
+    - Artgen selection moved OFF its bespoke in-page overlay (the fragile
+      crash-workaround surface, retired) and onto the shared right pane — the same
+      proven pattern the native galleries use; the grid stays mapped on the left.
+    - Artgen card clicks now use the SAME mechanism as native cards
+      (`SelectionMode.NONE` + one `Gtk.GestureClick` per card handling single +
+      double click), replacing FlowBox `child-activated`.
+    - Double-click a card -> full-screen: native video/image via the existing
+      viewer windows; GIFs (AnimateDiff) now ANIMATE full-screen (VideoPlayerWindow
+      gained a `GdkPixbufAnimationIter` / `AnimatedGifWidget` GIF branch instead of
+      the unreliable Gtk.Video path); artgen media via a net-new `ArtgenViewerWindow`
+      (svg/gif/ansi/palette/verse/markdown/code), which shares one artgen render
+      dispatch with `ArtgenDetail` (no duplicated ext->renderer logic).
+    - `ArtgenDetail` gained a "⛶ Fullscreen" button and dropped its vestigial
+      "← Gallery" back button (the left-pane grid is always visible now); the
+      `on_back` callback survives only to collapse the pane when a delete empties
+      the list. Switching the right pane away from artgen pauses its GIF timer.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 18:30:00 +0000
+
 tt-local-generator (0.48.4) noble; urgency=medium
 
   * fix(artgen): ROOT-CAUSE fix for the crash opening an AnimateDiff GIF from
