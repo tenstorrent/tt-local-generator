@@ -7659,8 +7659,8 @@ class MainWindow(Gtk.ApplicationWindow):
     # rather than fork them, so nothing about prompt generation or theme
     # batches is lost — only the ControlPanel-only launch UI is gone.
 
-    def _create_inspire_fn(self, prompt_type, on_result, on_error) -> None:
-        # (prompt_type: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
+    def _create_inspire_fn(self, prompt_type, seed_text, on_result, on_error) -> None:
+        # (prompt_type: str, seed_text: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
         """CreateView's "Inspire me" seam (SP-3c-3) — drives the same
         prompt-gen backend (`prompt_client.generate_prompt`, the
         `generate_prompt.py` three-tier algo/markov/LLM-polish generator) the
@@ -7669,15 +7669,26 @@ class MainWindow(Gtk.ApplicationWindow):
 
         Runs `generate_prompt()` in a background thread (it can block on a
         network call to the prompt server) and posts the outcome back via
-        `GLib.idle_add`, per the GTK threading rule in CLAUDE.md. Always
-        generates a fresh prompt (empty seed text) rather than polishing an
-        existing one; see `CreateView._on_inspire_clicked`.
+        `GLib.idle_add`, per the GTK threading rule in CLAUDE.md.
+
+        **Two-mode (regression fix 1/2):** `seed_text` is threaded straight
+        through to `generate_prompt(prompt_type, seed_text, system_prompt)`
+        unchanged — empty seed_text -> fresh three-tier generation from
+        scratch; non-empty seed_text -> the backend polishes/remixes those
+        exact words (see `prompt_client.generate_prompt`'s own docstring).
+        This mirrors the deleted ControlPanel/ArtgenPanel Inspire buttons'
+        behavior (SP-3d-5 lost only the caller wiring, hardcoding `""` here,
+        not the backend, which was two-mode the whole time). The caller
+        (`CreateView._on_inspire_clicked`, or `create_param_panels.
+        attach_inspire_button` for any other prompt entry) is responsible for
+        reading the field's current text and deciding what to pass as
+        seed_text — this seam just forwards it.
         """
         system_prompt = self._prompt_gen_system_prompt
 
         def run():
             try:
-                text = prompt_client.generate_prompt(prompt_type, "", system_prompt)
+                text = prompt_client.generate_prompt(prompt_type, seed_text, system_prompt)
                 GLib.idle_add(on_result, text)
             except Exception as e:  # noqa: BLE001 - fail-soft
                 GLib.idle_add(on_error, str(e))

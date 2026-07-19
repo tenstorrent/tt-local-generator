@@ -762,7 +762,7 @@ def test_inspiration_door_is_safe_with_no_callback(monkeypatch):
     assert view._entry_mode == "inspiration"
 
 
-# ── Inspire-me prompt-gen (SP-3c-3) ──────────────────────────────────────
+# ── Inspire-me prompt-gen (SP-3c-3, two-mode restored — regression fix 1/2) ──
 #
 # Distinct from the "inspiration" door above (-> Muse hand-off): this is a
 # one-tap button in the brief zone (the idea door's `_prompt_entry`) that
@@ -770,19 +770,27 @@ def test_inspiration_door_is_safe_with_no_callback(monkeypatch):
 # (generate_prompt.py / prompt-server), injected as `inspire_fn` so these
 # tests never touch a real subprocess, network call, or thread. Migration-
 # safe: `inspire_fn=None` (the default) means no button at all.
+#
+# TWO-MODE seam: `inspire_fn(prompt_type, seed_text, on_result, on_error)` —
+# `seed_text` is `_prompt_entry`'s CURRENT text at click time (empty ->
+# fresh-generate; non-empty -> the backend polishes/remixes it). This is the
+# fix for the regression where the deleted ControlPanel's two-mode Inspire
+# button lost its seed-threading when Create's own button was built
+# (`_on_inspire_clicked` used to hardcode nothing at all, just never read the
+# entry).
 
 class _FakeInspire:
-    """Records `inspire_fn(prompt_type, on_result, on_error)` calls without
-    firing either callback — lets a test drive the loading state and then
-    manually invoke the callback it wants, mirroring how the real seam
+    """Records `inspire_fn(prompt_type, seed_text, on_result, on_error)` calls
+    without firing either callback — lets a test drive the loading state and
+    then manually invoke the callback it wants, mirroring how the real seam
     (MainWindow._create_inspire_fn) calls back asynchronously from a
     background thread."""
 
     def __init__(self):
-        self.calls = []  # list of (prompt_type, on_result, on_error)
+        self.calls = []  # list of (prompt_type, seed_text, on_result, on_error)
 
-    def __call__(self, prompt_type, on_result, on_error):
-        self.calls.append((prompt_type, on_result, on_error))
+    def __call__(self, prompt_type, seed_text, on_result, on_error):
+        self.calls.append((prompt_type, seed_text, on_result, on_error))
 
 
 def test_inspire_button_absent_without_inspire_fn(monkeypatch):
@@ -804,7 +812,7 @@ def test_inspire_click_calls_inspire_fn_with_prompt_type_for_active_medium(monke
     view._inspire_btn.emit("clicked")
 
     assert len(fake.calls) == 1
-    prompt_type, _on_result, _on_error = fake.calls[0]
+    prompt_type, _seed_text, _on_result, _on_error = fake.calls[0]
     assert prompt_type == "image"
 
 
@@ -816,6 +824,7 @@ def test_inspire_click_derives_prompt_type_from_video_medium(monkeypatch):
     view._inspire_btn.emit("clicked")
 
     assert fake.calls[-1][0] == "video"
+    assert fake.calls[-1][1] == ""  # entry started empty -> fresh mode
 
 
 def test_inspire_click_falls_back_to_a_sensible_default_for_artgen(monkeypatch):
@@ -837,7 +846,7 @@ def test_inspire_result_fills_prompt_entry_and_reenables_button(monkeypatch):
     view._inspire_btn.emit("clicked")
     assert view._inspire_btn.get_sensitive() is False  # loading state
 
-    _prompt_type, on_result, _on_error = fake.calls[0]
+    _prompt_type, _seed_text, on_result, _on_error = fake.calls[0]
     on_result("a golden fox in a neon forest")
 
     assert view._prompt_entry.get_text() == "a golden fox in a neon forest"
@@ -851,7 +860,7 @@ def test_inspire_error_is_fail_soft(monkeypatch):
     view = _make_view(monkeypatch, inspire_fn=fake)
 
     view._inspire_btn.emit("clicked")
-    _prompt_type, _on_result, on_error = fake.calls[0]
+    _prompt_type, _seed_text, _on_result, on_error = fake.calls[0]
 
     on_error("prompt server is down")  # must not raise
 
@@ -869,13 +878,58 @@ def test_inspire_click_is_a_noop_without_inspire_fn(monkeypatch):
 def test_inspire_fn_raising_synchronously_is_fail_soft(monkeypatch):
     """If the injected inspire_fn itself raises before ever calling a
     callback (e.g. thread spawn failure), the button must still recover."""
-    def _boom(prompt_type, on_result, on_error):
+    def _boom(prompt_type, seed_text, on_result, on_error):
         raise RuntimeError("boom")
 
     view = _make_view(monkeypatch, inspire_fn=_boom)
     view._inspire_btn.emit("clicked")  # must not raise
 
     assert view._inspire_btn.get_sensitive() is True
+
+
+# ── Two-mode restoration (regression fix 1/2) ────────────────────────────────
+#
+# The deleted ControlPanel/ArtgenPanel Inspire buttons read the field's
+# EXISTING text and threaded it through as a seed: empty field -> fresh
+# generation; non-empty field -> the backend (`prompt_client.generate_prompt`)
+# polishes/remixes those words instead. Create's own button lost this when it
+# was built (`_on_inspire_clicked` never read `_prompt_entry` at all) — these
+# tests pin the restored behavior.
+
+def test_inspire_click_with_empty_entry_passes_empty_seed_text(monkeypatch):
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+    assert view._prompt_entry.get_text() == ""
+
+    view._inspire_btn.emit("clicked")
+
+    assert len(fake.calls) == 1
+    _prompt_type, seed_text, _on_result, _on_error = fake.calls[0]
+    assert seed_text == ""
+
+
+def test_inspire_click_with_existing_text_passes_it_as_seed(monkeypatch):
+    """Non-empty `_prompt_entry` text at click time -> remix mode: the exact
+    existing words are threaded through as `seed_text`."""
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+    view._prompt_entry.set_text("a castle")
+
+    view._inspire_btn.emit("clicked")
+
+    assert len(fake.calls) == 1
+    _prompt_type, seed_text, _on_result, _on_error = fake.calls[0]
+    assert seed_text == "a castle"
+
+
+def test_inspire_click_strips_whitespace_from_existing_text(monkeypatch):
+    fake = _FakeInspire()
+    view = _make_view(monkeypatch, inspire_fn=fake)
+    view._prompt_entry.set_text("  a castle  ")
+
+    view._inspire_btn.emit("clicked")
+
+    assert fake.calls[0][1] == "a castle"
 
 
 # ── Theme Set (SP-3d-1) ──────────────────────────────────────────────────

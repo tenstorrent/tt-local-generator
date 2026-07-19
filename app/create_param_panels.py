@@ -47,16 +47,17 @@ SkyReels-I2V (an image-to-video model that needs a conditioning image).
 from __future__ import annotations
 
 import argparse
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, Gio, GdkPixbuf, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 import field_roles
 from app_settings import settings as _settings
@@ -2247,6 +2248,99 @@ def load_chips_for_kind(kind: str) -> "list":
         return load_chips(kind)
     except Exception:
         return []
+
+
+def attach_inspire_button(
+    entry: Gtk.Entry,
+    prompt_type_getter: "Callable[[], str]",
+    inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None]",
+    *,
+    label: str = "✨ Inspire",
+    tooltip: "Optional[str]" = None,
+) -> Gtk.Button:
+    """Build a ready-to-append "✨ Inspire" `Gtk.Button` wired to *entry*.
+
+    Shared by Create's idea-door entry and (Task 2) pipeline-editor field
+    entries, so a "✨" button means the same thing everywhere: ONE
+    implementation of the two-mode click contract instead of forking it per
+    surface (regression fix 1/2's step (b) -- see CLAUDE.md's "Create
+    surface" section).
+
+    **Two-mode contract** (mirrors `prompt_client.generate_prompt`'s own
+    docstring): at click time, *entry*'s CURRENT text is read as the seed --
+        - empty   -> `seed_text=""`      -> the backend generates a fresh
+          prompt from scratch (algo -> markov -> LLM polish).
+        - non-empty -> `seed_text=<text>` -> the backend polishes/remixes
+          those exact words instead of discarding them.
+    This restores the behavior the deleted `ControlPanel`/`ArtgenPanel`
+    Inspire buttons had (SP-3d-5 lost only the CALLER wiring, not the
+    backend -- `prompt_client.generate_prompt(source, seed_text, ...)` was
+    two-mode the whole time).
+
+    *inspire_fn* is called as `inspire_fn(prompt_type, seed_text, on_result,
+    on_error)`. It is expected to run off the GTK main thread and post its
+    outcome via `GLib.idle_add` (the GTK threading rule, CLAUDE.md) -- but
+    the callbacks built here wrap the actual widget mutation in ANOTHER
+    `GLib.idle_add` regardless, so a same-thread (test) fake is just as safe
+    as a real background thread, and *inspire_fn* raising SYNCHRONOUSLY
+    (e.g. a thread failing to spawn) is caught here too, so a misbehaving
+    seam can never crash the caller.
+
+    Returns the `Gtk.Button` — callers append it wherever the entry lives and
+    may keep a reference (e.g. `self._inspire_btn`) for tests that assert on
+    its `get_sensitive()` loading state.
+    """
+    btn = Gtk.Button(label=label)
+    btn.add_css_class("create-inspire-btn")
+    btn.set_tooltip_text(
+        tooltip
+        or "Inspire a fresh prompt, or reimagine what you've typed."
+    )
+
+    # Mutable closure state (plain dict, not an attribute on the fresh
+    # button) tracking whether a generation is currently in flight -- guards
+    # against a re-entrant click firing a second overlapping call.
+    state = {"generating": False}
+
+    def _set_generating(generating: bool) -> None:
+        state["generating"] = generating
+        if generating:
+            btn.set_label("⏳ Generating…")
+            btn.set_sensitive(False)
+        else:
+            btn.set_label(label)
+            btn.set_sensitive(True)
+
+    def _apply_result(text: str) -> bool:
+        entry.set_text(text)
+        _set_generating(False)
+        return False  # GLib.idle_add: fire once
+
+    def _on_result(text: str) -> None:
+        # May be invoked from any thread -- post the widget mutation to the
+        # GTK main thread (GTK threading rule, CLAUDE.md).
+        GLib.idle_add(_apply_result, text)
+
+    def _apply_error(msg: str) -> bool:
+        print(f"[tt-gen] Inspire error: {msg}", file=sys.stderr)
+        _set_generating(False)
+        return False
+
+    def _on_error(msg: str) -> None:
+        GLib.idle_add(_apply_error, msg)
+
+    def _on_clicked(_btn) -> None:
+        if state["generating"]:
+            return
+        seed_text = entry.get_text().strip()
+        _set_generating(True)
+        try:
+            inspire_fn(prompt_type_getter(), seed_text, _on_result, _on_error)
+        except Exception as e:  # noqa: BLE001 - fail-soft, see docstring
+            _on_error(str(e))
+
+    btn.connect("clicked", _on_clicked)
+    return btn
 
 
 class ModifierPills(Gtk.Box):

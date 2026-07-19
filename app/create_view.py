@@ -849,7 +849,7 @@ class CreateView(Gtk.Box):
         on_create: Optional[Callable[[Medium, dict], None]] = None,
         on_inspiration: Optional[Callable[[], None]] = None,
         status_service: "Optional[object]" = None,
-        inspire_fn: "Optional[Callable[[str, Callable[[str], None], Callable[[str], None]], None]]" = None,
+        inspire_fn: "Optional[Callable[[str, str, Callable[[str], None], Callable[[str], None]], None]]" = None,
         on_theme_set: Optional[Callable[[Medium, dict], None]] = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -862,16 +862,27 @@ class CreateView(Gtk.Box):
         self._on_inspiration = on_inspiration
         # SP-3c-3 "Inspire me" seam — DISTINCT from `on_inspiration` above
         # (the inspiration DOOR, which hands off entirely to the Muse).
-        # `inspire_fn(prompt_type, on_result, on_error)` reuses the exact
-        # `generate_prompt.py`/prompt-server path ControlPanel's own
-        # "Inspire me" button already drives (see `MainWindow._on_inspire`
-        # for the legacy callback shape this mirrors) — it is expected to run
-        # off the GTK main thread and call back via `GLib.idle_add`, but
-        # CreateView's own `_on_inspire_result`/`_on_inspire_error` wrap the
-        # widget mutation in another `GLib.idle_add` regardless, so a
-        # same-thread (test) fake is just as safe as a real background
-        # thread. `None` (the default) means "no button at all" — see
-        # `_build_idea_row`.
+        # `inspire_fn(prompt_type, seed_text, on_result, on_error)` reuses the
+        # exact `generate_prompt.py`/prompt-server path ControlPanel's own
+        # "Inspire me" button already drove (see `MainWindow._create_inspire_fn`
+        # for the callback shape this mirrors) — it is expected to run off the
+        # GTK main thread and call back via `GLib.idle_add`, but CreateView's
+        # own `_on_inspire_result`/`_on_inspire_error` wrap the widget
+        # mutation in another `GLib.idle_add` regardless, so a same-thread
+        # (test) fake is just as safe as a real background thread. `None`
+        # (the default) means "no button at all" — see `_build_idea_row`.
+        #
+        # TWO-MODE (regression fix 1/2): `seed_text` is `_prompt_entry`'s
+        # CURRENT text at click time, read by `_on_inspire_clicked` — empty
+        # -> fresh generation; non-empty -> the backend polishes/remixes the
+        # existing words instead of discarding them. This restores behavior
+        # the deleted ControlPanel/ArtgenPanel Inspire buttons had; the
+        # backend (`prompt_client.generate_prompt`) was two-mode the whole
+        # time — only this caller's seed-threading had been lost. The shared
+        # helper `create_param_panels.attach_inspire_button` implements this
+        # exact same click contract for any OTHER prompt `Gtk.Entry` (e.g.
+        # pipeline-editor field entries) so the two-mode behavior isn't
+        # forked per surface.
         self._inspire_fn = inspire_fn
         self._inspire_generating = False
         # SP-3d-1 "Theme Set" — migrated from ControlPanel's own "🎬 Theme
@@ -1152,7 +1163,7 @@ class CreateView(Gtk.Box):
             inspire_btn = Gtk.Button(label="✨ Inspire me")
             inspire_btn.add_css_class("create-inspire-btn")
             inspire_btn.set_tooltip_text(
-                "Generate a fresh prompt for the current medium and fill it in above."
+                "Inspire a fresh prompt, or reimagine what you've typed."
             )
             inspire_btn.connect("clicked", self._on_inspire_clicked)
             self._inspire_btn = inspire_btn
@@ -1179,6 +1190,13 @@ class CreateView(Gtk.Box):
     def _on_inspire_clicked(self, _btn) -> None:
         """Fire `self._inspire_fn`, showing a loading state while it runs.
 
+        **Two-mode (regression fix 1/2):** reads `_prompt_entry`'s CURRENT
+        text as `seed_text` — empty means fresh generation, non-empty means
+        "reimagine these exact words" (see the `inspire_fn` seam docstring in
+        `__init__`). Previously this hardcoded no seed at all (never read the
+        entry), so Inspire could only ever generate from scratch even when
+        the brief already had text in it.
+
         Fail-soft by construction: no `inspire_fn` injected is a no-op (the
         button wouldn't exist to click anyway, but this guards a direct call
         too — see the migration-safe test); an `inspire_fn` that raises
@@ -1190,9 +1208,10 @@ class CreateView(Gtk.Box):
         if self._inspire_fn is None or self._inspire_generating:
             return
         prompt_type = self._inspire_prompt_type()
+        seed_text = self._prompt_entry.get_text().strip()
         self._set_inspire_generating(True)
         try:
-            self._inspire_fn(prompt_type, self._on_inspire_result, self._on_inspire_error)
+            self._inspire_fn(prompt_type, seed_text, self._on_inspire_result, self._on_inspire_error)
         except Exception as e:  # noqa: BLE001 - fail-soft, see docstring
             self._on_inspire_error(str(e))
 
