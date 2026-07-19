@@ -13,9 +13,16 @@ Task 3 removes that overlay entirely: MainWindow's shared `_right_stack` (in
 `_detail_wrap`) is a SIBLING subtree of the gallery grid under `inner_paned`,
 so switching it never unmaps the FlowBox/grid -- it cannot reproduce that
 crash class, so the workaround is no longer needed here. `ArtgenGallery` is
-now grid-only; `_on_card_activated` just resolves media_id and forwards it to
-`on_card_activated` (still additive/no-op-safe if unwired, same contract the
-native galleries' select_cb use).
+now grid-only; card activation forwards media_id to `on_card_activated`
+(still additive/no-op-safe if unwired, same contract the native galleries'
+select_cb use).
+
+Task 6 later replaced the FlowBox "child-activated" signal (SelectionMode.
+SINGLE, single-click-only) with a per-card Gtk.GestureClick (SelectionMode.
+NONE) -- see tests/test_artgen_gallery_click_mechanism.py for that mechanism.
+The activation tests below now drive the real per-card gesture instead of
+calling the old `_on_card_activated(flow, child)` signal handler directly
+(that method no longer exists).
 
 Run under xvfb (GTK4 widgets need a real display):
     xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_artgen_gallery_preview.py -v
@@ -87,6 +94,21 @@ def _find_child_for(gallery, media_id: str):
     return None
 
 
+def _fire_single_click(gallery, media_id: str) -> None:
+    """Drive a card's real, connected primary GestureClick with a single
+    press (n_press=1) -- the Task 6 replacement for calling the old
+    `_on_card_activated(flow, child)` signal handler directly."""
+    import gi
+    from gi.repository import Gtk
+
+    child = _find_child_for(gallery, media_id)
+    assert child is not None, f"expected a FlowBoxChild for {media_id!r}"
+    overlay = child.get_child()
+    gestures = [c for c in overlay.observe_controllers() if isinstance(c, Gtk.GestureClick)]
+    assert gestures, "expected a GestureClick controller on the card overlay"
+    gestures[0].emit("pressed", 1, 0.0, 0.0)
+
+
 # ── Source-level: the in-page overlay/detail is gone ───────────────────────
 
 def test_build_no_longer_creates_an_in_page_detail_or_overlay():
@@ -119,7 +141,7 @@ def test_build_appends_grid_page_directly():
 @gtk_required
 def test_card_activation_forwards_media_id_when_wired(tmp_path):
     """`on_card_activated` fires with the clicked card's media_id -- the only
-    thing `_on_card_activated` does now."""
+    thing a single click on the card's GestureClick does (Task 6)."""
     import media_store as ms_mod
     from artgen_gallery import ArtgenGallery
 
@@ -131,10 +153,7 @@ def test_card_activation_forwards_media_id_when_wired(tmp_path):
     gallery.on_card_activated = lambda media_id: seen.append(media_id)
     gallery.refresh()
 
-    child = _find_child_for(gallery, rec.id)
-    assert child is not None, "expected a FlowBoxChild for the seeded record"
-
-    gallery._on_card_activated(gallery._flow, child)
+    _fire_single_click(gallery, rec.id)
 
     assert seen == [rec.id]
 
@@ -154,33 +173,7 @@ def test_card_activation_is_a_noop_without_external_wiring(tmp_path):
     assert gallery.on_card_activated is None
     gallery.refresh()
 
-    child = _find_child_for(gallery, rec.id)
-    gallery._on_card_activated(gallery._flow, child)  # must not raise
-
-
-@gtk_required
-def test_card_activation_ignores_child_with_no_media_id(tmp_path):
-    """Defensive branch: a FlowBoxChild whose box has no stashed _media_id
-    (shouldn't normally happen) must not raise and must not forward."""
-    import media_store as ms_mod
-    from artgen_gallery import ArtgenGallery
-    import gi
-    from gi.repository import Gtk
-
-    rec = _make_media_record(tmp_path)
-    ms_mod.media_store.add(rec)
-
-    gallery = ArtgenGallery()
-    seen = []
-    gallery.on_card_activated = lambda media_id: seen.append(media_id)
-    gallery.refresh()
-
-    bogus_child = Gtk.FlowBoxChild()
-    bogus_child.set_child(Gtk.Label(label="no media id here"))
-
-    gallery._on_card_activated(gallery._flow, bogus_child)
-
-    assert seen == []
+    _fire_single_click(gallery, rec.id)  # must not raise
 
 
 # ── Behavioral: remove_record ───────────────────────────────────────────────

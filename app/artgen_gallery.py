@@ -23,6 +23,7 @@ from media_store import media_store as _ms, MediaRecord
 import gallery_layout
 from artgen_render import AnimatedGifWidget as _AnimatedGifWidget
 from artgen_render import parse_ansi_grid
+from artgen_viewer import ArtgenViewerWindow
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -414,17 +415,24 @@ class ArtgenGallery(Gtk.Box):
         # FlowBox grid settings -- IDENTICAL to the native video/image/animate
         # galleries (GalleryWidget._flow in main_window.py), sourced from
         # gallery_layout.py so switching Discover tabs never changes the grid.
+        # SelectionMode.NONE -- unify-gallery-interaction Task 6: click
+        # handling moves OFF the FlowBox (which used to own it via
+        # SelectionMode.SINGLE + "child-activated", a single-click-only
+        # mechanism) and ONTO a per-card Gtk.GestureClick built in
+        # _make_card, the SAME mechanism the native GenerationCard uses
+        # (main_window.py's _on_pressed). This lets one gesture distinguish
+        # single-click (select, via on_card_activated) from double-click
+        # (open ArtgenViewerWindow) instead of needing two different signals.
         self._flow = Gtk.FlowBox()
         self._flow.set_max_children_per_line(gallery_layout.FLOW_MAX_CHILDREN_PER_LINE)
         self._flow.set_min_children_per_line(gallery_layout.FLOW_MIN_CHILDREN_PER_LINE)
-        self._flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self._flow.set_row_spacing(gallery_layout.FLOW_ROW_SPACING)
         self._flow.set_column_spacing(gallery_layout.FLOW_COLUMN_SPACING)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
         self._flow.set_margin_top(8)
         self._flow.set_margin_bottom(8)
-        self._flow.connect("child-activated", self._on_card_activated)
         scroll.set_child(self._flow)
         self._scroll = scroll
         grid_page.append(scroll)
@@ -539,8 +547,9 @@ class ArtgenGallery(Gtk.Box):
         """Return self._records narrowed by the active filter chip.
 
         Shared by _rebuild_grid (what the grid page shows) and
-        _on_card_activated (the nav list ArtgenDetail steps through with
-        ‹ / ›) so the two never disagree about which records are "in view".
+        MainWindow's _on_artgen_card_selected, which passes this list to
+        ArtgenDetail.show_record as the nav list it steps through with
+        ‹ / › -- so the two never disagree about which records are "in view".
         """
         if self._active_filter == _STARRED_FILTER:
             return [r for r in self._records if r.starred]
@@ -740,27 +749,39 @@ class ArtgenGallery(Gtk.Box):
         motion.connect("leave", _leave_card)
         overlay.add_controller(motion)
 
+        # Primary click gesture -- unify-gallery-interaction Task 6. ONE
+        # Gtk.GestureClick per card handles both single- and double-click,
+        # the same mechanism native GenerationCard uses
+        # (main_window.py's _on_pressed): a single click (any press) selects
+        # the card into the shared right-pane detail view via
+        # on_card_activated (the FlowBox itself no longer does this --
+        # SelectionMode.NONE above), and a double click (n_press == 2) ALSO
+        # opens the artifact full-screen in ArtgenViewerWindow, mirroring
+        # GenerationCard's VideoPlayerWindow/ImageViewerWindow double-click
+        # branch. Guarded the same way: only opens if the artifact's file
+        # actually exists on disk (record.video_exists/image_exists there;
+        # a plain Path.exists() check here since MediaRecord has no such
+        # property).
+        click = Gtk.GestureClick()
+        click.set_button(1)
+
+        def _on_pressed(_gesture, n_press, _x, _y, _rec=rec, _ov=overlay):
+            if self.on_card_activated:
+                self.on_card_activated(_rec.id)
+            if n_press != 2:
+                return
+            fp = Path(_rec.file_path) if _rec.file_path else Path()
+            if not fp.exists():
+                return
+            win = ArtgenViewerWindow(_rec, _ov.get_root())
+            win.present()
+
+        click.connect("pressed", _on_pressed)
+        overlay.add_controller(click)
+
         return overlay
 
     # ── Signal handlers ───────────────────────────────────────────────────────
-
-    def _on_card_activated(self, _flow, child) -> None:
-        """Resolve the clicked card's media_id and forward it to whoever is
-        wired to on_card_activated.
-
-        Unify-gallery-interaction-pattern Task 3: this gallery no longer owns
-        an in-page detail view (the crash-workaround Overlay + ArtgenDetail
-        instance removed above) -- selection now routes into MainWindow's
-        shared right-pane `ArtgenDetail` (`self._right_stack` in
-        main_window.py) via this callback, the same additive-hook contract
-        the native GalleryWidgets use for their own select_cb.
-        """
-        box = child.get_child()
-        if not box or not hasattr(box, "_media_id"):
-            return
-        media_id = box._media_id
-        if self.on_card_activated:
-            self.on_card_activated(media_id)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:
