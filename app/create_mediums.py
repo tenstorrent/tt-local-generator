@@ -110,6 +110,7 @@ _ARTGEN_LABELS_ICONS: dict[str, tuple[str, str]] = {
     "circuit":       ("Circuit", "⬟"),
     "palette":       ("Palette", "◼"),
     "ansi":          ("ANSI", "▓"),
+    "ansi-image":    ("ANSI Art", "▓"),
     "animatediff":   ("AnimateDiff", "🕺"),
 }
 
@@ -130,6 +131,7 @@ _ARTGEN_KIND: dict[str, str] = {
     "circuit": "image",
     "palette": "image",
     "ansi": "image",
+    "ansi-image": "image",
     "animatediff": "gif",
 }
 

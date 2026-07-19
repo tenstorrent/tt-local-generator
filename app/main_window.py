@@ -2015,9 +2015,10 @@ class GenerationCard(Gtk.Box):
 
         # All available transforms: (plugin_key, intent → result label)
         all_transforms = [
-            ("rmbg",  "Remove background  →  transparent PNG"),
-            ("blip",  "Describe this  →  text caption"),
-            ("depth", "Show depth  →  depth map"),
+            ("rmbg",       "Remove background  →  transparent PNG"),
+            ("blip",       "Describe this  →  text caption"),
+            ("depth",      "Show depth  →  depth map"),
+            ("ansi-image", "Convert to ANSI art  →  .ans"),
         ]
         available = [(k, lbl) for k, lbl in all_transforms if _transform_available(k)]
         if not available:
@@ -5390,7 +5391,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Pre-warm transform availability cache off the main thread so the first
         # right-click doesn't block while importing plugin modules (torch etc.).
         threading.Thread(
-            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth")],
+            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth", "ansi-image")],
             daemon=True,
         ).start()
         if self._inventory_url:
@@ -7135,8 +7136,20 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _run_transform(self, record: GenerationRecord, key: str) -> GenerationRecord:
-        """Run a forge plugin transform and return a new GenerationRecord for the result."""
+    def _run_transform(self, record: GenerationRecord, key: str):
+        """Run a forge plugin transform and return the resulting record.
+
+        rmbg/blip/depth produce a native image `GenerationRecord` for the
+        Image gallery (the original behavior). "ansi-image" is a SPECIAL
+        CASE (Effort B Task 2): it produces a NEW ARTGEN
+        `media_store.MediaRecord` (a `.ans` ANSI-art file) instead, mirroring
+        `_create_generate_artgen`'s artgen record-construction pattern rather
+        than the `_META`-driven `(fn_name, ext, label)` dispatch used below
+        for the image-output transforms — `image_to_ansi(src)` takes no
+        `dest` and returns text, not a file it writes itself.
+        `_on_transform_finished` branches on the returned record's
+        `media_type` to route it to the right gallery.
+        """
         import importlib.util as _ilu
         import uuid
         from datetime import datetime, timezone
@@ -7170,6 +7183,59 @@ class MainWindow(Gtk.ApplicationWindow):
         _writelog(f"source:    {src}")
         _writelog(f"plugin:    {plugins_dir / key / 'plugin.py'}")
         _writelog(f"record_id: {record.id}")
+
+        if key == "ansi-image":
+            # Produces a media_store MediaRecord (artgen), not a
+            # history_store GenerationRecord — see the docstring above and
+            # `_create_generate_artgen` for the pattern being mirrored.
+            from artgen_thumb import make_thumbnail, make_artgen_path
+            from media_store import MediaRecord
+            from media_store import media_store as _ms
+
+            try:
+                ansi_text = mod.image_to_ansi(src)
+                out_path = make_artgen_path(job_id[:8], ".ans")
+                # make_artgen_path() normally creates its own parent dir
+                # (base_dir.mkdir(...)), but tests stub the function out
+                # with a bare Path, so create it here too — cheap and
+                # idempotent either way.
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(ansi_text, encoding="utf-8")
+                _writelog(f"output:    {out_path}")
+            except Exception as e:
+                _writelog(f"ERROR:     {e}")
+                raise
+
+            elapsed = (datetime.now(timezone.utc) - t_start).total_seconds()
+            _writelog(f"elapsed:   {elapsed:.1f}s")
+            _writelog("status:    ok")
+
+            thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+            try:
+                thumb_path = make_thumbnail(out_path, thumb_path)
+            except Exception:
+                thumb_path = Path("")
+
+            source_label = (record.prompt or Path(src).stem)[:100]
+            rec = MediaRecord(
+                id=job_id,
+                media_type="artgen",
+                created_at=ts.isoformat(),
+                file_path=str(out_path),
+                thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                prompt=f"ANSI art from {source_label}",
+                model_id="artgen",
+                generator_type="ansi-image",
+                params=json.dumps({"_source_id": record.id, "_transform": "ansi-image"}),
+                starred=0,
+            )
+            # Duck-typed alias — see `_create_generate_artgen`'s identical
+            # comment: `CreateResultPanel`/gallery code reads
+            # `media_file_path`, which plain `MediaRecord` doesn't declare.
+            rec.media_file_path = str(out_path)
+            _ms.add(rec)
+            _ms.ensure_auto_playlists()
+            return rec
 
         # (fn_name, output_ext_or_None, display_label)
         _META = {
@@ -7225,8 +7291,30 @@ class MainWindow(Gtk.ApplicationWindow):
             },
         )
 
-    def _on_transform_finished(self, record: GenerationRecord) -> bool:
-        """Add the transform result to the store and refresh the image gallery."""
+    def _on_transform_finished(self, record) -> bool:
+        """Route a finished transform's record to the right gallery.
+
+        rmbg/blip/depth return a native image `GenerationRecord` — append to
+        `self._store` and refresh the Image gallery (unchanged behavior).
+
+        "ansi-image" (Effort B Task 2) returns a `media_store.MediaRecord`
+        (`media_type == "artgen"`) instead — it was already written to
+        `media_store` by `_run_transform` itself (mirroring
+        `_create_generate_artgen`), so here we only need to refresh the
+        artgen gallery, same as `_on_create_artgen_done` does. This record
+        must NEVER be appended to `self._store` (a `history_store`-only
+        list) or handed to `self._image_gallery` — wrong type, wrong gallery.
+        """
+        if getattr(record, "media_type", None) == "artgen":
+            artgen_gallery = getattr(self, "_artgen_gallery", None)
+            if artgen_gallery is not None:
+                try:
+                    artgen_gallery.refresh()
+                except Exception:
+                    pass  # a refresh failure must never crash the transform flow
+            self._flash_status("New ANSI art in the Generative Art gallery")
+            return False
+
         self._store.append(record)
         self._image_gallery.load_history(
             [r for r in self._store.all_records() if r.media_type == "image"]

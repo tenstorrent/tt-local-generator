@@ -1,3 +1,32 @@
+tt-local-generator (0.51.0) noble; urgency=medium
+
+  * feat(artgen): "Convert to ANSI art" image transform. Right-click any
+    image card -> "Convert to ANSI art  ->  .ans" runs Effort B Task 1's
+    `plugins/ansi-image/` utility plugin (a pure-Pillow, in-process
+    converter reusing the app's own xterm-256 palette -- no subprocess, no
+    LLM, fully deterministic; inspired by closed-source GUI converters like
+    `rez2ans-next`) off the main thread and writes a new artgen `.ans`
+    record straight into the Generative Art gallery.
+    - `MainWindow._run_transform` special-cases the "ansi-image" key: unlike
+      rmbg/blip/depth (which write a native image `GenerationRecord` via the
+      shared `(fn_name, ext, label)` `_META` dispatch), `image_to_ansi(src)`
+      takes no destination path and returns text, so this branch writes the
+      `.ans` file itself, renders its thumbnail via `artgen_thumb.
+      make_thumbnail`, and builds a `media_store.MediaRecord`
+      (media_type="artgen", generator_type="ansi-image") -- the exact
+      pattern `_create_generate_artgen` already uses for Create's artgen
+      mediums, so the new card needs no separate re-scan to appear.
+    - `MainWindow._on_transform_finished` branches on the returned record's
+      `media_type`: an artgen record refreshes `self._artgen_gallery`
+      instead of being appended to the native `self._store`/Image gallery,
+      which never sees it. The rmbg/blip/depth path is unchanged.
+    - Registered in the two remaining transform-key lists (the right-click
+      menu's `all_transforms` and the health pre-warm probe) and given a
+      gallery badge (▓, matching the LLM "ansi" generator's grid-render
+      icon) in `create_mediums.py`/`artgen_gallery.py`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 20:00:00 +0000
+
 tt-local-generator (0.50.0) noble; urgency=medium
 
   * feat(inspire): restore ✨ Inspire on every creative prompt entry in the

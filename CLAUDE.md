@@ -63,6 +63,58 @@ token budget.
 (51, 87), toxic green (46, 82), hot magenta (201, 199), gold (226, 220). Zone rules
 constrain rows 1-2 and 18-20 to near-black void (232–234), rows 3-17 to the neon subject.
 
+## Right-click transform: image → ANSI art (`plugins/ansi-image/`, v0.51.0)
+
+`plugins/ansi-image/plugin.py` is a "forge transform" utility plugin
+(`x-ttlg.utility: true`, not a generator) — a pure-Pillow, in-process
+image → ANSI-art converter reusing `artgen_render._XTERM256_HEX` (the same
+256-entry xterm palette the ANSI renderer already uses, so quantization here
+can never drift from what the viewer draws). One color per cell only —
+`\x1b[38;5;Nm█`, foreground + full block — because `artgen_render.
+parse_ansi_grid` doesn't support two-color half-block cells; this is exactly
+the format the 3-pass `ansi` LLM generator emits too. `is_available()` is a
+bare `import PIL` check (Pillow, already a dependency elsewhere); no
+subprocess, no LLM, fully deterministic for a given input. Two color modes:
+`colors=256` (default, indices 16-255, the 6×6×6 cube + grayscale ramp — best
+for photographic gradients) or `colors=16` (indices 0-15, the classic DOS/BBS
+palette, for an intentional retro look).
+
+**Wired into the right-click transform menu** (`app/main_window.py`) as
+`"ansi-image"`, registered in the same three places as rmbg/blip/depth
+(`GenerationCard._on_right_click`'s `all_transforms`, `MainWindow.__init__`'s
+health pre-warm probe thread, and `_transform_available`'s dynamic plugin
+loader — no additional registration needed there since it dispatches by key
++ path convention). It is a SPECIAL CASE in `MainWindow._run_transform`,
+because it produces a different kind of record than the other three:
+
+- rmbg/blip/depth call a plugin fn shaped `fn(src, dest)` or `fn(src) -> str`
+  (the `_META` dict maps key → `(fn_name, ext_or_None, label)`) and always
+  return a native `history_store.GenerationRecord` (`media_type="image"`)
+  for the Image gallery.
+- `ansi-image`'s `image_to_ansi(src, cols=80, colors=256) -> str` takes no
+  destination and returns text, so `_run_transform` special-cases the key
+  entirely: writes the `.ans` file itself (`artgen_thumb.make_artgen_path`),
+  renders its thumbnail (`artgen_thumb.make_thumbnail` — the `.ans` branch
+  already draws a real color-grid PNG), and builds a
+  `media_store.MediaRecord` (`media_type="artgen"`,
+  `generator_type="ansi-image"`, `params` carrying `_source_id`/`_transform`
+  for provenance) — the exact record-construction pattern
+  `_create_generate_artgen` uses for Create's artgen mediums, right down to
+  the `rec.media_file_path` duck-typed alias and `_ms.add()` +
+  `_ms.ensure_auto_playlists()`. It still writes the same structured
+  `_TRANSFORMS_LOG_DIR` log file as every other transform.
+- `MainWindow._on_transform_finished` branches on the returned record's
+  `media_type`: `"artgen"` refreshes `self._artgen_gallery` (same as
+  `_on_create_artgen_done`) and is NEVER appended to `self._store` or handed
+  to `self._image_gallery` (wrong type, wrong gallery — those only ever see
+  `GenerationRecord`s). The rmbg/blip/depth path is byte-for-byte unchanged.
+
+Icon/label polish: `"ansi-image"` was added to `create_mediums.
+_ARTGEN_LABELS_ICONS` (`("ANSI Art", "▓")`) and `_ARTGEN_KIND`
+(`"image"`, same as the LLM `"ansi"` generator — both render as a color
+grid), and to `artgen_gallery._TYPE_EMOJI` (`"▓"`) for the gallery card
+badge.
+
 ## Media showcase everywhere (`app/artgen_render.py`, v0.48.0)
 
 A full media-type × display-context audit found the rich rendering logic for

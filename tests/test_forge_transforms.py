@@ -150,6 +150,7 @@ def _make_mock_main_window():
     mw_inst = MagicMock()
     mw_inst._store = MagicMock(spec=HistoryStore)
     mw_inst._image_gallery = MagicMock()
+    mw_inst._artgen_gallery = MagicMock()
     return mw_inst
 
 
@@ -241,6 +242,7 @@ def test_on_transform_finished_appends_and_refreshes(tmp_path):
 
     mw_inst._store.append.assert_called_once_with(record)
     mw_inst._image_gallery.load_history.assert_called_once()
+    mw_inst._artgen_gallery.refresh.assert_not_called()  # image path never touches artgen gallery
     assert result is False  # must return False for GLib.idle_add
 
 
@@ -356,3 +358,159 @@ def test_collect_log_files_includes_transforms_section(tmp_path):
         assert tx["files"][0]["is_error"] is False
     finally:
         log_viewer._TRANSFORMS_LOG_DIR = orig
+
+
+# ── "Convert to ANSI art" (ansi-image) — Effort B Task 2 ─────────────────────
+#
+# Unlike rmbg/blip/depth, this transform produces an ARTGEN MediaRecord (a
+# new .ans file in the Generative Art gallery), not a native image
+# GenerationRecord in the Image gallery. `_run_transform` special-cases the
+# "ansi-image" key to call the plugin's `image_to_ansi(src)` and write a
+# `media_store.MediaRecord`, mirroring `_create_generate_artgen`'s artgen
+# record-construction pattern. `_on_transform_finished` then branches on
+# `media_type == "artgen"` to refresh the artgen gallery instead of the
+# image store/gallery.
+
+def test_menu_lists_ansi_image_transform():
+    """The right-click menu's hardcoded transform list includes ansi-image."""
+    import inspect
+    import main_window as mw
+
+    src = inspect.getsource(mw.GenerationCard._on_right_click)
+    assert '"ansi-image"' in src
+    assert "ANSI" in src
+
+
+def test_prewarm_probes_ansi_image():
+    """MainWindow.__init__'s prewarm thread also probes ansi-image."""
+    import inspect
+    import main_window as mw
+
+    src = inspect.getsource(mw.MainWindow.__init__)
+    assert '"ansi-image"' in src
+
+
+def test_transform_available_ansi_image_real_plugin():
+    """_transform_available('ansi-image') loads the REAL plugin (no mocking)
+    and returns True, since Pillow is present in this environment."""
+    import main_window as mw
+
+    mw._TRANSFORM_AVAIL.clear()
+    try:
+        assert mw._transform_available("ansi-image") is True
+    finally:
+        mw._TRANSFORM_AVAIL.clear()
+
+
+def test_run_transform_ansi_image_creates_artgen_record(tmp_path):
+    """_run_transform('ansi-image') writes a .ans file and returns a
+    media_store.MediaRecord (media_type='artgen'), not a GenerationRecord."""
+    import main_window as mw
+    from media_store import MediaRecord
+
+    img_path = str(tmp_path / "src.jpg")
+    Path(img_path).write_bytes(b"fake")
+    record = _make_record(
+        image_path=img_path, video_path="", media_type="image",
+        prompt="a sunset over dunes",
+    )
+
+    ansi_text = "\x1b[38;5;196m█" * 20
+    fake_plugin = MagicMock()
+    fake_plugin.image_to_ansi.return_value = ansi_text
+
+    spec = MagicMock()
+    spec.loader.exec_module = lambda m: None
+
+    out_path = tmp_path / "artgen" / "20260101_000000_abcd1234.ans"
+    thumb_path = tmp_path / "artgen" / "thumbnails" / "20260101_000000_abcd1234.png"
+    fake_media_store = MagicMock()
+
+    with patch("importlib.util.spec_from_file_location", return_value=spec), \
+         patch("importlib.util.module_from_spec", return_value=fake_plugin), \
+         patch("artgen_thumb.make_artgen_path", return_value=out_path), \
+         patch("artgen_thumb.make_thumbnail", return_value=thumb_path), \
+         patch("media_store.media_store", fake_media_store):
+        mw_inst = _make_mock_main_window()
+        result = mw.MainWindow._run_transform(mw_inst, record, "ansi-image")
+
+    assert isinstance(result, MediaRecord)
+    assert result.media_type == "artgen"
+    assert result.generator_type == "ansi-image"
+    assert result.file_path == str(out_path)
+    assert Path(result.file_path).read_text(encoding="utf-8") == ansi_text
+    assert result.media_file_path == str(out_path)  # duck-typed alias, see _create_generate_artgen
+
+    fake_media_store.add.assert_called_once_with(result)
+    fake_media_store.ensure_auto_playlists.assert_called_once()
+
+    import json
+    params = json.loads(result.params)
+    assert params["_source_id"] == record.id
+    assert params["_transform"] == "ansi-image"
+
+
+def test_run_transform_ansi_image_writes_log_file(tmp_path):
+    """The ansi-image branch still logs like every other transform."""
+    import main_window as mw
+    import log_viewer
+
+    orig_log_dir = log_viewer._TRANSFORMS_LOG_DIR
+    log_viewer._TRANSFORMS_LOG_DIR = tmp_path / "transforms"
+
+    img_path = str(tmp_path / "src.jpg")
+    Path(img_path).write_bytes(b"fake")
+    record = _make_record(image_path=img_path, video_path="", media_type="image")
+
+    fake_plugin = MagicMock()
+    fake_plugin.image_to_ansi.return_value = "\x1b[38;5;196m█"
+    spec = MagicMock(); spec.loader.exec_module = lambda m: None
+
+    out_path = tmp_path / "artgen" / "20260101_000000_abcd1234.ans"
+    thumb_path = tmp_path / "artgen" / "thumbnails" / "20260101_000000_abcd1234.png"
+
+    try:
+        with patch("importlib.util.spec_from_file_location", return_value=spec), \
+             patch("importlib.util.module_from_spec", return_value=fake_plugin), \
+             patch("artgen_thumb.make_artgen_path", return_value=out_path), \
+             patch("artgen_thumb.make_thumbnail", return_value=thumb_path), \
+             patch("media_store.media_store", MagicMock()):
+            mw_inst = _make_mock_main_window()
+            mw.MainWindow._run_transform(mw_inst, record, "ansi-image")
+
+        logs = list((tmp_path / "transforms").glob("*.log"))
+        assert len(logs) == 1
+        content = logs[0].read_text()
+        assert "transform: ansi-image" in content
+        assert "status:    ok" in content
+    finally:
+        log_viewer._TRANSFORMS_LOG_DIR = orig_log_dir
+
+
+def test_on_transform_finished_refreshes_artgen_gallery_for_artgen_record(tmp_path):
+    """_on_transform_finished branches to the artgen gallery for an artgen
+    MediaRecord, WITHOUT touching the native image store/gallery."""
+    import main_window as mw
+    from media_store import MediaRecord
+
+    rec = MediaRecord(
+        id=str(uuid.uuid4()),
+        media_type="artgen",
+        created_at="2026-01-01T00:00:00+00:00",
+        file_path=str(tmp_path / "out.ans"),
+        thumbnail_path=str(tmp_path / "out.png"),
+        prompt="ANSI art from a sunset over dunes",
+        model_id="artgen",
+        generator_type="ansi-image",
+        params="{}",
+        starred=0,
+    )
+    mw_inst = _make_mock_main_window()
+
+    with patch("gi.repository.GLib.idle_add", lambda fn, *a: fn(*a)):
+        result = mw.MainWindow._on_transform_finished(mw_inst, rec)
+
+    mw_inst._artgen_gallery.refresh.assert_called_once()
+    mw_inst._store.append.assert_not_called()
+    mw_inst._image_gallery.load_history.assert_not_called()
+    assert result is False

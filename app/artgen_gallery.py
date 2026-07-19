@@ -32,6 +32,8 @@ _TYPE_EMOJI: dict[str, str] = {
     "landscape": "🏔", "skyline": "🌃", "verse": "✍",
     "constellation": "✦", "geometric": "⬡", "circuit": "⬟",
     "palette": "◼", "ansi": "▓", "freeform": "?",
+    "ansi-image": "▓",  # image->ANSI transform (Effort B Task 2) — same
+                        # color-grid render as the LLM "ansi" generator.
 }
 
 
