@@ -48,6 +48,7 @@ from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_gallery import ArtgenGallery
 from artgen_detail import ArtgenDetail
+from artgen_render import AnimatedGifWidget
 import artgen_kind
 from create_view import CreateView
 import gallery_layout
@@ -1920,9 +1921,10 @@ class GenerationCard(Gtk.Box):
         self.set_hexpand(True)
         self._build()
 
-        # Clicking anywhere on the card selects it in the detail panel.
+        # Clicking anywhere on the card selects it in the detail panel; a
+        # double click ALSO opens the record full-screen (see _on_pressed).
         gesture = Gtk.GestureClick()
-        gesture.connect("pressed", lambda *_: self._select_cb(self))
+        gesture.connect("pressed", self._on_pressed)
         self.add_controller(gesture)
 
         # Right-click: forge transform menu (remove background, describe, show depth…)
@@ -1937,6 +1939,37 @@ class GenerationCard(Gtk.Box):
         motion.connect("enter", self._on_hover_enter)
         motion.connect("leave", self._on_hover_leave)
         self.add_controller(motion)
+
+    def _on_pressed(self, _gesture, n_press: int, _x: float, _y: float) -> None:
+        """Primary-button press handler for the card's main GestureClick.
+
+        Single click (n_press == 1): select the card into the DetailPanel --
+        unchanged from the previous plain `lambda *_: self._select_cb(self)`.
+
+        Double click (n_press == 2): ALSO open the record full-screen in its
+        own window, mirroring DetailPanel's "⛶ View Full"/"⛶ Fullscreen"
+        buttons (`_open_fullscreen` / `_open_image_fullscreen`) but reachable
+        directly from the gallery card -- no round-trip through the right
+        pane required. `_select_cb` still fires on every press (including
+        both presses of a double-click); that's harmless since the first
+        press already populates the pane with this same record.
+
+        Guards mirror the DetailPanel methods exactly: images need
+        `image_exists`, everything else (video/animate/animatediff) needs
+        `video_exists`. `VideoPlayerWindow`/`ImageViewerWindow` are the same
+        module-level classes DetailPanel uses.
+        """
+        self._select_cb(self)
+        if n_press != 2:
+            return
+        record = self._record
+        if record.media_type == "image":
+            if record.image_exists:
+                win = ImageViewerWindow(record, self.get_root())
+                win.present()
+        elif record.video_exists:
+            win = VideoPlayerWindow(record, self.get_root())
+            win.present()
 
     def _on_right_click(self, gesture, n_press: int, x: float, y: float) -> None:
         """Build and show a forge-transform popover anchored to the click position."""
@@ -3417,7 +3450,16 @@ class VideoPlayerWindow(Gtk.Window):
     Opens maximized by default. Supports:
       - Escape / clicking the close button → closes window, pauses video
       - F key or the ⛶ button → toggle fullscreen
-      - Space → play / pause
+      - Space → play / pause (no-op for the GIF branch below -- see `_toggle_play`)
+
+    GIF branch: AnimateDiff `.gif` records (media_type == "animatediff", or
+    any video_path literally ending in ".gif") are NOT played via Gtk.Video --
+    the app avoids Gtk.Video for gifs everywhere else (DetailPanel drives them
+    frame-by-frame via GdkPixbufAnimationIter instead, since GStreamer seeking
+    on a gif is unreliable) -- so the fullscreen window uses the same
+    self-driving `artgen_render.AnimatedGifWidget` the Discover galleries use.
+    Everything else (maximize/F/Escape/title/layout/control strip) is
+    identical between the two branches.
     """
 
     def __init__(self, record: "GenerationRecord", parent_window: Gtk.Window):
@@ -3434,10 +3476,20 @@ class VideoPlayerWindow(Gtk.Window):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_child(outer)
 
-        # ── Video player ──────────────────────────────────────────────────────
-        self._video = Gtk.Video.new_for_filename(record.video_path)
-        self._video.set_autoplay(True)
-        self._video.set_loop(True)
+        # ── Video / GIF player ───────────────────────────────────────────────
+        is_gif = (
+            record.media_type == "animatediff"
+            or record.video_path.endswith(".gif")
+        )
+        if is_gif:
+            # Self-driving animated Gtk.Picture -- same widget the Discover
+            # galleries use for gif thumbnails/hover-preview. It manages its
+            # own GLib timer and cancels it on unrealize (i.e. window close).
+            self._video = AnimatedGifWidget(record.video_path)
+        else:
+            self._video = Gtk.Video.new_for_filename(record.video_path)
+            self._video.set_autoplay(True)
+            self._video.set_loop(True)
         self._video.set_vexpand(True)
         self._video.set_hexpand(True)
         outer.append(self._video)
@@ -3475,6 +3527,11 @@ class VideoPlayerWindow(Gtk.Window):
         self.maximize()
 
     def _toggle_play(self, _btn) -> None:
+        # AnimatedGifWidget (the GIF branch) is a plain Gtk.Picture -- it has
+        # no media stream and self-drives its own animation loop, so Play/
+        # Pause (button or Space) is a no-op there rather than an error.
+        if not hasattr(self._video, "get_media_stream"):
+            return
         stream = self._video.get_media_stream()
         if stream is None:
             return
