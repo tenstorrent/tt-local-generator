@@ -1,3 +1,23 @@
+tt-local-generator (0.49.1) noble; urgency=medium
+
+  * fix(create): forward the user's prompt to artgen generators that declare
+    --prompt (AnimateDiff). `MainWindow._create_generate_artgen` built its
+    `tt-ctl artgen <generator> ...` argv by unconditionally skipping
+    `params["prompt"]` -- true for most artgen generators (verse/ansi/palette
+    use --theme/--subject/... instead), but the `animatediff` plugin DOES
+    declare `--prompt` (default "a candle flame flickering",
+    plugins/animatediff/plugin.py), so the idea-door's typed prompt never
+    reached it and every AnimateDiff Create generation silently rendered the
+    default candle. New `_artgen_accepts_prompt(generator)` introspects the
+    generator's own argparse (mirroring `artgen_bool_flags`'s approach) to
+    tell the two cases apart; a non-empty resolved prompt is now forwarded as
+    `--prompt <value>` only for generators that declare it, added exactly
+    once outside the per-key loop so it is never duplicated or forwarded
+    empty (an empty/whitespace prompt still lets the generator's own default
+    apply). Non-prompt generators (verse/palette/...) are unchanged.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.49.0) noble; urgency=medium
 
   * feat(gallery): unified interaction pattern across ALL galleries (native

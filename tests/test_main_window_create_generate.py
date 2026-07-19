@@ -594,6 +594,88 @@ def test_artgen_default_true_bool_off_emits_negative_flag(monkeypatch, tmp_path)
     assert "--glitch" not in argv
 
 
+def test_artgen_accepts_prompt_true_for_animatediff():
+    """`animatediff` DOES declare its own `--prompt` (default "a candle
+    flame flickering", see plugins/animatediff/plugin.py:54) — the whole
+    bug is that this default silently wins when the user's prompt is never
+    forwarded. `_artgen_accepts_prompt` must detect the declared arg via the
+    generator's real `add_args`, no plugin.py string-matching."""
+    import main_window as mw
+    assert mw._artgen_accepts_prompt("animatediff") is True
+
+
+def test_artgen_accepts_prompt_false_for_generators_without_prompt_flag():
+    """verse/palette (and every other non-animatediff artgen generator) use
+    their own bespoke vocabulary (--theme/--mood/…), never a common
+    --prompt — unchanged skip behavior must be preserved for these."""
+    import main_window as mw
+    assert mw._artgen_accepts_prompt("verse") is False
+    assert mw._artgen_accepts_prompt("palette") is False
+
+
+def test_artgen_animatediff_forwards_the_users_prompt(monkeypatch, tmp_path):
+    """THE BUG: Create's AnimateDiff medium ignored the user's typed prompt
+    and always rendered the default ("a candle flame flickering") because
+    `_create_generate_artgen` unconditionally skipped the "prompt" key. Since
+    animatediff's own `add_args` DOES declare `--prompt`, the resolved
+    `params["prompt"]` (the idea-door's typed brief) must now reach argv.
+
+    Uses the REAL animatediff generator (via `_patch_artgen_deps_real_generator`,
+    same as the landscape bool-flag test) so `_artgen_accepts_prompt` sees its
+    actual argparse, not a test double lacking `add_args`."""
+    obj = _make_mw(monkeypatch)
+    fake_ms, run_tt_ctl_spy, _out = _patch_artgen_deps_real_generator(
+        monkeypatch, tmp_path=tmp_path
+    )
+
+    params = {"prompt": "a dragon over a city", "steps": 8}
+    obj._on_create_generate(_ANIMATEDIFF_MEDIUM, params)
+
+    run_tt_ctl_spy.assert_called_once()
+    (argv,), _kwargs = run_tt_ctl_spy.call_args
+    assert argv[0] == "artgen"
+    assert argv[1] == "animatediff"
+    assert "--prompt" in argv
+    assert argv[argv.index("--prompt") + 1] == "a dragon over a city"
+    # forwarded exactly once — no duplicate from the generic key loop.
+    assert argv.count("--prompt") == 1
+
+
+def test_artgen_non_prompt_generator_still_skips_prompt_flag(monkeypatch, tmp_path):
+    """verse has no --prompt flag at all — forwarding the idea-door's prompt
+    to it would raise an argparse "unrecognized argument" error. Unchanged
+    skip behavior (mirrors the pre-existing assertion in
+    `test_artgen_medium_shells_out_to_tt_ctl_artgen_with_generator_and_flags`)."""
+    obj = _make_mw(monkeypatch)
+    fake_ms, run_tt_ctl_spy, _out = _patch_artgen_deps_real_generator(
+        monkeypatch, tmp_path=tmp_path
+    )
+
+    params = {"prompt": "winter forges", "form": "haiku"}
+    obj._on_create_generate(_VERSE_MEDIUM, params)
+
+    run_tt_ctl_spy.assert_called_once()
+    (argv,), _kwargs = run_tt_ctl_spy.call_args
+    assert "--prompt" not in argv
+
+
+def test_artgen_animatediff_empty_prompt_omits_flag(monkeypatch, tmp_path):
+    """An empty/whitespace-only prompt must NOT be forwarded — the generator's
+    own default ("a candle flame flickering") should apply, same as a bare
+    CLI invocation with no --prompt would do."""
+    obj = _make_mw(monkeypatch)
+    fake_ms, run_tt_ctl_spy, _out = _patch_artgen_deps_real_generator(
+        monkeypatch, tmp_path=tmp_path
+    )
+
+    params = {"prompt": "   ", "steps": 8}
+    obj._on_create_generate(_ANIMATEDIFF_MEDIUM, params)
+
+    run_tt_ctl_spy.assert_called_once()
+    (argv,), _kwargs = run_tt_ctl_spy.call_args
+    assert "--prompt" not in argv
+
+
 def test_artgen_medium_records_artifact_in_media_store(monkeypatch, tmp_path):
     obj = _make_mw(monkeypatch)
     fake_ms, _spy, out_path = _patch_artgen_deps(monkeypatch, tmp_path=tmp_path)

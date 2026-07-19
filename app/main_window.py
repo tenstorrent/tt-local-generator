@@ -1670,6 +1670,43 @@ def _theme_key_from_text(text: str) -> str:
             return key
     return ""
 
+
+def _artgen_accepts_prompt(generator: str) -> bool:
+    """True if artgen generator *generator*'s own `add_args` declares a
+    `--prompt` argument (dest == "prompt").
+
+    Most artgen generators (verse/ansi/palette/landscape/…) have no common
+    `--prompt` flag at all — each has its own bespoke vocabulary (--theme,
+    --subject, --mood, …) — so `_create_generate_artgen` has always (by
+    design) skipped forwarding the idea-door's typed prompt to them: doing
+    so would raise an argparse "unrecognized argument" error.
+
+    The artgen "animatediff" plugin is the exception: `plugins/animatediff/
+    plugin.py`'s `add_args` DOES declare `--prompt` (default "a candle flame
+    flickering") — so when `_create_generate_artgen` skipped "prompt"
+    unconditionally, the user's typed prompt never reached it and every
+    AnimateDiff Create generation silently rendered the default candle
+    instead. This is the introspection this bug fix hangs the fix on: forward
+    "prompt" only for generators that actually declare it.
+
+    Reuses `create_param_panels._introspect_generator_args` — the SAME
+    "build a throwaway argparse.ArgumentParser, call the generator's own
+    add_args against it" approach `artgen_bool_flags` already relies on for
+    the FIX-3 bool-flag spelling — rather than duplicating that argparse
+    walk here. Same fail-soft contract: an unknown/broken generator name (or
+    any import/introspection failure) returns False, never raises — matching
+    the existing behavior of skipping "prompt" for every generator this
+    function doesn't recognize as accepting it.
+    """
+    try:
+        from create_param_panels import _introspect_generator_args
+        return any(
+            spec.dest == "prompt" for spec in _introspect_generator_args(generator)
+        )
+    except Exception:
+        return False
+
+
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
 # handled by the health check).
@@ -8763,11 +8800,22 @@ class MainWindow(Gtk.ApplicationWindow):
         I/O); only the final status message + gallery refresh are posted
         back via `GLib.idle_add`, per CLAUDE.md's GTK threading rule.
 
-        The idea-door's `params["prompt"]` is deliberately NOT forwarded as
-        a CLI flag — artgen generators have no common `--prompt` flag (each
-        has its own bespoke vocabulary: `--theme`, `--form`, `--palette`,
-        …), so passing it through would make every artgen generation fail
-        with an "unrecognized argument" error from argparse.
+        The idea-door's `params["prompt"]` is, by default, NOT forwarded as
+        a CLI flag — most artgen generators have no common `--prompt` flag
+        (each has its own bespoke vocabulary: `--theme`, `--form`,
+        `--palette`, …), so passing it through would make every artgen
+        generation fail with an "unrecognized argument" error from argparse.
+
+        FIX 4 (Create's AnimateDiff medium always rendered its default "a
+        candle flame flickering" instead of the user's prompt): the
+        blanket skip above was wrong for the artgen "animatediff" plugin,
+        whose `add_args` DOES declare `--prompt` (`plugins/animatediff/
+        plugin.py`). `_artgen_accepts_prompt(generator)` introspects the
+        generator's own argparse (mirroring `artgen_bool_flags`'s approach)
+        to tell the two cases apart: forward `params["prompt"]` as
+        `--prompt <value>` only when the generator declares it AND the
+        value is non-empty (an empty/whitespace prompt lets the generator's
+        own default apply, same as a bare CLI invocation would).
         """
         generator = medium.generator
         if not generator:
@@ -8822,6 +8870,19 @@ class MainWindow(Gtk.ApplicationWindow):
                 # Done here, not in the shared `_append_flag_value` (which the
                 # pipeline engine also uses and must stay generator-agnostic).
                 bool_flags = artgen_bool_flags(generator)
+                # FIX 4 (see this method's docstring): forward the resolved
+                # prompt ONLY for a generator that actually declares
+                # `--prompt` (currently just "animatediff"), and only when
+                # there is a real value to forward — an empty/whitespace
+                # prompt is skipped so the generator's own default (e.g.
+                # animatediff's "a candle flame flickering") still applies,
+                # matching what a bare `tt-ctl artgen <generator>` invocation
+                # would do. This runs once here, OUTSIDE the per-key loop
+                # below (which still unconditionally skips the "prompt" key
+                # itself, so this is the ONLY place "--prompt" can be added —
+                # never duplicated).
+                if isinstance(prompt, str) and prompt.strip() and _artgen_accepts_prompt(generator):
+                    _append_flag_value(argv, "--prompt", prompt)
                 for key, value in params.items():
                     if key == "prompt" or value is None:
                         continue
