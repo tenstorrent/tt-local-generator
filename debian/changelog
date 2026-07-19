@@ -1,3 +1,21 @@
+tt-local-generator (0.51.1) noble; urgency=medium
+
+  * fix(gallery): pause the artgen GIF timer when the detail pane is
+    collapsed. `ArtgenDetail`'s GLib timeout kept firing on a hidden
+    Gtk.Stack child (Gtk.Stack keeps hidden children realized) whenever the
+    whole right-hand pane was dismissed via the ✕ bar or `win.toggle-detail`
+    -- previously the timer was only paused when the pane SWITCHED
+    renderers. `_set_detail_pane_visible(False)` now also calls
+    `_artgen_detail.pause_animation()`. CPU-idle waste only; no correctness
+    impact.
+  * fix(viewer): fullscreen viewer's Pause button / Space key now actually
+    pause/resume an animated GIF instead of silently no-opping.
+    `AnimatedGifWidget` gains `set_playing()`/`toggle_playing()`;
+    `VideoPlayerWindow._toggle_play` routes the GIF branch through it and
+    updates the Pause/Play label. The Gtk.Video (mp4) path is unchanged.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.51.0) noble; urgency=medium
 
   * feat(artgen): "Convert to ANSI art" image transform. Right-click any

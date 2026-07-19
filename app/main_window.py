@@ -3488,7 +3488,8 @@ class VideoPlayerWindow(Gtk.Window):
     Opens maximized by default. Supports:
       - Escape / clicking the close button → closes window, pauses video
       - F key or the ⛶ button → toggle fullscreen
-      - Space → play / pause (no-op for the GIF branch below -- see `_toggle_play`)
+      - Space → play / pause (GIF branch below pauses/resumes the frame timer
+        via `AnimatedGifWidget.toggle_playing()` -- see `_toggle_play`)
 
     GIF branch: AnimateDiff `.gif` records (media_type == "animatediff", or
     any video_path literally ending in ".gif") are NOT played via Gtk.Video --
@@ -3566,8 +3567,14 @@ class VideoPlayerWindow(Gtk.Window):
 
     def _toggle_play(self, _btn) -> None:
         # AnimatedGifWidget (the GIF branch) is a plain Gtk.Picture -- it has
-        # no media stream and self-drives its own animation loop, so Play/
-        # Pause (button or Space) is a no-op there rather than an error.
+        # no media stream, so it can't be driven through Gtk.MediaStream's
+        # play()/pause(). gif-hygiene fix 2: route Pause/Space through its
+        # own toggle_playing() API instead of no-opping, so the button/key
+        # genuinely pause/resume the gif's frame-advance timer.
+        if isinstance(self._video, AnimatedGifWidget):
+            playing = self._video.toggle_playing()
+            self._play_pause_btn.set_label("⏸ Pause" if playing else "▶ Play")
+            return
         if not hasattr(self._video, "get_media_stream"):
             return
         stream = self._video.get_media_stream()
@@ -6286,6 +6293,17 @@ class MainWindow(Gtk.ApplicationWindow):
             self._inner_paned.set_position(
                 self._inner_paned.get_allocation().width
             )
+        if not visible:
+            # gif-hygiene fix 1: collapsing the whole pane must also pause
+            # any GIF timer running inside the shared `_artgen_detail`
+            # renderer. A Gtk.Stack keeps its hidden child realized, so
+            # without this the timer keeps firing indefinitely on a fully
+            # hidden pane (CPU-idle waste; harmless but wasteful). Showing
+            # the pane again doesn't need an explicit "resume" -- the next
+            # `show_record`/`_render` call restarts the timer itself.
+            artgen_detail = getattr(self, "_artgen_detail", None)
+            if artgen_detail is not None:
+                artgen_detail.pause_animation()
 
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
         self._set_detail_pane_visible(not self._detail_visible)

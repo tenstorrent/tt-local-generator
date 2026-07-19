@@ -96,9 +96,9 @@ def test_gallery_for_type_has_explicit_artgen_guard():
 def _make_bare_mw():
     """Bind the real `_set_detail_pane_visible`/`_on_toggle_detail` methods
     onto a `MainWindow.__new__` instance with fake `_detail_wrap`/
-    `_inner_paned` widgets — plain Mocks are enough since both methods only
-    call `set_visible`/`get_allocation`/`set_position`, never touch anything
-    else on the real widget tree."""
+    `_inner_paned`/`_artgen_detail` widgets — plain Mocks are enough since
+    both methods only call `set_visible`/`get_allocation`/`set_position`/
+    `pause_animation`, never touch anything else on the real widget tree."""
     import main_window as mw
 
     obj = mw.MainWindow.__new__(mw.MainWindow)
@@ -106,6 +106,7 @@ def _make_bare_mw():
     obj._detail_wrap = MagicMock()
     obj._inner_paned = MagicMock()
     obj._inner_paned.get_allocation.return_value.width = 987
+    obj._artgen_detail = MagicMock()
 
     for name in ("_set_detail_pane_visible", "_on_toggle_detail"):
         setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
@@ -147,6 +148,45 @@ def test_set_detail_pane_visible_tolerates_missing_inner_paned():
     obj._set_detail_pane_visible(False)  # must not raise
     assert obj._detail_visible is False
     obj._detail_wrap.set_visible.assert_called_once_with(False)
+
+
+# ── Collapsing the pane pauses the artgen GIF timer (gif-hygiene fix 1) ─────
+#
+# `ArtgenDetail` drives an animated GIF via a `GLib.timeout` that keeps
+# firing on a hidden Gtk.Stack child (Gtk.Stack keeps hidden children
+# realized). Previously this was paused only when the right pane SWITCHES
+# renderers (native `_on_card_selected` calling `pause_animation()`), not
+# when the whole pane COLLAPSES via the ✕ dismiss bar / `win.toggle-detail`.
+# `_set_detail_pane_visible(False)` must now also pause it; `pause_animation`
+# is idempotent/safe to call even with no timer running, and showing the
+# pane again does not need an explicit "resume" call since the next
+# `show_record`/`_render` restarts the timer itself.
+
+def test_set_detail_pane_visible_false_pauses_artgen_detail_animation():
+    obj = _make_bare_mw()
+    obj._set_detail_pane_visible(False)
+    obj._artgen_detail.pause_animation.assert_called_once_with()
+
+
+def test_set_detail_pane_visible_true_does_not_require_pausing_artgen_detail():
+    obj = _make_bare_mw()
+    obj._detail_visible = False
+    obj._set_detail_pane_visible(True)
+    obj._artgen_detail.pause_animation.assert_not_called()
+
+
+def test_set_detail_pane_visible_tolerates_missing_artgen_detail():
+    """Some harnesses (and possibly very early construction) won't have
+    `_artgen_detail` set yet — must not raise."""
+    import main_window as mw
+
+    obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._detail_visible = True
+    obj._detail_wrap = MagicMock()
+    obj._set_detail_pane_visible = mw.MainWindow._set_detail_pane_visible.__get__(obj)
+
+    obj._set_detail_pane_visible(False)  # must not raise
+    assert obj._detail_visible is False
 
 
 def test_on_toggle_detail_toggles_via_detail_wrap_not_get_parent():

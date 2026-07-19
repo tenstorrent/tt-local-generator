@@ -201,6 +201,115 @@ def test_animated_gif_widget_advances_frames(tmp_path):
         assert widget._timer_id is None
 
 
+def _make_multiframe_gif_widget(tmp_path):
+    """Shared setup for the set_playing/toggle_playing tests below --
+    same skip guards as test_animated_gif_widget_advances_frames (PIL,
+    display, GTK4 all required to build a real multi-frame AnimatedGifWidget).
+    Returns None if any prerequisite is missing (caller should pytest.skip)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return None
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401
+    except Exception:
+        return None
+
+    gif_path = tmp_path / "test2.gif"
+    frame1 = Image.new("RGB", (4, 4), (255, 0, 0))
+    frame2 = Image.new("RGB", (4, 4), (0, 255, 0))
+    frame1.save(gif_path, save_all=True, append_images=[frame2], duration=50, loop=0)
+
+    from artgen_render import AnimatedGifWidget
+    return AnimatedGifWidget(str(gif_path))
+
+
+# ── AnimatedGifWidget.set_playing / toggle_playing (gif-hygiene fix 2) ──────
+#
+# The fullscreen viewer's Pause button / Space key used to no-op for the GIF
+# branch entirely (AnimatedGifWidget has no media stream to pause). These
+# give it a real pause/resume API so VideoPlayerWindow can drive it.
+
+def test_animated_gif_widget_set_playing_false_cancels_timer(tmp_path):
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 not available")
+    try:
+        assert widget._timer_id is not None
+        assert widget._playing is True
+
+        widget.set_playing(False)
+
+        assert widget._timer_id is None
+        assert widget._playing is False
+    finally:
+        widget._on_unrealize(widget)
+
+
+def test_animated_gif_widget_set_playing_true_reschedules_timer(tmp_path):
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 not available")
+    try:
+        widget.set_playing(False)
+        assert widget._timer_id is None
+
+        widget.set_playing(True)
+
+        assert widget._timer_id is not None
+        assert widget._playing is True
+    finally:
+        widget._on_unrealize(widget)
+
+
+def test_animated_gif_widget_set_playing_true_is_noop_when_already_playing(tmp_path):
+    """Calling set_playing(True) while already playing must not schedule a
+    second competing timer (which would double the frame-advance rate)."""
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 not available")
+    try:
+        first_timer_id = widget._timer_id
+        widget.set_playing(True)
+        assert widget._timer_id == first_timer_id
+    finally:
+        widget._on_unrealize(widget)
+
+
+def test_animated_gif_widget_toggle_playing_flips_state(tmp_path):
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 not available")
+    try:
+        assert widget._playing is True
+
+        result = widget.toggle_playing()
+        assert result is False
+        assert widget._playing is False
+        assert widget._timer_id is None
+
+        result = widget.toggle_playing()
+        assert result is True
+        assert widget._playing is True
+        assert widget._timer_id is not None
+    finally:
+        widget._on_unrealize(widget)
+
+
+def test_animated_gif_widget_on_unrealize_still_clears_playing_state(tmp_path):
+    """`_on_unrealize` must remain a clean cancel regardless of `_playing`."""
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 not available")
+    widget._on_unrealize(widget)
+    assert widget._timer_id is None
+    assert widget._iter is None
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # "unify gallery interaction" Task 5 — shared ext -> renderer dispatch
 # ═════════════════════════════════════════════════════════════════════════

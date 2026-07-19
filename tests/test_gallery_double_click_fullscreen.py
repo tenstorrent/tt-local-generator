@@ -267,3 +267,68 @@ def test_video_player_window_uses_gtk_video_for_real_mp4(tmp_path):
     win = mw.VideoPlayerWindow(rec, None)
 
     assert isinstance(win._video, mw.Gtk.Video)
+
+
+# ── VideoPlayerWindow._toggle_play: real gif pause/resume (gif-hygiene fix 2) ─
+#
+# Space/Pause used to no-op entirely for the gif branch (AnimatedGifWidget
+# has no get_media_stream()). Now it should genuinely pause/resume the gif
+# via AnimatedGifWidget.set_playing/toggle_playing and flip the button label.
+
+@gtk_required
+def test_toggle_play_pauses_and_resumes_gif(tmp_path):
+    import main_window as mw
+
+    gif = tmp_path / "loop.gif"
+    _make_gif(gif)
+    rec = _make_record(media_type="animatediff", video_path=str(gif))
+
+    win = mw.VideoPlayerWindow(rec, None)
+    assert win._video._playing is True
+
+    win._toggle_play(None)
+    assert win._video._playing is False
+    assert win._video._timer_id is None
+    assert win._play_pause_btn.get_label() == "▶ Play"
+
+    win._toggle_play(None)
+    assert win._video._playing is True
+    assert win._video._timer_id is not None
+    assert win._play_pause_btn.get_label() == "⏸ Pause"
+
+
+@gtk_required
+def test_toggle_play_via_space_key_pauses_gif(tmp_path):
+    """The Space handler routes through `_toggle_play` -- confirm the gif
+    branch responds to it too, not just the button."""
+    import main_window as mw
+
+    gif = tmp_path / "loop.gif"
+    _make_gif(gif)
+    rec = _make_record(media_type="animatediff", video_path=str(gif))
+
+    win = mw.VideoPlayerWindow(rec, None)
+    win._on_key(None, 0x20, 0, 0)  # Space
+
+    assert win._video._playing is False
+    assert win._play_pause_btn.get_label() == "▶ Play"
+
+
+@gtk_required
+def test_toggle_play_unchanged_for_mp4_branch(tmp_path):
+    """Non-gif path must still be driven by get_media_stream() -- unaffected
+    by the new gif pause/resume wiring. In this headless test the Gtk.Video
+    widget has no real GStreamer backend, so get_media_stream() returns None
+    and _toggle_play is a no-op (same as before this fix)."""
+    import main_window as mw
+
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"fake-mp4")
+    rec = _make_record(media_type="video", video_path=str(vid))
+
+    win = mw.VideoPlayerWindow(rec, None)
+    label_before = win._play_pause_btn.get_label()
+
+    win._toggle_play(None)  # must not raise
+
+    assert win._play_pause_btn.get_label() == label_before

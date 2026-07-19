@@ -595,6 +595,13 @@ class AnimatedGifWidget(Gtk.Picture):
         super().__init__()
         self._timer_id: "int | None" = None
         self._iter: "GdkPixbuf.PixbufAnimationIter | None" = None
+        # gif-hygiene fix 2: tracks whether the animation is currently
+        # advancing, independent of `_timer_id` being set/None -- lets
+        # callers (VideoPlayerWindow's fullscreen Pause/Space) query and
+        # toggle play state without reaching into timer internals directly.
+        # Starts True: a freshly-constructed multi-frame gif schedules its
+        # first `_tick` immediately below, same as before this fix.
+        self._playing: bool = True
         self.set_hexpand(True)
         self.set_vexpand(True)
         self.set_content_fit(Gtk.ContentFit.COVER)
@@ -605,6 +612,7 @@ class AnimatedGifWidget(Gtk.Picture):
             return
         if anim.is_static_image():
             self.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            self._playing = False  # nothing to animate
             return
         it = anim.get_iter(None)
         self._iter = it
@@ -628,6 +636,35 @@ class AnimatedGifWidget(Gtk.Picture):
             return GLib.SOURCE_REMOVE
         self._timer_id = GLib.timeout_add(max(delay, 10), self._tick)
         return GLib.SOURCE_REMOVE
+
+    def set_playing(self, playing: bool) -> None:
+        """Pause/resume the frame-advance timer (gif-hygiene fix 2).
+
+        Used by `VideoPlayerWindow`'s fullscreen Pause button / Space key so
+        a GIF can actually be paused there instead of silently no-opping.
+        Pausing cancels the pending `GLib.timeout` outright (same mechanism
+        `_on_unrealize` already uses). Resuming re-schedules `_tick` using
+        the iter's current per-frame delay -- the same "delay, floor 10ms"
+        logic `__init__`/`_tick` use -- so playback picks back up from
+        whatever frame it was paused on. No-ops if there's nothing to
+        animate (`_iter is None`, e.g. a static image) or if the requested
+        state already matches (avoids scheduling a second, competing timer).
+        """
+        self._playing = playing
+        if not playing:
+            if self._timer_id is not None:
+                GLib.source_remove(self._timer_id)
+                self._timer_id = None
+            return
+        if self._iter is None or self._timer_id is not None:
+            return
+        delay = max(self._iter.get_delay_time(), 10)
+        self._timer_id = GLib.timeout_add(delay, self._tick)
+
+    def toggle_playing(self) -> bool:
+        """Flip play state and return the new `_playing` value."""
+        self.set_playing(not self._playing)
+        return self._playing
 
     def _on_unrealize(self, _widget) -> None:
         if self._timer_id is not None:
