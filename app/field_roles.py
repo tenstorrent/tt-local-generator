@@ -59,7 +59,17 @@ def classify_artgen(spec) -> FieldRole:
     dest = getattr(spec, "dest", "")
     kind = getattr(spec, "kind", "str")
     default = getattr(spec, "default", None)
-    if dest in {"subject", "text", "prompt", "theme", "board_name", "tagline"}:
+    # "freeform" (the freeform generator's whole-prompt field) and "mood"
+    # (palette's mood/theme seed) joined this set for the ✨ Inspire regression
+    # fix (tt-local-generator inspire2): both are genuine free-form creative
+    # text -- the OLD (deleted) ArtgenPanel gave both an Inspire button
+    # (`_free_tv`/`_pal_mood` in the pre-SP-3d-5 `artgen_panel.py`) -- but
+    # neither dest was in this set, so they fell through to
+    # ROLE_DIRECTION/MARK_INTERPRETED below. `create_param_panels`'s
+    # `attach_inspire_button` wiring reuses THIS classification (role ==
+    # ROLE_BRIEF) as its single source of truth for "is this a creative text
+    # field", so extending the set here is what makes both fields eligible.
+    if dest in {"subject", "text", "prompt", "theme", "board_name", "tagline", "freeform", "mood"}:
         return FieldRole(ROLE_BRIEF, MARK_WORDS)
     if kind in ("int", "float"):
         return FieldRole(ROLE_CONTROL, MARK_EXACT)

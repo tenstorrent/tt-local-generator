@@ -277,6 +277,61 @@ panel's renderer (which reads that name, matching `GenerationRecord`) resolves
 the artifact; `MediaStore.add` reads only declared fields, so it's inert for
 persistence.
 
+**✨ Inspire — restored on every creative prompt entry (v0.50.0, regression
+fix).** SP-3d-5 deleted `ControlPanel`/`ArtgenPanel` (the per-field ✦ Inspire
+buttons went with them) in favor of the Create/Discover/Remix shell, but
+nothing grew a replacement — Create's idea door kept an Inspire button but
+(bug) always generated fresh, never reading the field first; every other
+prompt entry (artgen params, pipeline step fields) had none at all. Fixed as
+ONE shared implementation instead of forking it per surface:
+
+- **`create_param_panels.attach_inspire_button(entry, prompt_type_getter,
+  inspire_fn, *, label=, tooltip=)`** — the single seam. Click reads
+  `entry.get_text().strip()` as the seed: empty -> fresh generation; non-empty
+  -> the backend polishes/remixes those exact words. Calls
+  `inspire_fn(prompt_type, seed_text, on_result, on_error)`; both callbacks
+  are wrapped in `GLib.idle_add` so a same-thread test fake is as safe as a
+  real background thread, and a synchronously-raising `inspire_fn` is caught
+  (fail-soft). `MainWindow._create_inspire_fn(prompt_type, seed_text,
+  on_result, on_error)` is the one real implementation (backed by
+  `prompt_client.generate_prompt`) — every surface below reuses it, never a
+  forked prompt-gen path.
+- **Create idea door** (`CreateView._on_inspire_clicked`) — now reads
+  `_prompt_entry`'s current text as the seed before calling `_inspire_fn`
+  (previously hardcoded `""`).
+- **`ArtgenParamPanel`** (`create_param_panels.py`) — takes optional
+  `inspire_fn`/`prompt_type_getter` constructor params (default `None` -> no
+  ✨ buttons, migration-safe). Every field whose `_ArgSpec.kind == "str"` AND
+  `field_roles.classify_artgen(spec).role == ROLE_BRIEF`
+  (`_artgen_field_wants_inspire`) gets a button appended inside its row
+  (travels with the row if `RoleZonePanel` re-parents it). This is
+  deliberately narrower than "any str field": structured/enum-like config
+  strings (circuit's `--inputs`/`--gates`/`--circuit-style`, landscape's
+  `--palette`) and negations (`negative_prompt`) are excluded — reusing
+  `classify_artgen` as the single source of truth means the ✨ eligibility
+  test can never drift from `RoleZonePanel`'s own Brief/Direction zoning.
+  `classify_artgen` gained `"freeform"` (freeform's whole-prompt field) and
+  `"mood"` (palette's mood/theme seed) to its recognized-creative-dest set —
+  both are genuine prose the old ArtgenPanel gave Inspire to, but had fallen
+  through to Direction/interpreted. `CreateView._swap_panel` threads its own
+  `_inspire_fn`/`_inspire_prompt_type` into every artgen medium's panel.
+- **`RemixView`** (`pipeline_studio.py`) — takes an optional `inspire_fn`
+  constructor param (same default-`None` contract), threaded from
+  `PipelineStudio(inspire_fn=...)` -> `MainWindow._show_pipelines` (passes
+  `self._create_inspire_fn`). `_build_field_row` attaches a button to a
+  BRIEF-role `kind=="text"` field (excluding `_NEGATIVE_FIELD_KEYS` —
+  `negative_prompt`/`avoid`, mirroring `ModifierPills`' own exclusion, but
+  WITHOUT `ModifierPills`' "needs a chip bank" requirement — Inspire is
+  useful on a text-output node too). `_prompt_type_for_output(output_kind)`
+  maps the owning node's `Intent.output_kind` (image/video/gif->animate) to
+  the `generate_prompt()` source string, defaulting to "video".
+- **Hard invariant preserved:** `collect()` (bare `ArtgenParamPanel`,
+  `RoleZonePanel`-wrapped, and `RemixView._collect_edits`) is byte-for-byte
+  identical whether or not `inspire_fn` was supplied — the button is
+  decoration inside a field's row, never the value-bearing widget those
+  methods read. Pinned by dedicated collect-equality tests (as well as the
+  pre-existing `test_role_zone_panel.py` suite, unaffected by this change).
+
 ## Model status (single source of truth)
 
 `app/model_status.py` — `ModelStatusService`, a **GUI-free** single source of

@@ -6861,7 +6861,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if self._pipeline_studio is None:
             from pipeline_studio import PipelineStudio
-            self._pipeline_studio = PipelineStudio()
+            # ✨ Inspire (regression fix 2/2): reuse the exact same seam
+            # CreateView's idea-door/ArtgenParamPanel wiring drives
+            # (`_create_inspire_fn`, backed by `prompt_client.generate_prompt`)
+            # so a pipeline step's text field gets the identical two-mode
+            # fresh/remix behavior, not a forked pipeline-only prompt-gen path.
+            self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn)
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
 
         # Always land on Discover, never a stale Open page from a previous

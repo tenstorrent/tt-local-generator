@@ -1,3 +1,46 @@
+tt-local-generator (0.50.0) noble; urgency=medium
+
+  * feat(inspire): restore ✨ Inspire on every creative prompt entry in the
+    app -- the Create idea door, every artgen generator's theme/subject/
+    prompt-shaped field, and every pipeline (RemixView) step card's editable
+    text field -- finalizing the regression fix started by the previous
+    release. SP-3d-5 deleted `ControlPanel`/`ArtgenPanel` (and their
+    per-field ✦ Inspire buttons) in favor of the Create/Discover/Remix shell,
+    but nothing grew a replacement for those buttons; this restores the
+    behavior via ONE shared implementation
+    (`create_param_panels.attach_inspire_button`) instead of forking it per
+    surface:
+    - Two modes everywhere: an EMPTY field generates a fresh prompt from
+      scratch (algo -> markov -> LLM polish); a FILLED field reimagines what
+      you typed, instead of discarding it. Create's own idea-door button had
+      regressed to always generating fresh (never reading the field first).
+    - `ArtgenParamPanel` (Create's per-generator param panel) now gives every
+      genuinely creative text field a ✨ button -- verse's theme, ansi's
+      subject/board-name/tagline, freeform's whole prompt, palette's mood,
+      animatediff's prompt -- while correctly skipping structured/enum-like
+      "str" fields that aren't prose (circuit's inputs/gates/style,
+      landscape's palette) and negations (negative_prompt). Threaded through
+      from `CreateView`'s own Inspire seam, so it's the identical backend and
+      click contract as the idea door.
+    - `RemixView` (Pipeline Studio's Remix page) gives every step card's
+      BRIEF-role text field the same ✨ button, excluding negative/avoid
+      fields, resolving the prompt-gen "source" from that node's own output
+      kind (image/video/animate) so an Inspire result for an image step
+      reads like an image prompt. `PipelineStudio`/`MainWindow` thread the
+      exact same `_create_inspire_fn` seam CreateView uses -- one prompt-gen
+      backend, three surfaces.
+    - `field_roles.classify_artgen`'s creative-text recognition (the single
+      source of truth `RoleZonePanel` zoning AND the ✨ eligibility check both
+      read) gained "freeform" and "mood", which had fallen through to the
+      Direction zone despite being genuine free-form prose.
+    - Migration-safe throughout: no `inspire_fn` injected means no ✨ button
+      anywhere, matching every existing panel/test's construction; the hard
+      `collect()`/`RoleZonePanel.collect()` byte-for-byte invariants are
+      unaffected (the button decorates a field's row, never the value-bearing
+      widget those methods read) and pinned by new collect-equality tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 00:00:00 +0000
+
 tt-local-generator (0.49.1) noble; urgency=medium
 
   * fix(create): forward the user's prompt to artgen generators that declare

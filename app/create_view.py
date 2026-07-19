@@ -1581,7 +1581,18 @@ class CreateView(Gtk.Box):
             return
 
         if medium.source == "artgen" and medium.generator:
-            panel = ArtgenParamPanel(medium.generator)
+            # ✨ Inspire (regression fix 2/2): thread the SAME `_inspire_fn`
+            # seam (and its two-mode click contract, see `attach_inspire_button`)
+            # into every artgen generator's theme/subject/prompt-shaped
+            # fields that the OLD (deleted, SP-3d-5) ArtgenPanel gave a ✦
+            # Inspire button — `_inspire_fn is None` (no seam injected)
+            # propagates straight through to "no ✨ buttons", same
+            # migration-safe contract the idea-door button already has.
+            panel = ArtgenParamPanel(
+                medium.generator,
+                inspire_fn=self._inspire_fn,
+                prompt_type_getter=self._inspire_prompt_type,
+            )
             zoned = RoleZonePanel(panel, medium)
             self._panel_host.append(zoned)
             self._active_panel = zoned

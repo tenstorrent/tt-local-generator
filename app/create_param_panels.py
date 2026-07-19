@@ -2040,6 +2040,39 @@ def artgen_bool_flags(
     return flags
 
 
+def _artgen_field_wants_inspire(spec: _ArgSpec) -> bool:
+    """True for an `_ArgSpec` the ✨ Inspire button belongs on (regression
+    fix 2/2).
+
+    Reuses `field_roles.classify_artgen` — the SAME single-source-of-truth
+    classifier `field_specs()` already calls to place this field in
+    RoleZonePanel's Brief/Direction/Controls zones — as the "is this
+    creative text" test, rather than a second, parallel allowlist that could
+    quietly drift from it. Restricting to `kind == "str"` on top of
+    `ROLE_BRIEF` is belt-and-suspenders (today every `ROLE_BRIEF` dest IS
+    "str"-kind — `classify_artgen` never assigns ROLE_BRIEF to an int/float/
+    bool/choice field — but this makes that assumption explicit rather than
+    implicit, and this function only ever gets called from the "str" branch
+    of `_build_control_row` anyway).
+
+    Concretely, as of today's registered generators (`artgen.get(name)` —
+    note "animatediff" resolves to the reduced-arg MCP plugin at
+    `plugins/animatediff/plugin.py`, not the fuller CLI arg set
+    `app/artgen/generators/animatediff.py` itself declares but never gets
+    instantiated with, per that plugin's own comment): ansi's `subject`/
+    `board_name`/`tagline`, verse's `theme`, freeform's `freeform`,
+    palette's `mood`, and animatediff's `prompt` all qualify. circuit's
+    `inputs`/`gates`/`circuit_style`, landscape's `palette`, and
+    animatediff's `negative_prompt` do NOT — they're structured config
+    strings or a negation, not prose an LLM prompt-generator should rewrite.
+    Any FUTURE path-like `str` field (e.g. a `--chain-from PATH`) would also
+    be excluded the same way: a `default=None`/"auto" str field that isn't
+    in `classify_artgen`'s recognized creative-dest set resolves to
+    ROLE_DIRECTION, not ROLE_BRIEF.
+    """
+    return spec.kind == "str" and field_roles.classify_artgen(spec).role == field_roles.ROLE_BRIEF
+
+
 class ArtgenParamPanel(CreateParamPanel):
     """One param panel class for every artgen generator (verse/ansi/
     landscape/…) — parameterized by generator NAME at construction, not
@@ -2050,12 +2083,42 @@ class ArtgenParamPanel(CreateParamPanel):
     named generator's `add_args` declares — this IS the params dict a later
     task (the artgen run-path wiring) feeds straight to `argparse.Namespace`
     construction / `generate_artifact`, no key translation needed.
+
+    **✨ Inspire (regression fix 2/2):** the OLD (deleted, SP-3d-5)
+    `ArtgenPanel` gave every generator's theme/subject/prompt-shaped entry a
+    ✦ Inspire button. `inspire_fn`/`prompt_type_getter` (both optional,
+    default `None`) restore that per-field wiring via the shared
+    `attach_inspire_button` helper -- `inspire_fn is None` (the default, and
+    what every pre-existing caller/test still passes) means "no ✨ buttons at
+    all", so this is purely additive. A creative-text field is one whose
+    `_ArgSpec.kind == "str"` AND whose `field_roles.classify_artgen`
+    classification is `ROLE_BRIEF` (see `_artgen_field_wants_inspire` below) --
+    this is deliberately narrower than "any str field", since several
+    generators have str-kind fields that are structured/enum-like config
+    (circuit's `--inputs`/`--gates`/`--circuit-style`, landscape's
+    `--palette`) rather than prose an LLM prompt-generator should ever
+    rewrite -- see `_artgen_field_wants_inspire`'s own docstring for the
+    exact reasoning and current qualifying/non-qualifying dests.
     """
 
-    def __init__(self, generator_name: str) -> None:
+    def __init__(
+        self,
+        generator_name: str,
+        *,
+        inspire_fn: "Optional[Callable[[str, str, Callable[[str], None], Callable[[str], None]], None]]" = None,
+        prompt_type_getter: "Optional[Callable[[], str]]" = None,
+    ) -> None:
         self._generator_name = generator_name
         self._widget: Optional[Gtk.Widget] = None
         self._controls: "list[_ArgControl]" = []
+        # ✨ Inspire seam (see class docstring). `prompt_type_getter` defaults
+        # to a constant "video" getter when an `inspire_fn` is given but no
+        # getter was -- matches `generate_prompt.py`'s own CLI default
+        # (`_INSPIRE_PROMPT_TYPE_DEFAULT` in create_view.py) -- so a caller
+        # that only cares about wiring the seam through doesn't also have to
+        # supply a trivial getter.
+        self._inspire_fn = inspire_fn
+        self._prompt_type_getter = prompt_type_getter or (lambda: "video")
         # dest -> built row widget, populated by build() — see
         # ImageParamPanel's `_rows` for the rationale (RoleZonePanel
         # re-parenting, Task 5). Absent entirely when introspection finds no
@@ -2215,6 +2278,20 @@ class ArtgenParamPanel(CreateParamPanel):
                 entry.set_tooltip_text(tooltip)
             row.append(entry)
             widget = entry
+
+            # ✨ Inspire (regression fix 2/2): only for a genuine creative-text
+            # field (see `_artgen_field_wants_inspire`) and only when this
+            # panel was actually given an `inspire_fn` — appended INSIDE
+            # `row` (not as a separate top-level widget) so it travels with
+            # the row if a caller ever re-parents it (mirrors RoleZonePanel's
+            # re-parenting contract for native panels; ArtgenParamPanel rows
+            # are re-parented whole exactly the same way — see
+            # `CreateParamPanel._row_for`'s docstring).
+            if self._inspire_fn is not None and _artgen_field_wants_inspire(spec):
+                inspire_btn = attach_inspire_button(
+                    entry, self._prompt_type_getter, self._inspire_fn,
+                )
+                row.append(inspire_btn)
 
         control = _ArgControl(
             dest=spec.dest, kind=spec.kind, widget=widget,

@@ -241,7 +241,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import capability_discovery  # noqa: E402
-from create_param_panels import ModifierPills  # noqa: E402
+from create_param_panels import ModifierPills, attach_inspire_button  # noqa: E402
 from field_roles import (  # noqa: E402
     MARKER_TIP, ROLE_BRIEF, ROLE_DIRECTION,
     classify_pipeline_field, marker_prefix,
@@ -1420,6 +1420,7 @@ class RemixView(Gtk.Box):
         self,
         capability_fn: "Callable[[str], list] | None" = None,
         wingit_fn: "Callable[[str, str], object] | None" = None,
+        inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
@@ -1429,6 +1430,15 @@ class RemixView(Gtk.Box):
         # health); tests inject a fake so the picker is exercised without ever
         # touching disk/hardware. See class docstring for the full contract.
         self._capability_fn = capability_fn or capability_discovery.default_capabilities
+
+        # ✨ Inspire (regression fix 2/2, pipeline-editor adoption): the SAME
+        # `inspire_fn(prompt_type, seed_text, on_result, on_error)` seam
+        # `create_param_panels.attach_inspire_button` expects, reusing
+        # `MainWindow._create_inspire_fn` — no separate pipeline-specific
+        # prompt-gen path. `None` (the default, and what every pre-existing
+        # test still constructs with) means no ✨ button is ever attached —
+        # see `_build_field_row`.
+        self._inspire_fn = inspire_fn
 
         # Same seam pattern for wing-it (SP-C Phase 2b-3 Task 2): the default
         # closure wires the real mapper + real capability discovery + real LLM
@@ -1705,6 +1715,19 @@ class RemixView(Gtk.Box):
         """
         return {"image": "image", "video": "video", "gif": "animate"}.get(output_kind)
 
+    def _prompt_type_for_output(self, output_kind: "str | None") -> str:
+        """The `prompt_client.generate_prompt()` "source" string ✨ Inspire
+        needs for a node whose `Intent.output_kind` is *output_kind* —
+        mirrors `CreateView._inspire_prompt_type`'s table (image/video/
+        animate) so a "video" prompt reads the same whether it was inspired
+        from Create or from a pipeline step card. "gif" (AnimateDiff's
+        output_kind) maps to "animate", matching `_bank_kind_for_output`'s
+        same rename. Anything else (text/playlist/None/unrecognized) falls
+        back to "video" — `generate_prompt.py`'s own CLI default — since
+        Inspire still needs SOME source to ask the three-tier generator for.
+        """
+        return {"image": "image", "video": "video", "gif": "animate"}.get(output_kind, "video")
+
     # ── Row building ─────────────────────────────────────────────────────────
 
     def _render(self) -> None:
@@ -1822,7 +1845,7 @@ class RemixView(Gtk.Box):
         # task) keeps finding every field exactly as before.
         bank_kind = self._bank_kind_for_output(intent.output_kind)
         for field, role in brief + direction:
-            row, widget = self._build_field_row(field, role)
+            row, widget = self._build_field_row(field, role, intent.output_kind)
             card.append(row)
             node_widgets[field.key] = widget
             node_meta[field.key] = (field.kind, field.value)
@@ -1859,7 +1882,7 @@ class RemixView(Gtk.Box):
             exp.add_css_class("ps-controls-expander")
             control_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             for field, role in control:
-                row, widget = self._build_field_row(field, role)
+                row, widget = self._build_field_row(field, role, intent.output_kind)
                 control_box.append(row)
                 node_widgets[field.key] = widget
                 node_meta[field.key] = (field.kind, field.value)
@@ -2058,7 +2081,9 @@ class RemixView(Gtk.Box):
                 except Exception:
                     pass
 
-    def _build_field_row(self, field, role) -> "tuple[Gtk.Widget, Gtk.Widget]":
+    def _build_field_row(
+        self, field, role, output_kind: "str | None" = None,
+    ) -> "tuple[Gtk.Widget, Gtk.Widget]":
         """One label + editable widget row for a single ParamField.
 
         *role* is the `field_roles.FieldRole` `_build_step_card` already
@@ -2067,6 +2092,11 @@ class RemixView(Gtk.Box):
         marker (`field_roles.MARKER_TIP`), so every field visibly declares
         how its value is used (creative words / model-interpreted / exact
         setting) without changing the field's editable widget at all.
+
+        *output_kind* is the owning node's `Intent.output_kind` — only used
+        to resolve which ✨ Inspire "source" (`_prompt_type_for_output`) to
+        request if this field gets a ✨ button at all (see below); it plays
+        no other role in this method.
 
         Returns (row, widget) — the caller keeps the widget reference (keyed
         by node_id/key) so Run-time diffing can read its current value; the
@@ -2084,6 +2114,32 @@ class RemixView(Gtk.Box):
         widget = self._build_field_widget(field)
         widget.set_hexpand(True)
         row.append(widget)
+
+        # ✨ Inspire (regression fix 2/2, pipeline-editor adoption): the same
+        # eligibility test `ModifierPills` uses in `_build_step_card` (a
+        # BRIEF-role TEXT field, excluding negative/avoid fields — see
+        # `_NEGATIVE_FIELD_KEYS`) MINUS the "has a chip bank" requirement —
+        # Inspire generates a whole prompt from scratch or remixes the
+        # typed one, which is useful on a text-output node (no chip bank)
+        # just as much as an image/video one. Appended INSIDE `row` (next to
+        # the entry, same placement `create_param_panels.attach_inspire_button`
+        # itself uses for Create's idea-door entry) so it's part of this
+        # field's own row, not a card-wide control. `self._inspire_fn is None`
+        # (the default — every pre-existing test constructs RemixView this
+        # way) means no button is ever attached, matching Create's own
+        # migration-safe contract.
+        if (
+            self._inspire_fn is not None
+            and role.role == ROLE_BRIEF
+            and field.kind == "text"
+            and field.key not in _NEGATIVE_FIELD_KEYS
+        ):
+            prompt_type = self._prompt_type_for_output(output_kind)
+            inspire_btn = attach_inspire_button(
+                widget, lambda pt=prompt_type: pt, self._inspire_fn,
+            )
+            row.append(inspire_btn)
+
         return row, widget
 
     def _node_field_order(self, node_id: str) -> "list[str]":
@@ -2796,11 +2852,19 @@ class PipelineStudio(Gtk.Box):
     threading rule this follows.
     """
 
-    def __init__(self, on_open_run: "Optional[Callable[[str], None]]" = None) -> None:
+    def __init__(
+        self,
+        on_open_run: "Optional[Callable[[str], None]]" = None,
+        inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
+    ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-studio")
         _apply_css()
         self._on_open_run_cb = on_open_run
+        # ✨ Inspire (regression fix 2/2) — threaded straight through to
+        # RemixView, the only page here with editable prompt fields. See
+        # RemixView's own docstring/`__init__` for the seam contract.
+        self._inspire_fn = inspire_fn
 
         # The run currently shown on the Open page — the source for
         # "Remix ..." (either button on OpenView). None until the first
@@ -2880,7 +2944,7 @@ class PipelineStudio(Gtk.Box):
         remix_back_bar.append(remix_back_btn)
         remix_page.append(remix_back_bar)
 
-        self.remix_view = RemixView()
+        self.remix_view = RemixView(inspire_fn=self._inspire_fn)
         self.remix_view.connect("run-remix", self._on_run_remix)
         self.remix_view.set_vexpand(True)
         remix_page.append(self.remix_view)
