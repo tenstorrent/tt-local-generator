@@ -199,3 +199,261 @@ def test_animated_gif_widget_advances_frames(tmp_path):
     finally:
         widget._on_unrealize(widget)
         assert widget._timer_id is None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# "unify gallery interaction" Task 5 — shared ext -> renderer dispatch
+# ═════════════════════════════════════════════════════════════════════════
+#
+# resolve_render_kind / build_reading_html are pure. render_artifact_widget
+# builds real GTK widgets, so those tests self-skip without a display (same
+# pattern as the AnimatedGifWidget test above).
+
+def _display_available() -> bool:
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        Gtk.Entry()  # probe: raises without a usable display
+        return True
+    except Exception:
+        return False
+
+
+display_required = pytest.mark.skipif(
+    not _display_available(), reason="no GTK4 display available"
+)
+
+
+class _Rec:
+    """Minimal duck-typed MediaRecord stand-in — render_artifact_widget only
+    reads .file_path / .generator_type / .params_dict."""
+
+    def __init__(self, file_path, generator_type="", params=None, prompt=""):
+        self.file_path = file_path
+        self.generator_type = generator_type
+        self.params = params or {}
+        self.prompt = prompt
+
+    @property
+    def params_dict(self):
+        return self.params
+
+
+# ── resolve_render_kind: pure ext -> kind mapping ─────────────────────────────
+
+def test_resolve_render_kind_maps_every_known_ext():
+    from artgen_render import resolve_render_kind
+
+    assert resolve_render_kind(".gif") == "gif"
+    assert resolve_render_kind(".svg") == "svg"
+    assert resolve_render_kind(".ans") == "ansi"
+    assert resolve_render_kind(".json") == "json"
+    assert resolve_render_kind(".py") == "code"
+
+
+def test_resolve_render_kind_defaults_to_text():
+    from artgen_render import resolve_render_kind
+
+    assert resolve_render_kind(".txt") == "text"
+    assert resolve_render_kind(".md") == "text"
+    assert resolve_render_kind("") == "text"
+    assert resolve_render_kind(".weird") == "text"
+
+
+# ── build_reading_html: shared html-builder dispatch ──────────────────────────
+
+def test_build_reading_html_ansi_matches_ansi_to_html():
+    from artgen_render import build_reading_html, ansi_to_html
+
+    raw = "\x1b[38;5;196m█\x1b[38;5;46m█"
+    assert build_reading_html("ansi", raw) == ansi_to_html(raw)
+
+
+def test_build_reading_html_json_with_colors_matches_palette_to_html():
+    import json as _json
+    from artgen_render import build_reading_html, palette_to_html
+
+    data = {"name": "P", "colors": [{"hex": "#111111", "role": "bg"}]}
+    raw = _json.dumps(data)
+    assert build_reading_html("json", raw) == palette_to_html(data)
+
+
+def test_build_reading_html_json_without_colors_falls_back_to_markdown():
+    import json as _json
+    from artgen_render import build_reading_html, md_to_html, derive_title
+
+    raw = _json.dumps({"foo": "bar"})
+    title = derive_title("freeform", {"freeform": raw})
+    html = build_reading_html("json", raw, gen_type="freeform", params={"freeform": raw})
+    assert html == md_to_html(raw, title=title)
+    assert 'class="swatch' not in html
+
+
+def test_build_reading_html_json_invalid_falls_back_to_markdown():
+    from artgen_render import build_reading_html
+
+    html = build_reading_html("json", "not valid json{{{")
+    assert "not valid json" in html
+    assert 'class="swatch' not in html
+
+
+def test_build_reading_html_code_matches_code_to_html():
+    from artgen_render import build_reading_html, code_to_html, derive_title
+
+    code = "def f():\n    return 1\n"
+    title = derive_title("codeart", {})
+    assert build_reading_html("code", code, gen_type="codeart") == code_to_html(code, title=title)
+    # indentation must survive -- this is the whole point of the code branch
+    assert "    return 1" in build_reading_html("code", code, gen_type="codeart")
+
+
+def test_build_reading_html_text_applies_verse_mode_from_gen_type():
+    from artgen_render import build_reading_html, md_to_html, derive_title
+
+    text = "line one\nline two"
+    title = derive_title("verse", {})
+    html = build_reading_html("text", text, gen_type="verse")
+    assert html == md_to_html(text, title=title, verse_mode=True)
+    assert "text-align: center" in html  # verse CSS layered in
+
+
+def test_build_reading_html_text_no_verse_mode_for_other_gen_types():
+    from artgen_render import build_reading_html
+
+    html = build_reading_html("text", "plain prose", gen_type="freeform")
+    assert "text-align: center" not in html
+
+
+# ── build_reading_webview: realize-deferral + WebKit-unavailable fallback ────
+
+@display_required
+def test_build_reading_webview_returns_webview_or_textview_fallback():
+    from artgen_render import build_reading_webview, _WEBKIT_OK
+
+    widget = build_reading_webview("<html><body><p>hello</p></body></html>")
+    if _WEBKIT_OK:
+        import gi
+        gi.require_version("WebKit", "6.0")
+        from gi.repository import WebKit
+        assert isinstance(widget, WebKit.WebView)
+    else:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        assert isinstance(widget, Gtk.TextView)
+        buf = widget.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+        assert "hello" in text
+
+
+# ── render_artifact_widget: the full ext -> widget dispatch ───────────────────
+
+@display_required
+def test_render_artifact_widget_gif_returns_animated_gif_widget(tmp_path):
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("PIL not available")
+
+    from artgen_render import render_artifact_widget, AnimatedGifWidget
+
+    gif_path = tmp_path / "a.gif"
+    frame1 = Image.new("RGB", (4, 4), (255, 0, 0))
+    frame2 = Image.new("RGB", (4, 4), (0, 255, 0))
+    frame1.save(gif_path, save_all=True, append_images=[frame2], duration=50, loop=0)
+
+    widget = render_artifact_widget(_Rec(str(gif_path)))
+    try:
+        assert isinstance(widget, AnimatedGifWidget)
+    finally:
+        widget._on_unrealize(widget)
+
+
+@display_required
+def test_render_artifact_widget_svg_returns_gtk_picture(tmp_path):
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    from artgen_render import render_artifact_widget
+
+    svg_path = tmp_path / "a.svg"
+    svg_path.write_text("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'></svg>")
+
+    widget = render_artifact_widget(_Rec(str(svg_path)))
+    assert isinstance(widget, Gtk.Picture)
+    assert widget.get_content_fit() == Gtk.ContentFit.CONTAIN
+
+
+def _assert_webview_or_fallback(widget):
+    from artgen_render import _WEBKIT_OK
+    import gi
+    if _WEBKIT_OK:
+        gi.require_version("WebKit", "6.0")
+        from gi.repository import WebKit
+        assert isinstance(widget, WebKit.WebView)
+    else:
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        assert isinstance(widget, Gtk.TextView)
+
+
+@display_required
+def test_render_artifact_widget_ansi_returns_webview_or_fallback(tmp_path):
+    from artgen_render import render_artifact_widget
+
+    ans_path = tmp_path / "a.ans"
+    ans_path.write_text("\x1b[38;5;196m█\x1b[38;5;46m█\n")
+
+    widget = render_artifact_widget(_Rec(str(ans_path), generator_type="ansi"))
+    _assert_webview_or_fallback(widget)
+
+
+@display_required
+def test_render_artifact_widget_json_palette_returns_webview_or_fallback(tmp_path):
+    import json as _json
+    from artgen_render import render_artifact_widget
+
+    json_path = tmp_path / "p.json"
+    json_path.write_text(_json.dumps({
+        "name": "Test",
+        "colors": [{"hex": "#abcdef", "role": "bg"}],
+    }))
+
+    widget = render_artifact_widget(_Rec(str(json_path), generator_type="palette"))
+    _assert_webview_or_fallback(widget)
+
+
+@display_required
+def test_render_artifact_widget_txt_returns_webview_or_fallback(tmp_path):
+    from artgen_render import render_artifact_widget
+
+    txt_path = tmp_path / "verse.txt"
+    txt_path.write_text("a lonely line\nof verse")
+
+    widget = render_artifact_widget(_Rec(str(txt_path), generator_type="verse"))
+    _assert_webview_or_fallback(widget)
+
+
+@display_required
+def test_render_artifact_widget_py_returns_webview_or_fallback(tmp_path):
+    from artgen_render import render_artifact_widget
+
+    py_path = tmp_path / "art.py"
+    py_path.write_text("def f():\n    return 1\n")
+
+    widget = render_artifact_widget(_Rec(str(py_path), generator_type="codeart"))
+    _assert_webview_or_fallback(widget)
+
+
+@display_required
+def test_render_artifact_widget_missing_file_degrades_gracefully(tmp_path):
+    """A record pointing at a nonexistent path must never raise -- it falls
+    through to the text/reading branch with empty content."""
+    from artgen_render import render_artifact_widget
+
+    missing = tmp_path / "gone.txt"  # never written
+    widget = render_artifact_widget(_Rec(str(missing), generator_type="freeform"))
+    _assert_webview_or_fallback(widget)

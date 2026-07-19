@@ -14,7 +14,6 @@ Callbacks:
 """
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
@@ -35,12 +34,21 @@ from media_store import media_store as _ms, MediaRecord
 # them directly from artgen_render, so no back-compat re-export is needed
 # for external callers -- these aliases exist purely to keep this file's own
 # call sites (_render(), below) unchanged.
+#
+# "unify gallery interaction" Task 5 (v0.49.0): the ext -> builder DECISION
+# itself (which used to be an inline if/elif chain in `_render` against
+# `.gif`/`.svg`/`.ans`/`.json`) is now `artgen_render.resolve_render_kind` +
+# `.build_reading_html`, shared with the new `ArtgenViewerWindow`
+# (app/artgen_viewer.py) so the two can never drift apart the way
+# artgen_detail/artgen_watch/artgen_gallery drifted before Task 1.
+# `ansi_to_html`/`palette_to_html`/`md_to_html`/`derive_title` are no longer
+# imported directly here -- `build_reading_html` calls all four internally --
+# so their old `_ansi_to_html`/`_palette_to_html`/`_md_to_html`/`_derive_title`
+# aliases are removed too (nothing in this file called them outside `_render`).
 from artgen_render import (
-    ansi_to_html as _ansi_to_html,
-    palette_to_html as _palette_to_html,
-    md_to_html as _md_to_html,
-    derive_title as _derive_title,
     drive_gif_animation as _drive_gif_animation,
+    resolve_render_kind as _resolve_render_kind,
+    build_reading_html as _build_reading_html,
 )
 
 
@@ -320,36 +328,27 @@ class ArtgenDetail(Gtk.Box):
         self._star_btn.set_label("★  Starred" if rec.starred else "☆  Star")
         self._star_btn.handler_unblock_by_func(self._on_star_toggled)
 
-        # Artifact
+        # Artifact — ext -> kind decision is the shared
+        # `artgen_render.resolve_render_kind`/`build_reading_html` dispatch
+        # (see the import block above); this file keeps only the WIDGET
+        # plumbing (which persistent `_art_stack` child to show / how to
+        # drive the reused `_gif_pic`/`_webview`) since that reuse-across-
+        # records behavior isn't shared with the fresh-widget-per-record
+        # `ArtgenViewerWindow`.
         fp = Path(rec.file_path)
         ext = fp.suffix.lower()
-        raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
-
         gen_type = rec.generator_type or ""
-        doc_title = _derive_title(gen_type, p)
-        verse_mode = gen_type == "verse"
+        kind = _resolve_render_kind(ext)
 
-        if ext == ".gif" and fp.exists():
+        if kind == "gif" and fp.exists():
             self._animate_gif(self._gif_pic, str(fp))
             self._art_stack.set_visible_child_name("gif")
-        elif ext == ".svg" and fp.exists():
+        elif kind == "svg" and fp.exists():
             self._svg_pic.set_file(Gio.File.new_for_path(str(fp)))
             self._art_stack.set_visible_child_name("svg")
-        elif ext == ".ans":
-            self._webview.load_html(_ansi_to_html(raw), "about:blank")
-            self._art_stack.set_visible_child_name("reading")
-        elif ext == ".json":
-            # Palette JSON — render color swatches
-            try:
-                data = json.loads(raw)
-                html = _palette_to_html(data) if "colors" in data else _md_to_html(raw, title=doc_title)
-            except Exception:
-                html = _md_to_html(raw, title=doc_title)
-            self._load_html(html)
-            self._art_stack.set_visible_child_name("reading")
         else:
-            # verse .txt, freeform — render as markdown reading view
-            html = _md_to_html(raw, title=doc_title, verse_mode=verse_mode)
+            raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
+            html = _build_reading_html(kind, raw, gen_type=gen_type, params=p)
             self._load_html(html)
             self._art_stack.set_visible_child_name("reading")
 

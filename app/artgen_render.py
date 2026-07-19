@@ -32,6 +32,26 @@ implementation detail of one view):
     code_to_html(raw, title="") -> str
     parse_ansi_grid(raw) -> list[list[(char, fg_hex_or_None, bg_hex_or_None)]]
     class AnimatedGifWidget(Gtk.Picture)
+    resolve_render_kind(ext) -> str
+    build_reading_html(kind, raw, gen_type="", params=None) -> str
+    build_reading_webview(html) -> Gtk.Widget
+    render_artifact_widget(record) -> Gtk.Widget
+
+`resolve_render_kind` / `build_reading_html` / `build_reading_webview` /
+`render_artifact_widget` (v0.49.0, "unify gallery interaction" Task 5) are the
+shared ext -> renderer DISPATCH extracted out of `ArtgenDetail._render` so a
+net-new `ArtgenViewerWindow` (app/artgen_viewer.py) can reproduce it exactly
+without a second hand-maintained copy of the ext->builder mapping.
+`ArtgenDetail` keeps its own persistent `_art_stack`/`_gif_pic`/`_webview`
+widgets (needed for cheap prev/next navigation) but now calls
+`resolve_render_kind`/`build_reading_html` instead of an inline if/elif chain
+that duplicated the decision. `render_artifact_widget` is the convenience
+entry point for callers (like the viewer window) that just want a fresh,
+disposable widget for one record and don't need to reuse widgets across a
+list. NOTE: this is deliberately NOT unified with create_view.py's own
+`_artifact_kind`/`_build_reading_webview` (which also considers
+generator_type/media_type and image/video/unknown, a broader vocabulary) --
+that's a known follow-up, out of scope for this task.
 
 `parse_ansi_grid` return shape
 -------------------------------
@@ -53,14 +73,27 @@ this module presuming how the pixel will ultimately be painted.
 from __future__ import annotations
 
 import html as _html_mod
+import json
 import re
+from pathlib import Path
 from typing import Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
+from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk
+
+# WebKit is optional at import time -- some environments (headless CI without
+# the webkit2gtk-6.0 typelib) can't load it. `build_reading_webview` degrades
+# to a plain Gtk.TextView in that case, mirroring artgen_watch's `_WEBKIT_OK`
+# fallback pattern so this module never hard-fails on a missing optional dep.
+try:
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import WebKit as _WebKit
+    _WEBKIT_OK = True
+except Exception:  # pragma: no cover - environment-dependent
+    _WEBKIT_OK = False
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -601,3 +634,174 @@ class AnimatedGifWidget(Gtk.Picture):
             GLib.source_remove(self._timer_id)
             self._timer_id = None
         self._iter = None
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Shared ext -> renderer dispatch ("unify gallery interaction" Task 5)
+# ═════════════════════════════════════════════════════════════════════════
+#
+# `ArtgenDetail._render` used to hardcode this ext -> builder mapping as an
+# inline if/elif chain against its own persistent `_art_stack` widgets. A
+# net-new `ArtgenViewerWindow` (app/artgen_viewer.py) needs the identical
+# DECISION for a fresh, disposable widget per record. Extracting the
+# decision here (rather than copy-pasting the if/elif chain a second time)
+# is the whole point -- see the module docstring's "Task 5" note.
+
+_KIND_GIF = "gif"
+_KIND_SVG = "svg"
+_KIND_ANSI = "ansi"
+_KIND_JSON = "json"    # palette-or-markdown; decided from *content*, not ext
+_KIND_CODE = "code"
+_KIND_TEXT = "text"
+
+
+def resolve_render_kind(ext: str) -> str:
+    """Classify a lowercased file extension into a rendering kind.
+
+    Returns one of "gif" | "svg" | "ansi" | "json" | "code" | "text".
+    Mirrors `ArtgenDetail._render`'s original ext dispatch exactly for
+    .gif/.svg/.ans/.json, and adds ".py" -> "code" (codeart artifacts used to
+    silently fall into the "text"/markdown branch, which mangles Python's
+    significant whitespace via `md_to_html`'s dedent+`nl2br` pipeline --
+    `create_view.py`'s own inline result panel already special-cased this via
+    `code_to_html`; unifying the dispatch here fixes the same gap for
+    ArtgenDetail and the new viewer for free). Anything else (.txt/.md/
+    verse/freeform/unknown) is "text".
+
+    "json" is deliberately not further split into palette-vs-markdown here
+    -- that decision needs the *parsed* content (does it have a "colors"
+    key?), not just the extension. See `build_reading_html`.
+    """
+    if ext == ".gif":
+        return _KIND_GIF
+    if ext == ".svg":
+        return _KIND_SVG
+    if ext == ".ans":
+        return _KIND_ANSI
+    if ext == ".json":
+        return _KIND_JSON
+    if ext == ".py":
+        return _KIND_CODE
+    return _KIND_TEXT
+
+
+def build_reading_html(
+    kind: str, raw: str, *, gen_type: str = "", params: "Optional[dict]" = None
+) -> str:
+    """Build the HTML document for any of the "reading-view" kinds
+    ("ansi" | "json" | "code" | "text") -- the single builder dispatch shared
+    by `ArtgenDetail._render` and `render_artifact_widget`/`ArtgenViewerWindow`
+    so a WebView's content can never diverge between the persistent detail
+    pane and the standalone viewer window.
+
+    `gen_type`/`params` feed `derive_title`/verse-mode detection exactly like
+    `ArtgenDetail._render`'s own `doc_title`/`verse_mode` locals did before
+    this extraction.
+    """
+    params = params or {}
+    doc_title = derive_title(gen_type, params)
+
+    if kind == _KIND_ANSI:
+        return ansi_to_html(raw)
+
+    if kind == _KIND_JSON:
+        try:
+            data = json.loads(raw)
+            return (
+                palette_to_html(data)
+                if isinstance(data, dict) and "colors" in data
+                else md_to_html(raw, title=doc_title)
+            )
+        except Exception:
+            return md_to_html(raw, title=doc_title)
+
+    if kind == _KIND_CODE:
+        return code_to_html(raw, title=doc_title)
+
+    # "text" (and any unrecognised kind, defensively) -- verse gets the
+    # centered-poem CSS layered on via verse_mode.
+    return md_to_html(raw, title=doc_title, verse_mode=(gen_type == "verse"))
+
+
+def build_reading_webview(html: str) -> Gtk.Widget:
+    """Build a FRESH, one-shot WebView pre-loaded with `html`, or a plain-text
+    `Gtk.TextView` fallback if WebKit isn't importable (matching
+    `artgen_watch`'s `_WEBKIT_OK` degrade pattern).
+
+    Uses the realize-deferral pattern documented on
+    `ArtgenDetail._load_html`/`_on_webview_realize`: `WebKit.WebView.
+    load_html()` called before the widget is realized is a silent no-op that
+    leaves the view permanently blank. Since this widget is freshly built and
+    1:1 with its content (unlike `ArtgenDetail`'s single persistent
+    `_webview`, reused across every record it ever shows), the pending HTML
+    can just live in this closure instead of needing an instance attribute
+    like `ArtgenDetail._pending_html` -- there is no "later render() call"
+    that could need to replace in-flight pending content for a one-shot
+    widget.
+    """
+    if not _WEBKIT_OK:  # pragma: no cover - environment-dependent
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_monospace(True)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.set_hexpand(True)
+        tv.set_vexpand(True)
+        # Best-effort plain-text degrade: strip tags rather than showing raw
+        # HTML soup.
+        tv.get_buffer().set_text(re.sub(r"<[^>]+>", " ", html))
+        return tv
+
+    webview = _WebKit.WebView()
+    try:
+        webview.get_settings().set_enable_javascript(False)
+    except Exception:
+        pass  # never let a settings lookup failure block rendering
+    webview.set_hexpand(True)
+    webview.set_vexpand(True)
+
+    if webview.get_realized():
+        webview.load_html(html, "about:blank")
+    else:
+        def _on_realize(widget, _html=html) -> None:
+            widget.load_html(_html, "about:blank")
+
+        webview.connect("realize", _on_realize)
+
+    return webview
+
+
+def render_artifact_widget(record) -> Gtk.Widget:
+    """Build a fresh, display-ready `Gtk.Widget` for `record`'s primary
+    artifact -- the single entry point `ArtgenViewerWindow` uses.
+
+    `record` is any MediaRecord-like object exposing `.file_path`,
+    `.generator_type` (optional), and `.params_dict` (optional dict-like) --
+    duck-typed so a plain namespace/mock works fine in tests, not just a
+    real `media_store.MediaRecord`.
+
+    `ArtgenDetail` cannot call this directly -- it reuses one persistent
+    `Gtk.Stack` of widgets across records for cheap prev/next navigation --
+    but shares the same `resolve_render_kind`/`build_reading_html` decision
+    logic, so the two can never disagree about what a given file renders as.
+    """
+    fp = Path(record.file_path)
+    ext = fp.suffix.lower()
+    kind = resolve_render_kind(ext)
+    exists = fp.exists()
+    gen_type = getattr(record, "generator_type", "") or ""
+    params = getattr(record, "params_dict", None) or {}
+
+    if kind == _KIND_GIF and exists:
+        return AnimatedGifWidget(str(fp))
+
+    if kind == _KIND_SVG and exists:
+        pic = Gtk.Picture()
+        pic.set_hexpand(True)
+        pic.set_vexpand(True)
+        pic.set_content_fit(Gtk.ContentFit.CONTAIN)
+        pic.set_file(Gio.File.new_for_path(str(fp)))
+        return pic
+
+    raw = fp.read_text(encoding="utf-8", errors="replace") if exists else ""
+    html = build_reading_html(kind, raw, gen_type=gen_type, params=params)
+    return build_reading_webview(html)
