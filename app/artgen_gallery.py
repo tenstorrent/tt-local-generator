@@ -21,7 +21,6 @@ from gi.repository import GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
-from artgen_detail import ArtgenDetail
 from artgen_render import AnimatedGifWidget as _AnimatedGifWidget
 from artgen_render import parse_ansi_grid
 
@@ -376,9 +375,12 @@ class ArtgenGallery(Gtk.Box):
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        # Grid page: filter bar + separator + card grid, exactly as before --
-        # just parented into a page Box instead of directly into `self`, so
-        # it can sit alongside the detail page inside self._stack.
+        # Grid page: filter bar + separator + card grid. Unify-gallery-
+        # interaction-pattern Task 3 removed the in-page ArtgenDetail overlay
+        # that used to live alongside this -- see the removed Overlay/_show_
+        # detail machinery this replaced (git history / CLAUDE.md) and
+        # main_window.py's shared `_right_stack`, which now hosts ArtgenDetail
+        # as a SIBLING subtree instead of stacking it over this grid.
         grid_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
         # Filter bar
@@ -427,53 +429,7 @@ class ArtgenGallery(Gtk.Box):
         self._scroll = scroll
         grid_page.append(scroll)
 
-        # Detail page: the rich single-artifact viewer (SVG/ANSI/palette/
-        # markdown-aware) that used to live inside the deleted ArtgenPanel.
-        # Un-orphaning artgen_detail.ArtgenDetail is the whole point of this
-        # fix -- see CLAUDE.md's SP-3d-5 section.
-        self._detail = ArtgenDetail()
-        self._detail.set_back_label("← Gallery")
-        self._detail.on_back = self._on_detail_back
-        self._detail.on_deleted = self._on_detail_deleted
-        self._detail.on_starred = self._on_detail_starred
-        self._detail.on_remix = self._on_detail_remix
-        self._detail.on_remix_as_pipeline = self._on_detail_remix_as_pipeline
-
-        # CRASH FIX (v0.48.3): use a Gtk.Overlay, NOT a Gtk.Stack, to host the
-        # grid + detail. A Gtk.Stack UNMAPS its hidden child on switch; unmapping
-        # the grid page while its just-clicked FlowBoxChild is still the focused
-        # child of a ScrolledWindow makes GTK run a scroll-to-focus geometry pass
-        # (`gtk_widget_compute_point`) on a widget whose ancestor chain is being
-        # torn down -> NULL widget -> SEGFAULT (confirmed via faulthandler:
-        # crash at `set_visible_child_name`, opening an AnimateDiff GIF from
-        # Discover). The native GalleryWidget never crashes because it never
-        # unmaps the grid. So: the grid is the always-mapped Overlay main child;
-        # the detail is an overlay child shown ON TOP. Switching to detail sets
-        # the grid's opacity to 0 (invisible but still MAPPED -> no teardown, no
-        # compute_point crash, and nothing bleeds through the detail) and reveals
-        # the detail; going back reverses it.
-        self._grid_page = grid_page
-        self._detail.set_visible(False)
-        self._detail.set_hexpand(True)
-        self._detail.set_vexpand(True)
-        self._detail_overlay = Gtk.Overlay()
-        self._detail_overlay.set_vexpand(True)
-        self._detail_overlay.set_child(grid_page)
-        self._detail_overlay.add_overlay(self._detail)
-        self.append(self._detail_overlay)
-
-    def _show_detail(self, shown: bool) -> None:
-        """Show/hide the in-page detail overlay WITHOUT unmapping the grid.
-
-        `test seam + single source of truth` for the grid<->detail toggle: the
-        grid stays mapped at all times (opacity 0 when the detail is up) so GTK
-        never runs geometry on a torn-down grid child -- see the Overlay comment
-        in `_build` for the segfault this avoids."""
-        self._detail.set_visible(shown)
-        self._grid_page.set_opacity(0.0 if shown else 1.0)
-
-    def _detail_shown(self) -> bool:
-        return self._detail.get_visible()
+        self.append(grid_page)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -528,6 +484,19 @@ class ArtgenGallery(Gtk.Box):
         self._records.insert(0, record)
         card = self._make_card(record)
         self._flow.prepend(card)
+
+    def remove_record(self, media_id: str) -> None:
+        """Remove one record from the in-memory list and rebuild grid+chips.
+
+        Mirrors `prepend_record`'s public, incremental-update style. Used by
+        the grid's own hover-delete flow (`_make_card`'s `_delete_confirmed`)
+        AND by `MainWindow` (unify-gallery-interaction-pattern Task 3) to
+        sync the grid after the shared right-pane `ArtgenDetail`'s OWN 🗑
+        deletes a record this grid doesn't otherwise know about.
+        """
+        self._records = [r for r in self._records if r.id != media_id]
+        self._rebuild_grid()
+        self._rebuild_chips()
 
     # ── Chips ─────────────────────────────────────────────────────────────────
 
@@ -672,9 +641,7 @@ class ArtgenGallery(Gtk.Box):
             if btn_idx != 1:
                 return
             _ms.delete(media_id)
-            self._records = [r for r in self._records if r.id != media_id]
-            self._rebuild_grid()
-            self._rebuild_chips()
+            self.remove_record(media_id)
             if self.on_card_deleted:
                 self.on_card_deleted(media_id)
 
@@ -778,67 +745,23 @@ class ArtgenGallery(Gtk.Box):
     # ── Signal handlers ───────────────────────────────────────────────────────
 
     def _on_card_activated(self, _flow, child) -> None:
+        """Resolve the clicked card's media_id and forward it to whoever is
+        wired to on_card_activated.
+
+        Unify-gallery-interaction-pattern Task 3: this gallery no longer owns
+        an in-page detail view (the crash-workaround Overlay + ArtgenDetail
+        instance removed above) -- selection now routes into MainWindow's
+        shared right-pane `ArtgenDetail` (`self._right_stack` in
+        main_window.py) via this callback, the same additive-hook contract
+        the native GalleryWidgets use for their own select_cb.
+        """
         box = child.get_child()
         if not box or not hasattr(box, "_media_id"):
             return
         media_id = box._media_id
-
-        # DEFAULT behavior: open the in-page ArtgenDetail preview (this is
-        # what ArtgenPanel used to do before it was deleted in SP-3d-5, and
-        # is the whole point of this fix -- see CLAUDE.md). This is additive:
-        # any externally-wired on_card_activated below still fires too.
-        #
-        # Safe to run synchronously here (v0.48.3): `_show_detail` reveals an
-        # Overlay child and only DIMS the grid (opacity 0) instead of unmapping
-        # it, so the just-activated FlowBoxChild stays live in a mapped tree --
-        # no `gtk_widget_compute_point` on a torn-down widget, no segfault (see
-        # the Overlay comment in `_build`). The earlier v0.48.2 idle-deferral
-        # was insufficient because the crash was the UNMAP itself, whenever it
-        # ran -- not the timing of the switch.
-        self._detail.show_record(media_id, self._filtered_records())
-        self._show_detail(True)
         if self.on_card_activated:
             self.on_card_activated(media_id)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:
             self.on_watch_requested(self._active_filter)
-
-    # ── ArtgenDetail callback wiring ──────────────────────────────────────────
-    # These mirror the card hover-action behavior above (_on_star/_on_delete
-    # in _make_card) so starring/deleting from inside the detail view keeps
-    # the grid page's in-memory records/chips in sync.
-
-    def _on_detail_back(self) -> None:
-        self._show_detail(False)
-
-    def _on_detail_deleted(self, media_id: str) -> None:
-        # ArtgenDetail already called _ms.delete(media_id) itself before
-        # invoking this callback (see ArtgenDetail._delete_confirmed) --
-        # calling it again is a harmless no-op (MediaStore.delete just
-        # returns False for an already-gone row). Re-issuing it here keeps
-        # this handler correct standing alone, matching the card's own
-        # hover-delete path (_on_delete/_delete_confirmed above).
-        _ms.delete(media_id)
-        self._records = [r for r in self._records if r.id != media_id]
-        self._rebuild_grid()
-        self._rebuild_chips()
-        if self.on_card_deleted:
-            self.on_card_deleted(media_id)
-        self._show_detail(False)
-
-    def _on_detail_starred(self, media_id: str, starred: bool) -> None:
-        _ms.star(media_id, starred)
-        for r in self._records:
-            if r.id == media_id:
-                r.starred = int(starred)
-                break
-        self._rebuild_chips()
-
-    def _on_detail_remix(self, rec: MediaRecord) -> None:
-        if self.on_remix:
-            self.on_remix(rec)
-
-    def _on_detail_remix_as_pipeline(self, rec: MediaRecord) -> None:
-        if self.on_remix_as_pipeline:
-            self.on_remix_as_pipeline(rec)

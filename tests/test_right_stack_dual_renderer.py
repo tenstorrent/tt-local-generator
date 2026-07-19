@@ -84,14 +84,14 @@ def test_artgen_detail_remix_callbacks_wired():
     )
 
 
-def test_artgen_detail_gallery_dependent_callbacks_not_yet_wired():
-    """`on_back`/`on_deleted`/`on_starred` need `self._artgen_gallery`, which
-    isn't constructed yet at this point in `__init__` -- Task 3 wires those
-    once it rewires the artgen gallery<->detail flow. Deliberately NOT
-    wired by this task."""
-    assert "self._artgen_detail.on_back = " not in _SRC
-    assert "self._artgen_detail.on_deleted = " not in _SRC
-    assert "self._artgen_detail.on_starred = " not in _SRC
+def test_artgen_detail_gallery_dependent_callbacks_now_wired():
+    """Unify-gallery-interaction-pattern Task 3 finishes the wiring Task 2
+    deferred -- `on_back`/`on_deleted`/`on_starred` now route into the
+    shared right pane / ArtgenGallery sync handlers (see
+    test_artgen_detail_shared_pane_wiring.py for the behavioral coverage)."""
+    assert "self._artgen_detail.on_back = " in _SRC
+    assert "self._artgen_detail.on_deleted = self._on_artgen_detail_deleted" in _SRC
+    assert "self._artgen_detail.on_starred = self._on_artgen_detail_starred" in _SRC
 
 
 # ── Behavioral: a real Gtk.Stack really holds both real widgets ────────────

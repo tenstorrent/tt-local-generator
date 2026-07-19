@@ -246,6 +246,25 @@ class ArtgenDetail(Gtk.Box):
         self._idx = next((i for i, r in enumerate(records) if r.id == media_id), 0)
         self._render()
 
+    def pause_animation(self) -> None:
+        """Cancel any running GIF animation timer.
+
+        Unify-gallery-interaction-pattern Task 3: `self` now lives as one of
+        two children inside MainWindow's shared `_right_stack` (a Gtk.Stack).
+        A Gtk.Stack keeps its hidden child realized (unlike the removed
+        artgen-gallery Overlay this replaced), so a GIF-driving GLib timer
+        started while this pane was visible would otherwise keep firing
+        forever after the stack switches to the "native" `DetailPanel` child
+        -- harmless (nothing is drawn) but a wasted, indefinitely-repeating
+        timer. Callers switch the stack away from "artgen" and call this in
+        the same breath (see `MainWindow._on_card_selected`). Same guard
+        `_render` uses at its own top, exposed as a public no-arg method so
+        it can be called from outside without touching `_render`'s internals.
+        """
+        if self._gif_timer_id is not None:
+            GLib.source_remove(self._gif_timer_id)
+            self._gif_timer_id = None
+
     # ── Navigation ────────────────────────────────────────────────────────────
 
     def _step(self, delta: int) -> None:

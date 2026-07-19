@@ -5434,6 +5434,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self._artgen_gallery = ArtgenGallery()
         self._artgen_gallery.on_remix = self._on_remix_card
         self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline
+        # Unify-gallery-interaction-pattern Task 3: card selection routes into
+        # the shared right-pane `ArtgenDetail` (self._artgen_detail, built
+        # below) via self._right_stack -- see _on_artgen_card_selected /
+        # _on_artgen_card_deleted. This replaces the in-page overlay preview
+        # ArtgenGallery used to own itself (a crash workaround; see CLAUDE.md
+        # and the removed Overlay comment this superseded).
+        self._artgen_gallery.on_card_activated = self._on_artgen_card_selected
+        self._artgen_gallery.on_card_deleted = self._on_artgen_card_deleted
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
@@ -5590,18 +5598,27 @@ class MainWindow(Gtk.ApplicationWindow):
         )
 
         # Unify-gallery-interaction-pattern Task 2: the right-hand detail pane
-        # is now a dual-renderer container -- a Gtk.Stack holding both
+        # is a dual-renderer container -- a Gtk.Stack holding both
         # `DetailPanel` (native video/image/animate records, unchanged above)
-        # and `ArtgenDetail` (artgen records). This task only builds+wires
-        # the container; nothing drives it from artgen clicks yet (that's
-        # Task 3) -- `set_visible_child_name("native")` below keeps native
-        # behavior a no-op. `on_back`/`on_deleted`/`on_starred` are left
-        # unwired here since they need `self._artgen_gallery`, which doesn't
-        # exist yet at this point in `__init__` -- Task 3 wires those once it
-        # rewires the artgen gallery<->detail flow.
+        # and `ArtgenDetail` (artgen records).
+        #
+        # Task 3 finishes the wiring Task 2 deferred (it needed
+        # self._artgen_gallery, constructed earlier in __init__, above): the
+        # artgen gallery's own in-page detail overlay -- a crash workaround,
+        # see CLAUDE.md's "unify gallery interaction pattern" notes -- is
+        # gone; card selection/deletion now route through this shared
+        # ArtgenDetail via _on_artgen_card_selected/_on_artgen_card_deleted/
+        # _on_artgen_detail_deleted/_on_artgen_detail_starred below. This is
+        # safe because self._right_stack is a SIBLING subtree of the gallery
+        # grid (both live under inner_paned, not one inside the other) --
+        # switching it never unmaps the FlowBox/grid, so it cannot reproduce
+        # the segfault the removed Overlay was a workaround for.
         self._artgen_detail = ArtgenDetail()
         self._artgen_detail.on_remix = self._on_remix_card
         self._artgen_detail.on_remix_as_pipeline = self._remix_as_pipeline
+        self._artgen_detail.on_back = lambda: self._set_detail_pane_visible(False)
+        self._artgen_detail.on_deleted = self._on_artgen_detail_deleted
+        self._artgen_detail.on_starred = self._on_artgen_detail_starred
 
         self._right_stack = Gtk.Stack()
         self._right_stack.add_named(self._detail, "native")
@@ -6874,6 +6891,16 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_card_selected(self, record: GenerationRecord) -> None:
         """Called when the user clicks a gallery card. Populates the detail panel."""
+        # Unify-gallery-interaction-pattern Task 3: a native card click always
+        # means the shared right pane should show `DetailPanel`, even if it
+        # was last left on the "artgen" page (e.g. the user clicked an
+        # artgen card, then clicked a video/image/animate card without
+        # closing the pane in between). Pause any GIF timer left running on
+        # the now-hidden ArtgenDetail first -- a Gtk.Stack keeps its hidden
+        # child realized, so an un-paused timer would otherwise keep firing
+        # forever (see ArtgenDetail.pause_animation's docstring).
+        self._artgen_detail.pause_animation()
+        self._right_stack.set_visible_child_name("native")
         gallery = self._gallery_for_type(record.media_type)
         # Use all_cards() so prev/next navigation crosses page boundaries.
         all_cards = gallery.all_cards()
@@ -6881,6 +6908,55 @@ class MainWindow(Gtk.ApplicationWindow):
         self._detail.set_context([c._record for c in all_cards], idx)
         self._detail.show_record(record, self._dispatch_remix,
                                   remix_as_pipeline_cb=self._remix_as_pipeline)
+
+    # ── Artgen card selection (shared right pane) ───────────────────────────────
+    # Unify-gallery-interaction-pattern Task 3: routes ArtgenGallery's card
+    # activation/deletion signals into self._right_stack + self._artgen_detail,
+    # the same shared-pane pattern `_on_card_selected` above uses for the
+    # three native galleries. Replaces ArtgenGallery's own in-page detail
+    # overlay (a crash workaround; see CLAUDE.md and artgen_gallery.py).
+
+    def _on_artgen_card_selected(self, media_id: str) -> None:
+        """Called when the user clicks an artgen gallery card."""
+        # Never force the pane open if the user collapsed it -- matches
+        # _on_card_selected above, which also never calls
+        # _set_detail_pane_visible(True).
+        self._right_stack.set_visible_child_name("artgen")
+        self._artgen_detail.show_record(media_id, self._artgen_gallery._filtered_records())
+
+    def _on_artgen_card_deleted(self, media_id: str) -> None:
+        """Called after ArtgenGallery's own hover-🗑 already removed the card
+        from its grid+in-memory records. Only clear the shared pane if it is
+        currently showing the record that was just deleted."""
+        if self._right_stack.get_visible_child_name() != "artgen":
+            return
+        records = self._artgen_detail._records
+        idx = self._artgen_detail._idx
+        current = records[idx] if records and 0 <= idx < len(records) else None
+        if current is not None and current.id == media_id:
+            self._set_detail_pane_visible(False)
+
+    def _on_artgen_detail_deleted(self, media_id: str) -> None:
+        """Called after the shared ArtgenDetail's OWN 🗑 deletes a record --
+        unlike the grid's hover-delete, ArtgenGallery doesn't know about this
+        deletion yet, so sync its grid+chips here. ArtgenDetail already
+        stepped to the next record (or called on_back if the list emptied)
+        inside its own `_delete_confirmed` -- nothing further to manage on
+        the detail side."""
+        self._artgen_gallery.remove_record(media_id)
+
+    def _on_artgen_detail_starred(self, media_id: str, starred: bool) -> None:
+        """Mirror _on_star's native counterpart: persist the starred state
+        and keep ArtgenGallery's in-memory records/chips (the ⭐ Starred
+        filter chip) in sync with a star toggle made from inside the shared
+        detail pane."""
+        from media_store import media_store as _ms
+        _ms.star(media_id, starred)
+        for r in self._artgen_gallery._records:
+            if r.id == media_id:
+                r.starred = int(starred)
+                break
+        self._artgen_gallery._rebuild_chips()
 
     # ── Remix routing ──────────────────────────────────────────────────────────
 

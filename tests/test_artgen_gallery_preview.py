@@ -1,17 +1,21 @@
 """
-Regression tests: clicking an artgen card must open an in-page preview.
+Tests for "unify gallery interaction pattern" Task 3 — removes ArtgenGallery's
+in-page detail overlay (a crash workaround) and makes card activation/deletion
+a pure signal-forwarding contract, matching the native GalleryWidgets.
 
-Bug (SP-3d-5, commit ff1d246): deleting `ArtgenPanel` in favor of the
-standalone `ArtgenGallery` dropped the `on_card_activated` wiring that used
-to switch a sub-stack to `ArtgenDetail`. `ArtgenGallery._on_card_activated`
-fires on click but only forwards to `self.on_card_activated` -- which
-`main_window.py` never sets for the artgen gallery -- so clicks silently did
-nothing and `ArtgenDetail` became an orphaned, untested class.
+History: this file used to guard the *previous* fix (SP-3d-5, commit
+ff1d246), where `ArtgenGallery` grew its OWN in-page `ArtgenDetail` shown in a
+`Gtk.Overlay` over the grid (`_detail_overlay`/`_grid_page` opacity toggle) --
+a workaround for a segfault where a `Gtk.Stack` UNMAPPED the grid while its
+just-clicked `FlowBoxChild` was mid-dispatch (commits b096a01/d3039f0).
 
-Fix: `ArtgenGallery` shows its own `ArtgenDetail` on activation (still
-calling any externally-wired `on_card_activated`, additive). The detail is an
-Overlay child on top of the always-mapped grid (v0.48.3) -- NOT a Gtk.Stack,
-which would unmap the grid and segfault; see test_card_activation_keeps_grid_mapped.
+Task 3 removes that overlay entirely: MainWindow's shared `_right_stack` (in
+`_detail_wrap`) is a SIBLING subtree of the gallery grid under `inner_paned`,
+so switching it never unmaps the FlowBox/grid -- it cannot reproduce that
+crash class, so the workaround is no longer needed here. `ArtgenGallery` is
+now grid-only; `_on_card_activated` just resolves media_id and forwards it to
+`on_card_activated` (still additive/no-op-safe if unwired, same contract the
+native galleries' select_cb use).
 
 Run under xvfb (GTK4 widgets need a real display):
     xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_artgen_gallery_preview.py -v
@@ -42,11 +46,14 @@ gtk_required = pytest.mark.skipif(
     not _gtk_available(), reason="GTK4 display not available"
 )
 
+_SRC = (Path(__file__).parent.parent / "app" / "artgen_gallery.py").read_text()
+
 
 def _make_media_record(tmp_path: Path, **kwargs) -> "object":
     """Build a MediaRecord backed by a real .txt file on disk (verse-style
     content), so ArtgenDetail._render's fp.read_text() call has something
-    real to read."""
+    real to read (kept even though this file no longer exercises ArtgenDetail
+    directly, so the record shape stays realistic for future callers)."""
     from media_store import MediaRecord
 
     file_path = tmp_path / f"{uuid.uuid4()}.txt"
@@ -80,100 +87,39 @@ def _find_child_for(gallery, media_id: str):
     return None
 
 
-@gtk_required
-def test_activating_a_card_opens_detail_page_with_no_external_wiring(tmp_path):
-    """THE regression: a fresh ArtgenGallery with NO on_card_activated wired
-    (exactly how main_window.py constructs it today) must still open the
-    in-page preview on click -- this is the actual bug."""
-    import media_store as ms_mod
-    from artgen_gallery import ArtgenGallery
+# ── Source-level: the in-page overlay/detail is gone ───────────────────────
 
-    rec = _make_media_record(tmp_path)
-    ms_mod.media_store.add(rec)
-
-    gallery = ArtgenGallery()
-    assert gallery.on_card_activated is None, "test assumes no external wiring"
-    gallery.refresh()
-
-    assert gallery._detail_shown() is False
-
-    child = _find_child_for(gallery, rec.id)
-    assert child is not None, "expected a FlowBoxChild for the seeded record"
-
-    gallery._on_card_activated(gallery._flow, child)
-
-    assert gallery._detail_shown() is True, (
-        "activating a card must switch the internal stack to the detail page"
-    )
-    assert gallery._detail._records[gallery._detail._idx].id == rec.id, (
-        "ArtgenDetail must be showing the activated record"
-    )
+def test_build_no_longer_creates_an_in_page_detail_or_overlay():
+    assert "from artgen_detail import ArtgenDetail" not in _SRC
+    assert "self._detail = ArtgenDetail(" not in _SRC
+    assert "_detail_overlay" not in _SRC
+    assert "def _show_detail(" not in _SRC
+    assert "def _detail_shown(" not in _SRC
+    # NOTE: `Gtk.Overlay()` itself still appears in _make_card (the per-card
+    # hover-actions overlay, unrelated and untouched) -- only the detail
+    # container's Overlay is gone, which the _build-scoped check below covers.
 
 
-@gtk_required
-def test_card_activation_keeps_grid_mapped(tmp_path):
-    """Crash fix (v0.48.3): opening the detail must NOT unmap the grid.
+def test_build_does_not_construct_a_detail_overlay():
+    start = _SRC.index("def _build(self")
+    end = _SRC.index("\n    def ", start + 1)
+    body = _SRC[start:end]
+    assert "Gtk.Overlay()" not in body
 
-    A Gtk.Stack unmaps its hidden child on switch; unmapping the grid while its
-    just-clicked, focused FlowBoxChild lives in a ScrolledWindow made GTK run a
-    scroll-to-focus `gtk_widget_compute_point` pass on a torn-down widget ->
-    SEGFAULT (confirmed via faulthandler opening an AnimateDiff GIF from
-    Discover). The fix hosts grid+detail in a Gtk.Overlay: the grid stays MAPPED
-    at all times (dimmed to opacity 0 when the detail is up), so no geometry
-    ever runs on a torn-down grid child."""
-    import media_store as ms_mod
-    from artgen_gallery import ArtgenGallery
 
-    rec = _make_media_record(tmp_path)
-    ms_mod.media_store.add(rec)
+def test_build_appends_grid_page_directly():
+    start = _SRC.index("def _build(self")
+    end = _SRC.index("\n    def ", start + 1)
+    body = _SRC[start:end]
+    assert "self.append(grid_page)" in body
 
-    gallery = ArtgenGallery()
-    gallery.refresh()
-    child = _find_child_for(gallery, rec.id)
 
-    gallery._on_card_activated(gallery._flow, child)
-
-    assert gallery._detail_shown() is True
-    # The grid page is still MAPPED (the whole point -- never unmapped), just
-    # dimmed out of sight behind the detail overlay.
-    assert gallery._grid_page.get_mapped() or not gallery.get_mapped(), (
-        "grid page must remain mapped when the detail is shown (never unmapped)"
-    )
-    assert gallery._grid_page.get_opacity() == 0.0
-    # And it is NOT a Gtk.Stack (which would unmap it) -- it's an Overlay.
-    import gi
-    from gi.repository import Gtk
-    assert isinstance(gallery._detail_overlay, Gtk.Overlay)
-
-    gallery._detail.on_back()
-    assert gallery._detail_shown() is False
-    assert gallery._grid_page.get_opacity() == 1.0
-
+# ── Behavioral: activation is pure signal-forwarding ────────────────────────
 
 @gtk_required
-def test_on_back_returns_to_grid_page(tmp_path):
-    import media_store as ms_mod
-    from artgen_gallery import ArtgenGallery
-
-    rec = _make_media_record(tmp_path)
-    ms_mod.media_store.add(rec)
-
-    gallery = ArtgenGallery()
-    gallery.refresh()
-    child = _find_child_for(gallery, rec.id)
-    gallery._on_card_activated(gallery._flow, child)
-    assert gallery._detail_shown() is True
-
-    gallery._detail.on_back()
-
-    assert gallery._detail_shown() is False
-
-
-@gtk_required
-def test_external_on_card_activated_still_fires_additively(tmp_path):
-    """Public API preserved: if something DOES wire on_card_activated, it
-    must still be called (additive to, not replaced by, the internal
-    preview)."""
+def test_card_activation_forwards_media_id_when_wired(tmp_path):
+    """`on_card_activated` fires with the clicked card's media_id -- the only
+    thing `_on_card_activated` does now."""
     import media_store as ms_mod
     from artgen_gallery import ArtgenGallery
 
@@ -186,37 +132,135 @@ def test_external_on_card_activated_still_fires_additively(tmp_path):
     gallery.refresh()
 
     child = _find_child_for(gallery, rec.id)
+    assert child is not None, "expected a FlowBoxChild for the seeded record"
+
     gallery._on_card_activated(gallery._flow, child)
 
-    assert seen == [rec.id], "external on_card_activated callback must still fire"
-    assert gallery._detail_shown() is True, (
-        "internal preview must still open even with external wiring present"
-    )
+    assert seen == [rec.id]
 
 
 @gtk_required
-def test_activation_respects_active_filter_for_detail_record_list(tmp_path):
-    """show_record's second argument (the nav list for </> stepping) must be
-    the FILTERED records, matching what _rebuild_grid shows -- not the full
-    unfiltered self._records."""
+def test_card_activation_is_a_noop_without_external_wiring(tmp_path):
+    """With no `on_card_activated` wired (the pre-Task-3 regression path),
+    activating a card must not raise -- there is no more internal detail
+    view for it to open."""
     import media_store as ms_mod
     from artgen_gallery import ArtgenGallery
 
-    rec_a = _make_media_record(tmp_path, generator_type="verse")
-    rec_b = _make_media_record(tmp_path, generator_type="landscape")
+    rec = _make_media_record(tmp_path)
+    ms_mod.media_store.add(rec)
+
+    gallery = ArtgenGallery()
+    assert gallery.on_card_activated is None
+    gallery.refresh()
+
+    child = _find_child_for(gallery, rec.id)
+    gallery._on_card_activated(gallery._flow, child)  # must not raise
+
+
+@gtk_required
+def test_card_activation_ignores_child_with_no_media_id(tmp_path):
+    """Defensive branch: a FlowBoxChild whose box has no stashed _media_id
+    (shouldn't normally happen) must not raise and must not forward."""
+    import media_store as ms_mod
+    from artgen_gallery import ArtgenGallery
+    import gi
+    from gi.repository import Gtk
+
+    rec = _make_media_record(tmp_path)
+    ms_mod.media_store.add(rec)
+
+    gallery = ArtgenGallery()
+    seen = []
+    gallery.on_card_activated = lambda media_id: seen.append(media_id)
+    gallery.refresh()
+
+    bogus_child = Gtk.FlowBoxChild()
+    bogus_child.set_child(Gtk.Label(label="no media id here"))
+
+    gallery._on_card_activated(gallery._flow, bogus_child)
+
+    assert seen == []
+
+
+# ── Behavioral: remove_record ───────────────────────────────────────────────
+
+@gtk_required
+def test_remove_record_prunes_records_and_rebuilds_grid(tmp_path):
+    import media_store as ms_mod
+    from artgen_gallery import ArtgenGallery
+
+    rec_a = _make_media_record(tmp_path)
+    rec_b = _make_media_record(tmp_path)
     ms_mod.media_store.add(rec_a)
     ms_mod.media_store.add(rec_b)
 
     gallery = ArtgenGallery()
     gallery.refresh()
-    gallery._active_filter = "verse"
-    gallery._rebuild_grid()
+    assert {r.id for r in gallery._records} == {rec_a.id, rec_b.id}
 
-    child = _find_child_for(gallery, rec_a.id)
-    assert child is not None
-    gallery._on_card_activated(gallery._flow, child)
+    gallery.remove_record(rec_a.id)
 
-    ids_in_detail = [r.id for r in gallery._detail._records]
-    assert ids_in_detail == [rec_a.id], (
-        f"detail nav list should be filtered to just the 'verse' record, got {ids_in_detail}"
-    )
+    assert [r.id for r in gallery._records] == [rec_b.id]
+    assert _find_child_for(gallery, rec_a.id) is None
+    assert _find_child_for(gallery, rec_b.id) is not None
+
+
+@gtk_required
+def test_remove_record_of_unknown_id_is_a_noop(tmp_path):
+    import media_store as ms_mod
+    from artgen_gallery import ArtgenGallery
+
+    rec = _make_media_record(tmp_path)
+    ms_mod.media_store.add(rec)
+
+    gallery = ArtgenGallery()
+    gallery.refresh()
+
+    gallery.remove_record("does-not-exist")
+
+    assert [r.id for r in gallery._records] == [rec.id]
+
+
+@gtk_required
+def test_remove_record_updates_starred_chip_when_last_starred_record_removed(tmp_path):
+    """Mirrors the old _on_detail_deleted's chip-refresh behavior -- removing
+    the only starred record should make the "⭐ Starred" chip disappear."""
+    from artgen_gallery import ArtgenGallery, _STARRED_FILTER
+    import media_store as ms_mod
+
+    rec = _make_media_record(tmp_path, starred=1)
+    ms_mod.media_store.add(rec)
+
+    gallery = ArtgenGallery()
+    gallery.refresh()
+
+    labels_before = []
+    child = gallery._chip_box.get_first_child()
+    while child is not None:
+        labels_before.append(child.get_label())
+        child = child.get_next_sibling()
+    assert any("Starred" in lbl for lbl in labels_before)
+
+    gallery.remove_record(rec.id)
+
+    labels_after = []
+    child = gallery._chip_box.get_first_child()
+    while child is not None:
+        labels_after.append(child.get_label())
+        child = child.get_next_sibling()
+    assert not any("Starred" in lbl for lbl in labels_after)
+
+
+# ── Source-level: grid's own hover-delete routes through remove_record ─────
+
+def test_delete_confirmed_calls_remove_record_not_duplicated_logic():
+    """The card's own hover 🗑 -> confirm dialog path (`_delete_confirmed`
+    inside `_make_card`) should route through the public `remove_record`
+    rather than duplicating the list-prune/rebuild logic inline."""
+    start = _SRC.index("def _delete_confirmed(dialog, result, media_id):")
+    end = _SRC.index("\n        del_btn.connect", start)
+    body = _SRC[start:end]
+    assert "self.remove_record(media_id)" in body
+    # The old inline duplication of remove_record's body must be gone here.
+    assert "self._records = [r for r in self._records if r.id != media_id]" not in body
