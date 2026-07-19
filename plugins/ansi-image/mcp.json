@@ -1,0 +1,38 @@
+{
+  "x-ttlg": {
+    "output_ext": ".ans",
+    "media_type": null,
+    "tab": null,
+    "hardware": null,
+    "utility": true,
+    "accepts_remix_from": ["image"],
+    "can_remix_to": []
+  },
+  "tools": [
+    {
+      "name": "ansi_image_to_ansi",
+      "description": "Convert a still image to one-color-per-cell ANSI block art (CP437-style, xterm-256 palette) using pure Pillow -- no LLM. Nearest-matches each downsampled pixel to the app's own xterm-256 color table so the result renders identically in the app's own .ans viewer. Reimplements the technique behind rez2ans-next-style image-to-ANSI converters in-process.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["src"],
+        "properties": {
+          "src": {"type": "string", "description": "Path to the input image (JPEG, PNG, WebP, etc.)"},
+          "cols": {"type": "integer", "description": "Output width in character columns (default 80, clamped to 120)", "default": 80},
+          "colors": {"type": "integer", "enum": [16, 256], "description": "Palette size: 256 for the xterm-256 color cube + grayscale ramp (photographic), or 16 for the DOS/BBS system palette (retro look)", "default": 256}
+        }
+      },
+      "examples": [
+        {"src": "/tmp/photo.jpg", "cols": 80, "colors": 256},
+        {"src": "/tmp/logo.png", "cols": 40, "colors": 16}
+      ],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    },
+    {
+      "name": "ansi_image_is_available",
+      "description": "Return true if the ansi-image plugin's only dependency (Pillow) is importable",
+      "inputSchema": {"type": "object", "properties": {}},
+      "examples": [],
+      "x-ttlg": {"streaming": null, "artifact_tool": false}
+    }
+  ]
+}
