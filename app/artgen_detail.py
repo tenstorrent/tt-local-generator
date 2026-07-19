@@ -4,13 +4,25 @@
 """
 ArtgenDetail — full-pane detail view for a single artgen artifact.
 
-Layout: ← Gallery header | large artifact (65%) | metadata sidebar (35%)
+Layout: header (title + ‹ › nav + ⛶ Fullscreen) | large artifact (65%) | metadata sidebar (35%)
 Navigation: ‹ › arrows step through the current filter without returning to grid.
 
 Callbacks:
-    on_back()           — user clicked ← Gallery
+    on_back()           — no longer user-facing (see below); still invoked
+                          programmatically when a delete empties the list
     on_deleted(id: str) — user confirmed deletion
     on_starred(id: str, starred: bool)
+
+"Unify gallery interaction" Task 7 (v0.50.0): the visible "← Gallery" back
+button is removed -- in the two-pane right-stack layout (Tasks 2/3) the
+gallery grid is always visible on the left, so there is nothing left to
+"go back" to, and native `DetailPanel` (the other `_right_stack` child) has
+no back button at all. The `on_back` CALLABLE ATTRIBUTE stays: main_window.py
+still wires `self._artgen_detail.on_back = lambda: self._set_detail_pane_visible(False)`
+so `_delete_confirmed` can collapse the pane when a delete empties the record
+list -- that path is unrelated to the removed button. In its place the header
+gets a "⛶ Fullscreen" button (parity with native `DetailPanel`'s ⛶ buttons)
+that opens `ArtgenViewerWindow` for the currently-shown record.
 """
 from __future__ import annotations
 
@@ -50,6 +62,7 @@ from artgen_render import (
     resolve_render_kind as _resolve_render_kind,
     build_reading_html as _build_reading_html,
 )
+from artgen_viewer import ArtgenViewerWindow
 
 
 class ArtgenDetail(Gtk.Box):
@@ -75,10 +88,12 @@ class ArtgenDetail(Gtk.Box):
         hdr.set_margin_top(8)
         hdr.set_margin_bottom(8)
 
-        self._back_btn = Gtk.Button(label="← Gallery")
-        self._back_btn.add_css_class("flat")
-        self._back_btn.connect("clicked", lambda _: self.on_back and self.on_back())
-        hdr.append(self._back_btn)
+        self._full_btn = Gtk.Button(label="⛶ Fullscreen")
+        self._full_btn.set_tooltip_text("Open in a maximized window")
+        self._full_btn.add_css_class("flat")
+        self._full_btn.set_sensitive(False)  # no record shown yet
+        self._full_btn.connect("clicked", self._open_fullscreen)
+        hdr.append(self._full_btn)
 
         self._title_lbl = Gtk.Label(label="")
         self._title_lbl.set_hexpand(True)
@@ -245,9 +260,6 @@ class ArtgenDetail(Gtk.Box):
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def set_back_label(self, label: str) -> None:
-        self._back_btn.set_label(label)
-
     def show_record(self, media_id: str, records: list[MediaRecord]) -> None:
         """Display the record with media_id; records is the current filter list."""
         self._records = records
@@ -287,6 +299,7 @@ class ArtgenDetail(Gtk.Box):
         if self._gif_timer_id is not None:
             GLib.source_remove(self._gif_timer_id)
             self._gif_timer_id = None
+        self._full_btn.set_sensitive(bool(self._records))
         if not self._records:
             return
         rec = self._records[self._idx]
@@ -400,6 +413,21 @@ class ArtgenDetail(Gtk.Box):
         btn.set_label("★  Starred" if starred else "☆  Star")
         if self.on_starred:
             self.on_starred(rec.id, starred)
+
+    def _open_fullscreen(self, _btn) -> None:
+        """Open the currently-shown record in a standalone maximized window.
+
+        Parity with native `DetailPanel`'s "⛶ Fullscreen"/"⛶ View Full"
+        buttons (`VideoPlayerWindow`/`ImageViewerWindow` in main_window.py),
+        just routed to the artgen-specific `ArtgenViewerWindow` (Task 5)
+        since the native viewers don't handle svg/gif/ansi/palette/verse/
+        markdown/codeart. The button is desensitized (see `_render`) whenever
+        `_records` is empty, so this is unreachable via a real click in that
+        state -- the guard below only matters for programmatic `emit`.
+        """
+        if not self._records:
+            return
+        ArtgenViewerWindow(self._records[self._idx], self.get_root()).present()
 
     def _on_open_file(self, _btn) -> None:
         if not self._records:
