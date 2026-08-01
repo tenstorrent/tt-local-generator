@@ -1,3 +1,14 @@
+tt-local-generator (0.51.2) noble; urgency=medium
+
+  * test(hw): add bin/smoke_test.sh — a health-gated, self-cleaning real-generation
+    smoke test for TT hardware. Validates the app's generation backends via the same
+    tt-ctl paths the GUI shells out to: hardware heartbeat gate -> single-Blackhole
+    artgen LLM + CPU prompt-server -> prompt-gen + `tt-ctl artgen`. Low backend-churn
+    (single chip; --image opt-in for FLUX). Validated on QB2: hw-health, servers-up,
+    prompt-gen, and artgen verse all PASS on real Blackhole silicon.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 20:30:00 +0000
+
 tt-local-generator (0.51.1) noble; urgency=medium
 
   * fix(gallery): pause the artgen GIF timer when the detail pane is
