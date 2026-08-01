@@ -1,3 +1,12 @@
+tt-local-generator (0.51.4) noble; urgency=medium
+
+  * ui(shell): pin the "Servers ▾" control to the right edge of the top nav
+    (expanding spacer between the loop-nav verbs and Servers), separating the
+    primary navigation from the machine-control popover — conventional
+    header-bar placement for a secondary/utility control.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 22:20:00 +0000
+
 tt-local-generator (0.51.3) noble; urgency=medium
 
   * fix(tttv): Escape now reliably closes the TT-TV attractor across repeated

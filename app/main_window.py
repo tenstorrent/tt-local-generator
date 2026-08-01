@@ -5486,8 +5486,15 @@ class MainWindow(Gtk.ApplicationWindow):
         loop_nav_row.append(self._pipelines_btn)
 
         # Standalone Servers control's "Servers ▾" button (SP-3b Task 2) —
-        # mounted here instead of ControlPanel's own (now-hidden) one, next
-        # to the loop nav / Pipelines entry.
+        # mounted here instead of ControlPanel's own (now-hidden) one.
+        # Pinned to the RIGHT edge of the window: an expanding spacer between
+        # the loop-nav verbs (left) and Servers (right) pushes it hard-right,
+        # separating the primary navigation from the machine-control popover
+        # (a distinct concern) — the conventional header-bar placement for a
+        # secondary/utility control.
+        _nav_spacer = Gtk.Box()
+        _nav_spacer.set_hexpand(True)
+        loop_nav_row.append(_nav_spacer)
         loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
