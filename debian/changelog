@@ -1,3 +1,16 @@
+tt-local-generator (0.51.3) noble; urgency=medium
+
+  * fix(tttv): Escape now reliably closes the TT-TV attractor across repeated
+    open/close cycles. The Escape handler called self.close() SYNCHRONOUSLY from
+    inside the EventControllerKey's key-pressed dispatch, destroying the window
+    (and that controller) mid-dispatch -- which corrupted key-event routing for
+    the NEXT attractor window, so after open->close->open, Escape silently
+    stopped closing (only the WM 'X' still worked). Escape's close is now
+    deferred via GLib.idle_add so the key event fully unwinds first (same
+    destroy-during-dispatch class as the earlier gallery/gif crashes).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sat, 18 Jul 2026 22:00:00 +0000
+
 tt-local-generator (0.51.2) noble; urgency=medium
 
   * test(hw): add bin/smoke_test.sh — a health-gated, self-cleaning real-generation

@@ -854,7 +854,14 @@ class AttractorWindow(Gtk.Window):
     def _on_key(self, _ctrl, keyval, _keycode, _state) -> bool:
         name = Gtk.accelerator_name(keyval, 0)
         if name == "Escape":
-            self.close()
+            # DEFER the close out of the key-controller dispatch. Calling
+            # self.close() synchronously here tears the window (and this very
+            # EventControllerKey) down while GTK is still inside the
+            # key-pressed signal emission — a destroy-during-dispatch that
+            # corrupts key-event routing for the NEXT attractor window: after
+            # open→close→open, Escape silently stops closing (only the WM 'X'
+            # still works). idle_add lets the key event fully unwind first.
+            GLib.idle_add(self.close)
             return True
         if name == "f":
             if self.is_fullscreen():
