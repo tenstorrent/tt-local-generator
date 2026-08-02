@@ -59,7 +59,15 @@ placeholder throughout — do not over-invest in wording.
 Ordered by dependency and risk. Each is its own spec-slice → plan → SDD cycle.
 The app stays shippable after every one.
 
-### SP-1 — The four-verb loop nav (spine) — *safe, first*
+> **⚠️ SUPERSEDED — see "## Revision (v2)" at the bottom of this file.** The
+> four-verb loop below (SP-1) shipped as v0.52.0, but live testing rejected the
+> rigid 1→2→3→4 framing: "Remix feels like Create," "Watch is jarringly
+> separate," "the sequence isn't how creating feels." The converged model (two
+> places + one-machine Runs + non-destructive live-context nav) and its revised
+> build sequence (RN-1..RN-4) are the authority now. SP-2..SP-6 below still hold
+> as written except where the revision restates them.
+
+### SP-1 — The four-verb loop nav (spine) — *SHIPPED v0.52.0, now being revised by RN-1*
 Reframe the top nav row into the legible cycle **✨ Create → 🔭 Discover → 📺 Watch
 → 🔀 Remix ↺**, with arrow glyphs between and a ↺ that says "go again"; **🧩
 Pipelines set apart** (a divider, styled as the advanced tool); Servers ▾ pinned
@@ -118,3 +126,68 @@ composer/panel is re-housed; live-display smoke on `./tt-gen` for the interactio
 Deselect the two known environment flakes
 (`test_pipeline_engine.py::test_run_plugin_loads_and_calls_real_module`,
 `test_forge_transforms.py::test_on_transform_finished_appends_and_refreshes`).
+
+---
+
+## Revision (v2) — the converged model (Aug 2026, authoritative)
+
+Live testing of the shipped SP-1 loop and the SP-2 wall drove the design past the
+"four-verb loop" into a simpler, deeper model. Two principles now govern
+(memory: `project_one_machine_runs`):
+
+**1. One machine — everything is a "Run."** Generate, remix, queue, and pipeline
+are not separate features: they're one Run concept at different complexity. A
+plain generation is a **1-step run**; a remix is a run **seeded** from an
+artifact; the queue is **the list of runs** in flight; a pipeline is the **same
+machine with more steps**. You never have to think in steps to create — but the
+machinery is **visible and inspiring**: even a simple Create visibly forges
+through its steps, and any run can be watched, left, and returned to.
+
+**2. Navigation is non-destructive and stateful — no dead-ends.** Two calm
+top-level places, **✨ Create** and **🗂 Library** (no rigid sequence, no arrows).
+- **Watch** = a **▶ Play** lens on the Library (in-app ambient stream) with an
+  optional **⛶ Full-screen TT-TV** kiosk pop-out (the existing attractor window).
+- **Remix** = a per-item **action** (cards + focus console), not a top verb —
+  remixing pre-seeds a run.
+- **Pipelines** = a quiet advanced entry (the same machine, more steps).
+- A **"you are here" breadcrumb** + a **live-context tray** of resumable runs that
+  persist across navigation (leave a running pipeline → watch its results land in
+  Library → click its tray chip to return; flip between a source and its remix).
+  The tray is the queue, made visible.
+
+### Revised build sequence (supersedes SP-1..SP-6 sequencing)
+
+Each is its own tested SDD sub-project; the app stays shippable after each. The
+deep backend `Run` abstraction is sequenced LAST — the nav/UX unifies first on
+top of today's separate paths (`GenerationWorker`, artgen generators,
+`pipeline_engine`, `_queue`, `remix_dispatch`).
+
+- **RN-1 — Revised nav (two places).** Replace the four-verb loop: loop-nav radio
+  becomes **{Create, Library}** only (relabel Discover→"🗂 Library"; drop the →
+  arrows and the ↺). **Remove the Remix nav button** (Remix stays a per-item
+  action; keep the `_on_loop_nav_remix` METHOD — CreateView's "Start with
+  inspiration" door still calls it via `on_inspiration`; a blank Muse stays
+  reachable through Pipelines). **Relabel Watch (`_attractor_btn`) to "▶ Play"**,
+  positioned as a Library companion, still opening the attractor kiosk for now
+  (in-app embed is RN-3b). Keep `_attractor_btn`'s name/handler/sensitivity
+  (`_update_attractor_btn`) and `_loop_nav_create_btn`. Pipelines stays set-apart.
+  *Revises shipped SP-1; the SP-2 possibilities wall is unaffected.*
+- **RN-2 — Live-context layer.** A `nav_state` model (current location + active
+  resumable contexts) rendered as the **breadcrumb** + **live-context tray**.
+  Structurally fixes the pipeline double-click (the tray/state replaces the
+  Pipelines-toggle-vs-loop-radio conflict) and the dead-ends. Pipeline runs,
+  remix drafts, and an active watch register as contexts you can leave/return to.
+- **RN-3a — Run visibility.** Surface any generation as a watchable **run** (the
+  "machine at work" moment) using what the code already emits
+  (`on_progress`/step callbacks). Simple runs show their step(s); the same view
+  scales to pipeline runs.
+- **RN-3b — Watch embedded.** Lift the attractor's render/advance machinery
+  (already decoupled from its Window via callbacks) into an in-viewport Watch
+  surface reached by ▶ Play, keeping the ⛶ kiosk pop-out. (Was SP-6.)
+- **RN-4 — Shared `Run` abstraction.** Unify generate/remix/queue/pipeline behind
+  one Run type + queue, so the visible model and the backend finally match.
+
+The SP-2 possibilities wall, SP-3 full-width focus-in-place, SP-4 composer, and
+SP-5 controls dock all still apply and slot into this model (the composer is the
+Create surface's run-launcher; focus-in-place is where the per-item Remix action
+lives).

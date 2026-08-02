@@ -1,0 +1,17 @@
+Package: tt-model-z-image
+Source: tt-local-generator
+Version: 0.11.0
+Architecture: all
+Maintainer: Tenstorrent <software@tenstorrent.com>
+Installed-Size: 26
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Section: graphics
+Priority: optional
+Homepage: https://github.com/tenstorrent/tt-local-generator
+Description: Z-Image-Turbo model weights for tt-local-generator
+ Downloads Tongyi-MAI/Z-Image-Turbo from HuggingFace. Required for the
+ Z-Image-Turbo image generation mode (P150X4 hardware). Status: functional
+ in tt-inference-server v0.17.0.
+ .
+ The model is publicly available; a HuggingFace account is not required,
+ though providing a token avoids API rate limits.
