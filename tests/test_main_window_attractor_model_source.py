@@ -328,14 +328,14 @@ def test_attractor_btn_is_a_main_toolbar_button_not_controlpanel():
     ControlPanel's `toolbar_box` (the composite this button used to be
     appended onto) is no longer mounted at all.
 
-    SP-1 (four-verb loop nav) relabels the button "📺 Watch" (was "📺 Watch
-    TT-TV") and moves its construction+append into `_build_loop_nav` itself
-    (appended onto that method's own local `row`, interleaved between
-    Discover and Remix) instead of `_build_ui`'s `loop_nav_row` -- same end
-    result (the button lands in the row `_build_ui` mounts as the toolbar),
-    different call site/label."""
+    SP-1 (four-verb loop nav) relabelled the button "📺 Watch" (was "📺 Watch
+    TT-TV") and moved its construction+append into `_build_loop_nav` itself.
+    RN-1 (Unified-Stage two-place nav) relabels it again to "▶ Play" (now a
+    companion beside 🗂 Library rather than interleaved between Discover and
+    Remix, which are gone) -- same end result (the button lands in the row
+    `_build_ui` mounts as the toolbar), different call site/label."""
     src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
-    assert 'self._attractor_btn = Gtk.Button(label="\\U0001f4fa Watch")' in src
+    assert 'self._attractor_btn = Gtk.Button(label="▶ Play")' in src
     assert 'self._attractor_btn.connect("clicked", self._on_open_attractor)' in src
     assert "row.append(self._attractor_btn)" in src
     assert "main_toolbar.append(self._attractor_btn)" not in src

@@ -1,3 +1,14 @@
+tt-local-generator (0.54.0) noble; urgency=medium
+
+  * feat(nav): revise the top nav to the two-place model — ✨ Create · 🗂 Library
+    — with a ▶ Play companion (TT-TV) beside Library and Pipelines set apart.
+    Drops the four-verb loop (arrows/↺) and the Remix nav button; Remix stays a
+    per-item action and CreateView's "Start with inspiration" door still opens
+    the Muse. (RN-1 of the Unified-Stage revision,
+    docs/superpowers/specs/2026-08-02-unified-stage-design.md)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 13:43:17 -0700
+
 tt-local-generator (0.53.1) noble; urgency=medium
 
   * fix(create): Create surface goes full-width and hides the Discover detail

@@ -1,17 +1,17 @@
 """
-Tests for the top-level loop nav (Create · Curate · Discover · Remix) — the
-first slice of the Create/Curate/Discover/Remix restructure
-(docs/superpowers/specs/2026-07-13-create-surface-design.md, Task 1).
+Tests for the top-level nav.
 
-For THIS task the four movements route to EXISTING surfaces — no internal
-rewrites of ControlPanel, the medium galleries, or Pipeline Studio:
-  - Create   -> the current generation UI (ControlPanel + medium galleries),
-                reached via `_on_source_change` exactly as it works today.
-  - Curate   -> the current-source gallery, full-width (placeholder — a later
-                slice adds the starred/playlist filter).
-  - Discover -> Pipeline Studio's Discover page (`_show_pipelines`).
-  - Remix    -> Pipeline Studio's Muse (`show_muse()`), via the same
-                activation bridge `_remix_as_pipeline` already uses.
+RN-1 of the Unified-Stage revision (docs/superpowers/specs/2026-08-02-unified-
+stage-design.md) replaced the earlier four-verb loop (Create/Discover/Watch/
+Remix, with arrow/↺ separators) with a two-place model plus a companion:
+  - ✨ Create   -> the Create surface (`_on_loop_nav_create`).
+  - 🗂 Library  -> Pipeline Studio's Discover page absorbs browse+curate
+                   (`_on_loop_nav_discover`).
+  - ▶ Play      -> a plain action button beside Library (not in the radio
+                   group) that opens the TT-TV kiosk (`_on_open_attractor`).
+Remix is no longer a nav place — it's a per-item action — but the
+`_on_loop_nav_remix` METHOD is retained because CreateView's "Start with
+inspiration" door still calls it directly.
 
 Mirrors tests/test_main_window_pipelines.py's harness: a minimal MainWindow
 built via `__new__` with `Gtk.ApplicationWindow.__init__` patched out, then
@@ -108,33 +108,39 @@ def _make_mw(tmp_path, monkeypatch):
     return obj
 
 
-def test_build_loop_nav_exposes_keyed_buttons(tmp_path, monkeypatch):
-    """_build_loop_nav returns the loop row: the three keyed verbs plus the
-    Watch action button, in create -> discover -> watch -> remix order."""
+def test_build_loop_nav_two_places_plus_play(tmp_path, monkeypatch):
+    """The nav is two places (Create, Library) plus a ▶ Play companion —
+    no Remix pill, no arrow/loop separators."""
     obj = _make_mw(tmp_path, monkeypatch)
 
     row = obj._build_loop_nav()
 
     assert isinstance(row, Gtk.Widget)
-    assert set(obj._loop_nav.keys()) == {"create", "discover", "remix"}
+    assert set(obj._loop_nav.keys()) == {"create", "discover"}
     for btn in obj._loop_nav.values():
         assert isinstance(btn, Gtk.ToggleButton)
-    # Watch is a plain action button built here now (not in _build_ui).
     assert isinstance(obj._attractor_btn, Gtk.Button)
-    assert not obj._attractor_btn.get_sensitive()  # starts disabled
+    assert not obj._attractor_btn.get_sensitive()
 
-    # The four verbs appear in loop order among the row's children.
     labels = []
     child = row.get_first_child()
     while child is not None:
         if isinstance(child, Gtk.Button):
             labels.append(child.get_label())
         child = child.get_next_sibling()
-    assert labels == ["✨ Create", "🔭 Discover", "📺 Watch", "🔀 Remix"]
+    assert labels == ["✨ Create", "🗂 Library", "▶ Play"]
+    # no arrow/loop separator labels remain in the row
+    texts = []
+    child = row.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            texts.append(child.get_text())
+        child = child.get_next_sibling()
+    assert "→" not in texts and "↺" not in texts
 
 
 def test_create_is_default_active(tmp_path, monkeypatch):
-    """Create starts active; the other three movements start inactive."""
+    """Create starts active; Library starts inactive."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
@@ -142,11 +148,10 @@ def test_create_is_default_active(tmp_path, monkeypatch):
 
     assert obj._loop_nav["create"].get_active() is True
     assert obj._loop_nav["discover"].get_active() is False
-    assert obj._loop_nav["remix"].get_active() is False
 
 
 def test_loop_nav_buttons_are_mutually_exclusive(tmp_path, monkeypatch):
-    """The four buttons share one radio group — only one is active at a time."""
+    """Create and Library share one radio group — only one is active at a time."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
     obj._loop_nav["create"].set_active(True)
@@ -173,11 +178,14 @@ def test_loop_nav_create_routes_to_create_view(tmp_path, monkeypatch):
 def test_loop_nav_create_unchecks_pipelines_toggle(tmp_path, monkeypatch):
     """If Pipelines was showing (shares `_gallery_stack`), Create must
     uncheck its toggle — same stale-toggle fix `_on_source_change` already
-    provided for the old medium tabs, now reproduced for CreateView."""
+    provided for the old medium tabs, now reproduced for CreateView. There is
+    no Remix nav button anymore, so open Pipelines via the retained
+    `_on_loop_nav_remix` method directly (CreateView's inspiration door does
+    the same)."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    obj._loop_nav["remix"].set_active(True)
+    obj._on_loop_nav_remix()
     assert obj._pipelines_btn.get_active() is True
 
     obj._loop_nav["create"].set_active(True)
@@ -220,11 +228,14 @@ def test_loop_nav_discover_then_create_hides_detail_pane(tmp_path, monkeypatch):
 
 
 def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
-    """Remix routes to Pipeline Studio's Muse via the existing bridge."""
+    """`_on_loop_nav_remix` routes to Pipeline Studio's Muse via the existing
+    bridge. There is no Remix nav button anymore — the method is retained
+    only for CreateView's "Start with inspiration" door, so this test calls
+    it directly rather than via a nav button toggle."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    obj._loop_nav["remix"].set_active(True)
+    obj._on_loop_nav_remix()
 
     assert obj._gallery_stack.get_visible_child_name() == "pipelines"
     assert obj._pipeline_studio.stack.get_visible_child_name() == "muse"
@@ -233,14 +244,15 @@ def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
 
 def test_loop_nav_remix_reuses_pipeline_studio_instance(tmp_path, monkeypatch):
     """Remix doesn't force a second PipelineStudio construction once one was
-    built (avoids re-scanning run history)."""
+    built (avoids re-scanning run history) — called directly since there is
+    no Remix nav button anymore."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
-    obj._loop_nav["remix"].set_active(True)
+    obj._on_loop_nav_remix()
     first = obj._pipeline_studio
     obj._loop_nav["create"].set_active(True)
-    obj._loop_nav["remix"].set_active(True)
+    obj._on_loop_nav_remix()
 
     assert obj._pipeline_studio is first
     assert obj._pipeline_studio.stack.get_visible_child_name() == "muse"
@@ -338,14 +350,15 @@ def test_discover_type_row_hidden_in_create(tmp_path, monkeypatch):
 
 
 def test_discover_type_row_hidden_in_remix(tmp_path, monkeypatch):
-    """Leaving Discover for Remix hides the switcher -- it must not overlap
-    the Remix/Muse surface."""
+    """Leaving Discover for Remix (via the retained `_on_loop_nav_remix`
+    method -- there is no Remix nav button anymore) hides the switcher -- it
+    must not overlap the Remix/Muse surface."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
     obj._on_loop_nav_discover()
     assert obj._discover_type_row.get_visible() is True
 
-    obj._loop_nav["remix"].set_active(True)
+    obj._on_loop_nav_remix()
 
     assert obj._discover_type_row.get_visible() is False
 

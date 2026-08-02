@@ -19,9 +19,9 @@ assert the opposite. What changes in THIS task is that `_ctrl_wrapper` (and,
 transitively, `self._controls.footer_box`, which used to be appended into
 it) is never attached anywhere in the window's widget tree, and
 ControlPanel's `toolbar_box` (logo/title + the now-superseded medium-tab
-toggle) is never read at all -- MainWindow's own three buttons (Watch TT-TV
-/ Pipelines / Servers ▾), which used to be appended onto `toolbar_box`, fold
-directly into the loop-nav row instead.
+toggle) is never read at all -- MainWindow's own buttons (▶ Play / Pipelines
+/ Servers ▾), which used to be appended onto `toolbar_box`, fold directly
+into the loop-nav row instead.
 
 Constructing the full `MainWindow` is heavy (see test_main_window_pipelines.py's
 docstring) -- these are source-level guards in the same style as
@@ -72,11 +72,11 @@ def test_loop_nav_row_captured_and_appended_to_root_box():
 
 
 def test_attractor_btn_appended_to_loop_nav_row():
-    """SP-1 (four-verb loop nav): Watch's construction+append moved from
-    `_build_ui`'s `loop_nav_row` into `_build_loop_nav` itself (appended onto
-    its own local `row`, interleaved in loop order between Discover and
-    Remix) -- same end result (the button lands in the row `_build_ui`
-    mounts), different call site."""
+    """RN-1 (two-place nav): the ▶ Play button (`_attractor_btn`) is
+    constructed and appended inside `_build_loop_nav` itself (onto its own
+    local `row`, beside Library), not in `_build_ui`'s `loop_nav_row` -- same
+    end result (the button lands in the row `_build_ui` mounts), different
+    call site."""
     assert "row.append(self._attractor_btn)" in _SRC
 
 

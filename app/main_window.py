@@ -379,17 +379,6 @@ scrollbar slider:hover {
     background-color: @tt_border;
     color: @tt_text;
 }
-.loop-nav-arrow {
-    color: @tt_text_muted;
-    padding: 0 5px;
-    font-size: 13px;
-}
-.loop-nav-loop {
-    color: @tt_accent;
-    padding: 0 10px 0 5px;
-    font-size: 15px;
-    font-weight: bold;
-}
 .loop-nav-divider {
     margin: 4px 12px;
 }
@@ -6695,7 +6684,8 @@ class MainWindow(Gtk.ApplicationWindow):
     # medium.
 
     def _build_loop_nav(self) -> Gtk.Box:
-        """Build the loop nav row: three movements sharing one radio group.
+        """Build the top nav row: two places (Create, Library) sharing one
+        radio group, plus a ▶ Play companion button (not in the group).
 
         Returns the row widget; the caller appends it to `root_box` *first*
         so it sits above everything else.
@@ -6706,15 +6696,8 @@ class MainWindow(Gtk.ApplicationWindow):
         the "toggled" signal here can never touch an attribute that doesn't
         exist yet.
         """
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.add_css_class("loop-nav-row")
-
-        def _sep(glyph: str = "→", *, loop: bool = False) -> Gtk.Label:
-            # → = "->", ↺ = the "go again" loop glyph. Kept as escapes
-            # so this stays copy-safe; they are Python str labels, never CSS.
-            lbl = Gtk.Label(label=glyph)
-            lbl.add_css_class("loop-nav-loop" if loop else "loop-nav-arrow")
-            return lbl
 
         create_btn = Gtk.ToggleButton(label="✨ Create")
         create_btn.add_css_class("loop-nav-btn")
@@ -6722,56 +6705,45 @@ class MainWindow(Gtk.ApplicationWindow):
             "Create — start something new: pick a medium or type an idea."
         )
 
-        # Discover absorbs Curate: browsing and collecting are one act — you
-        # star, build playlists, and thread things together AS you find them.
-        discover_btn = Gtk.ToggleButton(label="\U0001f52d Discover")
+        # Library absorbs Discover + Curate: browse and collect everything
+        # you've made — star it, build playlists, thread it together.
+        discover_btn = Gtk.ToggleButton(label="\U0001f5c2 Library")
         discover_btn.add_css_class("loop-nav-btn")
         discover_btn.set_tooltip_text(
-            "Discover & curate — browse what you've made: star it, add it to "
-            "playlists, thread it together (individual artifacts or whole projects)."
+            "Library — browse and collect everything you've made: star it, "
+            "add it to playlists, thread it together."
         )
 
-        # Watch is an ACTION (opens the TT-TV kiosk window), not a surface radio,
-        # but it sits in the loop between Discover and Remix so the cycle reads
-        # left to right. Built HERE now (moved out of _build_ui) so it can be
-        # interleaved in loop order. Same attribute/handler/initial-state as before.
-        self._attractor_btn = Gtk.Button(label="\U0001f4fa Watch")
+        # Watch is a ▶ Play LENS on the Library (opens the TT-TV kiosk for now;
+        # an in-app embedded stream comes later). Not a top-level place, not in
+        # the radio group — a plain action button sitting beside Library. Same
+        # attribute/handler/initial-state as before (relabelled only).
+        self._attractor_btn = Gtk.Button(label="▶ Play")
         self._attractor_btn.add_css_class("loop-nav-btn")
         self._attractor_btn.add_css_class("loop-nav-action")
         self._attractor_btn.set_tooltip_text(
-            "Watch TT-TV — a living kiosk stream of your media that also keeps\n"
-            "generating new content; remix anything you see."
+            "▶ Play — play your Library as TT-TV (full-screen kiosk); it also\n"
+            "keeps generating new content. Remix anything you see."
         )
         self._attractor_btn.set_sensitive(False)
         self._attractor_btn.connect("clicked", self._on_open_attractor)
 
-        remix_btn = Gtk.ToggleButton(label="\U0001f500 Remix")
-        remix_btn.add_css_class("loop-nav-btn")
-        remix_btn.set_tooltip_text(
-            "Remix — the Muse: turn anything into a new pipeline, and go again."
-        )
-
         discover_btn.set_group(create_btn)
-        remix_btn.set_group(create_btn)
 
         create_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_create())
         discover_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_discover())
-        remix_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_remix())
 
         row.append(create_btn)
-        row.append(_sep())
         row.append(discover_btn)
-        row.append(_sep())
         row.append(self._attractor_btn)
-        row.append(_sep())
-        row.append(remix_btn)
-        row.append(_sep("↺", loop=True))
 
         # Keyed lookup for tests and for __init__'s default-active line.
+        # Remix is no longer a nav place (it's a per-item action); the
+        # `_on_loop_nav_remix` METHOD is retained — CreateView's "Start with
+        # inspiration" door still calls it via on_inspiration.
         self._loop_nav = {
             "create": create_btn,
             "discover": discover_btn,
-            "remix": remix_btn,
         }
         self._loop_nav_create_btn = create_btn
         return row
