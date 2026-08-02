@@ -1460,6 +1460,31 @@ popover.picker-popover > contents {
 .log-footer-btn:hover {
     background: rgba(79, 209, 197, 0.25);
 }
+
+/* -- Possibilities wall ("Start something") on the Create surface ---------- */
+.possibilities-wall { padding: 6px 2px; }
+.possibilities-title { font-size: 20px; font-weight: bold; color: @tt_text; }
+.possibilities-surprise {
+    background-color: @tt_accent; color: @tt_bg_darkest;
+    border-radius: 10px; padding: 8px 16px; font-weight: bold;
+}
+.possibilities-card {
+    padding: 0; border-radius: 12px; border: 1px solid @tt_border;
+    background-color: @tt_bg_dark;
+}
+.possibilities-card:hover { border-color: @tt_accent; }
+.possibilities-cap {
+    padding: 8px 10px;
+    background-image: linear-gradient(to top, rgba(4,18,23,0.93), rgba(4,18,23,0.0));
+    border-radius: 0 0 12px 12px;
+}
+.possibilities-med { font-size: 13px; font-weight: bold; color: @tt_text; }
+.possibilities-eg { font-size: 11px; color: @tt_text_muted; }
+.possibilities-grad-icon { font-size: 34px; opacity: 0.55; }
+.poss-grad-image { background-image: linear-gradient(135deg, #123240, #3aa89e); }
+.poss-grad-video { background-image: linear-gradient(135deg, #123f4a, #e0a24a); }
+.poss-grad-gif   { background-image: linear-gradient(135deg, #1a2b4a, #7d3a8f); }
+.poss-grad-text  { background-image: linear-gradient(135deg, #0b1f28, #2b6373); }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
