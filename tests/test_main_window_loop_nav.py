@@ -103,12 +103,14 @@ def _make_mw(tmp_path, monkeypatch):
 
     obj._rebuild_context_menu = MagicMock()
     obj.lookup_action = MagicMock(return_value=None)
+    obj._on_open_attractor = MagicMock()
 
     return obj
 
 
 def test_build_loop_nav_exposes_keyed_buttons(tmp_path, monkeypatch):
-    """_build_loop_nav returns a row and exposes buttons keyed by verb."""
+    """_build_loop_nav returns the loop row: the three keyed verbs plus the
+    Watch action button, in create -> discover -> watch -> remix order."""
     obj = _make_mw(tmp_path, monkeypatch)
 
     row = obj._build_loop_nav()
@@ -117,6 +119,18 @@ def test_build_loop_nav_exposes_keyed_buttons(tmp_path, monkeypatch):
     assert set(obj._loop_nav.keys()) == {"create", "discover", "remix"}
     for btn in obj._loop_nav.values():
         assert isinstance(btn, Gtk.ToggleButton)
+    # Watch is a plain action button built here now (not in _build_ui).
+    assert isinstance(obj._attractor_btn, Gtk.Button)
+    assert not obj._attractor_btn.get_sensitive()  # starts disabled
+
+    # The four verbs appear in loop order among the row's children.
+    labels = []
+    child = row.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Button):
+            labels.append(child.get_label())
+        child = child.get_next_sibling()
+    assert labels == ["✨ Create", "🔭 Discover", "📺 Watch", "🔀 Remix"]
 
 
 def test_create_is_default_active(tmp_path, monkeypatch):

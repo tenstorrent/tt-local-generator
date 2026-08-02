@@ -365,7 +365,7 @@ scrollbar slider:hover {
     background-color: @tt_bg_dark;
     color: @tt_text_muted;
     border: 1px solid @tt_border;
-    border-radius: 0;
+    border-radius: 6px;
     padding: 6px 18px;
     font-size: 13px;
     font-weight: bold;
@@ -379,16 +379,22 @@ scrollbar slider:hover {
     background-color: @tt_border;
     color: @tt_text;
 }
-.loop-nav-btn-left {
-    border-radius: 6px 0 0 6px;
+.loop-nav-arrow {
+    color: @tt_text_muted;
+    padding: 0 5px;
+    font-size: 13px;
 }
-.loop-nav-btn-mid {
-    border-radius: 0;
-    border-left-width: 0;
+.loop-nav-loop {
+    color: @tt_accent;
+    padding: 0 10px 0 5px;
+    font-size: 15px;
+    font-weight: bold;
 }
-.loop-nav-btn-right {
-    border-radius: 0 6px 6px 0;
-    border-left-width: 0;
+.loop-nav-divider {
+    margin: 4px 12px;
+}
+.loop-nav-action {
+    color: @tt_accent;
 }
 .loop-nav-btn-active,
 .loop-nav-btn:checked {
@@ -5459,15 +5465,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # Build and register menu actions before creating the bar
         self._build_menu_actions()
 
-        self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
-        self._attractor_btn.add_css_class("attractor-launch-btn")
-        self._attractor_btn.set_tooltip_text(
-            "Watch TT-TV — plays all media in a kiosk loop\n"
-            "and continuously generates new content."
-        )
-        self._attractor_btn.set_sensitive(False)
-        self._attractor_btn.connect("clicked", self._on_open_attractor)
-        loop_nav_row.append(self._attractor_btn)
+        # ── Pipelines: set apart from the four-verb loop as the advanced tool ──
+        _loop_div = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        _loop_div.add_css_class("loop-nav-divider")
+        loop_nav_row.append(_loop_div)
 
         # ── Pipelines nav entry ────────────────────────────────────────────────
         # Deliberately NOT part of ControlPanel's video/animate/image/artgen
@@ -6683,28 +6684,47 @@ class MainWindow(Gtk.ApplicationWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         row.add_css_class("loop-nav-row")
 
+        def _sep(glyph: str = "→", *, loop: bool = False) -> Gtk.Label:
+            # → = "->", ↺ = the "go again" loop glyph. Kept as escapes
+            # so this stays copy-safe; they are Python str labels, never CSS.
+            lbl = Gtk.Label(label=glyph)
+            lbl.add_css_class("loop-nav-loop" if loop else "loop-nav-arrow")
+            return lbl
+
         create_btn = Gtk.ToggleButton(label="✨ Create")
         create_btn.add_css_class("loop-nav-btn")
-        create_btn.add_css_class("loop-nav-btn-left")
         create_btn.set_tooltip_text(
-            "Create — start something new: an idea, a model, or an inspiration."
+            "Create — start something new: pick a medium or type an idea."
         )
 
         # Discover absorbs Curate: browsing and collecting are one act — you
-        # star, build playlists, and thread things together AS you find them,
-        # across individual artifacts and whole pipelines/projects.
-        discover_btn = Gtk.ToggleButton(label="🔭 Discover")
+        # star, build playlists, and thread things together AS you find them.
+        discover_btn = Gtk.ToggleButton(label="\U0001f52d Discover")
         discover_btn.add_css_class("loop-nav-btn")
-        discover_btn.add_css_class("loop-nav-btn-mid")
         discover_btn.set_tooltip_text(
-            "Discover — browse and collect what you've made: star it, add it to "
+            "Discover & curate — browse what you've made: star it, add it to "
             "playlists, thread it together (individual artifacts or whole projects)."
         )
 
-        remix_btn = Gtk.ToggleButton(label="🔀 Remix")
+        # Watch is an ACTION (opens the TT-TV kiosk window), not a surface radio,
+        # but it sits in the loop between Discover and Remix so the cycle reads
+        # left to right. Built HERE now (moved out of _build_ui) so it can be
+        # interleaved in loop order. Same attribute/handler/initial-state as before.
+        self._attractor_btn = Gtk.Button(label="\U0001f4fa Watch")
+        self._attractor_btn.add_css_class("loop-nav-btn")
+        self._attractor_btn.add_css_class("loop-nav-action")
+        self._attractor_btn.set_tooltip_text(
+            "Watch TT-TV — a living kiosk stream of your media that also keeps\n"
+            "generating new content; remix anything you see."
+        )
+        self._attractor_btn.set_sensitive(False)
+        self._attractor_btn.connect("clicked", self._on_open_attractor)
+
+        remix_btn = Gtk.ToggleButton(label="\U0001f500 Remix")
         remix_btn.add_css_class("loop-nav-btn")
-        remix_btn.add_css_class("loop-nav-btn-right")
-        remix_btn.set_tooltip_text("Remix — the Muse: turn anything into a new pipeline.")
+        remix_btn.set_tooltip_text(
+            "Remix — the Muse: turn anything into a new pipeline, and go again."
+        )
 
         discover_btn.set_group(create_btn)
         remix_btn.set_group(create_btn)
@@ -6714,8 +6734,13 @@ class MainWindow(Gtk.ApplicationWindow):
         remix_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_remix())
 
         row.append(create_btn)
+        row.append(_sep())
         row.append(discover_btn)
+        row.append(_sep())
+        row.append(self._attractor_btn)
+        row.append(_sep())
         row.append(remix_btn)
+        row.append(_sep("↺", loop=True))
 
         # Keyed lookup for tests and for __init__'s default-active line.
         self._loop_nav = {

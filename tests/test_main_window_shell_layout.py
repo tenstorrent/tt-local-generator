@@ -72,7 +72,12 @@ def test_loop_nav_row_captured_and_appended_to_root_box():
 
 
 def test_attractor_btn_appended_to_loop_nav_row():
-    assert "loop_nav_row.append(self._attractor_btn)" in _SRC
+    """SP-1 (four-verb loop nav): Watch's construction+append moved from
+    `_build_ui`'s `loop_nav_row` into `_build_loop_nav` itself (appended onto
+    its own local `row`, interleaved in loop order between Discover and
+    Remix) -- same end result (the button lands in the row `_build_ui`
+    mounts), different call site."""
+    assert "row.append(self._attractor_btn)" in _SRC
 
 
 def test_pipelines_btn_appended_to_loop_nav_row():
