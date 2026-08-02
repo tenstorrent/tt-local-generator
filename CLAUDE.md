@@ -384,6 +384,40 @@ ONE shared implementation instead of forking it per surface:
   methods read. Pinned by dedicated collect-equality tests (as well as the
   pre-existing `test_role_zone_panel.py` suite, unaffected by this change).
 
+## Possibilities wall (v0.53.0)
+
+`app/possibilities.py` — `PossibilitiesWall`, a full-width "Start something"
+wall mounted as the FIRST child of `CreateView`'s form column
+(`CreateView.__init__`, before the doors row), one exemplar tile per
+`mediums_fn()` medium. Each tile's art resolves in a three-tier priority so
+the wall is never empty and never a hard dependency on shipped samples:
+
+1. **YOUR latest** piece of that medium (`media_store` query by
+   `media_type`/`generator_type`, newest first) — the wall gets richer as you
+   create.
+2. a **curated** sample — a record from a "demo"/favorites-style playlist
+   (`curated_playlist_matcher`, default matches name substrings
+   demo/sample/showcase/favorite). A future optional curated-samples `.deb`
+   that drops records into the same `media_store` on install is a natural
+   source for this tier; nothing in the wall hard-depends on one existing —
+   it's discovered by playlist name, not a special package hook.
+3. a per-kind **gradient + icon** (`poss-grad-*` CSS classes) — always works,
+   no assets, so a fresh profile with an empty store still shows a full wall
+   instead of a blank page.
+
+**Seeds the composer, does not replace it.** Tapping a tile (or "✨ Surprise
+me") calls `CreateView._on_possibility_picked(medium, idea)`, which only
+selects the medium chip (`self._chip_buttons[medium.id].set_active(True)` —
+the same "toggled" path a manual chip click takes), switches to the idea
+door, and fills `_prompt_entry`'s text. It never sets a generation param
+directly, so `_collect_params()` is byte-for-byte identical whether a tile
+was picked or the same medium + prompt were set by hand — pinned by
+`tests/test_create_view_possibilities.py::test_collect_params_unchanged_by_pick`.
+Constructed defensively in `CreateView.__init__` (try/except around
+`PossibilitiesWall(...)`, `self._possibilities = None` on failure, skipped in
+the mount) so a wall failure (e.g. the real `media_store` singleton raising
+during art resolution) can never break Create.
+
 ## Model status (single source of truth)
 
 `app/model_status.py` — `ModelStatusService`, a **GUI-free** single source of

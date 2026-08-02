@@ -1,3 +1,20 @@
+tt-local-generator (0.53.0) noble; urgency=medium
+
+  * feat(create): the Create surface now opens to a "Start something"
+    possibilities wall (`app/possibilities.py`, SP-2 Task 1) — one exemplar
+    tile per medium, resolving its art in priority order: YOUR latest piece
+    of that medium, else a CURATED demo/favorites-playlist sample, else a
+    per-kind gradient + icon (always works, no assets, no blank page on a
+    fresh profile). An optional curated-samples .deb dropping records into
+    the same store is a natural future curated source; nothing in the wall
+    hard-depends on one existing today. Tapping a tile (or "✨ Surprise me")
+    only SEEDS the existing composer — selects the medium chip and fills the
+    idea-door prompt entry — it never touches a generation param directly,
+    so `CreateView._collect_params()` is byte-for-byte unaffected (SP-2
+    Task 2, pinned by tests/test_create_view_possibilities.py).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 09:43:02 -0700
+
 tt-local-generator (0.52.0) noble; urgency=medium
 
   * feat(nav): reframe the top nav into the four-verb creative loop

@@ -109,6 +109,7 @@ from create_param_panels import (  # noqa: E402
     VideoParamPanel,
 )
 from model_status import Status  # noqa: E402
+from possibilities import PossibilitiesWall  # noqa: E402
 
 # Video-only alias: server_manager's key for the Wan2.2 text-to-video service
 # is "wan2.2", but VideoParamPanel's own internal short key (and therefore
@@ -969,9 +970,29 @@ class CreateView(Gtk.Box):
         # too.
         self._model_dropdown.connect("notify::selected", self._on_scoped_model_dropdown_changed)
 
+        # "Start something" possibilities wall (SP-2 Task 2): a full-width
+        # wall of per-medium exemplar tiles above the doors/chips. Tapping a
+        # tile calls `_on_possibility_picked`, which only SEEDS the existing
+        # composer (selects the medium chip, switches to the idea door, fills
+        # the prompt entry) — it never touches a generation param directly,
+        # so `_collect_params()` is byte-for-byte identical to doing the same
+        # three steps by hand (pinned by
+        # tests/test_create_view_possibilities.py::test_collect_params_unchanged_by_pick).
+        # Constructed defensively: a wall failure (e.g. the real media_store
+        # singleton raising during art resolution) must never break Create.
+        try:
+            self._possibilities = PossibilitiesWall(
+                mediums_fn=self._mediums_fn,
+                on_pick=self._on_possibility_picked,
+            )
+        except Exception:
+            self._possibilities = None
+
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         content.add_css_class("create-view-content")
         content.add_css_class("create-form-pane")
+        if self._possibilities is not None:
+            content.append(self._possibilities)
         content.append(self._build_doors_row())
         content.append(self._build_idea_row())
         content.append(self._build_model_door_row())
@@ -1536,6 +1557,29 @@ class CreateView(Gtk.Box):
             first_btn.set_active(True)  # fires _select_medium via "toggled"
 
         return row
+
+    def _on_possibility_picked(self, medium: Medium, idea: str) -> None:
+        """Seed the existing composer from a possibilities-wall tile: select
+        the medium chip (fires `_select_medium` -> `_swap_panel` via the same
+        "toggled" path a manual chip click takes), switch to the idea door,
+        and fill the prompt entry.
+
+        Pure convenience wiring — it touches no generation param directly, so
+        `_collect_params()` is byte-for-byte identical whether a tile was
+        picked or the same medium + prompt were set by hand (pinned by
+        tests/test_create_view_possibilities.py::test_collect_params_unchanged_by_pick).
+        """
+        btn = self._chip_buttons.get(medium.id)
+        if btn is not None and not btn.get_active():
+            btn.set_active(True)  # fires _select_medium -> _swap_panel via "toggled"
+        elif btn is not None:
+            self._select_medium(medium)  # already active -> ensure panel matches
+        door = self._doors.get("idea")
+        if door is not None and not door.get_active():
+            door.set_active(True)
+        if getattr(self, "_prompt_entry", None) is not None:
+            self._prompt_entry.set_text(idea)
+            self._prompt_entry.grab_focus()
 
     def _select_medium(self, medium: Medium) -> None:
         self._active_medium = medium
