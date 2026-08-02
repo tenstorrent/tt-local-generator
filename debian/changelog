@@ -1,3 +1,24 @@
+tt-local-generator (0.55.0) noble; urgency=medium
+
+  * feat(create): Create now checks server readiness before launching a job.
+    If the required server isn't running (or a different server is running
+    on the same shared Blackhole hardware group), a confirm dialog names the
+    stop/reset/start plan; only on accept does it stop the conflicting server,
+    reset the boards (tt-smi -r), start the needed one, and launch the job
+    once healthy. A ready server launches with no dialog, unchanged. Reuses
+    `ready_to_run.plan_switch` (RN-S t1), `server_manager`,
+    `pipeline_engine._tt_smi_reset`, and `ServersControl`'s log — no new
+    hardware-touching code path. Confirm-before-switch is a hard safety rule
+    on this hardware (a QB2 card has hard-locked the box on backend-switch
+    churn before). Also fixes a latent bug in `ready_to_run.conflicting_server`:
+    wrapping a real `model_status.Status` enum value in `str()` before
+    lowering it returned "Status.READY" instead of "ready" (Python 3.11+
+    Enum.__str__), so the live gate would never have detected a conflicting
+    server — masked previously because the Task 1 tests only ever passed
+    plain strings. Fixed by dropping the `str()` wrapper.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 14:29:34 -0700
+
 tt-local-generator (0.54.0) noble; urgency=medium
 
   * feat(nav): revise the top nav to the two-place model — ✨ Create · 🗂 Library

@@ -53,7 +53,15 @@ def conflicting_server(target_key: str, status_of: Callable[[str], str]) -> Opti
     for key in server_manager.SERVERS:
         if key == target_key or _group_of(key) != group:
             continue
-        if str(status_of(key)).lower() in ("ready", "starting"):
+        # NOTE: `.lower()` directly on the status value, NOT `str(status_of(key))`.
+        # `model_status.Status` is a `(str, Enum)` whose `__str__` (Python 3.11+)
+        # returns "Status.READY", not "ready" — wrapping in str() first would
+        # silently defeat conflict detection for every REAL caller (the live
+        # `_status_service.status()` returns `Status` members), even though the
+        # plain-string status_of fakes in tests/test_ready_to_run.py never
+        # exercised this path. `.lower()` operates on the underlying str data on
+        # both a plain str and a Status member, so this works for either.
+        if status_of(key).lower() in ("ready", "starting"):
             return key
     return None
 

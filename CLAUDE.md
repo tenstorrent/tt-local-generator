@@ -1328,3 +1328,47 @@ Qwen servers on LAN don't get false-negative health checks.
 
 **Gallery ordering** fixed: `_load_history` now sorts merged local+remote records by
 `created_at` descending so downloaded records appear chronologically, not at the top.
+
+---
+
+## Ready-to-Run gate (RN-S, v0.55.0)
+
+`app/ready_to_run.py` (GUI-free) decides whether a Create job's required server
+needs starting/switching: `plan_switch(selected_model_key, status_of) ->
+SwitchPlan(target, conflict, needs_reset)`. `target` is `None` when the
+selection maps to no real `server_manager.SERVERS` key (empty selection, or a
+synthetic/self-contained medium like AnimateDiff) — nothing to gate.
+`conflict` is a currently READY/STARTING server sharing `target`'s hardware
+group (media: video/image/animate all share the port-8000 diffusion server;
+artgen servers share the port-8002 slot) that would have to be stopped +
+reset first.
+
+`MainWindow._ensure_server_ready_then(medium, params)` is the gate in front of
+`_on_create_generate`'s dispatch: ready/no-target -> `_launch_create_job`
+(the extracted former dispatch body) runs immediately, same as before; not
+ready -> `_confirm_start_server` shows a dialog naming the stop/reset/start
+plan, and only on **explicit accept** does `_perform_switch_then` run the
+switch on a background thread (stop conflict -> `pipeline_engine._tt_smi_reset()`
+if needed -> `server_manager.start` -> poll `is_healthy` -> `_launch_create_job`).
+All widget touches go through `GLib.idle_add`; `ServersControl`'s log and
+`ModelStatusService.note_starting/note_stopping` are reused, not duplicated.
+
+**Hard safety rule, non-negotiable:** the switch only ever executes after the
+user accepts the confirm dialog — never auto-run. Backend-switch churn has
+hard-locked this box before (see `reference_qb2_card924055_fragility` in
+memory); confirm-before-switch is the guard against that.
+
+**Bug found and fixed while wiring this up:** `ready_to_run.conflicting_server`
+originally did `str(status_of(key)).lower()` — but `model_status.Status` is a
+`(str, Enum)` whose `__str__` (Python 3.11+) returns `"Status.READY"`, not
+`"ready"`, so the live gate (fed real `Status` values by
+`ModelStatusService.status()`) would never have detected a conflict. Task 1's
+own tests only ever passed plain strings, masking it. Fixed by dropping the
+`str()` wrapper — `.lower()` alone works on both a plain string and a `Status`
+member (it operates on the underlying str data, unaffected by the Enum's
+`__str__` override).
+
+**Follow-ons (not done here):** Pipeline Studio already switches servers
+between steps with its own UX — worth reconciling with this confirm-dialog
+pattern later for consistency. A readiness-clarity pass on the Create option
+labels themselves is optional; the status dots already convey it.

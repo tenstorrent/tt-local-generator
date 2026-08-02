@@ -8710,6 +8710,19 @@ class MainWindow(Gtk.ApplicationWindow):
                     f"{medium.label} can't be queued yet; try again once it finishes."
                 )
             return
+        # RN-S: make sure the server this job needs is ready first. If it is
+        # (or there's nothing to start), launch now; otherwise a confirm dialog
+        # starts it (stopping + resetting a conflicting server) and launches
+        # when ready. Confirm-before-switch — churn is risky on this hardware.
+        try:
+            self._ensure_server_ready_then(medium, params)
+        except Exception as exc:
+            self._set_status(f"Couldn't start generation: {exc}")
+
+    def _launch_create_job(self, medium, params: dict) -> None:
+        """The begin+dispatch half of a Create job (extracted from
+        `_on_create_generate` for RN-S so the server-readiness gate can defer
+        it). Body is the former dispatch verbatim — same soft-fail semantics."""
         try:
             if medium.source == "native":
                 self._begin_create_job(medium, params)
@@ -8732,6 +8745,110 @@ class MainWindow(Gtk.ApplicationWindow):
             # unconditionally.
             self._fail_create_job(str(exc))
             self._set_status(f"Couldn't start generation: {exc}")
+
+    def _ensure_server_ready_then(self, medium, params: dict) -> None:
+        """RN-S gate: launch now if the required server is ready / nothing to
+        start; else show the confirm-and-start dialog and defer the launch."""
+        import ready_to_run
+        from model_status import Status
+        svc = getattr(self, "_status_service", None)
+        if svc is None:
+            self._launch_create_job(medium, params)
+            return
+        try:
+            selected = self._create_view._selected_model_key()
+        except Exception:
+            selected = None
+        plan = ready_to_run.plan_switch(selected, lambda k: svc.status(k))
+        if plan.target is None or svc.status(plan.target) == Status.READY:
+            self._launch_create_job(medium, params)
+            return
+        self._confirm_start_server(
+            plan, medium, lambda: self._launch_create_job(medium, params)
+        )
+
+    def _confirm_start_server(self, plan, medium, proceed) -> None:
+        """Confirm dialog for starting `plan.target` (stopping + tt-smi -r a
+        conflicting server first). On accept -> `_perform_switch_then`; on
+        cancel -> nothing (the job never began — no pending state to clear)."""
+        target_label = _sm.SERVERS[plan.target].label
+        text = f"Start the {target_label} server for {medium.label}?"
+        if plan.conflict:
+            conflict_label = _sm.SERVERS[plan.conflict].label
+            secondary = (
+                f"{conflict_label} is running on the shared Blackhole chips. It "
+                f"will be stopped and the boards reset (tt-smi -r) before "
+                f"{target_label} starts — this can take a few minutes."
+            )
+        else:
+            secondary = (
+                f"{target_label} isn't running yet. Start it? "
+                f"This can take a few minutes to warm up."
+            )
+        dialog = Gtk.MessageDialog(
+            modal=True, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE, text=text, secondary_text=secondary,
+        )
+        dialog.set_transient_for(self)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        start_btn = dialog.add_button(f"Start {target_label}", Gtk.ResponseType.ACCEPT)
+        start_btn.add_css_class("suggested-action")
+
+        def _on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.ACCEPT:
+                self._perform_switch_then(plan, proceed)
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
+    def _perform_switch_then(self, plan, proceed) -> None:
+        """Stop any conflicting server (+ tt-smi -r), start `plan.target`, and
+        run `proceed` once it's healthy. Reuses server_manager + pipeline_engine's
+        reset + ServersControl's log. All widget updates via GLib.idle_add."""
+        import pipeline_engine
+        target = plan.target
+        self._servers_control.set_server_launching(target, True)
+        self._servers_control.append_server_log(
+            f"Preparing {target}…"
+            + (f" (stopping {plan.conflict} + reset)" if plan.conflict else "")
+        )
+
+        def run() -> None:
+            try:
+                if plan.conflict:
+                    _sm.stop(plan.conflict)
+                    try:
+                        self._status_service.note_stopping(plan.conflict)
+                    except Exception:
+                        pass
+                    if plan.needs_reset:
+                        GLib.idle_add(self._servers_control.append_server_log,
+                                      "Resetting boards (tt-smi -r)…")
+                        pipeline_engine._tt_smi_reset()
+                GLib.idle_add(self._servers_control.append_server_log, f"Starting {target}…")
+                _sm.start(target, gui=True)
+                try:
+                    self._status_service.note_starting(target)
+                except Exception:
+                    pass
+                waited, deadline = 0, 1800   # first-run compiles can be long
+                while waited < deadline:
+                    if _sm.is_healthy(target):
+                        GLib.idle_add(self._servers_control.append_server_log, f"{target} ready.")
+                        GLib.idle_add(self._servers_control.set_server_launching, target, False)
+                        GLib.idle_add(proceed)
+                        return
+                    time.sleep(15)
+                    waited += 15
+                GLib.idle_add(self._servers_control.append_server_log,
+                              f"{target} didn't become ready in time — try again from Create.")
+                GLib.idle_add(self._servers_control.set_server_launching, target, False)
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error starting {target}: {e}")
+                GLib.idle_add(self._servers_control.set_server_launching, target, False)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _begin_create_job(self, medium, params: dict) -> None:
         """Mark a Create-originated generation as active and put the inline
