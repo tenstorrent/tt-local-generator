@@ -6842,12 +6842,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self._uncheck_pipelines_toggle_if_active()
         self._gallery_stack.set_visible_child_name("create")
 
-        # Restore the right detail pane to the startup Create state (visible
-        # — `_build_ui` leaves it at its GTK4 default, and startup's own
-        # `_on_loop_nav_create` never touches it). Discover doesn't collapse
-        # it either (only Pipelines does), but a Pipelines→Create hop needs
-        # this restored.
-        self._detail_wrap.set_visible(True)
+        # Create is full-width: CreateView carries its OWN result area
+        # (CreateResultPanel), so the Discover detail pane has no role here.
+        # Leaving it visible showed a dead "← Click a card to preview"
+        # placeholder that the Create surface's possibility tiles never feed
+        # (they seed the composer) — a false-promise pane. Hide it so Create
+        # gets the whole width. `_on_loop_nav_discover` re-shows it (it's the
+        # surface that actually has cards to preview).
+        self._detail_wrap.set_visible(False)
 
         # SP-3d-6: the Discover-only media-type switcher must not linger
         # underneath Create.
@@ -6871,6 +6873,10 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         source = self._current_medium_source()
         self._sync_gallery_to_source(source)
+
+        # Discover is the surface that actually has cards to preview, so its
+        # detail pane must be visible here (Create now hides it for full width).
+        self._detail_wrap.set_visible(True)
 
         row = getattr(self, "_discover_type_row", None)
         if row is not None:

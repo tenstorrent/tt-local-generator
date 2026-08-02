@@ -202,21 +202,21 @@ def test_loop_nav_discover_routes_to_gallery_full_width(tmp_path, monkeypatch):
     assert obj._detail_wrap.get_visible() is True
 
 
-def test_loop_nav_discover_then_create_restores_detail_pane(tmp_path, monkeypatch):
-    """Returning to Create after Discover must leave `_detail_wrap` visible,
-    matching the startup Create state — this only actually changes anything
-    once Pipelines has been visited (which collapses it), but this guards
-    that Create's own handler always re-asserts it visible regardless."""
+def test_loop_nav_discover_then_create_hides_detail_pane(tmp_path, monkeypatch):
+    """Create is full-width and hides `_detail_wrap` (CreateView owns its own
+    result area); Discover shows it. So Discover(shows)->Create(hides) must
+    leave the pane hidden — no dead 'click a card to preview' placeholder on
+    the Create surface, whose possibility tiles seed the composer, not the pane."""
     obj = _make_mw(tmp_path, monkeypatch)
     obj._build_loop_nav()
 
+    obj._loop_nav["discover"].set_active(True)
     assert obj._detail_wrap.get_visible() is True
 
-    obj._loop_nav["discover"].set_active(True)
     obj._loop_nav["create"].set_active(True)
 
     assert obj._gallery_stack.get_visible_child_name() == "create"
-    assert obj._detail_wrap.get_visible() is True
+    assert obj._detail_wrap.get_visible() is False
 
 
 def test_loop_nav_remix_calls_show_muse(tmp_path, monkeypatch):
@@ -348,3 +348,18 @@ def test_discover_type_row_hidden_in_remix(tmp_path, monkeypatch):
     obj._loop_nav["remix"].set_active(True)
 
     assert obj._discover_type_row.get_visible() is False
+
+
+def test_create_hides_detail_pane_and_discover_shows_it(tmp_path, monkeypatch):
+    """Create is full-width (CreateView owns its own result area), so the
+    Discover detail pane is hidden on Create — no dead 'click a card to
+    preview' false promise. Discover re-shows it (it has cards to preview)."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+
+    obj._detail_wrap.set_visible(True)
+    obj._loop_nav["create"].set_active(True)
+    assert obj._detail_wrap.get_visible() is False
+
+    obj._loop_nav["discover"].set_active(True)
+    assert obj._detail_wrap.get_visible() is True
