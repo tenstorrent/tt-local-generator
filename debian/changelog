@@ -1,10 +1,9 @@
-tt-local-generator (0.58.0) noble; urgency=medium
+tt-local-generator (0.58.1) noble; urgency=medium
 
-  * ui(create): compact the Create column toward the release's cohesive
-    generation panel — hide the redundant idea/model/inspiration doors row
-    (the possibilities wall is the entry point now; _doors/entry-mode wiring
-    kept intact) and shrink the possibilities band, reclaiming vertical space
-    so the flow is closer to fitting without scrolling.
+  * ui(create): give the form pane the growth room (more room on the left) and
+    cap the result/recents pane at ~400px — the form no longer gets squeezed
+    into half the width, so its rows lay out wider and the flow is closer to
+    fitting without scrolling.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 06:28:00 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 06:31:46 -0700
 

@@ -1092,7 +1092,14 @@ class CreateView(Gtk.Box):
         panes.set_homogeneous(False)
         panes.add_css_class("create-panes")
 
-        result_pane.set_hexpand(True)
+        # Give the FORM the growth room (more room on the left) and cap the
+        # result pane: the form is where you compose, so it should get the
+        # extra width when the window is wide; the result/recents panel reads
+        # fine in a fixed ~400px column. (Was the reverse — result hexpanded and
+        # squeezed the form.) FlowBox still reflows to stacked on a narrow window.
+        form_pane.set_hexpand(True)
+        result_pane.set_hexpand(False)
+        result_pane.set_size_request(400, -1)
         panes.append(form_pane)
         panes.append(result_pane)
 
