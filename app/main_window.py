@@ -1651,6 +1651,7 @@ _VIDEO_MODEL_IDS: dict = {
     "mochi":        "mochi-1-preview",
     "skyreels":     "skyreels-v2-i2v-14b-540p",
     "animatediff":  "animatediff-blackhole",
+    "animate":      "wan2.2-animate-14b",   # Video-model routing only; not a panel choice
 }
 _IMAGE_MODEL_IDS: dict = {
     "flux":           "flux.1-schnell",

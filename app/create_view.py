@@ -1768,7 +1768,11 @@ class CreateView(Gtk.Box):
         cap = "artgen" if medium.source == "artgen" else medium.id
         keys = [sdef.key for sdef in server_manager.servers_for_capability(cap)]
         if medium.id == "video":
-            keys.append("animatediff")
+            # AnimateDiff (local, no server) leads — always-ready + the
+            # index-0 auto-select fallback. Animate (Wan2.2-Animate) is a
+            # real server keyed ("animate",), so servers_for_capability("video")
+            # won't return it; append it as a Video model by hand.
+            keys = ["animatediff"] + keys + ["animate"]
         if medium.source == "artgen":
             detected_key = self._detected_model_key()
             if detected_key is not None:
