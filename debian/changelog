@@ -1,12 +1,11 @@
-tt-local-generator (0.58.3) noble; urgency=medium
+tt-local-generator (0.58.4) noble; urgency=medium
 
-  * ui(create): fix the big left gutter — the width cap now flush-LEFT aligns
-    (align="start" on MaxWidthBin) instead of centering, so a wide window no
-    longer leaves ~240px of empty padding on the left.
-  * ui(create): compact form column (~660px) with the result pane filling the
-    rest, top-aligned — echoing the release's generation-panel + content layout.
-  * fix(create): the seed-image well no longer stretches into a tall vertical
-    bar (fixed compact square, valign start) — the "wonky form" is gone.
+  * ui(create): possibilities-wall tile art now comes ONLY from curated
+    collections — the per-type playlists (Ansis, Palettes, Verses,
+    Animatediffs, …, matched by name) and any demo/favorite playlist,
+    preferring starred picks — instead of surfacing an arbitrary recent
+    generation (which had put unflattering/test images on the medium tiles).
+    A medium with no curated sample falls to the clean per-kind gradient.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 07:05:36 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 08:00:48 -0700
 

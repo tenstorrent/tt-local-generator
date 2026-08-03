@@ -176,34 +176,49 @@ class PossibilitiesWall(Gtk.Box):
         box.append(icon)
         return box
 
+    def _is_curated_for(self, name: str, key: str) -> bool:
+        """A playlist is a curated art source for a medium if it's a
+        demo/favorite playlist (via the injected matcher) OR a per-type
+        playlist whose name is the plural of the medium/generator — e.g.
+        "Ansis"->ansi, "Palettes"->palette, "Animatediffs"->animatediff."""
+        try:
+            if self._match(name):
+                return True
+        except Exception:
+            pass
+        n = (name or "").lower().strip()
+        return bool(key) and (n.rstrip("s") == key or n.rstrip("s") == key.rstrip("s"))
+
     def _resolve_tile_art(self, medium):
         mt = "artgen" if medium.source == "artgen" else medium.id
         gt = medium.generator if medium.source == "artgen" else None
-        # 1. your latest
+        # Tile art comes ONLY from CURATED collections — the user's per-type
+        # playlists (Ansis, Palettes, Verses, Animatediffs, …) and any
+        # demo/favorite playlist — preferring starred picks. We deliberately do
+        # NOT surface an arbitrary recent generation (that put unflattering /
+        # test images on the medium tiles); a medium with no curated sample
+        # gets the clean per-kind gradient instead.
+        key = (medium.generator or medium.id or "").lower()
         try:
-            recs = self._store.query(media_type=mt, generator_type=gt, limit=1)
+            playlists = self._store.list_playlists()
+        except Exception:
+            playlists = []
+        for pl in playlists:
+            if not self._is_curated_for(pl.get("name", ""), key):
+                continue
+            try:
+                recs = self._store.playlist_records(pl["id"])
+            except Exception:
+                continue
+            recs = sorted(recs, key=lambda r: -int(getattr(r, "starred", 0) or 0))
             for r in recs:
+                if getattr(r, "media_type", None) != mt:
+                    continue
+                if gt is not None and getattr(r, "generator_type", None) != gt:
+                    continue
                 t = getattr(r, "thumbnail_path", None)
                 if t and os.path.exists(t):
                     return ("thumb", t)
-        except Exception:
-            pass
-        # 2. curated playlist
-        try:
-            for pl in self._store.list_playlists():
-                if not self._match(pl.get("name", "")):
-                    continue
-                for r in self._store.playlist_records(pl["id"]):
-                    if getattr(r, "media_type", None) != mt:
-                        continue
-                    if gt is not None and getattr(r, "generator_type", None) != gt:
-                        continue
-                    t = getattr(r, "thumbnail_path", None)
-                    if t and os.path.exists(t):
-                        return ("thumb", t)
-        except Exception:
-            pass
-        # 3. gradient
         return ("gradient", None)
 
     def _activate_card(self, medium) -> None:

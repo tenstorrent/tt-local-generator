@@ -71,28 +71,56 @@ def test_pick_fires_on_pick_with_medium_and_idea(tmp_path):
     assert picked and picked[0][0] == "image" and isinstance(picked[0][1], str) and picked[0][1]
 
 
-def test_art_resolution_prefers_your_latest(tmp_path):
+def test_art_uses_curated_not_arbitrary_recent(tmp_path):
+    """Tile art comes from a CURATED playlist, never an arbitrary recent
+    generation — recents put unflattering/test images on the medium tiles.
+    Even when a recent exists, the curated pick is used (and the recent isn't)."""
     from possibilities import PossibilitiesWall
     meds = [_medium("image")]
-    store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(tmp_path/'mine.png'))]})
-    (tmp_path/'mine.png').write_bytes(b"\x89PNG\r\n")   # exists on disk
+    recent = tmp_path / "recent.png"; recent.write_bytes(b"\x89PNG\r\n")
+    curated = tmp_path / "curated.png"; curated.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(
+        latest={("image", None): [_rec("image", thumb=str(recent))]},   # would-be recent
+        playlists=[{"id": "p1", "name": "The Demo"}],                    # demo = curated
+        playlist_recs={"p1": [_rec("image", thumb=str(curated))]},
+    )
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
-    kind, payload = wall._resolve_tile_art(meds[0])
-    assert kind == "thumb" and payload == str(tmp_path/'mine.png')
+    assert wall._resolve_tile_art(meds[0]) == ("thumb", str(curated))
 
 
-def test_art_resolution_falls_back_to_curated_then_gradient(tmp_path):
+def test_art_per_type_playlist_matches_by_name(tmp_path):
+    """A per-type playlist (name = plural of the generator, e.g. "Ansis") is a
+    curated source even though it doesn't match the demo/favorite name pattern."""
     from possibilities import PossibilitiesWall
-    meds = [_medium("verse", kind="text", source="artgen", generator="verse")]
-    # no personal work; a curated playlist named "demo" holds a matching artgen/verse rec
-    thumb = tmp_path/'curated.png'; thumb.write_bytes(b"\x89PNG\r\n")
-    store = _FakeStore(playlists=[{"id": "p1", "name": "The Demo"}],
-                       playlist_recs={"p1": [_rec("artgen", "verse", str(thumb))]})
+    meds = [_medium("ansi", kind="text", source="artgen", generator="ansi")]
+    thumb = tmp_path / "a.png"; thumb.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(playlists=[{"id": "p", "name": "Ansis"}],
+                       playlist_recs={"p": [_rec("artgen", "ansi", str(thumb))]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(thumb))
-    # with NOTHING anywhere -> gradient tier, never raises
-    bare = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=_FakeStore())
-    assert bare._resolve_tile_art(meds[0])[0] == "gradient"
+
+
+def test_art_gradient_when_no_curated_even_if_recent_exists(tmp_path):
+    """No curated playlist -> gradient, and the recent generation is NOT used."""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("image")]
+    recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(recent))]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    assert wall._resolve_tile_art(meds[0])[0] == "gradient"
+
+
+def test_art_prefers_starred_within_curated(tmp_path):
+    from possibilities import PossibilitiesWall
+    meds = [_medium("verse", kind="text", source="artgen", generator="verse")]
+    plain = tmp_path / "plain.png"; plain.write_bytes(b"\x89PNG\r\n")
+    star = tmp_path / "star.png"; star.write_bytes(b"\x89PNG\r\n")
+    r_plain = _rec("artgen", "verse", str(plain)); r_plain.starred = 0
+    r_star = _rec("artgen", "verse", str(star)); r_star.starred = 1
+    store = _FakeStore(playlists=[{"id": "p", "name": "Verses"}],
+                       playlist_recs={"p": [r_plain, r_star]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    assert wall._resolve_tile_art(meds[0]) == ("thumb", str(star))
 
 
 def test_empty_store_builds_all_gradient_no_exception(tmp_path):
@@ -100,20 +128,3 @@ def test_empty_store_builds_all_gradient_no_exception(tmp_path):
     meds = [_medium("image"), _medium("video", kind="video"), _medium("ansi", kind="text", source="artgen", generator="ansi")]
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=_FakeStore())
     assert wall.card_count() == 3
-
-
-def test_your_latest_beats_curated_when_both_present(tmp_path):
-    """Tier-1 (your latest) wins over tier-2 (curated playlist) when BOTH have a
-    usable thumbnail for the same medium — proves the priority order by putting
-    the tiers in direct competition, not in isolation."""
-    from possibilities import PossibilitiesWall
-    meds = [_medium("image")]
-    mine = tmp_path / "mine.png"; mine.write_bytes(b"\x89PNG\r\n")
-    curated = tmp_path / "curated.png"; curated.write_bytes(b"\x89PNG\r\n")
-    store = _FakeStore(
-        latest={("image", None): [_rec("image", thumb=str(mine))]},
-        playlists=[{"id": "p1", "name": "The Demo"}],
-        playlist_recs={"p1": [_rec("image", thumb=str(curated))]},
-    )
-    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
-    assert wall._resolve_tile_art(meds[0]) == ("thumb", str(mine))
