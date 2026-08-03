@@ -5813,7 +5813,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_lbl.add_controller(_status_click)
 
         inner_paned.set_start_child(gallery_wrap)
-        inner_paned.set_shrink_start_child(False)
+        # Shrinkable so the divider is driven by an explicit, deterministic
+        # position (see `_reset_detail_split`), NOT by each gallery's varying
+        # content min-width — that content-driven forcing was the source of the
+        # Library "left column jitters narrower/wider depending on click order".
+        inner_paned.set_shrink_start_child(True)
 
         self._detail = DetailPanel(
             download_cb=lambda rec_id, dest: self._client.download(rec_id, Path(dest)),
@@ -6384,6 +6388,39 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._prefs_dialog._director_drop.set_selected(i)
                     break
 
+    _DETAIL_PANE_WIDTH = 440  # DetailPanel's 420px min + a little handle slack
+
+    def _reset_detail_split(self) -> None:
+        """Snap `inner_paned`'s divider to a deterministic split: the detail
+        pane gets a fixed ~440px on the right, the gallery gets everything else.
+
+        This is the fix for the Library jitter — with the start child now
+        shrinkable, the divider is driven purely by this explicit position, so
+        the gallery no longer flips narrower/wider depending on the order you
+        switch sections (that was each gallery's varying content min-width
+        fighting a stale divider position). No-op without `_inner_paned` (test
+        harnesses); retries once after allocation if the window isn't sized yet."""
+        ip = getattr(self, "_inner_paned", None)
+        if ip is None:
+            return
+        try:
+            width = ip.get_allocation().width
+        except Exception:
+            return
+        if width and width > 100:
+            ip.set_position(max(360, width - self._DETAIL_PANE_WIDTH))
+        else:
+            # not allocated yet — set once after the next layout pass
+            GLib.idle_add(self._reset_detail_split_once)
+
+    def _reset_detail_split_once(self) -> bool:
+        ip = getattr(self, "_inner_paned", None)
+        if ip is not None:
+            width = ip.get_allocation().width
+            if width and width > 100:
+                ip.set_position(max(360, width - self._DETAIL_PANE_WIDTH))
+        return False  # GLib.idle_add: run once
+
     def _set_detail_pane_visible(self, visible: bool) -> None:
         """Show/hide the detail pane and keep `self._detail_visible` in sync.
 
@@ -6776,6 +6813,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self._uncheck_pipelines_toggle_if_active()
         self._gallery_stack.set_visible_child_name(source)
         self._rebuild_context_menu(source)
+        # Re-establish a deterministic gallery|detail split on every switch so
+        # the left column doesn't jitter narrower/wider by click order.
+        self._reset_detail_split()
 
     # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────────
     #

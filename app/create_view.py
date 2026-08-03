@@ -2218,6 +2218,19 @@ class CreateView(Gtk.Box):
         self._cta_btn = btn
         row.append(btn)
 
+        # "Surprise me" lives here in the reserved button area (moved out of the
+        # possibilities-wall header) — it drives the wall's `surprise()` to pick
+        # a medium + seed the composer. Guarded: no wall -> no button.
+        if getattr(self, "_possibilities", None) is not None:
+            surprise_btn = Gtk.Button(label="✨ Surprise me")
+            surprise_btn.add_css_class("create-surprise-btn")
+            surprise_btn.set_tooltip_text("Pick a medium and idea for me")
+            surprise_btn.connect("clicked", lambda _b: self._possibilities.surprise())
+            self._surprise_btn = surprise_btn
+            row.append(surprise_btn)
+        else:
+            self._surprise_btn = None
+
         # SP-3d-1: Theme Set — generates a coherent N-shot themed batch and
         # queues it for the active medium, migrated from ControlPanel's own
         # "🎬 Theme Set" button (never reimplemented — see `_on_theme_set`'s

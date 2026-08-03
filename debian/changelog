@@ -1,28 +1,12 @@
-tt-local-generator (0.59.0) noble; urgency=medium
+tt-local-generator (0.59.1) noble; urgency=medium
 
-  * feat(nav): "you are here" breadcrumb + live-context tray (RN-2). New
-    `app/nav_widgets.py` (`Breadcrumb`, `ContextTray`) renders RN-2 Task 1's
-    `NavState`/`Crumb`/`Context` model — GTK views that subscribe and
-    re-render via `GLib.idle_add`, so a later off-thread context mutation is
-    safe. Mounted into `MainWindow`: a slim breadcrumb row under the menu
-    bar, and the context tray between the loop-nav spacer and the Servers
-    button (empty/hidden until RN-2 Task 3 registers live contexts).
-    Crumbs are set on every navigation (`_set_crumbs`, a no-op guard when
-    `_nav_state` is absent so existing bare test harnesses are unaffected):
-    Create, Library, Pipelines, Library › Watch, and Library › <item> (a
-    ~40-char title derived from the record's prompt, safely defaulting to
-    "Untitled" when absent).
+  * fix(library): deterministic gallery|detail split — the start child is now
+    shrinkable and the divider is snapped to a fixed position on every section
+    switch (_reset_detail_split), so the left column no longer jitters
+    narrower/wider depending on click order (content min-width was fighting a
+    stale divider position).
+  * ui(create): move "Surprise me" out of the possibilities-wall header into the
+    bottom CTA button area, beside Create (drives the wall's surprise()).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 08:58:27 -0700
-
-tt-local-generator (0.58.4) noble; urgency=medium
-
-  * ui(create): possibilities-wall tile art now comes ONLY from curated
-    collections — the per-type playlists (Ansis, Palettes, Verses,
-    Animatediffs, …, matched by name) and any demo/favorite playlist,
-    preferring starred picks — instead of surfacing an arbitrary recent
-    generation (which had put unflattering/test images on the medium tiles).
-    A medium with no curated sample falls to the clean per-kind gradient.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 08:00:48 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 09:32:11 -0700
 

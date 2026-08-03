@@ -92,11 +92,10 @@ class PossibilitiesWall(Gtk.Box):
         title = Gtk.Label(label="Start something", xalign=0.0)
         title.add_css_class("possibilities-title")
         title.set_hexpand(True)
-        surprise = Gtk.Button(label="✨ Surprise me")
-        surprise.add_css_class("possibilities-surprise")
-        surprise.connect("clicked", self._on_surprise)
+        # "Surprise me" now lives in the bottom CTA bar (CreateView wires a button
+        # to `surprise()`), keeping all actions in the reserved button area — so
+        # the wall header is just the title.
         head.append(title)
-        head.append(surprise)
         self.append(head)
 
         # A single-row horizontal SHELF (not a wrapping grid): always present as
@@ -231,7 +230,10 @@ class PossibilitiesWall(Gtk.Box):
             print(f"PossibilitiesWall: on_pick failed for {getattr(medium, 'id', '?')}: {exc}",
                   file=sys.stderr)
 
-    def _on_surprise(self, _btn) -> None:
+    def surprise(self) -> None:
+        """Pick a medium for the user and seed the composer — same as tapping a
+        tile, but chosen for them. Public so the CTA bar's "Surprise me" button
+        (owned by CreateView) can drive it."""
         try:
             mediums = list(self._mediums_fn() or [])
         except Exception:
