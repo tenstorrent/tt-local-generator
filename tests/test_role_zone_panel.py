@@ -122,6 +122,35 @@ def test_controls_expander_holds_control_fields():
     assert _contains_widget(controls_child, steps_row)
 
 
+def _video_medium():
+    from create_mediums import Medium
+    return Medium(id="video", label="Video", icon="🎥", kind="video", source="native")
+
+
+def test_controls_expander_label_hints_contents():
+    """The Controls expander should advertise what's inside (Steps / Seed /
+    Frame count …) rather than a bare 'Controls', mirroring how the Direction
+    category labels advertise their contents."""
+    rp = cpp.RoleZonePanel(cpp.VideoParamPanel(), _video_medium())
+    label = rp._controls_expander.get_label()
+    assert label.startswith("Controls — ")
+    assert "Steps" in label
+    # Video has 4 control fields (steps/seed/frame count/AnimateDiff Options),
+    # so the summary caps at 3 and ends with an ellipsis. The "Model" field is
+    # kind="model" and must NOT appear (it's not a zone field).
+    assert label.endswith("…")
+    assert "Model" not in label
+
+
+def test_control_rows_anchored_to_top_not_stretched():
+    """Control rows must be valign=START so a tall sibling (the AnimateDiff
+    Options group) can't stretch a small spin row (Frame count) into one giant
+    weird input in the Controls FlowBox."""
+    rp = cpp.RoleZonePanel(cpp.VideoParamPanel(), _video_medium())
+    frames_row = rp._panel._row_for("num_frames")
+    assert frames_row.get_valign() == Gtk.Align.START
+
+
 def test_animate_path_field_gets_neutral_tooltip_not_marker_tip():
     """Task-4's oddity: a `kind="path"` field shouldn't get the words-marker
     tooltip ("Your words — the model turns this into art.") since that reads

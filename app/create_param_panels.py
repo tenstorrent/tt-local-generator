@@ -2614,7 +2614,10 @@ class ModifierPills(Gtk.Box):
                 mbtn.set_label("− less" if now else f"+{n} more…")
 
             more.connect("clicked", _toggle_more)
-            group.append(more)
+            # Inline pill beside the visible chips (was a full-width row of its
+            # own in the vertical `group`, which wasted a line per category);
+            # the overflow chips still expand into the revealer below.
+            flow.append(more)
             group.append(revealer)
 
         return group
@@ -2761,6 +2764,7 @@ class RoleZonePanel(Gtk.Box):
         self._controls_expander.set_child(self._controls_grid)
 
         # ── Re-parent every field's row into its zone ───────────────────
+        control_labels: "list[str]" = []
         for spec in specs:
             if spec.kind == "model":
                 # Deliberately not a zone field — see module comment.
@@ -2784,7 +2788,23 @@ class RoleZonePanel(Gtk.Box):
                 continue
             row.unparent()
             self._relabel_row(row, spec)
-            self._zone_for_role(spec.role.role).append(row)
+            zone = self._zone_for_role(spec.role.role)
+            zone.append(row)
+            if zone is self._controls_grid:
+                # Anchor each control to the top. The Controls FlowBox wraps a
+                # tall sibling (the "AnimateDiff Options" group) onto the same
+                # line as small spin rows, and a default valign=FILL would
+                # stretch e.g. "Frame count" into one giant weird input.
+                row.set_valign(Gtk.Align.START)
+                control_labels.append(spec.label)
+
+        # Hint what's tucked inside the collapsed Controls expander (e.g.
+        # "steps, seed, frame count…") rather than a bare "Controls" — mirrors
+        # how the Direction category labels advertise their own contents.
+        if control_labels:
+            shown = ", ".join(control_labels[:3])
+            suffix = ", …" if len(control_labels) > 3 else ""
+            self._controls_expander.set_label(f"Controls — {shown}{suffix}")
 
         # Don't show an empty "Your brief" frame: for an artgen medium whose
         # only brief field was the (now-hidden) prompt, the zone has no rows —

@@ -1,3 +1,19 @@
+tt-local-generator (0.61.2) noble; urgency=medium
+
+  * fix(create): the Video → AnimateDiff "Frame count" control rendered as one
+    giant stretched input — in the Controls FlowBox it shared a wrap-line with
+    the tall "AnimateDiff Options" group and its default valign=FILL stretched
+    it. Control rows are now anchored valign=START so each keeps its natural
+    height.
+  * feat(create): the Direction zone's "+N more…" disclosure is now a compact
+    inline pill beside the visible chips instead of its own full-width row per
+    category (reclaims a line for every chip category).
+  * feat(create): the collapsed "Controls" expander now advertises what's
+    inside (e.g. "Controls — Steps, Seed, Frame count, …") instead of a bare
+    "Controls", mirroring the Direction category labels.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 16:40:00 +0000
+
 tt-local-generator (0.61.1) noble; urgency=medium
 
   * fix(create): the model door's Wan2.2-Animate card was a silent dead end —

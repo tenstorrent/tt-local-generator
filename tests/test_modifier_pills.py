@@ -60,6 +60,40 @@ def test_remove_drops_pill():
     assert p.applied_text() == ""
 
 
+def _descendant_button(container, substr):
+    """First Gtk.Button anywhere under *container* whose label contains substr."""
+    if isinstance(container, Gtk.Button) and substr in (container.get_label() or ""):
+        return container
+    child = container.get_first_child() if hasattr(container, "get_first_child") else None
+    while child is not None:
+        found = _descendant_button(child, substr)
+        if found is not None:
+            return found
+        child = child.get_next_sibling()
+    return None
+
+
+def test_more_button_is_inline_not_a_full_width_row():
+    """The '+N more…' disclosure must live INSIDE the chip FlowBox (a compact
+    inline pill beside the visible chips), NOT as its own full-width row in the
+    category's vertical box — that standalone row wasted a whole line per
+    category (see the AnimateDiff Video form screenshots)."""
+    from chip_config import ChipCategory, ChipEntry
+    cat = ChipCategory("Lighting", [ChipEntry(f"c{i}", f"c{i}", "") for i in range(4)])
+    p = cpp.ModifierPills("image")
+    group = p._build_category_box(cat)
+    # Direct children of the vertical group: header label, chip flow, revealer.
+    # None of them may be a bare Button — the more-pill must be nested in a flow.
+    direct = []
+    ch = group.get_first_child()
+    while ch is not None:
+        direct.append(ch)
+        ch = ch.get_next_sibling()
+    assert not any(isinstance(c, Gtk.Button) for c in direct)
+    flow = next(c for c in direct if isinstance(c, Gtk.FlowBox))
+    assert _descendant_button(flow, "more") is not None
+
+
 def test_unknown_kind_no_crash():
     assert cpp.ModifierPills("nope").applied_text() == ""
 
