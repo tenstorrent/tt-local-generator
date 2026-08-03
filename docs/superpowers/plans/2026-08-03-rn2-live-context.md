@@ -500,6 +500,125 @@ Expected: PASS (the `_set_crumbs` guard means the loop-nav harness — which has
 - Widget/state/loop-nav/shell suites green.
 - Live (`./tt-gen` + `shot.sh`): a breadcrumb bar under the menu shows the current place (Create / Library / Pipelines / Library › Watch / Library › <item>), and clicking an upstream crumb navigates back. The context tray is empty (hidden) until Task 3 registers pipeline/remix/watch contexts.
 
-## Task 3 (outline)
+### Task 3: register pipeline + watch contexts (leave-and-return)
 
-Register contexts at their sites: `_show_pipelines`/pipeline-run → `open_context(Context("pipeline", …, running=…))`; the Muse/remix entry → `open_context(Context("remix:<id>", …))`; `_on_open_attractor`/`_on_attractor_closed` → open/close `Context("watch", …)`. Tray `on_resume` navigates to that context; `on_dismiss` closes it (and, for pipeline/watch, may stop/close the underlying activity — decide per-kind in this task). Route the Pipelines show/hide through `NavState` so the toggle-vs-radio double-click is gone; keep a regression test for "opening Pipelines twice from any entry shows it once."
+Scope: register the two concrete resumable contexts (a **pipeline** session, a
+**watch** session) so the tray becomes usable — leave a pipeline for the
+Library and click the chip to return; open Watch, leave, return. Wire the Task-2
+resume/dismiss stubs. (The Pipelines double-click fix is a SEPARATE follow-up —
+`_show_pipelines` is idempotent, so resume-via-chip works regardless; the radio
+change that fixes the toggle double-click is deferred to keep this task low-risk
+and test-verifiable, since it can't be visually confirmed here.)
+
+**Files:**
+- Modify: `app/main_window.py`
+- Test: `tests/test_nav_contexts.py`
+
+**Interfaces:** consumes Task 1 `Context` (add to the existing `from nav_state import NavState, Crumb` → `, Context`). Produces guarded `_nav_open_context(ctx)` / `_nav_close_context(id)` helpers; fleshed-out `_on_context_resume`/`_on_context_dismiss`.
+
+- [ ] **Step 1: Failing test** (`tests/test_nav_contexts.py`) — `__new__` harness (like `test_main_window_loop_nav.py`), binds the methods under test, fakes `_show_pipelines`/`_on_open_attractor`/`_attractor_win`/`_gallery_stack`/`_loop_nav`:
+
+```python
+# header: sys.path + GTK-probe/skip like tests/test_main_window_loop_nav.py
+from unittest.mock import MagicMock, patch
+import main_window as mw
+from nav_state import NavState, Context
+
+def _mw():
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._nav_state = NavState()
+    for name in ("_nav_open_context", "_nav_close_context",
+                 "_on_context_resume", "_on_context_dismiss"):
+        setattr(obj, name, getattr(mw.MainWindow, name).__get__(obj))
+    obj._show_pipelines = MagicMock()
+    obj._on_open_attractor = MagicMock()
+    obj._attractor_win = None
+    obj._gallery_stack = MagicMock()
+    obj._gallery_stack.get_visible_child_name.return_value = "pipelines"
+    obj._loop_nav = {"discover": MagicMock()}
+    return obj
+
+def test_resume_pipeline_shows_pipelines():
+    obj = _mw()
+    obj._on_context_resume("pipeline")
+    obj._show_pipelines.assert_called_once()
+
+def test_resume_watch_opens_attractor():
+    obj = _mw()
+    obj._on_context_resume("watch")
+    obj._on_open_attractor.assert_called_once()
+
+def test_dismiss_pipeline_leaves_to_library_and_closes_context():
+    obj = _mw()
+    obj._nav_state.open_context(Context("pipeline", "Pipeline", kind="pipeline"))
+    obj._on_context_dismiss("pipeline")
+    obj._loop_nav["discover"].set_active.assert_called_once_with(True)   # go to Library
+    assert not obj._nav_state.has_context("pipeline")
+
+def test_dismiss_watch_closes_the_window():
+    obj = _mw()
+    obj._nav_state.open_context(Context("watch", "Watch", kind="watch", running=True))
+    win = MagicMock(); obj._attractor_win = win
+    obj._on_context_dismiss("watch")
+    win.close.assert_called_once()   # closing the window triggers _on_attractor_closed -> close_context
+
+def test_nav_helpers_noop_without_nav_state():
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    for n in ("_nav_open_context", "_nav_close_context"):
+        setattr(obj, n, getattr(mw.MainWindow, n).__get__(obj))
+    obj._nav_open_context(Context("x", "x"))   # no _nav_state -> no crash
+    obj._nav_close_context("x")
+```
+
+- [ ] **Step 2: Run — verify fail.** `xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_nav_contexts.py -v`
+
+- [ ] **Step 3: Implement in `main_window.py`.**
+  - Import: change `from nav_state import NavState, Crumb` → `from nav_state import NavState, Crumb, Context`.
+  - Guarded helpers (near `_set_crumbs`):
+    ```python
+    def _nav_open_context(self, ctx) -> None:
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.open_context(ctx)
+
+    def _nav_close_context(self, ctx_id: str) -> None:
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.close_context(ctx_id)
+    ```
+  - In `_show_pipelines` (after it switches to the pipelines page): `self._nav_open_context(Context("pipeline", "🧩 Pipeline", kind="pipeline"))`.
+  - In `_on_open_attractor`, in the branch that CREATES the window (right after `self._attractor_win = win`): `self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))`. (The early `if self._attractor_win is not None: present(); return` branch — a resume — does NOT re-open the context; it already exists.)
+  - In `_on_attractor_closed` (right after `self._attractor_win = None`): `self._nav_close_context("watch")`.
+  - Replace the Task-2 stubs:
+    ```python
+    def _on_context_resume(self, ctx_id: str) -> None:
+        if ctx_id == "pipeline":
+            self._show_pipelines()
+        elif ctx_id == "watch":
+            self._on_open_attractor()   # presents the existing kiosk window
+
+    def _on_context_dismiss(self, ctx_id: str) -> None:
+        if ctx_id == "watch":
+            win = getattr(self, "_attractor_win", None)
+            if win is not None:
+                win.close()  # -> _on_attractor_closed -> _nav_close_context("watch")
+                return
+        if ctx_id == "pipeline":
+            # leaving the pipeline session entirely -> back to Library
+            gs = getattr(self, "_gallery_stack", None)
+            if gs is not None and gs.get_visible_child_name() == "pipelines":
+                self._loop_nav["discover"].set_active(True)
+        self._nav_close_context(ctx_id)
+    ```
+
+- [ ] **Step 4: Run — verify pass.** `xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_nav_contexts.py -v`
+
+- [ ] **Step 5: Regression.** `xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/test_nav_contexts.py tests/test_nav_state.py tests/test_nav_widgets.py tests/test_main_window_loop_nav.py tests/test_main_window_attractor_model_source.py -q` → PASS. (The `_nav_open_context` guard keeps the loop-nav/attractor harnesses — which don't set `_nav_state` — working.)
+
+- [ ] **Step 6: Version + changelog + commit.** `VERSION` → `0.60.0`. Changelog: "feat(nav): resumable pipeline + watch contexts in the tray (leave-and-return) (RN-2 t3)". Commit code + test + VERSION + changelog + plan.
+
+### Verification (Task 3)
+- Context suites green.
+- Live (`./tt-gen` + `shot.sh`): open Pipelines → a "🧩 Pipeline" chip appears in the tray; go to Library → chip persists; click it → back in Pipelines. Open Watch (▶ Play) → a "📺 Watch ●" chip appears; close the kiosk → chip disappears; while open, its ✕ closes the kiosk. (The Pipelines-button double-click fix is a tracked follow-up.)

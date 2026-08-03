@@ -1,3 +1,9 @@
+tt-local-generator (0.60.0) noble; urgency=medium
+
+  * feat(nav): resumable pipeline + watch contexts in the tray (leave-and-return) (RN-2 t3)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 10:17:52 -0700
+
 tt-local-generator (0.59.2) noble; urgency=medium
 
   * fix(gallery): the hover action bar no longer spills past a card into its

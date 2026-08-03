@@ -55,7 +55,7 @@ import gallery_layout
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
 from model_status import ModelStatusService, Status
-from nav_state import NavState, Crumb
+from nav_state import NavState, Crumb, Context
 from nav_widgets import Breadcrumb, ContextTray
 from servers_control import ServersControl
 from worker import (
@@ -5525,6 +5525,20 @@ class MainWindow(Gtk.ApplicationWindow):
         if ns is not None:
             ns.set_crumbs(crumbs)
 
+    def _nav_open_context(self, ctx) -> None:
+        """Register (or update) a resumable live-context tray chip, if a
+        `NavState` exists. Guarded the same way `_set_crumbs` is — bare test
+        harnesses that skip `NavState()` construction stay a safe no-op."""
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.open_context(ctx)
+
+    def _nav_close_context(self, ctx_id: str) -> None:
+        """Remove a live-context tray chip, if a `NavState` exists."""
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.close_context(ctx_id)
+
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
         provider = Gtk.CssProvider()
@@ -7077,6 +7091,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._pipeline_studio.show_discover()
         self._gallery_stack.set_visible_child_name("pipelines")
         self._set_crumbs([Crumb("🧩 Pipelines")])
+        # Register (or refresh) the resumable tray chip so leaving Pipelines
+        # for the Library doesn't lose track of the session — clicking the
+        # chip calls `_show_pipelines` again, which is idempotent.
+        self._nav_open_context(Context("pipeline", "🧩 Pipeline", kind="pipeline"))
         # Full-width: Pipeline Studio has its own layout and needs neither
         # the (now-deleted) prompt-composition panel nor the detail pane.
         self._detail_wrap.set_visible(False)
@@ -7110,10 +7128,28 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_pipelines()
 
     def _on_context_resume(self, ctx_id: str) -> None:
-        pass  # RN-2 Task 3 wires resume per kind
+        """Tray chip clicked: jump back into the live activity it represents."""
+        if ctx_id == "pipeline":
+            self._show_pipelines()
+        elif ctx_id == "watch":
+            self._on_open_attractor()   # presents the existing kiosk window
 
     def _on_context_dismiss(self, ctx_id: str) -> None:
-        self._nav_state.close_context(ctx_id)  # RN-2 Task 3 also stops the activity per kind
+        """Tray chip's ✕ clicked: actually end the activity, not just hide
+        the chip — a dismissed pipeline session returns to the Library, and
+        a dismissed watch session closes the kiosk window (which in turn
+        removes the context via `_on_attractor_closed`)."""
+        if ctx_id == "watch":
+            win = getattr(self, "_attractor_win", None)
+            if win is not None:
+                win.close()  # -> _on_attractor_closed -> _nav_close_context("watch")
+                return
+        if ctx_id == "pipeline":
+            # Leaving the pipeline session entirely -> back to Library.
+            gs = getattr(self, "_gallery_stack", None)
+            if gs is not None and gs.get_visible_child_name() == "pipelines":
+                self._loop_nav["discover"].set_active(True)
+        self._nav_close_context(ctx_id)
 
     # Maps GenerationRecord.media_type -> the "kind" vocabulary Pipeline Studio's
     # Muse expects for a seed_artifact. Anything absent from this table (e.g.
@@ -8380,6 +8416,11 @@ class MainWindow(Gtk.ApplicationWindow):
         win.set_transient_for(self)
         win.connect("destroy", self._on_attractor_closed)
         self._attractor_win = win
+        # Register the resumable tray chip HERE — the window-creation branch
+        # only. The early `present()`-and-return resume branch above does NOT
+        # re-open the context; it already exists (opening it twice would just
+        # be a no-op replace in NavState, but the intent is "created once").
+        self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))
         win.present()
         self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
         GLib.idle_add(win.start)
@@ -8392,6 +8433,7 @@ class MainWindow(Gtk.ApplicationWindow):
         User-typed prompts (from_attractor=False) are preserved.
         """
         self._attractor_win = None
+        self._nav_close_context("watch")
         before = len(self._queue)
         self._queue = [item for item in self._queue if not item.from_attractor]
         purged = before - len(self._queue)
