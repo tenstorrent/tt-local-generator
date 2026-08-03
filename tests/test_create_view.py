@@ -150,12 +150,17 @@ def _sync_create_view_threading(monkeypatch):
 
 
 def _fake_mediums():
+    """Native = image + video only — matches production `default_mediums()`
+    (`create_mediums._NATIVE_MEDIUMS`) since the "Video is Video" spec folded
+    Wan2.2-Animate into the Video medium as a model choice rather than its
+    own native medium/chip. A stale native "animate" entry here previously
+    masked a real bug: `_server_key_to_medium_id("animate")` had nothing to
+    match against without it, so the Animate model-door card silently
+    no-opped in production while every test using this fixture stayed green."""
     return [
         Medium(id="image", label="Image", icon="\U0001f5bc️", kind="image",
                source="native", generator=None),
         Medium(id="video", label="Video", icon="\U0001f3a5", kind="video",
-               source="native", generator=None),
-        Medium(id="animate", label="Animate", icon="\U0001f483", kind="gif",
                source="native", generator=None),
         Medium(id="verse", label="Verse", icon="✍", kind="text",
                source="artgen", generator="verse"),
@@ -342,7 +347,9 @@ def test_unrealize_with_no_status_service_is_a_noop(make_create_view):
 
 def test_chips_render_one_per_medium(monkeypatch):
     view = _make_view(monkeypatch)
-    assert set(view._chip_buttons.keys()) == {"image", "video", "animate", "verse"}
+    # "animate" is deliberately absent: production has no native Animate
+    # medium/chip anymore — Wan2.2-Animate is a model choice under Video.
+    assert set(view._chip_buttons.keys()) == {"image", "video", "verse"}
     for medium_id, btn in view._chip_buttons.items():
         assert isinstance(btn, Gtk.ToggleButton)
 
@@ -605,9 +612,26 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
 
 
 # ── Animate param panel wiring (Task 5) ──────────────────────────────────
+#
+# NOTE: production `default_mediums()` no longer has a native "animate"
+# medium/chip (the "Video is Video" spec folded Wan2.2-Animate into the
+# Video medium's model choices — see `_fake_mediums()`'s docstring above).
+# `AnimateParamPanel`/`_ANIMATE_MODEL_ID`/the native-animate-medium branch in
+# `create_view.py` are intentionally left in place (judged tidiness-not-bug,
+# not part of this fix), so these tests still exercise that code path via a
+# LOCAL medium list carrying the native "animate" medium `_fake_mediums()`
+# itself no longer has — keeping this reachable-in-tests without resurrecting
+# it as a reachable-in-production chip.
+
+def _fake_mediums_with_native_animate():
+    return _fake_mediums() + [
+        Medium(id="animate", label="Animate", icon="\U0001f483", kind="gif",
+               source="native", generator=None),
+    ]
+
 
 def test_selecting_animate_medium_mounts_real_animate_param_panel(monkeypatch):
-    view = _make_view(monkeypatch)
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_native_animate)
 
     view._chip_buttons["animate"].set_active(True)
 
@@ -619,7 +643,7 @@ def test_selecting_animate_medium_mounts_real_animate_param_panel(monkeypatch):
 
 
 def test_switching_away_from_animate_and_back_remounts_a_fresh_panel(monkeypatch):
-    view = _make_view(monkeypatch)
+    view = _make_view(monkeypatch, mediums_fn=_fake_mediums_with_native_animate)
     view._chip_buttons["animate"].set_active(True)
     first_animate_panel = _panel_of(view)
 
@@ -633,7 +657,11 @@ def test_switching_away_from_animate_and_back_remounts_a_fresh_panel(monkeypatch
 
 def test_cta_calls_on_create_with_animate_param_panel_collect_output(monkeypatch):
     calls = []
-    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view = _make_view(
+        monkeypatch,
+        mediums_fn=_fake_mediums_with_native_animate,
+        on_create=lambda medium, params: calls.append((medium, params)),
+    )
 
     view._chip_buttons["animate"].set_active(True)
     view._cta_btn.emit("clicked")
@@ -646,7 +674,11 @@ def test_cta_calls_on_create_with_animate_param_panel_collect_output(monkeypatch
 
 def test_cta_reflects_edited_animate_param_panel_widgets(monkeypatch):
     calls = []
-    view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view = _make_view(
+        monkeypatch,
+        mediums_fn=_fake_mediums_with_native_animate,
+        on_create=lambda medium, params: calls.append((medium, params)),
+    )
 
     view._chip_buttons["animate"].set_active(True)
     panel = _panel_of(view)
@@ -1761,6 +1793,25 @@ def test_activate_model_card_switches_from_model_door_back_to_idea(monkeypatch):
     assert view._prompt_entry.get_visible() is True
 
 
+def test_activate_model_card_animate_lands_on_video_with_model_preselected(monkeypatch):
+    """Finding 1 regression test: the model door's Wan2.2-Animate card (group
+    "Video" per `_CAPABILITY_TO_MODEL_DOOR_GROUP["animate"]`) must not be a
+    silent dead-end. Before the fix, `_server_key_to_medium_id("animate")`
+    found no native medium literally named "animate" (Task 2 removed it) and
+    returned None, so the click early-returned doing nothing. It should land
+    the user on the Video medium with the Animate model preselected in the
+    scoped dropdown."""
+    view = _make_view(monkeypatch)
+    view._doors["model"].set_active(True)
+    assert view._entry_mode == "model"
+
+    view._activate_model_card("animate")
+
+    assert view._active_medium.id == "video"
+    assert view._entry_mode == "idea"  # door click always returns to Idea
+    assert view._selected_model_key() == "animate"
+
+
 def test_activate_model_card_unknown_key_is_a_noop(monkeypatch):
     view = _make_view(monkeypatch)
     before = view._active_medium.id
@@ -1808,7 +1859,11 @@ def test_server_key_to_medium_id_maps_native_capabilities(monkeypatch):
     view = _make_view(monkeypatch)
     assert view._server_key_to_medium_id("wan2.2") == "video"    # capabilities=("video",)
     assert view._server_key_to_medium_id("flux") == "image"      # capabilities=("image",)
-    assert view._server_key_to_medium_id("animate") == "animate"  # capabilities=("animate",)
+    # "animate" (capabilities=("animate",)) folds onto "video" — there is no
+    # native "animate" medium anymore (Wan2.2-Animate lives on Video as a
+    # model choice); this is Finding 1's fix, closing the model-door dead end
+    # where an Animate card resolved to no medium at all and no-opped.
+    assert view._server_key_to_medium_id("animate") == "video"
 
 
 def test_server_key_to_medium_id_maps_artgen_capability_to_first_artgen_medium(monkeypatch):

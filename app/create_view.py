@@ -1113,9 +1113,13 @@ class CreateView(Gtk.Box):
         # tagline), read from `self._model_row_meta` (built alongside
         # `_model_dropdown_entries` by `_populate_model_dropdown`). Set as
         # `list_factory` ONLY — not `factory` — so the collapsed/selected
-        # button keeps its existing single-line rendering (the default
-        # Gtk.StringList label, dot + raw label, unchanged from before this
-        # task) and only the popped-open list gets the richer two-line row.
+        # button keeps its existing single-line rendering (dot + a label
+        # string) and only the popped-open list gets the richer two-line
+        # row. Follow-up fix: that single-line label string itself is now
+        # built from `server_manager.display_name_for(key)` in
+        # `_populate_model_dropdown` (not the raw `ServerDef.label`/
+        # `CAPABILITY_LABELS` implementation string) — the resting button
+        # must never show an implementation string either.
         model_row_factory = Gtk.SignalListItemFactory()
         model_row_factory.connect("setup", self._on_model_row_setup)
         model_row_factory.connect("bind", self._on_model_row_bind)
@@ -2138,7 +2142,20 @@ class CreateView(Gtk.Box):
                 else server_manager.CAPABILITY_LABELS.get(key, key)
             )
             dot = self._model_dot_glyph(key)
-            labels.append(f"{dot} {label_text}")
+            # Task 4 follow-up: the collapsed/selected DropDown button renders
+            # straight off this `labels` StringList (the popup's two-line
+            # friendly-name+benefit rendering is a separate factory —
+            # `_on_model_row_setup`/`_on_model_row_bind`, wired via
+            # `set_list_factory` above — that never touches the resting
+            # button). Using the raw `label_text` here would put the
+            # implementation string ("Wan2.2-T2V-A14B  (P300X2)") right back
+            # in front of the user the instant they collapse the popup —
+            # exactly what this whole feature exists to avoid. Swap in the
+            # same friendly name the popup shows; `entries`' `label_text`
+            # (3rd tuple element) is left alone since selection logic
+            # (`_selected_model_key`, `_collect_params`) keys off `key`/
+            # `canonical`, never that string.
+            labels.append(f"{dot} {server_manager.display_name_for(key)}")
             entries.append((key, canonical, label_text))
             row_meta.append((
                 server_manager.display_name_for(key),
@@ -2467,7 +2484,15 @@ class CreateView(Gtk.Box):
         (not a stale cache — a plugin could appear/disappear between calls).
 
         - A native capability ("video"/"image"/"animate") maps 1:1 to the
-          identically-named native medium id.
+          identically-named native medium id — EXCEPT "animate": Task 2
+          deleted the native `"animate"` medium (Wan2.2-Animate lives on the
+          Video medium now, gated by `_update_animate_extras_visibility`), so
+          there is no `native_ids` entry named "animate" for it to match.
+          Without a special case, an Animate-capability key would fall
+          through every rule below and return None — the dead-end this
+          docstring's Finding-1 fix exists to close. Folds onto "video"
+          instead, mirroring how `_classify_server_key_for_model_door`
+          already files Animate under the "Video" model-door group.
         - "artgen" has no single matching medium id (each artgen generator is
           its own medium) — it maps to the FIRST artgen-sourced medium in the
           list, a deliberate "pick a generative default", not a precise
@@ -2491,6 +2516,8 @@ class CreateView(Gtk.Box):
         for cap in sdef.capabilities:
             if cap in native_ids:
                 return cap
+            if cap == "animate" and "video" in native_ids:
+                return "video"
             if cap == "artgen" and first_artgen_id is not None:
                 return first_artgen_id
         return None

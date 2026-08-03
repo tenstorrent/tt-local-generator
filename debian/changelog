@@ -1,3 +1,28 @@
+tt-local-generator (0.61.1) noble; urgency=medium
+
+  * fix(create): the model door's Wan2.2-Animate card was a silent dead end —
+    `_server_key_to_medium_id` had no rule for the "animate" capability once
+    Task 2 removed the native "animate" medium, so the click resolved to no
+    medium and no-opped. It now folds onto "video" (mirroring how
+    `_classify_server_key_for_model_door` already files Animate under the
+    Video model-door group), so clicking the card lands on the Video medium
+    with the Animate model preselected in the scoped dropdown.
+  * fix(create): the scoped model dropdown's collapsed/selected button was
+    still rendering the raw `ServerDef.label` implementation string (e.g.
+    "Wan2.2-T2V-A14B  (P300X2)") even though the popped-open list already
+    showed the friendly two-line name+benefit row. `_populate_model_dropdown`
+    now builds the collapsed `Gtk.StringList` from
+    `server_manager.display_name_for(key)` too, so no implementation string
+    is ever shown to the user, in either dropdown state.
+  * test: aligned `tests/test_create_view.py`'s `_fake_mediums()` with
+    production `default_mediums()` (native = image + video only, no more
+    stale native "animate" entry) — this fixture drift is what let the
+    model-door dead-end above ship untested. Updated the tests that relied on
+    the stale native-animate medium to use a local fixture instead, and added
+    coverage for the Animate-door-card -> Video-medium routing fix.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 16:30:00 -0700
+
 tt-local-generator (0.61.0) noble; urgency=medium
 
   * feat(create): "Video is Video" — the video trio (Wan2.2/Mochi/SkyReels,
