@@ -5641,17 +5641,12 @@ class MainWindow(Gtk.ApplicationWindow):
         # view exists, so a restored queue shows up there too, not just in
         # the legacy queue box.
         self._refresh_create_queue_display()
-        # CreateView is a tall vertical surface (doors + role zones + model
-        # door + CTA). Unlike the gallery children (which scroll internally),
-        # it must be wrapped in a vertical scroller or its lower elements —
-        # including the Create button — become unreachable when the content is
-        # taller than the window. Horizontal never scrolls: CreateView already
-        # clamps its own width via gtk_layout.wrap_centered.
-        create_scroll = Gtk.ScrolledWindow()
-        create_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        create_scroll.set_vexpand(True)
-        create_scroll.set_child(self._create_view)
-        self._gallery_stack.add_named(create_scroll, "create")
+        # CreateView is mounted DIRECTLY (no outer ScrolledWindow): it now owns
+        # its own internal scroll for the form and PINS the ✨ Create CTA below
+        # it, so the primary action is always visible (a CTA must never sit
+        # below the fold). Wrapping it in an outer scroller here would put the
+        # pinned CTA inside that scroll and defeat the point.
+        self._gallery_stack.add_named(self._create_view, "create")
 
         self._gallery_stack.set_visible_child_name("video")
 

@@ -544,6 +544,13 @@ _CSS = b"""
 .create-cta-row {
     padding-top: 4px;
 }
+/* Pinned CTA bar: a fixed footer below the scrolling form so Create is
+   always visible. A top border + subtle fill separate it from the scroll. */
+.create-cta-bar {
+    border-top: 1px solid #1d4655;
+    background-color: #0c222c;
+    padding: 8px 12px;
+}
 .create-cta-btn {
     background-color: #4FD1C5;
     color: #0F2A35;
@@ -1011,7 +1018,9 @@ class CreateView(Gtk.Box):
         content.append(self._build_chip_row())  # fires _select_medium synchronously
         content.append(self._build_model_dropdown_row())
         content.append(self._panel_host)
-        content.append(self._build_cta_row())
+        # NOTE: the CTA row is NOT appended here — it's pinned below the
+        # scrolling form (see the form_scroll + cta_bar assembly below) so
+        # ✨ Create is always visible, never scrolled below the fold.
 
         # Two-pane responsive layout (Task 2): the form column built above
         # becomes one child of a Gtk.FlowBox, alongside a fresh
@@ -1027,7 +1036,21 @@ class CreateView(Gtk.Box):
         # only what's INSIDE it is now capped to a comfortable column. The
         # cap is raised to `_TWO_PANE_MAX_WIDTH` (see that constant's
         # docstring) now that the clamped content is two panes, not one.
-        self.append(gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH))
+        # The form + result panes SCROLL; the CTA is PINNED below them so the
+        # primary action (✨ Create) is always visible — a CTA must never sit
+        # below the fold. CreateView is mounted directly in the gallery stack
+        # (no outer ScrolledWindow), so this internal scroll owns the form's
+        # overflow and the CTA bar stays fixed at the bottom.
+        self.set_vexpand(True)
+        form_scroll = Gtk.ScrolledWindow()
+        form_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        form_scroll.set_vexpand(True)
+        form_scroll.set_child(gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH))
+        self.append(form_scroll)
+
+        cta_bar = gtk_layout.wrap_centered(self._build_cta_row(), max_width=_TWO_PANE_MAX_WIDTH)
+        cta_bar.add_css_class("create-cta-bar")
+        self.append(cta_bar)
 
         # The boolean poller is the pre-Task-2 fallback: only start it when
         # no ModelStatusService was injected -- when one is present it (and

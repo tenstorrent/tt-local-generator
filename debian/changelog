@@ -1,11 +1,10 @@
-tt-local-generator (0.56.0) noble; urgency=medium
+tt-local-generator (0.57.0) noble; urgency=medium
 
-  * feat(startup): auto-start the CPU prompt-gen server (port 8001, powers
-    ✨ Inspire) at launch if it isn't already running — CPU-only, coexists with
-    any TT workload; soft-fails to the algorithmic generator if it can't start.
-  * ui(create): bound the "Start something" possibilities wall to a compact,
-    internally-scrolling band so the Create surface fits the window like an app
-    instead of scrolling like a long web page.
+  * ui(create): pin the ✨ Create CTA as a fixed footer below an internal
+    scroll (CreateView mounts directly, owns its own scroll) so the primary
+    action is always visible, never below the fold.
+  * fix(servers): drop the literal "▾" from the Servers button label — the
+    Gtk.MenuButton already renders its own dropdown arrow (was doubled).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 17:13:44 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 17:21:26 -0700
 

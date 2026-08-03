@@ -303,7 +303,9 @@ class ServersControl(Gtk.Box):
 
         popover.set_child(outer)
 
-        btn = Gtk.MenuButton(label="Servers ▾")
+        # Label is just "Servers" — a Gtk.MenuButton renders its OWN dropdown
+        # arrow, so a "▾" in the string would double it up.
+        btn = Gtk.MenuButton(label="Servers")
         btn.add_css_class("servers-menu-btn")
         btn.set_tooltip_text("Start, stop, or restart any managed service")
         btn.set_popover(popover)
