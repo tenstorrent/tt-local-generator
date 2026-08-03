@@ -2082,10 +2082,22 @@ class CreateView(Gtk.Box):
         cap = "artgen" if medium.source == "artgen" else _MODEL_STATUS_CAPABILITY.get(medium.id)
         if cap is None:
             return 0
-        try:
-            running_key = self._status_service.running_or_starting(cap)
-        except Exception:
-            running_key = None
+        # 'Video is Video': the video medium's models span two capabilities
+        # (video servers + the one animate server). Prefer whichever is
+        # actually running; only then fall through to the index-0 default
+        # (AnimateDiff — the local no-server model that always works).
+        caps = ("video", "animate") if medium.id == "video" else (cap,)
+        running_key = None
+        for c in caps:
+            if c is None:
+                continue
+            try:
+                rk = self._status_service.running_or_starting(c)
+            except Exception:
+                rk = None
+            if rk is not None:
+                running_key = rk
+                break
         if running_key is None and medium.source == "artgen":
             running_key = self._detected_model_key()
         if running_key is None:
