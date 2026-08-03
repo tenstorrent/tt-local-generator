@@ -9197,6 +9197,24 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # "video"
         model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+        if model_key == "animate":
+            # 'Video is Video': the Animate model reuses _on_generate's animate
+            # branch (AnimateGenerationWorker). Its two inputs come from the
+            # Video form's reveal-on-demand section (see create_view
+            # _AnimateExtras), folded into params by _collect_params.
+            args = (
+                prompt, "",
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+            )
+            kwargs = dict(
+                seed_image_path="",
+                model_source="animate",
+                ref_video_path=params.get("reference_video_path", ""),
+                ref_char_path=params.get("reference_image_path", ""),
+                animate_mode=params.get("animate_mode", "animation"),
+            )
+            return args, kwargs
         # SP-3c-1 review fix (Important): SkyReels-I2V requires a
         # conditioning image — the exact reason it was pulled from the
         # Video door in v0.27.1 (see `_VIDEO_MODEL_IDS`'s module comment in
