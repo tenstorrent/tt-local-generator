@@ -84,8 +84,6 @@ _NATIVE_MEDIUMS: tuple[Medium, ...] = (
            source="native", generator=None),
     Medium(id="video", label="Video", icon="🎥", kind="video",
            source="native", generator=None),
-    Medium(id="animate", label="Animate", icon="💃", kind="gif",
-           source="native", generator=None),
 )
 
 
@@ -201,6 +199,10 @@ def discover_mediums(
     for name in names:
         try:
             key = str(name)
+            if key == "animatediff":
+                # Folded into the Video medium as a model (see the
+                # 'Video is Video' spec) — no longer its own chip.
+                continue
             label, icon = _ARTGEN_LABELS_ICONS.get(key, (_fallback_label(key), _DEFAULT_ICON))
             kind = _ARTGEN_KIND.get(key, _DEFAULT_KIND)
             uses_llm = True

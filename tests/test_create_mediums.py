@@ -18,18 +18,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 import create_mediums as cm
 
 
+# ── Animate + AnimateDiff dropped (Task 2) ────────────────────────────────────
+
+def test_animate_and_animatediff_are_not_mediums():
+    ids = {m.id for m in cm.default_mediums()}
+    assert "video" in ids and "image" in ids
+    assert "animate" not in ids          # folded into Video as a model
+    assert "animatediff" not in ids      # folded into Video as a model
+    # other artgen kinds untouched
+    assert "verse" in ids and "ansi" in ids and "palette" in ids
+
+
+def test_discover_mediums_filters_animatediff_name():
+    ms = cm.discover_mediums(artgen_names=["verse", "animatediff", "ansi"])
+    ids = [m.id for m in ms]
+    assert "animatediff" not in ids
+    assert ids[:1] == ["image"]          # native still first
+    assert "verse" in ids and "ansi" in ids
+
+
 # ── Native mediums: always present, always first, deterministic order ────────
 
 def test_native_mediums_present_first_and_in_order():
     mediums = cm.discover_mediums(artgen_names=[])
-    assert [m.id for m in mediums] == ["image", "video", "animate"]
+    assert [m.id for m in mediums] == ["image", "video"]
 
 
 def test_native_mediums_have_expected_kind_and_source():
     mediums = {m.id: m for m in cm.discover_mediums(artgen_names=[])}
     assert mediums["image"].kind == "image"
     assert mediums["video"].kind == "video"
-    assert mediums["animate"].kind == "gif"
     for m in mediums.values():
         assert m.source == "native"
         assert m.generator is None
@@ -39,7 +57,7 @@ def test_native_mediums_have_expected_kind_and_source():
 
 def test_empty_artgen_names_returns_only_native():
     mediums = cm.discover_mediums(artgen_names=[])
-    assert len(mediums) == 3
+    assert len(mediums) == 2
     assert all(m.source == "native" for m in mediums)
 
 
@@ -58,7 +76,7 @@ def test_one_medium_per_artgen_generator_name():
 def test_artgen_mediums_follow_native_and_preserve_given_order():
     names = ["ansi", "verse", "palette"]
     mediums = cm.discover_mediums(artgen_names=names)
-    assert [m.id for m in mediums] == ["image", "video", "animate", "ansi", "verse", "palette"]
+    assert [m.id for m in mediums] == ["image", "video", "ansi", "verse", "palette"]
 
 
 # ── Kind mapping per the brief's exact table ──────────────────────────────────
@@ -80,8 +98,10 @@ def test_kind_mapping_image_generators():
 
 
 def test_kind_mapping_gif_generator():
+    # animatediff is now filtered out (folded into Video as a model), so
+    # it does not appear in discovered mediums even if in the artgen_names list.
     mediums = {m.id: m for m in cm.discover_mediums(artgen_names=["animatediff"])}
-    assert mediums["animatediff"].kind == "gif"
+    assert "animatediff" not in mediums
 
 
 def test_every_artgen_medium_has_label_and_icon():
@@ -111,12 +131,12 @@ def test_raising_artgen_names_falls_back_to_native_only():
             raise RuntimeError("plugin registry unavailable")
 
     mediums = cm.discover_mediums(artgen_names=_Boom())
-    assert [m.id for m in mediums] == ["image", "video", "animate"]
+    assert [m.id for m in mediums] == ["image", "video"]
 
 
 def test_none_artgen_names_falls_back_to_native_only():
     mediums = cm.discover_mediums(artgen_names=None)
-    assert [m.id for m in mediums] == ["image", "video", "animate"]
+    assert [m.id for m in mediums] == ["image", "video"]
 
 
 def test_one_bad_generator_name_does_not_take_down_the_rest():
@@ -143,7 +163,7 @@ def test_default_mediums_wraps_artgen_all_names(monkeypatch):
     import artgen
     monkeypatch.setattr(artgen, "all_names", lambda: ["verse", "ansi"])
     mediums = cm.default_mediums()
-    assert [m.id for m in mediums] == ["image", "video", "animate", "verse", "ansi"]
+    assert [m.id for m in mediums] == ["image", "video", "verse", "ansi"]
 
 
 def test_default_mediums_never_crashes_if_artgen_import_fails(monkeypatch):
@@ -157,7 +177,7 @@ def test_default_mediums_never_crashes_if_artgen_import_fails(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
     mediums = cm.default_mediums()
-    assert [m.id for m in mediums] == ["image", "video", "animate"]
+    assert [m.id for m in mediums] == ["image", "video"]
 
 
 # ── uses_llm threading (AnimateDiff-model-fix) ────────────────────────────────
@@ -184,14 +204,14 @@ def test_discover_mediums_uses_llm_for_marks_generator_false():
     """A generator the injected `uses_llm_for` callable reports False for
     gets `uses_llm=False` on its Medium; everything else stays True."""
     def _uses_llm_for(name):
-        return name != "animatediff"
+        return name != "codeart"
 
     mediums = {
         m.id: m for m in cm.discover_mediums(
-            artgen_names=["verse", "animatediff"], uses_llm_for=_uses_llm_for
+            artgen_names=["verse", "codeart"], uses_llm_for=_uses_llm_for
         )
     }
-    assert mediums["animatediff"].uses_llm is False
+    assert mediums["codeart"].uses_llm is False
     assert mediums["verse"].uses_llm is True
 
 
@@ -201,10 +221,10 @@ def test_discover_mediums_uses_llm_for_default_true_when_not_provided():
     feature, matching the module's existing "additive, never-break-existing-
     callers" discipline."""
     mediums = {
-        m.id: m for m in cm.discover_mediums(artgen_names=["verse", "animatediff"])
+        m.id: m for m in cm.discover_mediums(artgen_names=["verse", "codeart"])
     }
     assert mediums["verse"].uses_llm is True
-    assert mediums["animatediff"].uses_llm is True
+    assert mediums["codeart"].uses_llm is True
 
 
 def test_discover_mediums_native_mediums_always_uses_llm_true():
@@ -220,20 +240,20 @@ def test_default_mediums_threads_real_uses_llm_flag(monkeypatch):
     """The real-deps wrapper must ask each generator's OWN `uses_llm` flag
     (via `artgen.get(name).uses_llm`, lazy-imported) rather than defaulting
     every artgen medium to True -- this is the piece that actually threads
-    the AnimateDiff fix into the real Create surface."""
+    the LLM-free generator fix into the real Create surface."""
     import artgen
 
     class _FakeGen:
         def __init__(self, uses_llm):
             self.uses_llm = uses_llm
 
-    fakes = {"verse": _FakeGen(True), "animatediff": _FakeGen(False)}
-    monkeypatch.setattr(artgen, "all_names", lambda: ["verse", "animatediff"])
+    fakes = {"verse": _FakeGen(True), "codeart": _FakeGen(False)}
+    monkeypatch.setattr(artgen, "all_names", lambda: ["verse", "codeart"])
     monkeypatch.setattr(artgen, "get", lambda name: fakes[name])
 
     mediums = {m.id: m for m in cm.default_mediums()}
     assert mediums["verse"].uses_llm is True
-    assert mediums["animatediff"].uses_llm is False
+    assert mediums["codeart"].uses_llm is False
 
 
 def test_default_mediums_uses_llm_fails_soft_to_true_on_error(monkeypatch):
