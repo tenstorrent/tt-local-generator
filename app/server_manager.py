@@ -77,6 +77,7 @@ class ServerDef:
     extra_args: tuple = field(default_factory=tuple)  # model-specific args for start/stop
     capabilities: tuple = field(default_factory=tuple)  # e.g. ("video",), ("artgen",)
     model_id: Optional[str] = None  # served /v1/models id, e.g. "Qwen/Qwen3-8B"
+    benefit: str = ""  # picker-only "what is this good for" tagline; "" = none
 
 
 # Human-readable labels for each capability key.
@@ -90,6 +91,41 @@ CAPABILITY_LABELS: dict = {
     "prompt":      "Prompt AI",
     "animatediff": "AnimateDiff  (Blackhole)",
 }
+
+
+# Picker-only friendly names + benefit taglines for keys that have no
+# ServerDef (the synthetic "animatediff" video model), and friendly display
+# overrides for keys whose raw ServerDef.label is an implementation string.
+# These are read ONLY by the Create model picker (create_view) — logs, the
+# Servers control, and ModelStatusService all key off the raw label/key.
+MODEL_BENEFITS: dict = {
+    "animatediff": "Runs locally on Blackhole — no server to start. Quick looping animation.",
+}
+MODEL_DISPLAY_NAMES: dict = {
+    "animatediff": "AnimateDiff",
+    "wan2.2": "Wan 2.2",
+    "mochi": "Mochi",
+    "skyreels": "SkyReels",
+    "animate": "Animate",
+}
+
+
+def benefit_for(key: str) -> str:
+    """Human 'what is this good for' tagline for a model/server key.
+    ServerDef.benefit wins; falls back to MODEL_BENEFITS; '' if unknown."""
+    sdef = SERVERS.get(key)
+    if sdef is not None and sdef.benefit:
+        return sdef.benefit
+    return MODEL_BENEFITS.get(key, "")
+
+
+def display_name_for(key: str) -> str:
+    """Friendly picker name for a model/server key. MODEL_DISPLAY_NAMES wins;
+    falls back to the raw ServerDef.label, then the bare key."""
+    if key in MODEL_DISPLAY_NAMES:
+        return MODEL_DISPLAY_NAMES[key]
+    sdef = SERVERS.get(key)
+    return sdef.label if sdef is not None else str(key)
 
 
 # Ordered: "all" starts these in sequence (QB2 / P300X2 recommended set).
@@ -110,6 +146,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2",
             capabilities=("video",),
+            benefit="Highest-quality 720p text-to-video. Needs its server running.",
         ),
         ServerDef(
             key="mochi",
@@ -118,6 +155,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-mochi-1",
             capabilities=("video",),
+            benefit="Cinematic text-to-video. Needs its server running.",
         ),
         ServerDef(
             key="flux",
@@ -158,6 +196,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2-animate",
             capabilities=("animate",),
+            benefit="Bring a character image to life with a motion video.",
         ),
         ServerDef(
             key="skyreels",
@@ -166,6 +205,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-skyreels-v2-i2v",
             capabilities=("video",),
+            benefit="Fast video from a seed image (image-to-video). Blackhole.",
         ),
         ServerDef(
             key="prompt-server",
