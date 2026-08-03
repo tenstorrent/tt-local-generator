@@ -1,9 +1,12 @@
-tt-local-generator (0.60.1) noble; urgency=medium
+tt-local-generator (0.60.2) noble; urgency=medium
 
-  * fix(nav): resuming a pipeline via the tray chip or breadcrumb now ACTIVATES
-    the Pipelines toggle button (via _navigate_to_pipelines) so it correctly
-    lights up as "you are in Pipelines" — previously it called _show_pipelines()
-    directly, leaving the toggle inactive so the button state lied.
+  * ui(generate): when the inference server on port 8000 isn't running, native
+    generation now shows an actionable "start the server from the Servers menu"
+    message instead of a raw HTTPConnectionPool traceback (worker._server_down_hint,
+    applied to the image-gen and submit error paths).
+  * NOTE: AnimateDiff Create still routes through the native IMAGE worker
+    (ImageGenerationWorker) rather than AnimateDiffGenerationWorker / the local
+    plugin — a routing bug flagged for follow-up (needs the intended-flow call).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 10:30:24 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 11:34:08 -0700
 

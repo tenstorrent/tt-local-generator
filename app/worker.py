@@ -73,6 +73,28 @@ def _safe_meta(data: dict) -> dict:
     }
 
 
+# Substrings a `requests` connection failure raises when the inference server
+# on port 8000 isn't up — used to turn a raw HTTPConnectionPool traceback into
+# an actionable message ("start the server").
+_CONN_DOWN_MARKERS = (
+    "Connection refused",
+    "Max retries exceeded",
+    "Failed to establish a new connection",
+    "NewConnectionError",
+)
+
+
+def _server_down_hint(err: Exception) -> "Optional[str]":
+    """If *err* looks like "the inference server isn't running", return a
+    friendly, actionable message; otherwise None (caller keeps its own text)."""
+    s = str(err)
+    if any(m in s for m in _CONN_DOWN_MARKERS):
+        return ("Couldn't reach the inference server on port 8000 — it isn't "
+                "running. Start it from the Servers menu (or the Start button), "
+                "then try again.")
+    return None
+
+
 class GenerationWorker:
     """
     Runs a single video generation job end-to-end in a background thread.
@@ -161,7 +183,7 @@ class GenerationWorker:
                     image=self._image,
                 )
             except Exception as e:
-                on_error(f"Submit failed: {e}")
+                on_error(_server_down_hint(e) or f"Submit failed: {e}")
                 return
             on_progress(f"Job queued ({job_id[:8]}…)")
 
@@ -611,7 +633,7 @@ class ImageGenerationWorker:
             )
             server_meta = _safe_meta(server_meta)
         except Exception as e:
-            on_error(f"Image generation failed: {e}")
+            on_error(_server_down_hint(e) or f"Image generation failed: {e}")
             return
 
         if self._is_cancelled():
