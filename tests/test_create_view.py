@@ -550,10 +550,19 @@ def test_switching_away_from_video_and_back_remounts_a_fresh_panel(monkeypatch):
 
 
 def test_cta_calls_on_create_with_video_param_panel_collect_output(monkeypatch):
+    """`_VIDEO_DEFAULTS` mirrors `VideoParamPanel.collect()`'s own wan2.2-
+    default output verbatim (see the constant's docstring and the direct
+    `test_video_param_panel_collect_returns_exact_worker_kwargs_with_defaults`
+    test) — this test exercises that same plain-wan2.2 video path end-to-end
+    through CreateView's CTA. AnimateDiff is now the scoped dropdown's
+    default (index 0, SP-3c-2 reordering), so wan2.2 must be selected
+    explicitly to keep exercising the path this test was written for,
+    rather than silently switching to asserting AnimateDiff's defaults."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
     view._chip_buttons["video"].set_active(True)
+    view._model_dropdown.set_selected(_wan22_index(view))
     view._cta_btn.emit("clicked")
 
     assert len(calls) == 1
@@ -563,6 +572,13 @@ def test_cta_calls_on_create_with_video_param_panel_collect_output(monkeypatch):
 
 
 def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
+    """Exercises the Mochi model path with edited widget values (negative
+    prompt / steps / seed / frames) flowing through collect() -> on_create.
+    Mochi's slot in the scoped dropdown is looked up by canonical id
+    (`_mochi_index`) rather than assumed to be a fixed index — SP-3c-2's
+    AnimateDiff-first reordering (`["animatediff", "wan2.2", "mochi",
+    "skyreels", "animate"]`) moved Mochi from index 1 to index 2, but the
+    edited-widgets intent of this test is unchanged."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
 
@@ -572,11 +588,7 @@ def test_cta_reflects_edited_video_param_panel_widgets(monkeypatch):
     panel._neg_entry.set_text("blurry, watermark")
     panel._steps_adj.set_value(40)
     panel._seed_adj.set_value(101)
-    # Scoped dropdown (Task 6, SP-3c-1): server_manager order is
-    # wan2.2, mochi, skyreels — all three now have a canonical-id mapping
-    # (SkyReels-I2V re-enabled once VideoParamPanel gained a SeedImageWell),
-    # so the dropdown offers [wan2.2, mochi, skyreels]; index 1 is mochi.
-    view._model_dropdown.set_selected(1)  # mochi
+    view._model_dropdown.set_selected(_mochi_index(view))  # mochi
     panel._frames_adj.set_value(65)
 
     view._cta_btn.emit("clicked")
@@ -1158,6 +1170,17 @@ def _animatediff_index(view):
     raise AssertionError("animatediff entry not found in video scoped dropdown")
 
 
+def _wan22_index(view):
+    """Index of the wan2.2 entry in the video scoped dropdown (server key
+    "wan2.2", canonical id "wan2.2-t2v") — looked up by key rather than
+    assumed to be a fixed index, since AnimateDiff now occupies index 0
+    (SP-3c-2 reordering, video-medium-default change)."""
+    for idx, (key, _canonical, _label) in enumerate(view._model_dropdown_entries):
+        if key == "wan2.2":
+            return idx
+    raise AssertionError("wan2.2 entry not found in video scoped dropdown")
+
+
 def test_collect_params_model_animatediff(monkeypatch):
     """Selecting AnimateDiff in the SCOPED dropdown (the one the user sees)
     must produce the "animatediff-blackhole" canonical id in collect_params'
@@ -1174,10 +1197,20 @@ def test_selecting_animatediff_in_scoped_dropdown_reveals_panel_options(monkeypa
     """The whole point of `_sync_panel_model_selection`: VideoParamPanel's
     own AnimateDiff-options box (invisible to RoleZonePanel's zone-building —
     it never renders a `kind == "model"` row) must become visible once the
-    user picks AnimateDiff in the ONE dropdown they actually see."""
+    user picks AnimateDiff in the ONE dropdown they actually see.
+
+    AnimateDiff is now the video medium's scoped-dropdown DEFAULT (index 0,
+    SP-3c-2 reordering), so a fresh mount already syncs the panel to it and
+    the options row starts visible. Switch away to wan2.2 first to get a
+    clean hidden baseline, then switch back to AnimateDiff and confirm the
+    reveal — preserving the original "selecting AnimateDiff reveals the
+    options row" assertion."""
     view = _make_view(monkeypatch)
     view._chip_buttons["video"].set_active(True)
     panel = _panel_of(view)
+    assert panel._ad_options_row.get_visible() is True  # AnimateDiff is the new default
+
+    view._model_dropdown.set_selected(_wan22_index(view))
     assert panel._ad_options_row.get_visible() is False
 
     view._model_dropdown.set_selected(_animatediff_index(view))
@@ -1192,7 +1225,10 @@ def test_switching_away_from_animatediff_hides_panel_options_again(monkeypatch):
     view._model_dropdown.set_selected(_animatediff_index(view))
     assert panel._ad_options_row.get_visible() is True
 
-    view._model_dropdown.set_selected(0)  # back to wan2.2
+    # Index 0 is now AnimateDiff itself (SP-3c-2 reordering) — look up wan2.2
+    # by key instead of assuming a fixed index, so this actually switches
+    # away rather than re-selecting the same entry.
+    view._model_dropdown.set_selected(_wan22_index(view))  # back to wan2.2
 
     assert panel._ad_options_row.get_visible() is False
 
@@ -1463,14 +1499,17 @@ def test_autoselect_starting_when_none_ready(monkeypatch):
 def test_autoselect_falls_back_to_default_when_nothing_running(monkeypatch):
     """`running_or_starting` returning `None` (nothing running/starting for
     this capability) must fall back to the existing medium default (index
-    0), not crash or leave the dropdown unselected."""
+    0), not crash or leave the dropdown unselected. Index 0 is now
+    AnimateDiff (SP-3c-2 reordering: it's the local, no-server default) —
+    "nothing running -> fall back to AnimateDiff" is exactly the intended
+    new-default outcome."""
     fake_service = _FakeStatusService(running={})
     view = _make_view(monkeypatch, status_service=fake_service)
 
     view._chip_buttons["video"].set_active(True)
 
     assert view._model_dropdown.get_selected() == 0
-    assert view._collect_params()["model"] == "wan2.2-t2v"
+    assert view._collect_params()["model"] == "animatediff-blackhole"
 
 
 def test_manual_pick_preserved_across_refresh_with_status_service(monkeypatch):
@@ -1496,12 +1535,13 @@ def test_manual_pick_preserved_across_refresh_with_status_service(monkeypatch):
 def test_autoselect_noop_when_status_service_is_none(monkeypatch):
     """No service injected -> byte-identical to pre-Task-3 behavior: fresh
     populate always lands on index 0, exactly like
-    `test_medium_swap_resets_scoped_model_selection_to_default`."""
+    `test_medium_swap_resets_scoped_model_selection_to_default`. Index 0 is
+    now AnimateDiff (SP-3c-2 reordering) — the local, no-server default."""
     view = _make_view(monkeypatch)  # status_service=None
     view._chip_buttons["video"].set_active(True)
 
     assert view._model_dropdown.get_selected() == 0
-    assert view._collect_params()["model"] == "wan2.2-t2v"
+    assert view._collect_params()["model"] == "animatediff-blackhole"
 
 
 # ── Model door visibility (grid shown only in "model" mode) ──────────────
