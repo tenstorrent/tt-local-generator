@@ -27,25 +27,30 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GdkPixbuf  # noqa: E402
 
 
-# Example ideas seed the composer on a tile pick. Keyed by medium id, with a
-# per-kind fallback so an unknown/new medium still gets a sensible seed. Copy
-# is placeholder — safe to revise freely.
+# Example ideas seed the composer on a tile pick. Drawn straight from the app's
+# OWN sources so they read in the house voice, not generic filler:
+#   - native mediums (image/video/animate): representative lines from the
+#     prompt generator's seed corpus (app/prompts/markov_seed.txt).
+#   - artgen mediums: the evocative THEMES behind curated "favorite" productions
+#     (the per-type playlists — Verses, Ansis, Palettes, Codearts, … — and
+#     "The Demo"), not the templated internal prompts.
+# Keyed by medium id, with a per-kind fallback for an unknown/new medium.
 _EXAMPLE_IDEAS_BY_ID = {
-    "image": "a lighthouse keeper at dawn",
-    "video": "a coastal storm rolling in",
-    "animate": "a candle flame flickering",
-    "verse": "a haiku about silicon",
-    "ansi": "a retro BBS dragon",
-    "palette": "sulfuric emberfall",
-    "landscape": "a misty fjord at golden hour",
-    "constellation": "a Norse star chart",
-    "codeart": "a turtle-graphics bloom",
+    "image": "a Moog Minimoog on a kitchen table in a dark apartment, one desk lamp",
+    "video": "a crop picker walks an empty furrow at 5am, the valley still grey",
+    "animate": "an elderly fisherman turns toward the horizon, a quiet smile at dawn",
+    "verse": "the final cartridge, the last checkpoint",
+    "ansi": "a death's-head moth, glowing wings spread wide",
+    "palette": "a bioluminescent tidal flat at 3am",
+    "landscape": "an otherworldly, dreamlike vista",
+    "constellation": "an invented star chart",
+    "codeart": "the nature of recursion",
 }
 _EXAMPLE_IDEAS_BY_KIND = {
-    "image": "a lighthouse keeper at dawn",
-    "video": "a coastal storm rolling in",
-    "gif": "a candle flame flickering",
-    "text": "something small and luminous",
+    "image": "a Moog Minimoog on a kitchen table, one desk lamp, Hopper stillness",
+    "video": "a crop picker walks an empty furrow at 5am, the valley still grey",
+    "gif": "an elderly fisherman turns toward the horizon, a quiet smile at dawn",
+    "text": "the final cartridge, the last checkpoint",
 }
 # Deterministic per-kind gradient CSS class (defined in main_window _CSS via
 # `poss-grad-*`). Falls back to `poss-grad-image`.

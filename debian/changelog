@@ -1,10 +1,9 @@
-tt-local-generator (0.57.0) noble; urgency=medium
+tt-local-generator (0.57.1) noble; urgency=medium
 
-  * ui(create): pin the ✨ Create CTA as a fixed footer below an internal
-    scroll (CreateView mounts directly, owns its own scroll) so the primary
-    action is always visible, never below the fold.
-  * fix(servers): drop the literal "▾" from the Servers button label — the
-    Gtk.MenuButton already renders its own dropdown arrow (was doubled).
+  * ui(create): source the possibilities-wall example ideas from the app's own
+    voice — the prompt generator's seed corpus (markov_seed.txt) for native
+    mediums and the curated "favorite" production themes for artgen — instead
+    of arbitrary placeholders.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 17:21:26 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 17:25:03 -0700
 
