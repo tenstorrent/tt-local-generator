@@ -1,13 +1,13 @@
-tt-local-generator (0.60.3) noble; urgency=medium
+tt-local-generator (0.60.4) noble; urgency=medium
 
-  * fix(gif): stop a heavy animated GIF from freezing the whole app. Both GIF
-    drivers (drive_gif_animation + AnimatedGifWidget._tick) decoded each frame
-    on the GTK main thread and re-armed at the frame delay regardless of decode
-    cost, so a large AnimateDiff GIF whose per-frame decode exceeded its delay
-    starved the main loop (UI lockup, confirmed via py-spy: MainThread parked in
-    artgen_render._tick / libpixbufloader-gif). Both ticks now self-throttle:
-    never re-arm sooner than the frame decode itself took, so the main loop
-    always gets breathing room — the GIF animates slower, never frozen.
+  * ui(create): remove the redundant second "Prompt" box. Artgen generators that
+    declare their own --prompt (AnimateDiff, Freeform, …) were surfacing a
+    "Prompt" field in "Your brief" that duplicated — and was overridden by — the
+    top "What do you want to make?" entry. RoleZonePanel now drops the prompt-key
+    field (like it already drops model), so there is ONE prompt per medium; the
+    generator's default still applies when the top entry is empty (collect()
+    unchanged). An artgen medium whose only brief field was the prompt now hides
+    its empty "Your brief" frame.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 11:58:29 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 12:15:28 -0700
 

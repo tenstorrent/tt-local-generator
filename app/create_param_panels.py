@@ -2693,6 +2693,17 @@ class RoleZonePanel(Gtk.Box):
             if spec.kind == "model":
                 # Deliberately not a zone field — see module comment.
                 continue
+            if spec.key == "prompt":
+                # The MAIN prompt is owned by CreateView's persistent "What do
+                # you want to make?" entry (which sits directly above this panel
+                # and OVERRIDES this field in `_collect_params`). Some artgen
+                # generators declare their own `--prompt` arg (AnimateDiff,
+                # Freeform, …), which would otherwise surface here as a second,
+                # redundant "Prompt" box in "Your brief". Skip it — the panel's
+                # widget still exists so `collect()` returns the generator's
+                # default when the top entry is left empty (behaviour unchanged),
+                # it just isn't shown twice.
+                continue
             row = panel._row_for(spec.key)
             if row is None:
                 # No built widget to relocate for this key (should not
@@ -2702,6 +2713,11 @@ class RoleZonePanel(Gtk.Box):
             row.unparent()
             self._relabel_row(row, spec)
             self._zone_for_role(spec.role.role).append(row)
+
+        # Don't show an empty "Your brief" frame: for an artgen medium whose
+        # only brief field was the (now-hidden) prompt, the zone has no rows —
+        # a labelled frame around nothing is just clutter.
+        brief_frame.set_visible(self._brief_zone.get_first_child() is not None)
 
         self.append(brief_frame)
         self.append(direction_frame)

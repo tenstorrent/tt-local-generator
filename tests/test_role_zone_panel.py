@@ -236,3 +236,45 @@ def test_seed_image_well_derives_live_root_after_reparenting(monkeypatch):
     assert captured == [win]
 
     win.destroy()
+
+
+def _artgen_medium(generator, kind="gif"):
+    from create_mediums import Medium
+    return Medium(id=generator, label=generator.title(), icon="*", kind=kind,
+                  source="artgen", generator=generator, uses_llm=False)
+
+
+def test_prompt_field_hidden_but_still_collected_for_artgen():
+    """An artgen generator that declares its own --prompt (e.g. AnimateDiff)
+    must NOT show a second "Prompt" box in the brief zone — the top idea entry
+    owns the prompt — but collect() must still return the generator's default
+    prompt so an empty top entry falls back to it (behaviour unchanged)."""
+    med = _artgen_medium("animatediff")
+    panel = cpp.ArtgenParamPanel(med.generator)
+    rp = cpp.RoleZonePanel(panel, med)
+
+    # no "prompt" row was re-parented into the brief zone
+    def _row_labels(box):
+        out, ch = [], box.get_first_child()
+        while ch is not None:
+            first = ch.get_first_child()
+            if isinstance(first, Gtk.Label):
+                out.append(first.get_label())
+            ch = ch.get_next_sibling()
+        return out
+    assert not any("Prompt" in lbl for lbl in _row_labels(rp._brief_zone))
+
+    # collect() still carries the prompt (the generator's default)
+    d = rp.collect()
+    assert "prompt" in d and d["prompt"]  # non-empty default
+
+
+def test_empty_brief_frame_hidden_for_prompt_only_artgen():
+    """AnimateDiff's only brief field was the (now-hidden) prompt -> the "Your
+    brief" frame is empty, so it is hidden rather than framing nothing."""
+    med = _artgen_medium("animatediff")
+    rp = cpp.RoleZonePanel(cpp.ArtgenParamPanel(med.generator), med)
+    # brief zone has no rows -> its frame is not visible
+    if rp._brief_zone.get_first_child() is None:
+        brief_frame = rp._brief_zone.get_parent()
+        assert brief_frame.get_visible() is False
