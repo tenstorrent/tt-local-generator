@@ -42,3 +42,12 @@ def test_plan_switch():
     assert (p.target, p.conflict, p.needs_reset) == (None, None, False)
     p = rtr.plan_switch(None, _status({}))
     assert (p.target, p.conflict, p.needs_reset) == (None, None, False)
+
+
+def test_animatediff_needs_no_server():
+    plan = rtr.plan_switch("animatediff", lambda k: "off")
+    assert plan.target is None          # local, nothing to gate → runs immediately
+
+
+def test_animate_maps_to_animate_server():
+    assert rtr.required_server("animate") == "animate"

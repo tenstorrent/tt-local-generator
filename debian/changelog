@@ -1,3 +1,27 @@
+tt-local-generator (0.61.0) noble; urgency=medium
+
+  * feat(create): "Video is Video" — the video trio (Wan2.2/Mochi/SkyReels,
+    Wan2.2-Animate, and the AnimateDiff artgen generator) is one Video medium
+    now, not three separate chips. Animate and AnimateDiff are *models* inside
+    Video's scoped picker, selected the same way Wan2.2/Mochi/SkyReels are.
+  * feat(server_manager): `benefit_for`/`display_name_for` seam — the Create
+    model picker renders a friendly display name plus a short "what is this
+    good for" benefit tagline for every model/server key, including the
+    synthetic no-server `animatediff` entry.
+  * feat(create): AnimateDiff (local, no server to start) is the default Video
+    model whenever nothing on the video/animate hardware group is already
+    running — a job always has a same-instant path to a result.
+  * feat(create): picking the Animate model reveals Video's on-demand "Animate
+    needs" section (motion video / character image / mode) inline; every other
+    Video/Image job's `collect()` dict is unaffected.
+  * feat(create): routes the Animate model through `_native_generate_args` to
+    `AnimateGenerationWorker` (`model_source="animate"`), the same worker the
+    old dedicated Animate chip used — no capability lost, no duplicated engine.
+  * chore: existing artgen-`animatediff` records continue to render in the
+    artgen gallery unchanged; this is a Create-surface taxonomy change only.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 15:48:58 -0700
+
 tt-local-generator (0.60.4) noble; urgency=medium
 
   * ui(create): remove the redundant second "Prompt" box. Artgen generators that

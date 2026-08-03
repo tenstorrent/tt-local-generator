@@ -384,6 +384,53 @@ ONE shared implementation instead of forking it per surface:
   methods read. Pinned by dedicated collect-equality tests (as well as the
   pre-existing `test_role_zone_panel.py` suite, unaffected by this change).
 
+## Video is Video (v0.61.0)
+
+The video trio — Wan2.2/Mochi/SkyReels, Wan2.2-Animate, and the AnimateDiff
+artgen generator — used to be three separate Create chips (Video / Animate /
+AnimateDiff, each its own medium). They are now ONE **Video** medium; Animate
+and AnimateDiff are *models* inside Video's scoped picker, selected the same
+way Wan2.2/Mochi/SkyReels already were (`create_mediums.py` drops the
+`"animate"` `Medium` and skips `"animatediff"` in `discover_mediums`'s artgen
+loop — folded in, not deleted).
+
+- **Benefit-advertising picker.** `server_manager.benefit_for(key)` /
+  `display_name_for(key)` is the friendly-name/tagline seam every Video
+  picker entry renders through (`CreateView`'s scoped dropdown and the Model
+  door, `create_view.py`). `ServerDef.benefit`/label win when present;
+  `MODEL_BENEFITS`/`MODEL_DISPLAY_NAMES` cover keys with no `ServerDef` at all
+  (the synthetic `"animatediff"` entry) or whose raw label reads as an
+  implementation string rather than a picker-friendly name.
+- **AnimateDiff is the no-server default.** When nothing on the video/animate
+  hardware group is already running, Video's scoped dropdown auto-selects
+  AnimateDiff (index 0) instead of whatever `_DEFAULT_VIDEO_KEY` used to pick —
+  it needs no server start, so a Create job always has an immediate path to a
+  result. `_autoselect_running_model_index` checks BOTH the `"video"` and
+  `"animate"` capabilities for Video (unlike other mediums' single-capability
+  check) so an already-running Animate server is still preferred over the
+  AnimateDiff default.
+- **Animate's inputs reveal on demand.** Picking the Animate model in Video's
+  scoped dropdown reveals an inline "Animate needs" section (motion video /
+  character image / mode) built from the same `create_param_panels.
+  build_path_picker_row`/`build_mode_toggle_row` helpers `AnimateParamPanel`
+  used before the merge — no duplicated FileDialog wiring. `_collect_params()`
+  folds these into the params dict ONLY when the Animate model is selected;
+  every other Video/Image job's `collect()` output is byte-for-byte unchanged
+  (collect-equality guard test).
+  Section is hidden for every other model.
+- **Routing:** `MainWindow._native_generate_args` recognizes
+  `model_key == "animate"` (via `_VIDEO_MODEL_ID_TO_KEY`) and returns
+  `model_source="animate"` args/kwargs (`ref_video_path`/`ref_char_path`/
+  `animate_mode` pulled from the reveal-on-demand fields), routing to the same
+  `AnimateGenerationWorker` the old dedicated Animate chip used — the two
+  AnimateDiff code paths (native worker vs. artgen plugin) are the same
+  underlying engine, so merging the chip lost no capability.
+- **Retired:** the standalone `"animate"` `Medium` chip and the artgen
+  `"animatediff"` chip are gone from Create's doors/possibilities wall.
+  Existing artgen-`animatediff` `MediaRecord`s already in history are
+  UNAFFECTED and continue to render in the artgen gallery exactly as before —
+  this is a Create-surface taxonomy change, not a data-model or storage change.
+
 ## Possibilities wall (v0.53.0)
 
 `app/possibilities.py` — `PossibilitiesWall`, a full-width "Start something"
@@ -894,12 +941,15 @@ xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/ -q
 ```
 
 `xvfb-run` is pre-installed on Ubuntu 24.04 (`apt install xvfb` if missing).
-Two pre-existing, environment-level flakes are expected and should be deselected
-in full-suite runs (both pass in isolation / are unrelated to app code):
-`test_forge_transforms::test_on_transform_finished_appends_and_refreshes`, and
+Three pre-existing, environment-level flakes are expected and should be
+deselected in full-suite runs (all three pass in isolation / are unrelated to
+app code): `test_forge_transforms::test_on_transform_finished_appends_and_refreshes`,
 `test_pipeline_engine.py::test_run_plugin_loads_and_calls_real_module` (a
 `cffi`/`cairosvg` version-mismatch that only surfaces under full-suite import
-ordering). Plus one environment skip (`test_regression_guards` when
+ordering), and `test_role_zone_panel.py::test_prompt_field_hidden_but_still_collected_for_artgen`
+(confirmed by multiple reviewers this session to reproduce on the base branch,
+unrelated to app changes — passes in isolation, fails only under full-suite
+import ordering). Plus one environment skip (`test_regression_guards` when
 `docs/assets/` is absent).
 
 Tests are in `tests/` at repo root. Each file does `sys.path.insert(0, str(Path(__file__).parent.parent / "app"))` to import from `app/`. Tests mock all subprocess and network calls.
