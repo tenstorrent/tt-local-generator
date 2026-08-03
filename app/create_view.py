@@ -222,8 +222,9 @@ def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
 # AnimateDiff. Capability-based classification is unambiguous instead:
 #
 #   image   -> Image   (flux/sdxl/z-image-turbo/motif)
-#   video   -> Video   (wan2.2/mochi/skyreels)
-#   animate -> Animate (Wan2.2-Animate-14B, the ONE real animate server)
+#   video   -> Video   (wan2.2/mochi/skyreels/animate — Wan2.2-Animate-14B
+#                       is a video model too, filed alongside its siblings
+#                       rather than getting its own single-server section)
 #   artgen  -> Text    (the chat-LLM backends — Qwen/Llama/DeepSeek/…)
 #   prompt  -> Text    (prompt-server, the tiny prompt-gen Qwen)
 #
@@ -233,7 +234,7 @@ def _canonical_model_id_for(medium: Medium, server_key: str) -> Optional[str]:
 _CAPABILITY_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
     "image": "Image",
     "video": "Video",
-    "animate": "Animate",
+    "animate": "Video",   # Wan2.2-Animate is a Video model now
     "artgen": "Text",
     "prompt": "Text",
 }
@@ -241,7 +242,7 @@ _CAPABILITY_TO_MODEL_DOOR_GROUP: "dict[str, str]" = {
 # Fixed display order for the model door's sections — independent of dict
 # iteration order, and stable regardless of which groups end up non-empty for
 # the current SERVERS table.
-_MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Animate", "Text")
+_MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Text")
 
 
 # Two-pane responsive layout (Task 2, "in-place Create results":
@@ -503,6 +504,15 @@ _CSS = b"""
 /* A visible hover affordance says "tap me". */
 .create-model-chip:hover {
     border-color: #4FD1C5;
+}
+
+/* -- Model picker benefit taglines (Task 4) -- dimmed second line shown on
+   the scoped dropdown's popup rows and the Model door's cards. ASCII only:
+   this whole block is inside the _CSS bytes literal, no non-ASCII glyphs
+   allowed here (dots/icons live in Python str labels only). */
+.model-row-benefit {
+    font-size: 0.85em;
+    opacity: 0.7;
 }
 
 /* -- Idea door's prompt entry (Task 7) ---------------------------------------- */
@@ -952,6 +962,11 @@ class CreateView(Gtk.Box):
         # None, label) aligned 1:1 with the Gtk.StringList currently mounted
         # in `_model_dropdown` — see `_populate_model_dropdown`/`_collect_params`.
         self._model_dropdown_entries: "list[tuple]" = []
+        # Parallel (Task 4): (friendly_name, benefit, dot_glyph) per row, read
+        # by the dropdown's `Gtk.SignalListItemFactory` `bind` callback (by
+        # position) so the popped-open list shows a friendly name + dimmed
+        # benefit tagline. See `_populate_model_dropdown`.
+        self._model_row_meta: "list[tuple]" = []
 
         # Built (but not yet appended) BEFORE the chip row: `_build_chip_row`
         # activates the first chip's toggle button as its last step, which
@@ -976,6 +991,17 @@ class CreateView(Gtk.Box):
         # so any future panel that exposes `set_selected_model_key` benefits
         # too.
         self._model_dropdown.connect("notify::selected", self._on_scoped_model_dropdown_changed)
+        # Task 4: two-line popup rows (friendly name + dimmed benefit
+        # tagline), read from `self._model_row_meta` (built alongside
+        # `_model_dropdown_entries` by `_populate_model_dropdown`). Set as
+        # `list_factory` ONLY — not `factory` — so the collapsed/selected
+        # button keeps its existing single-line rendering (the default
+        # Gtk.StringList label, dot + raw label, unchanged from before this
+        # task) and only the popped-open list gets the richer two-line row.
+        model_row_factory = Gtk.SignalListItemFactory()
+        model_row_factory.connect("setup", self._on_model_row_setup)
+        model_row_factory.connect("bind", self._on_model_row_bind)
+        self._model_dropdown.set_list_factory(model_row_factory)
 
         # "Start something" possibilities wall (SP-2 Task 2): a full-width
         # wall of per-medium exemplar tiles above the doors/chips. Tapping a
@@ -1461,28 +1487,46 @@ class CreateView(Gtk.Box):
         from the model id it carries, suffixed " (detected)" so the card
         reads unambiguously as "this is running, but not one of ours" rather
         than looking like an ordinary registered model.
+
+        Task 4: real/synthetic keys show `server_manager.display_name_for(key)`
+        as the title (friendly name — e.g. "Wan 2.2" instead of the raw
+        "Wan2.2-T2V-A14B  (P300X2)" `ServerDef.label`) with a dimmed
+        `benefit_for(key)` subtitle underneath (the SAME `.model-row-benefit`
+        CSS class the scoped dropdown's popup rows use), omitted when there's
+        no benefit tagline for this key. The detected-sentinel card is
+        unaffected — `display_name_for`/`benefit_for` only make sense for a
+        real `SERVERS`/`MODEL_DISPLAY_NAMES` entry.
         """
         if _is_detected_key(key):
             label_text = f"{_detected_key_model_id(key)} (detected)"
+            benefit_text = ""
         else:
-            sdef = server_manager.SERVERS.get(key)
-            label_text = sdef.label if sdef is not None else key
+            label_text = server_manager.display_name_for(key)
+            benefit_text = server_manager.benefit_for(key)
         dot_glyph = self._model_dot_glyph(key)
         running = dot_glyph == "●"
 
         btn = Gtk.Button()
         btn.add_css_class("create-model-chip")
         btn.add_css_class("create-model-chip-on" if running else "create-model-chip-off")
-        btn.set_tooltip_text(label_text)
+        btn.set_tooltip_text(benefit_text or label_text)
 
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         dot = Gtk.Label(label=dot_glyph)
         dot.add_css_class("create-model-dot-on" if running else "create-model-dot-off")
         content.append(dot)
 
+        text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         label = Gtk.Label(label=label_text)
+        label.set_xalign(0.0)
         label.add_css_class("create-model-label")
-        content.append(label)
+        text_col.append(label)
+        if benefit_text:
+            benefit_label = Gtk.Label(label=benefit_text)
+            benefit_label.set_xalign(0.0)
+            benefit_label.add_css_class("model-row-benefit")
+            text_col.append(benefit_label)
+        content.append(text_col)
 
         btn.set_child(content)
         btn.connect("clicked", lambda _b, k=key: self._activate_model_card(k))
@@ -1704,6 +1748,46 @@ class CreateView(Gtk.Box):
 
     # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 
+    def _on_model_row_setup(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        """Build the two-line row template (Task 4): a name `Gtk.Label` over
+        a dimmed benefit `Gtk.Label` (`.model-row-benefit`). `_on_model_row_bind`
+        fills in the actual text per row — this only builds the reusable
+        widget skeleton, per the factory pattern."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        name_label = Gtk.Label()
+        name_label.set_xalign(0.0)
+        name_label.add_css_class("model-row-name")
+        box.append(name_label)
+        benefit_label = Gtk.Label()
+        benefit_label.set_xalign(0.0)
+        benefit_label.add_css_class("model-row-benefit")
+        box.append(benefit_label)
+        list_item.set_child(box)
+
+    def _on_model_row_bind(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        """Fill the row template from `self._model_row_meta[position]` — the
+        parallel `(friendly_name, benefit, dot_glyph)` list `_populate_model_dropdown`
+        builds alongside `_model_dropdown_entries`. Reads by POSITION (not the
+        bound `Gtk.StringObject`'s own string) since the same `Gtk.StringList`
+        backs both this richer popup row and `_model_dropdown_entries`'s
+        single-line label — the two are aligned 1:1 by index."""
+        pos = list_item.get_position()
+        box = list_item.get_child()
+        name_label = box.get_first_child()
+        benefit_label = name_label.get_next_sibling()
+        meta = getattr(self, "_model_row_meta", [])
+        if 0 <= pos < len(meta):
+            name, benefit, dot = meta[pos]
+        else:
+            name, benefit, dot = ("", "", "")
+        name_label.set_label(f"{dot} {name}".strip())
+        if benefit:
+            benefit_label.set_label(benefit)
+            benefit_label.set_visible(True)
+        else:
+            benefit_label.set_label("")
+            benefit_label.set_visible(False)
+
     def _build_model_dropdown_row(self) -> Gtk.Box:
         """Label + `self._model_dropdown`, mounted directly above
         `_panel_host`. The dropdown's contents are populated per-medium by
@@ -1864,6 +1948,13 @@ class CreateView(Gtk.Box):
 
         entries: "list[tuple]" = []
         labels: "list[str]" = []
+        # Parallel to `entries`/`labels` (Task 4): `(friendly_name, benefit,
+        # dot_glyph)` per row, read by the `_model_dropdown` factory's `bind`
+        # (indexed by `list_item.get_position()`) so the popped-open list can
+        # show a friendly name + dimmed benefit tagline without disturbing
+        # `entries`' `(key, canonical, label)` shape, which `_selected_model_key`
+        # and `_collect_params` still key off unchanged.
+        row_meta: "list[tuple]" = []
         llm_free_artgen_self_key = (
             medium.source == "artgen" and not medium.uses_llm
         )
@@ -1883,8 +1974,10 @@ class CreateView(Gtk.Box):
                 # `collect()` is unaffected, exactly like every other artgen
                 # medium's dropdown.
                 label_text = medium.label
-                labels.append(f"{self._model_dot_glyph(key, medium=medium)} {label_text}")
+                dot = self._model_dot_glyph(key, medium=medium)
+                labels.append(f"{dot} {label_text}")
                 entries.append((key, None, label_text))
+                row_meta.append((medium.label, "", dot))
                 continue
             if _is_detected_key(key):
                 # SP-3 Task 3: the synthetic "detected model" entry — never a
@@ -1896,8 +1989,10 @@ class CreateView(Gtk.Box):
                 # medium kind that can ever produce this key; native mediums
                 # never call `_detected_model_key`, see `_scoped_model_keys`).
                 label_text = f"{_detected_key_model_id(key)} (detected)"
-                labels.append(f"{self._model_dot_glyph(key)} {label_text}")
+                dot = self._model_dot_glyph(key)
+                labels.append(f"{dot} {label_text}")
                 entries.append((key, None, label_text))
+                row_meta.append((label_text, "", dot))
                 continue
             canonical = _canonical_model_id_for(medium, key)
             if is_native_with_model and canonical is None:
@@ -1915,12 +2010,19 @@ class CreateView(Gtk.Box):
             dot = self._model_dot_glyph(key)
             labels.append(f"{dot} {label_text}")
             entries.append((key, canonical, label_text))
+            row_meta.append((
+                server_manager.display_name_for(key),
+                server_manager.benefit_for(key),
+                dot,
+            ))
 
         if not entries:
             labels = ["No models available"]
             entries = [(None, None, "No models available")]
+            row_meta = [("No models available", "", "")]
 
         self._model_dropdown_entries = entries
+        self._model_row_meta = row_meta
         self._model_dropdown.set_model(Gtk.StringList.new(labels))
         # Re-select the previously-chosen key if it survived the rebuild
         # (same-medium health refresh) — v0.28.1 fix, untouched: `restored`

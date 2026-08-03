@@ -1566,15 +1566,16 @@ def test_model_door_row_visible_only_in_model_mode(monkeypatch):
 # Task 6 left an honest "not built yet" placeholder in the model door after
 # retiring the non-wrapping live-model strip. Task 7 replaces that
 # placeholder with a grouped, wrapping Gtk.FlowBox grid — every
-# server_manager key classified into Image/Video/Animate/Text — so the whole
-# (~15 and growing) model collection is browsable without ever overflowing
-# the window. `_model_door_groups()` and `_activate_model_card()` are the
-# pure/GTK test seams (task-7-brief.md, Step 1, verbatim below).
+# server_manager key classified into Image/Video/Text (Task 4 folds Animate
+# into Video — Wan2.2-Animate-14B is a video model, not its own section) —
+# so the whole (~15 and growing) model collection is browsable without ever
+# overflowing the window. `_model_door_groups()` and `_activate_model_card()`
+# are the pure/GTK test seams (task-7-brief.md, Step 1, verbatim below).
 
 def test_model_door_groups_by_type(monkeypatch):
     view = _make_view(monkeypatch)
     groups = view._model_door_groups()
-    assert set(groups) <= {"Image", "Video", "Animate", "Text"}
+    assert set(groups) <= {"Image", "Video", "Text"}
     assert "flux" in groups["Image"]
     assert all(v for v in groups.values())
 
@@ -1587,18 +1588,21 @@ def test_model_door_card_click_routes_to_medium(monkeypatch):
 
 
 def test_model_door_groups_video_and_animate_and_text(monkeypatch):
-    """Beyond Image (the brief's one asserted group), the other three groups
+    """Beyond Image (the brief's one asserted group), the other two groups
     must also classify sensibly against the real server_manager.SERVERS
-    table combined with _fake_mediums()'s image/video/animate/verse list."""
+    table combined with _fake_mediums()'s image/video/animate/verse list.
+    Task 4: "animate" capability now files under Video alongside the other
+    video servers, not its own section."""
     view = _make_view(monkeypatch)
     groups = view._model_door_groups()
 
     assert "wan2.2" in groups["Video"]
     assert "mochi" in groups["Video"]
     assert "skyreels" in groups["Video"]
+    assert "animate" in groups["Video"]
     assert "flux" not in groups["Video"]
 
-    assert groups["Animate"] == ["animate"]
+    assert "Animate" not in groups
 
     # Every artgen chat-LLM server, plus prompt-server (capability "prompt"),
     # lands in Text.
@@ -1637,7 +1641,9 @@ def test_llm_servers_group_as_text_with_multiple_artgen_mediums(monkeypatch):
     capability-based-classification fix): with MORE THAN ONE artgen medium
     present — `animatediff` (gif) alphabetically before `verse` (text),
     mirroring default_mediums() — every artgen-* chat/LLM key AND
-    prompt-server must land in groups["Text"], never in groups["Animate"]."""
+    prompt-server must land in groups["Text"], never in groups["Video"]
+    (Task 4 folded the old "Animate" group into Video — the first-artgen-
+    medium bug this guards would have misfiled these keys there)."""
     view = _make_view(monkeypatch, mediums_fn=_fake_mediums_multi_artgen)
     groups = view._model_door_groups()
 
@@ -1652,8 +1658,8 @@ def test_llm_servers_group_as_text_with_multiple_artgen_mediums(monkeypatch):
     ]
     for key in llm_keys:
         assert key in groups["Text"], f"{key} must be in Text, not elsewhere"
-        assert key not in groups.get("Animate", []), (
-            f"{key} must NOT be in Animate (the first-artgen-medium bug)"
+        assert key not in groups.get("Video", []), (
+            f"{key} must NOT be in Video (the first-artgen-medium bug)"
         )
 
 
@@ -1680,8 +1686,9 @@ def test_model_door_omits_empty_groups(monkeypatch):
     """Classification is now purely by `server_manager.SERVERS` capabilities
     (independent of mediums_fn), so an empty group only arises when SERVERS
     itself has no server for that capability. Reduce SERVERS to image+text
-    servers and assert the Video/Animate sections are omitted entirely — the
-    "no empty groups" requirement."""
+    servers and assert the Video section (which also covers "animate" since
+    Task 4 folded that capability in) is omitted entirely — the "no empty
+    groups" requirement."""
     import server_manager
 
     subset = {
@@ -1693,7 +1700,7 @@ def test_model_door_omits_empty_groups(monkeypatch):
     view = _make_view(monkeypatch)
     groups = view._model_door_groups()
 
-    assert "Animate" not in groups
+    assert "Animate" not in groups  # this group no longer exists at all
     assert "Video" not in groups
     assert set(groups) <= {"Image", "Text"}
     assert all(v for v in groups.values())
