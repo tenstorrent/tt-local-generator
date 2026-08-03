@@ -1,12 +1,13 @@
-tt-local-generator (0.60.2) noble; urgency=medium
+tt-local-generator (0.60.3) noble; urgency=medium
 
-  * ui(generate): when the inference server on port 8000 isn't running, native
-    generation now shows an actionable "start the server from the Servers menu"
-    message instead of a raw HTTPConnectionPool traceback (worker._server_down_hint,
-    applied to the image-gen and submit error paths).
-  * NOTE: AnimateDiff Create still routes through the native IMAGE worker
-    (ImageGenerationWorker) rather than AnimateDiffGenerationWorker / the local
-    plugin — a routing bug flagged for follow-up (needs the intended-flow call).
+  * fix(gif): stop a heavy animated GIF from freezing the whole app. Both GIF
+    drivers (drive_gif_animation + AnimatedGifWidget._tick) decoded each frame
+    on the GTK main thread and re-armed at the frame delay regardless of decode
+    cost, so a large AnimateDiff GIF whose per-frame decode exceeded its delay
+    starved the main loop (UI lockup, confirmed via py-spy: MainThread parked in
+    artgen_render._tick / libpixbufloader-gif). Both ticks now self-throttle:
+    never re-arm sooner than the frame decode itself took, so the main loop
+    always gets breathing room — the GIF animates slower, never frozen.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 11:34:08 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 11:58:29 -0700
 

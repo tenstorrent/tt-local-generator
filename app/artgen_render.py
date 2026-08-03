@@ -75,6 +75,7 @@ from __future__ import annotations
 import html as _html_mod
 import json
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -563,13 +564,20 @@ def drive_gif_animation(pic: Gtk.Picture, path: str, on_timer_id) -> None:
     it = anim.get_iter(None)
 
     def tick() -> bool:
+        _t0 = time.monotonic()
         it.advance(None)
         pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
         delay = it.get_delay_time()
         if delay < 0:
             on_timer_id(None)
             return GLib.SOURCE_REMOVE
-        on_timer_id(GLib.timeout_add(max(delay, 10), tick))
+        # Self-throttle: a heavy GIF whose per-frame decode costs more than its
+        # frame delay would starve the GTK main loop and freeze the whole app
+        # (an AnimateDiff result did exactly this). Never re-arm sooner than the
+        # decode itself took, so the main loop always gets at least that much
+        # breathing room between frames — the GIF animates slower, never frozen.
+        decode_ms = int((time.monotonic() - _t0) * 1000)
+        on_timer_id(GLib.timeout_add(max(delay, 10, decode_ms), tick))
         return GLib.SOURCE_REMOVE
 
     pic.set_paintable(Gdk.Texture.new_for_pixbuf(it.get_pixbuf()))
@@ -626,6 +634,7 @@ class AnimatedGifWidget(Gtk.Picture):
         if self._iter is None:
             self._timer_id = None
             return GLib.SOURCE_REMOVE
+        _t0 = time.monotonic()
         self._iter.advance(None)
         pb = self._iter.get_pixbuf()
         if pb is not None:
@@ -634,7 +643,11 @@ class AnimatedGifWidget(Gtk.Picture):
         if delay < 0:
             self._timer_id = None
             return GLib.SOURCE_REMOVE
-        self._timer_id = GLib.timeout_add(max(delay, 10), self._tick)
+        # Self-throttle (see drive_gif_animation.tick): never re-arm sooner than
+        # the frame decode took, so a heavy GIF can't starve the main loop and
+        # freeze the app.
+        decode_ms = int((time.monotonic() - _t0) * 1000)
+        self._timer_id = GLib.timeout_add(max(delay, 10, decode_ms), self._tick)
         return GLib.SOURCE_REMOVE
 
     def set_playing(self, playing: bool) -> None:
