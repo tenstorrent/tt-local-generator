@@ -1,9 +1,10 @@
-tt-local-generator (0.58.1) noble; urgency=medium
+tt-local-generator (0.58.2) noble; urgency=medium
 
-  * ui(create): give the form pane the growth room (more room on the left) and
-    cap the result/recents pane at ~400px — the form no longer gets squeezed
-    into half the width, so its rows lay out wider and the flow is closer to
-    fitting without scrolling.
+  * ui(create): make the possibilities wall a compact horizontal SHELF (single
+    row, scrolls sideways) — always-present inspiration, minimal height.
+  * ui(create): the Direction style chips now show 2 per category with a
+    "+N more…" reveal for the rest, so the chip area stays compact. De-dup and
+    applied-modifier text are unchanged.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 06:31:46 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 06:37:29 -0700
 

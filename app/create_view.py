@@ -999,19 +999,11 @@ class CreateView(Gtk.Box):
         content.add_css_class("create-view-content")
         content.add_css_class("create-form-pane")
         if self._possibilities is not None:
-            # Keep the wall a compact, scannable BAND rather than a tall grid
-            # that pushes the composer below the fold. The Create surface should
-            # feel like an app that fits the window, not a long-scrolling web
-            # page — so bound the wall's height and let it scroll internally.
-            # `self._possibilities` stays the same object (tests reference it
-            # directly), just re-parented into the height-capped scroller.
-            poss_scroll = Gtk.ScrolledWindow()
-            poss_scroll.add_css_class("create-possibilities-scroll")
-            poss_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            poss_scroll.set_propagate_natural_height(True)
-            poss_scroll.set_max_content_height(200)
-            poss_scroll.set_child(self._possibilities)
-            content.append(poss_scroll)
+            # The wall is now a compact, self-contained horizontal SHELF
+            # (single row, scrolls sideways) — always-present inspiration with a
+            # minimal vertical footprint, so the Create surface fits without
+            # scrolling. Appended directly (no outer height-capped band needed).
+            content.append(self._possibilities)
         # The doors row (idea / model / inspiration toggles) is built for its
         # side effects — it populates `self._doors` and sets the default "idea"
         # entry mode — but is NO LONGER MOUNTED: the possibilities wall is the

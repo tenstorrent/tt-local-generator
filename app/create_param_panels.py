@@ -2481,6 +2481,11 @@ class ModifierPills(Gtk.Box):
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
+    # How many "add" chips each category shows inline before the rest tuck
+    # behind a "+N more…" reveal — keeps the Direction zone compact so the
+    # Create surface fits without scrolling.
+    _VISIBLE_PER_CATEGORY = 2
+
     def _build_category_box(self, category) -> Gtk.Widget:
         group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         group.add_css_class("modifier-pills-category")
@@ -2490,18 +2495,49 @@ class ModifierPills(Gtk.Box):
         header.set_xalign(0.0)
         group.append(header)
 
+        # First N chips show inline; any beyond go into a collapsed Revealer
+        # toggled by "+N more…". Every chip is still built and registered in
+        # `_add_buttons`, so de-dup + `applied_text()` are unaffected — the
+        # reveal only controls whether the overflow GROUP is on screen.
         flow = Gtk.FlowBox()
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.add_css_class("modifier-pills-add-row")
-        for entry in category.chips:
+
+        overflow_flow = Gtk.FlowBox()
+        overflow_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        overflow_flow.add_css_class("modifier-pills-add-row")
+        revealer = Gtk.Revealer()
+        revealer.set_child(overflow_flow)
+        revealer.set_reveal_child(False)
+
+        overflow = 0
+        for i, entry in enumerate(category.chips):
             btn = Gtk.Button(label=f"+ {entry.label}")
             btn.add_css_class("create-addchip")
             if entry.tip:
                 btn.set_tooltip_text(entry.tip)
             btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
-            flow.append(btn)
             self._add_buttons[id(entry)] = btn
+            if i < self._VISIBLE_PER_CATEGORY:
+                flow.append(btn)
+            else:
+                overflow_flow.append(btn)
+                overflow += 1
         group.append(flow)
+
+        if overflow > 0:
+            more = Gtk.Button(label=f"+{overflow} more…")
+            more.add_css_class("create-addchip")
+            more.add_css_class("modifier-pills-more")
+
+            def _toggle_more(_b, rev=revealer, mbtn=more, n=overflow):
+                now = not rev.get_reveal_child()
+                rev.set_reveal_child(now)
+                mbtn.set_label("− less" if now else f"+{n} more…")
+
+            more.connect("clicked", _toggle_more)
+            group.append(more)
+            group.append(revealer)
 
         return group
 

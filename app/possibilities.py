@@ -60,7 +60,7 @@ _GRADIENT_CLASS_BY_KIND = {
     "gif": "poss-grad-gif",
     "text": "poss-grad-text",
 }
-_TILE_W, _TILE_H = 230, 150
+_TILE_W, _TILE_H = 200, 104
 
 
 def example_idea_for(medium) -> str:
@@ -99,13 +99,16 @@ class PossibilitiesWall(Gtk.Box):
         head.append(surprise)
         self.append(head)
 
-        self._flow = Gtk.FlowBox()
-        self._flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        self._flow.set_max_children_per_line(8)
-        self._flow.set_column_spacing(14)
-        self._flow.set_row_spacing(14)
-        self._flow.set_homogeneous(True)
-        self.append(self._flow)
+        # A single-row horizontal SHELF (not a wrapping grid): always present as
+        # inspiration, but minimal vertical footprint so the Create surface fits
+        # without scrolling. Scrolls horizontally when the mediums overflow.
+        self._flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self._flow.add_css_class("possibilities-shelf")
+        shelf_scroll = Gtk.ScrolledWindow()
+        shelf_scroll.add_css_class("possibilities-shelf-scroll")
+        shelf_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        shelf_scroll.set_child(self._flow)
+        self.append(shelf_scroll)
 
         self.refresh()
 
