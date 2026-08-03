@@ -1459,6 +1459,129 @@ _ANIMATE_MODE_ANIMATION = "animation"
 _ANIMATE_MODE_REPLACEMENT = "replacement"
 
 
+def build_path_picker_row(
+    label_text: str, placeholder: str, dialog_title: str
+) -> "tuple[Gtk.Box, Gtk.Entry, Callable[[Gtk.Button], None], Callable]":
+    """Shared label + path-entry + "Browse…" row, wired to GTK4's async
+    `Gtk.FileDialog` (`open()` + `open_finish()` in a try/except, per
+    CLAUDE.md's FileDialog gotcha — `open_finish()` raises when the user
+    cancels, and the existing entry text is left untouched in that case).
+
+    Factored out of `AnimateParamPanel._build_ref_video_row`/
+    `_build_ref_image_row` (SDD task-6-brief.md) so the Video form's
+    reveal-on-demand Animate-needs section (`create_view._AnimateExtras`)
+    can build the identical two rows without hand-duplicating the file-
+    dialog wiring — one place to fix if the FileDialog pattern ever changes.
+
+    The Browse button's transient parent is derived from the CLICKED BUTTON
+    (`_btn.get_root()`), not from any enclosing "panel box" — once a
+    `RoleZonePanel` re-parents this row's widgets out of a panel's own
+    `build()` box, that box is orphaned and its `get_root()` returns None,
+    but the button stays live in the real widget tree (see
+    `tests/test_role_zone_panel.py::test_animate_pickers_derive_live_root_after_reparenting`).
+
+    Returns `(row, entry, on_browse, on_picked)`:
+      - `row` / `entry` — mount the row, read/seed the entry's text.
+      - `on_browse(button)` — the exact Browse-click handler (already wired
+        to the row's own button); also exposed so a caller can keep an
+        `_on_pick_ref_*`-shaped attribute for direct invocation (tests
+        simulate a click by calling this with a live button).
+      - `on_picked(dlg, result)` — the `open_finish()` completion handler;
+        exposed so a caller can keep an `_on_ref_*_picked`-shaped attribute
+        for direct invocation (tests simulate a completed dialog round-trip
+        without ever opening a real one).
+    """
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    row.add_css_class("animate-param-row")
+    label = Gtk.Label(label=label_text)
+    label.add_css_class("animate-param-label")
+    label.set_xalign(0.0)
+    label.set_size_request(120, -1)
+    row.append(label)
+
+    entry = Gtk.Entry()
+    entry.set_placeholder_text(placeholder)
+    entry.set_hexpand(True)
+    entry.add_css_class("animate-param-input")
+    row.append(entry)
+
+    def on_picked(dlg, result) -> None:
+        try:
+            gfile = dlg.open_finish(result)
+        except Exception:
+            return  # user cancelled — leave the existing entry text untouched
+        if gfile is not None:
+            path = gfile.get_path()
+            if path:
+                entry.set_text(path)
+
+    def on_browse(_btn: Gtk.Button) -> None:
+        dlg = Gtk.FileDialog()
+        dlg.set_title(dialog_title)
+        # See docstring: derive the parent from the live clicked button, not
+        # from a possibly-orphaned enclosing box, so the dialog stays modal
+        # to the real window after RoleZonePanel re-parenting.
+        parent = _btn.get_root() if _btn is not None else None
+        dlg.open(parent, None, on_picked)
+
+    browse = Gtk.Button(label="Browse…")
+    browse.connect("clicked", on_browse)
+    row.append(browse)
+
+    return row, entry, on_browse, on_picked
+
+
+def build_mode_toggle_row(
+    on_change: "Callable[[str], None]",
+) -> "tuple[Gtk.Box, Gtk.ToggleButton, Gtk.ToggleButton]":
+    """Shared Animation/Replacement mode toggle row.
+
+    Factored out of `AnimateParamPanel._build_mode_row` (SDD task-6-brief.md)
+    for the same reason as `build_path_picker_row` above — the Video form's
+    `create_view._AnimateExtras` reveal section needs the identical toggle
+    without duplicating it by hand.
+
+    Calls `on_change(mode)` whenever the active mode changes to
+    `_ANIMATE_MODE_ANIMATION`/`_ANIMATE_MODE_REPLACEMENT` — including once
+    immediately at construction time, since `anim_btn.set_active(True)`
+    (selecting the default) fires the "toggled" signal just like a real
+    click would. Returns `(row, anim_btn, repl_btn)` so a caller can keep
+    `_mode_anim_btn`/`_mode_repl_btn`-shaped attributes for direct
+    inspection/toggling (existing tests set `.set_active(True)` on these).
+    """
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    row.add_css_class("animate-param-row")
+    label = Gtk.Label(label="Mode")
+    label.add_css_class("animate-param-label")
+    label.set_xalign(0.0)
+    label.set_size_request(120, -1)
+    row.append(label)
+
+    anim_btn = Gtk.ToggleButton(label="Animation")
+    anim_btn.add_css_class("animate-param-input")
+    anim_btn.set_tooltip_text("Character image mimics the motion video")
+
+    repl_btn = Gtk.ToggleButton(label="Replacement")
+    repl_btn.add_css_class("animate-param-input")
+    repl_btn.set_tooltip_text("Character image replaces the person in the motion video")
+    repl_btn.set_group(anim_btn)
+
+    anim_btn.connect(
+        "toggled",
+        lambda b: b.get_active() and on_change(_ANIMATE_MODE_ANIMATION),
+    )
+    repl_btn.connect(
+        "toggled",
+        lambda b: b.get_active() and on_change(_ANIMATE_MODE_REPLACEMENT),
+    )
+
+    row.append(anim_btn)
+    row.append(repl_btn)
+    anim_btn.set_active(True)  # default "animation"; fires on_change
+
+    return row, anim_btn, repl_btn
+
+
 class AnimateParamPanel(CreateParamPanel):
     """Animate medium's param controls: motion-video picker, character-image
     picker, animate-mode toggle, steps, seed.
@@ -1625,60 +1748,35 @@ class AnimateParamPanel(CreateParamPanel):
         return row
 
     def _build_ref_video_row(self) -> Gtk.Box:
-        row = self._row("Motion video")
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("no motion video selected")
-        entry.set_hexpand(True)
-        entry.add_css_class("animate-param-input")
+        """Built from the shared `build_path_picker_row` helper (SDD
+        task-6-brief.md) — see that function's docstring for the FileDialog
+        wiring. `_on_pick_ref_video`/`_on_ref_video_picked` are kept as
+        instance attributes (not methods) bound to the returned closures so
+        existing direct-invocation callers/tests are unaffected."""
+        row, entry, on_browse, on_picked = build_path_picker_row(
+            "Motion video", "no motion video selected", "Select motion video",
+        )
         self._ref_video_entry = entry
-        row.append(entry)
-
-        browse = Gtk.Button(label="Browse…")
-        browse.connect("clicked", self._on_pick_ref_video)
-        row.append(browse)
+        self._on_pick_ref_video = on_browse
+        self._on_ref_video_picked = on_picked
         return row
 
     def _build_ref_image_row(self) -> Gtk.Box:
-        row = self._row("Character image")
-        entry = Gtk.Entry()
-        entry.set_placeholder_text("no character image selected")
-        entry.set_hexpand(True)
-        entry.add_css_class("animate-param-input")
+        """See `_build_ref_video_row` — identical, for the character image."""
+        row, entry, on_browse, on_picked = build_path_picker_row(
+            "Character image", "no character image selected", "Select character image",
+        )
         self._ref_image_entry = entry
-        row.append(entry)
-
-        browse = Gtk.Button(label="Browse…")
-        browse.connect("clicked", self._on_pick_ref_image)
-        row.append(browse)
+        self._on_pick_ref_image = on_browse
+        self._on_ref_image_picked = on_picked
         return row
 
     def _build_mode_row(self) -> Gtk.Box:
-        row = self._row("Mode")
-
-        anim_btn = Gtk.ToggleButton(label="Animation")
-        anim_btn.add_css_class("animate-param-input")
-        anim_btn.set_tooltip_text("Character image mimics the motion video")
-
-        repl_btn = Gtk.ToggleButton(label="Replacement")
-        repl_btn.add_css_class("animate-param-input")
-        repl_btn.set_tooltip_text("Character image replaces the person in the motion video")
-        repl_btn.set_group(anim_btn)
-
-        anim_btn.connect(
-            "toggled",
-            lambda b: b.get_active() and self._set_animate_mode(_ANIMATE_MODE_ANIMATION),
-        )
-        repl_btn.connect(
-            "toggled",
-            lambda b: b.get_active() and self._set_animate_mode(_ANIMATE_MODE_REPLACEMENT),
-        )
-
+        """Built from the shared `build_mode_toggle_row` helper (SDD
+        task-6-brief.md) — see that function's docstring."""
+        row, anim_btn, repl_btn = build_mode_toggle_row(self._set_animate_mode)
         self._mode_anim_btn = anim_btn
         self._mode_repl_btn = repl_btn
-        anim_btn.set_active(True)  # default "animation"; fires _set_animate_mode
-
-        row.append(anim_btn)
-        row.append(repl_btn)
         return row
 
     def _set_animate_mode(self, mode: str) -> None:
@@ -1723,46 +1821,19 @@ class AnimateParamPanel(CreateParamPanel):
             self._seed_adj.set_value(-1)
 
     # ── File pickers (GTK4 async Gtk.FileDialog, per CLAUDE.md) ──────────────
-
-    def _on_pick_ref_video(self, _btn: Gtk.Button) -> None:
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select motion video")
-        # Derive the transient parent from the clicked button, not from
-        # `self._widget`: once a RoleZonePanel (Task 5) re-parents this panel's
-        # rows out of its own `build()` box, `self._widget` becomes an orphaned,
-        # un-mounted box whose `get_root()` is None — but the button is still
-        # in the live widget tree, so its `get_root()` is the real window.
-        parent = _btn.get_root() if _btn is not None else None
-        dlg.open(parent, None, self._on_ref_video_picked)
-
-    def _on_ref_video_picked(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return  # user cancelled — leave the existing entry text untouched
-        if gfile is not None and self._ref_video_entry is not None:
-            path = gfile.get_path()
-            if path:
-                self._ref_video_entry.set_text(path)
-
-    def _on_pick_ref_image(self, _btn: Gtk.Button) -> None:
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select character image")
-        # See `_on_pick_ref_video`: derive the parent from the live button, not
-        # from the possibly-orphaned `self._widget`, so the dialog stays modal
-        # to the real window after RoleZonePanel re-parenting.
-        parent = _btn.get_root() if _btn is not None else None
-        dlg.open(parent, None, self._on_ref_image_picked)
-
-    def _on_ref_image_picked(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return  # user cancelled — leave the existing entry text untouched
-        if gfile is not None and self._ref_image_entry is not None:
-            path = gfile.get_path()
-            if path:
-                self._ref_image_entry.set_text(path)
+    #
+    # `_on_pick_ref_video`/`_on_ref_video_picked`/`_on_pick_ref_image`/
+    # `_on_ref_image_picked` are no longer defined here as methods — they are
+    # set as INSTANCE ATTRIBUTES (bound to `build_path_picker_row`'s returned
+    # closures) inside `_build_ref_video_row`/`_build_ref_image_row` above.
+    # This is the DRY extraction task-6-brief.md asks for: the exact same
+    # FileDialog open/open_finish wiring now lives in ONE place
+    # (`build_path_picker_row`), shared with `create_view._AnimateExtras`,
+    # instead of being hand-duplicated per caller. Every existing direct-
+    # invocation call site (`panel._on_pick_ref_video(btn)`,
+    # `panel._on_ref_video_picked(dlg, result)`, etc.) is unaffected — an
+    # instance attribute resolves identically to a bound method for a plain
+    # `obj.attr(...)` call.
 
 
 # ─────────────────────────────────────────────────────────────────────────────

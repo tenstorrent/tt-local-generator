@@ -99,6 +99,7 @@ import server_manager  # noqa: E402
 from create_mediums import Medium, default_mediums  # noqa: E402
 from create_mediums import _ARTGEN_KIND  # noqa: E402
 from create_param_panels import (  # noqa: E402
+    _ANIMATE_MODE_REPLACEMENT,
     _ANIMATE_MODEL_ID,
     _IMAGE_MODEL_IDS,
     _VIDEO_MODEL_IDS,
@@ -107,6 +108,8 @@ from create_param_panels import (  # noqa: E402
     ImageParamPanel,
     RoleZonePanel,
     VideoParamPanel,
+    build_mode_toggle_row,
+    build_path_picker_row,
 )
 from model_status import Status  # noqa: E402
 from possibilities import PossibilitiesWall  # noqa: E402
@@ -804,6 +807,20 @@ _CSS = b"""
 .create-form-pane {
     padding: 0 8px 0 0;
 }
+
+/* -- Animate-needs reveal section (Task 6) -- Motion video / Character
+   image / Mode, shown only when the scoped model dropdown's selection is
+   the Animate model (`_animate_extras_visible_for`). Rows inside reuse the
+   existing `.animate-param-row`/`.animate-param-label`/`.animate-param-input`
+   classes verbatim (shared via create_param_panels.build_path_picker_row/
+   build_mode_toggle_row), so only the outer wrapper needs its own rule
+   here -- a little top margin to separate it from the model dropdown row
+   above it. --------------------------------------------------------- */
+.create-animate-extras {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #2D5566;
+}
 """
 
 _css_applied = False
@@ -827,6 +844,107 @@ def _apply_css() -> None:
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
     )
     _css_applied = True
+
+
+def _animate_extras_visible_for(model_key: "Optional[str]") -> bool:
+    """The Animate-needs section (motion video / character image / mode)
+    shows only when the scoped `_model_dropdown`'s current selection is the
+    Animate model — the server key `"animate"` (see `_scoped_model_keys`'s
+    docstring: that key is appended to the "video" medium's scoped list by
+    hand, since Wan2.2-Animate is a real server but not returned by
+    `server_manager.servers_for_capability("video")`).
+
+    A pure, one-line predicate on purpose (SDD task-6-brief.md Step 3) — it
+    is the SINGLE place both the widget-visibility toggle
+    (`CreateView._update_animate_extras_visibility`) and the `_collect_params`
+    merge guard consult, so the two can never disagree about when the
+    Animate-needs section is "on".
+    """
+    return model_key == "animate"
+
+
+class _AnimateExtras(Gtk.Box):
+    """The Video form's reveal-on-demand "Animate needs" section: Motion
+    video / Character image path pickers + an Animation/Replacement mode
+    toggle, built from the exact same `create_param_panels.
+    build_path_picker_row`/`build_mode_toggle_row` helpers `AnimateParamPanel`
+    itself is built from (SDD task-6-brief.md) — no duplicated FileDialog
+    wiring, no drift between the two.
+
+    **CreateView-owned chrome, not a `CreateParamPanel`.** Per the task
+    brief this widget is deliberately kept OFF the wrapped `RoleZonePanel` —
+    it is mounted directly under the model row (like `_prompt_entry`) and
+    its `collect()` dict is folded into `_collect_params()` by hand, guarded
+    by `_animate_extras_visible_for(self._selected_model_key())`. This keeps
+    every OTHER model's `collect()` output byte-for-byte unchanged: the
+    fold only ever happens when the Animate model is the scoped dropdown's
+    current selection (see `CreateView._collect_params`'s Task-6 docstring
+    addendum and the collect-equality regression test in
+    `tests/test_create_view_animate_reveal.py`).
+
+    Starts hidden (`set_visible(False)`) — `CreateView` toggles it via
+    `_update_animate_extras_visibility`, called once per
+    `_populate_model_dropdown` (medium swap AND same-medium health refresh)
+    and on every scoped-dropdown selection change
+    (`_on_scoped_model_dropdown_changed`).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add_css_class("create-animate-extras")
+        self.set_visible(False)
+
+        self._animate_mode: str = "animation"
+
+        video_row, self._ref_video_entry, _on_browse_video, _on_picked_video = (
+            build_path_picker_row(
+                "Motion video", "no motion video selected", "Select motion video",
+            )
+        )
+        self.append(video_row)
+
+        image_row, self._ref_image_entry, _on_browse_image, _on_picked_image = (
+            build_path_picker_row(
+                "Character image", "no character image selected", "Select character image",
+            )
+        )
+        self.append(image_row)
+
+        mode_row, self._mode_anim_btn, self._mode_repl_btn = build_mode_toggle_row(
+            self._set_mode
+        )
+        self.append(mode_row)
+
+    def _set_mode(self, mode: str) -> None:
+        self._animate_mode = mode
+
+    # ── Test seams (SDD task-6-brief.md) — set values without a real dialog ──
+
+    def set_paths(self, video_path: str, character_path: str) -> None:
+        """Set both path entries directly, bypassing the async FileDialog —
+        the seam `tests/test_create_view_animate_reveal.py` uses."""
+        self._ref_video_entry.set_text(video_path)
+        self._ref_image_entry.set_text(character_path)
+
+    def set_mode(self, mode: str) -> None:
+        """Set the animation/replacement mode directly, bypassing a real
+        button click. Any value other than the replacement mode string
+        selects "animation" (the toggle group's default), matching how a
+        `Gtk.ToggleButton` group actually behaves (exactly one of the two
+        is ever active)."""
+        if mode == _ANIMATE_MODE_REPLACEMENT:
+            self._mode_repl_btn.set_active(True)
+        else:
+            self._mode_anim_btn.set_active(True)
+
+    def collect(self) -> "dict":
+        """The exact three keys `CreateView._collect_params` folds into a
+        Video job's params when the Animate model is selected."""
+        return {
+            "reference_video_path": self._ref_video_entry.get_text(),
+            "reference_image_path": self._ref_image_entry.get_text(),
+            "animate_mode": self._animate_mode,
+        }
 
 
 class CreateView(Gtk.Box):
@@ -1003,6 +1121,14 @@ class CreateView(Gtk.Box):
         model_row_factory.connect("bind", self._on_model_row_bind)
         self._model_dropdown.set_list_factory(model_row_factory)
 
+        # Animate-needs reveal section (SDD task-6-brief.md): CreateView-owned
+        # chrome, NOT a `CreateParamPanel` field — built here (before
+        # `_build_chip_row()`'s synchronous first `_swap_panel` ->
+        # `_populate_model_dropdown` -> `_update_animate_extras_visibility`
+        # call below) so that first populate has something to toggle. Starts
+        # hidden; see `_AnimateExtras`'s own docstring.
+        self._animate_extras = _AnimateExtras()
+
         # "Start something" possibilities wall (SP-2 Task 2): a full-width
         # wall of per-medium exemplar tiles above the doors/chips. Tapping a
         # tile calls `_on_possibility_picked`, which only SEEDS the existing
@@ -1045,6 +1171,10 @@ class CreateView(Gtk.Box):
         content.append(self._build_model_door_row())
         content.append(self._build_chip_row())  # fires _select_medium synchronously
         content.append(self._build_model_dropdown_row())
+        # Mounted directly under the model row, like `_prompt_entry` — CreateView
+        # chrome, not part of the wrapped RoleZonePanel (see `_AnimateExtras`'s
+        # docstring). Visibility toggled by `_update_animate_extras_visibility`.
+        content.append(self._animate_extras)
         content.append(self._panel_host)
         # NOTE: the CTA row is NOT appended here — it's pinned below the
         # scrolling form (see the form_scroll + cta_bar assembly below) so
@@ -2045,6 +2175,15 @@ class CreateView(Gtk.Box):
             # above guards against).
             restored = self._autoselect_running_model_index(medium, entries)
         self._model_dropdown.set_selected(restored)
+        # Explicit call, not a reliance on `notify::selected` firing (SDD
+        # task-6-brief.md Step 4): `set_selected(restored)` above only emits
+        # a change notification when `restored` differs from whatever index
+        # was already selected — a same-medium health refresh that lands on
+        # the SAME index would otherwise leave the Animate-needs section's
+        # visibility stale. Covers both a medium swap and a same-medium
+        # repopulate; `_on_scoped_model_dropdown_changed` covers every
+        # subsequent manual dropdown pick.
+        self._update_animate_extras_visibility()
 
     def _autoselect_running_model_index(
         self, medium: Medium, entries: "list[tuple]"
@@ -2123,8 +2262,40 @@ class CreateView(Gtk.Box):
 
     def _on_scoped_model_dropdown_changed(self, _dropdown, _pspec) -> None:
         """`notify::selected` handler for the scoped `_model_dropdown` — see
-        `_sync_panel_model_selection`."""
+        `_sync_panel_model_selection` and `_update_animate_extras_visibility`."""
         self._sync_panel_model_selection()
+        self._update_animate_extras_visibility()
+
+    def _update_animate_extras_visibility(self) -> None:
+        """Show the Animate-needs section (`self._animate_extras`) only when
+        BOTH the active medium is "video" AND the scoped dropdown's current
+        selection is the Animate model — the SAME two-part gate
+        `_collect_params`'s merge guard uses, so visibility and collect()
+        behavior can never disagree (SDD task-6-brief.md Step 4).
+
+        The "video" medium check matters because the scoped-dropdown key
+        `"animate"` is not unique to it: a still-reachable (test-only in
+        this codebase today — see `create_mediums._NATIVE_MEDIUMS`, which no
+        longer lists a native "animate" medium) `AnimateParamPanel`-backed
+        medium whose id is itself `"animate"` also resolves that same scoped
+        key (its capability IS its id). That panel already renders its own
+        motion/character/mode rows directly — this CreateView-level section
+        must never double them.
+
+        No-op when `self._animate_extras` doesn't exist yet — guards the
+        narrow window during `__init__` before it's constructed, and any
+        test double that skips `__init__` entirely (`CreateView.__new__`).
+        """
+        animate_extras = getattr(self, "_animate_extras", None)
+        if animate_extras is None:
+            return
+        medium = getattr(self, "_active_medium", None)
+        visible = (
+            medium is not None
+            and medium.id == "video"
+            and _animate_extras_visible_for(self._selected_model_key())
+        )
+        animate_extras.set_visible(visible)
 
     def _sync_panel_model_selection(self) -> None:
         """Push the scoped dropdown's current selection into the active
@@ -2467,6 +2638,16 @@ class CreateView(Gtk.Box):
         collected dict whenever one is available — e.g. for an artgen medium
         (no "model" key in `collect()` at all) there is nothing to override,
         so the dict is left exactly as `collect()` produced it.
+
+        **Animate-needs fold** (SDD task-6-brief.md — a separate task from
+        this module's own "Task 6" numbering above, despite the coincidental
+        number): when `_animate_extras_visible_for(self._selected_model_key())`
+        is True (i.e. the scoped dropdown's selection is the Animate model),
+        `self._animate_extras.collect()`'s three keys
+        (`reference_video_path`/`reference_image_path`/`animate_mode`) are
+        merged in. For every other model this merge never runs, so `params`
+        is byte-for-byte identical to pre-task-6 behavior — pinned by
+        `tests/test_create_view_animate_reveal.py`'s collect-equality guard.
         """
         if self._active_panel is None:
             params = {}
@@ -2483,6 +2664,37 @@ class CreateView(Gtk.Box):
                 _key, canonical, _label = entries[idx]
                 if canonical is not None:
                     params["model"] = canonical
+
+        # Task 6 (SDD task-6-brief.md): fold the reveal-on-demand "Animate
+        # needs" section's motion video / character image / mode into params
+        # -- but ONLY when the active medium is "video" AND the scoped
+        # dropdown's current selection IS the Animate model. Same two-part
+        # gate as `_update_animate_extras_visibility` (see that method's
+        # docstring for why the medium check matters -- a still-reachable
+        # `AnimateParamPanel`-backed medium whose own id is "animate" also
+        # resolves that scoped key, and its `collect()` already carries
+        # these three keys itself; folding this section's on TOP of that
+        # would silently clobber the user's real edits with this section's
+        # untouched-empty defaults). For every other case
+        # `self._animate_extras` is either absent (a bare test double, e.g.
+        # `test_create_view.py`'s many `CreateView.__new__` fixtures) or
+        # present-but-not-merged, so `params` stays byte-for-byte identical
+        # to pre-Task-6 behavior -- pinned by
+        # tests/test_create_view_animate_reveal.py's collect-equality guard.
+        # A raising `.collect()` degrades to a no-op merge rather than
+        # crashing the CTA click, matching every other fail-soft read above.
+        animate_extras = getattr(self, "_animate_extras", None)
+        active_medium = getattr(self, "_active_medium", None)
+        if (
+            animate_extras is not None
+            and active_medium is not None
+            and active_medium.id == "video"
+            and _animate_extras_visible_for(self._selected_model_key())
+        ):
+            try:
+                params = {**params, **animate_extras.collect()}
+            except Exception:
+                pass
 
         prompt_entry = getattr(self, "_prompt_entry", None)
         prompt_text = prompt_entry.get_text().strip() if prompt_entry is not None else ""
