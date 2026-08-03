@@ -7125,12 +7125,26 @@ class MainWindow(Gtk.ApplicationWindow):
         elif target == "create" and self._loop_nav.get("create"):
             self._loop_nav["create"].set_active(True)
         elif target == "pipeline":
+            self._navigate_to_pipelines()
+
+    def _navigate_to_pipelines(self) -> None:
+        """Enter Pipelines the way the toolbar button does — by ACTIVATING the
+        toggle — so the button correctly lights up as "you are in Pipelines".
+        Calling `_show_pipelines()` directly (as crumb/tray-chip navigation used
+        to) left the toggle inactive, so the button state lied about where you
+        were. No-op-safe without the button (test harnesses)."""
+        btn = getattr(self, "_pipelines_btn", None)
+        if btn is None:
             self._show_pipelines()
+        elif btn.get_active():
+            self._show_pipelines()   # already active -> just (re-)assert the surface
+        else:
+            btn.set_active(True)     # -> _on_pipelines_toggled -> _show_pipelines
 
     def _on_context_resume(self, ctx_id: str) -> None:
         """Tray chip clicked: jump back into the live activity it represents."""
         if ctx_id == "pipeline":
-            self._show_pipelines()
+            self._navigate_to_pipelines()
         elif ctx_id == "watch":
             self._on_open_attractor()   # presents the existing kiosk window
 

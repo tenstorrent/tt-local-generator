@@ -86,3 +86,31 @@ def test_nav_helpers_noop_without_nav_state():
         setattr(obj, n, getattr(mw.MainWindow, n).__get__(obj))
     obj._nav_open_context(Context("x", "x"))   # no _nav_state -> no crash
     obj._nav_close_context("x")
+
+
+def test_resume_pipeline_activates_the_toggle_button():
+    """Resuming a pipeline via the tray chip must ACTIVATE the Pipelines toggle
+    (so the button correctly lights up), not just call _show_pipelines() — which
+    left the button state lying about where you were."""
+    obj = _mw()
+    btn = Gtk.ToggleButton()
+    btn.connect("toggled", lambda b: b.get_active() and obj._show_pipelines())
+    obj._pipelines_btn = btn
+    assert btn.get_active() is False
+
+    obj._on_context_resume("pipeline")
+
+    assert btn.get_active() is True
+    obj._show_pipelines.assert_called()
+
+
+def test_crumb_navigate_to_pipeline_activates_the_toggle_button():
+    obj = _mw()
+    btn = Gtk.ToggleButton()
+    btn.connect("toggled", lambda b: b.get_active() and obj._show_pipelines())
+    obj._pipelines_btn = btn
+    obj._loop_nav = {"discover": MagicMock(), "create": MagicMock()}
+
+    obj._on_crumb_navigate("pipeline")
+
+    assert btn.get_active() is True
