@@ -2214,7 +2214,10 @@ class GenerationCard(Gtk.Box):
 
         # Remix-as-pipeline button — always present, parallel to 🔀 Remix above,
         # so any card can seed a multi-step Pipeline Studio remix.
-        self._remix_as_pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
+        # Short label ("Pipeline", not "Remix as pipeline…") so the 3-button
+        # hover bar fits within the fixed tile width instead of spilling past
+        # the card into the neighbour; the tooltip carries the full meaning.
+        self._remix_as_pipeline_btn = Gtk.Button(label="🧩 Pipeline")
         self._remix_as_pipeline_btn.add_css_class("hover-action-btn")
         self._remix_as_pipeline_btn.set_can_focus(False)
         self._remix_as_pipeline_btn.set_tooltip_text(
@@ -2234,6 +2237,10 @@ class GenerationCard(Gtk.Box):
 
         self._action_revealer.set_child(action_bar)
         overlay.add_overlay(self._action_revealer)
+        # Clip the hover action bar to the card bounds so a too-wide bar can
+        # never paint past the tile into the neighbouring card (clip_overlay
+        # defaults to False — that was the "hover goes wider than the box").
+        overlay.set_clip_overlay(self._action_revealer, True)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
         # The stack expands horizontally so the thumbnail fills the FlowBox cell width.

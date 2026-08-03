@@ -1,12 +1,9 @@
-tt-local-generator (0.59.1) noble; urgency=medium
+tt-local-generator (0.59.2) noble; urgency=medium
 
-  * fix(library): deterministic gallery|detail split — the start child is now
-    shrinkable and the divider is snapped to a fixed position on every section
-    switch (_reset_detail_split), so the left column no longer jitters
-    narrower/wider depending on click order (content min-width was fighting a
-    stale divider position).
-  * ui(create): move "Surprise me" out of the possibilities-wall header into the
-    bottom CTA button area, beside Create (drives the wall's surprise()).
+  * fix(gallery): the hover action bar no longer spills past a card into its
+    neighbour — the "Remix as pipeline…" button is shortened to "Pipeline"
+    (full meaning in the tooltip) so the 3-button bar fits the fixed tile, and
+    the action-bar overlay is clipped to the card bounds (clip_overlay was off).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 09:32:11 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 09:44:25 -0700
 
