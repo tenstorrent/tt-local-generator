@@ -8,7 +8,7 @@ The Create surface (docs/superpowers/specs/2026-07-13-create-surface-design.md)
 replaces the four hardcoded medium tabs (Video / Animate / Image / Generative
 Art) with ONE surface where the medium is a chip, not a top-level tab. That
 chip row must include every native medium the app's own GenerationWorker
-drives (image/video/animate) AND one chip per artgen generator — so a new
+drives (image/video) AND one chip per artgen generator — so a new
 plugin dropped into plugins/ shows up automatically with zero code changes
 here.
 
@@ -35,16 +35,15 @@ from typing import Callable, Optional
 class Medium:
     """One selectable "make a ___" chip on the Create surface.
 
-    id        — stable identifier: "image"/"video"/"animate" for the three
-                native mediums, else the artgen generator name (e.g. "verse").
+    id        — stable identifier: "image"/"video" for the native mediums,
+                else the artgen generator name (e.g. "verse").
     label     — human, creative-language chip text ("Image", "Verse", "ANSI").
                 Never a raw class_type or internal tool name.
     icon      — one emoji for the compact chip.
     kind      — the output KIND this medium produces: "image" | "video" |
-                "gif" | "text". Native "animate" (Wan2.2-Animate-14B) reports
-                "gif" here to match how its results are already stored/played
-                in the gallery (an animated clip, no distinct "video" vs
-                "animate" file-kind split exists downstream).
+                "gif" | "text". Artgen mediums report the kind matching how
+                their results are stored/played in the gallery (e.g. "gif"
+                for animatediff's animated clips).
     source    — "native" (a GenerationWorker medium the app drives directly)
                 or "artgen" (routed through an artgen generator).
     generator — the artgen generator name for source="artgen" mediums, else
@@ -76,7 +75,7 @@ class Medium:
 #
 # Fixed, deterministic, always first. Icons/labels match the existing
 # per-medium toggle buttons in main_window.py's Create toolbar (🎥 Video,
-# 💃 Animate, 🖼️ Image) so a chip never introduces a new visual vocabulary
+# 🖼️ Image) so a chip never introduces a new visual vocabulary
 # for a medium the user already recognizes elsewhere in the app.
 
 _NATIVE_MEDIUMS: tuple[Medium, ...] = (
@@ -172,7 +171,7 @@ def discover_mediums(
     also defaults to True — never let one bad lookup crash discovery.
 
     Order is deterministic: native mediums first (in `native`'s order, or
-    the default image/video/animate order), then one Medium per name in
+    the default image/video order), then one Medium per name in
     `artgen_names`, in the exact order given — this function never sorts or
     reorders the caller's list.
 
