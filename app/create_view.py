@@ -998,6 +998,7 @@ class CreateView(Gtk.Box):
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         content.add_css_class("create-view-content")
         content.add_css_class("create-form-pane")
+        content.set_valign(Gtk.Align.START)  # hug the top; don't stretch rows
         if self._possibilities is not None:
             # The wall is now a compact, self-contained horizontal SHELF
             # (single row, scrolls sideways) — always-present inspiration with a
@@ -1046,10 +1047,17 @@ class CreateView(Gtk.Box):
         form_scroll = Gtk.ScrolledWindow()
         form_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         form_scroll.set_vexpand(True)
-        form_scroll.set_child(gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH))
+        # align="start": flush-LEFT within the width cap so a wide window doesn't
+        # leave a big empty left gutter (the surplus sits on the right, past the
+        # result pane), instead of centering the whole column.
+        form_scroll.set_child(
+            gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH, align="start")
+        )
         self.append(form_scroll)
 
-        cta_bar = gtk_layout.wrap_centered(self._build_cta_row(), max_width=_TWO_PANE_MAX_WIDTH)
+        cta_bar = gtk_layout.wrap_centered(
+            self._build_cta_row(), max_width=_TWO_PANE_MAX_WIDTH, align="start"
+        )
         cta_bar.add_css_class("create-cta-bar")
         self.append(cta_bar)
 
@@ -1084,14 +1092,15 @@ class CreateView(Gtk.Box):
         panes.set_homogeneous(False)
         panes.add_css_class("create-panes")
 
-        # Give the FORM the growth room (more room on the left) and cap the
-        # result pane: the form is where you compose, so it should get the
-        # extra width when the window is wide; the result/recents panel reads
-        # fine in a fixed ~400px column. (Was the reverse — result hexpanded and
-        # squeezed the form.) FlowBox still reflows to stacked on a narrow window.
-        form_pane.set_hexpand(True)
-        result_pane.set_hexpand(False)
-        result_pane.set_size_request(400, -1)
+        # Compact form column on the left, result fills the rest — echoing the
+        # release's cohesive "compact generation panel + big content area".
+        # The form is a defined ~660px column (roomy but not sprawling); the
+        # result/recents pane hexpands to fill the remaining width. Top-aligned
+        # so the form hugs the top instead of stretching its rows.
+        form_pane.set_hexpand(False)
+        form_pane.set_size_request(660, -1)
+        form_pane.set_valign(Gtk.Align.START)
+        result_pane.set_hexpand(True)
         panes.append(form_pane)
         panes.append(result_pane)
 

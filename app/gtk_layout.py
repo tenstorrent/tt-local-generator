@@ -54,9 +54,11 @@ class MaxWidthBin(Gtk.Widget):
     own reference to it unchanged (this just becomes its new parent).
     """
 
-    def __init__(self, child: Gtk.Widget, max_width: int = CONTENT_MAX_WIDTH) -> None:
+    def __init__(self, child: Gtk.Widget, max_width: int = CONTENT_MAX_WIDTH,
+                 align: str = "center") -> None:
         super().__init__()
         self._max_width = max_width
+        self._align = align  # "center" (default) or "start" (flush-left)
         self._child = child
         child.set_parent(self)
 
@@ -78,9 +80,13 @@ class MaxWidthBin(Gtk.Widget):
 
     def do_size_allocate(self, width, height, baseline):
         child_width = min(width, self._max_width)
-        # Center the (possibly narrower-than-allocated) child within the full
-        # width this bin received.
-        x = max(0, (width - child_width) // 2)
+        # Position the (possibly narrower-than-allocated) child within the full
+        # width this bin received: centered by default, or flush-left when
+        # align="start" (so a wide window doesn't leave a big LEFT gutter).
+        if self._align == "start":
+            x = 0
+        else:
+            x = max(0, (width - child_width) // 2)
         allocation = Gdk.Rectangle()
         allocation.x = x
         allocation.y = 0
@@ -98,7 +104,8 @@ class MaxWidthBin(Gtk.Widget):
         Gtk.Widget.do_dispose(self)
 
 
-def wrap_centered(content: Gtk.Widget, max_width: int = CONTENT_MAX_WIDTH) -> Gtk.Widget:
+def wrap_centered(content: Gtk.Widget, max_width: int = CONTENT_MAX_WIDTH,
+                  align: str = "center") -> Gtk.Widget:
     """Constrain *content* to a centered column no wider than *max_width*.
 
     Wraps *content* in a `MaxWidthBin`, which enforces a genuine width
@@ -110,7 +117,7 @@ def wrap_centered(content: Gtk.Widget, max_width: int = CONTENT_MAX_WIDTH) -> Gt
     *content*'s children are unaffected.
     """
     content.set_hexpand(True)
-    wrapper = MaxWidthBin(content, max_width)
+    wrapper = MaxWidthBin(content, max_width, align=align)
     wrapper.add_css_class("ps-content-column")
     wrapper.set_halign(Gtk.Align.FILL)
     wrapper.set_hexpand(True)

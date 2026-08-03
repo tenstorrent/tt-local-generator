@@ -203,6 +203,12 @@ class SeedImageWell(Gtk.Box):
         self._path: str = ""
         self._size = size
         self.set_size_request(size, size)
+        # Fixed compact square — never stretch to fill a tall row/frame (that
+        # turned the empty well into a huge vertical bar and made the form wonky).
+        self.set_vexpand(False)
+        self.set_hexpand(False)
+        self.set_valign(Gtk.Align.START)
+        self.set_halign(Gtk.Align.START)
         self.add_css_class("seed-image-well")
         self._set_empty_tooltip()
 
