@@ -1,3 +1,20 @@
+tt-local-generator (0.59.0) noble; urgency=medium
+
+  * feat(nav): "you are here" breadcrumb + live-context tray (RN-2). New
+    `app/nav_widgets.py` (`Breadcrumb`, `ContextTray`) renders RN-2 Task 1's
+    `NavState`/`Crumb`/`Context` model — GTK views that subscribe and
+    re-render via `GLib.idle_add`, so a later off-thread context mutation is
+    safe. Mounted into `MainWindow`: a slim breadcrumb row under the menu
+    bar, and the context tray between the loop-nav spacer and the Servers
+    button (empty/hidden until RN-2 Task 3 registers live contexts).
+    Crumbs are set on every navigation (`_set_crumbs`, a no-op guard when
+    `_nav_state` is absent so existing bare test harnesses are unaffected):
+    Create, Library, Pipelines, Library › Watch, and Library › <item> (a
+    ~40-char title derived from the record's prompt, safely defaulting to
+    "Untitled" when absent).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 08:58:27 -0700
+
 tt-local-generator (0.58.4) noble; urgency=medium
 
   * ui(create): possibilities-wall tile art now comes ONLY from curated

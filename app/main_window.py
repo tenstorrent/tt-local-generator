@@ -55,6 +55,8 @@ import gallery_layout
 from history_store import GenerationRecord, HistoryStore
 from media_store import MediaRecord
 from model_status import ModelStatusService, Status
+from nav_state import NavState, Crumb
+from nav_widgets import Breadcrumb, ContextTray
 from servers_control import ServersControl
 from worker import (
     AnimateDiffGenerationWorker,
@@ -395,6 +397,54 @@ scrollbar slider:hover {
 .loop-nav-btn-active:hover,
 .loop-nav-btn:checked:hover {
     background-color: @tt_accent_light;
+}
+/* RN-2 Task 2: breadcrumb bar + live-context tray */
+.nav-breadcrumb-bar {
+    padding: 4px 12px;
+}
+.nav-crumb-link {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    min-height: 0;
+    color: @tt_accent;
+    font-weight: bold;
+}
+.nav-crumb-link:hover {
+    color: @tt_accent_light;
+    text-decoration: underline;
+}
+.nav-crumb-here {
+    color: @tt_text_muted;
+    font-weight: bold;
+}
+.nav-crumb-sep {
+    color: @tt_text_hint;
+}
+.nav-context-tray {
+    padding: 0 8px;
+}
+.nav-ctx-chip {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
+    border-radius: 12px;
+    padding: 2px 4px;
+}
+.nav-ctx-dot {
+    color: @tt_accent;
+    font-size: 10px;
+}
+.nav-ctx-open,
+.nav-ctx-close {
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    min-height: 0;
+    color: @tt_text;
+}
+.nav-ctx-open:hover,
+.nav-ctx-close:hover {
+    color: @tt_accent;
 }
 .discover-type-row {
     padding: 6px 10px 0 10px;
@@ -2633,6 +2683,20 @@ def _fmt_duration(seconds: float) -> str:
     s = int(seconds)
     m, s = divmod(s, 60)
     return f"{m}m {s:02d}s" if m else f"{s}s"
+
+
+def _short_title(text: "str | None", limit: int = 40) -> str:
+    """Derive a short breadcrumb-leaf title from a record's prompt.
+
+    Guards against a missing/empty prompt (artgen records in particular may
+    carry no prose prompt at all) rather than assuming callers always have
+    one, and truncates to keep the breadcrumb bar from overflowing on a long
+    generation prompt.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "Untitled"
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 # ── Detail panel ───────────────────────────────────────────────────────────────
@@ -5386,6 +5450,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_service = ModelStatusService()
         self._status_service.start()
 
+        # NavState (RN-2 Task 1/2): the single "you are here" model backing
+        # the breadcrumb bar + live-context tray. Constructed BEFORE
+        # `_build_ui()` (same rationale as `_status_service` above) so the
+        # widgets built inside `_build_ui()` can subscribe to a real instance
+        # from the start. `_set_crumbs` no-ops when this attribute is absent,
+        # which keeps existing test harnesses that construct a bare/partial
+        # MainWindow (no `_nav_state`) working unchanged.
+        self._nav_state = NavState()
+
         self._build_ui()
         # Now that _build_ui() has constructed everything the loop nav's
         # "toggled" handlers touch (_gallery_stack, _detail_wrap,
@@ -5432,6 +5505,18 @@ class MainWindow(Gtk.ApplicationWindow):
         # gone with the class — Create reads those settings directly, and
         # `_current_medium_source()` derives "what am I making" from
         # CreateView's own active-medium state instead of a startup pre-select.
+
+    def _set_crumbs(self, crumbs) -> None:
+        """Push a new breadcrumb trail onto `NavState`, if one exists.
+
+        Guarded rather than assumed: test harnesses that construct a bare/
+        partial `MainWindow` (skipping `__init__`'s `NavState()` line) don't
+        have `_nav_state` at all, and this must stay a safe no-op for them
+        instead of raising `AttributeError` deep inside a loop-nav handler.
+        """
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.set_crumbs(crumbs)
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -5513,6 +5598,14 @@ class MainWindow(Gtk.ApplicationWindow):
         _nav_spacer = Gtk.Box()
         _nav_spacer.set_hexpand(True)
         loop_nav_row.append(_nav_spacer)
+        # Live-context tray (RN-2 Task 2): sits between the spacer and Servers
+        # so it reads as part of the utility cluster on the right edge, not
+        # the primary loop-nav verbs on the left. Empty/hidden until Task 3
+        # registers pipeline/remix/watch contexts via `self._nav_state`.
+        self._context_tray = ContextTray(
+            self._nav_state, on_resume=self._on_context_resume, on_dismiss=self._on_context_dismiss
+        )
+        loop_nav_row.append(self._context_tray)
         loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
@@ -5520,6 +5613,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._context_menu_source: str = ""   # last source built; skip rebuild if unchanged
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
+
+        # ── Breadcrumb bar (RN-2 Task 2): "you are here", one slim row under
+        # the menu bar. Renders `self._nav_state`'s crumb trail; clicking an
+        # upstream (non-leaf) crumb routes through `_on_crumb_navigate`.
+        self._breadcrumb = Breadcrumb(self._nav_state, on_navigate=self._on_crumb_navigate)
+        self._breadcrumb_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self._breadcrumb_bar.add_css_class("nav-breadcrumb-bar")
+        self._breadcrumb_bar.append(self._breadcrumb)
+        root_box.append(self._breadcrumb_bar)
 
         # ── Two-pane layout: gallery | detail (SP-3d-4) ───────────────────────
         # A horizontal Gtk.Paned split (gallery | detail) — the window's only
@@ -6811,6 +6913,7 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._uncheck_pipelines_toggle_if_active()
         self._gallery_stack.set_visible_child_name("create")
+        self._set_crumbs([Crumb("✨ Create")])
 
         # Create is full-width: CreateView carries its OWN result area
         # (CreateResultPanel), so the Discover detail pane has no role here.
@@ -6843,6 +6946,7 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         source = self._current_medium_source()
         self._sync_gallery_to_source(source)
+        self._set_crumbs([Crumb("🗂 Library")])
 
         # Discover is the surface that actually has cards to preview, so its
         # detail pane must be visible here (Create now hides it for full width).
@@ -6925,6 +7029,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # visit — Discover is Pipeline Studio's front door every time.
         self._pipeline_studio.show_discover()
         self._gallery_stack.set_visible_child_name("pipelines")
+        self._set_crumbs([Crumb("🧩 Pipelines")])
         # Full-width: Pipeline Studio has its own layout and needs neither
         # the (now-deleted) prompt-composition panel nor the detail pane.
         self._detail_wrap.set_visible(False)
@@ -6941,6 +7046,27 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._sync_gallery_to_source(self._current_medium_source())
         self._detail_wrap.set_visible(True)
+
+    # ── Breadcrumb / live-context routing (RN-2 Task 2) ─────────────────────────
+
+    def _on_crumb_navigate(self, target: str) -> None:
+        """`Breadcrumb`'s `on_navigate` callback: an upstream (non-leaf) crumb
+        was clicked. Maps the crumb's opaque `target` id back onto the same
+        loop-nav places `_build_loop_nav`'s buttons drive, so navigating via a
+        crumb is indistinguishable from clicking the loop-nav button directly
+        (each place's own handler re-sets the crumb trail to match)."""
+        if target == "library" and self._loop_nav.get("discover"):
+            self._loop_nav["discover"].set_active(True)
+        elif target == "create" and self._loop_nav.get("create"):
+            self._loop_nav["create"].set_active(True)
+        elif target == "pipeline":
+            self._show_pipelines()
+
+    def _on_context_resume(self, ctx_id: str) -> None:
+        pass  # RN-2 Task 3 wires resume per kind
+
+    def _on_context_dismiss(self, ctx_id: str) -> None:
+        self._nav_state.close_context(ctx_id)  # RN-2 Task 3 also stops the activity per kind
 
     # Maps GenerationRecord.media_type -> the "kind" vocabulary Pipeline Studio's
     # Muse expects for a seed_artifact. Anything absent from this table (e.g.
@@ -7059,6 +7185,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._detail.set_context([c._record for c in all_cards], idx)
         self._detail.show_record(record, self._dispatch_remix,
                                   remix_as_pipeline_cb=self._remix_as_pipeline)
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb(_short_title(getattr(record, "prompt", "")))])
 
     # ── Artgen card selection (shared right pane) ───────────────────────────────
     # Unify-gallery-interaction-pattern Task 3: routes ArtgenGallery's card
@@ -7073,7 +7200,11 @@ class MainWindow(Gtk.ApplicationWindow):
         # _on_card_selected above, which also never calls
         # _set_detail_pane_visible(True).
         self._right_stack.set_visible_child_name("artgen")
-        self._artgen_detail.show_record(media_id, self._artgen_gallery._filtered_records())
+        records = self._artgen_gallery._filtered_records()
+        self._artgen_detail.show_record(media_id, records)
+        rec = next((r for r in records if getattr(r, "id", None) == media_id), None)
+        title = _short_title(getattr(rec, "prompt", "") if rec is not None else "")
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb(title)])
 
     def _on_artgen_card_deleted(self, media_id: str) -> None:
         """Called after ArtgenGallery's own hover-🗑 already removed the card
@@ -8118,6 +8249,7 @@ class MainWindow(Gtk.ApplicationWindow):
         """Open (or raise) the Attractor Mode kiosk window."""
         if self._attractor_win is not None:
             self._attractor_win.present()
+            self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
             return
 
         # Stop any gallery videos that are currently playing so their GStreamer
@@ -8202,6 +8334,7 @@ class MainWindow(Gtk.ApplicationWindow):
         win.connect("destroy", self._on_attractor_closed)
         self._attractor_win = win
         win.present()
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
         GLib.idle_add(win.start)
 
     def _on_attractor_closed(self, _win) -> None:
