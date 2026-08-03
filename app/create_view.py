@@ -1009,10 +1009,19 @@ class CreateView(Gtk.Box):
             poss_scroll.add_css_class("create-possibilities-scroll")
             poss_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             poss_scroll.set_propagate_natural_height(True)
-            poss_scroll.set_max_content_height(300)
+            poss_scroll.set_max_content_height(200)
             poss_scroll.set_child(self._possibilities)
             content.append(poss_scroll)
-        content.append(self._build_doors_row())
+        # The doors row (idea / model / inspiration toggles) is built for its
+        # side effects — it populates `self._doors` and sets the default "idea"
+        # entry mode — but is NO LONGER MOUNTED: the possibilities wall is the
+        # entry point now, so a separate mode-toggle row is redundant clutter.
+        # Hiding (not deleting) keeps `_doors`/entry-mode wiring + tests intact
+        # while reclaiming the vertical space, echoing the release's compact
+        # generation column.
+        _doors_row = self._build_doors_row()
+        _doors_row.set_visible(False)
+        content.append(_doors_row)
         content.append(self._build_idea_row())
         content.append(self._build_model_door_row())
         content.append(self._build_chip_row())  # fires _select_medium synchronously
