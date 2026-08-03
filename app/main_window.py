@@ -5415,6 +5415,9 @@ class MainWindow(Gtk.ApplicationWindow):
         # resolves a status for it -- check it once, standalone, same as the
         # old `_start_artgen_health_worker`'s nested one-shot thread did.
         self._check_animatediff_hardware()
+        # Bring up the CPU prompt-gen server (port 8001, powers ✨ Inspire) if it
+        # isn't already running — CPU-only, coexists with any TT workload.
+        self._autostart_prompt_server()
         # Pre-warm transform availability cache off the main thread so the first
         # right-click doesn't block while importing plugin modules (torch etc.).
         threading.Thread(
@@ -7610,6 +7613,26 @@ class MainWindow(Gtk.ApplicationWindow):
                 "animatediff", ok, msg if ok else "hardware not detected",
             )
         threading.Thread(target=_check, daemon=True).start()
+
+    def _autostart_prompt_server(self) -> None:
+        """Bring up the CPU prompt-gen server (port 8001, powers ✨ Inspire) at
+        launch if it isn't already running. It's CPU-only and coexists with any
+        TT workload, so starting it on open is safe and makes Inspire work out
+        of the box. Soft-fail: if it can't start, Inspire falls back to the
+        algorithmic generator. Runs off the main thread — never blocks startup
+        or crashes the app; skips the start entirely if it's already healthy."""
+        def run() -> None:
+            try:
+                if _sm.is_healthy("prompt-server"):
+                    return
+                _sm.start("prompt-server", gui=True)
+                try:
+                    self._status_service.note_starting("prompt-server")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def _load_prompt_gen_system(self) -> str:
         """

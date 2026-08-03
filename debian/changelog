@@ -1,42 +1,11 @@
-tt-local-generator (0.55.0) noble; urgency=medium
+tt-local-generator (0.56.0) noble; urgency=medium
 
-  * feat(create): Create now checks server readiness before launching a job.
-    If the required server isn't running (or a different server is running
-    on the same shared Blackhole hardware group), a confirm dialog names the
-    stop/reset/start plan; only on accept does it stop the conflicting server,
-    reset the boards (tt-smi -r), start the needed one, and launch the job
-    once healthy. A ready server launches with no dialog, unchanged. Reuses
-    `ready_to_run.plan_switch` (RN-S t1), `server_manager`,
-    `pipeline_engine._tt_smi_reset`, and `ServersControl`'s log — no new
-    hardware-touching code path. Confirm-before-switch is a hard safety rule
-    on this hardware (a QB2 card has hard-locked the box on backend-switch
-    churn before). Also fixes a latent bug in `ready_to_run.conflicting_server`:
-    wrapping a real `model_status.Status` enum value in `str()` before
-    lowering it returned "Status.READY" instead of "ready" (Python 3.11+
-    Enum.__str__), so the live gate would never have detected a conflicting
-    server — masked previously because the Task 1 tests only ever passed
-    plain strings. Fixed by dropping the `str()` wrapper.
+  * feat(startup): auto-start the CPU prompt-gen server (port 8001, powers
+    ✨ Inspire) at launch if it isn't already running — CPU-only, coexists with
+    any TT workload; soft-fails to the algorithmic generator if it can't start.
+  * ui(create): bound the "Start something" possibilities wall to a compact,
+    internally-scrolling band so the Create surface fits the window like an app
+    instead of scrolling like a long web page.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 14:29:34 -0700
-
-tt-local-generator (0.54.0) noble; urgency=medium
-
-  * feat(nav): revise the top nav to the two-place model — ✨ Create · 🗂 Library
-    — with a ▶ Play companion (TT-TV) beside Library and Pipelines set apart.
-    Drops the four-verb loop (arrows/↺) and the Remix nav button; Remix stays a
-    per-item action and CreateView's "Start with inspiration" door still opens
-    the Muse. (RN-1 of the Unified-Stage revision,
-    docs/superpowers/specs/2026-08-02-unified-stage-design.md)
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 13:43:17 -0700
-
-tt-local-generator (0.53.1) noble; urgency=medium
-
-  * fix(create): Create surface goes full-width and hides the Discover detail
-    pane. It previously showed a dead "click a card to preview" placeholder
-    that the Create surface's possibility tiles never feed (they seed the
-    composer) -- a false-promise pane. Discover re-shows the pane (it has
-    cards to preview).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 10:17:21 -0700
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 02 Aug 2026 17:13:44 -0700
 
