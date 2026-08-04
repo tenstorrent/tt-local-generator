@@ -8367,7 +8367,15 @@ class MainWindow(Gtk.ApplicationWindow):
     ) -> None:
         """Open (or raise) the Attractor Mode kiosk window."""
         if self._attractor_win is not None:
+            # Persistent kiosk: REUSE the same window (its GdkGLContext stays
+            # valid across reopens — a fresh window would strand GStreamer's
+            # cached GL context and produce an unclosable video surface; see
+            # AttractorWindow._on_close_requested). Un-hide, raise, and RESTART
+            # playback/generation (the last close's `stop()` halted them).
+            self._attractor_win.set_visible(True)
             self._attractor_win.present()
+            self._attractor_win.start()   # no-op if already running
+            self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))
             self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
             return
 
@@ -8440,6 +8448,11 @@ class MainWindow(Gtk.ApplicationWindow):
                 # AND a window the app doesn't fully own (which then wouldn't
                 # close). See AttractorWindow.__init__.
                 application=self.get_application(),
+                # Persistent kiosk: closing HIDES the window (keeps its GL
+                # context alive); this callback does the close-time bookkeeping
+                # the old destroy handler did (purge TT-TV queue, close the
+                # Watch context) WITHOUT dropping the window reference.
+                on_hide=self._on_attractor_hidden,
             )
         except Exception:
             import traceback
@@ -8462,8 +8475,24 @@ class MainWindow(Gtk.ApplicationWindow):
         self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
         GLib.idle_add(win.start)
 
+    def _on_attractor_hidden(self) -> None:
+        """Called when the PERSISTENT kiosk is closed (hidden, not destroyed —
+        see AttractorWindow._on_close_requested). Does the same close-time
+        bookkeeping as `_on_attractor_closed` — close the Watch context, purge
+        auto-generated TT-TV jobs — but KEEPS `self._attractor_win` so the next
+        open reuses the same window (whose GL context stays valid)."""
+        self._nav_close_context("watch")
+        before = len(self._queue)
+        self._queue = [item for item in self._queue if not item.from_attractor]
+        purged = before - len(self._queue)
+        if purged:
+            self._persist_queue()
+            self._update_queue_display()
+            self._set_status(f"TT-TV closed — {purged} queued auto-gen job{'s' if purged != 1 else ''} cancelled")
+
     def _on_attractor_closed(self, _win) -> None:
-        """Called when the attractor window is destroyed.
+        """Called when the attractor window is actually DESTROYED (app shutdown;
+        the persistent kiosk hides rather than destroys on a normal close).
 
         Purges any auto-generated TT-TV jobs still waiting in the queue so
         they don't continue running after the user has closed TT-TV.

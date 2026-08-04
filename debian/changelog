@@ -1,3 +1,27 @@
+tt-local-generator (0.66.0) noble; urgency=medium
+
+  * fix(tt-tv): persistent kiosk window — the real fix for "reopened TT-TV won't
+    close". Live process inspection (py-spy/proc) showed the main loop was
+    HEALTHY and the bug was independent of how many videos played: destroying
+    and recreating the kiosk window stranded GStreamer's gtkglsink GL context in
+    its process-wide GstGLDisplay cache, so the SECOND window's video couldn't
+    embed and became a bare, app-id-less GL surface ("W" fallback icon) with no
+    close handler — only quitting the app tore it down. TT-TV now uses ONE
+    persistent window: closing it HIDES it and soft-stops playback/generation
+    (new AttractorWindow.stop()/_teardown_playback()), and reopening SHOWS the
+    same window and restarts (start() is now restartable). One window = one GL
+    context for the app's lifetime, so a reopen never recreates GL and can't
+    break; hide always closes cleanly. Bookkeeping (queue purge, Watch context)
+    moves to a MainWindow on_hide callback that keeps the window reference; the
+    window is only truly destroyed at app shutdown. Also fixes screensaver
+    D-Bus unsubscribe to track (connection, sub_id) pairs so restart doesn't
+    accumulate duplicate handlers.
+  * Reverts the v0.65.2-4 close-mechanics theories (destroy-dispatch, slot-leak,
+    app_id timing) as primary causes — they were adjacent; the slot-release
+    teardown is retained inside _teardown_playback.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 19:30:00 +0000
+
 tt-local-generator (0.65.4) noble; urgency=medium
 
   * fix(tt-tv): associate the kiosk window with the Gtk.Application at

@@ -383,3 +383,55 @@ def test_open_attractor_passes_application_at_construction(monkeypatch):
     mw.MainWindow._on_open_attractor.__get__(obj)()
 
     assert captured.get("application") is fake_app
+
+
+def test_reopen_attractor_reuses_persistent_window(monkeypatch):
+    """Persistent kiosk: when `_attractor_win` already exists, reopening REUSES
+    it (un-hide + present + start) and never constructs a NEW window (a fresh
+    window would strand GStreamer's cached GL context -> unclosable video)."""
+    import main_window as mw
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    existing = MagicMock()
+    obj._attractor_win = existing
+    obj._set_crumbs = MagicMock()
+    obj._nav_open_context = MagicMock()
+
+    constructed = []
+    monkeypatch.setattr(
+        mw.attractor, "AttractorWindow",
+        lambda **k: (constructed.append(k), MagicMock())[1],
+    )
+
+    mw.MainWindow._on_open_attractor.__get__(obj)()
+
+    assert constructed == []                         # reused, NOT recreated
+    existing.set_visible.assert_called_once_with(True)
+    existing.present.assert_called_once()
+    existing.start.assert_called_once()              # playback/generation restarted
+    obj._nav_open_context.assert_called_once()
+
+
+def test_attractor_hidden_purges_queue_and_keeps_reference():
+    """Closing the persistent kiosk (hide) purges auto-gen jobs and closes the
+    Watch context, but KEEPS the window reference so the next open reuses it."""
+    import main_window as mw
+    from types import SimpleNamespace
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    win = MagicMock()
+    obj._attractor_win = win
+    obj._nav_close_context = MagicMock()
+    obj._persist_queue = MagicMock()
+    obj._update_queue_display = MagicMock()
+    obj._set_status = MagicMock()
+    obj._queue = [
+        SimpleNamespace(from_attractor=True, prompt="auto"),
+        SimpleNamespace(from_attractor=False, prompt="mine"),
+    ]
+
+    mw.MainWindow._on_attractor_hidden.__get__(obj)()
+
+    assert [i.prompt for i in obj._queue] == ["mine"]   # auto-gen purged, user kept
+    obj._nav_close_context.assert_called_once_with("watch")
+    assert obj._attractor_win is win                     # reference KEPT for reuse

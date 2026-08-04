@@ -126,32 +126,54 @@ def test_add_record_soon_default_false_can_land_far():
     assert far_count > trials // 3, "Default add_record seems to always insert near front"
 
 
-def test_close_request_destroys_and_handles(monkeypatch):
-    """close-request destroys the window and returns True (so GTK's default
-    close doesn't also run). Destroy is synchronous — the real reopen-close bug
-    was a pipeline leak in _on_destroy, not a destroy-during-dispatch."""
+def test_close_request_hides_and_stops_never_destroys():
+    """Persistent-window model: closing the kiosk HIDES it (keeps its GL
+    context) and soft-stops playback — it must NOT destroy. Destroying the
+    window stranded GStreamer's cached GL context, breaking the next reopen's
+    video into an unclosable surface. Returns True so GTK's default close (which
+    would destroy) doesn't run. `on_hide` fires for MainWindow bookkeeping."""
     import attractor
     win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
+    win.stop = MagicMock()
+    win.set_visible = MagicMock()
     win.destroy = MagicMock()
+    hidden = []
+    win._on_hide = lambda: hidden.append(True)
+
     ret = attractor.AttractorWindow._on_close_requested(win, win)
+
     assert ret is True
-    win.destroy.assert_called_once()
+    win.stop.assert_called_once()
+    win.set_visible.assert_called_once_with(False)
+    win.destroy.assert_not_called()   # NEVER destroy on a normal close
+    assert hidden == [True]
 
 
-def test_on_destroy_releases_both_slot_pipelines(monkeypatch):
-    """ROOT CAUSE of the "reopened TT-TV won't close" bug: _on_destroy must
-    release the GStreamer pipeline for BOTH video slots on EVERY platform. It
-    used to do so only on macOS (`if _USE_SYSTEM_PLAYER`), so on Linux each
-    close leaked two live pipelines that flood the GLib main loop and make a
-    reopened window unclosable."""
+def test_stop_soft_stops_and_is_idempotent():
+    """stop() marks the kiosk not-running and tears down playback, keeping the
+    window alive. A second stop() (already stopped) is a no-op."""
     import attractor
-    unloaded = []
-    monkeypatch.setattr(attractor, "_unload_slot_video", lambda slot: unloaded.append(slot))
+    win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
+    win._started = True
+    calls = []
+    win._teardown_playback = lambda: calls.append(True)
+
+    attractor.AttractorWindow.stop(win)
+    assert win._started is False and calls == [True]
+
+    attractor.AttractorWindow.stop(win)          # already stopped
+    assert calls == [True]                        # no second teardown
+
+
+def _teardown_fake():
+    from unittest.mock import MagicMock
+    import attractor
     win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
     win._alive = True
+    win._started = True
     win._gen_stop = MagicMock()
     win._att_poll_stop = MagicMock()
-    win._dbus_conn = None
+    win._dbus_sub_ids = []
     win._pending_advance_source = None
     win._graveyard_timer = 0
     win._video_graveyard = []
@@ -160,8 +182,34 @@ def test_on_destroy_releases_both_slot_pipelines(monkeypatch):
     win._stream_handler_id = None
     win._slot_a = object()
     win._slot_b = object()
+    return win
+
+
+def test_teardown_releases_both_slot_pipelines(monkeypatch):
+    """Shared teardown must release the GStreamer pipeline for BOTH video slots
+    on EVERY platform (used by stop() and _on_destroy). Leaked pipelines are the
+    thread/fd flood behind the unclosable-kiosk bug."""
+    import attractor
+    unloaded = []
+    monkeypatch.setattr(attractor, "_unload_slot_video", lambda slot: unloaded.append(slot))
+    win = _teardown_fake()
+
+    attractor.AttractorWindow._teardown_playback(win)
+
+    assert win._slot_a in unloaded and win._slot_b in unloaded
+    win._gen_stop.set.assert_called_once()
+    win._att_poll_stop.set.assert_called_once()
+
+
+def test_on_destroy_marks_dead_and_tears_down(monkeypatch):
+    """Real destruction (app shutdown) marks the window dead first, then runs
+    the shared teardown (which releases both slot pipelines)."""
+    import attractor
+    unloaded = []
+    monkeypatch.setattr(attractor, "_unload_slot_video", lambda slot: unloaded.append(slot))
+    win = _teardown_fake()
 
     attractor.AttractorWindow._on_destroy(win, win)
 
-    assert win._slot_a in unloaded and win._slot_b in unloaded  # BOTH slots released
-    assert win._alive is False                                  # marked dead first
+    assert win._alive is False and win._started is False
+    assert win._slot_a in unloaded and win._slot_b in unloaded

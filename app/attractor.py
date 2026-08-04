@@ -764,6 +764,7 @@ class AttractorWindow(Gtk.Window):
         get_all_records: "Callable[[], list]" = lambda: [],  # full unfiltered record set for model channels
         get_animate_inputs: "Callable[[], tuple[str, str]] | None" = None,  # animate TT-TV inputs
         application=None,                     # Gtk.Application to associate BEFORE realize
+        on_hide=None,                         # called when the kiosk is closed (hidden, not destroyed)
     ) -> None:
         _log.debug("AttractorWindow.__init__ - %d records, model_source=%s", len(records), model_source)
         super().__init__(title="TT-TV")
@@ -778,6 +779,7 @@ class AttractorWindow(Gtk.Window):
         # quits. Setting it here, pre-realize, makes every launch identical.
         if application is not None:
             self.set_application(application)
+        self._on_hide = on_hide   # MainWindow bookkeeping when the kiosk is hidden (closed)
         self._system_prompt = system_prompt
         self._model_source = model_source
         self._on_enqueue = on_enqueue
@@ -887,52 +889,52 @@ class AttractorWindow(Gtk.Window):
         return False
 
     def _on_close_requested(self, _win) -> bool:
-        """Force full window destruction on close so _on_destroy always fires.
+        """Persistent-window model: HIDE + soft-stop, never DESTROY.
 
-        GTK4's default close-request handler may merely hide the window, which
-        would leave _attractor_win non-None in MainWindow and break the second
-        launch.  We explicitly call destroy() then return True so GTK doesn't
-        do a redundant second close.
-
-        (Destroy is SYNCHRONOUS on purpose: the real "reopened window won't
-        close" bug was a Linux GStreamer slot-pipeline LEAK in `_on_destroy`,
-        not a destroy-during-dispatch — see that method. Deferring the destroy
-        onto `GLib.idle_add` was counterproductive because it made closing
-        depend on the very idle queue the leaked pipelines were starving.)
+        Destroying the kiosk window tore down its GdkGLContext; GStreamer's
+        gtkglsink then left that dead context dangling in its process-wide
+        GstGLDisplay cache, so the NEXT kiosk's video failed to embed and became
+        a bare, app-id-less GL surface that couldn't be closed (only quitting
+        the app tore it down — the reported "reopened window won't close" bug,
+        independent of how many videos had played). Reusing ONE window keeps the
+        GL context valid across every reopen. `stop()` halts playback +
+        generation and releases the running pipelines; the window (and its GL
+        context) stay alive, hidden, until the next `start()`. `_on_hide` lets
+        MainWindow do its bookkeeping (purge the TT-TV queue, close the Watch
+        context). App shutdown still destroys the window normally (-> _on_destroy).
         """
-        self.destroy()
-        return True  # we handled it
+        self.stop()
+        self.set_visible(False)
+        if self._on_hide is not None:
+            try:
+                self._on_hide()
+            except Exception:
+                _log.exception("attractor on_hide callback raised")
+        return True  # handled; do NOT destroy
 
-    def _on_destroy(self, _win) -> None:
-        """Stop the generation loop and cancel any pending timers."""
-        # Mark dead FIRST so any idle/timer callbacks that fire after this
-        # point (e.g. queued by the generation thread mid-call) silently bail
-        # instead of touching destroyed widgets.
-        self._alive = False
-        # Log a stack trace so we can see what triggered the close.
-        _log.info("=== Attractor stopped ===\n%s", "".join(traceback.format_stack()))
+    def stop(self) -> None:
+        """Soft stop: halt playback + the generation/status loops and release
+        every running video pipeline, but KEEP the window and its GdkGLContext
+        alive so a later `start()` reuses them. Idempotent."""
+        if not self._started:
+            return
+        self._started = False
+        self._teardown_playback()
+
+    def _teardown_playback(self) -> None:
+        """Stop threads, cancel timers, unsubscribe D-Bus, and release every
+        running video pipeline (slots + graveyard). Shared by `stop()` (window
+        survives) and `_on_destroy` (window is being destroyed)."""
         self._gen_stop.set()
         self._att_poll_stop.set()
-        # Unsubscribe from screensaver D-Bus signals.
-        if getattr(self, "_dbus_conn", None):
-            for sub_id in getattr(self, "_dbus_sub_ids", []):
-                try:
-                    self._dbus_conn.signal_unsubscribe(sub_id)
-                except Exception:
-                    pass
+        self._unsubscribe_screensaver()
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
             self._pending_advance_source = None
         if self._graveyard_timer:
             GLib.source_remove(self._graveyard_timer)
             self._graveyard_timer = 0
-        # Release (pause + set_file(None)) each graveyard widget's pipeline
-        # BEFORE dropping the refs. Clearing the list alone leaves those leaked
-        # Gtk.Video pipelines to tear down uncontrolled during window
-        # destruction — part of the fd/gst_poll flood that makes a reopened
-        # kiosk unclosable. Mirrors `_flush_video_graveyard`'s per-widget unload
-        # (which we can't call here — it early-returns now that `_alive` is
-        # False).
+        # Release each graveyard widget's pipeline BEFORE dropping the refs.
         for _vid in self._video_graveyard:
             _stream = _vid.get_media_stream()
             if _stream is not None:
@@ -948,8 +950,7 @@ class AttractorWindow(Gtk.Window):
         if self._pending_flash_source:
             GLib.source_remove(self._pending_flash_source)
             self._pending_flash_source = 0
-        # Disconnect the notify::ended handler so a late-firing signal after
-        # window destruction doesn't call _advance() on a dead widget tree.
+        # Disconnect the notify::ended handler so a late signal doesn't advance.
         if self._watched_stream is not None and self._stream_handler_id is not None:
             try:
                 self._watched_stream.disconnect(self._stream_handler_id)
@@ -957,18 +958,31 @@ class AttractorWindow(Gtk.Window):
                 pass
         self._watched_stream = None
         self._stream_handler_id = None
-        # Release BOTH video-slot pipelines on EVERY platform. This was the
-        # ROOT-CAUSE bug: the release was macOS-only (`if _USE_SYSTEM_PLAYER`),
-        # so on Linux each close left the two live Gtk.Video slot pipelines to
-        # tear down uncontrolled. Accumulating leaked pipelines flood the GLib
-        # main loop with gst_poll assertion failures (see `_generation_loop`'s
-        # own note) and exhaust fds, so a REOPENED kiosk's close/destroy work
-        # never gets serviced and the window can only be torn down by quitting
-        # the app. `_unload_slot_video` pauses-then-releases on Linux and closes
-        # the GstPlayer on macOS — the exact teardown the screen-lock path
-        # already does correctly (see `_on_screensaver_active`).
+        # Release BOTH video-slot pipelines on every platform (pause -> NULL).
+        # `_unload_slot_video` pauses-then-releases on Linux and closes the
+        # GstPlayer on macOS — the teardown the screen-lock path already does.
         _unload_slot_video(self._slot_a)
         _unload_slot_video(self._slot_b)
+
+    def _unsubscribe_screensaver(self) -> None:
+        """Drop every screensaver D-Bus subscription (session + system bus) on
+        the connection each was registered on, so a `start()` after `stop()`
+        doesn't accumulate duplicate lock/unlock handlers."""
+        for _conn, _sub_id in getattr(self, "_dbus_sub_ids", []):
+            try:
+                _conn.signal_unsubscribe(_sub_id)
+            except Exception:
+                pass
+        self._dbus_sub_ids = []
+
+    def _on_destroy(self, _win) -> None:
+        """Real window destruction (app shutdown). Mark dead FIRST so any late
+        idle/timer callbacks bail instead of touching destroyed widgets, then
+        run the shared teardown."""
+        self._alive = False
+        _log.info("=== Attractor destroyed ===")
+        self._started = False
+        self._teardown_playback()
 
     def _toggle_pause(self) -> None:
         """Toggle playback pause. Generation loop is unaffected."""
@@ -1352,10 +1366,17 @@ class AttractorWindow(Gtk.Window):
         """
         Begin playback and start the generation loop daemon thread.
         Must be called after the window is presented so the display is ready.
+
+        RESTARTABLE: a persistent kiosk calls `start()` again after `stop()`
+        (i.e. a "reopen" of the hidden window). No-op if already running.
         """
-        if not self._alive:
+        if not self._alive or self._started:
             return
         self._started = True
+        # Clear the stop Events (stop() set them) so the fresh loop threads
+        # started below don't exit on their first `.wait()`.
+        self._gen_stop.clear()
+        self._att_poll_stop.clear()
         _log.info("=== Attractor started - pool size: %d, auto_generate: %s ===",
                   self._pool.size, self._auto_generate)
         self._subscribe_screensaver()
@@ -1403,7 +1424,7 @@ class AttractorWindow(Gtk.Window):
                     Gio.DBusSignalFlags.NONE,
                     self._on_screensaver_active_changed,
                 )
-                self._dbus_sub_ids.append(sub_id)
+                self._dbus_sub_ids.append((bus, sub_id))
             _log.debug("screensaver session-bus subscriptions OK (sub_ids=%s)",
                        self._dbus_sub_ids)
         except Exception as exc:
@@ -1423,7 +1444,7 @@ class AttractorWindow(Gtk.Window):
                     Gio.DBusSignalFlags.NONE,
                     self._on_logind_lock_signal,
                 )
-                self._dbus_sub_ids.append(sub_id)
+                self._dbus_sub_ids.append((sys_bus, sub_id))
             _log.debug("screensaver logind system-bus subscriptions OK")
         except Exception as exc:
             _log.warning("screensaver logind system-bus subscription failed: %s", exc)
