@@ -751,6 +751,20 @@ _CSS = b"""
     color: #A9C1C6;
     font-size: 12px;
 }
+/* "Back to Generating..." control shown over a recent that was opened while a
+   generation is still running -- restores the live pending view. */
+.create-result-return {
+    color: #4FD1C5;
+    background-color: #14343D;
+    border: 1px solid #2D5566;
+    border-radius: 10px;
+    font-size: 11px;
+    padding: 2px 10px;
+    margin-bottom: 4px;
+}
+.create-result-return:hover {
+    border-color: #4FD1C5;
+}
 .create-result-error-label {
     color: #FF6B6B;
     font-size: 13px;
@@ -2927,6 +2941,15 @@ class CreateResultPanel(Gtk.Box):
         self._state = "empty"
         self._timer_id: Optional[int] = None
         self._pending_start: float = 0.0
+        # A generation can be IN FLIGHT while the current-result area shows
+        # something else (the user clicked a recent). These preserve enough to
+        # RE-RENDER the live "Generating…" view on demand (see
+        # `_return_to_pending`), so navigating to a recent mid-generation is
+        # never a dead-end. `_pending_active` outlives the pending VIEW.
+        self._pending_active: bool = False
+        self._pending_prompt: str = ""
+        self._pending_medium = None
+        self._pending_last_status: str = ""
         # Newest-first list of `history_store.GenerationRecord`-like objects
         # (only `.prompt`/`.thumbnail_path`/`.media_file_path` are read, so a
         # duck-typed stand-in works too) — capped at `_RECENTS_MAX` by
@@ -3000,6 +3023,7 @@ class CreateResultPanel(Gtk.Box):
 
     def _show_empty(self) -> None:
         self._stop_timer()
+        self._pending_active = False
         self._clear_current()
         self._state = "empty"
         self._pending_status_lbl = None
@@ -3019,16 +3043,36 @@ class CreateResultPanel(Gtk.Box):
     # ── State: pending ───────────────────────────────────────────────────────
 
     def show_pending(self, prompt: str, medium=None) -> None:
-        """Show the pending state: spinner + elapsed seconds + the prompt.
+        """Start the pending state: remember the job so its live "Generating…"
+        view can always be restored, then render that view.
 
         `medium` (a `create_mediums.Medium` or `None`) only affects the
         header text (its icon/label, when present) — never required, since
         Create's "idea" door can generate without an explicit medium choice.
         """
+        icon = getattr(medium, "icon", "") if medium is not None else ""
+        medium_label = getattr(medium, "label", "") if medium is not None else ""
+        if icon or medium_label:
+            header_text = f"{icon} Generating {medium_label}…".strip()
+        else:
+            header_text = "Generating…"
+
+        self._pending_active = True
+        self._pending_prompt = prompt
+        self._pending_medium = medium
+        self._pending_last_status = header_text
+        self._pending_start = time.monotonic()
+        self._render_pending()
+
+    def _render_pending(self) -> None:
+        """(Re)draw the live pending view from the stored job state — spinner +
+        the latest status + elapsed (counted from `_pending_start`, so a RETURN
+        picks up the real elapsed, not 0s) + the prompt. Used both by
+        `show_pending` (fresh) and `_return_to_pending` (after the user viewed a
+        recent mid-generation)."""
         self._stop_timer()
         self._clear_current()
         self._state = "pending"
-        self._pending_start = time.monotonic()
 
         spinner = Gtk.Spinner()
         spinner.set_spinning(True)
@@ -3036,13 +3080,7 @@ class CreateResultPanel(Gtk.Box):
         spinner.set_halign(Gtk.Align.CENTER)
         self._current_box.append(spinner)
 
-        icon = getattr(medium, "icon", "") if medium is not None else ""
-        medium_label = getattr(medium, "label", "") if medium is not None else ""
-        if icon or medium_label:
-            header_text = f"{icon} Generating {medium_label}…".strip()
-        else:
-            header_text = "Generating…"
-        self._pending_status_lbl = Gtk.Label(label=header_text)
+        self._pending_status_lbl = Gtk.Label(label=self._pending_last_status)
         self._pending_status_lbl.add_css_class("create-result-status")
         self._pending_status_lbl.set_wrap(True)
         # Bound + center: progress messages (`show_progress`) change length as a
@@ -3055,15 +3093,15 @@ class CreateResultPanel(Gtk.Box):
         self._pending_status_lbl.set_halign(Gtk.Align.CENTER)
         self._current_box.append(self._pending_status_lbl)
 
-        self._pending_elapsed_lbl = Gtk.Label(label="0s elapsed")
+        self._pending_elapsed_lbl = Gtk.Label(label=self._elapsed_text())
         self._pending_elapsed_lbl.add_css_class("create-result-elapsed")
         # Centered so the per-second "…s elapsed" text re-centers within the
         # (now fixed-width) card instead of nudging its layout.
         self._pending_elapsed_lbl.set_halign(Gtk.Align.CENTER)
         self._current_box.append(self._pending_elapsed_lbl)
 
-        if prompt:
-            prompt_lbl = Gtk.Label(label=prompt)
+        if self._pending_prompt:
+            prompt_lbl = Gtk.Label(label=self._pending_prompt)
             prompt_lbl.add_css_class("create-result-prompt")
             prompt_lbl.set_wrap(True)
             # Cap the NATURAL width. A wrapping Gtk.Label with no max-width-chars
@@ -3080,30 +3118,37 @@ class CreateResultPanel(Gtk.Box):
 
         self._timer_id = GLib.timeout_add(1000, self._tick)
 
+    def _elapsed_text(self) -> str:
+        elapsed = int(time.monotonic() - self._pending_start)
+        m, s = divmod(elapsed, 60)
+        return f"{m}m {s:02d}s elapsed" if m else f"{s}s elapsed"
+
     def _tick(self) -> bool:
         """GLib.timeout_add callback — runs on the main thread, so touching
         widgets directly is safe (mirrors `PendingCard._tick`). Returns True
         to keep firing every second until `_stop_timer` cancels it."""
-        elapsed = int(time.monotonic() - self._pending_start)
-        m, s = divmod(elapsed, 60)
-        text = f"{m}m {s:02d}s elapsed" if m else f"{s}s elapsed"
         if self._pending_elapsed_lbl is not None:
-            self._pending_elapsed_lbl.set_label(text)
+            self._pending_elapsed_lbl.set_label(self._elapsed_text())
         return True
 
     def show_progress(self, message: str) -> None:
-        """Update the pending status text in place. A no-op outside the
-        pending state — a stray progress message arriving after the job has
-        already finished/errored/been cleared must not resurrect a pending
-        label that no longer exists."""
-        if self._state != "pending" or self._pending_status_lbl is None:
+        """Record the latest progress message and, if the live pending view is
+        currently showing, update it in place. The message is ALSO stashed
+        (`_pending_last_status`) even when the user has navigated to a recent
+        mid-generation, so `_return_to_pending` shows the CURRENT status, not a
+        stale one. A no-op once the job is no longer active (a stray progress
+        message arriving after finish/error/clear must not resurrect anything)."""
+        if not self._pending_active:
             return
-        self._pending_status_lbl.set_label(message)
+        self._pending_last_status = message
+        if self._state == "pending" and self._pending_status_lbl is not None:
+            self._pending_status_lbl.set_label(message)
 
     # ── State: error ─────────────────────────────────────────────────────────
 
     def show_error(self, message: str) -> None:
         self._stop_timer()
+        self._pending_active = False
         self._clear_current()
         self._state = "error"
         self._pending_status_lbl = None
@@ -3121,6 +3166,7 @@ class CreateResultPanel(Gtk.Box):
         strip (newest first, capped at `_RECENTS_MAX` — see `_push_recent`).
         """
         self._stop_timer()
+        self._pending_active = False   # the job that was pending is now done
         self._render_record(record)
         self._push_recent(record)
 
@@ -3367,6 +3413,26 @@ class CreateResultPanel(Gtk.Box):
         `show_finished` (that would re-insert/reorder the recents strip on
         every click) — it goes straight through `_render_record`, same as
         `show_finished` does internally, just without the recents side
-        effect."""
+        effect.
+
+        If a generation is still IN FLIGHT (`_pending_active`), prepend a small
+        "back to Generating…" control so peeking at a recent mid-generation is
+        never a dead-end — clicking it restores the live pending view (see
+        `_return_to_pending`). The elapsed timer is stopped while the recent is
+        shown (its label isn't on screen) and resumes from the real elapsed on
+        return."""
         self._stop_timer()
         self._render_record(record)
+        if self._pending_active:
+            back = Gtk.Button(label="⏳ Back to Generating…")
+            back.add_css_class("create-result-return")
+            back.set_halign(Gtk.Align.CENTER)
+            back.connect("clicked", lambda _b: self._return_to_pending())
+            self._current_box.prepend(back)
+
+    def _return_to_pending(self) -> None:
+        """Restore the live pending view after the user peeked at a recent
+        mid-generation. No-op if the job already finished/errored (nothing to
+        return to)."""
+        if self._pending_active:
+            self._render_pending()

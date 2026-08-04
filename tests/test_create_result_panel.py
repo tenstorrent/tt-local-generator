@@ -244,6 +244,55 @@ def test_pending_status_and_elapsed_are_bounded_and_centered():
     assert 0 < status.get_max_width_chars() <= 60
 
 
+def _find_return_button(box):
+    ch = box.get_first_child()
+    while ch is not None:
+        if isinstance(ch, Gtk.Button) and "Generating" in (ch.get_label() or ""):
+            return ch
+        ch = ch.get_next_sibling()
+    return None
+
+
+def test_clicking_recent_while_pending_offers_return_and_restores(tmp_path):
+    """Peeking at a recent MID-generation must not be a dead end: a 'back to
+    Generating' control appears, the job stays active, and returning restores
+    the live pending view (not stuck on the recent)."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a castle", None)
+    assert p.state == "pending" and p._pending_active is True
+
+    p._on_recent_clicked(_rec(tmp_path))     # peek at a recent
+    assert p.state == "finished"             # now showing the recent
+    assert p._pending_active is True         # ...but the job is still in flight
+    assert _find_return_button(p._current_box) is not None
+
+    p._return_to_pending()                   # click "back to Generating…"
+    assert p.state == "pending"
+    assert p._pending_status_lbl is not None
+
+
+def test_progress_while_viewing_recent_is_shown_on_return(tmp_path):
+    """A progress message arriving while the user peeks at a recent is stashed
+    and shown when they return — not lost, not stale."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a castle", None)
+    p._on_recent_clicked(_rec(tmp_path))
+    p.show_progress("chip2: 12/50")          # arrives while viewing the recent
+    assert p.state == "finished"             # progress did NOT yank us back
+    p._return_to_pending()
+    assert p.state == "pending"
+    assert p._pending_status_lbl.get_label() == "chip2: 12/50"
+
+
+def test_finish_clears_pending_active_so_return_is_inert(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a castle", None)
+    p.show_finished(_rec(tmp_path))
+    assert p._pending_active is False
+    p._return_to_pending()                   # nothing to return to
+    assert p.state == "finished"
+
+
 def test_recents_caps_at_max(tmp_path):
     p = cv.CreateResultPanel()
     for _ in range(cv._RECENTS_MAX + 3):

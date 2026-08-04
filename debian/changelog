@@ -1,3 +1,16 @@
+tt-local-generator (0.64.3) noble; urgency=medium
+
+  * fix(create): peeking at a recent while a generation is still running is no
+    longer a dead end. Clicking a recent used to overwrite the live
+    "Generating…" view (and stop its timer) with no way back. Now the pending
+    job is remembered independently of what the result area shows: opening a
+    recent mid-generation prepends a "⏳ Back to Generating…" control that
+    restores the live view (spinner + latest progress + real elapsed + prompt).
+    Progress messages that arrive while you're viewing a recent are stashed and
+    shown on return, and the pending state clears cleanly on finish/error.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 15:15:00 +0000
+
 tt-local-generator (0.64.2) noble; urgency=medium
 
   * fix(gallery): gallery cards no longer overflow their cell on hover. Root
