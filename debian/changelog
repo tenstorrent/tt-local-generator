@@ -1,3 +1,18 @@
+tt-local-generator (0.64.0) noble; urgency=medium
+
+  * feat(create): the Direction modifier chips are now grouped as collapsible
+    CATEGORIES — each category is one compact row showing an icon (borrowed from
+    its first chip's emoji) + the category name + a dimmed hint of what's inside
+    (e.g. "cinematic, aerial, close-up …"). Expanding a category reveals its
+    add-chips. Replaces the "2 chips inline + N more" layout with far less visual
+    noise; de-dup / applied-pills behaviour is unchanged.
+  * feat(create): the Direction | Controls columns are capped at a comfortable
+    combined width (~940px, left-aligned) so they no longer stretch sparsely
+    across the now-uncapped, full-width form; the possibilities wall / prompt /
+    chip row above still use the full width.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 12:15:00 +0000
+
 tt-local-generator (0.63.0) noble; urgency=medium
 
   * feat(create): the Create surface is now a resizable split, like browse mode.

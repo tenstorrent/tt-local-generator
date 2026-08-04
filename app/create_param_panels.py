@@ -57,9 +57,10 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 import field_roles
+import gtk_layout
 from app_settings import settings as _settings
 
 
@@ -2498,6 +2499,42 @@ def attach_inspire_button(
     return btn
 
 
+def _looks_emoji(token: str) -> bool:
+    """True if *token*'s first character is an emoji/symbol (beyond basic Latin
+    + Latin-1), as every chip label's leading glyph is (e.g. "🎥", "↩", "🔭")."""
+    return bool(token) and ord(token[0]) > 0x2100
+
+
+def _category_icon(category) -> str:
+    """A leading emoji for a category, borrowed from its first chip's label
+    (chip labels start with an emoji, e.g. "🎥 cinematic"). Falls back to a
+    neutral marker when the first chip has no emoji prefix."""
+    chips = getattr(category, "chips", None) or []
+    if chips:
+        tok = (getattr(chips[0], "label", "") or "").strip().split(" ", 1)[0]
+        if _looks_emoji(tok):
+            return tok
+    return "✦"
+
+
+def _category_hint(category, n: int = 4) -> str:
+    """A short 'what's inside' preview: the first few chip labels (leading
+    emoji stripped), comma-joined, with an ellipsis when there are more."""
+    chips = getattr(category, "chips", None) or []
+    names = []
+    for c in chips[:n]:
+        lbl = (getattr(c, "label", "") or "").strip()
+        parts = lbl.split(" ", 1)
+        if parts and _looks_emoji(parts[0]):
+            lbl = parts[1] if len(parts) > 1 else ""
+        if lbl:
+            names.append(lbl)
+    hint = ", ".join(names)
+    if hint and len(chips) > n:
+        hint += ", …"
+    return hint
+
+
 class ModifierPills(Gtk.Box):
     """Category-grouped "add" chips that turn into removable pills.
 
@@ -2559,70 +2596,52 @@ class ModifierPills(Gtk.Box):
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    # How many "add" chips each category shows inline before the rest tuck
-    # behind a "+N more…" reveal — keeps the Direction zone compact so the
-    # Create surface fits without scrolling.
-    _VISIBLE_PER_CATEGORY = 2
-
     def _build_category_box(self, category) -> Gtk.Widget:
-        group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        group.add_css_class("modifier-pills-category")
+        """One collapsible CATEGORY row: an icon + the category name + a short
+        hint of what's inside (e.g. "cinematic, aerial, close-up …"). Expanding
+        it reveals every add-chip in that category. This replaces the old
+        "2 chips inline + N more" layout — far less visual noise in the
+        Direction column, and each category advertises its own contents.
 
-        header = Gtk.Label(label=category.name)
-        header.add_css_class("modifier-pills-category-label")
-        header.set_xalign(0.0)
-        group.append(header)
+        Every chip is still built and registered in `_add_buttons`, so de-dup +
+        `applied_text()` behave exactly as before; only where the chips LIVE
+        (inside the expander) changed.
+        """
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header.add_css_class("modifier-cat-header")
+        icon_lbl = Gtk.Label(label=_category_icon(category))
+        icon_lbl.add_css_class("modifier-cat-icon")
+        header.append(icon_lbl)
+        name_lbl = Gtk.Label(label=category.name)
+        name_lbl.add_css_class("modifier-cat-name")
+        header.append(name_lbl)
+        hint = _category_hint(category)
+        if hint:
+            hint_lbl = Gtk.Label(label=hint)
+            hint_lbl.add_css_class("modifier-cat-hint")
+            hint_lbl.set_xalign(0.0)
+            hint_lbl.set_hexpand(True)
+            hint_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            header.append(hint_lbl)
 
-        # First N chips show inline; any beyond go into a collapsed Revealer
-        # toggled by "+N more…". Every chip is still built and registered in
-        # `_add_buttons`, so de-dup + `applied_text()` are unaffected — the
-        # reveal only controls whether the overflow GROUP is on screen.
+        exp = Gtk.Expander()
+        exp.set_label_widget(header)
+        exp.set_expanded(False)
+        exp.add_css_class("modifier-cat")
+
         flow = Gtk.FlowBox()
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.add_css_class("modifier-pills-add-row")
-
-        overflow_flow = Gtk.FlowBox()
-        overflow_flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        overflow_flow.add_css_class("modifier-pills-add-row")
-        revealer = Gtk.Revealer()
-        revealer.set_child(overflow_flow)
-        revealer.set_reveal_child(False)
-
-        overflow = 0
-        for i, entry in enumerate(category.chips):
+        for entry in category.chips:
             btn = Gtk.Button(label=f"+ {entry.label}")
             btn.add_css_class("create-addchip")
             if entry.tip:
                 btn.set_tooltip_text(entry.tip)
             btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
             self._add_buttons[id(entry)] = btn
-            if i < self._VISIBLE_PER_CATEGORY:
-                flow.append(btn)
-            else:
-                overflow_flow.append(btn)
-                overflow += 1
-        group.append(flow)
-
-        if overflow > 0:
-            # A flat, small text-link disclosure — NOT a full-size chip pill
-            # (those competed visually with the real add-chips and wasted space).
-            more = Gtk.Button(label=f"{overflow} more…")
-            more.add_css_class("modifier-pills-more")
-            more.set_has_frame(False)
-
-            def _toggle_more(_b, rev=revealer, mbtn=more, n=overflow):
-                now = not rev.get_reveal_child()
-                rev.set_reveal_child(now)
-                mbtn.set_label("less" if now else f"{n} more…")
-
-            more.connect("clicked", _toggle_more)
-            # Inline pill beside the visible chips (was a full-width row of its
-            # own in the vertical `group`, which wasted a line per category);
-            # the overflow chips still expand into the revealer below.
-            flow.append(more)
-            group.append(revealer)
-
-        return group
+            flow.append(btn)
+        exp.set_child(flow)
+        return exp
 
     def _apply_entry(self, entry) -> None:
         self._applied.append(entry)
@@ -2850,7 +2869,13 @@ class RoleZonePanel(Gtk.Box):
         columns.append(left_col)
         columns.append(self._controls_expander)
         self._columns = columns
-        self.append(columns)
+        # Cap the two columns at a comfortable combined width (left-aligned)
+        # instead of letting them stretch across the now-uncapped, full-width
+        # form (the resizable-split redesign lets the form fill the whole left
+        # side). ~940px keeps each column ~460 — roomy for chips/controls
+        # without sprawling — while the possibilities wall / prompt / chip row
+        # above still use the full form width.
+        self.append(gtk_layout.wrap_centered(columns, max_width=940, align="start"))
 
     # ── Public API ───────────────────────────────────────────────────────────
 

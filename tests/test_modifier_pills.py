@@ -73,25 +73,57 @@ def _descendant_button(container, substr):
     return None
 
 
-def test_more_button_is_inline_not_a_full_width_row():
-    """The '+N more…' disclosure must live INSIDE the chip FlowBox (a compact
-    inline pill beside the visible chips), NOT as its own full-width row in the
-    category's vertical box — that standalone row wasted a whole line per
-    category (see the AnimateDiff Video form screenshots)."""
+def _descendant_label_texts(container):
+    """Every Gtk.Label text anywhere under *container*."""
+    texts = []
+    if isinstance(container, Gtk.Label):
+        texts.append(container.get_label() or "")
+    child = container.get_first_child() if hasattr(container, "get_first_child") else None
+    while child is not None:
+        texts.extend(_descendant_label_texts(child))
+        child = child.get_next_sibling()
+    return texts
+
+
+def test_category_renders_as_collapsible_expander_with_icon_name_and_hint():
+    """Each modifier category is a collapsed Gtk.Expander whose label row shows
+    an icon (borrowed from the first chip's emoji) + the category name + a hint
+    of what's inside; expanding it reveals every add-chip. This replaced the old
+    '2 chips + N more' layout."""
     from chip_config import ChipCategory, ChipEntry
-    cat = ChipCategory("Lighting", [ChipEntry(f"c{i}", f"c{i}", "") for i in range(4)])
+    cat = ChipCategory("Lighting", [
+        ChipEntry("🌅 golden hour", "golden hour", ""),
+        ChipEntry("🌙 moonlit", "moonlit", ""),
+        ChipEntry("💡 studio", "studio lighting", ""),
+    ])
     p = cpp.ModifierPills("image")
-    group = p._build_category_box(cat)
-    # Direct children of the vertical group: header label, chip flow, revealer.
-    # None of them may be a bare Button — the more-pill must be nested in a flow.
-    direct = []
-    ch = group.get_first_child()
-    while ch is not None:
-        direct.append(ch)
-        ch = ch.get_next_sibling()
-    assert not any(isinstance(c, Gtk.Button) for c in direct)
-    flow = next(c for c in direct if isinstance(c, Gtk.FlowBox))
-    assert _descendant_button(flow, "more") is not None
+    box = p._build_category_box(cat)
+    assert isinstance(box, Gtk.Expander)
+    assert box.get_expanded() is False   # collapsed by default
+    header_texts = _descendant_label_texts(box.get_label_widget())
+    assert any("Lighting" in t for t in header_texts)          # category name
+    assert any("golden hour" in t for t in header_texts)       # content hint
+    assert any(t == "🌅" for t in header_texts)                # icon from first chip
+    # Expanding reveals the actual add-chips.
+    assert _descendant_button(box.get_child(), "golden hour") is not None
+
+
+def test_category_icon_and_hint_helpers():
+    from chip_config import ChipCategory, ChipEntry
+    cat = ChipCategory("Camera", [
+        ChipEntry("🎥 cinematic", "cinematic", ""),
+        ChipEntry("🚁 aerial", "aerial", ""),
+        ChipEntry("📷 close-up", "close-up", ""),
+        ChipEntry("🏔 wide", "wide", ""),
+        ChipEntry("👁 POV", "pov", ""),
+    ])
+    assert cpp._category_icon(cat) == "🎥"
+    hint = cpp._category_hint(cat, n=3)
+    assert hint.startswith("cinematic, aerial, close-up")
+    assert hint.endswith("…")   # more than 3 chips -> ellipsis
+    # No-emoji fallback icon.
+    plain = ChipCategory("Plain", [ChipEntry("just text", "t", "")])
+    assert cpp._category_icon(plain) == "✦"
 
 
 def test_unknown_kind_no_crash():

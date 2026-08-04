@@ -639,22 +639,20 @@ _CSS = b"""
 .create-addchip:hover {
     border-color: #4FD1C5;
 }
-/* "N more" / "less" disclosure inside a modifier-pill category -- a flat,
-   muted text link, deliberately NOT the boxed .create-addchip pill so it
-   reads as a control, not another selectable chip. */
-.modifier-pills-more {
-    background: none;
-    border: none;
-    box-shadow: none;
-    color: #7FB3AD;
-    font-size: 10.5px;
-    padding: 0 6px;
-    min-height: 0;
-    min-width: 0;
+/* Modifier categories are collapsible: the expander's label row shows an
+   icon + the category name + a dimmed hint of what's inside; expanding it
+   reveals the add-chips. */
+.modifier-cat-icon {
+    font-size: 13px;
 }
-.modifier-pills-more:hover {
-    color: #4FD1C5;
-    text-decoration: underline;
+.modifier-cat-name {
+    color: #E8F0F2;
+    font-size: 12px;
+    font-weight: bold;
+}
+.modifier-cat-hint {
+    color: #7FB3AD;
+    font-size: 11px;
 }
 .create-pill {
     background-color: #4FD1C5;
