@@ -1,3 +1,18 @@
+tt-local-generator (0.65.4) noble; urgency=medium
+
+  * fix(tt-tv): associate the kiosk window with the Gtk.Application at
+    CONSTRUCTION (new `application=` arg to AttractorWindow), before `_build()`/
+    `maximize()` can realize it — instead of calling set_application() after
+    construction. On Wayland the xdg-toplevel app_id (KDE taskbar icon) is fixed
+    at first realize; a warm/second launch could realize during construction,
+    BEFORE the post-hoc set_application landed, so the second TT-TV window got
+    the generic GTK fallback icon AND wasn't fully owned by the app — which is
+    the window that then refused to close. Setting the application pre-realize
+    makes every launch identical. (Follow-up to the v0.65.3 pipeline-leak fix;
+    the user pinpointed the reopened window by its wrong icon.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:40:00 +0000
+
 tt-local-generator (0.65.3) noble; urgency=medium
 
   * fix(tt-tv): actually fix the "reopened TT-TV window won't close" bug. Root

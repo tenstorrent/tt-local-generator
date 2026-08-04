@@ -339,3 +339,47 @@ def test_attractor_btn_is_a_main_toolbar_button_not_controlpanel():
     assert 'self._attractor_btn.connect("clicked", self._on_open_attractor)' in src
     assert "row.append(self._attractor_btn)" in src
     assert "main_toolbar.append(self._attractor_btn)" not in src
+
+
+def test_open_attractor_passes_application_at_construction(monkeypatch):
+    """The attractor window must receive the Gtk.Application at CONSTRUCTION
+    (so its Wayland app_id / KDE icon is fixed before realize and every launch
+    is identical), not set post-construction where a warm/second launch could
+    realize first and end up with the fallback icon + an unclosable window."""
+    import main_window as mw
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+
+    obj._attractor_win = None
+    _g = MagicMock()
+    obj._video_gallery = _g
+    obj._animate_gallery = _g
+    obj._image_gallery = _g
+    obj._store = MagicMock()
+    obj._store.all_records.return_value = []
+    obj._store.artgen_records.return_value = []
+    obj._current_medium_source = MagicMock(return_value="video")
+    obj._active_medium_is_animatediff = MagicMock(return_value=False)
+    obj._prompt_gen_system_prompt = "sys"
+    obj._attractor_server_status = MagicMock(return_value=(True, None))
+    obj._get_animate_inputs = MagicMock()
+    obj._queue = []
+    obj._worker = None
+    obj._worker_gen = None
+    obj._set_crumbs = MagicMock()
+    obj._nav_open_context = MagicMock()
+    fake_app = MagicMock()
+    obj.get_application = MagicMock(return_value=fake_app)
+
+    captured = {}
+
+    def _fake_attractor_window(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(mw.attractor, "AttractorWindow", _fake_attractor_window)
+    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: None)
+
+    mw.MainWindow._on_open_attractor.__get__(obj)()
+
+    assert captured.get("application") is fake_app

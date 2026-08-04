@@ -763,9 +763,21 @@ class AttractorWindow(Gtk.Window):
         get_playlists: "Callable[[], list]" = lambda: [],  # for channel switcher dropdown
         get_all_records: "Callable[[], list]" = lambda: [],  # full unfiltered record set for model channels
         get_animate_inputs: "Callable[[], tuple[str, str]] | None" = None,  # animate TT-TV inputs
+        application=None,                     # Gtk.Application to associate BEFORE realize
     ) -> None:
         _log.debug("AttractorWindow.__init__ - %d records, model_source=%s", len(records), model_source)
         super().__init__(title="TT-TV")
+        # Associate with the Gtk.Application IMMEDIATELY — before `_build()` /
+        # `self.maximize()` below can realize the window. On Wayland the
+        # xdg-toplevel's app_id (which KDE uses for the taskbar icon) is fixed at
+        # first realize; if `set_application` lands AFTER the window has already
+        # mapped (as it did when the caller set it post-construction, which a
+        # warm/second launch could hit), the toplevel gets NO app_id — the
+        # generic GTK fallback icon — and a window not properly owned by the app
+        # also fails to route close/destroy, so it can't be closed until the app
+        # quits. Setting it here, pre-realize, makes every launch identical.
+        if application is not None:
+            self.set_application(application)
         self._system_prompt = system_prompt
         self._model_source = model_source
         self._on_enqueue = on_enqueue

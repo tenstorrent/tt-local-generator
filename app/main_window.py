@@ -8432,6 +8432,14 @@ class MainWindow(Gtk.ApplicationWindow):
                 get_animate_inputs=(
                     self._get_animate_inputs if current_source == "animate" else None
                 ),
+                # Associate with the Gtk.Application at CONSTRUCTION, before the
+                # window realizes — so Wayland fixes the correct app_id (KDE
+                # taskbar icon) on the xdg-toplevel and every launch is
+                # identical. Setting it post-construction let a warm/second
+                # launch realize first, yielding the generic GTK fallback icon
+                # AND a window the app doesn't fully own (which then wouldn't
+                # close). See AttractorWindow.__init__.
+                application=self.get_application(),
             )
         except Exception:
             import traceback
@@ -8442,13 +8450,6 @@ class MainWindow(Gtk.ApplicationWindow):
             _logging.getLogger("attractor").exception("AttractorWindow() raised")
             self._set_status("Attractor Mode failed to open — see terminal or attractor.log")
             return
-        # Associate with the Gtk.Application so Wayland sets the correct app_id
-        # (used by KDE and other compositors to look up the window icon).
-        # Without this, plain Gtk.Window instances have no app_id and show a
-        # generic icon in the taskbar / title bar.
-        app = self.get_application()
-        if app is not None:
-            win.set_application(app)
         win.set_transient_for(self)
         win.connect("destroy", self._on_attractor_closed)
         self._attractor_win = win
