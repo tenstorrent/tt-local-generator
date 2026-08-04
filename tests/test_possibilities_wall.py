@@ -76,13 +76,14 @@ def test_art_uses_curated_not_arbitrary_recent(tmp_path):
     generation — recents put unflattering/test images on the medium tiles.
     Even when a recent exists, the curated pick is used (and the recent isn't)."""
     from possibilities import PossibilitiesWall
-    meds = [_medium("image")]
+    # Video has no bundled tile art, so curated-vs-recent applies cleanly here.
+    meds = [_medium("video", kind="video")]
     recent = tmp_path / "recent.png"; recent.write_bytes(b"\x89PNG\r\n")
     curated = tmp_path / "curated.png"; curated.write_bytes(b"\x89PNG\r\n")
     store = _FakeStore(
-        latest={("image", None): [_rec("image", thumb=str(recent))]},   # would-be recent
+        latest={("video", None): [_rec("video", thumb=str(recent))]},   # would-be recent
         playlists=[{"id": "p1", "name": "The Demo"}],                    # demo = curated
-        playlist_recs={"p1": [_rec("image", thumb=str(curated))]},
+        playlist_recs={"p1": [_rec("video", thumb=str(curated))]},
     )
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(curated))
@@ -100,14 +101,31 @@ def test_art_per_type_playlist_matches_by_name(tmp_path):
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(thumb))
 
 
-def test_native_medium_falls_back_to_latest_when_no_curated(tmp_path):
-    """A NATIVE medium (image/video/animate) with no curated playlist falls
-    back to your most recent piece of that medium — so the tile shows a real
-    example instead of a bare gradient+icon once you've created anything."""
+def test_image_tile_uses_bundled_worlds_fair_art(tmp_path):
+    """The Image tile shows the bundled World's Fair (Montreal '67) image as its
+    TOP-priority art — over curated playlists and over your latest image."""
+    import os
+    import possibilities
     from possibilities import PossibilitiesWall
     meds = [_medium("image")]
     recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
     store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(recent))]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    kind, path = wall._resolve_tile_art(meds[0])
+    assert kind == "thumb"
+    assert path == os.path.join(possibilities._ASSETS_DIR, "tile-image-montreal-1967.jpg")
+    assert os.path.exists(path)   # the asset actually ships
+
+
+def test_native_medium_falls_back_to_latest_when_no_curated(tmp_path):
+    """A NATIVE medium (image/video/animate) with no curated playlist falls
+    back to your most recent piece of that medium — so the tile shows a real
+    example instead of a bare gradient+icon once you've created anything.
+    (Uses video, which has no bundled tile art overriding the fallback.)"""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("video", kind="video")]
+    recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(latest={("video", None): [_rec("video", thumb=str(recent))]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(recent))
 

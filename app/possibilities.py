@@ -62,6 +62,26 @@ _GRADIENT_CLASS_BY_KIND = {
 }
 _TILE_W, _TILE_H = 200, 104
 
+# Curated BUNDLED tile art that ships with the app (app/assets/), keyed by
+# medium id. Always present, so it's the top-priority source for a tile — used
+# for mediums where a specific hand-picked example reads better than "your
+# latest". The Image tile uses a World's Fair (Montreal Expo 67) generated
+# image rather than whatever raster you happened to make last.
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_BUNDLED_TILE_ART = {
+    "image": "tile-image-montreal-1967.jpg",
+}
+
+
+def _bundled_tile_art_path(medium) -> "Optional[str]":
+    """Absolute path to a medium's bundled tile image, or None if it has none
+    (or the asset is missing — never crash the wall over a packaging slip)."""
+    fn = _BUNDLED_TILE_ART.get(getattr(medium, "id", None))
+    if not fn:
+        return None
+    p = os.path.join(_ASSETS_DIR, fn)
+    return p if os.path.exists(p) else None
+
 
 def example_idea_for(medium) -> str:
     return (_EXAMPLE_IDEAS_BY_ID.get(medium.id)
@@ -191,6 +211,11 @@ class PossibilitiesWall(Gtk.Box):
     def _resolve_tile_art(self, medium):
         mt = "artgen" if medium.source == "artgen" else medium.id
         gt = medium.generator if medium.source == "artgen" else None
+        # A hand-picked BUNDLED example (ships with the app) wins over
+        # everything — e.g. the Image tile's World's Fair Montreal '67 image.
+        bundled = _bundled_tile_art_path(medium)
+        if bundled is not None:
+            return ("thumb", bundled)
         # Tile art comes ONLY from CURATED collections — the user's per-type
         # playlists (Ansis, Palettes, Verses, Animatediffs, …) and any
         # demo/favorite playlist — preferring starred picks. We deliberately do

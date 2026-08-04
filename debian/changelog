@@ -1,3 +1,13 @@
+tt-local-generator (0.64.1) noble; urgency=medium
+
+  * feat(create): the Image tile in the Possibilities wall now shows a bundled,
+    hand-picked example — a World's Fair (Montreal Expo 67) generated image
+    (app/assets/tile-image-montreal-1967.jpg) — as its top-priority art, instead
+    of whatever raster you happened to make last. Other mediums are unchanged
+    (curated playlist, then your latest, then gradient).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 13:45:00 +0000
+
 tt-local-generator (0.64.0) noble; urgency=medium
 
   * feat(create): the Direction modifier chips are now grouped as collapsible
