@@ -1254,9 +1254,14 @@ class CreateView(Gtk.Box):
         paned.set_shrink_end_child(False)
         self._create_paned = paned
         self.append(paned)
-        # Snap the divider so the detail pane gets its default width once the
-        # split has a real allocation (mirrors main_window._reset_detail_split).
-        GLib.idle_add(self._reset_create_split_once)
+        # Snap the divider so the detail pane gets its default width when the
+        # split is first MAPPED (Create becomes visible) — NOT from a
+        # construction-time idle. The app launches on the Library gallery, so
+        # this Stack child isn't allocated for a long time (maybe never); an idle
+        # that returned "retry until allocated" would busy-spin a CPU core that
+        # whole time. `map` fires when Create is shown, and an idle_add then
+        # lands after the first real allocation.
+        paned.connect("map", lambda *_a: GLib.idle_add(self._reset_create_split_once))
 
         # CTA pinned below the split, full width (no cap), so ✨ Create is
         # always visible and never scrolled below the fold.
@@ -1276,18 +1281,24 @@ class CreateView(Gtk.Box):
     _RESULT_PANE_WIDTH = 440  # default docked width of the result detail pane
 
     def _reset_create_split_once(self) -> bool:
-        """Snap the split's divider so the result detail pane gets
-        `_RESULT_PANE_WIDTH` and the form fills the rest — deferred to an idle
-        because the paned has no useful allocation at construction time (mirrors
-        `main_window._reset_detail_split`). Returns True to retry until the
-        paned is actually allocated, then False to stop."""
+        """Snap the split's divider ONCE so the result detail pane gets
+        `_RESULT_PANE_WIDTH` and the form fills the rest (mirrors
+        `main_window._reset_detail_split`). ONE-SHOT: always returns False —
+        never reschedules (a retry-until-allocated idle busy-spins the main loop
+        while Create is off-screen). Fired from the paned's `map`, so it runs
+        when Create is visible; if it still has no allocation it gives up and the
+        next `map` retries. `_split_initialized` guards against re-snapping (and
+        clobbering a manual divider drag) on later Create visits."""
+        if getattr(self, "_split_initialized", False):
+            return False
         paned = getattr(self, "_create_paned", None)
         if paned is None:
             return False
         width = paned.get_width()  # GTK4 allocated width; 0 until first allocation
         if width <= 1:
-            return True  # not allocated yet — try again on the next idle tick
+            return False  # not allocated yet — a later `map` retries
         paned.set_position(max(360, width - self._RESULT_PANE_WIDTH))
+        self._split_initialized = True
         return False
 
     # ── Pending-queue display (SP-3c-4, task-4-brief.md) ────────────────────

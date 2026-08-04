@@ -810,6 +810,7 @@ class AttractorWindow(Gtk.Window):
         self._pool = AttractorPool(video_records)
         self._gen_stop = threading.Event()
         self._paused = False
+        self._run_id: int = 0             # per-start() token; loop threads exit when it changes
         self._pending_advance_source: int | None = None  # GLib source id
         self._watched_stream = None          # stream we connected notify::ended to
         self._stream_handler_id: int | None = None  # handler ID so we can disconnect
@@ -856,11 +857,12 @@ class AttractorWindow(Gtk.Window):
         ctrl.connect("key-pressed", self._on_key)
         self.add_controller(ctrl)
 
+        # `destroy` fires only at real teardown (app shutdown) — a normal close
+        # HIDES this persistent window (see `_on_close_requested`).
         self.connect("destroy", self._on_destroy)
-        # Explicitly destroy (not merely hide) when the user clicks X or the Stop
-        # button calls close().  GTK4's default close-request can hide the window
-        # instead of destroying it, leaving _attractor_win non-None and preventing
-        # a fresh open on the second launch.
+        # Intercept close (X / Stop / Escape) to hide + soft-stop instead of
+        # letting GTK's default destroy it (destroying strands the GL context —
+        # see `_on_close_requested`).
         self.connect("close-request", self._on_close_requested)
 
     # ── Event handlers ────────────────────────────────────────────────────
@@ -868,13 +870,11 @@ class AttractorWindow(Gtk.Window):
     def _on_key(self, _ctrl, keyval, _keycode, _state) -> bool:
         name = Gtk.accelerator_name(keyval, 0)
         if name == "Escape":
-            # DEFER the close out of the key-controller dispatch. Calling
-            # self.close() synchronously here tears the window (and this very
-            # EventControllerKey) down while GTK is still inside the
-            # key-pressed signal emission — a destroy-during-dispatch that
-            # corrupts key-event routing for the NEXT attractor window: after
-            # open→close→open, Escape silently stops closing (only the WM 'X'
-            # still works). idle_add lets the key event fully unwind first.
+            # Defer close() out of the key-controller dispatch (idle_add). Even
+            # though close() now only HIDES (persistent window), invoking it
+            # synchronously mid-key-dispatch is still best avoided; letting the
+            # key event fully unwind first is harmless and keeps the controller
+            # tidy.
             GLib.idle_add(self.close)
             return True
         if name == "f":
@@ -1373,6 +1373,18 @@ class AttractorWindow(Gtk.Window):
         if not self._alive or self._started:
             return
         self._started = True
+        # A pause toggled before the last close must NOT persist across a
+        # reopen — else _advance() bails on `_paused` and the kiosk reopens
+        # permanently blank with no user-reachable recovery.
+        self._paused = False
+        # Per-run token: bump it every start() and hand it to the loop threads.
+        # A `threading.Event` only breaks a thread sitting IN `.wait()`; a
+        # thread mid-body when stop() sets and start() re-clears the event never
+        # observes the set and would run forever (double tt-smi / double
+        # auto-gen after a fast close→reopen). The loops re-check `_run_id ==
+        # run_id` each iteration and exit once superseded.
+        self._run_id += 1
+        _run_id = self._run_id
         # Clear the stop Events (stop() set them) so the fresh loop threads
         # started below don't exit on their first `.wait()`.
         self._gen_stop.clear()
@@ -1383,8 +1395,8 @@ class AttractorWindow(Gtk.Window):
         if self._pool.size > 0:
             self._advance()
         if self._auto_generate:
-            threading.Thread(target=self._generation_loop, daemon=True).start()
-        threading.Thread(target=self._att_status_poll_loop, daemon=True).start()
+            threading.Thread(target=self._generation_loop, args=(_run_id,), daemon=True).start()
+        threading.Thread(target=self._att_status_poll_loop, args=(_run_id,), daemon=True).start()
 
     def _subscribe_screensaver(self) -> None:
         """Subscribe to screen-lock signals from every known source.
@@ -1407,7 +1419,7 @@ class AttractorWindow(Gtk.Window):
         """
         self._dbus_conn = None
         self._dbus_sys_conn = None
-        self._dbus_sub_ids: list[int] = []
+        self._dbus_sub_ids: list = []   # list[(Gio.DBusConnection, sub_id)] — see _unsubscribe_screensaver
         self._screen_locked = False   # dedup: ignore duplicate lock/unlock signals
 
         # ── Session bus: ScreenSaver ActiveChanged (KDE, GNOME, etc.) ─────
@@ -1858,19 +1870,20 @@ class AttractorWindow(Gtk.Window):
 
     # ── Generation loop ───────────────────────────────────────────────────
 
-    def _generation_loop(self) -> None:
+    def _generation_loop(self, run_id: int = 0) -> None:
         """
         Background daemon thread. Continuously generates prompts and enqueues
         new generation jobs via on_enqueue callback.
 
         Back-pressure: if queue depth >= 3, waits 30 s before retrying (server
-        isn't consuming jobs fast enough). Stops when _gen_stop is set.
+        isn't consuming jobs fast enough). Stops when _gen_stop is set OR when a
+        newer start() has superseded this run (`_run_id != run_id`).
         """
         # AnimateDiff is slow (~5 min/frame); cap ahead-of-time queuing to 1 job.
         # Server-based models can queue up to 3 because jobs are seconds apart.
         _max_queue = 1 if self._model_source == "animatediff" else 3
 
-        while not self._gen_stop.wait(0.0) and self._auto_generate:
+        while not self._gen_stop.wait(0.0) and self._auto_generate and self._run_id == run_id:
             depth = self._get_queue_depth()
             generating = self._get_is_generating()
             GLib.idle_add(self._update_work_lbl, depth, generating)
@@ -2345,8 +2358,11 @@ class AttractorWindow(Gtk.Window):
         self._autogen_switch.handler_unblock_by_func(self._on_autogen_toggled)
 
         # If auto-gen just became enabled and wasn't before, start the thread.
+        # Pass the current `_run_id` so this loop isn't instantly superseded by
+        # the run-token gate (a bare spawn would default run_id=0 and exit).
         if self._auto_generate and not was_auto_gen and self._started and self._alive:
-            threading.Thread(target=self._generation_loop, daemon=True).start()
+            threading.Thread(target=self._generation_loop,
+                             args=(self._run_id,), daemon=True).start()
 
         # Flash to signal the channel change, then advance to the first video.
         self._trigger_channel_change()
@@ -2586,12 +2602,17 @@ class AttractorWindow(Gtk.Window):
 
         return "  ".join(parts)
 
-    def _att_status_poll_loop(self) -> None:
+    def _att_status_poll_loop(self, run_id: int = 0) -> None:
         """Background thread: polls server status, disk, and chip telemetry every 10 s.
 
         Two-stage chip read so the segment is never blank at startup:
           Stage 1 — sysfs clocks only (instant, posted before anything blocks).
           Stage 2 — full telemetry via tt-smi (may take up to ~13 s on cold start).
+
+        Exits when `_att_poll_stop` is set OR a newer start() has superseded this
+        run (`_run_id != run_id`) — otherwise a fast close→reopen while this
+        thread is blocked in a ~13 s tt-smi read would leave TWO poll loops
+        hammering the hardware (see reference_qb2_card924055_fragility).
         """
         # Stage 1: post an instant sysfs-only baseline so _att_chip_lbl is visible
         # immediately, before the slow tt-smi version check + snapshot run.
@@ -2601,7 +2622,7 @@ class AttractorWindow(Gtk.Window):
             shade_str = "".join(self._clock_to_shade(c, max_clk) for c in clocks)
             GLib.idle_add(self._apply_att_chip, f"{max_clk} MHz  {shade_str}")
 
-        while not self._att_poll_stop.is_set():
+        while not self._att_poll_stop.is_set() and self._run_id == run_id:
             ready, model = self._get_server_status()
             depth = self._get_queue_depth()
             generating = self._get_is_generating()

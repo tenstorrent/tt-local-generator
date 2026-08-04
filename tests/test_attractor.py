@@ -213,3 +213,19 @@ def test_on_destroy_marks_dead_and_tears_down(monkeypatch):
 
     assert win._alive is False and win._started is False
     assert win._slot_a in unloaded and win._slot_b in unloaded
+
+
+def test_generation_loop_exits_when_run_id_superseded():
+    """A generation loop from a SUPERSEDED start() (run_id mismatch) must exit
+    immediately, not run forever — the zombie-loop race on a fast close->reopen
+    (stop() sets the Event, start() clears it; a thread mid-body never sees the
+    set, so a per-run token is the real guard)."""
+    import threading
+    import attractor
+    win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
+    win._gen_stop = threading.Event()      # NOT set -> would loop forever without the run_id gate
+    win._auto_generate = True
+    win._model_source = "video"
+    win._run_id = 5                        # the current run
+    # A loop launched for an OLD run (1) must bail immediately (returns == exits).
+    attractor.AttractorWindow._generation_loop(win, run_id=1)

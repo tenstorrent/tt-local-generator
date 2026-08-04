@@ -2793,3 +2793,15 @@ def test_create_param_panels_module_does_not_import_main_window_or_worker():
             assert "main_window" not in line, f"{filename}: {line!r}"
             assert "worker" not in line, f"{filename}: {line!r}"
             assert "ControlPanel" not in line, f"{filename}: {line!r}"
+
+
+def test_reset_create_split_is_one_shot_never_busy_spins(make_create_view):
+    """_reset_create_split_once must ALWAYS return False (one-shot). Returning
+    True to 'retry until allocated' busy-spins the GLib idle loop the whole time
+    Create is off-screen (the app launches on the Library gallery) — it's fired
+    from the paned's `map` signal instead of a construction-time idle."""
+    cv = make_create_view()
+    cv._split_initialized = False
+    assert cv._reset_create_split_once() is False   # unallocated -> give up, not retry
+    cv._split_initialized = True
+    assert cv._reset_create_split_once() is False    # already snapped -> no-op

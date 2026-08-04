@@ -1,3 +1,30 @@
+tt-local-generator (0.66.1) noble; urgency=medium
+
+  * fix(create): _reset_create_split_once busy-spun a CPU core from launch until
+    Create was first opened — it returned True (retry) forever because the Paned
+    isn't allocated while the app sits on the Library gallery. Now it's one-shot
+    (always returns False), fired from the paned's `map` signal when Create
+    becomes visible; `_split_initialized` guards against re-snapping over a
+    manual drag. (Found by code review.)
+  * fix(tt-tv): the Watch-menu playlist/model channel entries still
+    destroy()+recreated the kiosk, reintroducing the exact GL-context strand the
+    v0.66.0 persistent-window fix exists to prevent. They now refilter the
+    existing window in place via `_switch_channel` (the same path the in-window
+    channel dropdown uses) — no destroy.
+  * fix(tt-tv): a fast close->reopen could leave zombie generation/status-poll
+    threads running forever (they gated only on a clearable threading.Event; a
+    thread mid-body when stop() sets and start() re-clears it never saw the set),
+    causing double tt-smi hardware churn and generating-while-"closed". Added a
+    per-start() run token (`_run_id`) that the loops re-check each iteration so a
+    superseded run exits. Fixed the in-window `_switch_channel` gen-loop spawn to
+    pass the token too.
+  * fix(tt-tv): `_paused` persisted across hide->reopen, so a kiosk paused before
+    closing reopened permanently blank with no recovery; start() now resets it.
+  * Refreshed stale comments left by the reverted v0.65.2-4 close-mechanics
+    theories (close-request/Escape/D-Bus annotation/context-dismiss docstring).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 20:15:00 +0000
+
 tt-local-generator (0.66.0) noble; urgency=medium
 
   * fix(tt-tv): persistent kiosk window — the real fix for "reopened TT-TV won't

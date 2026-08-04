@@ -435,3 +435,41 @@ def test_attractor_hidden_purges_queue_and_keeps_reference():
     assert [i.prompt for i in obj._queue] == ["mine"]   # auto-gen purged, user kept
     obj._nav_close_context.assert_called_once_with("watch")
     assert obj._attractor_win is win                     # reference KEPT for reuse
+
+
+def test_open_attractor_for_playlist_refilters_not_destroys():
+    """Persistent kiosk: switching to a playlist channel via the menu must
+    REFILTER the existing window (_switch_channel), never destroy+recreate it
+    (a fresh window strands the GL context -> unclosable, the v0.66.0 bug)."""
+    import main_window as mw
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    win = MagicMock()
+    obj._attractor_win = win
+    obj._nav_open_context = MagicMock()
+    obj._set_crumbs = MagicMock()
+
+    mw.MainWindow._on_open_attractor_for_playlist.__get__(obj)("pl-123")
+
+    win.destroy.assert_not_called()                 # NOT destroyed
+    win._switch_channel.assert_called_once_with("pl-123")
+    win.start.assert_called_once()
+    assert obj._attractor_win is win                # reference kept
+
+
+def test_open_attractor_for_model_refilters_via_model_channel():
+    """Menu 'watch this model' must refilter in place via the __model__ channel
+    sentinel, not destroy+recreate the window."""
+    import main_window as mw
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    win = MagicMock()
+    obj._attractor_win = win
+    obj._nav_open_context = MagicMock()
+    obj._set_crumbs = MagicMock()
+
+    mw.MainWindow._on_open_attractor_for_model.__get__(obj)("flux")
+
+    win.destroy.assert_not_called()
+    win._switch_channel.assert_called_once_with("__model__flux")
+    assert obj._attractor_win is win
