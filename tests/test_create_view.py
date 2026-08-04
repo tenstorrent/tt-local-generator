@@ -2700,17 +2700,22 @@ def test_create_view_has_result_panel(make_create_view):
     assert isinstance(cv._result_panel, m.CreateResultPanel)
 
 
-def test_panes_in_wrapping_container_not_hbox(make_create_view):
-    """Step-1 brief test, verbatim (task-2-brief.md): the form+result live
-    in a FlowBox (wraps) — never a fixed horizontal Box."""
+def test_form_result_split_is_a_draggable_paned(make_create_view):
+    """The form and result live in a resizable Gtk.Paned (form on the left,
+    result detail pane docked on the right, draggable divider) — the
+    browse-style split that replaced the old FlowBox two-pane."""
     cv = make_create_view()
-    assert cv._panes_wrap()
+    assert cv._split_is_paned()
+    assert isinstance(cv._create_paned, Gtk.Paned)
+    assert cv._create_paned.get_orientation() == Gtk.Orientation.HORIZONTAL
 
 
-def test_surface_still_width_clamped(make_create_view):
-    """Step-1 brief test, verbatim (task-2-brief.md): unchanged from prior
-    work — some ancestor in the built tree is still a MaxWidthBin."""
-    assert make_create_view()._is_width_clamped()
+def test_form_is_not_width_clamped(make_create_view):
+    """The form column is deliberately NO LONGER wrapped in a MaxWidthBin: it
+    expands to fill the left of the split up to the divider ("let the left side
+    show it all"). The result pane's width comes from the Paned divider, not a
+    content cap."""
+    assert make_create_view()._is_width_clamped() is False
 
 
 def test_result_panel_starts_in_empty_state(make_create_view):
@@ -2744,32 +2749,27 @@ def test_refresh_queue_forwards_to_result_panel(make_create_view):
     assert cv._result_panel._on_queue_cancel is on_cancel
 
 
-def test_panes_container_is_a_flowbox_with_two_children(make_create_view):
-    """The two-pane container itself (not just `_panes_wrap()`'s boolean)
-    is a real `Gtk.FlowBox` holding exactly the form column and the result
-    panel — proves the reflow settings apply to the actual pair, not some
-    unrelated FlowBox elsewhere in the tree."""
+def test_paned_holds_scrolling_form_and_docked_result_detail_pane(make_create_view):
+    """The split's start child is the scrolling form; its end child is a
+    scroller wrapping the CreateResultPanel (the docked detail pane). The
+    result pane holds its width when the window resizes (shrink_end False),
+    but the divider is still draggable."""
     cv = make_create_view()
-    assert isinstance(cv._panes, Gtk.FlowBox)
-    assert cv._panes.get_min_children_per_line() == 1
-    assert cv._panes.get_max_children_per_line() == 2
-    assert cv._panes.get_homogeneous() is False
-    assert cv._panes.get_selection_mode() == Gtk.SelectionMode.NONE
-
-    children = []
-    child = cv._panes.get_first_child()
-    while child is not None:
-        children.append(child)
-        child = child.get_next_sibling()
-    assert len(children) == 2
-    # One FlowBoxChild wraps the result panel; the other wraps the form
-    # column (a plain Gtk.Box — not itself the result panel).
-    inner = [c.get_child() for c in children]
-    assert cv._result_panel in inner
+    paned = cv._create_paned
+    assert isinstance(paned, Gtk.Paned)
+    start = paned.get_start_child()
+    end = paned.get_end_child()
+    assert isinstance(start, Gtk.ScrolledWindow)   # the form scroller
+    assert isinstance(end, Gtk.ScrolledWindow)     # the detail-pane scroller
+    # A ScrolledWindow wraps a non-scrollable child in a GtkViewport.
+    end_child = end.get_child()
+    inner = end_child.get_child() if isinstance(end_child, Gtk.Viewport) else end_child
+    assert inner is cv._result_panel               # result panel is IN the detail pane
+    assert paned.get_shrink_end_child() is False
 
 
-def test_existing_form_widgets_still_reachable_in_two_pane_layout(make_create_view):
-    """Wrapping the form column as one FlowBox child must not rebuild or
+def test_existing_form_widgets_still_reachable_in_split_layout(make_create_view):
+    """Moving the form column into the Paned's start child must not rebuild or
     detach its widgets — the exact same `_cta_btn`/`_chip_buttons` instances
     from before this task must still be part of the live tree, so every
     existing CTA/chip/dropdown test keeps working unmodified."""

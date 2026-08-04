@@ -1,3 +1,18 @@
+tt-local-generator (0.63.0) noble; urgency=medium
+
+  * feat(create): the Create surface is now a resizable split, like browse mode.
+    The form lives on the LEFT and expands to fill up to the divider — no more
+    880px/1440px caps that floated the result pane in dead space on a wide
+    window — and the result is a DETAIL PANE docked on the RIGHT (default ~440px,
+    subtle left border). The divider is a draggable Gtk.Paned handle, so you can
+    widen the result over the form or give the form the whole width. Because the
+    result is a fixed side pane rather than a FlowBox cell whose natural width
+    steered the layout, it can no longer wrap below the form or jitter as its
+    text changes, so the old MaxWidthBin/prompt-width workarounds are obsolete
+    (removed `_build_panes`/`_TWO_PANE_MAX_WIDTH`).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 11:30:00 +0000
+
 tt-local-generator (0.62.2) noble; urgency=medium
 
   * feat(create): Video is now the default-selected medium on open (the first

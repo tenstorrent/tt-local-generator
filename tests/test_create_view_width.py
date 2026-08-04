@@ -90,43 +90,30 @@ def make_create_view(monkeypatch):
     return _factory
 
 
-# ── Step-1 brief test, verbatim ──────────────────────────────────────────
+# ── Resizable split (form fills; result docked right) ─────────────────────
 
-def test_surface_is_width_clamped(make_create_view):
+def test_form_is_not_width_clamped_anymore(make_create_view):
+    """The form is deliberately UN-clamped now: the old MaxWidthBin that capped
+    it (and floated the result pane in dead space on a wide window) is gone.
+    The form fills the left of a resizable Gtk.Paned up to the divider — "let
+    the left side show it all". No ancestor MaxWidthBin remains."""
     cv = make_create_view()
-    # some ancestor in the built tree is a MaxWidthBin
-    assert cv._is_width_clamped()
-
-
-# ── Additional coverage ───────────────────────────────────────────────────
-
-def test_width_clamp_wraps_a_max_width_bin_with_a_real_ceiling(make_create_view):
-    """The wrapper CreateView installs must actually be a `MaxWidthBin`
-    carrying a genuine numeric ceiling, not merely something that happens to
-    satisfy `_is_width_clamped`'s isinstance check via an unrelated subclass.
-
-    Updated by Task 2 ("in-place Create results",
-    .superpowers/sdd/task-2-brief.md): the clamped content is now TWO panes
-    side by side (the form column + `CreateResultPanel`, wrapped in a
-    `Gtk.FlowBox` — see `test_create_view.py`'s two-pane tests), not the form
-    alone, so the ceiling was deliberately raised past the shared
-    `gtk_layout.CONTENT_MAX_WIDTH` (960px, sized for one pane) to
-    `create_view._TWO_PANE_MAX_WIDTH` (1440px) — see that constant's
-    docstring for why this is safe (a ceiling, never a forced minimum; the
-    FlowBox reflows to one column long before a window could approach it)."""
-    import create_view
-
-    cv = make_create_view()
-
+    assert cv._is_width_clamped() is False
     child = cv.get_first_child()
-    found = None
     while child is not None:
-        if isinstance(child, gtk_layout.MaxWidthBin):
-            found = child
+        assert not isinstance(child, gtk_layout.MaxWidthBin)
         child = child.get_next_sibling()
 
-    assert found is not None
-    assert found._max_width == create_view._TWO_PANE_MAX_WIDTH
+
+def test_form_fills_left_of_a_resizable_paned(make_create_view):
+    """Structure of the new split: a horizontal Gtk.Paned whose start child is
+    the scrolling form and whose end child docks the result detail pane at a
+    fixed default width (draggable). Replaces the FlowBox+MaxWidthBin two-pane."""
+    cv = make_create_view()
+    assert isinstance(cv._create_paned, Gtk.Paned)
+    assert cv._create_paned.get_orientation() == Gtk.Orientation.HORIZONTAL
+    assert isinstance(cv._create_paned.get_start_child(), Gtk.ScrolledWindow)
+    assert cv._create_paned.get_shrink_end_child() is False
 
 
 def test_create_view_remains_a_plain_gtk_box_for_existing_mount_callers(make_create_view):

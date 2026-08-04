@@ -249,16 +249,11 @@ _MODEL_DOOR_GROUP_ORDER: "tuple[str, ...]" = ("Image", "Video", "Text")
 
 
 # Two-pane responsive layout (Task 2, "in-place Create results":
-# .superpowers/sdd/task-2-brief.md). The form column and `CreateResultPanel`
-# sit side by side once there's enough width for both — `wrap_centered`'s
-# shared default (`gtk_layout.CONTENT_MAX_WIDTH`, 960px) was sized for the
-# form ALONE (pre-Task-2) and is too tight for two comfortable panes, so the
-# whole surface's ceiling is raised here. This is safe precisely because the
-# clamp is a CEILING, not a fixed width (see `gtk_layout.MaxWidthBin`'s
-# docstring): a window narrower than this never gets forced wide — the
-# `Gtk.FlowBox` two-pane container (`_build_panes`) reflows to one column
-# per line long before the window could ever approach this cap.
-_TWO_PANE_MAX_WIDTH = 1440
+# NOTE: the form and CreateResultPanel are no longer a width-clamped FlowBox
+# two-pane. They now live in a resizable `Gtk.Paned` (form fills the left up to
+# the divider; result is a detail pane docked right — see CreateView.__init__),
+# so there is no surface-wide MaxWidthBin ceiling anymore. The old
+# `_TWO_PANE_MAX_WIDTH` / `_build_panes` were removed with that redesign.
 
 
 # Native medium id -> its real CreateParamPanel class. `_swap_panel` mounts
@@ -722,6 +717,14 @@ _CSS = b"""
 .create-result-panel {
     padding: 4px 0;
 }
+/* The result DETAIL PANE docked on the right of the resizable split -- a
+   subtle left border + slightly recessed ground set it apart from the form,
+   the same way browse mode's detail pane reads as its own surface. */
+.create-result-pane {
+    border-left: 1px solid #2D5566;
+    background-color: #0C232C;
+    padding: 0 8px;
+}
 .create-result-current {
     background-color: #0A1F28;
     border: 1px solid #2D5566;
@@ -813,15 +816,10 @@ _CSS = b"""
     border-color: #4FD1C5;
 }
 
-/* -- Two-pane responsive layout (Task 2, in-place Create results) -- the
-   form column (.create-form-pane) and CreateResultPanel side by side in a
-   wrapping Gtk.FlowBox (.create-panes). No fixed widths here on purpose:
-   each pane's own natural/hexpand settings (see CreateView._build_panes)
-   decide sizing; this class only adds a little breathing room between the
-   two panes and above/below the row. --------------------------------- */
-.create-panes {
-    padding: 4px 0;
-}
+/* -- Resizable split: the form column (.create-form-pane) on the left of a
+   Gtk.Paned, the result detail pane docked on the right. Sizing comes from the
+   draggable Paned divider (see CreateView.__init__); these classes only add a
+   little breathing room. --------------------------------------------------- */
 .create-form-pane {
     padding: 0 8px 0 0;
 }
@@ -1207,41 +1205,52 @@ class CreateView(Gtk.Box):
         # scrolling form (see the form_scroll + cta_bar assembly below) so
         # ✨ Create is always visible, never scrolled below the fold.
 
-        # Two-pane responsive layout (Task 2): the form column built above
-        # becomes one child of a Gtk.FlowBox, alongside a fresh
-        # CreateResultPanel (Task 1 — standalone until this task). See
-        # `_build_panes` for the reflow settings and `_panes_wrap` for the
-        # test seam.
+        # Resizable split (mirrors browse mode's inner_paned): the FORM lives on
+        # the LEFT and expands to fill up to the divider — no artificial width
+        # cap — while the result is a DETAIL PANE docked on the RIGHT. The
+        # divider is a draggable Gtk.Paned handle, so the result can be widened
+        # over the form, or the form given the whole width. Because the result
+        # is a fixed side pane (not a FlowBox cell whose natural width steers the
+        # layout), it can no longer wrap below the form or jitter as its text
+        # changes — this replaces and obsoletes the old two-pane MaxWidthBin/
+        # prompt-width caps.
         self._result_panel = CreateResultPanel()
-        panes = self._build_panes(content, self._result_panel)
-
-        # Width clamp (fix: content sprawling edge-to-edge / overflowing on a
-        # wide window) — `self` stays a plain Gtk.Box so every existing caller
-        # (main_window.py mounts `self._create_view` directly) is unaffected;
-        # only what's INSIDE it is now capped to a comfortable column. The
-        # cap is raised to `_TWO_PANE_MAX_WIDTH` (see that constant's
-        # docstring) now that the clamped content is two panes, not one.
-        # The form + result panes SCROLL; the CTA is PINNED below them so the
-        # primary action (✨ Create) is always visible — a CTA must never sit
-        # below the fold. CreateView is mounted directly in the gallery stack
-        # (no outer ScrolledWindow), so this internal scroll owns the form's
-        # overflow and the CTA bar stays fixed at the bottom.
         self.set_vexpand(True)
+
         form_scroll = Gtk.ScrolledWindow()
         form_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         form_scroll.set_vexpand(True)
-        # align="start": flush-LEFT within the width cap so a wide window doesn't
-        # leave a big empty left gutter (the surplus sits on the right, past the
-        # result pane), instead of centering the whole column.
-        form_scroll.set_child(
-            gtk_layout.wrap_centered(panes, max_width=_TWO_PANE_MAX_WIDTH, align="start")
-        )
-        self.append(form_scroll)
+        form_scroll.set_hexpand(True)
+        form_scroll.set_child(content)   # no width cap — the form fills its pane
 
-        cta_bar = gtk_layout.wrap_centered(
-            self._build_cta_row(), max_width=_TWO_PANE_MAX_WIDTH, align="start"
-        )
+        result_scroll = Gtk.ScrolledWindow()
+        result_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        result_scroll.set_vexpand(True)
+        result_scroll.add_css_class("create-result-pane")
+        result_scroll.set_child(self._result_panel)
+
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        paned.set_vexpand(True)
+        paned.set_wide_handle(True)
+        paned.set_start_child(form_scroll)
+        paned.set_resize_start_child(True)
+        paned.set_shrink_start_child(True)
+        paned.set_end_child(result_scroll)
+        # Detail pane holds its width when the window resizes (like browse's
+        # end child), but the user can still drag the handle either way.
+        paned.set_resize_end_child(False)
+        paned.set_shrink_end_child(False)
+        self._create_paned = paned
+        self.append(paned)
+        # Snap the divider so the detail pane gets its default width once the
+        # split has a real allocation (mirrors main_window._reset_detail_split).
+        GLib.idle_add(self._reset_create_split_once)
+
+        # CTA pinned below the split, full width (no cap), so ✨ Create is
+        # always visible and never scrolled below the fold.
+        cta_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         cta_bar.add_css_class("create-cta-bar")
+        cta_bar.append(self._build_cta_row())
         self.append(cta_bar)
 
         # The boolean poller is the pre-Task-2 fallback: only start it when
@@ -1252,57 +1261,22 @@ class CreateView(Gtk.Box):
         if self._status_service is None:
             self._refresh_model_health_async()
 
-    def _build_panes(self, form_pane: Gtk.Widget, result_pane: Gtk.Widget) -> Gtk.FlowBox:
-        """Wrap *form_pane* and *result_pane* as the two children of a
-        `Gtk.FlowBox` that lays them out side by side on a wide window and
-        stacks them (form first — `Gtk.FlowBox` preserves append order) on a
-        narrow one, with no manual resize handling.
+    _RESULT_PANE_WIDTH = 440  # default docked width of the result detail pane
 
-        `min_children_per_line=1` / `max_children_per_line=2` is exactly the
-        brief's spec: never more than 2 columns, and 1 is always allowed (the
-        stacked case). `homogeneous=False` lets the two panes have different
-        natural widths instead of being forced equal — the form pane keeps
-        its own natural width; `result_pane.set_hexpand(True)` lets the
-        result panel fill whatever width remains in its own FlowBox cell.
-        `selection_mode=NONE` matches every other FlowBox in this file (the
-        chip row, the model door's per-group flows) — these are layout
-        containers, not selectable lists.
-        """
-        panes = Gtk.FlowBox()
-        panes.set_selection_mode(Gtk.SelectionMode.NONE)
-        panes.set_min_children_per_line(1)
-        panes.set_max_children_per_line(2)
-        panes.set_homogeneous(False)
-        panes.add_css_class("create-panes")
-
-        # Compact form column on the left, result fills the rest — echoing the
-        # release's cohesive "compact generation panel + big content area".
-        # The form is a defined ~660px column (roomy but not sprawling); the
-        # result/recents pane hexpands to fill the remaining width. Top-aligned
-        # so the form hugs the top instead of stretching its rows.
-        form_pane.set_hexpand(False)
-        form_pane.set_size_request(660, -1)
-        form_pane.set_valign(Gtk.Align.START)
-        # Cap the form column's MAX width too — not just its 660 min. The form
-        # interior is now a two-column layout (Direction | Controls — see
-        # RoleZonePanel), so it wants ~880px; without a cap a wide medium form
-        # would sprawl further and, added to the result pane's own natural
-        # width, overflow the two-pane FlowBox line and kick the result pane
-        # BELOW the form. MaxWidthBin clamps the reported natural width, so an
-        # 880 cap gives the two columns room while still leaving the result pane
-        # a side slot on a wide window (it stacks below on a genuinely narrow one
-        # via min_children_per_line=1). Pairs with the pending prompt label's own
-        # max-width-chars cap (see show_pending) — both are needed: this bounds
-        # the form, that bounds the result.
-        form_column = gtk_layout.wrap_centered(form_pane, max_width=880, align="start")
-        form_column.set_hexpand(False)
-        form_column.set_valign(Gtk.Align.START)
-        result_pane.set_hexpand(True)
-        panes.append(form_column)
-        panes.append(result_pane)
-
-        self._panes = panes
-        return panes
+    def _reset_create_split_once(self) -> bool:
+        """Snap the split's divider so the result detail pane gets
+        `_RESULT_PANE_WIDTH` and the form fills the rest — deferred to an idle
+        because the paned has no useful allocation at construction time (mirrors
+        `main_window._reset_detail_split`). Returns True to retry until the
+        paned is actually allocated, then False to stop."""
+        paned = getattr(self, "_create_paned", None)
+        if paned is None:
+            return False
+        width = paned.get_width()  # GTK4 allocated width; 0 until first allocation
+        if width <= 1:
+            return True  # not allocated yet — try again on the next idle tick
+        paned.set_position(max(360, width - self._RESULT_PANE_WIDTH))
+        return False
 
     # ── Pending-queue display (SP-3c-4, task-4-brief.md) ────────────────────
 
@@ -1331,12 +1305,11 @@ class CreateView(Gtk.Box):
             child = child.get_next_sibling()
         return False
 
-    def _panes_wrap(self) -> bool:
-        """True if the two-pane container (form + `CreateResultPanel`) is a
-        `Gtk.FlowBox` — a wrapping/reflowing container, never a fixed-
-        direction `Gtk.Box` that could overflow the window (Task 2's
-        two-pane responsive layout)."""
-        return isinstance(getattr(self, "_panes", None), Gtk.FlowBox)
+    def _split_is_paned(self) -> bool:
+        """True if the form|result split is a draggable `Gtk.Paned` — the
+        resizable browse-style layout (form left, result detail pane docked
+        right, draggable divider)."""
+        return isinstance(getattr(self, "_create_paned", None), Gtk.Paned)
 
     # ── Doors row (idea default / model / inspiration) ──────────────────────
 
