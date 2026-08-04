@@ -1,3 +1,19 @@
+tt-local-generator (0.62.0) noble; urgency=medium
+
+  * feat(create): art-type chips (and the Possibilities wall) now read
+    most-visual -> most-textual — image/video/scenic/color first, ANSI as the
+    bridge, then the pure-text kinds (Code Art/Freeform/Verse) last. Display
+    sort only (create_mediums.sort_mediums_visual_first); default_mediums()
+    order is unchanged.
+  * feat(create): the param form uses its horizontal space better — Direction
+    (modifier chips) and Controls now sit SIDE BY SIDE in a two-column layout
+    (RoleZonePanel) instead of stacking and scrolling. Controls opens in its own
+    right-hand column (still collapsible). The form column widens 720 -> 880,
+    nudging the result pane a little further right while keeping it beside the
+    form. Reflows to a single column on a narrow window.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 09:30:00 +0000
+
 tt-local-generator (0.61.4) noble; urgency=medium
 
   * fix(create): the pending result card kept resizing while a job ran. The

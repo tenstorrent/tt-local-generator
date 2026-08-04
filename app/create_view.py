@@ -96,7 +96,7 @@ from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 import artgen_render  # noqa: E402
 import gtk_layout  # noqa: E402
 import server_manager  # noqa: E402
-from create_mediums import Medium, default_mediums  # noqa: E402
+from create_mediums import Medium, default_mediums, sort_mediums_visual_first  # noqa: E402
 from create_mediums import _ARTGEN_KIND  # noqa: E402
 from create_param_panels import (  # noqa: E402
     _ANIMATE_MODE_REPLACEMENT,
@@ -993,7 +993,14 @@ class CreateView(Gtk.Box):
         _apply_css()
         self.add_css_class("create-view")
 
-        self._mediums_fn = mediums_fn or default_mediums
+        _raw_mediums_fn = mediums_fn or default_mediums
+        # Present art types most-visual → most-textual in BOTH the chip row and
+        # the possibilities wall (both read self._mediums_fn). Display-only: the
+        # underlying default_mediums()/discover_mediums() order is untouched, so
+        # id-keyed lookups (_scoped_model_keys, _server_key_to_medium_id, the
+        # model door) are unaffected — they key off medium.id/capabilities, not
+        # list position.
+        self._mediums_fn = lambda: sort_mediums_visual_first(_raw_mediums_fn())
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
         self._on_inspiration = on_inspiration
@@ -1261,17 +1268,18 @@ class CreateView(Gtk.Box):
         form_pane.set_hexpand(False)
         form_pane.set_size_request(660, -1)
         form_pane.set_valign(Gtk.Align.START)
-        # Cap the form column's MAX width too — not just its 660 min. A wide
-        # medium form (AnimateDiff's expanded options) otherwise sprawls its
-        # natural width to ~820px which, added to the result pane's own natural
-        # width, overflows the two-pane FlowBox line and kicks the result pane
-        # BELOW the form once a job starts. MaxWidthBin clamps the reported
-        # natural width, so a hard 720 cap guarantees the result keeps a side
-        # slot on a wide window (it still stacks below on a genuinely narrow one
-        # via min_children_per_line=1). Pairs with the pending prompt label's
-        # own max-width-chars cap (see show_pending) — both are needed: this
-        # bounds the form, that bounds the result.
-        form_column = gtk_layout.wrap_centered(form_pane, max_width=720, align="start")
+        # Cap the form column's MAX width too — not just its 660 min. The form
+        # interior is now a two-column layout (Direction | Controls — see
+        # RoleZonePanel), so it wants ~880px; without a cap a wide medium form
+        # would sprawl further and, added to the result pane's own natural
+        # width, overflow the two-pane FlowBox line and kick the result pane
+        # BELOW the form. MaxWidthBin clamps the reported natural width, so an
+        # 880 cap gives the two columns room while still leaving the result pane
+        # a side slot on a wide window (it stacks below on a genuinely narrow one
+        # via min_children_per_line=1). Pairs with the pending prompt label's own
+        # max-width-chars cap (see show_pending) — both are needed: this bounds
+        # the form, that bounds the result.
+        form_column = gtk_layout.wrap_centered(form_pane, max_width=880, align="start")
         form_column.set_hexpand(False)
         form_column.set_valign(Gtk.Align.START)
         result_pane.set_hexpand(True)

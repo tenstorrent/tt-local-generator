@@ -29,6 +29,34 @@ def test_animate_and_animatediff_are_not_mediums():
     assert "verse" in ids and "ansi" in ids and "palette" in ids
 
 
+def test_sort_mediums_visual_first_orders_visual_then_textual():
+    """Display sort: photographic/scenic/color kinds lead, ANSI bridges, and
+    the pure-text kinds (verse/freeform/codeart) come last — without mutating
+    the caller's list."""
+    ms = cm.default_mediums()
+    ordered = cm.sort_mediums_visual_first(ms)
+    ids = [m.id for m in ordered]
+    # image/video lead; the text kinds trail every visual kind.
+    assert ids[0] == "image" and ids[1] == "video"
+    for text_id in ("verse", "freeform", "codeart"):
+        if text_id in ids:
+            for visual_id in ("landscape", "palette", "ansi"):
+                if visual_id in ids:
+                    assert ids.index(visual_id) < ids.index(text_id)
+    # Pure display sort — same set, never fewer/more mediums.
+    assert {m.id for m in ordered} == {m.id for m in ms}
+
+
+def test_sort_mediums_visual_first_is_stable_and_safe():
+    from create_mediums import Medium
+    a = Medium(id="image", label="Image", icon="", kind="image", source="native")
+    b = Medium(id="video", label="Video", icon="", kind="video", source="native")
+    # Unknown text-kind medium must sort AFTER known visual ones.
+    z = Medium(id="mystery", label="Mystery", icon="", kind="text", source="artgen")
+    out = cm.sort_mediums_visual_first([z, a, b])
+    assert [m.id for m in out] == ["image", "video", "mystery"]
+
+
 def test_discover_mediums_filters_animatediff_name():
     ms = cm.discover_mediums(artgen_names=["verse", "animatediff", "ansi"])
     ids = [m.id for m in ms]

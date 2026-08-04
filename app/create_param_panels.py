@@ -2754,13 +2754,19 @@ class RoleZonePanel(Gtk.Box):
         direction_frame.add_css_class("role-zone-direction")
         direction_frame.set_child(self._direction_zone)
 
-        # ── "Controls" zone (collapsed expander, wrapping grid) ─────────
+        # ── "Controls" zone (wrapping grid, its own right-hand column) ──
         self._controls_grid = Gtk.FlowBox()
         self._controls_grid.set_selection_mode(Gtk.SelectionMode.NONE)
         self._controls_grid.add_css_class("role-zone-controls-grid")
         self._controls_expander = Gtk.Expander(label="Controls")
         self._controls_expander.add_css_class("role-zone-controls")
-        self._controls_expander.set_expanded(False)  # collapsed by default
+        # Open by default: Controls now lives in its OWN right-hand column beside
+        # Direction (see the two-column assembly below), so showing it open no
+        # longer pushes the rest of the form down — it fills otherwise-unused
+        # horizontal space. Still an Expander so a user can collapse a big
+        # options group (e.g. AnimateDiff's) when they want to.
+        self._controls_expander.set_expanded(True)
+        self._controls_expander.set_valign(Gtk.Align.START)
         self._controls_expander.set_child(self._controls_grid)
 
         # ── Re-parent every field's row into its zone ───────────────────
@@ -2798,8 +2804,8 @@ class RoleZonePanel(Gtk.Box):
                 row.set_valign(Gtk.Align.START)
                 control_labels.append(spec.label)
 
-        # Hint what's tucked inside the collapsed Controls expander (e.g.
-        # "steps, seed, frame count…") rather than a bare "Controls" — mirrors
+        # Title the Controls column with what it holds (e.g. "Controls —
+        # Steps, Seed, Frame count, …") rather than a bare "Controls" — mirrors
         # how the Direction category labels advertise their own contents.
         if control_labels:
             shown = ", ".join(control_labels[:3])
@@ -2810,10 +2816,36 @@ class RoleZonePanel(Gtk.Box):
         # only brief field was the (now-hidden) prompt, the zone has no rows —
         # a labelled frame around nothing is just clutter.
         brief_frame.set_visible(self._brief_zone.get_first_child() is not None)
+        # Likewise hide the Controls column when a medium exposes no control
+        # fields, so the two-column FlowBox collapses to a single column instead
+        # of showing an empty "Controls" box.
+        self._controls_expander.set_visible(bool(control_labels))
 
-        self.append(brief_frame)
-        self.append(direction_frame)
-        self.append(self._controls_expander)
+        # ── Two-column interior (visual redesign) ──────────────────────────
+        # Direction (+ Brief below it) on the LEFT, Controls on the RIGHT, so
+        # the two tallest zones sit SIDE BY SIDE instead of stacking and forcing
+        # a long vertical scroll (worst case: AnimateDiff's big options group).
+        # A FlowBox(min1/max2, homogeneous) keeps them equal-width side by side
+        # on a wide form and reflows to a single stacked column on a narrow one
+        # — no manual resize handling, matching every other reflow in this app.
+        left_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        left_col.set_valign(Gtk.Align.START)
+        left_col.append(direction_frame)
+        left_col.append(brief_frame)  # hidden when empty (set_visible above)
+
+        columns = Gtk.FlowBox()
+        columns.set_selection_mode(Gtk.SelectionMode.NONE)
+        columns.set_min_children_per_line(1)
+        columns.set_max_children_per_line(2)
+        columns.set_homogeneous(True)
+        columns.set_valign(Gtk.Align.START)
+        columns.set_column_spacing(12)
+        columns.set_row_spacing(8)
+        columns.add_css_class("role-zone-columns")
+        columns.append(left_col)
+        columns.append(self._controls_expander)
+        self._columns = columns
+        self.append(columns)
 
     # ── Public API ───────────────────────────────────────────────────────────
 

@@ -250,3 +250,44 @@ def default_mediums() -> list[Medium]:
             return True
 
     return discover_mediums(artgen_names=names, uses_llm_for=_uses_llm_for)
+
+
+# ── Display order: most-visual → most-textual ──────────────────────────────
+#
+# The Create chip row and the Possibilities wall present art types from the
+# most VISUAL (photographic / motion / scenic / pure-color) through the
+# semi-visual (ANSI block art) to the most TEXTUAL (code, prose, verse). This
+# is a DISPLAY-ONLY concern: `default_mediums()` / `discover_mediums()` keep
+# their own native-first / registry order (and the tests that pin it) — callers
+# that care about the visual gradient sort with `sort_mediums_visual_first`.
+_VISUAL_TEXTUAL_ORDER: tuple = (
+    "image", "video",                                             # photo / motion
+    "landscape", "skyline", "constellation", "geometric", "circuit",  # scenic / abstract SVG
+    "palette",                                                    # pure color
+    "ansi",                                                       # visual-but-made-of-text bridge
+    "codeart", "freeform", "verse",                              # text
+)
+
+
+def _visual_sort_rank(medium) -> int:
+    """Sort key for `sort_mediums_visual_first`. Known ids get their position
+    in `_VISUAL_TEXTUAL_ORDER`; an unknown medium (e.g. a newly dropped plugin)
+    slots AFTER the known list — and text-kind unknowns after non-text ones, so
+    the "textual comes last" rule still holds for names this table hasn't been
+    taught yet."""
+    try:
+        return _VISUAL_TEXTUAL_ORDER.index(medium.id)
+    except (ValueError, AttributeError):
+        base = len(_VISUAL_TEXTUAL_ORDER)
+        return base + (1 if getattr(medium, "kind", "") == "text" else 0)
+
+
+def sort_mediums_visual_first(mediums) -> list:
+    """Return *mediums* stably ordered most-visual → most-textual (see
+    `_VISUAL_TEXTUAL_ORDER`). Stable: equal-rank mediums keep their input order.
+    Never raises — returns the input order on any error (display sort must never
+    break the Create surface)."""
+    try:
+        return sorted(mediums, key=_visual_sort_rank)
+    except Exception:
+        return list(mediums)
