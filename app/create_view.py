@@ -711,6 +711,7 @@ _CSS = b"""
     border-radius: 8px;
     padding: 12px;
     min-height: 120px;
+    min-width: 320px;
 }
 .create-result-empty-label {
     color: #607D8B;
@@ -3045,10 +3046,21 @@ class CreateResultPanel(Gtk.Box):
         self._pending_status_lbl = Gtk.Label(label=header_text)
         self._pending_status_lbl.add_css_class("create-result-status")
         self._pending_status_lbl.set_wrap(True)
+        # Bound + center: progress messages (`show_progress`) change length as a
+        # job runs; without a max-width-chars cap the label's natural width
+        # tracks the text and jitters the whole card's width every update. Cap
+        # it and center it so a changing message re-wraps in place instead of
+        # resizing the pane.
+        self._pending_status_lbl.set_max_width_chars(40)
+        self._pending_status_lbl.set_justify(Gtk.Justification.CENTER)
+        self._pending_status_lbl.set_halign(Gtk.Align.CENTER)
         self._current_box.append(self._pending_status_lbl)
 
         self._pending_elapsed_lbl = Gtk.Label(label="0s elapsed")
         self._pending_elapsed_lbl.add_css_class("create-result-elapsed")
+        # Centered so the per-second "…s elapsed" text re-centers within the
+        # (now fixed-width) card instead of nudging its layout.
+        self._pending_elapsed_lbl.set_halign(Gtk.Align.CENTER)
         self._current_box.append(self._pending_elapsed_lbl)
 
         if prompt:

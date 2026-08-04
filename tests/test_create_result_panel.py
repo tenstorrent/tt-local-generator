@@ -224,6 +224,26 @@ def test_pending_prompt_label_width_is_bounded():
     assert 0 < mwc <= 80  # bounded, not the -1 "unlimited natural width" default
 
 
+def test_pending_status_and_elapsed_are_bounded_and_centered():
+    """The status + elapsed labels change text as a job runs; they must be
+    bounded/centered so a longer progress message or a ticking elapsed count
+    re-wraps in place instead of resizing the whole pending card."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a castle", None)
+    status = p._pending_status_lbl
+    elapsed = p._pending_elapsed_lbl
+    assert status is not None and elapsed is not None
+    # status: bounded natural width + centered
+    assert status.get_wrap() is True
+    assert 0 < status.get_max_width_chars() <= 60
+    assert status.get_halign() == Gtk.Align.CENTER
+    # elapsed: centered so per-second updates don't shift layout
+    assert elapsed.get_halign() == Gtk.Align.CENTER
+    # a long progress message must not lift the cap
+    p.show_progress("chip2: Generating 2 frame(s)… decoding latents at step 37/50")
+    assert 0 < status.get_max_width_chars() <= 60
+
+
 def test_recents_caps_at_max(tmp_path):
     p = cv.CreateResultPanel()
     for _ in range(cv._RECENTS_MAX + 3):

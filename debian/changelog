@@ -1,3 +1,15 @@
+tt-local-generator (0.61.4) noble; urgency=medium
+
+  * fix(create): the pending result card kept resizing while a job ran. The
+    status label (updated by progress messages) and the elapsed label (ticking
+    every second) had unbounded natural widths, so each text change nudged the
+    two-pane layout. Both are now bounded/centered (status caps at 40 chars and
+    wraps in place; elapsed is centered) and the card gets a min-width floor, so
+    a running job's changing text re-wraps in place instead of jittering the
+    card size.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 17:45:00 +0000
+
 tt-local-generator (0.61.3) noble; urgency=medium
 
   * fix(create): the result pane jumped BELOW the form once generation started
