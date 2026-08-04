@@ -108,6 +108,34 @@ def _make_mw(tmp_path, monkeypatch):
     return obj
 
 
+def test_create_switches_after_pipelines(tmp_path, monkeypatch):
+    """Regression: Pipelines -> Create must switch to Create. The 🧩 Pipelines
+    toggle sits OUTSIDE the Create/Library radio group, so entering Pipelines
+    must clear that group. Otherwise the previously-active loop-nav button stays
+    "active" while Pipelines shows, and re-clicking it emits no "toggled" (a
+    grouped toggle can't re-activate itself) -- so the view never switches
+    ("click Pipelines then Create does nothing")."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    # _show_pipelines collaborators (already-built studio -> no heavy construct)
+    obj._pipeline_studio = MagicMock()
+    obj._set_crumbs = MagicMock()
+    obj._nav_open_context = MagicMock()
+    obj._gallery_stack.add_named(Gtk.Box(), "pipelines")
+
+    obj._build_loop_nav()                       # real create/discover toggles
+    create_btn = obj._loop_nav["create"]
+    create_btn.set_active(True)                 # Create is the active place
+    obj._gallery_stack.set_visible_child_name("create")
+
+    obj._show_pipelines()                       # enter Pipelines
+    assert obj._gallery_stack.get_visible_child_name() == "pipelines"
+    # The loop-nav radio group MUST be cleared so Create can be re-selected.
+    assert create_btn.get_active() is False
+
+    create_btn.set_active(True)                 # click Create
+    assert obj._gallery_stack.get_visible_child_name() == "create"
+
+
 def test_build_loop_nav_two_places_plus_play(tmp_path, monkeypatch):
     """The nav is two places (Create, Library) plus a ▶ Play companion —
     no Remix pill, no arrow/loop separators."""

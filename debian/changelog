@@ -1,3 +1,16 @@
+tt-local-generator (0.65.1) noble; urgency=medium
+
+  * fix(nav): clicking Create (or Library) right after Pipelines did nothing.
+    The 🧩 Pipelines toggle sits outside the Create/Library radio group, and
+    entering Pipelines never cleared that group -- so the previously-active
+    loop-nav button stayed "active" while Pipeline Studio showed. Re-clicking
+    that same button emitted no "toggled" signal (a grouped toggle can't
+    re-activate itself), so its handler never ran and the view never switched.
+    _show_pipelines now clears the loop-nav radio group, so a later click on
+    Create/Library always changes state and fires. Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 16:55:00 +0000
+
 tt-local-generator (0.65.0) noble; urgency=medium
 
   * feat(gallery): bigger card frames (tile 220x240 -> 260x272, thumbnail zone

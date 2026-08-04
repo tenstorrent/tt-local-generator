@@ -7102,6 +7102,16 @@ class MainWindow(Gtk.ApplicationWindow):
         # visit — Discover is Pipeline Studio's front door every time.
         self._pipeline_studio.show_discover()
         self._gallery_stack.set_visible_child_name("pipelines")
+        # Pipelines is a peer PLACE, but its toggle sits OUTSIDE the Create/
+        # Library radio group. If a loop-nav button stayed "active" while
+        # Pipelines is shown, clicking that SAME button again would be a silent
+        # no-op — a grouped toggle can't re-activate itself, so no "toggled"
+        # fires and the view never switches (the "Pipelines then Create does
+        # nothing" bug). Clear the group so a later click on Create/Library
+        # always changes state (inactive -> active) and fires its handler.
+        for _b in getattr(self, "_loop_nav", {}).values():
+            if _b.get_active():
+                _b.set_active(False)   # fires toggled(False); handler is a no-op
         self._set_crumbs([Crumb("🧩 Pipelines")])
         # Register (or refresh) the resumable tray chip so leaving Pipelines
         # for the Library doesn't lose track of the session — clicking the
