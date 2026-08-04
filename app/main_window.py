@@ -244,13 +244,20 @@ scrollbar slider {
 scrollbar slider:hover {
     background-color: @tt_accent;
 }
+/* Selection thickens the border to 2px. Compensate the padding (8 -> 7) so the
+   card's OUTER size (border + padding + content = 9px of chrome per side either
+   way) is UNCHANGED -- otherwise the extra 1px per side grows the card and, in a
+   natural-size-packed FlowBox, shoves every neighbouring card over. The content
+   box stays at the same 9px inset too, so the thumbnail doesn't shift either. */
 .card-selected {
     border-color: @tt_accent;
     border-width: 2px;
+    padding: 7px;
 }
 .card-selected-image {
     border-color: @tt_pink;
     border-width: 2px;
+    padding: 7px;
 }
 .type-badge-video {
     background-color: @tt_bg_dark;

@@ -1,3 +1,14 @@
+tt-local-generator (0.64.4) noble; urgency=medium
+
+  * fix(gallery): selecting a card no longer shifts its neighbours. The
+    .card-selected / .card-selected-image styles thickened the border 1px -> 2px,
+    growing the card 1px per side; in the natural-size-packed FlowBox that shoved
+    every surrounding card over on each click. Padding is now compensated
+    (8px -> 7px) so a selected card keeps the exact same outer size (and content
+    position) while still showing its 2px accent border. Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 15:45:00 +0000
+
 tt-local-generator (0.64.3) noble; urgency=medium
 
   * fix(create): peeking at a recent while a generation is still running is no
