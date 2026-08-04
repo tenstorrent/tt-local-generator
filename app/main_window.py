@@ -8468,6 +8468,11 @@ class MainWindow(Gtk.ApplicationWindow):
         they don't continue running after the user has closed TT-TV.
         User-typed prompts (from_attractor=False) are preserved.
         """
+        # Identity guard: only the CURRENT window's destroy should clear the
+        # reference and close the context. A late "destroy" from a previous
+        # window instance must never wipe a freshly-reopened one.
+        if self._attractor_win is not None and _win is not self._attractor_win:
+            return
         self._attractor_win = None
         self._nav_close_context("watch")
         before = len(self._queue)

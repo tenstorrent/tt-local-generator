@@ -126,22 +126,42 @@ def test_add_record_soon_default_false_can_land_far():
     assert far_count > trials // 3, "Default add_record seems to always insert near front"
 
 
-def test_close_request_defers_destroy_out_of_dispatch(monkeypatch):
-    """The close-request handler must DEFER the destroy out of the signal
-    dispatch (GLib.idle_add), never destroy synchronously. Destroying the window
-    (and its EventControllers) mid-dispatch corrupts GTK's close routing for the
-    NEXT attractor window -- open->close->open then leaves a window that won't
-    close until the whole app shuts down. Must return True so GTK's default
-    close doesn't also run."""
+def test_close_request_destroys_and_handles(monkeypatch):
+    """close-request destroys the window and returns True (so GTK's default
+    close doesn't also run). Destroy is synchronous — the real reopen-close bug
+    was a pipeline leak in _on_destroy, not a destroy-during-dispatch."""
     import attractor
-    scheduled = []
-    monkeypatch.setattr(attractor.GLib, "idle_add",
-                        lambda fn, *a, **k: (scheduled.append(fn), 1)[1])
     win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
     win.destroy = MagicMock()
-
     ret = attractor.AttractorWindow._on_close_requested(win, win)
+    assert ret is True
+    win.destroy.assert_called_once()
 
-    assert ret is True                     # handled -> GTK default close won't also act
-    win.destroy.assert_not_called()        # NOT destroyed synchronously in dispatch
-    assert win.destroy in scheduled        # deferred to the idle loop instead
+
+def test_on_destroy_releases_both_slot_pipelines(monkeypatch):
+    """ROOT CAUSE of the "reopened TT-TV won't close" bug: _on_destroy must
+    release the GStreamer pipeline for BOTH video slots on EVERY platform. It
+    used to do so only on macOS (`if _USE_SYSTEM_PLAYER`), so on Linux each
+    close leaked two live pipelines that flood the GLib main loop and make a
+    reopened window unclosable."""
+    import attractor
+    unloaded = []
+    monkeypatch.setattr(attractor, "_unload_slot_video", lambda slot: unloaded.append(slot))
+    win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
+    win._alive = True
+    win._gen_stop = MagicMock()
+    win._att_poll_stop = MagicMock()
+    win._dbus_conn = None
+    win._pending_advance_source = None
+    win._graveyard_timer = 0
+    win._video_graveyard = []
+    win._pending_flash_source = 0
+    win._watched_stream = None
+    win._stream_handler_id = None
+    win._slot_a = object()
+    win._slot_b = object()
+
+    attractor.AttractorWindow._on_destroy(win, win)
+
+    assert win._slot_a in unloaded and win._slot_b in unloaded  # BOTH slots released
+    assert win._alive is False                                  # marked dead first

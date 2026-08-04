@@ -1,3 +1,23 @@
+tt-local-generator (0.65.3) noble; urgency=medium
+
+  * fix(tt-tv): actually fix the "reopened TT-TV window won't close" bug. Root
+    cause (found via a deeper trace): AttractorWindow._on_destroy released the
+    two video-slot GStreamer pipelines ONLY on macOS (`if _USE_SYSTEM_PLAYER`),
+    so on Linux every close leaked two live Gtk.Video pipelines. Accumulating
+    leaked pipelines flood the GLib main loop with gst_poll assertion failures
+    and exhaust fds, so a reopened kiosk's close/destroy work never gets
+    serviced — X / Stop / Escape all stop responding and only quitting the app
+    tears it down. _on_destroy now releases BOTH slots (and the graveyard
+    widgets) on every platform via _unload_slot_video, mirroring the screen-lock
+    release path that already did this correctly.
+  * Reverted the earlier close-request GLib.idle_add deferral (v0.65.2): the
+    destroy-during-dispatch theory was wrong, and deferring made closing depend
+    on the very idle queue the leak was starving. Destroy is synchronous again.
+  * Hardening: _on_attractor_closed now identity-guards the window reference so
+    a late destroy from a previous instance can't wipe a freshly-reopened one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:05:00 +0000
+
 tt-local-generator (0.65.2) noble; urgency=medium
 
   * fix(tt-tv): after starting TT-TV, closing it, and reopening, the window

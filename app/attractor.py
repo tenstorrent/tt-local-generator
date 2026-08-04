@@ -879,20 +879,17 @@ class AttractorWindow(Gtk.Window):
 
         GTK4's default close-request handler may merely hide the window, which
         would leave _attractor_win non-None in MainWindow and break the second
-        launch.  We explicitly destroy the window then return True so GTK doesn't
+        launch.  We explicitly call destroy() then return True so GTK doesn't
         do a redundant second close.
 
-        DEFER the destroy out of this close-request dispatch (idle_add), exactly
-        like `_on_key`'s Escape handler defers `close()`. Destroying the window —
-        and tearing down its EventControllers — synchronously WHILE GTK is still
-        inside the close-request emission is a destroy-during-dispatch that
-        corrupts GTK's close/event routing for the NEXT attractor window: after
-        open→close→open, the window silently stops responding to close (X, Stop,
-        Escape) and only app shutdown tears it down. idle_add lets the
-        close-request emission fully unwind first.
+        (Destroy is SYNCHRONOUS on purpose: the real "reopened window won't
+        close" bug was a Linux GStreamer slot-pipeline LEAK in `_on_destroy`,
+        not a destroy-during-dispatch — see that method. Deferring the destroy
+        onto `GLib.idle_add` was counterproductive because it made closing
+        depend on the very idle queue the leaked pipelines were starving.)
         """
-        GLib.idle_add(self.destroy)
-        return True  # we handled it; GTK's default close won't also run
+        self.destroy()
+        return True  # we handled it
 
     def _on_destroy(self, _win) -> None:
         """Stop the generation loop and cancel any pending timers."""
@@ -917,6 +914,24 @@ class AttractorWindow(Gtk.Window):
         if self._graveyard_timer:
             GLib.source_remove(self._graveyard_timer)
             self._graveyard_timer = 0
+        # Release (pause + set_file(None)) each graveyard widget's pipeline
+        # BEFORE dropping the refs. Clearing the list alone leaves those leaked
+        # Gtk.Video pipelines to tear down uncontrolled during window
+        # destruction — part of the fd/gst_poll flood that makes a reopened
+        # kiosk unclosable. Mirrors `_flush_video_graveyard`'s per-widget unload
+        # (which we can't call here — it early-returns now that `_alive` is
+        # False).
+        for _vid in self._video_graveyard:
+            _stream = _vid.get_media_stream()
+            if _stream is not None:
+                try:
+                    _stream.pause()
+                except Exception:
+                    pass
+            try:
+                _vid.set_file(None)
+            except Exception:
+                pass
         self._video_graveyard.clear()
         if self._pending_flash_source:
             GLib.source_remove(self._pending_flash_source)
@@ -930,15 +945,18 @@ class AttractorWindow(Gtk.Window):
                 pass
         self._watched_stream = None
         self._stream_handler_id = None
-        # macOS: close any open GstPlayer pipelines so fds are released promptly.
-        if _USE_SYSTEM_PLAYER:
-            for slot in (self._slot_a, self._slot_b):
-                gst = getattr(slot, "_gst_player", None)
-                if gst is not None:
-                    try:
-                        gst.close()
-                    except Exception:
-                        pass
+        # Release BOTH video-slot pipelines on EVERY platform. This was the
+        # ROOT-CAUSE bug: the release was macOS-only (`if _USE_SYSTEM_PLAYER`),
+        # so on Linux each close left the two live Gtk.Video slot pipelines to
+        # tear down uncontrolled. Accumulating leaked pipelines flood the GLib
+        # main loop with gst_poll assertion failures (see `_generation_loop`'s
+        # own note) and exhaust fds, so a REOPENED kiosk's close/destroy work
+        # never gets serviced and the window can only be torn down by quitting
+        # the app. `_unload_slot_video` pauses-then-releases on Linux and closes
+        # the GstPlayer on macOS — the exact teardown the screen-lock path
+        # already does correctly (see `_on_screensaver_active`).
+        _unload_slot_video(self._slot_a)
+        _unload_slot_video(self._slot_b)
 
     def _toggle_pause(self) -> None:
         """Toggle playback pause. Generation loop is unaffected."""
