@@ -1,3 +1,13 @@
+tt-local-generator (0.62.2) noble; urgency=medium
+
+  * feat(create): Video is now the default-selected medium on open (the first
+    displayed chip). Video's default model is AnimateDiff, which runs locally
+    with no server to start, so a fresh Create works on a cold box without
+    picking anything. (Test fixtures that assumed Image-default now select Image
+    explicitly where they exercise image-specific behavior.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 10:45:00 +0000
+
 tt-local-generator (0.62.1) noble; urgency=medium
 
   * fix(create): the Direction | Controls columns now actually render side by

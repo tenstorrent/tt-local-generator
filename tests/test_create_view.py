@@ -191,14 +191,15 @@ def make_create_view(monkeypatch):
     return _factory
 
 
-def test_chip_row_visual_first_but_default_selection_is_raw_first(make_create_view):
-    """The art-type row DISPLAYS most-visual → most-textual (video before
-    image), but the DEFAULT-selected medium stays the RAW-first entry (image),
-    so reordering the row never silently changes what a fresh Create makes."""
+def test_chip_row_video_first_and_is_default(make_create_view):
+    """The art-type row leads with Video (most-visual → most-textual), and the
+    first displayed chip (Video) is the default-selected medium — Video's
+    default model (AnimateDiff) runs locally with no server, so it's the
+    zero-config starting point."""
     cv = make_create_view()
-    # Default active medium is image (raw-first), not video (display-first).
-    assert cv._chip_buttons["image"].get_active() is True
-    assert cv._chip_buttons["video"].get_active() is False
+    # Default active medium is video (display-first), not image.
+    assert cv._chip_buttons["video"].get_active() is True
+    assert cv._chip_buttons["image"].get_active() is False
     # Row display order: video appears before image.
     id_by_btn = {b: i for i, b in cv._chip_buttons.items()}
     order = []
@@ -311,10 +312,12 @@ def test_service_present_skips_boolean_health_poller(monkeypatch):
 
 
 def test_snapshot_updates_dropdown_dot_glyphs(monkeypatch):
-    """Pushing a fresh snapshot re-renders the scoped dropdown's dots (image
-    medium is default-active; "flux" is one of its keys)."""
+    """Pushing a fresh snapshot re-renders the scoped dropdown's dots.
+    "flux" is an image-scoped key, so the image medium must be selected
+    explicitly (video, not image, is the display-first default now)."""
     fake_service = _FakeStatusService({"flux": Status.STARTING})
     view = _make_view(monkeypatch, status_service=fake_service)
+    view._chip_buttons["image"].set_active(True)
 
     model = view._model_dropdown.get_model()
     labels = [model.get_string(i) for i in range(model.get_n_items())]
@@ -375,10 +378,12 @@ def test_chips_render_one_per_medium(monkeypatch):
 
 
 def test_first_medium_is_active_by_default(monkeypatch):
+    """Video is now display-first (`sort_mediums_visual_first`) and so is the
+    default-active medium — see test_chip_row_video_first_and_is_default."""
     view = _make_view(monkeypatch)
     assert view._active_medium is not None
-    assert view._active_medium.id == "image"
-    assert view._chip_buttons["image"].get_active() is True
+    assert view._active_medium.id == "video"
+    assert view._chip_buttons["video"].get_active() is True
 
 
 def test_selecting_a_chip_sets_active_medium_and_swaps_panel(monkeypatch):
@@ -402,10 +407,12 @@ def test_selecting_a_chip_sets_active_medium_and_swaps_panel(monkeypatch):
 
 
 def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
+    """Video is the default-active medium now, so swap to "image" (a genuinely
+    different medium) to prove the panel host contents actually change."""
     view = _make_view(monkeypatch)
     first_panel = view._panel_host.get_first_child()
 
-    view._chip_buttons["video"].set_active(True)
+    view._chip_buttons["image"].set_active(True)
 
     second_panel = view._panel_host.get_first_child()
     assert second_panel is not first_panel
@@ -413,14 +420,15 @@ def test_swapping_chips_replaces_panel_host_contents(monkeypatch):
 
 # ── Image param panel wiring (Task 4) ────────────────────────────────────
 
-def test_default_active_image_medium_mounts_real_image_param_panel(monkeypatch):
-    """"image" is the default-active chip (see test_first_medium_is_active_by_
-    default) and is a native medium -> CreateView must mount a real
-    ImageParamPanel for it immediately on construction, not the stub."""
+def test_default_active_video_medium_mounts_real_video_param_panel(monkeypatch):
+    """"video" is the default-active chip (see test_first_medium_is_active_by_
+    default — display-first sort puts Video ahead of Image) and is a native
+    medium -> CreateView must mount a real VideoParamPanel for it immediately
+    on construction, not the stub."""
     view = _make_view(monkeypatch)
 
     assert isinstance(view._active_panel, RoleZonePanel)
-    assert isinstance(_panel_of(view), ImageParamPanel)
+    assert isinstance(_panel_of(view), VideoParamPanel)
     child = view._panel_host.get_first_child()
     assert child is not None
     assert not child.has_css_class("create-panel-stub-label")
@@ -443,10 +451,12 @@ def test_switching_away_from_image_and_back_remounts_a_fresh_panel(monkeypatch):
 
 
 def test_cta_calls_on_create_with_image_param_panel_collect_output(monkeypatch):
-    """CTA click for the default-active "image" medium must route through the
-    mounted ImageParamPanel's real `collect()` output, not `{}`."""
+    """CTA click for the "image" medium (selected explicitly — video, not
+    image, is the display-first default now) must route through the mounted
+    ImageParamPanel's real `collect()` output, not `{}`."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
 
     view._cta_btn.emit("clicked")
 
@@ -459,9 +469,12 @@ def test_cta_calls_on_create_with_image_param_panel_collect_output(monkeypatch):
 def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
     """Changing a widget on the mounted ImageParamPanel before clicking
     Create must be reflected in the params `on_create` receives — proves the
-    CTA reads live widget state via `collect()`, not a stale snapshot."""
+    CTA reads live widget state via `collect()`, not a stale snapshot. Selects
+    the image medium explicitly (video, not image, is the display-first
+    default now)."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
 
     panel = _panel_of(view)
     assert isinstance(panel, ImageParamPanel)
@@ -498,10 +511,12 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
 def test_seed_mode_selector_reaches_the_controls_expander_when_mounted(monkeypatch):
     """The mounted (RoleZonePanel-wrapped) ImageParamPanel's seed-mode
     dropdown must be reachable inside the real Controls expander CreateView
-    shows — not just present on the unwrapped panel."""
+    shows — not just present on the unwrapped panel. Selects the image medium
+    explicitly (video, not image, is the display-first default now)."""
     from create_param_panels import RoleZonePanel
 
     view = _make_view(monkeypatch)
+    view._chip_buttons["image"].set_active(True)
     zone = view._active_panel
     assert isinstance(zone, RoleZonePanel)
     panel = _panel_of(view)
@@ -526,7 +541,9 @@ def test_seed_mode_selector_reaches_the_controls_expander_when_mounted(monkeypat
 def test_cta_repeat_last_seed_mode_reproduces_the_last_generated_seed(monkeypatch):
     """End-to-end through CreateView's real CTA: picking "Repeat last" then
     clicking Create must forward the most recently generated seed, the SAME
-    history-derived value ControlPanel's own "repeat" mode resolves to."""
+    history-derived value ControlPanel's own "repeat" mode resolves to.
+    Selects the image medium explicitly (video, not image, is the
+    display-first default now)."""
     from history_store import GenerationRecord, HistoryStore
     from create_param_panels import _SEED_MODE_KEYS
 
@@ -539,6 +556,7 @@ def test_cta_repeat_last_seed_mode_reproduces_the_last_generated_seed(monkeypatc
 
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
     panel = _panel_of(view)
     assert isinstance(panel, ImageParamPanel)
 
@@ -869,9 +887,11 @@ def test_inspire_button_present_with_inspire_fn(monkeypatch):
 
 
 def test_inspire_click_calls_inspire_fn_with_prompt_type_for_active_medium(monkeypatch):
-    """Default-active medium in `_fake_mediums` is "image" -> prompt_type "image"."""
+    """Image medium selected explicitly (video, not image, is the
+    display-first default now) -> prompt_type "image"."""
     fake = _FakeInspire()
     view = _make_view(monkeypatch, inspire_fn=fake)
+    view._chip_buttons["image"].set_active(True)
 
     view._inspire_btn.emit("clicked")
 
@@ -1032,9 +1052,11 @@ def test_theme_set_button_present_with_on_theme_set(monkeypatch):
 
 
 def test_theme_set_click_calls_seam_with_active_medium_and_collected_params(monkeypatch):
-    """Default-active medium in `_fake_mediums` is "image"."""
+    """Image medium selected explicitly (video, not image, is the
+    display-first default now)."""
     fake = _FakeThemeSet()
     view = _make_view(monkeypatch, on_theme_set=fake)
+    view._chip_buttons["image"].set_active(True)
 
     view._theme_set_btn.emit("clicked")
 
@@ -1131,9 +1153,11 @@ def test_no_persistent_model_strip(monkeypatch):
 
 
 def test_scoped_dropdown_lists_only_active_medium_models(monkeypatch):
-    """Step-1 brief test, verbatim (task-6-brief.md): default-active medium
-    is "image" -> only image-capable server_manager keys are offered."""
+    """Step-1 brief test, verbatim (task-6-brief.md), with the image medium
+    now selected explicitly (video, not image, is the display-first default)
+    -> only image-capable server_manager keys are offered."""
     view = _make_view(monkeypatch)
+    view._chip_buttons["image"].set_active(True)
     keys = view._scoped_model_keys()
     assert "flux" in keys and "wan2.2" not in keys
 
@@ -1149,7 +1173,11 @@ def test_scoped_dropdown_switches_contents_with_active_medium(monkeypatch):
 
 
 def test_model_dropdown_widget_model_rebuilds_on_medium_swap(monkeypatch):
+    """Selects image explicitly first (video, not image, is the display-first
+    default now) so switching to video is a genuine swap to a different
+    medium's scoped model list."""
     view = _make_view(monkeypatch)
+    view._chip_buttons["image"].set_active(True)
     image_list = view._model_dropdown.get_model()
 
     view._chip_buttons["video"].set_active(True)
@@ -1157,15 +1185,16 @@ def test_model_dropdown_widget_model_rebuilds_on_medium_swap(monkeypatch):
     assert view._model_dropdown.get_model() is not image_list
 
 
-def test_model_dropdown_default_selection_yields_image_default_model_id(monkeypatch):
-    """Index 0 of the default-active "image" medium's scoped dropdown must
-    translate to the exact canonical id ImageParamPanel's OWN (now-hidden)
-    model dropdown would have produced by default — the migration invariant
-    this task's `_canonical_model_id_for` exists to preserve."""
+def test_model_dropdown_default_selection_yields_video_default_model_id(monkeypatch):
+    """Index 0 of the default-active "video" medium's scoped dropdown (video
+    is now the display-first default — see
+    test_first_medium_is_active_by_default) must translate to AnimateDiff's
+    canonical id, the local, no-server default SP-3c-2 reordering put at
+    index 0 of the video scoped dropdown."""
     view = _make_view(monkeypatch)
     idx = view._model_dropdown.get_selected()
     _key, canonical, _label = view._model_dropdown_entries[idx]
-    assert canonical == "flux.1-schnell"
+    assert canonical == "animatediff-blackhole"
 
 
 def test_video_scoped_dropdown_includes_skyreels(monkeypatch):
@@ -1537,11 +1566,11 @@ def test_autoselect_starting_when_none_ready(monkeypatch):
     for a second medium."""
     fake_service = _FakeStatusService(running={"image": "motif"})
     view = _make_view(monkeypatch, status_service=fake_service)
-    # "image" is already the default-active medium (see
-    # test_first_medium_is_active_by_default) -- but the dropdown is
-    # populated by _swap_panel during __init__, before which the fake
-    # service already had its `running` map, so construction itself is the
-    # fresh populate under test here.
+    # Video (not image) is the display-first default-active medium now (see
+    # test_first_medium_is_active_by_default) -- select "image" explicitly so
+    # this is a fresh populate for the medium the "motif" running-key is
+    # scoped to.
+    view._chip_buttons["image"].set_active(True)
 
     idx = view._model_dropdown.get_selected()
     _key, canonical, _label = view._model_dropdown_entries[idx]
@@ -1723,7 +1752,7 @@ def test_activate_llm_card_does_not_jump_to_animate_medium(monkeypatch):
     never lands the user on AnimateDiff."""
     view = _make_view(monkeypatch, mediums_fn=_fake_mediums_multi_artgen)
     before = view._active_medium.id
-    assert before == "image"
+    assert before == "video"  # display-first default (see sort_mediums_visual_first)
 
     view._activate_model_card("artgen-qwen3-8b")
 
@@ -1780,7 +1809,11 @@ def test_build_model_door_renders_one_flowbox_section_per_nonempty_group(monkeyp
 
 
 def test_activate_model_card_switches_active_medium(monkeypatch):
+    """Selects "image" explicitly first (video, not image, is the
+    display-first default now) so activating the wan2.2 model card is a
+    genuine medium switch, not a same-medium no-op."""
     view = _make_view(monkeypatch)
+    view._chip_buttons["image"].set_active(True)
     assert view._active_medium.id == "image"
 
     view._activate_model_card("wan2.2")
@@ -1926,8 +1959,12 @@ def test_prompt_entry_hidden_outside_idea_door(monkeypatch):
 
 
 def test_cta_payload_includes_typed_prompt(monkeypatch):
+    """Selects the image medium explicitly (video, not image, is the
+    display-first default now) since the assertion below checks against
+    `_IMAGE_DEFAULTS`."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
 
     view._prompt_entry.set_text("a lighthouse in a storm")
     view._cta_btn.emit("clicked")
@@ -1942,9 +1979,12 @@ def test_cta_payload_omits_prompt_key_when_entry_is_empty(monkeypatch):
     """Backward-compat guard: every Tasks 3-6 CTA test asserts an exact params
     dict with no "prompt" key (the prompt entry is untouched/empty in those
     tests) — an empty entry must not silently inject a "prompt": "" key and
-    break them."""
+    break them. Selects the image medium explicitly (video, not image, is the
+    display-first default now) since the assertion below checks against
+    `_IMAGE_DEFAULTS`."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
 
     view._cta_btn.emit("clicked")
 
@@ -1976,8 +2016,11 @@ def test_collect_params_appends_modifier_text(monkeypatch):
 
 
 def test_collect_params_dict_keys_unchanged_for_image(monkeypatch):
-    """Step-1 brief test, verbatim (task-6-brief.md)."""
+    """Step-1 brief test, verbatim (task-6-brief.md), with the image medium
+    now selected explicitly (video, not image, is the display-first default;
+    "guidance_scale" is an image-only key)."""
     view = _make_view(monkeypatch)
+    view._chip_buttons["image"].set_active(True)
     view._prompt_entry.set_text("x")
 
     p = view._collect_params()
@@ -2008,14 +2051,18 @@ def test_collect_params_no_modifier_and_no_prompt_omits_prompt_key(monkeypatch):
 # ── CTA ───────────────────────────────────────────────────────────────────
 
 def test_cta_calls_on_create_with_active_medium_and_params(monkeypatch):
+    """Selects the image medium explicitly (video, not image, is the
+    display-first default now) since the assertion below checks against
+    `_IMAGE_DEFAULTS`."""
     calls = []
     view = _make_view(monkeypatch, on_create=lambda medium, params: calls.append((medium, params)))
+    view._chip_buttons["image"].set_active(True)
 
     view._cta_btn.emit("clicked")
 
     assert len(calls) == 1
     medium, params = calls[0]
-    assert medium.id == "image"  # the default-active medium
+    assert medium.id == "image"  # explicitly selected above
     # "image" is ported to a real ImageParamPanel this task (Task 4) — see
     # test_cta_calls_on_create_with_image_param_panel_collect_output for the
     # dedicated assertion on its exact contents. "verse" and every other

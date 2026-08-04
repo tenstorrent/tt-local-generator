@@ -1012,10 +1012,8 @@ class CreateView(Gtk.Box):
 
         # RAW order (native-first). The visual→textual sort is applied only at
         # the DISPLAY points (chip row + possibilities wall) via
-        # sort_mediums_visual_first — deliberately NOT here, so the DEFAULT
-        # active medium stays the raw first entry (Image), not whatever sorts
-        # first (Video). Reordering the row must not silently change what a
-        # fresh Create generates.
+        # sort_mediums_visual_first; the chip row selects the first DISPLAYED
+        # chip (Video) as the default medium (see `_build_chip_row`).
         self._mediums_fn = mediums_fn or default_mediums
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
@@ -1806,14 +1804,13 @@ class CreateView(Gtk.Box):
             raw = list(self._mediums_fn() or [])
         except Exception:
             raw = []
-        # DISPLAY order: most-visual → most-textual. The DEFAULT selection,
-        # though, is the RAW-first medium (Image) — see __init__'s note — so a
-        # reordered row doesn't change what a fresh Create generates.
+        # DISPLAY order: most-visual → most-textual. The first displayed chip
+        # (Video) is the default-selected medium — Video's default model is
+        # AnimateDiff, which runs locally with no server to start, so it's the
+        # zero-config "just works on a cold box" starting point.
         mediums = sort_mediums_visual_first(raw)
-        default_medium_id = raw[0].id if raw else None
 
         first_btn: Optional[Gtk.ToggleButton] = None
-        default_btn: Optional[Gtk.ToggleButton] = None
         for medium in mediums:
             btn = Gtk.ToggleButton(label=f"{medium.icon} {medium.label}")
             btn.add_css_class("create-chip-btn")
@@ -1827,12 +1824,9 @@ class CreateView(Gtk.Box):
             )
             row.append(btn)
             self._chip_buttons[medium.id] = btn
-            if medium.id == default_medium_id:
-                default_btn = btn
 
-        chosen = default_btn or first_btn
-        if chosen is not None:
-            chosen.set_active(True)  # fires _select_medium via "toggled"
+        if first_btn is not None:
+            first_btn.set_active(True)  # fires _select_medium via "toggled"
 
         return row
 
