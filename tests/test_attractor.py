@@ -124,3 +124,24 @@ def test_add_record_soon_default_false_can_land_far():
             far_count += 1
     # At least half the trials should land outside the window.
     assert far_count > trials // 3, "Default add_record seems to always insert near front"
+
+
+def test_close_request_defers_destroy_out_of_dispatch(monkeypatch):
+    """The close-request handler must DEFER the destroy out of the signal
+    dispatch (GLib.idle_add), never destroy synchronously. Destroying the window
+    (and its EventControllers) mid-dispatch corrupts GTK's close routing for the
+    NEXT attractor window -- open->close->open then leaves a window that won't
+    close until the whole app shuts down. Must return True so GTK's default
+    close doesn't also run."""
+    import attractor
+    scheduled = []
+    monkeypatch.setattr(attractor.GLib, "idle_add",
+                        lambda fn, *a, **k: (scheduled.append(fn), 1)[1])
+    win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
+    win.destroy = MagicMock()
+
+    ret = attractor.AttractorWindow._on_close_requested(win, win)
+
+    assert ret is True                     # handled -> GTK default close won't also act
+    win.destroy.assert_not_called()        # NOT destroyed synchronously in dispatch
+    assert win.destroy in scheduled        # deferred to the idle loop instead

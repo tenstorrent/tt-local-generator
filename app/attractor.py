@@ -879,11 +879,20 @@ class AttractorWindow(Gtk.Window):
 
         GTK4's default close-request handler may merely hide the window, which
         would leave _attractor_win non-None in MainWindow and break the second
-        launch.  We explicitly call destroy() then return True so GTK doesn't
+        launch.  We explicitly destroy the window then return True so GTK doesn't
         do a redundant second close.
+
+        DEFER the destroy out of this close-request dispatch (idle_add), exactly
+        like `_on_key`'s Escape handler defers `close()`. Destroying the window —
+        and tearing down its EventControllers — synchronously WHILE GTK is still
+        inside the close-request emission is a destroy-during-dispatch that
+        corrupts GTK's close/event routing for the NEXT attractor window: after
+        open→close→open, the window silently stops responding to close (X, Stop,
+        Escape) and only app shutdown tears it down. idle_add lets the
+        close-request emission fully unwind first.
         """
-        self.destroy()
-        return True  # we handled it
+        GLib.idle_add(self.destroy)
+        return True  # we handled it; GTK's default close won't also run
 
     def _on_destroy(self, _win) -> None:
         """Stop the generation loop and cancel any pending timers."""
