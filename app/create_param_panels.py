@@ -2604,14 +2604,16 @@ class ModifierPills(Gtk.Box):
         group.append(flow)
 
         if overflow > 0:
-            more = Gtk.Button(label=f"+{overflow} more…")
-            more.add_css_class("create-addchip")
+            # A flat, small text-link disclosure — NOT a full-size chip pill
+            # (those competed visually with the real add-chips and wasted space).
+            more = Gtk.Button(label=f"{overflow} more…")
             more.add_css_class("modifier-pills-more")
+            more.set_has_frame(False)
 
             def _toggle_more(_b, rev=revealer, mbtn=more, n=overflow):
                 now = not rev.get_reveal_child()
                 rev.set_reveal_child(now)
-                mbtn.set_label("− less" if now else f"+{n} more…")
+                mbtn.set_label("less" if now else f"{n} more…")
 
             more.connect("clicked", _toggle_more)
             # Inline pill beside the visible chips (was a full-width row of its
@@ -2825,23 +2827,26 @@ class RoleZonePanel(Gtk.Box):
         # Direction (+ Brief below it) on the LEFT, Controls on the RIGHT, so
         # the two tallest zones sit SIDE BY SIDE instead of stacking and forcing
         # a long vertical scroll (worst case: AnimateDiff's big options group).
-        # A FlowBox(min1/max2, homogeneous) keeps them equal-width side by side
-        # on a wide form and reflows to a single stacked column on a narrow one
-        # — no manual resize handling, matching every other reflow in this app.
+        #
+        # A homogeneous horizontal Box (NOT a FlowBox): a FlowBox sizes each
+        # cell to the WIDER column's natural width, so with the Direction chips
+        # being wide it couldn't fit two per line and silently collapsed back to
+        # a single stacked column. A homogeneous Box forces a true 50/50 split of
+        # whatever width the form column has, so the two really do render side by
+        # side; the chip/control FlowBoxes inside each half just wrap tighter.
+        # Homogeneous counts only VISIBLE children, so when a medium has no
+        # Controls (expander hidden above) the left column fills the full width.
         left_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         left_col.set_valign(Gtk.Align.START)
         left_col.append(direction_frame)
         left_col.append(brief_frame)  # hidden when empty (set_visible above)
 
-        columns = Gtk.FlowBox()
-        columns.set_selection_mode(Gtk.SelectionMode.NONE)
-        columns.set_min_children_per_line(1)
-        columns.set_max_children_per_line(2)
+        columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         columns.set_homogeneous(True)
         columns.set_valign(Gtk.Align.START)
-        columns.set_column_spacing(12)
-        columns.set_row_spacing(8)
         columns.add_css_class("role-zone-columns")
+        left_col.set_hexpand(True)
+        self._controls_expander.set_hexpand(True)
         columns.append(left_col)
         columns.append(self._controls_expander)
         self._columns = columns

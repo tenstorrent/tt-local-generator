@@ -644,6 +644,23 @@ _CSS = b"""
 .create-addchip:hover {
     border-color: #4FD1C5;
 }
+/* "N more" / "less" disclosure inside a modifier-pill category -- a flat,
+   muted text link, deliberately NOT the boxed .create-addchip pill so it
+   reads as a control, not another selectable chip. */
+.modifier-pills-more {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: #7FB3AD;
+    font-size: 10.5px;
+    padding: 0 6px;
+    min-height: 0;
+    min-width: 0;
+}
+.modifier-pills-more:hover {
+    color: #4FD1C5;
+    text-decoration: underline;
+}
 .create-pill {
     background-color: #4FD1C5;
     color: #0F2A35;
@@ -993,14 +1010,13 @@ class CreateView(Gtk.Box):
         _apply_css()
         self.add_css_class("create-view")
 
-        _raw_mediums_fn = mediums_fn or default_mediums
-        # Present art types most-visual → most-textual in BOTH the chip row and
-        # the possibilities wall (both read self._mediums_fn). Display-only: the
-        # underlying default_mediums()/discover_mediums() order is untouched, so
-        # id-keyed lookups (_scoped_model_keys, _server_key_to_medium_id, the
-        # model door) are unaffected — they key off medium.id/capabilities, not
-        # list position.
-        self._mediums_fn = lambda: sort_mediums_visual_first(_raw_mediums_fn())
+        # RAW order (native-first). The visual→textual sort is applied only at
+        # the DISPLAY points (chip row + possibilities wall) via
+        # sort_mediums_visual_first — deliberately NOT here, so the DEFAULT
+        # active medium stays the raw first entry (Image), not whatever sorts
+        # first (Video). Reordering the row must not silently change what a
+        # fresh Create generates.
+        self._mediums_fn = mediums_fn or default_mediums
         self._health_fn = health_fn or server_manager.status_all
         self._on_create = on_create
         self._on_inspiration = on_inspiration
@@ -1153,7 +1169,8 @@ class CreateView(Gtk.Box):
         # singleton raising during art resolution) must never break Create.
         try:
             self._possibilities = PossibilitiesWall(
-                mediums_fn=self._mediums_fn,
+                # Display sorted visual→textual, same as the chip row.
+                mediums_fn=lambda: sort_mediums_visual_first(self._mediums_fn()),
                 on_pick=self._on_possibility_picked,
             )
         except Exception:
@@ -1786,11 +1803,17 @@ class CreateView(Gtk.Box):
         self._chip_row = row
 
         try:
-            mediums = list(self._mediums_fn() or [])
+            raw = list(self._mediums_fn() or [])
         except Exception:
-            mediums = []
+            raw = []
+        # DISPLAY order: most-visual → most-textual. The DEFAULT selection,
+        # though, is the RAW-first medium (Image) — see __init__'s note — so a
+        # reordered row doesn't change what a fresh Create generates.
+        mediums = sort_mediums_visual_first(raw)
+        default_medium_id = raw[0].id if raw else None
 
         first_btn: Optional[Gtk.ToggleButton] = None
+        default_btn: Optional[Gtk.ToggleButton] = None
         for medium in mediums:
             btn = Gtk.ToggleButton(label=f"{medium.icon} {medium.label}")
             btn.add_css_class("create-chip-btn")
@@ -1804,9 +1827,12 @@ class CreateView(Gtk.Box):
             )
             row.append(btn)
             self._chip_buttons[medium.id] = btn
+            if medium.id == default_medium_id:
+                default_btn = btn
 
-        if first_btn is not None:
-            first_btn.set_active(True)  # fires _select_medium via "toggled"
+        chosen = default_btn or first_btn
+        if chosen is not None:
+            chosen.set_active(True)  # fires _select_medium via "toggled"
 
         return row
 

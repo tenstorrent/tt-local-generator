@@ -191,6 +191,26 @@ def make_create_view(monkeypatch):
     return _factory
 
 
+def test_chip_row_visual_first_but_default_selection_is_raw_first(make_create_view):
+    """The art-type row DISPLAYS most-visual → most-textual (video before
+    image), but the DEFAULT-selected medium stays the RAW-first entry (image),
+    so reordering the row never silently changes what a fresh Create makes."""
+    cv = make_create_view()
+    # Default active medium is image (raw-first), not video (display-first).
+    assert cv._chip_buttons["image"].get_active() is True
+    assert cv._chip_buttons["video"].get_active() is False
+    # Row display order: video appears before image.
+    id_by_btn = {b: i for i, b in cv._chip_buttons.items()}
+    order = []
+    ch = cv._chip_row.get_first_child()
+    while ch is not None:
+        btn = ch.get_child() if hasattr(ch, "get_child") else ch
+        if btn in id_by_btn:
+            order.append(id_by_btn[btn])
+        ch = ch.get_next_sibling()
+    assert order.index("video") < order.index("image")
+
+
 # ── Construction ──────────────────────────────────────────────────────────
 
 def test_create_view_builds(monkeypatch):

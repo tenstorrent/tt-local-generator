@@ -50,16 +50,19 @@ def test_zones_present_and_controls_open_in_own_column():
     # it is OPEN by default rather than collapsed — showing it no longer pushes
     # the rest of the form down.
     assert rp._controls_expander.get_expanded() is True
-    # The two zones sit in a two-column FlowBox: left column (Direction+Brief)
-    # and the Controls expander, side by side.
-    assert isinstance(rp._columns, Gtk.FlowBox)
-    assert rp._columns.get_max_children_per_line() == 2
+    # The two zones sit in a homogeneous horizontal Box (a true 50/50 split,
+    # so they actually render side by side): left column (Direction+Brief) and
+    # the Controls expander.
+    assert isinstance(rp._columns, Gtk.Box)
+    assert rp._columns.get_orientation() == Gtk.Orientation.HORIZONTAL
+    assert rp._columns.get_homogeneous() is True
     cols = []
     c = rp._columns.get_first_child()
     while c is not None:
-        cols.append(c.get_child())  # unwrap FlowBoxChild
+        cols.append(c)
         c = c.get_next_sibling()
     assert rp._controls_expander in cols  # Controls is one of the two columns
+    assert len(cols) == 2
 
 
 def test_collect_matches_legacy_image():

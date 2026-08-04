@@ -1,3 +1,24 @@
+tt-local-generator (0.62.1) noble; urgency=medium
+
+  * fix(create): the Direction | Controls columns now actually render side by
+    side. The homogeneous FlowBox sized each cell to the WIDER column's natural
+    width, so with wide Direction chips it couldn't fit two per line and quietly
+    collapsed to one stacked column; replaced with a homogeneous horizontal Box
+    that forces a true 50/50 split (chips/controls just wrap tighter).
+  * feat(create): art-type row now leads with Video, then Image, then the
+    scenic/abstract/color kinds, ANSI, and the text kinds. The row DISPLAY order
+    changed but the default-selected medium stays Image, so a fresh Create still
+    generates what it did before.
+  * feat(create): "N more" / "less" modifier disclosures are now flat, muted
+    text links instead of full-size chip pills, so they stop competing with the
+    real add-chips and reclaim space.
+  * feat(create): native medium tiles (Image/Video/Animate) in the Possibilities
+    wall fall back to your most recent piece of that medium when there's no
+    curated sample, so the Image tile shows a real example instead of a bare
+    icon. Artgen tiles stay curated-only (no arbitrary test artifacts).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 10:15:00 +0000
+
 tt-local-generator (0.62.0) noble; urgency=medium
 
   * feat(create): art-type chips (and the Possibilities wall) now read

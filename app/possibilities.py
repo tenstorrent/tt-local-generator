@@ -218,6 +218,23 @@ class PossibilitiesWall(Gtk.Box):
                 t = getattr(r, "thumbnail_path", None)
                 if t and os.path.exists(t):
                     return ("thumb", t)
+
+        # Fallback for NATIVE mediums (image/video/animate): your most recent
+        # piece of that medium, so a tile shows a real example instead of a bare
+        # gradient+icon once you've created anything (the wall gets richer as you
+        # use it). Deliberately native-only — artgen mediums stay curated-only,
+        # since surfacing an arbitrary recent artgen put unflattering/test
+        # artifacts on those tiles (the reason curated-only was introduced). A
+        # native medium you've never generated in still degrades to the gradient.
+        if medium.source == "native":
+            try:
+                recs = self._store.query(media_type=mt, limit=8)
+            except Exception:
+                recs = []
+            for r in recs:
+                t = getattr(r, "thumbnail_path", None)
+                if t and os.path.exists(t):
+                    return ("thumb", t)
         return ("gradient", None)
 
     def _activate_card(self, medium) -> None:

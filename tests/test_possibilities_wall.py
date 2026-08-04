@@ -100,12 +100,26 @@ def test_art_per_type_playlist_matches_by_name(tmp_path):
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(thumb))
 
 
-def test_art_gradient_when_no_curated_even_if_recent_exists(tmp_path):
-    """No curated playlist -> gradient, and the recent generation is NOT used."""
+def test_native_medium_falls_back_to_latest_when_no_curated(tmp_path):
+    """A NATIVE medium (image/video/animate) with no curated playlist falls
+    back to your most recent piece of that medium — so the tile shows a real
+    example instead of a bare gradient+icon once you've created anything."""
     from possibilities import PossibilitiesWall
     meds = [_medium("image")]
     recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
     store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(recent))]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    assert wall._resolve_tile_art(meds[0]) == ("thumb", str(recent))
+
+
+def test_artgen_medium_stays_gradient_when_no_curated_even_with_recent(tmp_path):
+    """ARTGEN mediums remain curated-ONLY: an arbitrary recent artgen must NOT
+    surface on the tile (that put unflattering/test artifacts there) — no
+    curated -> gradient, even if a recent exists."""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("ansi", kind="text", source="artgen", generator="ansi")]
+    recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(latest={("artgen", "ansi"): [_rec("artgen", "ansi", str(recent))]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0])[0] == "gradient"
 

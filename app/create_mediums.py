@@ -261,7 +261,7 @@ def default_mediums() -> list[Medium]:
 # their own native-first / registry order (and the tests that pin it) — callers
 # that care about the visual gradient sort with `sort_mediums_visual_first`.
 _VISUAL_TEXTUAL_ORDER: tuple = (
-    "image", "video",                                             # photo / motion
+    "video", "image",                                             # motion / photo
     "landscape", "skyline", "constellation", "geometric", "circuit",  # scenic / abstract SVG
     "palette",                                                    # pure color
     "ansi",                                                       # visual-but-made-of-text bridge

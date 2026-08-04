@@ -36,8 +36,8 @@ def test_sort_mediums_visual_first_orders_visual_then_textual():
     ms = cm.default_mediums()
     ordered = cm.sort_mediums_visual_first(ms)
     ids = [m.id for m in ordered]
-    # image/video lead; the text kinds trail every visual kind.
-    assert ids[0] == "image" and ids[1] == "video"
+    # video/image lead; the text kinds trail every visual kind.
+    assert ids[0] == "video" and ids[1] == "image"
     for text_id in ("verse", "freeform", "codeart"):
         if text_id in ids:
             for visual_id in ("landscape", "palette", "ansi"):
@@ -54,7 +54,7 @@ def test_sort_mediums_visual_first_is_stable_and_safe():
     # Unknown text-kind medium must sort AFTER known visual ones.
     z = Medium(id="mystery", label="Mystery", icon="", kind="text", source="artgen")
     out = cm.sort_mediums_visual_first([z, a, b])
-    assert [m.id for m in out] == ["image", "video", "mystery"]
+    assert [m.id for m in out] == ["video", "image", "mystery"]
 
 
 def test_discover_mediums_filters_animatediff_name():
