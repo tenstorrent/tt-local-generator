@@ -201,6 +201,29 @@ def test_pending_progress_updates_status(tmp_path):
     assert p._pending_status_lbl.get_label() == "still cooking..."
 
 
+def test_pending_prompt_label_width_is_bounded():
+    """A long prompt must not balloon the result pane's natural width (which
+    would kick it below the form in the two-pane FlowBox). The prompt label
+    must wrap AND cap its max-width-chars so its natural width stays bounded."""
+    long_prompt = (
+        "A desert depot, three hundred identically dressed chorus members, a "
+        "man walks slowly between them, smoke rising and still, cinematic"
+    )
+    p = cv.CreateResultPanel()
+    p.show_pending(long_prompt, None)
+    # Find the prompt label among the current-result children.
+    prompt_lbl = None
+    child = p._current_box.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label) and child.get_label() == long_prompt:
+            prompt_lbl = child
+        child = child.get_next_sibling()
+    assert prompt_lbl is not None
+    assert prompt_lbl.get_wrap() is True
+    mwc = prompt_lbl.get_max_width_chars()
+    assert 0 < mwc <= 80  # bounded, not the -1 "unlimited natural width" default
+
+
 def test_recents_caps_at_max(tmp_path):
     p = cv.CreateResultPanel()
     for _ in range(cv._RECENTS_MAX + 3):

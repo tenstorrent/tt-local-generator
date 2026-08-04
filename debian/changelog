@@ -1,3 +1,17 @@
+tt-local-generator (0.61.3) noble; urgency=medium
+
+  * fix(create): the result pane jumped BELOW the form once generation started
+    (most visible with AnimateDiff's wide/tall options). Root cause was pure
+    size negotiation in the two-pane FlowBox: (1) the pending card's prompt
+    Gtk.Label wrapped but had no max-width-chars, so its natural width was the
+    full un-wrapped prompt (~1000px), ballooning the result pane; and (2) a wide
+    medium form sprawled its natural width past the intended ~660px column. Both
+    are now bounded — the prompt label caps at 48 chars, and the form column is
+    wrapped in a MaxWidthBin(720) — so the result pane keeps its side slot on a
+    wide window and only stacks below on a genuinely narrow one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 17:20:00 +0000
+
 tt-local-generator (0.61.2) noble; urgency=medium
 
   * fix(create): the Video → AnimateDiff "Frame count" control rendered as one

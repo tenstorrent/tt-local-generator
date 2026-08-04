@@ -1260,8 +1260,21 @@ class CreateView(Gtk.Box):
         form_pane.set_hexpand(False)
         form_pane.set_size_request(660, -1)
         form_pane.set_valign(Gtk.Align.START)
+        # Cap the form column's MAX width too — not just its 660 min. A wide
+        # medium form (AnimateDiff's expanded options) otherwise sprawls its
+        # natural width to ~820px which, added to the result pane's own natural
+        # width, overflows the two-pane FlowBox line and kicks the result pane
+        # BELOW the form once a job starts. MaxWidthBin clamps the reported
+        # natural width, so a hard 720 cap guarantees the result keeps a side
+        # slot on a wide window (it still stacks below on a genuinely narrow one
+        # via min_children_per_line=1). Pairs with the pending prompt label's
+        # own max-width-chars cap (see show_pending) — both are needed: this
+        # bounds the form, that bounds the result.
+        form_column = gtk_layout.wrap_centered(form_pane, max_width=720, align="start")
+        form_column.set_hexpand(False)
+        form_column.set_valign(Gtk.Align.START)
         result_pane.set_hexpand(True)
-        panes.append(form_pane)
+        panes.append(form_column)
         panes.append(result_pane)
 
         self._panes = panes
@@ -3042,6 +3055,15 @@ class CreateResultPanel(Gtk.Box):
             prompt_lbl = Gtk.Label(label=prompt)
             prompt_lbl.add_css_class("create-result-prompt")
             prompt_lbl.set_wrap(True)
+            # Cap the NATURAL width. A wrapping Gtk.Label with no max-width-chars
+            # still reports its full single-line text as its natural width, so a
+            # long prompt balloons the result pane's natural width to ~1000px —
+            # which, added to a wide form (e.g. AnimateDiff's expanded options),
+            # overflows the two-pane FlowBox line and kicks the result pane BELOW
+            # the form once generation fills in the prompt. Bounding it keeps the
+            # pane narrow enough to stay side-by-side; hexpand still lets it fill
+            # the real width it's allocated.
+            prompt_lbl.set_max_width_chars(48)
             prompt_lbl.set_xalign(0.0)
             self._current_box.append(prompt_lbl)
 
