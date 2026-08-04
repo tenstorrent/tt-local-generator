@@ -2027,6 +2027,13 @@ class GenerationCard(Gtk.Box):
         self._thumb_w, self._thumb_h = gallery_layout.thumb_size(density)
         self.set_size_request(self._tile_w, self._tile_h)
         self.set_hexpand(True)
+        # Hard boundary: nothing a card paints (a hover-swapped video, the
+        # revealed action bar, an oversized thumbnail) may escape the card's own
+        # bounds and overlap neighbouring cells. The pinned media/card zones clip
+        # their own content (gallery_layout.pin_fixed_zone), and this clips the
+        # card as a whole -- respecting the rounded border, so the clip follows
+        # the card's shape.
+        self.set_overflow(Gtk.Overflow.HIDDEN)
         self._build()
 
         # Clicking anywhere on the card selects it in the detail panel; a

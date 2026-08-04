@@ -1,3 +1,19 @@
+tt-local-generator (0.64.2) noble; urgency=medium
+
+  * fix(gallery): gallery cards no longer overflow their cell on hover. Root
+    cause: the card's media/card zones (gallery_layout.pin_fixed_zone) pinned
+    only their MEASURED size via an overlay-anchor, but never clipped paint —
+    GtkOverlay's per-child clip defaults False and no Gtk.Overflow.HIDDEN was
+    set anywhere. So a hover-swapped Gtk.Video (which carries only a size-request
+    FLOOR, no content-fit ceiling, and reports the media's full resolution)
+    painted past the pinned zone and spilled over neighbouring cards; the action
+    bar could too. Fixed at the source: pin_fixed_zone now sets
+    set_overflow(HIDDEN) + set_clip_overlay on the pinned child, and both the
+    native GenerationCard and the artgen card clip themselves to their bounds
+    (respecting the rounded border). Covers video/image/animate AND artgen grids.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 14:30:00 +0000
+
 tt-local-generator (0.64.1) noble; urgency=medium
 
   * feat(create): the Image tile in the Possibilities wall now shows a bundled,

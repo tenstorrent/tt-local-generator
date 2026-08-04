@@ -122,6 +122,20 @@ def pin_fixed_zone(child: Gtk.Widget, width: int, height: int) -> Gtk.Overlay:
     child.set_halign(Gtk.Align.FILL)
     child.set_valign(Gtk.Align.FILL)
     zone.add_overlay(child)
+    # CLIP the pinned zone to width x height, not just MEASURE it. The anchor
+    # above pins the measured size, but an overlay child whose own
+    # minimum/intrinsic size exceeds the pinned area (e.g. a hover-swapped
+    # Gtk.Video reporting the media's full resolution, which carries only a
+    # size-request FLOOR and no content-fit ceiling) is still ALLOCATED that
+    # larger size and PAINTS beyond the zone — spilling over neighbouring
+    # gallery cards. GtkOverlay's per-child clip defaults False and nothing
+    # else clips here, so pin the painted area too: `set_overflow(HIDDEN)`
+    # clips all descendant rendering to the zone's allocation, and
+    # `set_clip_overlay` is the GtkOverlay-specific belt-and-suspenders for the
+    # overlay child. This is the root-cause fix for gallery cards growing past
+    # their container on hover.
+    zone.set_overflow(Gtk.Overflow.HIDDEN)
+    zone.set_clip_overlay(child, True)
     return zone
 
 

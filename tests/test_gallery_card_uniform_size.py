@@ -494,6 +494,36 @@ def test_apply_gallery_density_resizes_already_built_artgen_card_via_main_window
     assert (min_w, min_h) == (compact_w, compact_h)
 
 
+@gtk_required
+def test_pin_fixed_zone_clips_its_content():
+    """A pinned zone must CLIP, not just measure: an overlay child whose own
+    size exceeds the pinned area (e.g. a hover-swapped Gtk.Video reporting the
+    media's full resolution) must be clipped to the zone instead of painting
+    past it and overlapping neighbouring gallery cards."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import gallery_layout as gl
+
+    child = Gtk.Box()
+    zone = gl.pin_fixed_zone(child, 200, 100)
+    assert zone.get_overflow() == Gtk.Overflow.HIDDEN
+    assert zone.get_clip_overlay(child) is True
+
+
+@gtk_required
+def test_generation_card_clips_to_its_bounds():
+    """The card itself is a hard clip boundary so a hover video / action bar /
+    oversized thumbnail can't escape the cell and overlap neighbours."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+    import main_window as mw
+
+    card = mw.GenerationCard(_make_record(), select_cb=lambda *_: None, delete_cb=lambda *_: None)
+    assert card.get_overflow() == Gtk.Overflow.HIDDEN
+
+
 # ── gallery_layout.set_pinned_size() unit tests ───────────────────────────────
 
 @gtk_required

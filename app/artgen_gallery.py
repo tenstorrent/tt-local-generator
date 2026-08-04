@@ -570,6 +570,10 @@ class ArtgenGallery(Gtk.Box):
         overlay.set_size_request(tile_w, tile_h)
         overlay._media_id = rec.id  # stash for activation handler
         overlay.add_css_class("artgen-card")
+        # Hard boundary so a hover-swapped animation or the revealed action bar
+        # can't paint past the card and overlap neighbours (mirrors the native
+        # GenerationCard; the content_zone below also clips via pin_fixed_zone).
+        overlay.set_overflow(Gtk.Overflow.HIDDEN)
 
         # Base: art content + bottom bar.  The content widget's own natural
         # size otherwise follows the underlying artwork's aspect ratio (a
