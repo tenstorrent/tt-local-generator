@@ -26,20 +26,20 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
 # ── Card tile (the whole card box) — IDENTICAL across every gallery tab ───────
-# 220 matches the historical GenerationCard width (_THUMB_W + 20px padding),
-# so the native galleries don't visually jump on this change. TILE_H = 240 was
-# measured empirically (xvfb) as the worst-case natural height of a
-# GenerationCard — 16:9 thumbnail zone (112) + a full 2-line wrapped prompt +
-# meta row + button row + card padding/spacing — so it's the smallest value
-# that still acts as a true CEILING (every card's measured min==nat==TILE_H,
-# confirmed for short/long prompts and with/without a model badge) without
-# leaving a large empty gap under short-prompt cards.
-TILE_W = 220
-TILE_H = 240
+# Widened from the historical 220x240 so the two button rows (the persistent
+# Save / convert / trash row AND the hover Remix / Pipeline / star bar) fit
+# within the card instead of being clipped at its edge, and so the thumbnail
+# has more room. Content width = TILE_W - 2*8 padding - 2*1 border = TILE_W-18;
+# at 260 that's 242px, comfortably wider than the ~210px hover bar. TILE_H
+# grows in step with the taller thumbnail zone below so a full 2-line prompt +
+# meta + button row still fit without a gap under short-prompt cards.
+TILE_W = 260
+TILE_H = 272
 
 # ── Thumbnail/media zone inside the tile — 16:9, letterboxed (CONTAIN fit) ────
-THUMB_W = 200
-THUMB_H = 112
+# Scaled up with the wider tile (kept ~16:9) so thumbnails fill more of the card.
+THUMB_W = 236
+THUMB_H = 132
 
 # ── Gtk.FlowBox grid settings — IDENTICAL across every gallery tab ────────────
 FLOW_MIN_CHILDREN_PER_LINE = 2

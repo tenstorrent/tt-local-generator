@@ -494,26 +494,23 @@ def test_apply_gallery_density_resizes_already_built_artgen_card_via_main_window
     assert (min_w, min_h) == (compact_w, compact_h)
 
 
-def test_card_selection_does_not_change_outer_size():
-    """Selecting a card thickens its border (1px -> 2px). The selection CSS MUST
-    compensate padding (8px -> 7px) so the card's outer size is unchanged --
-    otherwise a selected card grows 1px per side and shoves every neighbour over
-    in the natural-size-packed FlowBox. Guards against re-introducing the
-    layout-shift-on-click bug by adding border-width without the padding offset."""
+def test_card_selection_uses_zero_layout_highlight():
+    """Selecting a card must not change any LAYOUT-affecting property (border
+    width, padding) -- either grows the card and shoves every neighbour over in
+    the natural-size-packed FlowBox (border-width) or shifts its content
+    (padding). The selection ring is an inset box-shadow, which is painted and
+    takes zero layout space. Guards against re-introducing the
+    layout-shift/jitter-on-click bug."""
     import main_window as mw
-    css = mw._CSS.decode()
-    # Grab the .card-selected / .card-selected-image blocks and assert each that
-    # sets border-width: 2px also drops padding to 7px.
     import re
+    css = mw._CSS.decode()
     for name in (".card-selected", ".card-selected-image"):
         m = re.search(re.escape(name) + r"\s*\{([^}]*)\}", css)
         assert m, f"{name} rule not found in _CSS"
         body = m.group(1)
-        if "border-width: 2px" in body:
-            assert "padding: 7px" in body, (
-                f"{name} thickens the border to 2px but does not compensate "
-                "padding to 7px -> selecting a card will shift its neighbours"
-            )
+        assert "box-shadow" in body, f"{name} should ring the card with a box-shadow"
+        assert "border-width" not in body, f"{name} must not change border-width (shifts neighbours)"
+        assert "padding" not in body, f"{name} must not change padding (shifts content)"
 
 
 @gtk_required

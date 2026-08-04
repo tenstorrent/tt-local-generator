@@ -244,20 +244,17 @@ scrollbar slider {
 scrollbar slider:hover {
     background-color: @tt_accent;
 }
-/* Selection thickens the border to 2px. Compensate the padding (8 -> 7) so the
-   card's OUTER size (border + padding + content = 9px of chrome per side either
-   way) is UNCHANGED -- otherwise the extra 1px per side grows the card and, in a
-   natural-size-packed FlowBox, shoves every neighbouring card over. The content
-   box stays at the same 9px inset too, so the thumbnail doesn't shift either. */
+/* Selection ring via an INSET box-shadow, NOT a thicker border: box-shadow is
+   painted and takes ZERO layout space, so selecting a card cannot change its
+   size, shift its content, or jitter -- and therefore can never shove
+   neighbouring cards in the natural-size-packed FlowBox. (A border-width change
+   would; that was the layout-shift-on-click bug.) The 1px base .card border is
+   left untouched. */
 .card-selected {
-    border-color: @tt_accent;
-    border-width: 2px;
-    padding: 7px;
+    box-shadow: inset 0 0 0 2px @tt_accent;
 }
 .card-selected-image {
-    border-color: @tt_pink;
-    border-width: 2px;
-    padding: 7px;
+    box-shadow: inset 0 0 0 2px @tt_pink;
 }
 .type-badge-video {
     background-color: @tt_bg_dark;

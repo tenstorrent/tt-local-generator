@@ -1,3 +1,17 @@
+tt-local-generator (0.65.0) noble; urgency=medium
+
+  * feat(gallery): bigger card frames (tile 220x240 -> 260x272, thumbnail zone
+    200x112 -> 236x132) so both button rows — the persistent Save / convert /
+    trash row AND the hover Remix / Pipeline / star bar — fit inside the card
+    instead of being clipped at its edge, and so thumbnails fill more of the card.
+  * fix(gallery): the selection highlight is now an inset box-shadow ring instead
+    of a thicker (2px) border. box-shadow takes zero layout space, so selecting a
+    card can no longer change its size, shift its content, or jitter — fully
+    replacing the border-width + padding-compensation approach (which still left a
+    subtle jitter). Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 16:30:00 +0000
+
 tt-local-generator (0.64.4) noble; urgency=medium
 
   * fix(gallery): selecting a card no longer shifts its neighbours. The
