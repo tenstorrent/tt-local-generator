@@ -1,6 +1,6 @@
 # tt-local-generator — developer notes
 
-## "👁 Watch" hardware-activity viz (experiment, v0.67.0)
+## "👁 Watch" hardware-activity viz (experiment, v0.67.0 · honest N-chip v0.68.0)
 
 `app/activity_viz.py` — `ActivityVizWidget(Gtk.Box)`, an OPTIONAL "watch the
 chip work while you generate" widget for the Create surface. Embeds the
@@ -11,39 +11,60 @@ one `about:blank` HTML doc) in a `WebKit.WebView` (JS enabled), reusing the
 `artgen_detail` **realize-deferral** pattern (`evaluate_javascript`/`load_html`
 before realize is a silent no-op → queue in `_pending_js`, flush on `"realize"`;
 backlog bounded to 32 so a never-realized active viz can't leak telemetry
-calls).
+calls). User loved the MVP and asked to develop it — see
+[[project_watch_activity_viz]].
 
-Two public methods drive it: `set_active(medium)` → `viz.activate(<mode>)`
-picks the tensix-viz animation MODE for the medium (`mode_for_medium`:
-image→`diffusion`, video/animate→`video`, animatediff→`diffusion`, any other
-artgen→`thinking`, else→`inference`) AND starts a **live telemetry tap**;
-`set_idle()` → `viz.activate('idle')` + stops the tap. The tap
-(`read_aiclk_intensity`, a 1 s `GLib.timeout`) reads AICLK straight from
-`/sys/class/tenstorrent/*/tt_aiclk` (same source as the TT-TV chip HUD),
-normalises peak/1400 MHz to 0..1, and feeds `viz.setMemoryStats({dram_bw,
-l1_fill})` so the memory layer pulses with the chips' REAL clock — the
-experiment's stretch goal. Both pure helpers are GTK-free and unit-tested;
-`arch="blackhole"` (QB2 is Blackhole).
+**Honest per-chip display (v0.68.0).** The widget draws ONE tensix-viz per REAL
+chip under `/sys/class/tenstorrent/` (`chip_count()`), capped at `_CHIP_CAP`
+(4) so a big system stays a legible corner instrument — 4-chip QB2 → a 2×2 grid
+(`grid_layout(n)` → `(cols, canvas_w, canvas_h)`). It does NOT use tensix-viz's
+`CardViz`/`SystemViz` (those hide their inner per-chip `TensixViz` instances);
+instead the inlined init script builds N canvases + a tiny `window.__viz`
+**facade** exposing `activate(mode)` (fans out, staggered), `setMemoryStats(s)`
+(all chips), and the net-new `setChipStats(i, s)` (ONE chip) — so each chip can
+be fed its OWN clock. `read_chip_clocks()` returns position-aligned per-chip
+AICLK (None for an unreadable chip, so index i always maps to chip i), and the
+1 s tap feeds `setChipStats(i, {dram_bw, l1_fill})` per chip. Maximally honest:
+each drawn chip pulses with its own real clock.
+
+Two decoupled controls: `set_mode(medium)` → `viz.activate(<mode>)` picks the
+animation MODE (`mode_for_medium`: image→`diffusion`, video/animate→`video`,
+animatediff→`diffusion`, any other artgen→`thinking`, else→`inference`; idle
+when None) and updates the header caption; `set_running(bool)` starts/stops the
+telemetry tap. They're separate so the **live clock ticks the whole time Watch
+is shown, not only mid-job** (`set_active`/`set_idle` remain as
+mode+running aliases). A compact **header** shows `◉ <mode>` (left) + peak MHz
+readout (right, `read_aiclk_peak_mhz`, "N/total" when the display is capped) +
+a `✕` dismiss (`on_close` callback → flips the Watch toggle off). All pure
+helpers (`mode_for_medium`, `chip_count`, `read_chip_clocks`,
+`read_aiclk_peak_mhz`, `read_aiclk_intensity`, `grid_layout`) are GTK-free and
+unit-tested; `arch="blackhole"` (QB2 is Blackhole).
 
 **Fail-soft + optional by construction.** OFF by default. No WebKit → inert
-stub (`_WEBKIT_OK` guard); no chips → the tap returns `None` and leaves the
-mode preset alone; every `evaluate_javascript` is wrapped so a bad tick just
-skips. **Built LAZILY** — `CreateResultPanel.__init__` never constructs it
-(WebKit is a heavy JS-engine/web-process cost, and 7 test files build
-CreateResultPanel; eager construction also segfaults the WebKit bwrap sandbox
-under nested-sandbox CI). Instead:
+stub (`_WEBKIT_OK` guard; header still shows, readout reads "—"); no chips →
+draw one idle chip and the tap no-ops; every `evaluate_javascript` is wrapped so
+a bad tick just skips. **Built LAZILY** — `CreateResultPanel.__init__` never
+constructs it (WebKit is a heavy JS-engine/web-process cost, and 7 test files
+build CreateResultPanel; eager construction also segfaults the WebKit bwrap
+sandbox under nested-sandbox CI). Instead:
 
 - The result pane is wrapped in a `Gtk.Overlay` (`CreateView._build_panes`,
-  `self._result_overlay`) so the viz can be pinned top-right corner
-  (halign END/valign START + margins).
+  `self._result_overlay`) so the viz can be pinned to the **bottom-right**
+  corner (halign END/valign END + bottom/end margins), locked into the frame.
+  **Corner-pin invariant:** the widget sets a fixed size + `hexpand/vexpand
+  False` (and so does its inner WebView) — an expanding overlay child gets
+  stretched to fill the pane instead of pinned (the MVP bug: it floated over
+  the content in the top-left).
 - CTA row has a `👁 Watch` `Gtk.ToggleButton` → `_on_watch_toggled` →
   `_ensure_activity_viz()` builds the widget ONCE on first reveal, adds it to
-  the overlay, and injects it via `CreateResultPanel.set_activity_viz(viz)`.
+  the overlay, wires `viz.on_close` to the toggle, and injects it via
+  `CreateResultPanel.set_activity_viz(viz)`.
 - `CreateResultPanel` DRIVES the mode from its own lifecycle so the animation
   can never drift from what's cooking: `show_pending`→`_drive_activity_active`
   (only when `_activity_visible`), `show_finished`/`show_error`/`_show_empty`→
-  `_drive_activity_idle`. `set_activity_visible(bool)` toggles the viz + starts/
-  stops the tap; turning Watch on mid-generation animates the in-flight medium
+  `_drive_activity_idle` (calms animation, keeps the clock ticking while
+  shown). `set_activity_visible(bool)` toggles the viz + `set_running` +
+  initial mode; turning Watch on mid-generation animates the in-flight medium
   immediately.
 
 **Invariant preserved:** `_collect_params()`/`collect()` are untouched — the

@@ -85,6 +85,46 @@ def test_read_aiclk_intensity_skips_unreadable_chip(monkeypatch, tmp_path):
     assert dram == pytest.approx(0.5, abs=1e-3)
 
 
+# ── Pure: honest chip count + per-chip clocks + layout ───────────────────────
+
+def _make_chips(tmp_path, clocks):
+    """Create fake chip dirs with the given per-chip clock strings (None -> a
+    dir with a missing/garbage clock file), sorted-name aligned to index."""
+    for i, mhz in enumerate(clocks):
+        d = tmp_path / f"tenstorrent!{i}"
+        d.mkdir()
+        if mhz is not None:
+            (d / "tt_aiclk").write_text(str(mhz))
+    return tmp_path
+
+
+def test_chip_count_reflects_sysfs(monkeypatch, tmp_path):
+    monkeypatch.setattr(activity_viz, "_SYSFS", _make_chips(tmp_path, [800, 810, 790, 805]))
+    assert activity_viz.chip_count() == 4
+
+
+def test_chip_count_zero_when_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(activity_viz, "_SYSFS", tmp_path)
+    assert activity_viz.chip_count() == 0
+
+
+def test_read_chip_clocks_is_position_aligned(monkeypatch, tmp_path):
+    # Middle chip unreadable -> None at its index, others intact.
+    monkeypatch.setattr(activity_viz, "_SYSFS", _make_chips(tmp_path, [800, None, 790]))
+    assert activity_viz.read_chip_clocks() == [800, None, 790]
+
+
+def test_peak_ignores_unreadable(monkeypatch, tmp_path):
+    monkeypatch.setattr(activity_viz, "_SYSFS", _make_chips(tmp_path, [800, None, 900]))
+    assert activity_viz.read_aiclk_peak_mhz() == 900
+
+
+def test_grid_layout_one_vs_many():
+    assert activity_viz.grid_layout(1)[0] == 1      # single column
+    assert activity_viz.grid_layout(2)[0] == 2      # 2-wide
+    assert activity_viz.grid_layout(4)[0] == 2      # 2x2
+
+
 # ── Widget + CreateResultPanel drive wiring (needs a display) ────────────────
 
 def _gtk_or_skip():
@@ -100,20 +140,23 @@ def _gtk_or_skip():
 
 
 class _FakeViz:
-    """Records set_active/set_idle/visibility without touching WebKit — a stand-
-    in for ActivityVizWidget so the drive-wiring tests don't need a browser."""
+    """Records set_mode/set_running/visibility without touching WebKit — a
+    stand-in for ActivityVizWidget so the drive-wiring tests don't need a
+    browser."""
     def __init__(self):
         self.calls = []
         self.visible = None
+        self.running = None
 
     def set_visible(self, v):
         self.visible = v
 
-    def set_active(self, medium=None):
-        self.calls.append(("active", getattr(medium, "id", None)))
+    def set_running(self, r):
+        self.running = r
+        self.calls.append(("running", r))
 
-    def set_idle(self):
-        self.calls.append(("idle", None))
+    def set_mode(self, medium=None):
+        self.calls.append(("mode", getattr(medium, "id", None)))
 
 
 def test_result_panel_construction_is_webkit_free():
@@ -139,13 +182,14 @@ def test_show_pending_animates_only_when_revealed():
 
     medium = SimpleNamespace(id="image", source="native", icon="", label="Image")
 
-    # Hidden: pending must NOT start the viz.
+    # Hidden: pending must NOT drive the viz.
     panel.show_pending("a cat", medium)
     assert fake.calls == []
 
-    # Reveal while pending -> starts animating the active medium.
+    # Reveal while pending -> telemetry starts AND it animates the active medium.
     panel.set_activity_visible(True)
-    assert ("active", "image") in fake.calls
+    assert ("running", True) in fake.calls
+    assert ("mode", "image") in fake.calls
 
 
 def test_reveal_then_pending_animates():
@@ -154,15 +198,16 @@ def test_reveal_then_pending_animates():
     panel = CreateResultPanel()
     fake = _FakeViz()
     panel._activity_viz = fake
-    panel.set_activity_visible(True)      # revealed, idle so far
+    panel.set_activity_visible(True)      # revealed, idle so far (mode None)
+    assert ("running", True) in fake.calls
     fake.calls.clear()
 
     medium = SimpleNamespace(id="video", source="native", icon="", label="Video")
     panel.show_pending("a dog", medium)
-    assert fake.calls == [("active", "video")]
+    assert fake.calls == [("mode", "video")]  # mode only — telemetry already on
 
 
-def test_finish_calms_the_viz():
+def test_finish_calms_animation_but_keeps_telemetry():
     _gtk_or_skip()
     from create_view import CreateResultPanel
     panel = CreateResultPanel()
@@ -175,10 +220,12 @@ def test_finish_calms_the_viz():
     rec = SimpleNamespace(prompt="p", thumbnail_path=None, media_file_path=None,
                           media_type="image")
     panel.show_finished(rec)
-    assert ("idle", None) in fake.calls
+    # Animation calms to idle, but telemetry is NOT stopped (clock keeps ticking).
+    assert ("mode", None) in fake.calls
+    assert ("running", False) not in fake.calls
 
 
-def test_hide_calms_the_viz():
+def test_hide_stops_telemetry_and_calms():
     _gtk_or_skip()
     from create_view import CreateResultPanel
     panel = CreateResultPanel()
@@ -187,4 +234,6 @@ def test_hide_calms_the_viz():
     panel.set_activity_visible(True)
     fake.calls.clear()
     panel.set_activity_visible(False)
-    assert fake.calls == [("idle", None)] and fake.visible is False
+    assert ("running", False) in fake.calls
+    assert ("mode", None) in fake.calls
+    assert fake.visible is False

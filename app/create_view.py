@@ -612,6 +612,36 @@ _CSS = b"""
     border-radius: 10px;
     background-color: #0F2A35;
 }
+.activity-viz-header {
+    background-color: #142E38;
+    border-bottom: 1px solid #2D5566;
+    padding: 2px 4px 2px 8px;
+    min-height: 20px;
+}
+.activity-viz-title {
+    color: #4FD1C5;
+    font-size: 10px;
+    font-weight: bold;
+}
+.activity-viz-readout {
+    color: #81E6D9;
+    font-size: 10px;
+    font-family: monospace;
+}
+.activity-viz-close {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0px 2px;
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: #6F9DAD;
+    font-size: 11px;
+}
+.activity-viz-close:hover {
+    color: #FF9E8A;
+}
 
 /* -- RoleZonePanel zones (Task 6) -- one class per zone so a future change to
    the brief/direction/controls look never has to touch create_param_panels.py
@@ -2675,10 +2705,16 @@ class CreateView(Gtk.Box):
             viz = ActivityVizWidget()
         except Exception:
             return
+        # Pin to the result pane's BOTTOM-right corner, locked into the frame.
         viz.set_halign(Gtk.Align.END)
-        viz.set_valign(Gtk.Align.START)
-        viz.set_margin_top(8)
+        viz.set_valign(Gtk.Align.END)
+        viz.set_margin_bottom(8)
         viz.set_margin_end(8)
+        # The viz's own ✕ dismiss just flips the Watch toggle off (which routes
+        # back through _on_watch_toggled -> set_activity_visible(False)).
+        watch_btn = getattr(self, "_watch_btn", None)
+        if watch_btn is not None:
+            viz.on_close = lambda b=watch_btn: b.set_active(False)
         overlay.add_overlay(viz)
         self._result_panel.set_activity_viz(viz)
 
@@ -3090,29 +3126,32 @@ class CreateResultPanel(Gtk.Box):
         self._activity_viz = viz
 
     def set_activity_visible(self, visible: bool) -> None:
-        """Show/hide the optional 'watch the hardware' viz. Turning it on while a
-        job is in flight starts it animating the active medium immediately;
-        turning it off (or when idle) calms it and stops its telemetry poll.
-        No-op when no viz has been injected yet."""
+        """Show/hide the optional 'watch the hardware' viz. While shown, the
+        live-clock telemetry tap runs the WHOLE time (so you always see the real
+        AICLK, not just mid-job); the animation MODE reflects generation —
+        active medium while a job is in flight, else idle. No-op when no viz has
+        been injected yet."""
         self._activity_visible = bool(visible)
         if self._activity_viz is None:
             return
         self._activity_viz.set_visible(self._activity_visible)
+        self._activity_viz.set_running(self._activity_visible)
         if self._activity_visible and self._pending_active:
-            self._activity_viz.set_active(self._pending_medium)
+            self._activity_viz.set_mode(self._pending_medium)
         else:
-            self._activity_viz.set_idle()
+            self._activity_viz.set_mode(None)
 
     def _drive_activity_active(self) -> None:
         """Animate the viz for the current pending medium — only when it's both
-        constructed and currently revealed (no point polling telemetry for a
-        hidden widget)."""
+        constructed and currently revealed."""
         if self._activity_viz is not None and self._activity_visible:
-            self._activity_viz.set_active(self._pending_medium)
+            self._activity_viz.set_mode(self._pending_medium)
 
     def _drive_activity_idle(self) -> None:
-        if self._activity_viz is not None:
-            self._activity_viz.set_idle()
+        """Calm the animation back to idle, but keep the live clock ticking
+        while the viz is shown."""
+        if self._activity_viz is not None and self._activity_visible:
+            self._activity_viz.set_mode(None)
 
     # ── Test seams ───────────────────────────────────────────────────────────
 

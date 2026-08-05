@@ -1,3 +1,21 @@
+tt-local-generator (0.68.0) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz — honest per-chip display + corner-lock +
+    header. Draws ONE tensix-viz chip per REAL detected chip
+    (/sys/class/tenstorrent/*, capped at 4 so a big system stays legible) and
+    feeds EACH chip its OWN AICLK into setMemoryStats — on a 4-chip QB2 you see
+    four chips, each pulsing with its own real clock. A compact header shows the
+    current mode + live peak MHz (+ "shown/total" when capped) + a ✕ to dismiss.
+    Repositioned to the result pane's BOTTOM-right, locked into the frame (the
+    MVP floated over the content because the WebView's expand propagated to the
+    Box — fixed with a no-expand fixed footprint so the overlay honours
+    halign/valign). Telemetry (set_running) is now decoupled from animation mode
+    (set_mode), so the live clock ticks the whole time Watch is on, not only
+    mid-job. New pure helpers chip_count/read_chip_clocks/grid_layout (unit-
+    tested). collect() still untouched.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:05:00 +0000
+
 tt-local-generator (0.67.0) noble; urgency=medium
 
   * feat(create): optional "👁 Watch" hardware-activity viz (experiment). A
