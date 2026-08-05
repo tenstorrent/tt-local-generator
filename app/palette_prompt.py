@@ -19,7 +19,8 @@ def load_palette(path: str) -> "dict | None":
     if not path:
         return None
     try:
-        data = json.loads(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
     except Exception:
         return None
     return data if isinstance(data, dict) else None

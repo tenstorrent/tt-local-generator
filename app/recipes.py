@@ -102,7 +102,7 @@ _CURATED: "list[Goal]" = [
     Goal("poster", "A poster", "🖼", "image", "blank",
          (("TTLGPromptCompose", {"caption": "a striking poster"}),
           ("TTLGTextToImage", {}))),
-    Goal("looping-animation", "A looping animation", "🔁", "gif", "blank",
+    Goal("looping-animation", "A looping animation", "🔁", "gif", "both",
          (("TTLGAnimateDiff", {"seamless_loop": True,
                                "prompt": "a dreamy, seamlessly looping scene"}),)),
     Goal("illustrated-poem", "An illustrated poem", "📜", "image", "blank",

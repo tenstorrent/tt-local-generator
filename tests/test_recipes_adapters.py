@@ -25,6 +25,22 @@ def test_goals_for_still_excludes_unreachable(monkeypatch):
     assert "vid" not in ids
 
 
+def test_real_catalog_offers_animatediff_from_palette_seed_and_blank():
+    # Regression guard for the marquee "palette -> Remix -> AnimateDiff"
+    # journey: the shipped catalog's ONLY TTLGAnimateDiff goal
+    # ("looping-animation") must stay reachable from a palette seed (via the
+    # TTLGPaletteToPrompt adapter) AND must not have been dropped from blank
+    # mode by the applies_to fix. Uses the REAL curated catalog, not a
+    # monkeypatched _CURATED, so catalog drift trips this test.
+    scoped_goals = recipes.goals_for(seed_output_kind="palette")
+    assert any(
+        g.recipe_steps[0][0] == "TTLGAnimateDiff" for g in scoped_goals
+    ), "no palette-reachable goal starts with TTLGAnimateDiff"
+
+    blank_ids = {g.id for g in recipes.goals_for(seed_output_kind=None)}
+    assert "looping-animation" in blank_ids
+
+
 def test_build_seed_spec_prepends_adapter_and_wires():
     goal = _animatediff_goal()
     spec = recipes.build_seed_spec(
