@@ -479,9 +479,15 @@ def test_remix_as_pipeline_media_record_image_kind_resolves_with_thumb(tmp_path,
     )
 
 
-def test_remix_as_pipeline_media_record_json_falls_back_to_blank_muse(tmp_path, monkeypatch):
-    """A .json artgen artifact (e.g. a palette) has no resolvable seed kind
-    — falls back to a blank muse rather than guessing."""
+def test_remix_as_pipeline_palette_seeds_muse(tmp_path, monkeypatch):
+    """A .json artgen artifact whose generator_type is "palette" is now a
+    seedable kind (Task 3 of remix-pipeline-unification taught
+    artgen_kind.artgen_seed_kind to return "palette" for it, overriding the
+    generic .json -> None mapping) — it SEEDS the Muse instead of falling
+    back to blank. seed_artifact is (file_path, "palette", thumbnail_path),
+    matching the "image"/"gif" resolution branch in
+    _resolve_artgen_media_seed (kind is neither None nor "text", so it falls
+    through to the generic file-exists-> seed branch)."""
     obj = _make_mw_for_remix(tmp_path, monkeypatch)
     rec = _make_media_record(
         tmp_path, filename="palette.json", content='{"colors": []}',
@@ -490,7 +496,9 @@ def test_remix_as_pipeline_media_record_json_falls_back_to_blank_muse(tmp_path, 
 
     obj._remix_as_pipeline(rec)
 
-    obj._pipeline_studio.show_muse.assert_called_once_with(seed_artifact=None)
+    obj._pipeline_studio.show_muse.assert_called_once_with(
+        seed_artifact=(str(tmp_path / "palette.json"), "palette", "")
+    )
 
 
 def test_remix_as_pipeline_media_record_missing_file_falls_back_to_blank_muse(tmp_path, monkeypatch):
@@ -532,16 +540,19 @@ def test_remix_as_pipeline_generation_record_path_unaffected_by_media_record_bra
 def test_main_window_wires_artgen_gallery_on_remix_as_pipeline_source():
     """Regression guard: main_window.py must wire
     `self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline`
-    right after the existing `on_remix` wiring (mirrors
-    test_workflow_popover_not_imported_at_startup's source-text style — a
-    full MainWindow() construction is too heavy/network-dependent to build
-    in tests, see the module docstring above).
+    (mirrors test_workflow_popover_not_imported_at_startup's source-text
+    style — a full MainWindow() construction is too heavy/network-dependent
+    to build in tests, see the module docstring above).
 
     SP-3d-5: `ArtgenPanel` is deleted — Discover's artgen gallery page is now
     the standalone `ArtgenGallery`, wired the same way the three native
     `GalleryWidget`s already are.
+
+    Task 8 (remix-pipeline-unification): the former parallel `on_remix`
+    (popover) wiring is gone — `on_remix_as_pipeline` is the single surviving
+    seam, since ArtgenGallery now has exactly one remix button.
     """
     src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
-    assert "self._artgen_gallery.on_remix = self._on_remix_card" in src
+    assert "self._artgen_gallery.on_remix = self._on_remix_card" not in src
     assert "self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline" in src
     assert "class ArtgenPanel(Gtk.Box):" not in src

@@ -1,3 +1,20 @@
+tt-local-generator (0.73.0) noble; urgency=medium
+
+  * feat(remix): collapse to one remix affordance. Every surface (native
+    GenerationCard, DetailPanel, ArtgenGallery card) used to show TWO remix
+    buttons — a "🔀 Remix" popover (RemixPopover -> _dispatch_remix, which
+    itself just opened Pipeline Studio's Muse, per the SP-3d-5 DISCOVERED
+    GAP note) and a separate "🧩 Remix as pipeline…" button doing the same
+    thing with more steps. Remix now means exactly one thing: seed a
+    pipeline from an artifact. Kept the single surviving button, relabeled
+    "🔀 Remix" (tooltip "Remix this into a pipeline"), wired to the existing
+    `_remix_as_pipeline` handler; deleted `MainWindow._on_remix_card` /
+    `_dispatch_remix` and all `RemixPopover`/`on_remix` wiring.
+    `remix_popover.py`/`remix_dispatch.py` stay in-tree (still unit-tested)
+    but are unreferenced from main_window.py now.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 12:00:00 +0000
+
 tt-local-generator (0.72.1) noble; urgency=medium
 
   * fix(library): clicking a native (non-AnimateDiff) video now autoplays it in
