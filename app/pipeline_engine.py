@@ -1153,24 +1153,33 @@ def _backend_for(class_type: str, inputs: dict) -> "BackendSpec | None":
 
     if class_type == "TTLGTextToImage":
         m = str(model or "").lower()
-        if "flux" in m:
-            key = "flux"
-        elif "sdxl" in m or "sd" in m:
-            key = "sdxl" if "sdxl" in sm.SERVERS else "flux"
-        else:
-            key = "flux"  # default image backend
+        image_keys = [s.key for s in sm.servers_for_capability("image")]
+        key = None
+        for k in image_keys:                 # exact server-key match wins
+            if m == k or k in m:
+                key = k
+                break
+        if key is None:                      # legacy substrings
+            if "flux" in m: key = "flux"
+            elif "sdxl" in m or (m.startswith("sd") ): key = "sdxl" if "sdxl" in sm.SERVERS else "flux"
+        if key is None or key not in sm.SERVERS:
+            key = "flux"                     # default image backend
         return BackendSpec(key, sm.SERVERS[key].health_url, _MAX_WAIT_IMAGE)
 
     if class_type == "TTLGImageToVideo":
         m = str(model or "").lower()
-        if "skyreels" in m:
-            key = "skyreels"
-        elif "wan" in m:
-            key = "wan2.2"
-        elif "mochi" in m:
-            key = "mochi"
-        else:
-            key = "wan2.2"  # default video backend
+        video_keys = [s.key for s in sm.servers_for_capability("video")]
+        key = None
+        for k in video_keys:                 # exact server-key match wins
+            if m == k or k in m:
+                key = k
+                break
+        if key is None:                      # legacy substrings
+            if "skyreels" in m: key = "skyreels"
+            elif "wan" in m: key = "wan2.2"
+            elif "mochi" in m: key = "mochi"
+        if key is None or key not in sm.SERVERS:
+            key = "wan2.2"                   # default video backend
         return BackendSpec(key, sm.SERVERS[key].health_url, _MAX_WAIT_VIDEO)
 
     if class_type == "TTLGGenerateText":
