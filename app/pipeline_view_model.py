@@ -393,6 +393,29 @@ def build_run_view(record: dict) -> RunView:
     )
 
 
+def final_index_for(run: RunView) -> "int | None":
+    """Index into `run.steps` of the step that produced `run.hero_path`.
+
+    Promotes the previously-unused `hero_path` field (set by `build_run_view`
+    to the first heroable image/video artifact) into "which STEP is the
+    deliverable" — OpenView uses this to render that step as a large
+    "Here's what you made" hero instead of just another row in the list.
+
+    Pure/GTK-free, like the rest of this module. Returns None whenever there
+    is nothing to point at: `hero_path` itself is None (no heroable artifact
+    was produced at all — deliberately NOT matched against a step whose own
+    `artifact_path` also happens to be None, which would be a false
+    positive), or `hero_path` doesn't equal any current step's
+    `artifact_path` (e.g. a stale value from a since-pruned/changed run).
+    """
+    if run.hero_path is None:
+        return None
+    for index, step in enumerate(run.steps):
+        if step.artifact_path == run.hero_path:
+            return index
+    return None
+
+
 def list_run_views(store, limit: int = 50) -> "list[RunView]":
     """Build `RunView`s for `store.list_runs()`, skipping unloadable records.
 

@@ -259,7 +259,9 @@ import pipeline_progress  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
-from pipeline_view_model import RunView, StepView, build_run_view, list_run_views  # noqa: E402
+from pipeline_view_model import (  # noqa: E402
+    RunView, StepView, build_run_view, final_index_for, list_run_views,
+)
 from spec_remix import (  # noqa: E402
     add_step, apply_edits, editable_params, remove_step, seed_spec, write_spec,
 )
@@ -1072,6 +1074,10 @@ class OpenView(Gtk.Box):
     PREVIEW_W, PREVIEW_H = 420, 260
     FANOUT_THUMB = 128   # per-still tile size in a fan-out step's grid
 
+    # Task 7: the hero's ⛶ Fullscreen popup window size — considerably
+    # larger than PREVIEW_W×PREVIEW_H, since the whole point is "see it big".
+    _FULLSCREEN_W, _FULLSCREEN_H = 960, 640
+
     # status -> (glyph, css class). Anything outside pipeline_view_model's
     # known statuses (which is already constrained to done/running/pending/
     # failed — see _resolve_status) falls back to the pending glyph rather
@@ -1106,6 +1112,27 @@ class OpenView(Gtk.Box):
         # Keyed by node_id -> the Gtk.Label actually holding the text, so
         # tests/callers can read it back directly.
         self._step_text_blocks: dict = {}
+        # Task 7 (final-result hero): kind tag ("artifact"/"text"/"none")
+        # shown on each row folded under "How it was made" once a hero is
+        # promoted out of the flat list. Keyed by node_id, like the dicts
+        # above.
+        self._step_kind_tags: dict = {}
+        # The "How it was made" Gtk.Expander wrapping the non-hero steps
+        # (None when the run has no promoted hero — the plain flat list is
+        # shown instead, same as before this task).
+        self._how_made_expander: "Gtk.Expander | None" = None
+        # Hero action-row buttons (only set when set_run() promotes a hero;
+        # exposed as attributes so tests can emit "clicked" directly, same
+        # convention as `_remix_all_btn`/`_showcase_btn`).
+        self._hero_fullscreen_btn: "Gtk.Button | None" = None
+        self._hero_save_btn: "Gtk.Button | None" = None
+        self._hero_library_btn: "Gtk.Button | None" = None
+        self._hero_remix_btn: "Gtk.Button | None" = None
+        self._hero_title_label: "Gtk.Label | None" = None
+        # Last window opened by ⛶ Fullscreen (see _open_fullscreen) — kept
+        # as an attribute so tests can inspect it without a real, blocking
+        # present() loop.
+        self._fullscreen_window: "Gtk.Window | None" = None
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.set_margin_top(18)
@@ -1192,6 +1219,17 @@ class OpenView(Gtk.Box):
         Also resets the showcase capstone's state (button re-enabled, any
         previously-revealed path/message hidden) — a stale result from a
         previously-loaded run must never bleed into a freshly-loaded one.
+
+        Task 7 (final-result hero): when the run has a promoted deliverable
+        step (`_resolve_hero_index` — either `final_index_for`'s image/video
+        hero, or a text-only pipeline's final text step), that step is
+        pulled OUT of the flat list and rendered first as a large "Here's
+        what you made" hero (`_build_hero`); every other step still renders
+        via the same `_build_step_row` this view always used, just folded
+        under a collapsed "How it was made" `Gtk.Expander` instead of sitting
+        loose in the list. A run with no promoted hero (most fixtures used by
+        this view's own pre-existing tests: `hero_path=None`) renders exactly
+        as before — one row per step, flat, no expander.
         """
         self._title_label.set_label(run.title)
         self._run_view = run
@@ -1204,6 +1242,13 @@ class OpenView(Gtk.Box):
         self._step_remix_buttons = {}
         self._step_thumb_frames = {}
         self._step_text_blocks = {}
+        self._step_kind_tags = {}
+        self._how_made_expander = None
+        self._hero_fullscreen_btn = None
+        self._hero_save_btn = None
+        self._hero_library_btn = None
+        self._hero_remix_btn = None
+        self._hero_title_label = None
 
         if not run.steps:
             empty = Gtk.Label(label="This run has no steps.")
@@ -1211,12 +1256,57 @@ class OpenView(Gtk.Box):
             self._steps_box.append(empty)
             return
 
+        hero_index = self._resolve_hero_index(run)
+        if hero_index is None:
+            for index, step in enumerate(run.steps, start=1):
+                self._steps_box.append(self._build_step_row(index, step))
+            return
+
+        hero_step = run.steps[hero_index]
+        self._steps_box.append(self._build_hero(hero_step))
+
+        expander = Gtk.Expander(label="How it was made")
+        expander.set_expanded(False)  # collapsed by default (brief)
+        exp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for index, step in enumerate(run.steps, start=1):
-            self._steps_box.append(self._build_step_row(index, step))
+            if index - 1 == hero_index:
+                continue  # already shown as the hero above
+            exp_box.append(self._build_step_row(index, step, tag=True))
+        expander.set_child(exp_box)
+        self._steps_box.append(expander)
+        self._how_made_expander = expander
+
+    def _resolve_hero_index(self, run: RunView) -> "int | None":
+        """Which step (if any) is this run's promoted deliverable.
+
+        Prefers `final_index_for` (the image/video `hero_path` step). A run
+        with no heroable artifact at all (`hero_path` is only ever set for
+        `_HERO_KINDS` — image/video — see `pipeline_view_model.
+        build_run_view`) but that has FINISHED and whose last step produced
+        real text and no file artifact is a text-only pipeline (e.g. a lone
+        TTLGGenerateText run) — that final text is the deliverable just as
+        much as an image would be, so it's promoted to the hero too (brief:
+        "Text-only pipelines ... show that text as the hero").
+
+        Gated on every step being "done": a run still mid-flight (any step
+        pending/running/failed) hasn't produced its real final deliverable
+        yet, so it keeps rendering as the plain flat list — pre-existing
+        `_make_run`/compact-vs-rich fixtures rely on exactly this (they pair
+        a not-yet-done step with a text-producing one purely to test row
+        styling, not to exercise the hero).
+        """
+        index = final_index_for(run)
+        if index is not None:
+            return index
+        if run.steps and all(s.status == "done" for s in run.steps):
+            last = run.steps[-1]
+            if not last.artifact_path and last.text_content:
+                return len(run.steps) - 1
+        return None
 
     # ── Row building ─────────────────────────────────────────────────────────
 
-    def _build_step_row(self, index: int, step: StepView) -> Gtk.Widget:
+    def _build_step_row(self, index: int, step: StepView, tag: bool = False) -> Gtk.Widget:
         """Build one step row.
 
         Fix #1 (cohesive intent label): verb+noun render as ONE label
@@ -1231,6 +1321,13 @@ class OpenView(Gtk.Box):
         `ps-step-rich` and either a substantially larger image/gif/video
         preview or its actual text rendered inline — see each other's
         docstring for exactly what "larger"/"inline" mean.
+
+        Task 7: `tag=True` (used only for the steps folded under "How it was
+        made" once a hero is promoted out of the flat list) adds a small
+        "artifact"/"text"/"none" label classifying the row via the same
+        artifact/text/neither split `has_content` already uses. `tag=False`
+        (the default, and every pre-existing call site) renders byte-for-byte
+        as before — this is purely additive.
         """
         has_content = bool(step.artifact_path or step.text_content)
 
@@ -1272,6 +1369,13 @@ class OpenView(Gtk.Box):
 
         right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         right.set_valign(Gtk.Align.CENTER)
+
+        if tag:
+            kind_label = Gtk.Label(label=self._kind_tag(step))
+            kind_label.add_css_class("ps-step-kind-tag")
+            kind_label.set_halign(Gtk.Align.END)
+            right.append(kind_label)
+            self._step_kind_tags[step.node_id] = kind_label
 
         remix_btn = Gtk.Button(label="Remix from here →")
         remix_btn.add_css_class("ps-remix-btn")
@@ -1344,6 +1448,216 @@ class OpenView(Gtk.Box):
 
     def _on_remix_clicked(self, _button: Gtk.Button, node_id: str) -> None:
         self.emit("remix-request", node_id)
+
+    @staticmethod
+    def _kind_tag(step: StepView) -> str:
+        """Classify *step* as "artifact" / "text" / "none" — the same
+        artifact/text/neither split `_build_step_row`'s own if/elif/else
+        already renders differently, promoted into a short label for the
+        "How it was made" breakdown rows."""
+        if step.artifact_path or step.artifact_paths:
+            return "artifact"
+        if step.text_content:
+            return "text"
+        return "none"
+
+    def _step_by_node_id(self, node_id: str) -> "StepView | None":
+        """Look up a step by node_id in the currently-loaded run, or None."""
+        if self._run_view is None:
+            return None
+        for step in self._run_view.steps:
+            if step.node_id == node_id:
+                return step
+        return None
+
+    # ── Task 7: final-result hero ───────────────────────────────────────────
+
+    def _build_hero(self, step: StepView) -> Gtk.Widget:
+        """Large "Here's what you made" hero for the run's deliverable step.
+
+        Renders the step's real artifact (reusing `_build_thumb_frame` at
+        `PREVIEW_W`×`PREVIEW_H` — the same "substantially larger" preview an
+        ordinary rich row already gets, see fix #6 in `_build_step_row`), the
+        WHOLE series as a wrapped grid for a fan-out step (mirroring
+        `_build_step_row`'s own `len(step.artifact_paths) > 1` branch — a
+        promoted fan-out hero must still show every still, not just one) or,
+        for a text-only pipeline, its actual text (via `_build_text_block`,
+        again the same rendering an ordinary text row already uses) — never
+        a placeholder tile, since `_resolve_hero_index` only ever promotes a
+        step that produced real content.
+
+        Registers into `_step_thumb_frames`/`_step_text_blocks`/
+        `_step_remix_buttons` under the step's own node_id exactly as
+        `_build_step_row` would have — this step no longer gets an ordinary
+        row, but callers/tests that look a step up by node_id in those dicts
+        must keep finding it.
+
+        Action row — ⛶ Fullscreen / ⤓ Save / ↪ In Library / 🔀 Remix:
+        Fullscreen and Remix reuse this view's own existing handlers
+        (`_open_fullscreen`/`_on_remix_clicked` — never forked). Save/In
+        Library are intentionally minimal: no richer "export"/"library
+        browser" surface exists in this module to reuse (importing
+        `main_window`'s viewer/library machinery here would be a circular
+        import — see `_open_fullscreen`'s docstring), so they're a plain
+        file-copy save-dialog and a reveal-in-file-manager, respectively.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.add_css_class("ps-hero-result")
+        box.set_halign(Gtk.Align.CENTER)
+
+        title = Gtk.Label(label="Here's what you made")
+        title.add_css_class("ps-hero-result-title")
+        box.append(title)
+        self._hero_title_label = title
+
+        if len(step.artifact_paths) > 1:
+            grid = Gtk.FlowBox()
+            grid.set_selection_mode(Gtk.SelectionMode.NONE)
+            grid.set_max_children_per_line(3)
+            grid.set_column_spacing(8)
+            grid.set_row_spacing(8)
+            grid.set_halign(Gtk.Align.CENTER)
+            grid.set_size_request(self.PREVIEW_W, -1)
+            for p in step.artifact_paths:
+                grid.insert(
+                    _build_thumb_frame(p, self.FANOUT_THUMB, self.FANOUT_THUMB,
+                                        "ps-card-thumb", step.intent), -1)
+            box.append(grid)
+            self._step_thumb_frames[step.node_id] = grid
+        elif step.artifact_path:
+            frame = _build_thumb_frame(step.artifact_path, self.PREVIEW_W, self.PREVIEW_H,
+                                        "ps-card-thumb", step.intent)
+            box.append(frame)
+            self._step_thumb_frames[step.node_id] = frame
+        elif step.text_content:
+            text_block, text_label = self._build_text_block(step.text_content)
+            box.append(text_block)
+            self._step_text_blocks[step.node_id] = text_label
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        actions.set_halign(Gtk.Align.CENTER)
+        box.append(actions)
+
+        fullscreen_btn = Gtk.Button(label="⛶ Fullscreen")
+        fullscreen_btn.add_css_class("ps-hero-action")
+        fullscreen_btn.connect("clicked", self._on_fullscreen_clicked, step.node_id)
+        actions.append(fullscreen_btn)
+        self._hero_fullscreen_btn = fullscreen_btn
+
+        save_btn = Gtk.Button(label="⤓ Save")
+        save_btn.add_css_class("ps-hero-action")
+        save_btn.connect("clicked", self._on_save_clicked, step.node_id)
+        actions.append(save_btn)
+        self._hero_save_btn = save_btn
+
+        library_btn = Gtk.Button(label="↪ In Library")
+        library_btn.add_css_class("ps-hero-action")
+        library_btn.connect("clicked", self._on_reveal_clicked, step.node_id)
+        actions.append(library_btn)
+        self._hero_library_btn = library_btn
+
+        remix_btn = Gtk.Button(label="🔀 Remix")
+        remix_btn.add_css_class("ps-hero-action")
+        remix_btn.connect("clicked", self._on_remix_clicked, step.node_id)
+        actions.append(remix_btn)
+        self._hero_remix_btn = remix_btn
+        self._step_remix_buttons[step.node_id] = remix_btn
+
+        return box
+
+    def _on_fullscreen_clicked(self, _button: Gtk.Button, node_id: str) -> None:
+        self._open_fullscreen(node_id)
+
+    def _open_fullscreen(self, node_id: str) -> None:
+        """Show *node_id*'s artifact maximized in its own window.
+
+        No dedicated full-size image/video viewer is safely reachable from
+        this module: `main_window`'s `ImageViewerWindow`/`VideoPlayerWindow`
+        key off a `GenerationRecord` (a different data model than this
+        module's `StepView`/plain paths) and `main_window` only ever imports
+        `pipeline_studio` LAZILY, inside a method — importing it back here at
+        module scope would be a circular import. So this reuses the same
+        poster-frame/placeholder rendering every other preview in this
+        module already goes through (`_build_thumb_frame`), just
+        considerably larger, in a plain `Gtk.Window`.
+        """
+        step = self._step_by_node_id(node_id)
+        if step is None or not step.artifact_path:
+            return
+        window = Gtk.Window(title="Here's what you made")
+        root = self.get_root()
+        if isinstance(root, Gtk.Window):
+            window.set_transient_for(root)
+        window.set_default_size(self._FULLSCREEN_W, self._FULLSCREEN_H)
+        frame = _build_thumb_frame(step.artifact_path, self._FULLSCREEN_W, self._FULLSCREEN_H,
+                                    "ps-card-thumb", step.intent)
+        window.set_child(frame)
+        # Kept as an attribute (not just a local) so a test can inspect the
+        # window it opened without needing a real, blocking present() loop.
+        self._fullscreen_window = window
+        window.present()
+
+    def _on_save_clicked(self, _button: Gtk.Button, node_id: str) -> None:
+        step = self._step_by_node_id(node_id)
+        if step is None or not step.artifact_path:
+            return
+        self._save_artifact(step.artifact_path)
+
+    def _save_artifact(self, path: str) -> None:
+        """Save *path* to wherever the user picks, via GTK4's async
+        `Gtk.FileDialog` (see CLAUDE.md's FileDialog gotcha — `save()` takes
+        a callback, not a return value; `save_finish()` is wrapped in
+        try/except since it raises on cancel). Minimal by design (brief):
+        a plain file copy, since no richer export pipeline exists in this
+        module to reuse.
+        """
+        import shutil  # noqa: PLC0415 — local import, mirrors this module's other local imports
+
+        dlg = Gtk.FileDialog()
+        dlg.set_initial_name(Path(path).name)
+        root = self.get_root()
+        parent = root if isinstance(root, Gtk.Window) else None
+
+        def _on_finish(dialog: Gtk.FileDialog, result) -> None:
+            try:
+                gfile = dialog.save_finish(result)
+            except Exception:
+                return  # user cancelled, or the dialog failed — nothing to do
+            dest = gfile.get_path() if gfile else None
+            if not dest:
+                return
+            try:
+                shutil.copyfile(path, dest)
+            except Exception:
+                pass  # best-effort save; never crash the view over a copy failure
+
+        dlg.save(parent, None, _on_finish)
+
+    def _on_reveal_clicked(self, _button: Gtk.Button, node_id: str) -> None:
+        step = self._step_by_node_id(node_id)
+        if step is None or not step.artifact_path:
+            return
+        self._reveal_in_file_manager(step.artifact_path)
+
+    def _reveal_in_file_manager(self, path: str) -> None:
+        """Open *path*'s containing folder in the system file manager —
+        minimal stand-in for "show this in the library" (brief): no in-app
+        media-library browser is reachable from this module without the same
+        circular-import problem `_open_fullscreen` documents. Same
+        xdg-open/open subprocess pattern `_on_open_showcase_clicked` already
+        uses elsewhere in this view.
+        """
+        import platform  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        folder = str(Path(path).parent)
+        try:
+            if platform.system() == "Darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            pass
 
     # ── "Build showcase" capstone ────────────────────────────────────────────
 
