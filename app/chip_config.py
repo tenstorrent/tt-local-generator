@@ -3,9 +3,11 @@
 """chip_config.py — Load prompt chip definitions from config/prompt_chips.yaml.
 
 Public API:
-    ChipEntry     — dataclass: label, text, tip
+    ChipEntry     — dataclass: label, text, tip, surprise
     ChipCategory  — dataclass: name, chips
     load_chips(tab, config_path=None) -> list[ChipCategory]
+    load_chips_for_artgen(artgen_type, config_path=None) -> list[ChipCategory]
+    surprise_pool(category) -> list[str]
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ class ChipEntry:
     label: str          # button label (may include emoji)
     text: str           # text appended to prompt on click
     tip: str = ""       # tooltip (empty string if omitted)
+    surprise: bool = False  # if True, text is auto-generated; omit text in YAML
 
 
 @dataclass
@@ -69,7 +72,8 @@ def load_chips(tab: str, config_path: Path | None = None) -> list[ChipCategory]:
                     f"Chip at category '{cat_name}' index {chip_idx} is missing required field 'label'"
                 )
             text = chip_raw.get("text")
-            if text is None:
+            is_surprise = bool(chip_raw.get("surprise", False))
+            if text is None and not is_surprise:
                 raise ValueError(
                     f"Chip at category '{cat_name}' index {chip_idx} is missing required field 'text'"
                 )
@@ -83,11 +87,28 @@ def load_chips(tab: str, config_path: Path | None = None) -> list[ChipCategory]:
             if tab in effective_for:
                 matched.append(ChipEntry(
                     label=label,
-                    text=text,
+                    text=text if text is not None else "",
                     tip=chip_raw.get("tip", ""),
+                    surprise=is_surprise,
                 ))
 
         if matched:
             result.append(ChipCategory(name=cat_name, chips=matched))
 
     return result
+
+
+def load_chips_for_artgen(artgen_type: str, config_path: Path | None = None) -> list[ChipCategory]:
+    """Chip banks for an artgen TYPE: that type's own categories plus the
+    shared cross-type 'artgen' mood bank. Deduped by category name (type
+    first). A type with no curated banks yields just the shared bank."""
+    type_cats = load_chips(artgen_type, config_path)
+    seen = {c.name for c in type_cats}
+    shared = [c for c in load_chips("artgen", config_path) if c.name not in seen]
+    return type_cats + shared
+
+
+def surprise_pool(category: ChipCategory) -> list[str]:
+    """The `.text` of every non-surprise chip in *category* — the pool a
+    Surprise chip picks from."""
+    return [c.text for c in category.chips if not c.surprise and c.text]
