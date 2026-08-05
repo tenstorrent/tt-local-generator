@@ -424,12 +424,19 @@ def build_run_view(record: dict) -> RunView:
         steps.append(StepView(node_id=node_id, intent=intent, status=status,
                               artifact_path=artifact_path, text_content=text_content,
                               artifact_paths=artifact_paths))
-        # First-wins tie-break (pinned by
-        # test_artifact_resolved_from_per_job_subdirectory, which asserts the
-        # first heroable artifact wins even when a later step also produced
-        # one) — this task only widens WHICH kinds are hero-eligible (see
-        # _is_hero_candidate), not the tie-break order.
-        if hero_path is None and artifact_path and _is_hero_candidate(intent, artifact_path):
+        # Last-wins (whole-branch review Finding 3): `order` is the spec's
+        # topological order, so overwriting hero_path on every hero-eligible
+        # step encountered leaves the TOPOLOGICALLY-LAST one standing — the
+        # run's actual final deliverable. First-wins (the original behavior,
+        # pinned by test_artifact_resolved_from_per_job_subdirectory before
+        # this fix) picked the FIRST heroable artifact instead — for a
+        # TTLGTextToImage -> TTLGImageToVideo pipeline that meant the seed
+        # IMAGE became the hero/Library registration instead of the finished
+        # VIDEO the pipeline was actually built to produce. See
+        # `_HERO_KINDS`'s docstring for why gif/artgen "any"-kind visual
+        # artifacts are hero-eligible in the first place; this only changes
+        # WHICH eligible step wins when more than one produced an artifact.
+        if artifact_path and _is_hero_candidate(intent, artifact_path):
             hero_path = artifact_path
 
     title = record.get("spec_name") or Path(record["spec_path"]).stem
@@ -449,8 +456,10 @@ def final_index_for(run: RunView) -> "int | None":
     """Index into `run.steps` of the step that produced `run.hero_path`.
 
     Promotes the previously-unused `hero_path` field (set by `build_run_view`
-    to the first heroable image/video artifact) into "which STEP is the
-    deliverable" — OpenView uses this to render that step as a large
+    to the LAST/topologically-final heroable image/video/gif/visual-artgen
+    artifact — the run's actual final deliverable, see build_run_view's
+    "Last-wins" comment) into "which STEP is the deliverable" — OpenView uses
+    this to render that step as a large
     "Here's what you made" hero instead of just another row in the list.
 
     Pure/GTK-free, like the rest of this module. Returns None whenever there

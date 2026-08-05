@@ -4,8 +4,9 @@
 Task 7 (final-result hero): pure unit tests for `pipeline_view_model.
 final_index_for`.
 
-`build_run_view` already computes `RunView.hero_path` (the first heroable
-image/video artifact) but nothing ever read it — `final_index_for` promotes
+`build_run_view` already computes `RunView.hero_path` (the last/topologically-
+final heroable image/video artifact — the run's final deliverable) but
+nothing ever read it — `final_index_for` promotes
 it into "which STEP produced the hero", which OpenView uses to render a
 "Here's what you made" hero instead of just another row. Pure/GTK-free, per
 this module's existing discipline (see its module docstring).
@@ -120,8 +121,10 @@ def test_open_view_text_only_finished_run_uses_text_as_hero():
 
     assert view._hero_title_label is not None
     assert view._step_text_blocks["1"].get_label() == "A poem."
-    # Sole step -> nothing left to fold under "How it was made".
-    assert view._how_made_expander is not None
+    # Whole-branch review Finding 5: the hero is the run's ONLY step, so
+    # there is nothing left to fold under "How it was made" -- no expander
+    # should be built at all (an empty-bodied one was dead, misleading UI).
+    assert view._how_made_expander is None
 
 
 def test_open_view_hero_fullscreen_button_reuses_open_fullscreen(monkeypatch):

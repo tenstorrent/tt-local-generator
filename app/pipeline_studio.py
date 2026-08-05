@@ -256,7 +256,7 @@ from intent_vocab import (  # noqa: E402
 )
 from model_picker import ModelPickerRow  # noqa: E402
 import pipeline_progress  # noqa: E402
-from pipeline_engine import load_spec, topo_order  # noqa: E402
+from pipeline_engine import _artgen_uses_llm, load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
 from pipeline_view_model import (  # noqa: E402
@@ -1227,9 +1227,12 @@ class OpenView(Gtk.Box):
         what you made" hero (`_build_hero`); every other step still renders
         via the same `_build_step_row` this view always used, just folded
         under a collapsed "How it was made" `Gtk.Expander` instead of sitting
-        loose in the list. A run with no promoted hero (most fixtures used by
-        this view's own pre-existing tests: `hero_path=None`) renders exactly
-        as before — one row per step, flat, no expander.
+        loose in the list — UNLESS the hero is the run's only step, in which
+        case there is nothing left to fold and no expander is built at all
+        (whole-branch review Finding 5: an expander with an empty body was
+        dead, misleading UI). A run with no promoted hero (most fixtures used
+        by this view's own pre-existing tests: `hero_path=None`) renders
+        exactly as before — one row per step, flat, no expander.
         """
         self._title_label.set_label(run.title)
         self._run_view = run
@@ -1265,12 +1268,20 @@ class OpenView(Gtk.Box):
         hero_step = run.steps[hero_index]
         self._steps_box.append(self._build_hero(hero_step))
 
+        # Whole-branch review Finding 5: when the hero is the run's ONLY
+        # step, there is nothing left to fold under "How it was made" — an
+        # expander with an empty body is a dead, misleading control (it
+        # implies there's more to expand). Build it only when at least one
+        # non-hero step actually exists.
+        other_steps = [(index, step) for index, step in enumerate(run.steps, start=1)
+                       if index - 1 != hero_index]
+        if not other_steps:
+            return
+
         expander = Gtk.Expander(label="How it was made")
         expander.set_expanded(False)  # collapsed by default (brief)
         exp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        for index, step in enumerate(run.steps, start=1):
-            if index - 1 == hero_index:
-                continue  # already shown as the hero above
+        for index, step in other_steps:
             exp_box.append(self._build_step_row(index, step, tag=True))
         expander.set_child(exp_box)
         self._steps_box.append(expander)
@@ -2173,6 +2184,24 @@ class RemixView(Gtk.Box):
         # pulled out of `fields` here, before the brief/direction/control
         # classification loop ever sees it.
         cap = capability_for_intent(class_type)
+        if cap is not None and class_type == "TTLGArtgenGenerate":
+            # Whole-branch review Finding 1 (part 2): `capability_for_intent`
+            # maps EVERY TTLGArtgenGenerate node to "artgen" regardless of
+            # which plugin it runs, but `pipeline_engine._backend_for` only
+            # switches an LLM backend for a plugin whose generator declares
+            # `uses_llm=True` — a purely algorithmic plugin (palette,
+            # ansi-image) gets no backend switch at all, so a picker here
+            # would be dead UI exactly like the (now-removed) Montage
+            # mapping was. A plugin value we can't confirm is LLM-backed (no
+            # "plugin" field on this node at all) is ALSO treated as "no
+            # picker" here — this is a stricter, UI-only decision than
+            # `_artgen_uses_llm`'s own fail-soft "assume LLM" default (that
+            # default exists to keep the ENGINE safe by starting a backend
+            # when in doubt; showing a no-op picker has no such safety
+            # upside, so we don't extend the same fail-soft direction to it).
+            plugin_value = next((f.value for f in fields if f.key == "plugin"), None)
+            if not plugin_value or not _artgen_uses_llm(plugin_value):
+                cap = None
         current_model = None
         if cap is not None:
             current_model = next((f.value for f in fields if f.key == "model"), None)

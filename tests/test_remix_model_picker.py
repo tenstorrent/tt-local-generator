@@ -139,6 +139,58 @@ def test_collect_edits_emits_model_edit_only_when_picker_selection_changes():
     assert received == [{"1": {"model": new_key}}]
 
 
+def test_montage_step_has_no_picker():
+    """Whole-branch review Finding 1: TTLGMontage is an ffmpeg slideshow node
+    with no model dimension (`pipeline_engine._backend_for` has no branch
+    for it) — `intent_vocab._CAPABILITY_FOR_INTENT` no longer maps it to
+    "video", so it must not get a (dead, no-op) model picker."""
+    view = ps.RemixView()
+    view._build_step_card(1, "1", "TTLGMontage", [])
+    assert view._model_pickers.get("1") is None
+    assert "1" not in view._model_orig
+
+
+def test_non_llm_artgen_plugin_has_no_picker():
+    """Whole-branch review Finding 1: a TTLGArtgenGenerate node running the
+    one purely algorithmic built-in plugin (`animatediff`, the only
+    registered generator with `uses_llm=False` -- see
+    `pipeline_engine._artgen_uses_llm`'s own callers) gets no LLM backend
+    switch at all (`pipeline_engine._backend_for` returns None for it), so
+    the artgen model picker Create's scoped dropdown otherwise shows would
+    be dead UI. The "plugin" field itself is left alone (still renders as a
+    plain field) -- only the picker is suppressed."""
+    view = ps.RemixView()
+    field = ParamField(node_id="1", key="plugin", label="Plugin", kind="text", value="animatediff")
+    view._build_step_card(1, "1", "TTLGArtgenGenerate", [field])
+    assert view._model_pickers.get("1") is None
+    assert "1" not in view._model_orig
+    # The plugin field itself is untouched -- still a plain rendered field.
+    assert "plugin" in view._field_widgets.get("1", {})
+
+
+def test_unknown_plugin_value_has_no_picker():
+    """A TTLGArtgenGenerate node with no "plugin" field at all (an edge case
+    real specs shouldn't hit, since the node always carries one) is treated
+    as "can't confirm this needs an LLM" -- no picker, rather than falling
+    back to `_artgen_uses_llm`'s own engine-safety fail-soft default (which
+    assumes LLM on any lookup failure, the opposite direction: better to
+    start a backend than not when a real run is at stake)."""
+    view = ps.RemixView()
+    view._build_step_card(1, "1", "TTLGArtgenGenerate", [])
+    assert view._model_pickers.get("1") is None
+    assert "1" not in view._model_orig
+
+
+def test_llm_artgen_plugin_still_gets_a_picker():
+    """The flip side: an LLM-backed artgen plugin (verse, the default —
+    `uses_llm=True`) keeps its picker exactly as before this fix."""
+    view = ps.RemixView()
+    field = ParamField(node_id="1", key="plugin", label="Plugin", kind="text", value="verse")
+    view._build_step_card(1, "1", "TTLGArtgenGenerate", [field])
+    assert view._model_pickers.get("1") is not None
+    assert "1" in view._model_orig
+
+
 def test_model_field_prefills_picker_selection():
     """When the spec DOES carry an explicit "model" value that matches a
     real capability entry, the picker should pre-select it (not silently

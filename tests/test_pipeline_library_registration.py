@@ -74,6 +74,28 @@ def _make_mw():
     return obj
 
 
+class _ImmediateThread:
+    """threading.Thread stand-in that runs its target synchronously on start()
+    — same pattern `tests/test_main_window_create_generate.py` uses. Needed
+    because whole-branch review Finding 2 moved
+    `_register_pipeline_final_native`'s ffmpeg/record-build work onto a real
+    background thread; these tests want that work to have already happened
+    by the time they assert."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def _patch_native_threading(monkeypatch):
+    """Make `_register_pipeline_final_native`'s background thread + its
+    `GLib.idle_add` tail-callback run inline, so tests can assert synchronously."""
+    monkeypatch.setattr(mw.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+
 # ── artgen-kind final (.gif) -> media_store.MediaRecord ──────────────────────
 
 def test_gif_final_registers_media_record_with_pipeline_provenance(tmp_path):
@@ -99,7 +121,7 @@ def test_gif_final_registers_media_record_with_pipeline_provenance(tmp_path):
     obj._gallery_for_type.assert_not_called()
 
 
-@pytest.mark.parametrize("ext", [".svg", ".ans", ".json", ".py", ".md"])
+@pytest.mark.parametrize("ext", [".svg", ".ans", ".json", ".py", ".md", ".webp"])
 def test_other_artgen_kinds_also_register_media_record(tmp_path, ext):
     obj = _make_mw()
     run_view = _run_with_final(tmp_path, ext, run_id=f"run-{ext}")
@@ -113,7 +135,8 @@ def test_other_artgen_kinds_also_register_media_record(tmp_path, ext):
 
 # ── raster/mp4 final -> history_store.GenerationRecord + gallery ────────────
 
-def test_png_final_registers_generation_record_via_gallery(tmp_path):
+def test_png_final_registers_generation_record_via_gallery(tmp_path, monkeypatch):
+    _patch_native_threading(monkeypatch)
     obj = _make_mw()
     run_view = _run_with_final(tmp_path, ".png", class_type="TTLGTextToImage")
 
@@ -133,7 +156,8 @@ def test_png_final_registers_generation_record_via_gallery(tmp_path):
     obj._artgen_gallery.refresh.assert_not_called()
 
 
-def test_mp4_final_registers_video_generation_record(tmp_path):
+def test_mp4_final_registers_video_generation_record(tmp_path, monkeypatch):
+    _patch_native_threading(monkeypatch)
     obj = _make_mw()
     run_view = _run_with_final(tmp_path, ".mp4", class_type="TTLGImageToVideo")
 
@@ -181,9 +205,27 @@ def test_missing_final_artifact_file_registers_nothing(tmp_path):
     obj._gallery_for_type.assert_not_called()
 
 
-def test_registration_error_never_raises(tmp_path):
+def test_failed_run_registers_nothing(tmp_path):
+    """Whole-branch review Finding 4: `LiveRunView.on_finished` emits
+    "run-done" on failure too, and registration must not treat the final
+    step's leftover/stale artifact as a genuine deliverable when that step's
+    own status is "failed" (not "done")."""
+    obj = _make_mw()
+    run_view = _run_with_final(tmp_path, ".png")
+    run_view.steps[0].status = "failed"
+
+    with patch("main_window.subprocess.run"):
+        obj._register_pipeline_final(run_view)  # must not raise
+
+    obj._store.append.assert_not_called()
+    obj._gallery_for_type.assert_not_called()
+    obj._artgen_gallery.refresh.assert_not_called()
+
+
+def test_registration_error_never_raises(tmp_path, monkeypatch):
     """Any exception while building/writing the record is swallowed — a
     failed registration must never break the run-done view."""
+    _patch_native_threading(monkeypatch)
     obj = _make_mw()
     obj._gallery_for_type = MagicMock(side_effect=RuntimeError("boom"))
     run_view = _run_with_final(tmp_path, ".png")
@@ -193,7 +235,8 @@ def test_registration_error_never_raises(tmp_path):
 
 # ── register-once-per-run ────────────────────────────────────────────────────
 
-def test_registers_only_once_per_run_id(tmp_path):
+def test_registers_only_once_per_run_id(tmp_path, monkeypatch):
+    _patch_native_threading(monkeypatch)
     obj = _make_mw()
     run_view = _run_with_final(tmp_path, ".png")
 

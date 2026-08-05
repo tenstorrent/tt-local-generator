@@ -331,10 +331,21 @@ def flow_line(intent: "Intent") -> str:
 
 # Intent (by class_type) -> model-picker capability, or None for intents with
 # no model dimension. Keys mirror server_manager capabilities.
+#
+# NOTE on "TTLGMontage": deliberately ABSENT. It's an ffmpeg slideshow node —
+# `pipeline_engine._backend_for` has no branch for it (returns None, "no
+# backend switch needed"), so there is no model to pick at all. It used to
+# map to "video" here, which rendered a video-model picker in the Pipeline
+# Studio step card that did nothing when touched — a dead control (whole-
+# branch review Finding 1). "TTLGArtgenGenerate" stays mapped to "artgen"
+# here (the LLM-backed default) — callers that need to render a per-node
+# picker must additionally gate on whether THIS node's plugin actually uses
+# an LLM (see `pipeline_engine._artgen_uses_llm`, consulted by
+# `RemixView._build_step_card`), since a non-LLM plugin (palette/ansi-image)
+# has the same "no backend, no picker" problem Montage did.
 _CAPABILITY_FOR_INTENT = {
     "TTLGTextToImage": "image",
     "TTLGImageToVideo": "video",
-    "TTLGMontage": "video",
     "TTLGAnimateDiff": "animatediff",
     "TTLGGenerateText": "artgen",
     "TTLGArtgenGenerate": "artgen",

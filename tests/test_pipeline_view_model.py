@@ -211,7 +211,14 @@ def test_artifact_resolved_from_per_job_subdirectory():
     assert Path(by_id["1"].artifact_path).exists()
     assert by_id["4"].artifact_path == str(_FIX_NESTED / "jobA" / "node4_video.mp4")
     assert Path(by_id["4"].artifact_path).exists()
-    assert view.hero_path == str(_FIX_NESTED / "jobA" / "node1_image.png")
+    # Whole-branch review Finding 3: the run's hero/Library deliverable is the
+    # LAST heroable (topologically-final) artifact, not the first — node "4"
+    # (TTLGImageToVideo, the finished video) wins over node "1" (the seed
+    # image that merely fed it). Pre-fix this asserted node "1" (first-wins),
+    # which meant an image->video pipeline's Library registration was always
+    # the intermediate seed image instead of the actual video deliverable.
+    assert view.hero_path == str(_FIX_NESTED / "jobA" / "node4_video.mp4")
+    assert pvm.final_index_for(view) == [s.node_id for s in view.steps].index("4")
 
 
 # ── StepView.text_content (Task 6, fix #6) ──────────────────────────────────

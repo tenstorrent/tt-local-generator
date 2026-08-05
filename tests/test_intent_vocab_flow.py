@@ -22,6 +22,14 @@ def test_capability_for_intent():
     assert iv.capability_for_intent("TTLGCaptionImage") is None  # no model dimension
 
 
+def test_capability_for_intent_montage_is_none():
+    """Whole-branch review Finding 1: TTLGMontage is an ffmpeg slideshow node
+    with no model dimension at all (`pipeline_engine._backend_for` has no
+    branch for it) — it must not map to a capability, or Pipeline Studio
+    renders a video-model picker that does nothing when touched."""
+    assert iv.capability_for_intent("TTLGMontage") is None
+
+
 def test_summary_field_optional_and_present_for_key_intents():
     assert iv.intent_for("TTLGCaptionImage").summary is None or isinstance(
         iv.intent_for("TTLGCaptionImage").summary, str)

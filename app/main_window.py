@@ -7127,15 +7127,24 @@ class MainWindow(Gtk.ApplicationWindow):
     # _register_pipeline_final's docstring.
     #
     # No ".webp" here: pipeline_view_model._IMAGE_EXTS (what _resolve_artifact
-    # actually filters "image"-kind candidates to) never includes it, so no
-    # node's artifact_path can ever end in .webp — it was dead/unreachable.
+    # actually filters NATIVE "image"-kind candidates to — TTLGTextToImage's
+    # image_path, TTLGComposite's image_path, etc.) never includes it, so a
+    # NATIVE artifact_path can never end in .webp — unreachable for THIS set.
+    # (Whole-branch review Finding 6: this does NOT extend to
+    # _PIPELINE_FINAL_ARTGEN_EXTS below — see its own comment.)
     _PIPELINE_FINAL_RASTER_EXTS = (".png", ".jpg", ".jpeg")
     _PIPELINE_FINAL_VIDEO_EXTS = (".mp4",)
     # ".txt" covers verse/freeform/lore's plain-text artgen output (the same
     # generic TTLGArtgenGenerate "artifact_path" the visual kinds share) —
     # a real .txt final should still register as a MediaRecord rather than
     # silently falling through the "unrecognized extension" no-op below.
-    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md", ".txt")
+    # ".webp" IS reachable here (unlike the native raster set above):
+    # TTLGArtgenGenerate's generic "any"-kind artifact_path can be any
+    # extension, and pipeline_view_model._ARTGEN_VISUAL_EXTS already lists
+    # ".webp" as hero-eligible — omitting it here meant a hypothetical .webp
+    # artgen final would show a hero (Discover/Open) but register nothing
+    # into the Library, a hero/registration mismatch (Finding 6).
+    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md", ".txt", ".webp")
 
     def _register_pipeline_final(self, run_view) -> None:
         """Register a completed pipeline run's final deliverable into the Library.
@@ -7171,6 +7180,18 @@ class MainWindow(Gtk.ApplicationWindow):
         must never surface to (or break) the run-done view the user is
         looking at.
 
+        Whole-branch review Finding 4: `LiveRunView.on_finished` emits
+        "run-done" on BOTH success and failure (a failed run still resolves
+        its in-flight step to "failed" and fires the signal so the Open page
+        rebuilds and shows what went wrong) — `PipelineStudio._on_run_done`
+        calls `on_run_complete` either way, with no success/failure
+        distinction of its own. Without an explicit gate here, a failed or
+        partial run whose hero-eligible step nonetheless left a stale/partial
+        artifact on disk (e.g. a retried node's earlier attempt) would get
+        registered into the Library as if it were a real finished deliverable.
+        Guarded below: only a final step whose OWN status is "done" (not
+        "failed"/"running"/"pending") is ever registered.
+
         `self._registered_pipeline_runs` (a set of run ids, lazily created)
         guards registering the same run more than once — defense in depth
         against `on_run_complete` somehow firing twice for one run_id.
@@ -7191,6 +7212,11 @@ class MainWindow(Gtk.ApplicationWindow):
             if index is None:
                 return
             step = run_view.steps[index]
+            if step.status != "done":
+                # Finding 4: never register a failed/partial run's final
+                # step — a stale artifact from an earlier retry (or one
+                # still mid-write) is not a genuine finished deliverable.
+                return
             artifact_path = step.artifact_path
             if not artifact_path or not Path(artifact_path).is_file():
                 return
@@ -7216,6 +7242,18 @@ class MainWindow(Gtk.ApplicationWindow):
         `_make_thumbnail_for` for a static image: no `-vframes`, just the
         scale+pad) — `-update 1` avoids the image2-muxer "already exists"
         warning either way.
+
+        Whole-branch review Finding 2: this method is reached from
+        `_register_pipeline_final`, which `PipelineStudio`'s `on_run_complete`
+        callback invokes via `GLib.idle_add` — i.e. on the GTK main thread.
+        The ffmpeg thumbnail extraction below is a real subprocess with a
+        `timeout=30`, so building it inline here could freeze the whole UI for
+        up to 30 seconds. Per CLAUDE.md's GTK threading rule, the heavy work
+        (ffmpeg + record construction + `self._store.append`, all pure I/O —
+        no GTK objects touched) now runs on a daemon thread, mirroring
+        `_create_generate_artgen`'s worker pattern; only the final gallery
+        touch (`gallery.replace_pending_with`, a real widget call) is posted
+        back via `GLib.idle_add`.
         """
         import uuid
         from datetime import datetime, timezone
@@ -7223,49 +7261,77 @@ class MainWindow(Gtk.ApplicationWindow):
 
         is_video = ext in self._PIPELINE_FINAL_VIDEO_EXTS
         media_type = "video" if is_video else "image"
-        ts = datetime.now(timezone.utc)
-        ts_str = ts.strftime("%Y%m%d_%H%M%S")
-        job_id = str(uuid.uuid4())
 
-        THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-        thumb_path = THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"
-        ffmpeg_args = ["ffmpeg", "-y", "-i", artifact_path]
-        if is_video:
-            ffmpeg_args += ["-vframes", "1"]
-        ffmpeg_args += [
-            "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
-                   "pad=200:112:(ow-iw)/2:(oh-ih)/2",
-            "-q:v", "3", "-update", "1", str(thumb_path),
-        ]
-        try:
-            subprocess.run(ffmpeg_args, stdin=subprocess.DEVNULL,
-                            capture_output=True, timeout=30)
-        except Exception:
+        def run() -> None:
             try:
-                shutil.copy2(artifact_path, str(thumb_path))
-            except Exception:
-                pass
+                ts = datetime.now(timezone.utc)
+                ts_str = ts.strftime("%Y%m%d_%H%M%S")
+                job_id = str(uuid.uuid4())
 
-        record = GenerationRecord(
-            id=job_id,
-            prompt=f"Pipeline: {run_view.title}"[:500],
-            negative_prompt="",
-            num_inference_steps=0,
-            seed=-1,
-            video_path=artifact_path if is_video else "",
-            thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
-            created_at=ts.isoformat(),
-            media_type=media_type,
-            image_path="" if is_video else artifact_path,
-            model="",
-            extra_meta={
-                "_pipeline_run_id": run_view.run_id,
-                "recipe": run_view.recipe,
-            },
-        )
-        self._store.append(record)
-        gallery = self._gallery_for_type(media_type)
-        gallery.replace_pending_with(record)
+                THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+                thumb_path = THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"
+                ffmpeg_args = ["ffmpeg", "-y", "-i", artifact_path]
+                if is_video:
+                    ffmpeg_args += ["-vframes", "1"]
+                ffmpeg_args += [
+                    "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
+                           "pad=200:112:(ow-iw)/2:(oh-ih)/2",
+                    "-q:v", "3", "-update", "1", str(thumb_path),
+                ]
+                try:
+                    subprocess.run(ffmpeg_args, stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=30)
+                except Exception:
+                    try:
+                        shutil.copy2(artifact_path, str(thumb_path))
+                    except Exception:
+                        pass
+
+                record = GenerationRecord(
+                    id=job_id,
+                    prompt=f"Pipeline: {run_view.title}"[:500],
+                    negative_prompt="",
+                    num_inference_steps=0,
+                    seed=-1,
+                    video_path=artifact_path if is_video else "",
+                    thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+                    created_at=ts.isoformat(),
+                    media_type=media_type,
+                    image_path="" if is_video else artifact_path,
+                    model="",
+                    extra_meta={
+                        "_pipeline_run_id": run_view.run_id,
+                        "recipe": run_view.recipe,
+                    },
+                )
+                self._store.append(record)
+                GLib.idle_add(self._finish_register_pipeline_final_native, media_type, record)
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "failed to build native pipeline final record for run %s",
+                    getattr(run_view, "run_id", None), exc_info=True,
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_register_pipeline_final_native(self, media_type: str, record) -> bool:
+        """Main-thread tail of `_register_pipeline_final_native`: the one real
+        widget touch (gallery insert), posted back via `GLib.idle_add` since
+        everything upstream of this ran on a background thread. Wrapped in
+        its own try/except — same fail-soft discipline as every other
+        registration path in this file — so a gallery-refresh error can never
+        surface after the record has already been durably persisted."""
+        try:
+            gallery = self._gallery_for_type(media_type)
+            gallery.replace_pending_with(record)
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to refresh gallery for native pipeline final (media_type=%s)",
+                media_type, exc_info=True,
+            )
+        return GLib.SOURCE_REMOVE
 
     def _register_pipeline_final_artgen(self, run_view, artifact_path: str) -> None:
         """Artgen-kind pipeline final → media_store.MediaRecord + artgen gallery refresh."""
