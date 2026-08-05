@@ -87,3 +87,18 @@ def test_generator_type_accepted_but_extension_wins():
 
 def test_empty_string_path_is_none():
     assert artgen_seed_kind("") is None
+
+
+def test_palette_json_is_palette_kind():
+    assert artgen_seed_kind("/x/pal.json", "palette") == "palette"
+
+
+def test_other_json_still_none():
+    assert artgen_seed_kind("/x/data.json", "somethingelse") is None
+    assert artgen_seed_kind("/x/data.json") is None
+
+
+def test_existing_kinds_unchanged():
+    assert artgen_seed_kind("/x/a.png") == "image"
+    assert artgen_seed_kind("/x/a.gif") == "gif"
+    assert artgen_seed_kind("/x/a.md") == "text"

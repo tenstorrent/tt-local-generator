@@ -27,6 +27,11 @@ def artgen_seed_kind(file_path, generator_type=None):
     try:
         if not file_path:
             return None
+        # A palette artgen record (JSON of colors+lore) is its own seed kind so
+        # the Muse can offer palette-aware goals / adapters. Keyed on the
+        # generator, not the bare .json ext, so unrelated JSON isn't miscast.
+        if generator_type == "palette":
+            return "palette"
         ext = PurePath(str(file_path)).suffix.lower()
         if not ext:
             return None
