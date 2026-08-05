@@ -1,3 +1,17 @@
+tt-local-generator (0.72.0) noble; urgency=medium
+
+  * feat(create): per-chip progress breakdown for multi-chip AnimateDiff. The
+    result-panel progress used to show a single status line, so a parallel
+    multi-chip run (remix mode) interleaved every chip's "chipN: ..." log lines
+    into one flickering line. `CreateResultPanel.show_progress` now parses the
+    "chipN:" prefix and renders one live row per chip (all chips reported at
+    once) under the coordinator/phase status line; plain single-chip runs are
+    unchanged (the per-chip box stays hidden). Rows are restored from the
+    persisted per-chip state on a return-to-pending, and cleared when a fresh
+    job starts.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 10:15:00 +0000
+
 tt-local-generator (0.71.0) noble; urgency=medium
 
   * feat(create): one-click clear on the prompt. The idea entry now shows a

@@ -440,6 +440,18 @@ on all `_on_generate` early returns (server busy / low disk / AnimateDiff-busy)
 and on artgen failure, so the panel never stays stuck on "pending" and the
 window-global flag never bleeds into an unrelated next job. Non-Create jobs
 (attractor/TT-TV) never touch the panel and keep their gallery pending card.
+**Per-chip progress (v0.72.0):** multi-chip AnimateDiff (remix mode) streams
+each chip's log lines prefixed `chipN:` (from `_run_multi_chip` in
+`artgen/generators/animatediff.py` — process-level parallelism, one 1×1
+MeshDevice process per chip). `CreateResultPanel.show_progress` parses
+`_CHIP_LINE_RE` and renders one live row per chip in `_pending_chip_box` (all
+chips at once) below the coordinator status line, instead of the chip lines
+interleaving into a single flickering label. `_chip_status` (index→latest line)
+is the persistent job state so `_render_pending` restores every row on a
+return-to-pending; reset on each `show_pending`. Plain (single-chip) runs never
+populate it, so the box stays hidden and the classic single status line is
+unchanged. (The 👁 Watch viz already showed all chips at once — this brings the
+textual progress to parity.)
 **Queue progress (v0.69.0):** `_start_next_queued` re-engages the panel for
 each queued job (sets `_create_job_active` + `show_pending` with the medium
 resolved by `_medium_for_queue_item`/`CreateView.medium_by_id`), so the panel's

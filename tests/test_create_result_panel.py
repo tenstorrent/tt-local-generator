@@ -239,9 +239,60 @@ def test_pending_status_and_elapsed_are_bounded_and_centered():
     assert status.get_halign() == Gtk.Align.CENTER
     # elapsed: centered so per-second updates don't shift layout
     assert elapsed.get_halign() == Gtk.Align.CENTER
-    # a long progress message must not lift the cap
-    p.show_progress("chip2: Generating 2 frame(s)… decoding latents at step 37/50")
+    # a long (non-chip) progress message must not lift the cap
+    p.show_progress("Generating 2 frame(s)… decoding latents at step 37/50")
     assert 0 < status.get_max_width_chars() <= 60
+
+
+def test_single_chip_progress_uses_status_line_not_chip_box():
+    """A plain (unprefixed) progress line drives the single status label and
+    leaves the per-chip box hidden — single-chip runs look exactly as before."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a castle", None)
+    p.show_progress("Denoising step 5/25")
+    assert p._pending_status_lbl.get_label() == "Denoising step 5/25"
+    assert p._pending_chip_box.get_visible() is False
+    assert p._chip_status == {}
+
+
+def test_multichip_progress_shows_a_row_per_chip():
+    """"chipN: ..." lines drive a per-chip breakdown (all chips at once), while a
+    plain coordinator line still updates the single status label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a neon city", None)
+    p.show_progress("Starting AnimateDiff on 4 chips in parallel…")
+    for i in range(4):
+        p.show_progress(f"chip{i}: Denoising step {i + 2}/25")
+    p.show_progress("chip1: Denoising step 9/25")   # update chip 1 in place
+    # Coordinator line stays on the status label; chips get their own rows.
+    assert p._pending_status_lbl.get_label() == "Starting AnimateDiff on 4 chips in parallel…"
+    assert p._pending_chip_box.get_visible() is True
+    assert set(p._chip_row_labels) == {0, 1, 2, 3}
+    assert p._chip_row_labels[1].get_label() == "chip 1: Denoising step 9/25"
+    assert p._chip_status[1] == "Denoising step 9/25"
+
+
+def test_chip_rows_restored_on_rerender():
+    """A return to the pending view (re-render) rebuilds every chip row from the
+    persisted `_chip_status` — peeking at a recent mid-run loses nothing."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a forest", None)
+    for i in range(3):
+        p.show_progress(f"chip{i}: step {i}")
+    p._render_pending()   # the path both show_pending and _return_to_pending use
+    assert set(p._chip_row_labels) == {0, 1, 2}
+    assert p._pending_chip_box.get_visible() is True
+
+
+def test_new_pending_clears_previous_chip_rows():
+    """Starting a fresh job drops the previous run's chip rows (no stale chips)."""
+    p = cv.CreateResultPanel()
+    p.show_pending("job one", None)
+    for i in range(4):
+        p.show_progress(f"chip{i}: step 1")
+    p.show_pending("job two", None)
+    assert p._chip_status == {}
+    assert p._pending_chip_box.get_visible() is False
 
 
 def _find_return_button(box):
@@ -281,7 +332,8 @@ def test_progress_while_viewing_recent_is_shown_on_return(tmp_path):
     assert p.state == "finished"             # progress did NOT yank us back
     p._return_to_pending()
     assert p.state == "pending"
-    assert p._pending_status_lbl.get_label() == "chip2: 12/50"
+    # The chip line was stashed while away and is restored as a per-chip row.
+    assert p._chip_row_labels[2].get_label() == "chip 2: 12/50"
 
 
 def test_finish_clears_pending_active_so_return_is_inert(tmp_path):

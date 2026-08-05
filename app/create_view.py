@@ -82,6 +82,7 @@ exercised by the injected-fake test path.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 import time
@@ -91,7 +92,7 @@ from typing import Callable, Optional
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("WebKit", "6.0")
-from gi.repository import GLib, Gtk, WebKit  # noqa: E402
+from gi.repository import GLib, Gtk, Pango, WebKit  # noqa: E402
 
 import artgen_render  # noqa: E402
 import gtk_layout  # noqa: E402
@@ -800,6 +801,14 @@ _CSS = b"""
 .create-result-elapsed {
     color: #4FD1C5;
     font-size: 11.5px;
+}
+.create-result-chip-box {
+    margin: 2px 0;
+}
+.create-result-chip-row {
+    font-family: monospace;
+    font-size: 11px;
+    color: #81E6D9;
 }
 .create-result-prompt {
     color: #A9C1C6;
@@ -2962,6 +2971,11 @@ class CreateView(Gtk.Box):
 
 _RECENTS_MAX = 6
 
+# Multi-chip AnimateDiff streams each chip's log lines prefixed "chipN: ..."
+# (see artgen/generators/animatediff._run_multi_chip). `show_progress` parses
+# this to drive a per-chip breakdown instead of one flickering status line.
+_CHIP_LINE_RE = re.compile(r"chip(\d+):\s*(.*)", re.IGNORECASE)
+
 # Extension sets used to classify a result artifact's kind for rendering.
 # Task 2 (media-showcase-everywhere, docs/superpowers/specs/
 # 2026-07-17-media-showcase-everywhere-design.md) widened this from
@@ -3130,6 +3144,16 @@ class CreateResultPanel(Gtk.Box):
         self._pending_status_lbl: Optional[Gtk.Label] = None
         self._pending_elapsed_lbl: Optional[Gtk.Label] = None
 
+        # Per-chip progress breakdown (multi-chip AnimateDiff). `_chip_status`
+        # is the persistent job state (chip index -> latest line) so a return to
+        # the pending view restores every chip's row; `_chip_row_labels` maps the
+        # same index to its live Gtk.Label inside `_pending_chip_box` (rebuilt
+        # each `_render_pending`). Empty for single-chip runs -> the box stays
+        # hidden and the classic single status line is all you see.
+        self._chip_status: dict = {}
+        self._chip_row_labels: dict = {}
+        self._pending_chip_box: Optional[Gtk.Box] = None
+
         self._current_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._current_box.add_css_class("create-result-current")
         self.append(self._current_box)
@@ -3277,6 +3301,7 @@ class CreateResultPanel(Gtk.Box):
         self._pending_prompt = prompt
         self._pending_medium = medium
         self._pending_last_status = header_text
+        self._chip_status = {}   # fresh job -> drop any previous run's chip rows
         self._pending_start = time.monotonic()
         self._render_pending()
         self._drive_activity_active()
@@ -3309,6 +3334,19 @@ class CreateResultPanel(Gtk.Box):
         self._pending_status_lbl.set_justify(Gtk.Justification.CENTER)
         self._pending_status_lbl.set_halign(Gtk.Align.CENTER)
         self._current_box.append(self._pending_status_lbl)
+
+        # Per-chip breakdown box — one row per chip for a multi-chip AnimateDiff
+        # run, so every chip reports at once instead of interleaving into the
+        # single status line above. Hidden until a "chipN:" line arrives; rebuilt
+        # from `_chip_status` here so a return-to-pending restores every row.
+        self._pending_chip_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        self._pending_chip_box.add_css_class("create-result-chip-box")
+        self._pending_chip_box.set_halign(Gtk.Align.CENTER)
+        self._pending_chip_box.set_visible(False)
+        self._current_box.append(self._pending_chip_box)
+        self._chip_row_labels = {}
+        for idx in sorted(self._chip_status):
+            self._upsert_chip_row(idx, self._chip_status[idx])
 
         self._pending_elapsed_lbl = Gtk.Label(label=self._elapsed_text())
         self._pending_elapsed_lbl.add_css_class("create-result-elapsed")
@@ -3348,14 +3386,44 @@ class CreateResultPanel(Gtk.Box):
             self._pending_elapsed_lbl.set_label(self._elapsed_text())
         return True
 
+    def _upsert_chip_row(self, idx: int, text: str) -> None:
+        """Create or update the status row for chip `idx` inside the per-chip box
+        and reveal the box. No-op if the box isn't built (not in pending view)."""
+        box = self._pending_chip_box
+        if box is None:
+            return
+        lbl = self._chip_row_labels.get(idx)
+        if lbl is None:
+            lbl = Gtk.Label()
+            lbl.add_css_class("create-result-chip-row")
+            lbl.set_xalign(0.0)
+            lbl.set_max_width_chars(40)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)  # long lines never widen the pane
+            self._chip_row_labels[idx] = lbl
+            box.append(lbl)
+            box.set_visible(True)
+        lbl.set_label(f"chip {idx}: {text}")
+
     def show_progress(self, message: str) -> None:
         """Record the latest progress message and, if the live pending view is
         currently showing, update it in place. The message is ALSO stashed
-        (`_pending_last_status`) even when the user has navigated to a recent
-        mid-generation, so `_return_to_pending` shows the CURRENT status, not a
-        stale one. A no-op once the job is no longer active (a stray progress
-        message arriving after finish/error/clear must not resurrect anything)."""
+        (`_pending_last_status`/`_chip_status`) even when the user has navigated
+        to a recent mid-generation, so `_return_to_pending` restores the CURRENT
+        status, not a stale one. A no-op once the job is no longer active (a stray
+        progress message arriving after finish/error/clear must not resurrect
+        anything).
+
+        Multi-chip AnimateDiff prefixes each chip's lines "chipN: ..." — those
+        drive a per-chip row (all chips reported at once) rather than the single
+        status line, which is left showing the latest coordinator/phase line."""
         if not self._pending_active:
+            return
+        m = _CHIP_LINE_RE.match(message)
+        if m:
+            idx, text = int(m.group(1)), m.group(2)
+            self._chip_status[idx] = text
+            if self._state == "pending":
+                self._upsert_chip_row(idx, text)
             return
         self._pending_last_status = message
         if self._state == "pending" and self._pending_status_lbl is not None:
