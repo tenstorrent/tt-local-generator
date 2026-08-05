@@ -7079,7 +7079,8 @@ class MainWindow(Gtk.ApplicationWindow):
             # so a pipeline step's text field gets the identical two-mode
             # fresh/remix behavior, not a forked pipeline-only prompt-gen path.
             self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn,
-                                                    status_service=self._status_service)
+                                                    status_service=self._status_service,
+                                                    on_run_complete=self._register_pipeline_final)
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
 
         # Always land on Discover, never a stale Open page from a previous
@@ -7117,6 +7118,188 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._sync_gallery_to_source(self._current_medium_source())
         self._detail_wrap.set_visible(True)
+
+    # Extensions a pipeline final's artifact can carry, and which Library
+    # record shape each maps to. Any extension outside both sets (shouldn't
+    # happen given today's known node output kinds — see
+    # pipeline_view_model._OUTPUT_KIND — but a future/unknown generator could
+    # emit one) registers nothing rather than guessing; see
+    # _register_pipeline_final's docstring.
+    _PIPELINE_FINAL_RASTER_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+    _PIPELINE_FINAL_VIDEO_EXTS = (".mp4",)
+    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md")
+
+    def _register_pipeline_final(self, run_view) -> None:
+        """Register a completed pipeline run's final deliverable into the Library.
+
+        Wired as `PipelineStudio`'s `on_run_complete` callback (see
+        `_show_pipelines`), invoked once per run the instant `LiveRunView`
+        emits "run-done" (`PipelineStudio._on_run_done`).
+
+        Resolves the "hero" step via `pipeline_view_model.final_index_for`
+        and classifies its artifact by extension into ONE of the two record
+        shapes every other Library-writing path in this file already
+        produces — never a new one:
+
+        - raster (.png/.jpg/.jpeg/.webp) or .mp4 → a native
+          `history_store.GenerationRecord`, persisted to `self._store` (the
+          same append `GenerationWorker` does before calling back) and routed
+          through the existing gallery add path
+          (`_gallery_for_type(...).replace_pending_with(record)` — the exact
+          call `_on_finished` makes; it degrades gracefully to a plain insert
+          when there's no pending card to swap, which is always the case
+          here since a pipeline final was never shown as a pending card).
+        - artgen kinds (.gif/.svg/.ans/.json/.py/.md) → a
+          `media_store.MediaRecord` with `generator_type="pipeline"` and
+          provenance (`_pipeline_run_id`, `recipe`) in `params`, mirroring
+          `_create_generate_artgen`/the `ansi-image` branch of
+          `_run_transform`: `rec.media_file_path` alias set, `_ms.add()` +
+          `_ms.ensure_auto_playlists()`, then `self._artgen_gallery.refresh()`
+          (mirrors `_on_create_artgen_done`).
+
+        Fail-soft end to end: no resolvable final step, a final artifact
+        missing on disk, an unrecognized extension, or any error raised while
+        building/writing the record all degrade to "register nothing" — this
+        must never surface to (or break) the run-done view the user is
+        looking at.
+
+        `self._registered_pipeline_runs` (a set of run ids, lazily created)
+        guards registering the same run more than once — defense in depth
+        against `on_run_complete` somehow firing twice for one run_id.
+        """
+        registered = getattr(self, "_registered_pipeline_runs", None)
+        if registered is None:
+            registered = set()
+            self._registered_pipeline_runs = registered
+        run_id = getattr(run_view, "run_id", None)
+        if run_id in registered:
+            return
+        registered.add(run_id)
+
+        try:
+            from pipeline_view_model import final_index_for
+
+            index = final_index_for(run_view)
+            if index is None:
+                return
+            step = run_view.steps[index]
+            artifact_path = step.artifact_path
+            if not artifact_path or not Path(artifact_path).is_file():
+                return
+
+            ext = Path(artifact_path).suffix.lower()
+            if ext in self._PIPELINE_FINAL_RASTER_EXTS or ext in self._PIPELINE_FINAL_VIDEO_EXTS:
+                self._register_pipeline_final_native(run_view, artifact_path, ext)
+            elif ext in self._PIPELINE_FINAL_ARTGEN_EXTS:
+                self._register_pipeline_final_artgen(run_view, artifact_path)
+            # else: unrecognized extension — register nothing (see docstring).
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to register pipeline final deliverable for run %s",
+                run_id, exc_info=True,
+            )
+
+    def _register_pipeline_final_native(self, run_view, artifact_path: str, ext: str) -> None:
+        """Raster/mp4 pipeline final → history_store.GenerationRecord + gallery.
+
+        Thumbnail extraction mirrors `worker.py`'s two ffmpeg incantations
+        (`_extract_thumbnail` for video: `-vframes 1`; `_make_thumbnail`/
+        `_make_thumbnail_for` for a static image: no `-vframes`, just the
+        scale+pad) — `-update 1` avoids the image2-muxer "already exists"
+        warning either way.
+        """
+        import uuid
+        from datetime import datetime, timezone
+        from history_store import GenerationRecord, THUMBNAILS_DIR
+
+        is_video = ext in self._PIPELINE_FINAL_VIDEO_EXTS
+        media_type = "video" if is_video else "image"
+        ts = datetime.now(timezone.utc)
+        ts_str = ts.strftime("%Y%m%d_%H%M%S")
+        job_id = str(uuid.uuid4())
+
+        THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+        thumb_path = THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"
+        ffmpeg_args = ["ffmpeg", "-y", "-i", artifact_path]
+        if is_video:
+            ffmpeg_args += ["-vframes", "1"]
+        ffmpeg_args += [
+            "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
+                   "pad=200:112:(ow-iw)/2:(oh-ih)/2",
+            "-q:v", "3", "-update", "1", str(thumb_path),
+        ]
+        try:
+            subprocess.run(ffmpeg_args, stdin=subprocess.DEVNULL,
+                            capture_output=True, timeout=30)
+        except Exception:
+            try:
+                shutil.copy2(artifact_path, str(thumb_path))
+            except Exception:
+                pass
+
+        record = GenerationRecord(
+            id=job_id,
+            prompt=f"Pipeline: {run_view.title}"[:500],
+            negative_prompt="",
+            num_inference_steps=0,
+            seed=-1,
+            video_path=artifact_path if is_video else "",
+            thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+            created_at=ts.isoformat(),
+            media_type=media_type,
+            image_path="" if is_video else artifact_path,
+            model="",
+            extra_meta={
+                "_pipeline_run_id": run_view.run_id,
+                "recipe": run_view.recipe,
+            },
+        )
+        self._store.append(record)
+        gallery = self._gallery_for_type(media_type)
+        gallery.replace_pending_with(record)
+
+    def _register_pipeline_final_artgen(self, run_view, artifact_path: str) -> None:
+        """Artgen-kind pipeline final → media_store.MediaRecord + artgen gallery refresh."""
+        import uuid
+        from datetime import datetime, timezone
+
+        from artgen_thumb import make_thumbnail
+        from media_store import MediaRecord
+        from media_store import media_store as _ms
+
+        out_path = Path(artifact_path)
+        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        try:
+            thumb_path = make_thumbnail(out_path, thumb_path)
+        except Exception:
+            thumb_path = Path("")
+
+        rec = MediaRecord(
+            id=str(uuid.uuid4()),
+            media_type="artgen",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            file_path=str(out_path),
+            thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+            prompt=f"Pipeline: {run_view.title}"[:500],
+            model_id="pipeline",
+            generator_type="pipeline",
+            params=json.dumps({
+                "_pipeline_run_id": run_view.run_id,
+                "recipe": run_view.recipe,
+            }),
+            starred=0,
+        )
+        # Duck-typed alias — see `_create_generate_artgen`'s identical comment:
+        # `CreateResultPanel`/gallery code reads `media_file_path`, which plain
+        # `MediaRecord` doesn't declare.
+        rec.media_file_path = str(out_path)
+        _ms.add(rec)
+        _ms.ensure_auto_playlists()
+
+        artgen_gallery = getattr(self, "_artgen_gallery", None)
+        if artgen_gallery is not None:
+            artgen_gallery.refresh()
 
     # ── Breadcrumb / live-context routing (RN-2 Task 2) ─────────────────────────
 

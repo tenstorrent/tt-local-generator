@@ -187,7 +187,11 @@ def test_main_window_source_wires_inspire_fn_at_both_construction_sites():
     # same call site, so the literal single-line form no longer appears --
     # check for the call site + the inspire_fn keyword instead.
     assert "self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn," in src
-    assert "status_service=self._status_service)" in src
+    # Library-registration Task 8 added a third keyword (`on_run_complete=`),
+    # so `status_service=...` no longer ends the call -- check for it as its
+    # own line instead of requiring the trailing `)`.
+    assert "status_service=self._status_service," in src
+    assert "on_run_complete=self._register_pipeline_final)" in src
 
     create_view_src = (Path(__file__).parent.parent / "app" / "create_view.py").read_text()
     assert "inspire_fn=self._inspire_fn,\n                prompt_type_getter=self._inspire_prompt_type," in create_view_src

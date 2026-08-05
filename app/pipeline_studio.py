@@ -3595,11 +3595,20 @@ class PipelineStudio(Gtk.Box):
         on_open_run: "Optional[Callable[[str], None]]" = None,
         inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
         status_service=None,
+        on_run_complete: "Optional[Callable[[RunView], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-studio")
         _apply_css()
         self._on_open_run_cb = on_open_run
+        # Library registration (Library-registration Task 8): fired once per
+        # run, right after a fresh run-done rebuild, with the RunView the
+        # Open page is about to show. MainWindow wires this to
+        # `_register_pipeline_final` so a finished run's hero/final artifact
+        # is added to the Library the instant it's ready — optional (default
+        # None) like every other callback seam here, so every pre-existing
+        # caller/test is unaffected.
+        self._on_run_complete = on_run_complete
         # ✨ Inspire (regression fix 2/2) — threaded straight through to
         # RemixView, the only page here with editable prompt fields. See
         # RemixView's own docstring/`__init__` for the seam contract.
@@ -3884,6 +3893,12 @@ class PipelineStudio(Gtk.Box):
         Same off-thread-then-idle_add pattern as _load_run_async — building a
         RunView re-reads the spec + globs the output dir, so it's disk I/O
         that must not run on the GTK main thread.
+
+        Also fires `on_run_complete(run_view)` (Library-registration Task 8),
+        once per genuine run completion — this is the ONE place a run
+        transitions from "running" to "done" for the first time (unlike
+        `_load_run_async`, which just re-opens an already-known run and must
+        NOT re-register it).
         """
         def worker() -> None:
             try:
@@ -3896,6 +3911,8 @@ class PipelineStudio(Gtk.Box):
                 log.warning("failed to rebuild run view for %s", run_id, exc_info=True)
                 return
             GLib.idle_add(self._show_run, run_view, record.get("spec_path"))
+            if self._on_run_complete is not None:
+                GLib.idle_add(self._on_run_complete, run_view)
 
         threading.Thread(target=worker, daemon=True).start()
 
