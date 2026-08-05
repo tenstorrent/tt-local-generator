@@ -386,15 +386,20 @@ def test_open_view_model_detail_row_present_only_when_model_label_set():
     view.set_run(run)
 
     def _has_model_row(node_id: str) -> bool:
-        # main column is (intent_row, [model_label]) — the combined intent
-        # label lives in intent_row (fix #1), so a model caption is the
-        # SECOND child of main, if present at all.
+        # main column is (intent_row, flow_line, [summary], [model_label]) —
+        # the combined intent label lives in intent_row (fix #1), and the
+        # flow-line/summary detail (task 2) is always appended right after
+        # intent_row, so a model caption is no longer reliably main's SECOND
+        # child — walk main's children and look for the ps-step-model class.
         row = _open_view_row_for(view, steps, node_id)
         n_label = row.get_first_child()
         main = n_label.get_next_sibling()
-        intent_row = main.get_first_child()
-        model_label = intent_row.get_next_sibling()
-        return model_label is not None
+        child = main.get_first_child()
+        while child is not None:
+            if child.has_css_class("ps-step-model"):
+                return True
+            child = child.get_next_sibling()
+        return False
 
     assert _has_model_row("1") is True   # TTLGTextToImage -> model_label "FLUX"
     assert _has_model_row("2") is False  # TTLGCaptionImage -> model_label None

@@ -250,7 +250,7 @@ from gtk_layout import CONTENT_MAX_WIDTH, MaxWidthBin, wrap_centered  # noqa: E4
 import recipes  # noqa: E402
 import showcase  # noqa: E402
 import wingit  # noqa: E402
-from intent_vocab import compatible_intents, intent_for, label  # noqa: E402
+from intent_vocab import compatible_intents, intent_for, flow_line, label  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
@@ -549,6 +549,14 @@ _CSS = b"""
 }
 .ps-step-model {
     font-size: 10.5px;
+    color: #6f948d;
+}
+.ps-step-flow {
+    font-size: 12px;
+    color: #4fd1c5;
+}
+.ps-step-summary {
+    font-size: 11px;
     color: #6f948d;
 }
 .ps-step-text-block {
@@ -991,6 +999,21 @@ class DiscoverView(Gtk.Box):
         return _build_thumb_frame(path, width, height, css_class)
 
 
+def _append_intent_detail(box, intent):
+    """Add the plain-language flow line (+ optional summary) under a step's
+    intent label. Shared by RemixView/LiveRunView/OpenView step builders."""
+    flow = Gtk.Label(label=flow_line(intent))
+    flow.set_xalign(0)
+    flow.add_css_class("ps-step-flow")
+    box.append(flow)
+    if intent.summary:
+        summ = Gtk.Label(label=intent.summary)
+        summ.set_xalign(0)
+        summ.set_wrap(True)
+        summ.add_css_class("ps-step-summary")
+        box.append(summ)
+
+
 class OpenView(Gtk.Box):
     """Open page: one run's steps laid out end-to-end (learn-by-example).
 
@@ -1210,6 +1233,7 @@ class OpenView(Gtk.Box):
         status_label.add_css_class(self._STATUS_CSS.get(step.status, "ps-status-pending"))
         intent_row.append(status_label)
         main.append(intent_row)
+        _append_intent_detail(main, step.intent)
 
         # model_label is omitted entirely (not shown as blank) for intents
         # that don't name an underlying tool/model — e.g. Describe/Cut
@@ -1787,6 +1811,7 @@ class RemixView(Gtk.Box):
         intent_label.set_xalign(0)
         intent_label.add_css_class("ps-step-intent")
         verb_col.append(intent_label)
+        _append_intent_detail(verb_col, intent)
 
         # model_label is a quiet secondary detail — omitted entirely (not
         # shown blank) when the intent doesn't name an underlying tool,
@@ -2860,6 +2885,7 @@ class LiveRunView(Gtk.Box):
         status_label.add_css_class(self._STATUS_CSS["pending"])
         intent_row.append(status_label)
         main.append(intent_row)
+        _append_intent_detail(main, step.intent)
 
         # model_label omitted entirely (not shown blank) when the intent
         # doesn't name an underlying tool — same guard as OpenView/RemixView.
