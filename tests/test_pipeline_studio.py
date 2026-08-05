@@ -1856,6 +1856,107 @@ def test_live_run_view_begin_is_repeat_safe():
     assert view._log_box.get_first_child() is None
 
 
+# ── LiveRunView: Task 6 (spinner + phase + elapsed + "Step N of M") ────────
+#
+# These drive the pure pipeline_progress.ProgressState reducer THROUGH the
+# widget (its own reducer-only behaviour is covered headlessly by
+# tests/test_live_run_progress.py) to pin the rendering contract: spinner
+# visible instead of the glyph while running, phase text from `detail`,
+# elapsed label starts/freezes, and the header's step-count text. The
+# elapsed-timer tests monkeypatch GLib.timeout_add (a real 1s wait would be
+# absurd in a unit test) AND GLib.source_remove (the real one warns loudly
+# when asked to remove an id it never actually scheduled).
+
+def test_live_run_view_running_step_shows_spinner_not_glyph(monkeypatch):
+    from gi.repository import GLib
+    from pipeline_studio import LiveRunView
+    monkeypatch.setattr(GLib, "timeout_add", lambda *a, **k: 999)
+    monkeypatch.setattr(GLib, "source_remove", lambda *a, **k: None)
+
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "1", "running", "sampling 5/25")
+
+    assert view._step_spinners["1"].get_visible() is True
+    assert view._step_status_labels["1"].get_visible() is False
+    # Glyph text is still kept current underneath, per existing contract.
+    assert view._step_status_labels["1"].get_label() == "⟳"
+
+    view.on_node_update("job", "1", "done", "")
+    assert view._step_spinners["1"].get_visible() is False
+    assert view._step_status_labels["1"].get_visible() is True
+
+
+def test_live_run_view_phase_label_shows_detail_while_running(monkeypatch):
+    from gi.repository import GLib
+    from pipeline_studio import LiveRunView
+    monkeypatch.setattr(GLib, "timeout_add", lambda *a, **k: 999)
+    monkeypatch.setattr(GLib, "source_remove", lambda *a, **k: None)
+
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "1", "running", "sampling 5/25")
+    assert view._step_phase_labels["1"].get_label() == "sampling 5/25"
+    assert view._step_phase_labels["1"].get_visible() is True
+
+    view.on_node_update("job", "1", "done", "")
+    assert view._step_phase_labels["1"].get_visible() is False
+
+
+def test_live_run_view_elapsed_timer_starts_and_freezes(monkeypatch):
+    from gi.repository import GLib
+    from pipeline_studio import LiveRunView
+
+    scheduled = {}
+    monkeypatch.setattr(GLib, "timeout_add", lambda ms, cb, arg: scheduled.setdefault("id", 42) or 42)
+    removed = []
+    monkeypatch.setattr(GLib, "source_remove", lambda sid: removed.append(sid))
+
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "1", "running", "")
+    assert view._step_elapsed_labels["1"].get_label().endswith("s")
+    assert "1" in view._elapsed_timers
+
+    view.on_node_update("job", "1", "done", "")
+    assert "1" not in view._elapsed_timers
+    assert removed == [42]
+
+
+def test_live_run_view_header_step_count_tracks_running_node(monkeypatch):
+    from gi.repository import GLib
+    from pipeline_studio import LiveRunView
+    monkeypatch.setattr(GLib, "timeout_add", lambda *a, **k: 999)
+    monkeypatch.setattr(GLib, "source_remove", lambda *a, **k: None)
+
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    assert view._step_count_label.get_label() == ""
+
+    view.on_node_update("job", "1", "running", "")
+    assert view._step_count_label.get_label() == "Step 1 of 3"
+
+    view.on_node_update("job", "1", "done", "")
+    view.on_node_update("job", "2", "running", "")
+    assert view._step_count_label.get_label() == "Step 2 of 3"
+
+
+def test_live_run_view_log_scroller_wrapped_in_collapsed_expander():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    # body = header's sibling; steps_scroller, then the log Gtk.Expander.
+    body = view.get_first_child().get_next_sibling()
+    log_expander = body.get_last_child()
+    assert isinstance(log_expander, Gtk.Expander)
+    assert log_expander.get_expanded() is False
+    assert log_expander.get_label() == "Details"
+
+
 # ── PipelineStudio: wire the loop (Open → Remix → Run → done) ──────────────
 #
 # SP-C Phase 2a Task 4 wired this loop by calling spec_remix.derive_spec(

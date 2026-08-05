@@ -233,6 +233,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -254,6 +255,7 @@ from intent_vocab import (  # noqa: E402
     capability_for_intent, compatible_intents, intent_for, flow_line, label,
 )
 from model_picker import ModelPickerRow  # noqa: E402
+import pipeline_progress  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
@@ -709,6 +711,25 @@ _CSS = b"""
     border-left: 2px solid #F6BC42;
     background-color: alpha(#F6BC42, 0.08);
     border-radius: 0 6px 6px 0;
+}
+.ps-step-count {
+    font-size: 12px;
+    color: #6f948d;
+    font-family: monospace;
+}
+.ps-step-phase {
+    font-size: 11px;
+    color: #4fd1c5;
+    font-style: italic;
+}
+.ps-step-elapsed {
+    font-size: 10.5px;
+    font-family: monospace;
+    color: #6f948d;
+}
+.ps-log-expander {
+    font-size: 11.5px;
+    color: #7fb0a8;
 }
 .ps-showcase-btn {
     background-color: #F6BC42;
@@ -2737,6 +2758,27 @@ class LiveRunView(Gtk.Box):
     runner's synthetic `job="__health__"` node update (chip-health/reattach
     warnings — never a real pipeline step) renders as a small note instead of
     a step row, so it can never be mistaken for one or crash the lookup.
+
+    **Live progress (Task 6).** `detail` — the runner's per-node phase text
+    (e.g. "sampling 5/25", "encoding") — used to be silently dropped. It now
+    flows through `pipeline_progress.ProgressState`, a GTK-free reducer
+    (`app/pipeline_progress.py`) that is the SINGLE place deciding what
+    `done_count`/`running_node`/`current_index` (used for the header's
+    "Step N of M") mean; this view only renders what the reducer computes —
+    it never derives progress by reading back its own widget text. Per
+    running step: the status glyph (`_step_status_labels`) is hidden and
+    replaced by a real `Gtk.Spinner` (`_step_spinners`) for the duration —
+    the glyph's text is still kept up to date underneath (so the existing
+    glyph-text assertions in `tests/test_pipeline_studio.py` still hold; it's
+    simply not the visible widget while running) — plus a phase sub-label
+    (`_step_phase_labels`, from `detail`) and a per-step elapsed timer
+    (`_step_elapsed_labels`, ticked by a `GLib.timeout_add(1000, ...)` per
+    running node, id kept in `_elapsed_timers` and cancelled on done/failed
+    AND in `begin()`/`on_finished()` so a stale timer can never keep firing
+    after a step resolves or the view is reused for a different run). The
+    raw log tail is demoted into a collapsed-by-default `Gtk.Expander`
+    ("Details") — `on_log` still appends into the same `_log_box`, just
+    nested one level deeper now.
     """
 
     __gsignals__ = {
@@ -2774,6 +2816,26 @@ class LiveRunView(Gtk.Box):
         # on_node_update/on_finished (rows themselves are never rebuilt after
         # begin() — only this label's text/css-class changes).
         self._step_status_labels: "dict[str, Gtk.Label]" = {}
+        # node_id -> the step's Gtk.Spinner (shown instead of the glyph while
+        # "running"), phase sub-label (set from on_node_update's `detail`),
+        # elapsed-time label, and the row containing both (whose visibility
+        # this view toggles as a unit) — populated by _build_step_row/begin(),
+        # addressed by node_id from on_node_update/on_finished exactly like
+        # _step_status_labels above.
+        self._step_spinners: "dict[str, Gtk.Spinner]" = {}
+        self._step_phase_labels: "dict[str, Gtk.Label]" = {}
+        self._step_elapsed_labels: "dict[str, Gtk.Label]" = {}
+        self._step_meta_rows: "dict[str, Gtk.Widget]" = {}
+        # node_id -> GLib.timeout_add source id for that step's ticking
+        # elapsed timer (only while "running"); node_id -> time.monotonic()
+        # the step started running, so the tick and the final freeze-on-
+        # finish both compute elapsed from the same anchor.
+        self._elapsed_timers: "dict[str, int]" = {}
+        self._elapsed_start: "dict[str, float]" = {}
+        # The pure reducer (Task 6) driving done_count/running_node/
+        # current_index for the "Step N of M" header — rebuilt fresh in
+        # begin() for each run (None only before the first begin()).
+        self._progress: "pipeline_progress.ProgressState | None" = None
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.set_margin_top(18)
@@ -2786,6 +2848,14 @@ class LiveRunView(Gtk.Box):
         self._title_label.add_css_class("ps-open-title")
         self._title_label.set_hexpand(True)
         header.append(self._title_label)
+
+        # "Step N of M" — driven entirely by self._progress (see
+        # _update_step_count_label); blank until a run has actually started
+        # (current_index == 0, i.e. before begin() or before the first node
+        # starts running).
+        self._step_count_label = Gtk.Label(label="")
+        self._step_count_label.add_css_class("ps-step-count")
+        header.append(self._step_count_label)
 
         # Hidden until the runner sends a __health__ update (see
         # _show_health_note) so a healthy run's header stays clean.
@@ -2815,12 +2885,24 @@ class LiveRunView(Gtk.Box):
 
         # Live-log tail: a narrow fixed-width side panel, per the mockup's
         # two-column `.body { grid-template-columns: 1fr 300px }` layout.
+        # Task 6 demotes the raw log behind a collapsed-by-default
+        # Gtk.Expander — the step rows above now carry the live phase/
+        # elapsed/spinner detail that used to be the log's only job, so the
+        # raw tail is "more detail if you want it" rather than the primary
+        # live-status surface. `on_log` is unchanged: it still appends
+        # straight into `self._log_box`, just nested one level deeper.
+        log_expander = Gtk.Expander(label="Details")
+        log_expander.set_expanded(False)
+        log_expander.add_css_class("ps-log-expander")
+        log_expander.set_vexpand(True)
+        log_expander.set_size_request(280, -1)
+        body.append(log_expander)
+
         log_scroller = Gtk.ScrolledWindow()
         log_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         log_scroller.set_vexpand(True)
-        log_scroller.set_size_request(280, -1)
         log_scroller.add_css_class("ps-log-panel")
-        body.append(log_scroller)
+        log_expander.set_child(log_scroller)
 
         self._log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self._log_box.set_margin_top(10)
@@ -2837,8 +2919,14 @@ class LiveRunView(Gtk.Box):
         Main-thread only, repeat-safe — same clear-then-rebuild pattern as
         DiscoverView.set_runs/OpenView.set_run/RemixView.set_run, so calling
         begin() again (e.g. re-opening Live for a different run without
-        recreating the widget) never leaves stale rows/state behind.
+        recreating the widget) never leaves stale rows/state behind. Task 6:
+        also cancels every still-running elapsed timer from a PREVIOUS run
+        before rebuilding — without this, re-using the widget for a second
+        run while an old timer was mid-flight would leak a GLib.timeout_add
+        ticking a label that no longer belongs to any visible row.
         """
+        self._cancel_all_elapsed_timers()
+
         self._run_id = run.run_id
         self._title_label.set_label(run.title)
         self._health_note.set_visible(False)
@@ -2850,12 +2938,25 @@ class LiveRunView(Gtk.Box):
             self._log_box.remove(child)
         self._step_status = {}
         self._step_status_labels = {}
+        self._step_spinners = {}
+        self._step_phase_labels = {}
+        self._step_elapsed_labels = {}
+        self._step_meta_rows = {}
 
         for index, step in enumerate(run.steps, start=1):
-            row, status_label = self._build_step_row(index, step)
+            row, status_label, phase_label, elapsed_label, spinner, meta_row = (
+                self._build_step_row(index, step)
+            )
             self._steps_box.append(row)
             self._step_status[step.node_id] = "pending"
             self._step_status_labels[step.node_id] = status_label
+            self._step_phase_labels[step.node_id] = phase_label
+            self._step_elapsed_labels[step.node_id] = elapsed_label
+            self._step_spinners[step.node_id] = spinner
+            self._step_meta_rows[step.node_id] = meta_row
+
+        self._progress = pipeline_progress.ProgressState(total=len(run.steps))
+        self._update_step_count_label()
 
     # ── PipelineRunner callback handlers ─────────────────────────────────────
     #
@@ -2875,6 +2976,13 @@ class LiveRunView(Gtk.Box):
         real pipeline step. Rather than hardcode one node_id, this checks
         `job == "__health__"` generically so any future __health__ signal
         still renders a note instead of crashing a node_id lookup.
+
+        Task 6: `detail` — previously dropped entirely — now flows through
+        `self._progress` (the pure reducer) and drives the spinner/phase-
+        label/elapsed-timer for this node_id. The glyph label's text/CSS is
+        still updated exactly as before (`_set_status_glyph`), just hidden
+        behind the spinner while "running" — every existing glyph-text
+        assertion in tests/test_pipeline_studio.py keeps working unchanged.
         """
         if job == "__health__":
             self._show_health_note(node_id, status, detail)
@@ -2889,6 +2997,12 @@ class LiveRunView(Gtk.Box):
 
         self._step_status[node_id] = status
         self._set_status_glyph(label, status)
+        if self._progress is not None:
+            self._progress.update(node_id, status, detail)
+        self._update_spinner(node_id, status)
+        self._update_phase_label(node_id, status, detail)
+        self._update_elapsed_timer(node_id, status)
+        self._update_step_count_label()
 
     def on_log(self, line: str) -> None:
         """Append one raw stdout line to the live log tail.
@@ -2911,26 +3025,50 @@ class LiveRunView(Gtk.Box):
         genuinely never reached them, so flipping them to done or failed
         would misrepresent what actually happened. Matches PipelineRunner's
         on_run_finished(success) call exactly — see this class's docstring.
+
+        Task 6: also resolves each such step's spinner/phase label and
+        cancels (with a final freeze, not a reset) its elapsed timer — a
+        step that just finished should stop ticking, not vanish its "12s".
         """
         resolved = "done" if success else "failed"
         for node_id, status in list(self._step_status.items()):
             if status == "running":
                 self._step_status[node_id] = resolved
                 self._set_status_glyph(self._step_status_labels[node_id], resolved)
+                if self._progress is not None:
+                    self._progress.update(node_id, resolved, "")
+                self._update_spinner(node_id, resolved)
+                self._update_phase_label(node_id, resolved, "")
+                self._cancel_elapsed_timer(node_id)
 
+        self._update_step_count_label()
         if self._run_id is not None:
             self.emit("run-done", self._run_id)
 
     # ── Row building / helpers ───────────────────────────────────────────────
 
-    def _build_step_row(self, index: int, step: StepView) -> "tuple[Gtk.Widget, Gtk.Label]":
-        """Build one PENDING step row; returns (row, status_label) so begin()
-        can keep the label reference for later in-place glyph updates.
+    def _build_step_row(
+        self, index: int, step: StepView
+    ) -> "tuple[Gtk.Widget, Gtk.Label, Gtk.Label, Gtk.Label, Gtk.Spinner, Gtk.Widget]":
+        """Build one PENDING step row; returns (row, status_label, phase_label,
+        elapsed_label, spinner, meta_row) so begin() can keep every widget
+        reference this view addresses by node_id from on_node_update/
+        on_finished for later in-place updates.
 
         Fix #1 (cohesive intent label): one combined "verb noun" label with
         the status glyph inline, matching OpenView/RemixView's identical
         treatment of the same intent vocabulary — see OpenView._build_step_
         row's docstring for the full rationale.
+
+        Task 6 additions, all created hidden (nothing is running yet at
+        PENDING): a `Gtk.Spinner` appended right after the glyph in
+        `intent_row` (so `test_live_run_view_step_row_has_single_combined_
+        intent_label`'s walk of intent_row's first two children — intent
+        label, then glyph label — still holds; the spinner is a THIRD
+        child, never inspected by that test) and a `meta_row` beneath
+        `intent_row` holding the phase sub-label + elapsed label together,
+        so `_update_phase_label`/`_update_elapsed_timer` can show/hide both
+        as one unit.
         """
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         row.add_css_class("ps-step")
@@ -2953,7 +3091,31 @@ class LiveRunView(Gtk.Box):
         status_label = Gtk.Label(label=self._STATUS_GLYPH["pending"])
         status_label.add_css_class(self._STATUS_CSS["pending"])
         intent_row.append(status_label)
+
+        # Real spinner, shown INSTEAD of status_label while "running" (see
+        # _update_spinner) — hidden/not-spinning at PENDING build time.
+        spinner = Gtk.Spinner()
+        spinner.set_visible(False)
+        intent_row.append(spinner)
+
         main.append(intent_row)
+
+        # Live phase text (from on_node_update's `detail`) + per-step
+        # elapsed timer, side by side; hidden until the step starts running
+        # (see _update_phase_label/_update_elapsed_timer) — a PENDING step
+        # has neither yet.
+        meta_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        meta_row.set_visible(False)
+        phase_label = Gtk.Label(label="")
+        phase_label.set_xalign(0)
+        phase_label.set_hexpand(True)
+        phase_label.add_css_class("ps-step-phase")
+        meta_row.append(phase_label)
+        elapsed_label = Gtk.Label(label="")
+        elapsed_label.add_css_class("ps-step-elapsed")
+        meta_row.append(elapsed_label)
+        main.append(meta_row)
+
         _append_intent_detail(main, step.intent)
 
         # model_label omitted entirely (not shown blank) when the intent
@@ -2965,7 +3127,7 @@ class LiveRunView(Gtk.Box):
             main.append(model_label)
 
         row.append(main)
-        return row, status_label
+        return row, status_label, phase_label, elapsed_label, spinner, meta_row
 
     def _set_status_glyph(self, label: Gtk.Label, status: str) -> None:
         """Update *label*'s glyph text and status CSS class in place."""
@@ -2973,6 +3135,114 @@ class LiveRunView(Gtk.Box):
         for css in self._STATUS_CSS.values():
             label.remove_css_class(css)
         label.add_css_class(self._STATUS_CSS.get(status, "ps-status-pending"))
+
+    def _update_spinner(self, node_id: str, status: str) -> None:
+        """Show a spinning `Gtk.Spinner` INSTEAD of the glyph while "running".
+
+        The glyph label's text/CSS is still kept current underneath by
+        `_set_status_glyph` (called by both callers of this method) — this
+        only toggles which of the two widgets is the VISIBLE one, so
+        existing `label.get_label()` assertions elsewhere are unaffected by
+        which widget the user actually sees.
+        """
+        spinner = self._step_spinners.get(node_id)
+        label = self._step_status_labels.get(node_id)
+        if spinner is None or label is None:
+            return
+        if status == "running":
+            label.set_visible(False)
+            spinner.set_visible(True)
+            spinner.set_spinning(True)
+        else:
+            spinner.set_spinning(False)
+            spinner.set_visible(False)
+            label.set_visible(True)
+
+    def _update_phase_label(self, node_id: str, status: str, detail: str) -> None:
+        """Show *detail* as the step's live phase text while "running".
+
+        Cleared/hidden on done/failed (a finished step doesn't need to keep
+        showing its last in-flight phase message) and left hidden entirely
+        for a running step with no `detail` yet (nothing to show beats a
+        blank line reserving space).
+        """
+        phase_label = self._step_phase_labels.get(node_id)
+        meta_row = self._step_meta_rows.get(node_id)
+        if phase_label is None:
+            return
+        if status == "running" and detail:
+            phase_label.set_label(detail)
+            phase_label.set_visible(True)
+        else:
+            phase_label.set_label("")
+            phase_label.set_visible(False)
+        if meta_row is not None:
+            # The row stays visible once a step has ever started running
+            # (elapsed_start recorded) even after it finishes, so the final
+            # frozen elapsed time doesn't vanish the instant a step resolves.
+            meta_row.set_visible(status == "running" or node_id in self._elapsed_start)
+
+    def _update_elapsed_timer(self, node_id: str, status: str) -> None:
+        """Start a per-second elapsed-time tick for *node_id* on its first
+        "running" update; cancel (freezing the final value) on anything else.
+        """
+        if status == "running":
+            if node_id in self._elapsed_start:
+                return  # already ticking -- a duplicate "running" update is a no-op
+            self._elapsed_start[node_id] = time.monotonic()
+            elapsed_label = self._step_elapsed_labels.get(node_id)
+            if elapsed_label is not None:
+                elapsed_label.set_label("0s")
+                elapsed_label.set_visible(True)
+            self._elapsed_timers[node_id] = GLib.timeout_add(1000, self._tick_elapsed, node_id)
+        else:
+            self._cancel_elapsed_timer(node_id)
+
+    def _tick_elapsed(self, node_id: str) -> bool:
+        """GLib.timeout_add callback (main thread, every 1s while running).
+
+        Returns True to keep repeating (GLib.SOURCE_CONTINUE) until
+        _cancel_elapsed_timer removes this source explicitly.
+        """
+        start = self._elapsed_start.get(node_id)
+        label = self._step_elapsed_labels.get(node_id)
+        if start is None or label is None:
+            return False
+        label.set_label(f"{int(time.monotonic() - start)}s")
+        return True
+
+    def _cancel_elapsed_timer(self, node_id: str) -> None:
+        """Stop *node_id*'s ticking timer and freeze its label at the true
+        final elapsed time (not whatever the last 1s-granularity tick left
+        it at)."""
+        timer_id = self._elapsed_timers.pop(node_id, None)
+        if timer_id is not None:
+            GLib.source_remove(timer_id)
+        start = self._elapsed_start.get(node_id)
+        label = self._step_elapsed_labels.get(node_id)
+        if start is not None and label is not None:
+            label.set_label(f"{int(time.monotonic() - start)}s")
+
+    def _cancel_all_elapsed_timers(self) -> None:
+        """Cancel every currently-ticking timer without touching labels —
+        used by begin() when the whole view is about to be rebuilt for a
+        different run, so stale rows/timers from a previous run() can never
+        be left ticking in the background."""
+        for timer_id in self._elapsed_timers.values():
+            GLib.source_remove(timer_id)
+        self._elapsed_timers = {}
+        self._elapsed_start = {}
+
+    def _update_step_count_label(self) -> None:
+        """Render the header's "Step {current_index} of {total}" from the
+        pure reducer — blank before any step has started running (index 0)
+        so a freshly-begin()'d view doesn't claim to be on "Step 0"."""
+        if self._progress is None or self._progress.current_index == 0:
+            self._step_count_label.set_label("")
+            return
+        self._step_count_label.set_label(
+            f"Step {self._progress.current_index} of {self._progress.total}"
+        )
 
     def _is_switch_line(self, text: str) -> bool:
         lowered = text.lower()
