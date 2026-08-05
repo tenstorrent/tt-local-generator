@@ -1,5 +1,101 @@
 # tt-local-generator — developer notes
 
+## Pipeline UX overhaul (v0.75.0)
+
+Nine-task program closing the gap between what Pipeline Studio's step cards
+*could* show and what they actually did: raw `class_type`s instead of plain
+language, no per-step model choice, a log-only view of a running pipeline,
+and a dead-end "run finished" screen whose deliverable never reached the
+Library. Every seam below is GTK-free/pure where the task allowed, so the
+logic is unit-tested without a display; only the widget glue lives in
+`pipeline_studio.py`/`main_window.py`.
+
+- **Self-explaining steps** (`app/intent_vocab.py`): `flow_line(intent) ->
+  str` renders a plain "Takes a prompt → makes an image" line per step
+  (source nodes read "Makes …" with no "Takes" clause) from `Intent.
+  input_kind`/`output_kind` via the `_KIND_NOUN` map. `Intent.summary` is an
+  optional one-sentence, tool-agnostic description ("Turns your words into
+  an image.") populated for the marquee generative intents. `capability_for_
+  intent(class_type) -> str | None` (the `_CAPABILITY_FOR_INTENT` map) is the
+  seam that tells a step card which `server_manager` capability (if any) its
+  model picker should scope to — `None` for intents with no model dimension
+  (caption/rmbg/depth/prompt-compose/etc.), so those step cards never grow a
+  picker at all.
+- **`app/model_picker.py`** — a shared, GTK-optional per-capability model
+  picker, deliberately a NEW module rather than extracting CreateView's own
+  scoped dropdown (avoids risking a Create regression; migrating CreateView
+  onto this module is an explicit, not-yet-done follow-up — it keeps its own
+  picker for now). `picker_entries(capability, snapshot=None,
+  has_service=False) -> list[(key, display_name, benefit, dot)]` is the pure
+  core (mirrors `server_manager.display_name_for`/`benefit_for` +
+  `ModelStatusService`'s dot glyphs; `capability=="animatediff"` is a single
+  synthetic always-● entry, since AnimateDiff has no `ServerDef` to poll).
+  `ModelPickerRow(Gtk.Box)` wraps it in a `Gtk.DropDown` + benefit sub-label,
+  subscribing to `ModelStatusService` for live dot updates and guarding
+  against the double `notify::selected` fire GTK4's `set_model()` triggers
+  on every rebuild (`_suppress_change`, so a live status push can never look
+  like a spurious user re-pick). `pipeline_studio.py` builds one
+  `ModelPickerRow` per step whose intent has a `capability_for_intent`
+  match, keyed by node_id in `self._model_pickers`.
+- **`_backend_for` parity** (`app/pipeline_engine.py`): a step's picker is
+  worthless if the run doesn't honor it. `_backend_for` now tries an EXACT
+  `server_manager` key match against the node's `inputs["model"]` first
+  (`TTLGTextToImage`/`TTLGImageToVideo`), falling back to the old
+  substring-sniffing (`"flux" in m`, `"wan" in m`, …) only when the picked
+  value doesn't match a real key — so a `ModelPickerRow` selection always
+  routes to the actual server it named, never a same-family guess.
+- **Live run progress** (`app/pipeline_progress.py` + `LiveRunView` in
+  `pipeline_studio.py`): `ProgressState` is a pure reducer — `update(node_id,
+  status, detail)` folds one event, `current_index`/`done_count`/
+  `running_node`/`phase(node_id)` are read back to drive widgets;
+  `current_index` counts nodes in FIRST-started order, not declaration
+  order, so "Step N of M" matches what's actually happening on screen.
+  `LiveRunView` replaces each running step's status glyph with a real
+  `Gtk.Spinner`, shows the latest `detail` as a phase sub-label, and ticks a
+  per-step elapsed-time label (`GLib.timeout_add(1000, …)`, cancelled with a
+  final freeze — not a reset — on done/failed). The verbose log is demoted
+  to a collapsed `Gtk.Expander` now that the spinner/phase/elapsed row
+  carries the at-a-glance status.
+- **Final-result hero** (`app/pipeline_view_model.py` + `OpenView` in
+  `pipeline_studio.py`): `final_index_for(run) -> int | None` resolves which
+  step is the run's "Here's what you made" deliverable. `_HERO_KINDS` was
+  `{"image", "video"}`; AnimateDiff's `gif_path` output and every visual
+  artgen artifact (`TTLGArtgenGenerate`'s generic `artifact_path`, whose
+  intent alone can't distinguish a visual finale from prose) were silently
+  UN-heroable — a real bug, not hypothetical, since it also meant no Library
+  registration (below). Fixed: `_HERO_KINDS` now includes `"gif"`, and
+  `_ARTGEN_VISUAL_EXTS` (`.svg`/`.ans`/`.json`/`.gif`/`.png`/`.jpg`/`.jpeg`/
+  `.webp`) promotes a visual-looking "any"-kind artgen artifact to hero by
+  its own file extension, deliberately excluding `.txt`/`.py` (verse/
+  codeart prose keeps falling through to the existing text-only hero path).
+  `OpenView._build_hero` renders the resolved step exactly like an ordinary
+  step row (fan-out grid / single thumb frame / text block — never a new
+  rendering path), just larger, with ⛶ Fullscreen / ⤓ Save / ↪ In Library /
+  🔀 Remix actions. This hero is still the fixed-contract static
+  `_build_thumb_frame`, not `artgen_render`'s rich/animated rendering — see
+  the "Known, accepted static-degrade" note under "Media showcase
+  everywhere" below.
+- **Library registration** (`MainWindow._register_pipeline_final`, wired as
+  `PipelineStudio`'s `on_run_complete` callback, fired once per run from
+  `LiveRunView`'s "run-done"): resolves the hero step via `final_index_for`
+  and classifies its artifact by extension into ONE of the two record
+  shapes every other Library-writing path already produces — raster
+  (`.png`/`.jpg`/`.jpeg`) or `.mp4` become a native `history_store.
+  GenerationRecord` via the same gallery-add path `_on_finished` uses;
+  artgen kinds (`.gif`/`.svg`/`.ans`/`.json`/`.py`/`.md`) become a
+  `media_store.MediaRecord` (`generator_type="pipeline"`, provenance
+  `_pipeline_run_id`/`recipe` in `params`) mirroring `_create_generate_
+  artgen`/the `ansi-image` transform branch. Fail-soft end to end (no
+  resolvable hero, missing file, unrecognized extension, or any raised
+  error just means "register nothing," never a crash on the run-done
+  screen the user is looking at); `self._registered_pipeline_runs` (a set of
+  run ids) guards against double-registering the same run.
+- **Legacy portfolio view retired.** `app/pipeline_portfolio_view.py` (the
+  pre-Task-7 "done runs" grid) was dead/unwired code — nothing in
+  `main_window.py` ever constructed it — and was deleted outright along with
+  its test file rather than kept around unreachable; `OpenView`'s hero
+  (above) is the surviving, already-live run-showcase surface.
+
 ## Remix is pipelines (v0.73.0)
 
 Remix used to mean two different things depending on which surface you clicked
@@ -359,11 +455,19 @@ in every context, not just the one context someone happened to build first.
 an artgen kind that actually generated successfully.
 
 **Known, accepted static-degrade:** `pipeline_studio`'s node/hero
-thumbnails and `pipeline_portfolio_view` are a fast, fixed-contract pixbuf-
-grid surface — a placeholder/static tile for non-raster artgen types there
-is intentional, not a gap to close. They may eventually call
+thumbnails are a fast, fixed-contract pixbuf-grid surface (`_build_thumb_frame`)
+— a placeholder/static tile for non-raster artgen types there is
+intentional, not a gap to close. They may eventually call
 `artgen_thumb.make_thumbnail` for a nicer static tile, but full rich/
-animated rendering doesn't fit that contract and is out of scope.
+animated rendering doesn't fit that contract and is out of scope. (The standalone `pipeline_portfolio_view.py` this
+paragraph used to also name was deleted outright in the v0.75.0 Pipeline UX
+overhaul — it was dead/unwired code, never mounted anywhere; the run-final
+showcase job it would have done belongs to `OpenView`'s own hero, which
+predates it. See the v0.75.0 section below. `OpenView`'s hero is still this
+same static-thumb-frame contract, not `artgen_render`'s rich/animated
+rendering; it now additionally counts "gif" and visual artgen kinds
+[svg/ans/json/png/jpg] as heroable via `pipeline_view_model._HERO_KINDS`/
+`_ARTGEN_VISUAL_EXTS`, where before only image/video were.)
 
 **`artgen_thumb.make_thumbnail` now produces real thumbnails for every
 type it's asked to preview**, not just raster/svg: `.json` (palette) parses

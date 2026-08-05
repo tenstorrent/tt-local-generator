@@ -7149,7 +7149,7 @@ class MainWindow(Gtk.ApplicationWindow):
         shapes every other Library-writing path in this file already
         produces — never a new one:
 
-        - raster (.png/.jpg/.jpeg/.webp) or .mp4 → a native
+        - raster (.png/.jpg/.jpeg) or .mp4 → a native
           `history_store.GenerationRecord`, persisted to `self._store` (the
           same append `GenerationWorker` does before calling back) and routed
           through the existing gallery add path

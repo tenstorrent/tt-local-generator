@@ -1,3 +1,45 @@
+tt-local-generator (0.75.0) noble; urgency=medium
+
+  * feat(pipeline): Pipeline UX overhaul — self-explaining steps, per-step
+    model picker, live run progress, final-result hero, Library
+    registration.
+    - Step cards now render plain-language "Takes a prompt → makes an
+      image" flow lines and a one-sentence summary for marquee generative
+      intents (`intent_vocab.flow_line`/`Intent.summary`), instead of raw
+      `class_type` names.
+    - Each step whose intent has a model dimension
+      (`intent_vocab.capability_for_intent`) gets its own model picker
+      (new `app/model_picker.py`, shared/pure `picker_entries()` +
+      `ModelPickerRow` widget) reusing Create's `server_manager` display
+      names/benefits and `ModelStatusService` status dots — a deliberately
+      new module rather than extracting CreateView's own picker, to avoid
+      risking a Create regression; CreateView keeps its picker for now.
+    - `pipeline_engine._backend_for` now matches a step's selected model
+      against a real `server_manager` key FIRST, falling back to the old
+      substring-sniffing only when it doesn't match — so a per-step picker
+      selection always routes to the server it actually named.
+    - Live pipeline runs get a real progress display: a pure reducer
+      (`app/pipeline_progress.py::ProgressState`) drives a spinner, a
+      phase sub-label, and a per-step elapsed-time counter in
+      `LiveRunView`; the verbose run log is demoted to a collapsed
+      expander now that at-a-glance status doesn't need it.
+    - The run page's final deliverable is now promoted to a "Here's what
+      you made" hero (`pipeline_view_model.final_index_for`, `OpenView.
+      _build_hero`) — fixed a real bug where AnimateDiff's GIF output and
+      every visual artgen artifact (svg/ansi/palette/etc.) were silently
+      un-heroable (`_HERO_KINDS` was image/video only); both are heroable
+      now.
+    - Every pipeline run's final deliverable is registered into the
+      Library the instant the run finishes
+      (`MainWindow._register_pipeline_final`), fail-soft and deduped per
+      run id, using the same native/artgen record shapes every other
+      Library-writing path already produces.
+    - The legacy, unwired `app/pipeline_portfolio_view.py` (and its test)
+      is deleted outright — `OpenView`'s hero is the surviving run-showcase
+      surface.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 05 Aug 2026 00:00:00 +0000
+
 tt-local-generator (0.74.0) noble; urgency=medium
 
   * feat(pills): per-artgen-type Direction pills.
