@@ -364,7 +364,9 @@ class ArtgenGallery(Gtk.Box):
         self.on_card_activated: Optional[Callable[[str], None]] = None
         self.on_watch_requested: Optional[Callable[[Optional[str]], None]] = None
         self.on_card_deleted: Optional[Callable[[str], None]] = None
-        self.on_remix: Optional[Callable[["MediaRecord"], None]] = None
+        # Task 8 (remix-pipeline-unification): the parallel "🔀 Remix" popover
+        # seam (`on_remix`) is gone — `on_remix_as_pipeline` is the single
+        # remix affordance now, wired to the card's one remaining button.
         self.on_remix_as_pipeline: Optional[Callable[["MediaRecord"], None]] = None
         self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
@@ -663,20 +665,12 @@ class ArtgenGallery(Gtk.Box):
         del_btn.connect("clicked", _on_delete)
         actions.append(del_btn)
 
-        seed_btn = Gtk.Button(label="🔀 Remix")
-        seed_btn.add_css_class("artgen-card-remix-btn")
-        seed_btn.set_tooltip_text("Remix this artwork into a new video or image")
-
-        def _on_seed(_b, _rec=rec):
-            if self.on_remix:
-                self.on_remix(_rec)
-
-        seed_btn.connect("clicked", _on_seed)
-        actions.append(seed_btn)
-
-        pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
+        # Single remix affordance (Task 8): opens Pipeline Studio's Muse
+        # scoped to this artifact. The former parallel "🔀 Remix" popover
+        # button is gone; this is relabeled to the canonical name.
+        pipeline_btn = Gtk.Button(label="🔀 Remix")
         pipeline_btn.add_css_class("artgen-card-remix-btn")
-        pipeline_btn.set_tooltip_text("Turn this into a multi-step pipeline")
+        pipeline_btn.set_tooltip_text("Remix this into a pipeline")
 
         def _on_pipeline_seed(_b, _rec=rec):
             if self.on_remix_as_pipeline:

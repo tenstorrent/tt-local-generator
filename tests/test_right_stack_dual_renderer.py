@@ -78,7 +78,10 @@ def test_close_bar_and_queue_section_still_bracket_the_stack():
 # ── Source-level: partial callback wiring (Task 3 finishes the rest) ───────
 
 def test_artgen_detail_remix_callbacks_wired():
-    assert "self._artgen_detail.on_remix = self._on_remix_card" in _SRC
+    # Task 8 (remix-pipeline-unification): the former parallel `on_remix`
+    # (popover) wiring is gone -- `on_remix_as_pipeline` is the single
+    # surviving seam.
+    assert "self._artgen_detail.on_remix = self._on_remix_card" not in _SRC
     assert (
         "self._artgen_detail.on_remix_as_pipeline = self._remix_as_pipeline" in _SRC
     )
