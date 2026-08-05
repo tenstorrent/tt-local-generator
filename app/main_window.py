@@ -3018,7 +3018,14 @@ class DetailPanel(Gtk.ScrolledWindow):
             else:
                 # Linux (or macOS with GStreamer backend): inline Gtk.Video player
                 self._video_widget = Gtk.Video.new_for_filename(record.video_path)
-                self._video_widget.set_autoplay(False)
+                # Autoplay on selection (parity with the macOS GstPlayer path +
+                # the hover preview): clicking a video card in the library plays
+                # it in the detail pane immediately, no ▶ Play click needed. With
+                # autoplay True GTK drives playback, so set_loop(True) actually
+                # loops (the loop-restart caveat in CLAUDE.md is only for
+                # manually driving get_media_stream().play()). The play button
+                # below therefore starts as "⏸ Pause".
+                self._video_widget.set_autoplay(True)
                 self._video_widget.set_loop(True)
                 self._video_widget.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
                 self._video_widget.set_hexpand(False)
@@ -3057,7 +3064,8 @@ class DetailPanel(Gtk.ScrolledWindow):
                 GLib.timeout_add(200, _connect_stream_error)
 
                 ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-                self._play_btn = Gtk.Button(label="▶ Play")
+                # Starts as Pause because the video autoplays on selection (above).
+                self._play_btn = Gtk.Button(label="⏸ Pause")
                 self._play_btn.connect("clicked", self._toggle_play)
                 ctrl_row.append(self._play_btn)
                 full_btn = Gtk.Button(label="⛶ Fullscreen")

@@ -269,6 +269,29 @@ def test_video_player_window_uses_gtk_video_for_real_mp4(tmp_path):
     assert isinstance(win._video, mw.Gtk.Video)
 
 
+@gtk_required
+def test_detail_pane_autoplays_native_video_on_select(tmp_path):
+    """Selecting a native (non-gif) video shows it in the detail pane already
+    PLAYING: the inline Gtk.Video has autoplay on and the play control starts as
+    "⏸ Pause" (parity with the macOS GstPlayer path + hover preview). Regression
+    for "clicking non-animatediff videos doesn't autoplay in the details pane"."""
+    import main_window as mw
+    if mw._USE_SYSTEM_PLAYER:  # pragma: no cover - macOS uses the GstPlayer path
+        pytest.skip("Linux Gtk.Video path only")
+
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"fake-mp4")   # path just needs to exist; content irrelevant
+    rec = _make_record(media_type="video", video_path=str(vid))
+
+    panel = mw.DetailPanel()
+    panel.show_record(rec, lambda *_a: None)
+
+    assert isinstance(panel._video_widget, mw.Gtk.Video)
+    assert panel._video_widget.get_autoplay() is True
+    assert panel._play_btn is not None
+    assert panel._play_btn.get_label() == "⏸ Pause"
+
+
 # ── VideoPlayerWindow._toggle_play: real gif pause/resume (gif-hygiene fix 2) ─
 #
 # Space/Pause used to no-op entirely for the gif branch (AnimatedGifWidget

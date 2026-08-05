@@ -1,3 +1,14 @@
+tt-local-generator (0.72.1) noble; urgency=medium
+
+  * fix(library): clicking a native (non-AnimateDiff) video now autoplays it in
+    the detail pane. The Linux inline Gtk.Video path was created with
+    autoplay=False + a ▶ Play button and never auto-started, so a selected mp4
+    sat on its first frame (GIFs auto-animated, macOS GstPlayer auto-played —
+    only this path didn't). Set autoplay=True (GTK-driven, so set_loop(True)
+    loops reliably) and start the play control as "⏸ Pause".
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 10:45:00 +0000
+
 tt-local-generator (0.72.0) noble; urgency=medium
 
   * feat(create): per-chip progress breakdown for multi-chip AnimateDiff. The
