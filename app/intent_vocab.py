@@ -49,6 +49,10 @@ class Intent:
                   the same vocabulary as `input_kind`. Used by the composer
                   (`compatible_intents`) to find valid "add a step after this
                   one" candidates.
+    summary     — an optional tool-agnostic one-sentence description of what
+                  this step does, e.g. "Turns your words into a short looping
+                  animation." Populated for marquee generative intents, None
+                  otherwise (or for utility/transform nodes).
     """
     class_type: str
     verb: str
@@ -59,6 +63,7 @@ class Intent:
     input_key: str | None = None
     input_kind: str | None = None
     output_kind: str | None = None
+    summary: str | None = None
 
 
 # ── The 14 native class_types the pipeline engine supports ───────────────────
@@ -78,6 +83,7 @@ INTENTS: dict[str, Intent] = {
         input_key="prompt",
         input_kind="text",
         output_kind="image",
+        summary="Turns your words into an image.",
     ),
     "TTLGImageToVideo": Intent(
         class_type="TTLGImageToVideo",
@@ -89,6 +95,7 @@ INTENTS: dict[str, Intent] = {
         input_key="image",
         input_kind="image",
         output_kind="video",
+        summary="Brings your image to life with motion.",
     ),
     "TTLGGenerateText": Intent(
         class_type="TTLGGenerateText",
@@ -100,6 +107,7 @@ INTENTS: dict[str, Intent] = {
         input_key="caption",
         input_kind="text",
         output_kind="text",
+        summary="Generates thoughtful prose about an image or topic.",
     ),
     "TTLGCaptionImage": Intent(
         class_type="TTLGCaptionImage",
@@ -155,6 +163,7 @@ INTENTS: dict[str, Intent] = {
         input_key=None,      # source-style: prompt is computed at seed time
         input_kind=None,
         output_kind="text",
+        summary="Turns a color palette into a vivid prompt.",
     ),
     "TTLGSVGRender": Intent(
         class_type="TTLGSVGRender",
@@ -199,6 +208,7 @@ INTENTS: dict[str, Intent] = {
         input_key=None,
         input_kind=None,
         output_kind="text",
+        summary="Creates procedural art — ANSI grids, verse, or code.",
     ),
     "TTLGAnimateDiff": Intent(
         class_type="TTLGAnimateDiff",
@@ -210,6 +220,7 @@ INTENTS: dict[str, Intent] = {
         input_key="prompt",
         input_kind="text",
         output_kind="gif",
+        summary="Turns your words into a short looping animation.",
     ),
     "TTLGSplitText": Intent(
         class_type="TTLGSplitText",
@@ -292,6 +303,46 @@ def adapter_for(seed_kind: "str | None", input_kind: "str | None") -> "str | Non
     if not seed_kind or not input_kind:
         return None
     return ADAPTERS.get((seed_kind, input_kind))
+
+
+# Human noun for each artifact kind, used by flow_line.
+_KIND_NOUN = {
+    "text": "text",
+    "image": "an image",
+    "gif": "a looping GIF",
+    "video": "a video",
+    "palette": "a color palette",
+    "playlist": "a collection",
+}
+
+
+def flow_line(intent: "Intent") -> str:
+    """Plain-language 'Takes X → makes Y' for a step card. A source node
+    (input_kind is None) has no 'Takes' clause."""
+    out = _KIND_NOUN.get(intent.output_kind or "", intent.output_kind or "a result")
+    if intent.input_kind is None:
+        return f"Makes {out}"
+    inp = _KIND_NOUN.get(intent.input_kind, intent.input_kind)
+    # Brief-fed nodes read better as "a prompt" than "text" for text input.
+    if intent.input_kind == "text":
+        inp = "a prompt"
+    return f"Takes {inp} → makes {out}"
+
+
+# Intent (by class_type) -> model-picker capability, or None for intents with
+# no model dimension. Keys mirror server_manager capabilities.
+_CAPABILITY_FOR_INTENT = {
+    "TTLGTextToImage": "image",
+    "TTLGImageToVideo": "video",
+    "TTLGMontage": "video",
+    "TTLGAnimateDiff": "animatediff",
+    "TTLGGenerateText": "artgen",
+    "TTLGArtgenGenerate": "artgen",
+}
+
+
+def capability_for_intent(class_type: str) -> "str | None":
+    return _CAPABILITY_FOR_INTENT.get(class_type)
 
 
 def label(class_type: str) -> str:
