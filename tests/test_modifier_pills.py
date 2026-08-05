@@ -182,3 +182,44 @@ def test_add_chip_click_cannot_double_apply_the_same_modifier(monkeypatch):
     assert add_btn.get_visible() is False
     # A hidden widget is exactly what keeps a real user from clicking it
     # again — the de-dup contract this task requires.
+
+
+# ── artgen loader + Surprise chip (Task 3, 2026-08-05-per-artgen-pills) ─────
+
+from chip_config import ChipEntry, ChipCategory
+
+
+def test_artgen_mode_uses_artgen_loader(monkeypatch):
+    # NOTE: the brief's original one-liner
+    #   `lambda t: called.setdefault("t", t) or [ChipCategory(...)]`
+    # is a latent bug — dict.setdefault(key, default) returns *default*
+    # itself (here the truthy string "palette"), so the `or` short-circuits
+    # and the lambda returns the raw string instead of the categories list,
+    # crashing ModifierPills.__init__ when it iterates it. Rewritten as an
+    # explicit function that records the call and returns a valid bank,
+    # preserving the test's actual intent.
+    called = {}
+
+    def _fake_loader(t):
+        called["t"] = t
+        return [ChipCategory("Mood", [ChipEntry("moody", "moody")])]
+
+    monkeypatch.setattr(cpp, "load_chips_for_artgen_kind", _fake_loader)
+    p = cpp.ModifierPills("palette", artgen=True)
+    assert called["t"] == "palette"
+
+
+def test_surprise_chip_applies_random_from_pool_and_stays(monkeypatch):
+    cat = ChipCategory("Mood", [
+        ChipEntry(label="🎲 Surprise", text="", surprise=True),
+        ChipEntry(label="moody", text="moody"),
+        ChipEntry(label="lush", text="lush"),
+    ])
+    monkeypatch.setattr(cpp, "load_chips_for_kind", lambda k: [cat])
+    monkeypatch.setattr(cpp, "_pick_surprise", lambda pool: "lush")
+    p = cpp.ModifierPills("image")
+    # find + click the surprise add-chip
+    btn = p._add_buttons[id(cat.chips[0])]
+    btn.emit("clicked")
+    assert "lush" in p.applied_text()
+    assert btn.get_visible() is True     # surprise chip is re-tappable

@@ -47,6 +47,7 @@ SkyReels-I2V (an image-to-video model that needs a conditioning image).
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -2406,6 +2407,25 @@ def load_chips_for_kind(kind: str) -> "list":
         return []
 
 
+def load_chips_for_artgen_kind(artgen_type: str) -> "list":
+    """Seam over `chip_config.load_chips_for_artgen(artgen_type)` — mirrors
+    `load_chips_for_kind` above but for artgen generator types (e.g.
+    "palette", "verse") rather than the native video/image/animate tabs.
+    Returns `[]` for an unknown type or any load error, never raises. Tests
+    monkeypatch this attribute directly to force a known bank."""
+    try:
+        from chip_config import load_chips_for_artgen
+        return load_chips_for_artgen(artgen_type)
+    except Exception:
+        return []
+
+
+def _pick_surprise(pool: "list[str]") -> "str | None":
+    """Random pick from a Surprise pool (its own seam so tests can inject a
+    deterministic pick instead of depending on `random`)."""
+    return random.choice(pool) if pool else None
+
+
 def attach_inspire_button(
     entry: Gtk.Entry,
     prompt_type_getter: "Callable[[], str]",
@@ -2563,7 +2583,7 @@ class ModifierPills(Gtk.Box):
     skipped, matching this class's existing fail-soft conventions.
     """
 
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, *, artgen: bool = False) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class("modifier-pills")
 
@@ -2572,7 +2592,9 @@ class ModifierPills(Gtk.Box):
         self._add_buttons: "dict[int, Gtk.Button]" = {}  # id(entry) -> its add-chip button
 
         try:
-            self._categories = load_chips_for_kind(kind) or []
+            self._categories = (
+                load_chips_for_artgen_kind(kind) if artgen else load_chips_for_kind(kind)
+            ) or []
         except Exception:
             self._categories = []
 
@@ -2629,6 +2651,9 @@ class ModifierPills(Gtk.Box):
         exp.set_expanded(False)
         exp.add_css_class("modifier-cat")
 
+        from chip_config import surprise_pool
+        pool = surprise_pool(category)
+
         flow = Gtk.FlowBox()
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.add_css_class("modifier-pills-add-row")
@@ -2637,7 +2662,14 @@ class ModifierPills(Gtk.Box):
             btn.add_css_class("create-addchip")
             if entry.tip:
                 btn.set_tooltip_text(entry.tip)
-            btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
+            if getattr(entry, "surprise", False):
+                # A Surprise chip applies a random pill from the category's
+                # pool and stays visible/re-tappable (no de-dup — unlike a
+                # normal add-chip below, which hides itself once applied).
+                btn.add_css_class("create-addchip-surprise")
+                btn.connect("clicked", lambda _b, pl=list(pool): self._apply_surprise(pl))
+            else:
+                btn.connect("clicked", lambda _b, e=entry: self._apply_entry(e))
             self._add_buttons[id(entry)] = btn
             flow.append(btn)
         exp.set_child(flow)
@@ -2648,6 +2680,18 @@ class ModifierPills(Gtk.Box):
         btn = self._add_buttons.get(id(entry))
         if btn is not None:
             btn.set_visible(False)  # de-dup: can't add the same modifier twice
+        self._render_applied()
+
+    def _apply_surprise(self, pool: "list[str]") -> None:
+        """Apply a random pill from *pool* (a Surprise tap). Builds a fresh
+        `ChipEntry` so it reads as a normal removable pill; the Surprise
+        add-chip itself is NOT hidden, so it can be tapped again for another
+        random pick (unlike `_apply_entry`'s de-dup hide)."""
+        text = _pick_surprise(pool)
+        if not text:
+            return
+        from chip_config import ChipEntry
+        self._applied.append(ChipEntry(label=f"🎲 {text}", text=text))
         self._render_applied()
 
     def _remove_entry(self, entry) -> None:
