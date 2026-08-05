@@ -16,13 +16,17 @@ _GIF_EXTS = {".gif"}
 
 
 def artgen_seed_kind(file_path, generator_type=None):
-    """Map an artgen artifact to a pipeline seed kind by file extension.
+    """Map an artgen artifact to a pipeline seed kind by file extension or generator.
 
+    Primary classification by file extension:
     .txt/.md/.py -> "text"; .png/.jpg/.jpeg/.svg/.ans/.webp -> "image";
     .gif -> "gif"; .json or unknown/missing/no-extension -> None (not
     seedable as a pipeline). Extension matching is case-insensitive.
-    `generator_type` is accepted for future use but does not affect the
-    result today. Never raises — any unexpected input yields None.
+
+    Special case: when generator_type == "palette", returns "palette"
+    (overrides .json -> None mapping). Other generator_type values are
+    ignored; extension determines the result. Never raises — any unexpected
+    input yields None.
     """
     try:
         if not file_path:
