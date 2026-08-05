@@ -654,6 +654,15 @@ def _h_prompt_compose(nid, inp, ctx):
     return {"prompt": tmpl}
 
 
+@register("TTLGPaletteToPrompt")
+def _h_palette_to_prompt(nid, inp, ctx):
+    """Adapter node: emits the prompt that was composed from a palette at seed
+    time (LLM-polished or the deterministic colors+lore literal). Pure — the
+    palette was consumed when the pipeline was built, so there's no run-time
+    LLM/backend dependency here (mirrors TTLGPromptCompose)."""
+    return {"prompt": inp.get("prompt", "")}
+
+
 @register("TTLGGenerateText")
 def _h_generate_text(nid, inp, ctx):
     if ctx.dry_run:
