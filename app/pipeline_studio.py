@@ -2247,6 +2247,7 @@ class MuseView(Gtk.Box):
         goals_fn: "Callable[[Optional[str]], list] | None" = None,
         wingit_pipeline_fn: "Callable[[str, Optional[str]], object] | None" = None,
         seed_spec_fn: "Callable[..., dict] | None" = None,
+        compose_fn: "Callable[[str, str, Callable[[str], None]], None] | None" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
@@ -2285,6 +2286,14 @@ class MuseView(Gtk.Box):
         # real `recipes.build_seed_spec` directly (see class docstring in the
         # module header and `_choose_goal` below).
         self._seed_spec_fn = seed_spec_fn or seed_spec
+
+        # `compose_fn(medium, literal, on_done)` — composes the best prompt
+        # for a cross-type adapter (currently just palette -> prompt) off the
+        # GTK main thread, then posts the result back via `on_done` on the
+        # main thread (see `_choose_goal`'s adapter path). `None` means run
+        # the deterministic literal fallback synchronously — the test/
+        # standalone-safe default (no threads, no LLM).
+        self._compose_fn = compose_fn
 
         # Set by set_context(); (path, kind, thumb_path) or None.
         self._seed_artifact: "tuple[str, str, str | None] | None" = None
@@ -2457,23 +2466,73 @@ class MuseView(Gtk.Box):
             return
         self._choose_goal(self._goals[len(self._goals) // 2])
 
-    def _choose_goal(self, goal: "recipes.Goal") -> None:
-        """Synchronous path shared by goal-card clicks and Surprise me: build
-        the seed spec via the REAL `recipes.build_seed_spec` (not an injected
-        seam — see class docstring) and emit `goal-chosen`, or show a gentle
-        message on a genuine kind mismatch instead of crashing."""
-        seed_artifact_pair = None
-        if self._seed_artifact is not None:
-            path, kind, _thumb_path = self._seed_artifact
-            seed_artifact_pair = (path, kind)
+    def _prompt_source_for_output(self, output_kind: "str | None") -> str:
+        """Map a goal's `output_kind` to the `generate_prompt`/
+        `llm_polish_or_none` source string used to compose an adapter
+        prompt. gif/video goals (AnimateDiff et al.) want video-flavored
+        phrasing; image goals want image-flavored phrasing; anything else
+        (including None) defaults to video."""
+        return {"gif": "video", "video": "video", "image": "image"}.get(
+            output_kind, "video")
 
-        try:
-            spec = recipes.build_seed_spec(goal, seed_artifact=seed_artifact_pair)
-        except ValueError as exc:
-            self._show_message(f"Couldn't build that pipeline: {exc}")
+    def _choose_goal(self, goal: "recipes.Goal") -> None:
+        """Build the seed spec and emit `goal-chosen`. Shared by goal-card
+        clicks and Surprise me.
+
+        When the seed's kind doesn't match the goal's first step but an
+        adapter is registered for that (seed_kind, input_kind) pair (today:
+        only palette -> prompt), compose the adapter's prompt from the
+        palette — LLM-polished via `compose_fn` when supplied, else the
+        deterministic `palette_prompt.literal_prompt` fallback — and prepend
+        a TTLGPaletteToPrompt step ahead of the goal's own steps via
+        `recipes.build_seed_spec(..., prepend_steps=...)`. Every other goal
+        (kind matches, or no adapter registered) keeps the original
+        synchronous build-and-emit path, unchanged."""
+        import palette_prompt
+        from intent_vocab import adapter_for, intent_for
+
+        seed_pair = None
+        seed_kind = None
+        if self._seed_artifact is not None:
+            path, seed_kind, _thumb = self._seed_artifact
+            seed_pair = (path, seed_kind)
+
+        first_ct = goal.recipe_steps[0][0]
+        first_input = intent_for(first_ct).input_kind
+        needs_adapter = (
+            seed_kind is not None
+            and seed_kind != first_input
+            and adapter_for(seed_kind, first_input) == "TTLGPaletteToPrompt"
+        )
+
+        if not needs_adapter:
+            try:
+                spec = recipes.build_seed_spec(goal, seed_artifact=seed_pair)
+            except ValueError as exc:
+                self._show_message(f"Couldn't build that pipeline: {exc}")
+                return
+            self._hide_message()
+            self.emit("goal-chosen", spec)
             return
-        self._hide_message()
-        self.emit("goal-chosen", spec)
+
+        # Palette -> prompt adapter path.
+        palette = palette_prompt.load_palette(self._seed_artifact[0]) or {}
+        literal = palette_prompt.literal_prompt(palette)
+        medium = self._prompt_source_for_output(goal.output_kind)
+
+        def _emit(prompt_text: str) -> None:
+            step = ("TTLGPaletteToPrompt",
+                    {"prompt": prompt_text, "_source_palette": self._seed_artifact[0]})
+            spec = recipes.build_seed_spec(goal, seed_artifact=None,
+                                            prepend_steps=(step,))
+            self._hide_message()
+            self.emit("goal-chosen", spec)
+
+        if self._compose_fn is None:
+            _emit(literal)                      # sync literal-only (tests/standalone)
+        else:
+            self._show_message("Composing a prompt from your palette…")
+            self._compose_fn(medium, literal, _emit)
 
     # ── Free text ("Dream it up") ────────────────────────────────────────────
 
@@ -2924,7 +2983,24 @@ class PipelineStudio(Gtk.Box):
         muse_back_bar.append(muse_back_btn)
         muse_page.append(muse_back_bar)
 
-        self.muse = MuseView()
+        def _compose_fn(medium, literal, on_done):
+            """Muse's palette->prompt adapter seam (Task 7): polish the
+            deterministic literal prompt via the prompt-gen LLM OFF the GTK
+            main thread, then post the best available prompt back via
+            `GLib.idle_add` (mirrors `main_window._create_inspire_fn`'s
+            thread/idle_add pattern). A down/erroring LLM (or none running)
+            falls back to the literal — `_choose_goal`'s adapter path is
+            never blocked on the LLM being available."""
+            def run():
+                try:
+                    import prompt_client
+                    polished = prompt_client.llm_polish_or_none(medium, literal)
+                except Exception:
+                    polished = None
+                GLib.idle_add(on_done, polished or literal)
+            threading.Thread(target=run, daemon=True).start()
+
+        self.muse = MuseView(compose_fn=_compose_fn)
         self.muse.connect("goal-chosen", self._on_muse_goal_chosen)
         self.muse.set_vexpand(True)
         muse_page.append(self.muse)
