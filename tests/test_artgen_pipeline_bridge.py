@@ -1,8 +1,8 @@
 """Task 7: "🧩 Remix as pipeline…" bridge from the Generative Art gallery.
 
-ArtgenGallery/ArtgenDetail grow a parallel `on_remix_as_pipeline` seam next to
-the existing `on_remix` (RemixPopover) seam, and a "🧩 Remix as pipeline…"
-button next to the existing "🔀 Remix" affordance.
+ArtgenGallery/ArtgenDetail grew a parallel `on_remix_as_pipeline` seam next to
+the then-existing `on_remix` (RemixPopover) seam, plus a "🧩 Remix as
+pipeline…" button next to the then-existing "🔀 Remix" affordance.
 
 SP-3d-5: `ArtgenPanel` (which used to forward its own `on_remix_as_pipeline`
 the same way it forwarded `on_remix`) is deleted — main_window.py now wires
@@ -12,6 +12,16 @@ directly, the same pattern the three native `GalleryWidget`s already use (see
 `test_main_window_pipelines.py::test_main_window_wires_artgen_gallery_on_remix_as_pipeline_source`
 for the main_window-level wiring guard). The ArtgenGallery/ArtgenDetail tests
 below are unaffected by that deletion.
+
+UPDATE (Task 8, remix-pipeline-unification): the `on_remix`/RemixPopover seam
+described above is now GONE from both ArtgenGallery and ArtgenDetail — remix
+means exactly one thing (seed a pipeline), so each card/sidebar has exactly
+one "🔀 Remix" button, wired to `on_remix_as_pipeline`. The tests below were
+updated in place rather than rewritten wholesale: the "gallery card" and
+"detail sidebar" `_remix_as_pipeline_btn` tests are unaffected by the
+consolidation since they never depended on the popover seam existing; only
+`test_detail_existing_remix_seam_untouched` (which exercised the now-deleted
+seam) was replaced by `test_detail_has_single_remix_affordance`.
 
 Creating GTK widgets needs a display; the full suite runs under xvfb. When no
 display is available this module skips itself (matches the repo's headless
@@ -134,18 +144,20 @@ def test_detail_remix_as_pipeline_button_noop_without_callback(tmp_path):
     detail._remix_as_pipeline_btn.emit("clicked")  # must not raise
 
 
-def test_detail_existing_remix_seam_untouched(tmp_path):
+def test_detail_has_single_remix_affordance(tmp_path):
+    """Task 8 follow-up (remix-pipeline-unification): the former parallel
+    "🔀 Remix" popover button (`_seed_btn`) and its `on_remix` seam are gone
+    from ArtgenDetail's sidebar -- `_remix_as_pipeline_btn` (relabeled to the
+    canonical "🔀 Remix") is the only remix button left. Replaces the old
+    test_detail_existing_remix_seam_untouched, whose premise (two independent
+    remix seams) no longer holds now that the popover seam has been deleted
+    outright rather than merely left unwired."""
     from artgen_detail import ArtgenDetail
 
     detail = ArtgenDetail()
-    remix_calls = []
-    pipeline_calls = []
-    detail.on_remix = lambda r: remix_calls.append(r)
-    detail.on_remix_as_pipeline = lambda r: pipeline_calls.append(r)
+    assert not hasattr(detail, "_seed_btn")
+    assert not hasattr(detail, "on_remix")
     rec = _media_record(tmp_path)
     detail.show_record(rec.id, [rec])
 
-    detail._remix_as_pipeline_btn.emit("clicked")
-
-    assert pipeline_calls == [rec]
-    assert remix_calls == []
+    assert detail._remix_as_pipeline_btn.get_label() == "🔀 Remix"

@@ -72,7 +72,10 @@ class ArtgenDetail(Gtk.Box):
         self.on_back: Optional[Callable[[], None]] = None
         self.on_deleted: Optional[Callable[[str], None]] = None
         self.on_starred: Optional[Callable[[str, bool], None]] = None
-        self.on_remix: Optional[Callable[["MediaRecord"], None]] = None
+        # Task 8 follow-up (remix-pipeline-unification): the parallel "🔀
+        # Remix" popover seam (`on_remix`) is gone — `on_remix_as_pipeline`
+        # is the single remix affordance now, wired to the sidebar's one
+        # remaining button.
         self.on_remix_as_pipeline: Optional[Callable[["MediaRecord"], None]] = None
         self._records: list[MediaRecord] = []
         self._idx: int = 0
@@ -235,15 +238,12 @@ class ArtgenDetail(Gtk.Box):
         open_btn.connect("clicked", self._on_open_file)
         sidebar.append(open_btn)
 
-        # Remix: use this artwork as an ingredient in a new generation
-        self._seed_btn = Gtk.Button(label="🔀 Remix")
-        self._seed_btn.set_tooltip_text("Remix this artwork into a new video or image")
-        self._seed_btn.connect("clicked", self._on_remix_clicked)
-        sidebar.append(self._seed_btn)
-
-        # Remix as pipeline: open Pipeline Studio's Muse scoped to this artifact
-        self._remix_as_pipeline_btn = Gtk.Button(label="🧩 Remix as pipeline…")
-        self._remix_as_pipeline_btn.set_tooltip_text("Turn this into a multi-step pipeline")
+        # Single remix affordance (Task 8 follow-up): opens Pipeline Studio's
+        # Muse scoped to this artifact. The former parallel "🔀 Remix"
+        # popover button (`_seed_btn` → `_on_remix_clicked` → `on_remix`) is
+        # gone; this is relabeled to the canonical name.
+        self._remix_as_pipeline_btn = Gtk.Button(label="🔀 Remix")
+        self._remix_as_pipeline_btn.set_tooltip_text("Remix this into a pipeline")
         self._remix_as_pipeline_btn.connect("clicked", self._on_remix_as_pipeline_clicked)
         sidebar.append(self._remix_as_pipeline_btn)
 
@@ -435,12 +435,6 @@ class ArtgenDetail(Gtk.Box):
         rec = self._records[self._idx]
         if Path(rec.file_path).exists():
             subprocess.Popen(["xdg-open", rec.file_path])
-
-    def _on_remix_clicked(self, _btn) -> None:
-        """Forward the remix request to the panel callback if wired."""
-        if not self._records or self.on_remix is None:
-            return
-        self.on_remix(self._records[self._idx])
 
     def _on_remix_as_pipeline_clicked(self, _btn) -> None:
         """Forward the "remix as pipeline" request to the panel callback if wired."""
