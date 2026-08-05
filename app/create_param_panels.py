@@ -2777,8 +2777,12 @@ class RoleZonePanel(Gtk.Box):
         MAIN prompt itself is NOT owned here — CreateView's idea-door prompt
         entry persists across medium swaps and sits directly above wherever
         this panel is mounted, so the prompt and this zone read as one region.
-      - **Direction** — a `ModifierPills(medium.kind)` followed by the
-        panel's `ROLE_DIRECTION` fields.
+      - **Direction** — a `ModifierPills` chip bank followed by the panel's
+        `ROLE_DIRECTION` fields. Native mediums key the bank by output
+        `kind` (`ModifierPills(medium.kind)`); artgen mediums key it by
+        their own TYPE instead (`ModifierPills(medium.id, artgen=True)`),
+        so e.g. palette and landscape each get their own bank rather than
+        sharing one generic "image" bank.
       - **Controls** — a collapsed `Gtk.Expander` holding the panel's
         `ROLE_CONTROL` fields in a wrapping `Gtk.FlowBox` grid.
 
@@ -2813,7 +2817,10 @@ class RoleZonePanel(Gtk.Box):
         # ── "Direction" zone ─────────────────────────────────────────────
         self._direction_zone = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._direction_zone.add_css_class("role-zone-direction-body")
-        self._modifier_pills = ModifierPills(medium.kind)
+        if getattr(medium, "source", "") == "artgen":
+            self._modifier_pills = ModifierPills(medium.id, artgen=True)
+        else:
+            self._modifier_pills = ModifierPills(medium.kind)
         self._direction_zone.append(self._modifier_pills)
         direction_frame = Gtk.Frame(label="Direction")
         direction_frame.add_css_class("role-zone-direction")

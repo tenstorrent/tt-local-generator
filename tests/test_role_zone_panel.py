@@ -323,3 +323,55 @@ def test_empty_brief_frame_hidden_for_prompt_only_artgen():
     if rp._brief_zone.get_first_child() is None:
         brief_frame = rp._brief_zone.get_parent()
         assert brief_frame.get_visible() is False
+
+
+def test_artgen_medium_pills_keyed_by_type(monkeypatch):
+    """An artgen medium's Direction pills must come from ITS TYPE (the
+    generator name), via the artgen chip loader — never the generic
+    kind-keyed native loader (task-4-brief.md).
+
+    NOTE: the fakes below use plain functions rather than the brief's
+    `seen.setdefault(k, t) or []` one-liner — `dict.setdefault` returns the
+    just-set value (a non-empty, truthy string), so `or []` never actually
+    fires and `ModifierPills` would iterate over the string's characters as
+    categories. Recording into `seen` and unconditionally returning `[]`
+    keeps the same observable assertions without that trap.
+    """
+    seen = {}
+
+    def fake_artgen_loader(t):
+        seen["artgen"] = t
+        return []
+
+    def fake_native_loader(k):
+        seen["native"] = k
+        return []
+
+    monkeypatch.setattr(cpp, "load_chips_for_artgen_kind", fake_artgen_loader)
+    monkeypatch.setattr(cpp, "load_chips_for_kind", fake_native_loader)
+    med = _artgen_medium("palette", kind="image")
+    cpp.RoleZonePanel(cpp.ArtgenParamPanel(med.generator), med)
+    assert seen.get("artgen") == "palette"   # artgen loader called with the TYPE
+    assert "native" not in seen              # native loader NOT used for an artgen medium
+
+
+def test_native_medium_pills_keyed_by_kind(monkeypatch):
+    """A native medium keeps using the generic kind-keyed loader — zero
+    behavior change (task-4-brief.md). See the note above re: the fakes'
+    shape."""
+    seen = {}
+
+    def fake_native_loader(k):
+        seen["native"] = k
+        return []
+
+    def fake_artgen_loader(t):
+        seen["artgen"] = t
+        return []
+
+    monkeypatch.setattr(cpp, "load_chips_for_kind", fake_native_loader)
+    monkeypatch.setattr(cpp, "load_chips_for_artgen_kind", fake_artgen_loader)
+    med = _medium("image")
+    cpp.RoleZonePanel(cpp.ImageParamPanel(), med)
+    assert seen.get("native") == "image"
+    assert "artgen" not in seen
