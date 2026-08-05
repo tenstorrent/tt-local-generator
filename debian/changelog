@@ -1,3 +1,13 @@
+tt-local-generator (0.71.0) noble; urgency=medium
+
+  * feat(create): one-click clear on the prompt. The idea entry now shows a
+    clear (✕) icon whenever it has text; pressing it wipes the prompt and
+    refocuses, so you can start FRESH instead of Inspire always evolving the
+    current text (or having to select-all-delete by hand). The icon is hidden
+    when the entry is empty.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 09:35:00 +0000
+
 tt-local-generator (0.70.1) noble; urgency=medium
 
   * fix(create): widen right gutters so the GTK4 overlay scrollbar can't cover

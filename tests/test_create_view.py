@@ -2749,6 +2749,20 @@ def test_refresh_queue_forwards_to_result_panel(make_create_view):
     assert cv._result_panel._on_queue_cancel is on_cancel
 
 
+def test_prompt_clear_icon_appears_with_text_and_clears(make_create_view):
+    """The idea entry shows a clear icon only when it has text; pressing it wipes
+    the prompt (so the next Inspire starts fresh instead of evolving old text)."""
+    cv = make_create_view()
+    e = cv._prompt_entry
+    # Empty -> no clear icon (no stray x over the placeholder).
+    assert e.get_icon_name(Gtk.EntryIconPosition.SECONDARY) is None
+    e.set_text("a lighthouse at dusk")
+    assert e.get_icon_name(Gtk.EntryIconPosition.SECONDARY) == "edit-clear-symbolic"
+    cv._on_prompt_clear_icon(e, Gtk.EntryIconPosition.SECONDARY)
+    assert e.get_text() == ""
+    assert e.get_icon_name(Gtk.EntryIconPosition.SECONDARY) is None
+
+
 def test_paned_holds_scrolling_form_and_docked_result_detail_pane(make_create_view):
     """The split's start child is the scrolling form; its end child is a
     Gtk.Overlay wrapping the result scroller (the docked detail pane). The

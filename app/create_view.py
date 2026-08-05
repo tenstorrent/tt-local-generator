@@ -1496,6 +1496,18 @@ class CreateView(Gtk.Box):
         entry.set_hexpand(True)
         entry.add_css_class("create-idea-entry")
         self._prompt_entry = entry
+        # Easy clear: a secondary "clear" icon inside the entry that appears only
+        # when there's text. Wiping the prompt lets the next Inspire generate a
+        # FRESH idea (rather than always evolving the current text) and gives a
+        # one-click "start over" before generating. Toggled by
+        # `_update_prompt_clear_icon` on every change.
+        entry.set_icon_activatable(Gtk.EntryIconPosition.SECONDARY, True)
+        entry.set_icon_tooltip_text(
+            Gtk.EntryIconPosition.SECONDARY, "Clear the prompt (start fresh)"
+        )
+        entry.connect("icon-press", self._on_prompt_clear_icon)
+        entry.connect("changed", lambda _e: self._update_prompt_clear_icon())
+        self._update_prompt_clear_icon()
         row.append(entry)
 
         # SP-3c-3 "Inspire me": a small, distinctly-styled button (never the
@@ -1517,6 +1529,22 @@ class CreateView(Gtk.Box):
 
         self._idea_row = row
         return row
+
+    def _update_prompt_clear_icon(self) -> None:
+        """Show the entry's clear icon only when there's text to clear (an empty
+        entry shows nothing — no stray ✕ over the placeholder)."""
+        entry = getattr(self, "_prompt_entry", None)
+        if entry is None:
+            return
+        name = "edit-clear-symbolic" if entry.get_text() else None
+        entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, name)
+
+    def _on_prompt_clear_icon(self, entry, icon_pos, *args) -> None:
+        """Secondary clear-icon press -> wipe the prompt and refocus, so you can
+        type or Inspire fresh instead of evolving the old text."""
+        if icon_pos == Gtk.EntryIconPosition.SECONDARY:
+            entry.set_text("")
+            entry.grab_focus()
 
     # ── Inspire-me prompt-gen (SP-3c-3) ──────────────────────────────────────
 
