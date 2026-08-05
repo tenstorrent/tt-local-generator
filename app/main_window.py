@@ -10084,6 +10084,25 @@ class MainWindow(Gtk.ApplicationWindow):
             short = removed.prompt[:40] + ("…" if len(removed.prompt) > 40 else "")
             self._set_status(f'Removed from queue: "{short}"')
 
+    def _medium_for_queue_item(self, item) -> "object | None":
+        """Best-effort resolve the Create `Medium` a queued item belongs to, so
+        the result panel's pending header + activity-viz mode are right while the
+        queue drains. `_QueueItem` only carries a `model_source`/`model_id`, not
+        the Medium object. None -> a generic "Generating…" header (harmless)."""
+        src = getattr(item, "model_source", "") or ""
+        if src in ("video", "animate"):
+            medium_id = "video"          # animate folded into the Video medium
+        elif src == "image":
+            medium_id = "image"
+        elif src == "artgen":
+            medium_id = getattr(item, "model_id", "") or ""  # artgen id == medium id
+        else:
+            medium_id = src
+        try:
+            return self._create_view.medium_by_id(medium_id)
+        except Exception:
+            return None
+
     def _start_next_queued(self) -> bool:
         # Guard against a race where the recovery dialog starts a worker between
         # the time _restore_queue() schedules this via GLib.idle_add and the time
@@ -10118,6 +10137,21 @@ class MainWindow(Gtk.ApplicationWindow):
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
         self._set_status(f"Auto-starting next queued prompt{suffix}…")
+        # Keep the Create result-panel progress going through the WHOLE queue,
+        # not just its first job. `_on_finished` cleared `_create_job_active`
+        # before draining, so without this each subsequent queued job would run
+        # with the flag False and `_on_progress`/`_on_finished` would skip the
+        # panel (status bar only) — the reported regression. Re-engage the panel
+        # exactly like `_begin_create_job` does (mark the job Create-owned + show
+        # its pending view). Excluded: TT-TV/attractor auto-gen items
+        # (`from_attractor`), which must not hijack the Create preview.
+        if not item.from_attractor:
+            self._create_job_active = True
+            try:
+                medium = self._medium_for_queue_item(item)
+                self._create_view._result_panel.show_pending(item.prompt, medium)
+            except Exception:
+                pass
         # SP-3a: replay the model selection captured on the item at enqueue
         # time — this method never reads self._controls.
         self._on_generate(item.prompt, item.negative_prompt,

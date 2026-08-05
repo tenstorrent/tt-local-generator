@@ -275,6 +275,26 @@ def test_finish_calms_animation_but_keeps_telemetry():
     assert ("running", False) not in fake.calls
 
 
+def test_cycle_mode_advances_and_wraps(monkeypatch):
+    _gtk_or_skip()
+    import activity_viz
+    # Force the WebKit-less stub so the widget builds its header (mode label)
+    # without spinning up a WebView — cycle_mode only touches the label + eval
+    # (which no-ops without a webview). Keeps the test off WebKit entirely.
+    monkeypatch.setattr(activity_viz, "_WEBKIT_OK", False)
+    from activity_viz import ActivityVizWidget, _CYCLE_MODES
+    w = ActivityVizWidget()
+    w._mode = _CYCLE_MODES[0]
+    w.cycle_mode()
+    assert w._mode == _CYCLE_MODES[1]
+    # Jump to the last and confirm it wraps back to the first.
+    w._mode = _CYCLE_MODES[-1]
+    w.cycle_mode()
+    assert w._mode == _CYCLE_MODES[0]
+    # Header caption reflects the current mode.
+    assert w._mode_lbl.get_label().startswith("◉")
+
+
 def test_hide_stops_telemetry_and_calms():
     _gtk_or_skip()
     from create_view import CreateResultPanel

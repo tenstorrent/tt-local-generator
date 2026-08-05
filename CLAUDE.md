@@ -37,6 +37,13 @@ aliases). A compact **header** shows `◉ <mode>` (left) + a live power/clock
 readout (right, "N/total" when the display is capped) + a `✕` dismiss
 (`on_close` callback → flips the Watch toggle off).
 
+**Click the title to cycle modes (v0.69.0).** A `Gtk.GestureClick` on the
+header's mode label steps `cycle_mode()` through `_CYCLE_MODES` (all tensix-viz
+modes) — a manual override for exploring the animations. `set_mode`/`cycle_mode`
+share `_apply_mode(mode_str)`; the lifecycle auto-driver reasserts the medium's
+mode on the next job. The gesture is on the label (which fills the header) not
+the whole header, so it never conflicts with the `✕` button.
+
 **Telemetry signal = per-chip POWER draw, not AICLK (v0.68.1).** The MVP fed
 sysfs AICLK into `setMemoryStats`, but AICLK on Blackhole is effectively binary
 (~800 idle / 1350 boosted) and often pins at 1350 even at rest — so the memory
@@ -418,8 +425,14 @@ Discover is unchanged -- the panel is additive), artgen jobs via
 on all `_on_generate` early returns (server busy / low disk / AnimateDiff-busy)
 and on artgen failure, so the panel never stays stuck on "pending" and the
 window-global flag never bleeds into an unrelated next job. Non-Create jobs
-(attractor/TT-TV/queue) never touch the panel and keep their gallery pending
-card. Note: the artgen `MediaRecord` gets a `media_file_path` alias set so the
+(attractor/TT-TV) never touch the panel and keep their gallery pending card.
+**Queue progress (v0.69.0):** `_start_next_queued` re-engages the panel for
+each queued job (sets `_create_job_active` + `show_pending` with the medium
+resolved by `_medium_for_queue_item`/`CreateView.medium_by_id`), so the panel's
+pending→progress→finished keeps running through a whole Theme-Set/queue drain —
+`_on_finished` clears the flag before draining, so without this only the first
+job showed in the panel. `from_attractor` items are excluded (they must not
+hijack the Create preview). Note: the artgen `MediaRecord` gets a `media_file_path` alias set so the
 panel's renderer (which reads that name, matching `GenerationRecord`) resolves
 the artifact; `MediaStore.add` reads only declared fields, so it's inert for
 persistence.

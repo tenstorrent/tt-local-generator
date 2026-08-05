@@ -78,10 +78,22 @@ _MODE_BY_MEDIUM_ID = {
 _MODE_CAPTION = {
     "idle": "idle",
     "inference": "inference",
+    "prefill": "prefill",
+    "thinking": "thinking",
+    "agents": "agents",
     "diffusion": "diffusion",
     "video": "video",
-    "thinking": "thinking",
+    "batch": "batch",
+    "explore": "explore",
+    "kernel_dispatch": "kernel dispatch",
 }
+
+# Order the header cycles through when you click the title (all tensix-viz
+# modes) — a fun manual override; the auto-driver reasserts on the next job.
+_CYCLE_MODES = [
+    "idle", "inference", "prefill", "thinking", "agents",
+    "diffusion", "video", "batch", "explore", "kernel_dispatch",
+]
 
 
 def mode_for_medium(medium) -> str:
@@ -283,6 +295,13 @@ class ActivityVizWidget(Gtk.Box):
         self._mode_lbl.add_css_class("activity-viz-title")
         self._mode_lbl.set_xalign(0.0)
         self._mode_lbl.set_hexpand(True)
+        self._mode_lbl.set_tooltip_text("Click to change animation mode")
+        # Click the title to cycle animation modes — a fun manual override. On
+        # the label (which fills most of the header) so it never conflicts with
+        # the ✕ button's own click.
+        _mode_click = Gtk.GestureClick()
+        _mode_click.connect("pressed", lambda *_a: self.cycle_mode())
+        self._mode_lbl.add_controller(_mode_click)
         header.append(self._mode_lbl)
         self._readout_lbl = Gtk.Label(label="")
         self._readout_lbl.add_css_class("activity-viz-readout")
@@ -400,14 +419,25 @@ class ActivityVizWidget(Gtk.Box):
                 del self._pending_js[1:-16]
 
     # ── Public API ───────────────────────────────────────────────────────────
+    def _apply_mode(self, mode: str) -> None:
+        """Activate a tensix-viz mode string + sync the header caption."""
+        self._mode = mode
+        self._eval("window.__viz&&window.__viz.activate(" + json.dumps(mode) + ")")
+        self._mode_lbl.set_label("◉ " + _MODE_CAPTION.get(mode, mode))  # ◉ + mode
+
     def set_mode(self, medium=None) -> None:
         """Animate the tensix-viz mode matching *medium* (idle when None) and
         update the header caption. Independent of the telemetry tap."""
-        mode = mode_for_medium(medium) if medium is not None else "idle"
-        self._mode = mode
-        self._eval("window.__viz&&window.__viz.activate(" + json.dumps(mode) + ")")
-        caption = _MODE_CAPTION.get(mode, mode)
-        self._mode_lbl.set_label("◉ " + caption)  # ◉ + mode
+        self._apply_mode(mode_for_medium(medium) if medium is not None else "idle")
+
+    def cycle_mode(self) -> None:
+        """Advance to the next tensix-viz mode (title-click manual override).
+        The auto-driver reasserts the medium's mode on the next job."""
+        try:
+            i = _CYCLE_MODES.index(self._mode)
+        except ValueError:
+            i = -1
+        self._apply_mode(_CYCLE_MODES[(i + 1) % len(_CYCLE_MODES)])
 
     def set_running(self, running: bool) -> None:
         """Start/stop the 1 s live-telemetry tap. Kept separate from `set_mode`

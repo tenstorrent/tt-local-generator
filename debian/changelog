@@ -1,3 +1,21 @@
+tt-local-generator (0.69.0) noble; urgency=medium
+
+  * fix(create): keep the result-panel progress going through a whole QUEUE of
+    generations, not just the first. `_on_finished` clears `_create_job_active`
+    before draining, so each subsequent queued job ran with the flag False and
+    `_on_progress`/`_on_finished` skipped the panel (status bar only). Now
+    `_start_next_queued` re-engages the panel per job (mirrors
+    `_begin_create_job`: mark Create-owned + show pending) with the right medium
+    header/viz mode via new `_medium_for_queue_item` + `CreateView.medium_by_id`.
+    TT-TV/attractor auto-gen items (`from_attractor`) are excluded so they can't
+    hijack the Create preview.
+  * feat(create): "👁 Watch" viz — click the title to cycle animation modes.
+    A manual override that steps through all tensix-viz modes (idle/inference/
+    prefill/thinking/agents/diffusion/video/batch/explore/kernel_dispatch); the
+    auto-driver reasserts the medium's mode on the next job.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 19:30:00 +0000
+
 tt-local-generator (0.68.1) noble; urgency=medium
 
   * feat(create): "👁 Watch" viz now drives the memory layer from per-chip POWER

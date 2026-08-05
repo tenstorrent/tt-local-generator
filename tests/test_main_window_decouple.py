@@ -388,6 +388,71 @@ def test_restore_queue_from_legacy_json_missing_animatediff_key_drains_cleanly(m
 # ── Queue replay: `_start_next_queued` uses the item, not live `_controls` ──
 
 
+def test_queue_replay_reengages_create_result_panel(monkeypatch):
+    """Regression: while a QUEUE drains, each queued job must keep the Create
+    result-panel progress going — `_on_finished` clears `_create_job_active`
+    before draining, so `_start_next_queued` must re-set it and re-show the
+    pending view, else the panel goes dark (status bar only) after the first
+    job. Attractor items are excluded (they must not hijack the Create preview).
+
+    FAILS before the fix (flag stays False, panel never re-shown)."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+
+    # A fake CreateView exposing the two seams the fix uses.
+    fake_medium = object()
+    obj._create_view = MagicMock()
+    obj._create_view.medium_by_id.return_value = fake_medium
+    obj._medium_for_queue_item = mw.MainWindow._medium_for_queue_item.__get__(obj)
+
+    obj._queue.append(mw._QueueItem(
+        prompt="a castle", negative_prompt="", steps=20, seed=-1,
+        model_source="image", model_id="flux",
+    ))
+
+    obj._start_next_queued()
+
+    assert obj._create_job_active is True
+    obj._create_view._result_panel.show_pending.assert_called_once_with("a castle", fake_medium)
+
+
+def test_queue_replay_attractor_item_does_not_touch_panel(monkeypatch):
+    """An attractor auto-gen queue item (`from_attractor=True`) must NOT engage
+    the Create result panel — it isn't a Create job."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+    obj._create_view = MagicMock()
+    obj._medium_for_queue_item = mw.MainWindow._medium_for_queue_item.__get__(obj)
+
+    obj._queue.append(mw._QueueItem(
+        prompt="ambient", negative_prompt="", steps=20, seed=-1,
+        model_source="video", video_model_key="animatediff",
+        animatediff_args=None, from_attractor=True,
+    ))
+
+    obj._start_next_queued()
+
+    assert obj._create_job_active is False
+    obj._create_view._result_panel.show_pending.assert_not_called()
+
+
+def test_medium_for_queue_item_maps_source_to_medium(monkeypatch):
+    """`_medium_for_queue_item` maps model_source -> medium id (animate folds
+    into video; artgen uses model_id) and resolves via CreateView."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+    seen = {}
+    obj._create_view = MagicMock()
+    obj._create_view.medium_by_id.side_effect = lambda mid: seen.setdefault("id", mid)
+    resolve = mw.MainWindow._medium_for_queue_item.__get__(obj)
+
+    resolve(mw._QueueItem("p", "", 20, -1, model_source="animate"))
+    assert seen["id"] == "video"
+    seen.clear()
+    resolve(mw._QueueItem("p", "", 20, -1, model_source="artgen", model_id="verse"))
+    assert seen["id"] == "verse"
+
+
 def test_queue_replay_uses_item_model(monkeypatch):
     """A `_QueueItem` carrying `model_id`/`video_model_key="mochi"` ->
     `_start_next_queued` passes those through so a Mochi worker is built,

@@ -1376,6 +1376,18 @@ class CreateView(Gtk.Box):
         """
         self._result_panel.set_queue(items, on_cancel)
 
+    def medium_by_id(self, medium_id: "str | None"):
+        """Return the `Medium` with this id, or None. MainWindow uses it to
+        re-show a queued job's pending state in the result panel with the right
+        header + activity-viz mode (the queue only stores a model_source/id, not
+        the Medium object)."""
+        if not medium_id:
+            return None
+        for m in (self._mediums_fn() or []):
+            if getattr(m, "id", None) == medium_id:
+                return m
+        return None
+
     # ── Width clamp test helper ──────────────────────────────────────────────
 
     def _is_width_clamped(self) -> bool:
