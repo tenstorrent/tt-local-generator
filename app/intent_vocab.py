@@ -145,6 +145,17 @@ INTENTS: dict[str, Intent] = {
         input_kind="text",
         output_kind="text",
     ),
+    "TTLGPaletteToPrompt": Intent(
+        class_type="TTLGPaletteToPrompt",
+        verb="Describe",
+        noun="a palette",
+        icon="🎨",
+        outputs=("prompt",),
+        model_label=None,
+        input_key=None,      # source-style: prompt is computed at seed time
+        input_kind=None,
+        output_kind="text",
+    ),
     "TTLGSVGRender": Intent(
         class_type="TTLGSVGRender",
         verb="Render",
@@ -263,6 +274,24 @@ def compatible_intents(output_kind: str) -> list[Intent]:
     calls with the same `output_kind` always return the same sequence.
     """
     return [i for i in INTENTS.values() if i.input_kind == output_kind]
+
+
+# Cross-type adapters: (seed_kind, needed_input_kind) -> converter class_type.
+# When a remix seed's kind doesn't directly match a goal's first-step input,
+# the Muse consults this to offer the goal and prepend the converter. Ships
+# palette->text only; more entries (e.g. ("image","text"):"TTLGCaptionImage")
+# can be added later without touching call sites.
+ADAPTERS: "dict[tuple[str, str], str]" = {
+    ("palette", "text"): "TTLGPaletteToPrompt",
+}
+
+
+def adapter_for(seed_kind: "str | None", input_kind: "str | None") -> "str | None":
+    """The converter class_type that turns a `seed_kind` artifact into an
+    `input_kind` input, or None if no adapter is registered."""
+    if not seed_kind or not input_kind:
+        return None
+    return ADAPTERS.get((seed_kind, input_kind))
 
 
 def label(class_type: str) -> str:
