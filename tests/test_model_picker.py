@@ -144,6 +144,73 @@ def test_row_subscribes_and_rebuilds_dots_on_push(monkeypatch):
 
 
 @needs_display
+def test_row_construction_never_fires_on_change():
+    """Building a row (even with a non-default `selected_key=`) is a
+    programmatic selection, not a user action -- `on_change` must never fire
+    just from constructing the widget."""
+    keys = [s.key for s in sm.servers_for_capability("image")]
+    if len(keys) < 2:
+        pytest.skip("need >=2 image servers to exercise a non-first selection")
+    seen = []
+    row = mp.ModelPickerRow("image", selected_key=keys[1], on_change=seen.append)
+    assert seen == []
+    assert row.selected_key() == keys[1]
+
+
+@needs_display
+def test_row_status_push_does_not_spuriously_fire_on_change_for_non_first_selection(monkeypatch):
+    """Regression: `Gtk.DropDown.set_model()` resets selection to index 0 and
+    fires `notify::selected` immediately, before `set_selected(index)` fires
+    it again with the real key. Unguarded, a live status-service push (the
+    ~5s poll) on a row whose selection ISN'T index 0 would call `on_change`
+    TWICE -- once with the wrong (index-0) key, once with the right one --
+    a phantom "model switched then reverted" signal on every poll tick.
+
+    Selects `keys[1]` (a non-first entry) so the bug (which the original
+    push test masked by always selecting `keys[0]`) is actually exercised."""
+    from model_status import Status
+
+    monkeypatch.setattr(mp.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    keys = [s.key for s in sm.servers_for_capability("image")]
+    if len(keys) < 2:
+        pytest.skip("need >=2 image servers to exercise a non-first selection")
+
+    fake_service = _FakeStatusService({keys[1]: Status.STARTING})
+    seen = []
+    row = mp.ModelPickerRow(
+        "image", status_service=fake_service, selected_key=keys[1], on_change=seen.append
+    )
+    assert row.selected_key() == keys[1]
+    assert seen == []  # construction itself must not fire on_change
+
+    # Simulate a poll tick landing -- dots change, selection does not.
+    fake_service.push({keys[1]: Status.READY})
+
+    assert row.selected_key() == keys[1]  # still the originally-selected key
+    assert seen == []  # a dot-only rebuild must never fire on_change at all,
+    # and in particular must never fire with the wrong (index-0) key
+
+
+@needs_display
+def test_row_user_selection_still_fires_on_change_once():
+    """A genuine user pick (driving the dropdown directly, as a click would)
+    must still reach `on_change` exactly once, with the newly-selected key --
+    the suppression guard must not swallow real user actions."""
+    keys = [s.key for s in sm.servers_for_capability("image")]
+    if len(keys) < 2:
+        pytest.skip("need >=2 image servers to exercise a selection change")
+    seen = []
+    row = mp.ModelPickerRow("image", selected_key=keys[0], on_change=seen.append)
+    assert seen == []
+
+    row._dropdown.set_selected(1)
+
+    assert seen == [row.selected_key()]
+    assert row.selected_key() == keys[1]
+
+
+@needs_display
 def test_row_unrealize_unsubscribes():
     fake_service = _FakeStatusService()
     row = mp.ModelPickerRow("image", status_service=fake_service)

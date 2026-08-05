@@ -114,6 +114,19 @@ if _GTK_OK:
             # Ordered in lockstep with the DropDown's Gtk.StringList so
             # `selected_key()` can map "selected index" -> "server key".
             self._entries: "list[tuple[str, str, str, str]]" = []
+            # Guards `_on_selected_changed` against firing `on_change` for
+            # PROGRAMMATIC selection changes -- both the initial build below
+            # and every later `_rebuild()` call `Gtk.DropDown.set_model(...)`,
+            # which resets GTK4's selection to index 0 and fires
+            # `notify::selected` immediately, before our own
+            # `set_selected(index)` fires it again with the real key. Left
+            # unguarded, that means every live status-service push spuriously
+            # calls `on_change` twice (wrong index-0 key, then the correct
+            # one) whenever the selected entry isn't index 0 -- a false
+            # "model switched then reverted" signal on every ~5s poll tick.
+            # Only a genuine USER selection (dropdown click) should reach
+            # `on_change`.
+            self._suppress_change = False
 
             self._dropdown = Gtk.DropDown()
             self._benefit_label = Gtk.Label(xalign=0)
@@ -125,7 +138,11 @@ if _GTK_OK:
             self.append(self._benefit_label)
 
             snapshot = status_service.snapshot() if status_service is not None else {}
-            self._rebuild(snapshot, preferred_key=selected_key)
+            self._suppress_change = True
+            try:
+                self._rebuild(snapshot, preferred_key=selected_key)
+            finally:
+                self._suppress_change = False
 
             self._dropdown.connect("notify::selected", self._on_selected_changed)
 
@@ -147,7 +164,17 @@ if _GTK_OK:
             preserving the currently-selected key across a live status
             update when possible (falls back to `preferred_key`, then index
             0 -- a single-entry capability like AnimateDiff always lands on
-            its one entry)."""
+            its one entry).
+
+            `set_model()`/`set_selected()` both fire `notify::selected` (GTK4
+            resets selection to 0 on `set_model()`, so it fires TWICE per
+            rebuild even when the resolved index doesn't change) -- neither
+            firing reflects a real user action, so both are wrapped in the
+            `_suppress_change` guard regardless of whether the caller
+            (`__init__` vs. a live status push) already set it. This makes
+            `_rebuild` safe to call standalone in tests without leaking a
+            spurious `on_change`.
+            """
             if preferred_key is None:
                 preferred_key = self.selected_key()
 
@@ -156,7 +183,6 @@ if _GTK_OK:
                 has_service=self._status_service is not None,
             )
             labels = [f"{dot} {name}" for (_key, name, _benefit, dot) in self._entries]
-            self._dropdown.set_model(Gtk.StringList.new(labels))
 
             index = 0
             if preferred_key is not None:
@@ -164,8 +190,17 @@ if _GTK_OK:
                     if key == preferred_key:
                         index = i
                         break
+
+            already_suppressing = self._suppress_change
+            self._suppress_change = True
+            try:
+                self._dropdown.set_model(Gtk.StringList.new(labels))
+                if self._entries:
+                    self._dropdown.set_selected(index)
+            finally:
+                self._suppress_change = already_suppressing
+
             if self._entries:
-                self._dropdown.set_selected(index)
                 self._benefit_label.set_label(self._entries[index][2])
             else:
                 self._benefit_label.set_label("")
@@ -191,6 +226,12 @@ if _GTK_OK:
             if self._entries and idx is not None and idx != Gtk.INVALID_LIST_POSITION \
                     and idx < len(self._entries):
                 self._benefit_label.set_label(self._entries[idx][2])
+            if self._suppress_change:
+                # Programmatic change (initial build or a live-status
+                # `_rebuild()`), not a real user pick -- never surface this
+                # to `on_change` (see `_rebuild`'s docstring for why GTK4
+                # fires this signal twice per rebuild on its own).
+                return
             if self._on_change is not None:
                 self._on_change(self.selected_key())
 
