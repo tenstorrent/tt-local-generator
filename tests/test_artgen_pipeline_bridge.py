@@ -16,12 +16,17 @@ below are unaffected by that deletion.
 UPDATE (Task 8, remix-pipeline-unification): the `on_remix`/RemixPopover seam
 described above is now GONE from both ArtgenGallery and ArtgenDetail — remix
 means exactly one thing (seed a pipeline), so each card/sidebar has exactly
-one "🔀 Remix" button, wired to `on_remix_as_pipeline`. The tests below were
-updated in place rather than rewritten wholesale: the "gallery card" and
-"detail sidebar" `_remix_as_pipeline_btn` tests are unaffected by the
-consolidation since they never depended on the popover seam existing; only
-`test_detail_existing_remix_seam_untouched` (which exercised the now-deleted
-seam) was replaced by `test_detail_has_single_remix_affordance`.
+one "🔀 Remix" button, wired to `on_remix_as_pipeline`. The two
+`_remix_as_pipeline_btn` "invokes callback" / "noop without callback" tests
+on each side are unaffected by the consolidation since they never depended
+on the popover seam existing. The two tests that DID exercise the now-deleted
+`on_remix` seam were replaced: `test_gallery_card_existing_remix_seam_untouched`
+-> `test_gallery_card_has_single_remix_affordance`, and
+`test_detail_existing_remix_seam_untouched` -> `test_detail_has_single_remix_affordance`.
+(The original gallery-side test asserted on a plain instance attribute —
+`gallery.on_remix = lambda ...` — which Python lets you set even though
+nothing reads it once the popover button is gone; that assertion would have
+kept "passing" vacuously forever, hiding exactly this kind of regression.)
 
 Creating GTK widgets needs a display; the full suite runs under xvfb. When no
 display is available this module skips itself (matches the repo's headless
@@ -98,16 +103,22 @@ def test_gallery_card_remix_as_pipeline_button_noop_without_callback(tmp_path):
     overlay._remix_as_pipeline_btn.emit("clicked")  # must not raise
 
 
-def test_gallery_card_existing_remix_seam_untouched(tmp_path):
-    """The pre-existing "🔀 Remix" seam (on_remix / RemixPopover) still fires
-    independently of the new pipeline button — clicking one must not touch
-    the other."""
+def test_gallery_card_has_single_remix_affordance(tmp_path):
+    """Task 8 follow-up (remix-pipeline-unification): the former parallel
+    "🔀 Remix" popover seam (`on_remix`) is gone from ArtgenGallery --
+    `on_remix_as_pipeline` (wired to the card's one remaining button,
+    relabeled to the canonical "🔀 Remix") is the only remix affordance
+    left. Replaces the old test_gallery_card_existing_remix_seam_untouched,
+    which asserted on a plain instance attribute (`gallery.on_remix = ...`)
+    that Python lets you set even though nothing reads it once the popover
+    button is deleted -- that assertion would have kept "passing" vacuously
+    forever, giving false confidence."""
     from artgen_gallery import ArtgenGallery
 
     gallery = ArtgenGallery()
-    remix_calls = []
+    assert not hasattr(gallery, "on_remix")
+
     pipeline_calls = []
-    gallery.on_remix = lambda r: remix_calls.append(r)
     gallery.on_remix_as_pipeline = lambda r: pipeline_calls.append(r)
     rec = _media_record(tmp_path)
 
@@ -115,7 +126,7 @@ def test_gallery_card_existing_remix_seam_untouched(tmp_path):
     overlay._remix_as_pipeline_btn.emit("clicked")
 
     assert pipeline_calls == [rec]
-    assert remix_calls == []
+    assert overlay._remix_as_pipeline_btn.get_label() == "🔀 Remix"
 
 
 # ── ArtgenDetail sidebar ──────────────────────────────────────────────────────

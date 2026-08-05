@@ -11,6 +11,9 @@ MainWindow (RemixPopover/_dispatch_remix/_on_remix_card), leaving
 """
 import inspect, sys
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 import main_window as mw
 
@@ -29,7 +32,32 @@ def test_mainwindow_source_does_not_wire_remixpopover():
 
 
 def test_artgen_gallery_has_single_remix_callback():
+    """Check the real single-affordance behavior on an INSTANCE, not the
+    class. `on_remix`/`on_remix_as_pipeline` are set inside `__init__` as
+    plain instance attributes, so `hasattr(ArtgenGallery, "on_remix")` is
+    `False` on the *class* regardless of whether `__init__` sets it or
+    not — a class-level check is tautological and would have passed even
+    before Task 8 deleted the popover seam. Building a real instance (via
+    `ArtgenGallery()`, not `__new__`) actually runs `__init__` and proves
+    the popover seam is gone while `on_remix_as_pipeline` still works.
+    """
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        Gtk.Entry()  # probe: raises without a usable display
+    except Exception:  # pragma: no cover - environment-dependent
+        pytest.skip("no GTK display available")
+
     import artgen_gallery as ag
-    g = ag.ArtgenGallery.__new__(ag.ArtgenGallery)
-    # on_remix (popover) attribute is gone; on_remix_as_pipeline remains the seam.
-    assert not hasattr(ag.ArtgenGallery, "on_remix") or "on_remix_as_pipeline" in inspect.getsource(ag)
+
+    gallery = ag.ArtgenGallery()
+
+    # The popover seam is gone -- no live `on_remix` attribute at all.
+    assert not hasattr(gallery, "on_remix")
+
+    # The single surviving seam is a real, working callable attribute.
+    calls = []
+    gallery.on_remix_as_pipeline = lambda r: calls.append(r)
+    gallery.on_remix_as_pipeline("some-record")
+    assert calls == ["some-record"]

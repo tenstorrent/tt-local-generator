@@ -7185,10 +7185,14 @@ class MainWindow(Gtk.ApplicationWindow):
         """Open Pipeline Studio's Muse scoped to this record's primary artifact.
 
         Wired as `remix_as_pipeline_cb` to every GenerationCard/DetailPanel's
-        "🧩 Remix as pipeline…" button ("Make this image into…") AND as
-        `ArtgenPanel.on_remix_as_pipeline` for the Generative Art gallery's own
-        "🧩 Remix as pipeline…" affordance. Accepts either record type and
-        dispatches on it:
+        "🔀 Remix" button ("Make this image into…") AND as
+        `ArtgenGallery`/`ArtgenDetail`'s `on_remix_as_pipeline` for the
+        Generative Art gallery's own "🔀 Remix" affordance. This is now the
+        SINGLE remix affordance on every surface (Task 8,
+        remix-pipeline-unification): the former parallel "🔀 Remix" popover
+        button (RemixPopover -> _dispatch_remix, which just opened this same
+        Muse with fewer steps) and `ArtgenPanel` (deleted in SP-3d-5) are
+        both gone. Accepts either record type and dispatches on it:
 
         - `history_store.GenerationRecord` (video/image galleries): resolves
           (path, kind, thumb_path) via `_REMIX_KIND_BY_MEDIA_TYPE`, as before.
