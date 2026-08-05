@@ -1,3 +1,14 @@
+tt-local-generator (0.70.1) noble; urgency=medium
+
+  * fix(create): widen right gutters so the GTK4 overlay scrollbar can't cover
+    right-edge buttons. The scrollbar expands to ~13px on hover but the form/
+    result panes only had 8px right padding, so it overlapped the ✨ Inspire
+    buttons / dropdowns (form) and queue/recents controls (result pane). Bumped
+    `.create-form-pane`/`.create-result-pane` right padding to 18px and the
+    activity-viz end margin to 18px (clears its ✕).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 09:10:00 +0000
+
 tt-local-generator (0.70.0) noble; urgency=medium
 
   * feat(create): "👁 Watch" viz shows much more data flow. Two changes: (1) the

@@ -773,7 +773,9 @@ _CSS = b"""
 .create-result-pane {
     border-left: 1px solid #2D5566;
     background-color: #0C232C;
-    padding: 0 8px;
+    /* Right gutter (18px) clears the GTK4 overlay scrollbar, which expands to
+       ~13px on hover and would otherwise cover right-edge buttons. */
+    padding: 0 18px 0 8px;
 }
 .create-result-current {
     background-color: #0A1F28;
@@ -885,7 +887,9 @@ _CSS = b"""
    draggable Paned divider (see CreateView.__init__); these classes only add a
    little breathing room. --------------------------------------------------- */
 .create-form-pane {
-    padding: 0 8px 0 0;
+    /* Right gutter (18px) clears the GTK4 overlay scrollbar (expands to ~13px
+       on hover) so it never covers right-edge buttons (Inspire, dropdowns). */
+    padding: 0 18px 0 0;
 }
 
 /* -- Animate-needs reveal section (Task 6) -- Motion video / Character
@@ -2718,10 +2722,12 @@ class CreateView(Gtk.Box):
         except Exception:
             return
         # Pin to the result pane's BOTTOM-right corner, locked into the frame.
+        # End margin (18px) clears the result scroller's overlay scrollbar so it
+        # can't cover the viz's ✕ dismiss.
         viz.set_halign(Gtk.Align.END)
         viz.set_valign(Gtk.Align.END)
         viz.set_margin_bottom(8)
-        viz.set_margin_end(8)
+        viz.set_margin_end(18)
         # The viz's own ✕ dismiss just flips the Watch toggle off (which routes
         # back through _on_watch_toggled -> set_activity_visible(False)).
         watch_btn = getattr(self, "_watch_btn", None)
