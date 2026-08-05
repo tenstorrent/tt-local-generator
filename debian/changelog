@@ -1,3 +1,34 @@
+tt-local-generator (0.74.0) noble; urgency=medium
+
+  * feat(pills): per-artgen-type Direction pills.
+    - Each artgen medium (palette / verse / ansi / landscape / codeart /
+      freeform) now shows its OWN curated chip banks in the Direction zone
+      instead of the generic photo/video pills it inherited before (or no
+      pills at all) — palette gets Mood/Era/Source/Harmony, verse gets
+      Form/Tone/Voice, ansi gets Scene/Subject/Look, landscape gets
+      Biome/Light/Style, codeart gets Structure, freeform gets Spark.
+    - Every artgen type ALSO gets a shared cross-type "Feeling" mood bank
+      (`for: [artgen]` in `config/prompt_chips.yaml`), deduped against any
+      type-specific category of the same name
+      (`chip_config.load_chips_for_artgen`).
+    - New 🎲 Surprise chip: a category can mark one chip `surprise: true`
+      (no `text:` needed) to apply a random pill from that category's own
+      pool of non-surprise chips at click time (`chip_config.surprise_pool`,
+      `ChipEntry.surprise`); unlike a normal add-chip it never hides itself,
+      so it can be re-tapped for another random pick.
+    - `ModifierPills(kind, artgen=True)` routes to the new
+      `load_chips_for_artgen_kind` seam instead of the native
+      `load_chips_for_kind`; `RoleZonePanel` now keys an artgen medium's
+      pills by the medium's own type (`medium.id`) rather than its generic
+      output `kind`, so e.g. palette and landscape no longer share one
+      bank.
+    - Native image/video mediums are unaffected (still keyed by `kind`, same
+      banks as before); `collect()` is untouched on every surface — the
+      pills remain pure decoration on top of the prompt text, pinned by the
+      existing collect-equality test suite.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 05 Aug 2026 00:00:00 +0000
+
 tt-local-generator (0.73.0) noble; urgency=medium
 
   * feat(remix): unify remix into pipelines, palette->AnimateDiff end to end.

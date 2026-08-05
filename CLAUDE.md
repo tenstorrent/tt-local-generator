@@ -600,6 +600,67 @@ ONE shared implementation instead of forking it per surface:
   methods read. Pinned by dedicated collect-equality tests (as well as the
   pre-existing `test_role_zone_panel.py` suite, unaffected by this change).
 
+## Per-artgen-type modifier pills (v0.74.0)
+
+Every artgen medium's Direction zone used to either inherit generic photo/
+video pills or show none at all — palette, verse, ansi, landscape, codeart,
+and freeform all looked the same as Image/Video's chip banks even though
+none of their categories (Camera/Shot, Lighting, Motion/Mood, …) apply to a
+color palette or a poem. Fixed with a per-type loader instead of forking
+`ModifierPills` per medium:
+
+- **`chip_config.load_chips_for_artgen(artgen_type, config_path=None)`**
+  (`app/chip_config.py`) — chip banks for one artgen TYPE: that type's own
+  categories (loaded via the existing `load_chips(tab, ...)`, just with
+  `tab=artgen_type` instead of `video`/`image`/`animate`) plus the shared
+  cross-type `"artgen"` mood bank, deduped by category name (type-specific
+  wins on a name collision). A type with no curated categories of its own
+  still gets the shared bank, so nothing renders empty.
+- **YAML convention** (`config/prompt_chips.yaml`) — a category's `for:`
+  list now also accepts artgen type keys (`palette`, `verse`, `ansi`,
+  `landscape`, `codeart`, `freeform`) alongside the native `video`/`image`/
+  `animate` keys, plus the special shared key `artgen` (currently just the
+  "Feeling" category — Content/Nostalgic/Whimsical/… moods that read
+  naturally across every artgen type). A category or chip omitting `for:`
+  still defaults to the native tabs only (`_ALL_TABS = {video, image,
+  animate}` in `load_chips`) — an artgen medium is NEVER handed a category
+  meant for native mediums just because it forgot to scope itself; every
+  artgen-facing category in the YAML explicitly opts in via `for:`.
+- **`ChipEntry.surprise` + `chip_config.surprise_pool(category)`** — a chip
+  can be declared `surprise: true` in YAML instead of a fixed `text:`
+  (`text` becomes optional exactly when `surprise` is set — `load_chips`
+  raises if both are missing). `surprise_pool` returns the `.text` of every
+  *non*-surprise chip in that category — the pool a Surprise tap draws from.
+  `ModifierPills._build_category_box` renders a `surprise=True` entry as a
+  `🎲`-styled add-chip (`create-addchip-surprise` CSS class) wired to
+  `_apply_surprise` instead of `_apply_entry`: `_pick_surprise(pool)` (a
+  pure, GTK-free `random.choice` helper) picks one pool entry, and a fresh
+  `ChipEntry` is appended to the applied-pills row so it reads as a normal
+  removable pill. Unlike a regular add-chip (which hides itself once
+  applied — the existing de-dup rule), the Surprise chip is NEVER hidden,
+  so it stays tappable for another random pick.
+- **`ModifierPills(kind, artgen=True)`** (`app/create_param_panels.py`) —
+  the widget's one new constructor flag. `artgen=True` routes construction
+  through `load_chips_for_artgen_kind(kind)` (a thin seam over
+  `chip_config.load_chips_for_artgen`, mirroring the existing
+  `load_chips_for_kind` seam for native mediums) instead of
+  `load_chips_for_kind(kind)`. Everything downstream (category Expanders,
+  add-chip buttons, applied-pills row, `applied_text()`) is unchanged code
+  path — only which categories get loaded differs.
+- **`RoleZonePanel` keys artgen mediums by their own type, not output
+  `kind`.** Previously every artgen medium's Direction bank was
+  `ModifierPills(medium.kind)` — palette and landscape both have
+  `kind=="image"`, so they shared one generic "image" bank. Now:
+  `medium.source == "artgen"` -> `ModifierPills(medium.id, artgen=True)`
+  (keyed by the medium's own id, e.g. `"palette"`/`"landscape"`, each
+  getting its own curated banks); every native medium is unchanged —
+  `ModifierPills(medium.kind)`, `artgen=False` (the default).
+- **`collect()` untouched, as always.** The pills are still pure decoration
+  appended to the prompt text via `applied_text()` — no value-bearing
+  widget changed shape. Pinned by the existing collect-equality suites
+  (`test_role_zone_panel.py`, `test_create_param_panels.py`) plus new
+  loader-call assertions for the artgen path.
+
 ## Video is Video (v0.61.0)
 
 The video trio — Wan2.2/Mochi/SkyReels, Wan2.2-Animate, and the AnimateDiff
