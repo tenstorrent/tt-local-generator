@@ -47,7 +47,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from intent_vocab import intent_for
+from intent_vocab import intent_for, adapter_for
 from spec_remix import seed_spec
 
 
@@ -249,22 +249,22 @@ def goals_for(*, seed_output_kind: "Optional[str]" = None,
         if g.applies_to not in ("scoped", "both"):
             continue
         first_ct = g.recipe_steps[0][0]
-        if intent_for(first_ct).input_kind == seed_output_kind:
+        first_input = intent_for(first_ct).input_kind
+        if first_input == seed_output_kind or \
+                adapter_for(seed_output_kind, first_input) is not None:
             result.append(g)
     return result
 
 
 def build_seed_spec(goal: Goal, *,
-                     seed_artifact: "tuple[str, str] | None" = None) -> dict:
+                     seed_artifact: "tuple[str, str] | None" = None,
+                     prepend_steps: "tuple[tuple[str, dict], ...]" = ()) -> dict:
     """Materialize *goal* into a runnable spec via `spec_remix.seed_spec`.
 
-    Thin delegation — `Goal.recipe_steps` is already exactly the
-    `list[tuple[class_type, params]]` shape `seed_spec` expects. Raises
-    `ValueError` (propagated from `seed_spec`) if the goal's steps or the
-    seed artifact's kind aren't actually kind-compatible — should never
-    happen for a curated goal (see `_CURATED`'s docstring) or a goal reached
-    through `goals_for`'s kind filter, but is not re-checked here so a
-    caller that bypasses `goals_for` still gets a loud failure instead of a
-    silently broken spec.
+    `prepend_steps` are inserted before the goal's own steps (used to prepend a
+    cross-type adapter node, e.g. TTLGPaletteToPrompt). `seed_spec` chains each
+    step's primary output into the next step's input, so a text-output adapter
+    wires straight into a text-input first goal step.
     """
-    return seed_spec(list(goal.recipe_steps), seed_artifact=seed_artifact)
+    steps = list(prepend_steps) + list(goal.recipe_steps)
+    return seed_spec(steps, seed_artifact=seed_artifact)
