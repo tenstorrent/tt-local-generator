@@ -70,6 +70,10 @@ def _make_mw(tmp_path, monkeypatch):
     # `get_model_source()`; ControlPanel itself is deleted (SP-3d-5).
     obj._current_medium_source = MagicMock(return_value="video")
 
+    # Task 5 (model picker): `_show_pipelines` threads `_status_service` into
+    # `PipelineStudio` -- `None` is a legitimate real degrade value.
+    obj._status_service = None
+
     obj._gallery_stack.add_named(Gtk.Box(), "create")
 
     obj._pipelines_btn = Gtk.ToggleButton()

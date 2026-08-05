@@ -66,6 +66,12 @@ def _make_mw(tmp_path, monkeypatch):
     # directly instead of a `_controls` stand-in.
     obj._current_medium_source = MagicMock(return_value="video")
 
+    # Task 5 (model picker): `_show_pipelines` now threads `_status_service`
+    # into `PipelineStudio` -- `None` is a legitimate real value too (the
+    # picker falls back to its own no-service degrade), so a bare stub is
+    # enough for this harness.
+    obj._status_service = None
+
     # Bind the real (unbound) methods under test so `self` resolves correctly.
     obj._show_pipelines = mw.MainWindow._show_pipelines.__get__(obj)
     obj._hide_pipelines = mw.MainWindow._hide_pipelines.__get__(obj)

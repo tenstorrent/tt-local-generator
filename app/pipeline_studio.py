@@ -250,7 +250,10 @@ from gtk_layout import CONTENT_MAX_WIDTH, MaxWidthBin, wrap_centered  # noqa: E4
 import recipes  # noqa: E402
 import showcase  # noqa: E402
 import wingit  # noqa: E402
-from intent_vocab import compatible_intents, intent_for, flow_line, label  # noqa: E402
+from intent_vocab import (  # noqa: E402
+    capability_for_intent, compatible_intents, intent_for, flow_line, label,
+)
+from model_picker import ModelPickerRow  # noqa: E402
 from pipeline_engine import load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
@@ -1445,6 +1448,7 @@ class RemixView(Gtk.Box):
         capability_fn: "Callable[[str], list] | None" = None,
         wingit_fn: "Callable[[str, str], object] | None" = None,
         inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
+        status_service=None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-discover")  # same dark-teal page background
@@ -1475,6 +1479,15 @@ class RemixView(Gtk.Box):
             )
         )
 
+        # Model picker (pipeline UX overhaul, Task 5): the same
+        # `ModelStatusService` MainWindow threads through Create's scoped
+        # dropdown, so a per-step picker's dots never disagree with what's
+        # actually running. `None` (every pre-existing caller/test) means
+        # every picker falls back to `model_picker.picker_entries`'s
+        # no-service behavior (solid dot, no live push) — same degrade
+        # CreateView's own dropdown uses.
+        self._status_service = status_service
+
         self._spec_path: "str | None" = None
         # The composer's WORKING SPEC DICT (Phase 2b-1 Task 3) — loaded fresh
         # by set_run() via pipeline_engine.load_spec, then mutated in place
@@ -1490,6 +1503,18 @@ class RemixView(Gtk.Box):
         # widget's kind — see _read_widget_value/_collect_edits).
         self._field_widgets: "dict[str, dict[str, Gtk.Widget]]" = {}
         self._field_meta: "dict[str, dict[str, tuple]]" = {}
+        # Per-step model picker (Task 5): keyed by node_id, only present for
+        # a node whose class_type maps to a capability
+        # (`intent_vocab.capability_for_intent`) — a `ModelPickerRow` in the
+        # "Runs on" slot, reusing Create's own model system instead of a
+        # second one. `_model_orig` records each picker's RESOLVED initial
+        # selection (not the raw, often-absent, "model" input value) so
+        # `_collect_edits` can diff a genuine user change from "nothing
+        # happened" even when the underlying spec never had a "model" key at
+        # all — see `_build_step_card`'s picker-construction comment for why
+        # that distinction matters.
+        self._model_pickers: "dict[str, ModelPickerRow]" = {}
+        self._model_orig: "dict[str, str | None]" = {}
         # Field-role zoning (Task 2 of "pipeline field roles"): each node's
         # editable fields are classified brief/direction/control
         # (`field_roles.classify_pipeline_field`) and rendered in that order;
@@ -1767,6 +1792,8 @@ class RemixView(Gtk.Box):
         self._field_widgets = {}
         self._field_meta = {}
         self._field_order = {}
+        self._model_pickers = {}
+        self._model_orig = {}
         self._field_pills = {}
         self._controls_expanders = {}
         self._remove_buttons = {}
@@ -1802,6 +1829,20 @@ class RemixView(Gtk.Box):
 
         intent = intent_for(class_type)
 
+        # Model picker (Task 5): a node whose class_type maps to a picker
+        # capability (image/video/animatediff/artgen — see
+        # `intent_vocab.capability_for_intent`) gets a live `ModelPickerRow`
+        # in the "Runs on" slot INSTEAD of the static model_label below. A
+        # `model` ParamField (if this node has one) is the picker's field —
+        # it must not also render as a separate free-text row, so it's
+        # pulled out of `fields` here, before the brief/direction/control
+        # classification loop ever sees it.
+        cap = capability_for_intent(class_type)
+        current_model = None
+        if cap is not None:
+            current_model = next((f.value for f in fields if f.key == "model"), None)
+            fields = [f for f in fields if f.key != "model"]
+
         # Fix #1 (cohesive intent label): one combined "verb noun" label
         # instead of two stacked lines, matching OpenView/LiveRunView's
         # identical treatment of the same intent vocabulary.
@@ -1813,10 +1854,27 @@ class RemixView(Gtk.Box):
         verb_col.append(intent_label)
         _append_intent_detail(verb_col, intent)
 
-        # model_label is a quiet secondary detail — omitted entirely (not
-        # shown blank) when the intent doesn't name an underlying tool,
-        # mirroring OpenView._build_step_row's identical guard.
-        if intent.model_label:
+        if cap is not None:
+            # Pre-select from the node's current "model" value if it names
+            # a real entry; otherwise `ModelPickerRow` resolves its own
+            # default (first entry) same as an empty Create dropdown would.
+            # `cap == "animatediff"` renders as the informational
+            # single-entry row (`picker_entries`' special case) automatically
+            # — no separate branch needed here.
+            picker = ModelPickerRow(cap, status_service=self._status_service,
+                                     selected_key=current_model)
+            verb_col.append(picker)
+            self._model_pickers[node_id] = picker
+            # Record the picker's own RESOLVED selection as "original", not
+            # the raw (often-missing) field value — this is what keeps an
+            # untouched remix's edits dict empty even when the underlying
+            # spec never had a "model" input at all (see class docstring's
+            # note in the __init__ dict comment).
+            self._model_orig[node_id] = picker.selected_key()
+        elif intent.model_label:
+            # model_label is a quiet secondary detail — omitted entirely
+            # (not shown blank) when the intent doesn't name an underlying
+            # tool, mirroring OpenView._build_step_row's identical guard.
             model_label = Gtk.Label(label=intent.model_label)
             model_label.set_xalign(0)
             model_label.add_css_class("ps-step-model")
@@ -2234,6 +2292,17 @@ class RemixView(Gtk.Box):
                     new_value = f"{new_value} {pills.applied_text()}".strip()
                 if new_value != orig_value:
                     edits.setdefault(node_id, {})[key] = new_value
+
+        # Model pickers (Task 5): folded in the same "only if changed" way
+        # as every other field, diffing against each picker's own recorded
+        # `_model_orig` (its resolved initial selection — see
+        # `_build_step_card`), not the raw spec value. A picker that was
+        # never touched always compares equal to itself here, so this can
+        # never turn a zero-interaction Run into a non-empty edits dict.
+        for node_id, picker in self._model_pickers.items():
+            selected = picker.selected_key()
+            if selected != self._model_orig.get(node_id):
+                edits.setdefault(node_id, {})["model"] = selected
         return edits
 
     def _read_widget_value(self, kind: str, orig_value, widget: Gtk.Widget):
@@ -2941,6 +3010,7 @@ class PipelineStudio(Gtk.Box):
         self,
         on_open_run: "Optional[Callable[[str], None]]" = None,
         inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
+        status_service=None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-studio")
@@ -2950,6 +3020,11 @@ class PipelineStudio(Gtk.Box):
         # RemixView, the only page here with editable prompt fields. See
         # RemixView's own docstring/`__init__` for the seam contract.
         self._inspire_fn = inspire_fn
+        # Model picker (Task 5) — same ModelStatusService MainWindow already
+        # threads into CreateView, so RemixView's per-step picker dots agree
+        # with Create's. `None` (every pre-existing caller/test) degrades to
+        # the picker's own no-service fallback.
+        self._status_service = status_service
 
         # The run currently shown on the Open page — the source for
         # "Remix ..." (either button on OpenView). None until the first
@@ -3046,7 +3121,8 @@ class PipelineStudio(Gtk.Box):
         remix_back_bar.append(remix_back_btn)
         remix_page.append(remix_back_bar)
 
-        self.remix_view = RemixView(inspire_fn=self._inspire_fn)
+        self.remix_view = RemixView(inspire_fn=self._inspire_fn,
+                                     status_service=self._status_service)
         self.remix_view.connect("run-remix", self._on_run_remix)
         self.remix_view.set_vexpand(True)
         remix_page.append(self.remix_view)

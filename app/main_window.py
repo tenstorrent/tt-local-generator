@@ -7078,7 +7078,8 @@ class MainWindow(Gtk.ApplicationWindow):
             # (`_create_inspire_fn`, backed by `prompt_client.generate_prompt`)
             # so a pipeline step's text field gets the identical two-mode
             # fresh/remix behavior, not a forked pipeline-only prompt-gen path.
-            self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn)
+            self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn,
+                                                    status_service=self._status_service)
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
 
         # Always land on Discover, never a stale Open page from a previous

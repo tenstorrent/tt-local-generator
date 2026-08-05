@@ -150,6 +150,10 @@ def _make_mw(tmp_path, monkeypatch):
     obj._detail_wrap.set_visible(True)
     obj._current_medium_source = MagicMock(return_value="video")
 
+    # Task 5 (model picker): `_show_pipelines` threads `_status_service` into
+    # `PipelineStudio` -- `None` is a legitimate real degrade value.
+    obj._status_service = None
+
     obj._show_pipelines = mw.MainWindow._show_pipelines.__get__(obj)
     obj._rebuild_context_menu = MagicMock()
     obj.lookup_action = MagicMock(return_value=None)
@@ -179,7 +183,11 @@ def test_main_window_source_wires_inspire_fn_at_both_construction_sites():
     wiring is caught even before a harness-level test would notice."""
     src = (Path(__file__).parent.parent / "app" / "main_window.py").read_text()
     assert "self._create_view = CreateView(" in src
-    assert "PipelineStudio(inspire_fn=self._create_inspire_fn)" in src
+    # Task 5 (model picker) added a second keyword (`status_service=`) to this
+    # same call site, so the literal single-line form no longer appears --
+    # check for the call site + the inspire_fn keyword instead.
+    assert "self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn," in src
+    assert "status_service=self._status_service)" in src
 
     create_view_src = (Path(__file__).parent.parent / "app" / "create_view.py").read_text()
     assert "inspire_fn=self._inspire_fn,\n                prompt_type_getter=self._inspire_prompt_type," in create_view_src
