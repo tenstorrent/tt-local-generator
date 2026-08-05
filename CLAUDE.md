@@ -51,9 +51,23 @@ layer barely moved during a job (the "AnimateDiff shows no difference" report).
 **Power is the graded, honest signal** (~18 W idle → 150 W+ under diffusion):
 `sample_telemetry(display, actual)` prefers per-chip power via
 `read_chip_power_watts()` (a `tt-smi -s --snapshot_no_tty` subprocess, ~0.3 s,
-parsed by pure `parse_powers`), normalised by `power_intensity`
-(`_POWER_FLOOR_W`=20 … `_POWER_CEILING_W`=150), and **falls back to sysfs AICLK**
-when tt-smi is absent. The subprocess CANNOT run on the GTK thread, so the tap
+parsed by pure `parse_powers`), converted to an **activity scalar 0..1** by
+`power_activity` (`_POWER_FLOOR_W`=15 … `_POWER_CEILING_W`=110, `**_POWER_CURVE`
+=0.6 perceptual boost), and **falls back to sysfs AICLK** (idle-relative
+800→1350 via `_clock_activity`) when tt-smi is absent.
+
+**Expressive data flow (v0.70.0).** The tap returns an activity scalar; the
+main-thread `_apply_sample` shapes it into flow via pure `shape_flow(activity,
+active)` → `(dram_bw, l1_fill, writeback)`. `active` = the animation mode isn't
+idle (a job is showing); an active job gets a FLOOR (dram≥0.35, writeback≥0.15)
+so DRAM↔L1 particle flow is clearly visible and then intensifies with real load,
+instead of the raw power value *suppressing* flow below the mode preset's own
+liveliness (the earlier "hard-override made it quieter than the canned preset"
+trap). **Bidirectional flow** needs a tensix-viz change: `setMemoryStats` now
+accepts an optional `writeback` (L1→DRAM return-particle density) override —
+committed in the sister repo `~/code/tensix-viz` (`src/chip.js`, `node build.js`,
+83 tests) and re-bundled into `app/assets/tensix-viz/`. Keep the bundle in sync
+by editing the source + rebuilding, never hand-editing the generated bundle. The subprocess CANNOT run on the GTK thread, so the tap
 is a **background daemon thread** (`_telemetry_loop`, `_TELEMETRY_INTERVAL_S`=1.5
 s, `stop.wait` for prompt cancel) that hands each sample to the main thread via
 `GLib.idle_add(self._apply_sample, …)` (which updates the readout + evals

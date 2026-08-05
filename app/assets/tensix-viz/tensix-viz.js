@@ -358,6 +358,7 @@ var _TensixVizBundle = (() => {
     } else {
       env = 0.85 + 0.15 * Math.sin(mem.phase * Math.PI * 2);
     }
+    const writebackAmt = this._memOverride && this._memOverride.writeback !== void 0 ? this._memOverride.writeback : preset.writeback;
     const dramBw = this._memOverride && this._memOverride.dram_bw !== void 0 ? this._memOverride.dram_bw : preset.dram_bw;
     const l1Fill = this._memOverride && this._memOverride.l1_fill !== void 0 ? this._memOverride.l1_fill : preset.l1_fill;
     const dramAlpha = dramBw * env * 0.55;
@@ -397,7 +398,7 @@ var _TensixVizBundle = (() => {
           _isMem: true
         });
       }
-      if (preset.writeback > 0 && Math.random() < preset.writeback * spawnRate * 0.15) {
+      if (writebackAmt > 0 && Math.random() < writebackAmt * spawnRate * 0.15) {
         const wbFrom = this._compute[Math.floor(Math.random() * this._compute.length)];
         const wbTo = this._dram[Math.floor(Math.random() * this._dram.length)];
         const wbFromRect = this._cellRect(wbFrom.col, wbFrom.row);
@@ -624,6 +625,7 @@ var _TensixVizBundle = (() => {
     this._memOverride = {};
     if (typeof stats.dram_bw === "number") this._memOverride.dram_bw = Math.max(0, Math.min(1, stats.dram_bw));
     if (typeof stats.l1_fill === "number") this._memOverride.l1_fill = Math.max(0, Math.min(1, stats.l1_fill));
+    if (typeof stats.writeback === "number") this._memOverride.writeback = Math.max(0, Math.min(1, stats.writeback));
   };
   TensixViz.prototype._runLoop = function() {
     const self = this;

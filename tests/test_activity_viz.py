@@ -141,38 +141,53 @@ def test_parse_powers_empty_when_no_devices():
     assert activity_viz.parse_powers({}) == []
 
 
-def test_power_intensity_floor_ceiling_and_mid():
-    assert activity_viz.power_intensity(activity_viz._POWER_FLOOR_W) == (0.0, 0.0)
-    dram, _ = activity_viz.power_intensity(activity_viz._POWER_CEILING_W)
-    assert dram == 1.0
-    # A value below the floor clamps to 0 (idle stays dark).
-    assert activity_viz.power_intensity(5.0) == (0.0, 0.0)
-    # Halfway between floor and ceiling -> ~0.5.
+def test_power_activity_floor_ceiling_and_curve():
+    assert activity_viz.power_activity(activity_viz._POWER_FLOOR_W) == 0.0
+    assert activity_viz.power_activity(activity_viz._POWER_CEILING_W) == 1.0
+    assert activity_viz.power_activity(5.0) == 0.0        # below floor clamps
+    # The perceptual curve (exp<1) lifts a mid load ABOVE its linear fraction.
     mid = (activity_viz._POWER_FLOOR_W + activity_viz._POWER_CEILING_W) / 2
-    assert activity_viz.power_intensity(mid)[0] == pytest.approx(0.5, abs=1e-3)
+    assert activity_viz.power_activity(mid) > 0.5
+    # Monotonic.
+    assert activity_viz.power_activity(40.0) < activity_viz.power_activity(80.0)
+
+
+def test_shape_flow_active_has_floor_and_writeback():
+    # A running job always shows clearly visible bidirectional flow...
+    dram, l1, wb = activity_viz.shape_flow(0.0, active=True)
+    assert dram >= 0.35 and wb >= 0.15
+    # ...that intensifies with load (and stays clamped at full).
+    dram2, l1_2, wb2 = activity_viz.shape_flow(1.0, active=True)
+    assert dram2 == 1.0 and dram2 > dram and wb2 > wb
+
+
+def test_shape_flow_idle_is_quiet():
+    dram, l1, wb = activity_viz.shape_flow(0.0, active=False)
+    assert dram < 0.1 and wb == 0.0
 
 
 def test_sample_telemetry_prefers_power(monkeypatch):
     monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [85.0, 85.0])
-    readout, pairs = activity_viz.sample_telemetry(2, 2)
+    readout, acts = activity_viz.sample_telemetry(2, 2)
     assert readout == "85 W"                      # watts, not MHz
-    assert pairs[0][0] == pytest.approx(0.5, abs=1e-3)
+    assert acts[0] == pytest.approx(activity_viz.power_activity(85.0), abs=1e-6)
+    assert 0.0 < acts[0] <= 1.0
 
 
 def test_sample_telemetry_falls_back_to_aiclk(monkeypatch, tmp_path):
-    # No power (tt-smi absent) -> AICLK path, reported in MHz.
+    # No power (tt-smi absent) -> AICLK path, reported in MHz, idle-relative.
     monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [])
     monkeypatch.setattr(activity_viz, "_SYSFS", _make_chips(tmp_path, [1350, 1350]))
-    readout, pairs = activity_viz.sample_telemetry(2, 2)
+    readout, acts = activity_viz.sample_telemetry(2, 2)
     assert readout == "1350 MHz"
-    assert pairs[0] is not None
+    assert acts[0] == pytest.approx(1.0, abs=1e-6)     # boosted -> full activity
 
 
 def test_sample_telemetry_readout_shows_shown_over_total_when_capped(monkeypatch):
     monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [40.0] * 8)
-    readout, pairs = activity_viz.sample_telemetry(4, 8)  # cap 4 of 8
+    readout, acts = activity_viz.sample_telemetry(4, 8)  # cap 4 of 8
     assert readout.endswith("· 4/8")
-    assert len(pairs) == 4
+    assert len(acts) == 4
 
 
 # ── Widget + CreateResultPanel drive wiring (needs a display) ────────────────

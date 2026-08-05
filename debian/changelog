@@ -1,3 +1,18 @@
+tt-local-generator (0.70.0) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz shows much more data flow. Two changes: (1) the
+    telemetry tap now maps per-chip power to an activity scalar (curved, lower
+    ceiling so real diffusion load saturates) and shapes it via `shape_flow`
+    into dram_bw/l1_fill/writeback — a running job gets a floor so DRAM<->L1
+    particle flow is clearly visible and then intensifies with real load, rather
+    than being suppressed below the mode preset's own liveliness; (2) bundled
+    tensix-viz rebuilt with a `setMemoryStats({writeback})` override, so the viz
+    now shows BIDIRECTIONAL flow (L1->DRAM return particles, not just DRAM->L1
+    reads). tensix-viz source change committed in ~/code/tensix-viz (83 tests
+    pass) and re-bundled into app/assets/tensix-viz.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 08:40:00 +0000
+
 tt-local-generator (0.69.0) noble; urgency=medium
 
   * fix(create): keep the result-panel progress going through a whole QUEUE of

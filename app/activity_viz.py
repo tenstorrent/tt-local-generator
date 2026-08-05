@@ -49,12 +49,17 @@ _SYSFS = Path("/sys/class/tenstorrent")
 # continuously (idle ~15-20 W → 150 W+ under diffusion), unlike AICLK which is
 # effectively binary on Blackhole (~800 idle / 1350 boosted) and often sits
 # pinned at 1350 even at rest — so AICLK barely moves during a job. Floor/ceiling
-# only scale the visual "heat"; rough values are fine. (p300c ≈ 150 W/chip TDP.)
-_POWER_FLOOR_W = 20.0
-_POWER_CEILING_W = 150.0
+# only scale the visual "heat". A modest ceiling (real diffusion load saturates
+# it) + a perceptual curve keep the data-flow lively rather than washed-out.
+_POWER_FLOOR_W = 15.0
+_POWER_CEILING_W = 110.0
+_POWER_CURVE = 0.6          # <1 boosts low/mid loads so flow reads clearly
 
-# Fallback signal (no tt-smi): AICLK. Ceiling normalises the tap to 0..1.
-_AICLK_CEILING_MHZ = 1400.0
+# Fallback signal (no tt-smi): AICLK, normalised IDLE-relative (800→1350) so the
+# fallback still swings 0..1 instead of sitting at a constant mid-value.
+_AICLK_IDLE_MHZ = 800.0
+_AICLK_BOOST_MHZ = 1350.0
+_AICLK_CEILING_MHZ = 1400.0  # (kept for read_aiclk_intensity back-compat)
 
 # How often the background telemetry thread samples (seconds). A tt-smi snapshot
 # is ~0.3 s, so this is a light passive read — same cadence class as tt-toplike.
@@ -189,12 +194,33 @@ def read_chip_power_watts() -> "list[float | None]":
         return []
 
 
-def power_intensity(watts: float) -> "tuple[float, float]":
-    """One chip's power -> (dram_bw, l1_fill) in 0..1, floor..ceiling normalised."""
+def power_activity(watts: float) -> float:
+    """One chip's power draw -> an 'activity' scalar in 0..1 (floor..ceiling,
+    perceptually curved so mid loads read as clearly busy). Pure."""
     span = _POWER_CEILING_W - _POWER_FLOOR_W
     frac = (watts - _POWER_FLOOR_W) / span if span > 0 else 0.0
-    intensity = max(0.0, min(1.0, frac))
-    return (intensity, intensity * 0.85)
+    return max(0.0, min(1.0, frac)) ** _POWER_CURVE
+
+
+def _clock_activity(mhz: int) -> float:
+    """AICLK -> activity 0..1, idle-relative (800→1350) so the fallback swings."""
+    span = _AICLK_BOOST_MHZ - _AICLK_IDLE_MHZ
+    frac = (mhz - _AICLK_IDLE_MHZ) / span if span > 0 else 0.0
+    return max(0.0, min(1.0, frac))
+
+
+def shape_flow(activity: float, active: bool) -> "tuple[float, float, float]":
+    """Map an activity scalar (0..1) to tensix-viz memory params
+    `(dram_bw, l1_fill, writeback)` — the read-particle density, L1 fill, and
+    return-particle density. When *active* (a job's mode is showing) a floor
+    guarantees clearly visible BIDIRECTIONAL flow that then intensifies with
+    real load; idle tracks activity but stays quiet. Pure — unit-testable."""
+    if active:
+        dram, l1, wb = 0.35 + 0.65 * activity, 0.30 + 0.60 * activity, 0.15 + 0.35 * activity
+    else:
+        dram, l1, wb = 0.05 + 0.45 * activity, 0.10 + 0.30 * activity, 0.10 * activity
+    clamp = lambda x: max(0.0, min(1.0, x))  # noqa: E731
+    return (round(clamp(dram), 3), round(clamp(l1), 3), round(clamp(wb), 3))
 
 
 def _readout_text(head: "str | None", display: int, actual: int) -> str:
@@ -206,31 +232,33 @@ def _readout_text(head: "str | None", display: int, actual: int) -> str:
 
 
 def sample_telemetry(display: int, actual: int) -> "tuple[str, list]":
-    """Sample the hardware and return `(readout_text, per_chip_pairs)` where each
-    pair is `(dram_bw, l1_fill)` or None. Prefers per-chip POWER (graded, tracks
-    real load); falls back to AICLK when tt-smi isn't available. Pure w.r.t. GTK
-    (does subprocess/sysfs I/O only) — call from the background thread."""
+    """Sample the hardware and return `(readout_text, per_chip_activity)` where
+    each entry is an activity scalar 0..1 (or None for an unreadable chip).
+    Prefers per-chip POWER (graded, tracks real load); falls back to AICLK when
+    tt-smi isn't available. Pure w.r.t. GTK (does subprocess/sysfs I/O only) —
+    call from the background thread. The caller maps activity → flow params via
+    `shape_flow` (it needs the current animation mode, which lives on the UI)."""
     powers = read_chip_power_watts()
     if powers:
-        pairs = [
-            power_intensity(powers[i]) if i < len(powers) and powers[i] is not None
+        acts = [
+            power_activity(powers[i]) if i < len(powers) and powers[i] is not None
             else None
             for i in range(display)
         ]
         present = [w for w in powers if w is not None]
         head = ("%d W" % round(max(present))) if present else None
-        return _readout_text(head, display, actual), pairs
+        return _readout_text(head, display, actual), acts
 
     # Fallback: sysfs AICLK (instant, but a coarse/near-binary signal).
     clocks = read_chip_clocks()
-    pairs = [
-        _intensity_for(clocks[i]) if i < len(clocks) and clocks[i] is not None
+    acts = [
+        _clock_activity(clocks[i]) if i < len(clocks) and clocks[i] is not None
         else None
         for i in range(display)
     ]
     present = [c for c in clocks if c is not None]
     head = ("%d MHz" % max(present)) if present else None
-    return _readout_text(head, display, actual), pairs
+    return _readout_text(head, display, actual), acts
 
 
 # ── Layout: how to arrange N chip canvases in the corner instrument ──────────
@@ -487,18 +515,22 @@ class ActivityVizWidget(Gtk.Box):
             GLib.idle_add(self._apply_sample, readout, pairs)
             stop.wait(_TELEMETRY_INTERVAL_S)
 
-    def _apply_sample(self, readout: str, pairs) -> bool:
-        """Main-thread: update the header readout + feed each chip its intensity.
+    def _apply_sample(self, readout: str, activities) -> bool:
+        """Main-thread: update the header readout + feed each chip its flow. The
+        activity scalar is shaped into dram_bw/l1_fill/writeback here (not in the
+        sampler) because `shape_flow` needs the current mode — a job's mode gets
+        a floor so the flow is clearly visible, then intensifies with real load.
         A late sample arriving after stop is ignored (`_tel_running`)."""
         if not self._tel_running:
             return False
         if self._readout_lbl is not None:
             self._readout_lbl.set_label(readout)
-        for i, pair in enumerate(pairs):
-            if pair is not None:
-                dram, l1 = pair
+        active = self._mode != "idle"
+        for i, act in enumerate(activities):
+            if act is not None:
+                dram, l1, wb = shape_flow(act, active)
                 self._eval(
-                    "window.__viz&&window.__viz.setChipStats(%d,{dram_bw:%.3f,l1_fill:%.3f})"
-                    % (i, dram, l1)
+                    "window.__viz&&window.__viz.setChipStats(%d,"
+                    "{dram_bw:%.3f,l1_fill:%.3f,writeback:%.3f})" % (i, dram, l1, wb)
                 )
         return False  # one-shot idle callback
