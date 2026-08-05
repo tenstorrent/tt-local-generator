@@ -2751,18 +2751,21 @@ def test_refresh_queue_forwards_to_result_panel(make_create_view):
 
 def test_paned_holds_scrolling_form_and_docked_result_detail_pane(make_create_view):
     """The split's start child is the scrolling form; its end child is a
-    scroller wrapping the CreateResultPanel (the docked detail pane). The
-    result pane holds its width when the window resizes (shrink_end False),
-    but the divider is still draggable."""
+    Gtk.Overlay wrapping the result scroller (the docked detail pane). The
+    overlay exists so the optional "👁 Watch" activity viz can be pinned to
+    the pane's top-right corner. The result pane holds its width when the
+    window resizes (shrink_end False), but the divider is still draggable."""
     cv = make_create_view()
     paned = cv._create_paned
     assert isinstance(paned, Gtk.Paned)
     start = paned.get_start_child()
     end = paned.get_end_child()
     assert isinstance(start, Gtk.ScrolledWindow)   # the form scroller
-    assert isinstance(end, Gtk.ScrolledWindow)     # the detail-pane scroller
+    assert isinstance(end, Gtk.Overlay)            # detail pane wrapped for the viz
+    scroller = end.get_child()
+    assert isinstance(scroller, Gtk.ScrolledWindow)  # the detail-pane scroller
     # A ScrolledWindow wraps a non-scrollable child in a GtkViewport.
-    end_child = end.get_child()
+    end_child = scroller.get_child()
     inner = end_child.get_child() if isinstance(end_child, Gtk.Viewport) else end_child
     assert inner is cv._result_panel               # result panel is IN the detail pane
     assert paned.get_shrink_end_child() is False

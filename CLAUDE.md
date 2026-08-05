@@ -1,5 +1,62 @@
 # tt-local-generator — developer notes
 
+## "👁 Watch" hardware-activity viz (experiment, v0.67.0)
+
+`app/activity_viz.py` — `ActivityVizWidget(Gtk.Box)`, an OPTIONAL "watch the
+chip work while you generate" widget for the Create surface. Embeds the
+self-contained **tensix-viz** Canvas animation (bundled at
+`app/assets/tensix-viz/{tensix-viz.js,tensix-viz.css}`, copied from
+`~/code/tensix-viz`, **zero external deps** — 0 fetch/import/CDN, inlined into
+one `about:blank` HTML doc) in a `WebKit.WebView` (JS enabled), reusing the
+`artgen_detail` **realize-deferral** pattern (`evaluate_javascript`/`load_html`
+before realize is a silent no-op → queue in `_pending_js`, flush on `"realize"`;
+backlog bounded to 32 so a never-realized active viz can't leak telemetry
+calls).
+
+Two public methods drive it: `set_active(medium)` → `viz.activate(<mode>)`
+picks the tensix-viz animation MODE for the medium (`mode_for_medium`:
+image→`diffusion`, video/animate→`video`, animatediff→`diffusion`, any other
+artgen→`thinking`, else→`inference`) AND starts a **live telemetry tap**;
+`set_idle()` → `viz.activate('idle')` + stops the tap. The tap
+(`read_aiclk_intensity`, a 1 s `GLib.timeout`) reads AICLK straight from
+`/sys/class/tenstorrent/*/tt_aiclk` (same source as the TT-TV chip HUD),
+normalises peak/1400 MHz to 0..1, and feeds `viz.setMemoryStats({dram_bw,
+l1_fill})` so the memory layer pulses with the chips' REAL clock — the
+experiment's stretch goal. Both pure helpers are GTK-free and unit-tested;
+`arch="blackhole"` (QB2 is Blackhole).
+
+**Fail-soft + optional by construction.** OFF by default. No WebKit → inert
+stub (`_WEBKIT_OK` guard); no chips → the tap returns `None` and leaves the
+mode preset alone; every `evaluate_javascript` is wrapped so a bad tick just
+skips. **Built LAZILY** — `CreateResultPanel.__init__` never constructs it
+(WebKit is a heavy JS-engine/web-process cost, and 7 test files build
+CreateResultPanel; eager construction also segfaults the WebKit bwrap sandbox
+under nested-sandbox CI). Instead:
+
+- The result pane is wrapped in a `Gtk.Overlay` (`CreateView._build_panes`,
+  `self._result_overlay`) so the viz can be pinned top-right corner
+  (halign END/valign START + margins).
+- CTA row has a `👁 Watch` `Gtk.ToggleButton` → `_on_watch_toggled` →
+  `_ensure_activity_viz()` builds the widget ONCE on first reveal, adds it to
+  the overlay, and injects it via `CreateResultPanel.set_activity_viz(viz)`.
+- `CreateResultPanel` DRIVES the mode from its own lifecycle so the animation
+  can never drift from what's cooking: `show_pending`→`_drive_activity_active`
+  (only when `_activity_visible`), `show_finished`/`show_error`/`_show_empty`→
+  `_drive_activity_idle`. `set_activity_visible(bool)` toggles the viz + starts/
+  stops the tap; turning Watch on mid-generation animates the in-flight medium
+  immediately.
+
+**Invariant preserved:** `_collect_params()`/`collect()` are untouched — the
+viz is pure decoration in the result pane, never a value-bearing widget. The
+paned end child is now a `Gtk.Overlay` wrapping the result scroller (was the
+scroller directly) — the only structural change, guarded by
+`test_create_view.py::test_paned_holds_scrolling_form_and_docked_result_detail_pane`.
+Tests: `tests/test_activity_viz.py` (pure helpers + a `_FakeViz` drives the
+CreateResultPanel wiring without WebKit; a regression guard asserts
+`CreateResultPanel.__init__` stays WebKit-free). Live rendering is
+user-verified on the real display (WebKit works there; the nested-sandbox
+`bwrap: Permission denied` crash is CI-only).
+
 ## artgen LLM endpoint discovery
 
 `artgen.detect_artgen_endpoint()` (`app/artgen/__init__.py`) picks the chat

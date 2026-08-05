@@ -590,6 +590,28 @@ _CSS = b"""
 .create-theme-set-btn:disabled {
     color: #607D8B;
 }
+.create-watch-btn {
+    background-color: #142E38;
+    color: #4FD1C5;
+    border: 1px solid #2D5566;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+}
+.create-watch-btn:hover {
+    border-color: #4FD1C5;
+    color: #81E6D9;
+}
+.create-watch-btn:checked {
+    background-color: #1B8EB1;
+    color: #0F2A35;
+    border-color: #4FD1C5;
+}
+.activity-viz {
+    border: 1px solid #2D5566;
+    border-radius: 10px;
+    background-color: #0F2A35;
+}
 
 /* -- RoleZonePanel zones (Task 6) -- one class per zone so a future change to
    the brief/direction/controls look never has to touch create_param_panels.py
@@ -1241,13 +1263,23 @@ class CreateView(Gtk.Box):
         result_scroll.add_css_class("create-result-pane")
         result_scroll.set_child(self._result_panel)
 
+        # The result pane is wrapped in a Gtk.Overlay so the optional "watch the
+        # hardware" viz can be pinned to its top-right corner. The viz itself is
+        # NOT built now (WebKit is heavy) — the CTA row's "👁 Watch" toggle
+        # lazily builds + adds it into this overlay on first use
+        # (`_ensure_activity_viz`).
+        result_overlay = Gtk.Overlay()
+        result_overlay.set_child(result_scroll)
+        self._result_overlay = result_overlay
+        result_end = result_overlay
+
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.set_vexpand(True)
         paned.set_wide_handle(True)
         paned.set_start_child(form_scroll)
         paned.set_resize_start_child(True)
         paned.set_shrink_start_child(True)
-        paned.set_end_child(result_scroll)
+        paned.set_end_child(result_end)
         # Detail pane holds its width when the window resizes (like browse's
         # end child), but the user can still drag the handle either way.
         paned.set_resize_end_child(False)
@@ -2604,7 +2636,51 @@ class CreateView(Gtk.Box):
         else:
             self._theme_set_btn = None
 
+        # Optional "watch the hardware" toggle (experiment) — OFF by default.
+        # Reveals a small live tensix-viz chip animation in the result pane's
+        # corner that pulses with real AICLK while generating. Fail-soft: if the
+        # result panel couldn't build the viz, the toggle still flips harmlessly.
+        watch_btn = Gtk.ToggleButton(label="\U0001f441 Watch")
+        watch_btn.add_css_class("create-watch-btn")
+        watch_btn.set_tooltip_text(
+            "Show a live view of the Tenstorrent chip working while you generate."
+        )
+        watch_btn.connect("toggled", self._on_watch_toggled)
+        self._watch_btn = watch_btn
+        row.append(watch_btn)
+
         return row
+
+    def _on_watch_toggled(self, btn) -> None:
+        """Reveal/hide the optional hardware-activity viz in the result pane,
+        building it lazily on first reveal (WebKit is heavy — don't pay for it
+        unless the user opts in)."""
+        active = btn.get_active()
+        if active:
+            self._ensure_activity_viz()
+        self._result_panel.set_activity_visible(active)
+
+    def _ensure_activity_viz(self) -> None:
+        """Build the ActivityVizWidget once, pin it into the result pane's top-
+        right corner, and hand it to the result panel to drive. Fail-soft: any
+        problem (e.g. no WebKit / no overlay) leaves the toggle a harmless no-op
+        instead of breaking Create."""
+        if getattr(self._result_panel, "_activity_viz", None) is not None:
+            return
+        overlay = getattr(self, "_result_overlay", None)
+        if overlay is None:
+            return
+        try:
+            from activity_viz import ActivityVizWidget
+            viz = ActivityVizWidget()
+        except Exception:
+            return
+        viz.set_halign(Gtk.Align.END)
+        viz.set_valign(Gtk.Align.START)
+        viz.set_margin_top(8)
+        viz.set_margin_end(8)
+        overlay.add_overlay(viz)
+        self._result_panel.set_activity_viz(viz)
 
     def _on_cta_clicked(self, _btn: Gtk.Button) -> None:
         if self._on_create is None or self._active_medium is None:
@@ -2993,7 +3069,50 @@ class CreateResultPanel(Gtk.Box):
         self._recents_flow.add_css_class("create-result-recents")
         self.append(self._recents_flow)
 
+        # Optional "watch the hardware" viz (experiment). Deliberately NOT
+        # constructed here: it embeds a WebKit.WebView (heavyweight — a JS engine
+        # + web process), and this panel is built on every Create open whether or
+        # not the feature is ever used. CreateView LAZILY builds it the first
+        # time the "👁 Watch" toggle is switched on, then injects it via
+        # `set_activity_viz` and pins it into the result pane's corner. This
+        # panel only DRIVES its mode from generation state (`set_active`/
+        # `set_idle`) so the animation always matches what's cooking.
+        self._activity_visible: bool = False
+        self._activity_viz = None
+
         self._show_empty()
+
+    # ── Optional hardware-activity viz ───────────────────────────────────────
+
+    def set_activity_viz(self, viz) -> None:
+        """Inject the lazily-built activity viz (CreateView owns construction +
+        overlay placement; this panel owns mode). Pass None to detach."""
+        self._activity_viz = viz
+
+    def set_activity_visible(self, visible: bool) -> None:
+        """Show/hide the optional 'watch the hardware' viz. Turning it on while a
+        job is in flight starts it animating the active medium immediately;
+        turning it off (or when idle) calms it and stops its telemetry poll.
+        No-op when no viz has been injected yet."""
+        self._activity_visible = bool(visible)
+        if self._activity_viz is None:
+            return
+        self._activity_viz.set_visible(self._activity_visible)
+        if self._activity_visible and self._pending_active:
+            self._activity_viz.set_active(self._pending_medium)
+        else:
+            self._activity_viz.set_idle()
+
+    def _drive_activity_active(self) -> None:
+        """Animate the viz for the current pending medium — only when it's both
+        constructed and currently revealed (no point polling telemetry for a
+        hidden widget)."""
+        if self._activity_viz is not None and self._activity_visible:
+            self._activity_viz.set_active(self._pending_medium)
+
+    def _drive_activity_idle(self) -> None:
+        if self._activity_viz is not None:
+            self._activity_viz.set_idle()
 
     # ── Test seams ───────────────────────────────────────────────────────────
 
@@ -3039,6 +3158,7 @@ class CreateResultPanel(Gtk.Box):
         self._state = "empty"
         self._pending_status_lbl = None
         self._pending_elapsed_lbl = None
+        self._drive_activity_idle()
 
         label = Gtk.Label(label="Nothing yet — press Create to make something.")
         label.add_css_class("create-result-empty-label")
@@ -3074,6 +3194,7 @@ class CreateResultPanel(Gtk.Box):
         self._pending_last_status = header_text
         self._pending_start = time.monotonic()
         self._render_pending()
+        self._drive_activity_active()
 
     def _render_pending(self) -> None:
         """(Re)draw the live pending view from the stored job state — spinner +
@@ -3164,6 +3285,7 @@ class CreateResultPanel(Gtk.Box):
         self._state = "error"
         self._pending_status_lbl = None
         self._pending_elapsed_lbl = None
+        self._drive_activity_idle()
 
         label = Gtk.Label(label=f"⚠ {message}")
         label.add_css_class("create-result-error-label")
@@ -3178,6 +3300,7 @@ class CreateResultPanel(Gtk.Box):
         """
         self._stop_timer()
         self._pending_active = False   # the job that was pending is now done
+        self._drive_activity_idle()
         self._render_record(record)
         self._push_recent(record)
 

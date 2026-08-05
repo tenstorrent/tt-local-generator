@@ -1,3 +1,22 @@
+tt-local-generator (0.67.0) noble; urgency=medium
+
+  * feat(create): optional "👁 Watch" hardware-activity viz (experiment). A
+    "👁 Watch" toggle in the Create CTA row reveals a small self-contained
+    tensix-viz chip animation (bundled app/assets/tensix-viz, zero deps) pinned
+    to the result pane's top-right corner. It animates the tensix-viz MODE that
+    matches whatever's generating (image->diffusion, video->video, LLM-art->
+    thinking) and — the stretch goal — pulses its memory layer with the chips'
+    REAL AICLK read straight from /sys/class/tenstorrent/*/tt_aiclk (same source
+    as the TT-TV chip HUD) via viz.setMemoryStats. New app/activity_viz.py
+    (WebKit.WebView + the artgen_detail realize-deferral pattern, JS enabled).
+    OFF by default and built LAZILY on first toggle (no WebKit cost otherwise);
+    fully fail-soft — no WebKit or no chips degrades to an inert stub / preset
+    animation and never breaks Create. CreateResultPanel drives the mode from
+    its show_pending/finished/error/idle lifecycle so the animation can't drift
+    from what's actually cooking.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 17:20:00 +0000
+
 tt-local-generator (0.66.1) noble; urgency=medium
 
   * fix(create): _reset_create_split_once busy-spun a CPU core from launch until
