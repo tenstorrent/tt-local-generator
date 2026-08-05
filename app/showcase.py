@@ -115,11 +115,15 @@ def _find_hero(run_view: RunView) -> "tuple[StepView, str] | tuple[None, None]":
     and re-scanning is cheap and avoids a second source of truth going stale
     relative to `pipeline_view_model`'s own hero-selection logic.
 
-    Note this deliberately diverges from `pipeline_view_model._HERO_KINDS`
-    (which excludes "gif"): `_ASSET_KIND` maps "gif" to "image", so a GIF step
-    is hero-eligible here even though the view model wouldn't pick it as
-    `RunView.hero_path`. That's fine — this module only needs *an* image/video
-    to feature, not agreement with the view model's specific hero choice.
+    Note this can still diverge from `pipeline_view_model._HERO_KINDS`/
+    `_is_hero_candidate` (which now also picks up "gif" and visual artgen
+    kinds like svg/ansi/palette via file extension): `_ASSET_KIND` only maps
+    "gif" to "image" here and doesn't special-case the view model's generic
+    "any"-kind artgen extension sniffing, so a visual artgen final (a "any"
+    kind at the intent level) may not be found by this scan even when the
+    view model DID pick it as `RunView.hero_path`. That's fine — this module
+    only needs *an* image/video to feature, not agreement with the view
+    model's specific hero choice.
     """
     for step in run_view.steps:
         if not step.artifact_path:

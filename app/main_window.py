@@ -7125,9 +7125,17 @@ class MainWindow(Gtk.ApplicationWindow):
     # pipeline_view_model._OUTPUT_KIND — but a future/unknown generator could
     # emit one) registers nothing rather than guessing; see
     # _register_pipeline_final's docstring.
-    _PIPELINE_FINAL_RASTER_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+    #
+    # No ".webp" here: pipeline_view_model._IMAGE_EXTS (what _resolve_artifact
+    # actually filters "image"-kind candidates to) never includes it, so no
+    # node's artifact_path can ever end in .webp — it was dead/unreachable.
+    _PIPELINE_FINAL_RASTER_EXTS = (".png", ".jpg", ".jpeg")
     _PIPELINE_FINAL_VIDEO_EXTS = (".mp4",)
-    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md")
+    # ".txt" covers verse/freeform/lore's plain-text artgen output (the same
+    # generic TTLGArtgenGenerate "artifact_path" the visual kinds share) —
+    # a real .txt final should still register as a MediaRecord rather than
+    # silently falling through the "unrecognized extension" no-op below.
+    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md", ".txt")
 
     def _register_pipeline_final(self, run_view) -> None:
         """Register a completed pipeline run's final deliverable into the Library.

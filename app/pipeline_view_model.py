@@ -74,9 +74,35 @@ _OUTPUT_KIND: dict[str, tuple[str, "tuple[str, ...] | None"]] = {
     "artifact_path": ("any", None),
 }
 
-# Kinds counted as "heroable" for RunView.hero_path (brief: first image/video
-# artifact — a GIF or arbitrary artifact does not qualify as a hero image).
-_HERO_KINDS = {"image", "video"}
+# Kinds counted as "heroable" for RunView.hero_path — the run's FINAL
+# deliverable, shown as the "Here's what you made" hero. Originally just
+# image/video; a real bug (found by pipeline-library-registration review)
+# left AnimateDiff's `gif_path` output ("gif" kind) and every artgen kind
+# UNheroable, so the marquee palette->AnimateDiff->GIF journey (and any
+# svg/ansi/palette artgen finale) never got a hero OR a Library registration
+# (pipeline_view_model.final_index_for reads hero_path, and
+# MainWindow._register_pipeline_final resolves the final step through it —
+# see main_window.py). "gif" is now heroable outright; TTLGArtgenGenerate's
+# generic "any" kind (shared by every artgen generator regardless of whether
+# it produces a visual svg/ansi/palette artifact or plain verse/codeart
+# prose) is handled separately by `_is_hero_candidate`, which falls back to
+# the artifact's own file extension since the intent alone can't tell visual
+# and textual artgen finals apart.
+_HERO_KINDS = {"image", "video", "gif"}
+
+# Extensions that make a TTLGArtgenGenerate "any"-kind artifact (its generic
+# `artifact_path` output, shared by every artgen generator) a VISUAL
+# deliverable worth promoting to hero: svg (constellation/geometric/
+# landscape/circuit/skyline), ans (ansi), json (palette's swatch-grid — the
+# only artgen generator that emits .json), gif (an artgen-path animatediff
+# artifact; the dedicated TTLGAnimateDiff node already qualifies via the
+# "gif" kind above, this covers the generic-node case too), and the raster
+# formats a future artgen generator might emit directly. Deliberately
+# EXCLUDES .txt (verse/freeform/lore prose) and .py (codeart) — those are
+# genuinely textual, and must keep falling through to build_run_view's/
+# OpenView's separate "text-only pipeline" hero fallback instead of becoming
+# a false image hero (see _is_hero_candidate).
+_ARTGEN_VISUAL_EXTS = (".svg", ".ans", ".json", ".gif", ".png", ".jpg", ".jpeg", ".webp")
 
 # Extensions that mark a string as a media-file PATH (a thing to render, never
 # to show as text). Superset of the engine's own suffixes so a drifted/unknown
@@ -291,6 +317,27 @@ def _artifact_kind(intent: Intent) -> "str | None":
     return kind_info[0] if kind_info else None
 
 
+def _is_hero_candidate(intent: Intent, artifact_path: str) -> bool:
+    """True if this step's resolved *artifact_path* should be eligible to
+    become the run's `hero_path` — the "final deliverable" a finished run
+    showcases first (see `_HERO_KINDS`'s docstring for the bug this fixes).
+
+    image/video/gif (declared via the intent's primary output key, see
+    `_OUTPUT_KIND`) are always eligible. `TTLGArtgenGenerate`'s generic "any"
+    kind can't be told apart at the intent level (every artgen generator
+    shares the same class_type/output key regardless of whether it produces
+    a visual svg/ansi/palette artifact or plain verse/codeart prose), so it
+    falls back to the artifact's own file extension via
+    `_ARTGEN_VISUAL_EXTS` instead.
+    """
+    kind = _artifact_kind(intent)
+    if kind in _HERO_KINDS:
+        return True
+    if kind == "any":
+        return Path(artifact_path).suffix.lower() in _ARTGEN_VISUAL_EXTS
+    return False
+
+
 def _resolve_artifact_list(output_dir: "Path | None", node_id: str, intent: Intent) -> "tuple[str, ...]":
     """All of node_id's on-disk file artifacts (in order), for a fan-out step.
 
@@ -377,7 +424,12 @@ def build_run_view(record: dict) -> RunView:
         steps.append(StepView(node_id=node_id, intent=intent, status=status,
                               artifact_path=artifact_path, text_content=text_content,
                               artifact_paths=artifact_paths))
-        if hero_path is None and artifact_path and _artifact_kind(intent) in _HERO_KINDS:
+        # First-wins tie-break (pinned by
+        # test_artifact_resolved_from_per_job_subdirectory, which asserts the
+        # first heroable artifact wins even when a later step also produced
+        # one) — this task only widens WHICH kinds are hero-eligible (see
+        # _is_hero_candidate), not the tie-break order.
+        if hero_path is None and artifact_path and _is_hero_candidate(intent, artifact_path):
             hero_path = artifact_path
 
     title = record.get("spec_name") or Path(record["spec_path"]).stem

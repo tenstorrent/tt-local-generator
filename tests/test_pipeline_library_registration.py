@@ -28,6 +28,7 @@ for artgen-kind finals.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -267,3 +268,113 @@ def test_pipeline_studio_run_done_tolerates_no_on_run_complete(monkeypatch):
 
     studio._on_run_done(studio.live_run, "run-finished-2")  # must not raise
     assert studio.stack.get_visible_child_name() == "open"
+
+
+# ── Review fix: real build_run_view integration (closes the hand-built-RunView
+#    bypass gap the coordinator's review found) ──────────────────────────────
+#
+# The 14 tests above all construct RunView/StepView by hand with hero_path
+# pre-set — proving _register_pipeline_final's classify/build logic works,
+# but never exercising pipeline_view_model.build_run_view's own hero_path
+# SELECTION. That selection had a real bug: _HERO_KINDS only covered
+# "image"/"video", so an AnimateDiff gif final (kind "gif") or a visual
+# artgen final (svg/ansi/palette — kind "any" at the intent level, since
+# every artgen generator shares TTLGArtgenGenerate's generic output) never
+# became hero_path, so final_index_for always returned None and
+# _register_pipeline_final registered nothing for either case — the marquee
+# palette->AnimateDiff->GIF journey got no hero AND no Library entry. These
+# tests go through the REAL build_run_view (not a hand-built RunView) to
+# prove that gap is closed.
+
+def _build_real_run_view(tmp_path, run_id: str, class_type: str, node_inputs: dict,
+                          artifact_filename: str) -> vm.RunView:
+    """Build a RunView via the REAL pipeline_view_model.build_run_view: writes
+    a real one-node spec.json + output_dir artifact and loads them through
+    load_spec/topo_order/build_run_view exactly like a genuine finished run,
+    instead of hand-constructing StepView/RunView (which bypasses the very
+    hero_path-selection logic this fix targets)."""
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps({
+        "1": {"class_type": class_type, "inputs": node_inputs},
+    }))
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    (output_dir / artifact_filename).write_bytes(b"x")
+
+    record = {
+        "id": run_id,
+        "spec_path": str(spec_path),
+        "spec_name": "Integration run",
+        "output_dir": str(output_dir),
+        "job_states": {"job1": {"1": {"status": "done"}}},
+    }
+    return vm.build_run_view(record)
+
+
+def test_animatediff_gif_final_gets_hero_and_registers_via_real_build_run_view(tmp_path):
+    """AnimateDiff gif deliverable: build_run_view sets hero_path to the gif,
+    final_index_for finds it, and _register_pipeline_final creates a
+    media_store.MediaRecord(generator_type="pipeline") with the run id in
+    params — going through every real seam, no hand-built RunView shortcut."""
+    run_view = _build_real_run_view(
+        tmp_path, "run-gif-int", "TTLGAnimateDiff", {"prompt": "a candle flame"},
+        "node1.gif",
+    )
+    gif_path = str(tmp_path / "out" / "node1.gif")
+    assert run_view.hero_path == gif_path
+    assert vm.final_index_for(run_view) == 0
+
+    obj = _make_mw()
+    fake_media_store = MagicMock()
+    with patch("media_store.media_store", fake_media_store):
+        obj._register_pipeline_final(run_view)
+
+    fake_media_store.add.assert_called_once()
+    rec = fake_media_store.add.call_args.args[0]
+    assert rec.generator_type == "pipeline"
+    assert rec.media_type == "artgen"
+    assert rec.file_path == gif_path
+    assert rec.params_dict["_pipeline_run_id"] == "run-gif-int"
+    fake_media_store.ensure_auto_playlists.assert_called_once()
+    obj._artgen_gallery.refresh.assert_called_once()
+
+
+@pytest.mark.parametrize("ext", [".svg", ".ans"])
+def test_artgen_visual_final_gets_hero_and_registers_via_real_build_run_view(tmp_path, ext):
+    """A generic TTLGArtgenGenerate visual final (svg/ansi — "any" kind at the
+    intent level, distinguishable from verse/codeart's plain-text finals only
+    by file extension via pipeline_view_model._ARTGEN_VISUAL_EXTS) also gets a
+    real hero_path and a real MediaRecord registration."""
+    run_view = _build_real_run_view(
+        tmp_path, f"run-artgen-int-{ext.strip('.')}", "TTLGArtgenGenerate", {},
+        f"node1_artifact{ext}",
+    )
+    artifact_path = str(tmp_path / "out" / f"node1_artifact{ext}")
+    assert run_view.hero_path == artifact_path
+    assert vm.final_index_for(run_view) == 0
+
+    obj = _make_mw()
+    fake_media_store = MagicMock()
+    with patch("media_store.media_store", fake_media_store):
+        obj._register_pipeline_final(run_view)
+
+    fake_media_store.add.assert_called_once()
+    rec = fake_media_store.add.call_args.args[0]
+    assert rec.generator_type == "pipeline"
+    assert rec.file_path == artifact_path
+    assert rec.params_dict["_pipeline_run_id"] == f"run-artgen-int-{ext.strip('.')}"
+
+
+def test_artgen_text_final_does_not_get_a_false_image_hero(tmp_path):
+    """Guard for the flip side of the fix: a genuinely TEXTUAL artgen final
+    (verse/freeform's .txt, kind "any" at the intent level) must NOT become
+    the hero — only visual artgen kinds should. build_run_view's separate
+    text-only-pipeline fallback doesn't apply here either (that only fires
+    when artifact_path is None; verse writes a real file), so this run
+    legitimately has no hero_path -- it must not silently become one via the
+    "any" kind bypass this fix introduces."""
+    run_view = _build_real_run_view(
+        tmp_path, "run-text-int", "TTLGArtgenGenerate", {}, "node1_artifact.txt",
+    )
+    assert run_view.hero_path is None
+    assert vm.final_index_for(run_view) is None

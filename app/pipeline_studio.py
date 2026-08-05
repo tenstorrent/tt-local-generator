@@ -1279,14 +1279,14 @@ class OpenView(Gtk.Box):
     def _resolve_hero_index(self, run: RunView) -> "int | None":
         """Which step (if any) is this run's promoted deliverable.
 
-        Prefers `final_index_for` (the image/video `hero_path` step). A run
-        with no heroable artifact at all (`hero_path` is only ever set for
-        `_HERO_KINDS` — image/video — see `pipeline_view_model.
-        build_run_view`) but that has FINISHED and whose last step produced
-        real text and no file artifact is a text-only pipeline (e.g. a lone
-        TTLGGenerateText run) — that final text is the deliverable just as
-        much as an image would be, so it's promoted to the hero too (brief:
-        "Text-only pipelines ... show that text as the hero").
+        Prefers `final_index_for` (the `hero_path` step — image/video/gif, or
+        a visual artgen artifact like svg/ansi/palette; see
+        `pipeline_view_model._HERO_KINDS`/`_is_hero_candidate`). A run with no
+        heroable artifact at all but that has FINISHED and whose last step
+        produced real text and no file artifact is a text-only pipeline (e.g.
+        a lone TTLGGenerateText run) — that final text is the deliverable
+        just as much as an image would be, so it's promoted to the hero too
+        (brief: "Text-only pipelines ... show that text as the hero").
 
         Gated on every step being "done": a run still mid-flight (any step
         pending/running/failed) hasn't produced its real final deliverable
