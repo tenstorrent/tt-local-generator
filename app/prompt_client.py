@@ -117,3 +117,21 @@ def generate_prompt(
         director_prob=director_prob, director_pin=director_pin,
     )
     return result["prompt"]
+
+
+def llm_polish_or_none(source: str, seed_text: str) -> "str | None":
+    """Polish *seed_text* into a prompt for *source* USING THE LLM ONLY.
+
+    Returns the polished string, or None when the prompt LLM isn't reachable
+    or produces nothing — so callers can fall back to a deterministic literal
+    (e.g. palette_prompt.literal_prompt) instead of `generate_prompt`'s
+    seed-ignoring algorithmic fallback. Never raises.
+    """
+    try:
+        import generate_prompt as _gp  # lazy: no GTK/network at import
+        if not seed_text.strip() or not _gp._llm_available():
+            return None
+        polished = _gp._llm_polish(seed_text.strip(), source)
+        return polished or None
+    except Exception:
+        return None
