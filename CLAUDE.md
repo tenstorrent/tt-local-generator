@@ -1,5 +1,87 @@
 # tt-local-generator — developer notes
 
+## Remix is pipelines (v0.73.0)
+
+Remix used to mean two different things depending on which surface you clicked
+from (a quick popover vs. "Remix as pipeline…"). It now means exactly ONE
+thing everywhere: **seed a pipeline from an artifact, via the Muse.**
+
+- **One affordance, one destination.** `GenerationCard`, `DetailPanel`,
+  `ArtgenGallery`'s card, and `ArtgenDetail` each show a single "🔀 Remix"
+  button (tooltip "Remix this into a pipeline"), all wired to the same
+  `_remix_as_pipeline` handler in `main_window.py`, which opens Pipeline
+  Studio's Muse seeded with that artifact. `remix_popover.py` (`RemixPopover`)
+  and `remix_dispatch.py` (`dispatch_remix`) **remain in-tree and
+  unit-tested but are unwired** — `MainWindow._on_remix_card`/
+  `_dispatch_remix` and all `RemixPopover`/`on_remix` call sites were
+  deleted; nothing in `main_window.py` constructs a `RemixPopover` anymore.
+- **Palette is now a seedable kind.** `artgen_kind.artgen_seed_kind(file_path,
+  generator_type)` returns `"palette"` when `generator_type == "palette"`
+  (before this, a saved palette JSON wasn't a recognized remix-seed kind at
+  all), so a palette artifact can be dropped into the Muse like any image,
+  video, or text artifact.
+- **Cross-type adapter registry** (`app/intent_vocab.py`): `ADAPTERS: dict[
+  (seed_kind, input_kind), class_type]` plus `adapter_for(seed_kind,
+  input_kind) -> str | None`. Ships one entry —
+  `("palette", "text"): "TTLGPaletteToPrompt"` — but is designed to grow
+  (e.g. a future `("image", "text"): "TTLGCaptionImage"`) without touching
+  any call site. `intent_vocab.INTENTS["TTLGPaletteToPrompt"]` is a
+  **source-style** Intent (`input_key=None`, `input_kind=None`,
+  `output_kind="text"`, `outputs=("prompt",)`) — it has no runtime input
+  because its value is computed once, at seed time, not at run time.
+- **`TTLGPaletteToPrompt`** is a pure engine handler
+  (`pipeline_engine._h_palette_to_prompt`, `@register("TTLGPaletteToPrompt")`)
+  that does nothing but echo `inputs["prompt"]` straight through — the actual
+  composition (palette JSON -> prompt text, optionally LLM-polished) already
+  happened when the pipeline was seeded, so the node has **zero runtime
+  LLM/backend dependency** (mirrors the existing `TTLGPromptCompose`
+  template-substitution handler's "pure at run time" shape). The composed
+  text lands in the step's `inputs.prompt` as an ordinary, hand-editable
+  literal — nothing about it is special-cased in the step-card field editor.
+- **`app/palette_prompt.py`** (GTK-free): `load_palette(path) -> dict | None`
+  (parses a palette JSON, `None` on any failure — missing/unreadable/not an
+  object) and `literal_prompt(palette) -> str` — the deterministic,
+  guaranteed-to-work fallback: up to the first 6 hex colors plus the lore
+  sentence, joined as `"palette: #hex1 #hex2 ..., <lore>"`. This is the same
+  colors+lore extraction that used to be trapped inside
+  `remix_popover._build_hint`, now a shared pure helper.
+  **`prompt_client.llm_polish_or_none(source, seed_text) -> str | None`** is
+  the optional upgrade path: polishes the literal into more natural phrasing
+  via the prompt-gen LLM, returning `None` (not raising) if no LLM is
+  reachable — the adapter always has a usable prompt either way.
+- **`recipes.build_seed_spec(goal, *, seed_artifact=None, prepend_steps=())`**
+  gained `prepend_steps: tuple[tuple[class_type, params_dict], ...]` — steps
+  inserted before the goal's own `recipe_steps`. `seed_spec` chains each
+  step's primary output into the next step's input, so a prepended
+  text-output adapter wires straight into the goal's first step's text
+  input with no special-casing. **`recipes.goals_for(seed_output_kind=...)`**
+  now also offers a goal when the seed's kind doesn't directly match the
+  goal's first step's `input_kind` but `adapter_for(seed_output_kind,
+  first_input)` resolves one — i.e. the Muse offers AnimateDiff-shaped goals
+  for a palette seed, not just text-shaped ones.
+- **Muse `compose_fn` seam** (`pipeline_studio.py`): `MuseView.__init__`
+  takes an optional `compose_fn: Callable[[medium, literal, on_done], None]`.
+  `PipelineStudio`'s `_compose_fn` runs `prompt_client.llm_polish_or_none`
+  on a background `threading.Thread` and posts the result back via
+  `GLib.idle_add(on_done, polished or literal)` — the same off-thread +
+  idle_add shape as `main_window._create_inspire_fn`. `MuseView._choose_goal`
+  detects when the chosen goal needs the palette adapter
+  (`adapter_for(seed_kind, first_input) == "TTLGPaletteToPrompt"`), shows a
+  "Composing a prompt from your palette…" message, and on `on_done` prepends
+  a `("TTLGPaletteToPrompt", {"prompt": <text>, "_source_palette": path})`
+  step via `build_seed_spec(..., prepend_steps=(step,))` before emitting
+  `goal-chosen`. `compose_fn=None` (tests/standalone) falls back to the
+  synchronous literal — the adapter path never blocks on an LLM being
+  available. Every other goal (kind matches directly, or no adapter
+  registered) keeps the original synchronous build-and-emit path unchanged.
+- **Regression lock:** `tests/test_palette_to_animatediff_e2e.py` builds a
+  palette-seeded AnimateDiff spec via `build_seed_spec(..., prepend_steps=...)`
+  end to end (headless, no GTK — pure spec assembly + a dry `pipeline_engine`
+  handler call) and asserts the adapter's `prompt` output wire lands on
+  AnimateDiff's `prompt` input (`spec["2"]["inputs"]["prompt"] == ["1",
+  "prompt"]`), the topo order resolves, and the dry-run handler output
+  contains both the palette's hex color and its lore text.
+
 ## "👁 Watch" hardware-activity viz (experiment, v0.67.0 · honest N-chip v0.68.0)
 
 `app/activity_viz.py` — `ActivityVizWidget(Gtk.Box)`, an OPTIONAL "watch the
