@@ -125,6 +125,56 @@ def test_grid_layout_one_vs_many():
     assert activity_viz.grid_layout(4)[0] == 2      # 2x2
 
 
+# ── Pure: power telemetry (the responsive signal) ────────────────────────────
+
+def test_parse_powers_from_snapshot():
+    snap = {"device_info": [
+        {"telemetry": {"power": "61.0"}},
+        {"telemetry": {"power": " 53.0"}},
+        {"telemetry": {"power": None}},   # non-numeric -> None
+        {"telemetry": {}},                 # missing -> None
+    ]}
+    assert activity_viz.parse_powers(snap) == [61.0, 53.0, None, None]
+
+
+def test_parse_powers_empty_when_no_devices():
+    assert activity_viz.parse_powers({}) == []
+
+
+def test_power_intensity_floor_ceiling_and_mid():
+    assert activity_viz.power_intensity(activity_viz._POWER_FLOOR_W) == (0.0, 0.0)
+    dram, _ = activity_viz.power_intensity(activity_viz._POWER_CEILING_W)
+    assert dram == 1.0
+    # A value below the floor clamps to 0 (idle stays dark).
+    assert activity_viz.power_intensity(5.0) == (0.0, 0.0)
+    # Halfway between floor and ceiling -> ~0.5.
+    mid = (activity_viz._POWER_FLOOR_W + activity_viz._POWER_CEILING_W) / 2
+    assert activity_viz.power_intensity(mid)[0] == pytest.approx(0.5, abs=1e-3)
+
+
+def test_sample_telemetry_prefers_power(monkeypatch):
+    monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [85.0, 85.0])
+    readout, pairs = activity_viz.sample_telemetry(2, 2)
+    assert readout == "85 W"                      # watts, not MHz
+    assert pairs[0][0] == pytest.approx(0.5, abs=1e-3)
+
+
+def test_sample_telemetry_falls_back_to_aiclk(monkeypatch, tmp_path):
+    # No power (tt-smi absent) -> AICLK path, reported in MHz.
+    monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [])
+    monkeypatch.setattr(activity_viz, "_SYSFS", _make_chips(tmp_path, [1350, 1350]))
+    readout, pairs = activity_viz.sample_telemetry(2, 2)
+    assert readout == "1350 MHz"
+    assert pairs[0] is not None
+
+
+def test_sample_telemetry_readout_shows_shown_over_total_when_capped(monkeypatch):
+    monkeypatch.setattr(activity_viz, "read_chip_power_watts", lambda: [40.0] * 8)
+    readout, pairs = activity_viz.sample_telemetry(4, 8)  # cap 4 of 8
+    assert readout.endswith("· 4/8")
+    assert len(pairs) == 4
+
+
 # ── Widget + CreateResultPanel drive wiring (needs a display) ────────────────
 
 def _gtk_or_skip():

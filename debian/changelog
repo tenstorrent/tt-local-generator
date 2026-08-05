@@ -1,3 +1,19 @@
+tt-local-generator (0.68.1) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz now drives the memory layer from per-chip POWER
+    draw, not AICLK. Investigation of "the viz barely responds during
+    AnimateDiff" found AICLK on Blackhole is effectively binary (~800 idle /
+    1350 boosted) and often sits pinned at 1350 even at rest, so it barely moved
+    during a job. Power draw is graded and tracks real utilisation (~18 W idle ->
+    150 W+ under diffusion), so each chip's memory layer now pulses with its own
+    real load and the header reads live watts. Read via a lightweight background
+    tt-smi poll (~0.3 s snapshot, 1.5 s cadence, off the GTK thread) since the
+    fast pyluwen lib is venv-only and the app runs system python; falls back to
+    sysfs AICLK when tt-smi is unavailable. New pure helpers parse_powers/
+    power_intensity/sample_telemetry (unit-tested).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:45:00 +0000
+
 tt-local-generator (0.68.0) noble; urgency=medium
 
   * feat(create): "👁 Watch" viz — honest per-chip display + corner-lock +

@@ -31,14 +31,31 @@ Two decoupled controls: `set_mode(medium)` → `viz.activate(<mode>)` picks the
 animation MODE (`mode_for_medium`: image→`diffusion`, video/animate→`video`,
 animatediff→`diffusion`, any other artgen→`thinking`, else→`inference`; idle
 when None) and updates the header caption; `set_running(bool)` starts/stops the
-telemetry tap. They're separate so the **live clock ticks the whole time Watch
-is shown, not only mid-job** (`set_active`/`set_idle` remain as
-mode+running aliases). A compact **header** shows `◉ <mode>` (left) + peak MHz
-readout (right, `read_aiclk_peak_mhz`, "N/total" when the display is capped) +
-a `✕` dismiss (`on_close` callback → flips the Watch toggle off). All pure
-helpers (`mode_for_medium`, `chip_count`, `read_chip_clocks`,
-`read_aiclk_peak_mhz`, `read_aiclk_intensity`, `grid_layout`) are GTK-free and
-unit-tested; `arch="blackhole"` (QB2 is Blackhole).
+telemetry tap. They're separate so the **live readout ticks the whole time Watch
+is shown, not only mid-job** (`set_active`/`set_idle` remain as mode+running
+aliases). A compact **header** shows `◉ <mode>` (left) + a live power/clock
+readout (right, "N/total" when the display is capped) + a `✕` dismiss
+(`on_close` callback → flips the Watch toggle off).
+
+**Telemetry signal = per-chip POWER draw, not AICLK (v0.68.1).** The MVP fed
+sysfs AICLK into `setMemoryStats`, but AICLK on Blackhole is effectively binary
+(~800 idle / 1350 boosted) and often pins at 1350 even at rest — so the memory
+layer barely moved during a job (the "AnimateDiff shows no difference" report).
+**Power is the graded, honest signal** (~18 W idle → 150 W+ under diffusion):
+`sample_telemetry(display, actual)` prefers per-chip power via
+`read_chip_power_watts()` (a `tt-smi -s --snapshot_no_tty` subprocess, ~0.3 s,
+parsed by pure `parse_powers`), normalised by `power_intensity`
+(`_POWER_FLOOR_W`=20 … `_POWER_CEILING_W`=150), and **falls back to sysfs AICLK**
+when tt-smi is absent. The subprocess CANNOT run on the GTK thread, so the tap
+is a **background daemon thread** (`_telemetry_loop`, `_TELEMETRY_INTERVAL_S`=1.5
+s, `stop.wait` for prompt cancel) that hands each sample to the main thread via
+`GLib.idle_add(self._apply_sample, …)` (which updates the readout + evals
+`setChipStats(i, …)` per chip; a late sample after stop is ignored via
+`_tel_running`). `pyluwen` (fast Rust telemetry) is venv-only and the app runs
+system `/usr/bin/python3`, so tt-smi is the portable read path. All pure helpers
+(`mode_for_medium`, `chip_count`, `read_chip_clocks`, `read_aiclk_peak_mhz`,
+`parse_powers`, `power_intensity`, `sample_telemetry`, `grid_layout`) are
+GTK-free and unit-tested; `arch="blackhole"` (QB2 is Blackhole).
 
 **Fail-soft + optional by construction.** OFF by default. No WebKit → inert
 stub (`_WEBKIT_OK` guard; header still shows, readout reads "—"); no chips →

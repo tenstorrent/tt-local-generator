@@ -26,6 +26,8 @@ just no-ops when sysfs has nothing to read.
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
 from pathlib import Path
 
 import gi
@@ -43,9 +45,20 @@ except Exception:  # pragma: no cover - environment-dependent
 _ASSETS = Path(__file__).resolve().parent / "assets" / "tensix-viz"
 _SYSFS = Path("/sys/class/tenstorrent")
 
-# Nominal Blackhole AICLK ceiling (MHz) used to normalise the telemetry tap to
-# 0..1. Not exact — it only scales the visual "heat", so a rough peak is fine.
+# PRIMARY signal: per-chip POWER draw (W). Power tracks real utilisation
+# continuously (idle ~15-20 W → 150 W+ under diffusion), unlike AICLK which is
+# effectively binary on Blackhole (~800 idle / 1350 boosted) and often sits
+# pinned at 1350 even at rest — so AICLK barely moves during a job. Floor/ceiling
+# only scale the visual "heat"; rough values are fine. (p300c ≈ 150 W/chip TDP.)
+_POWER_FLOOR_W = 20.0
+_POWER_CEILING_W = 150.0
+
+# Fallback signal (no tt-smi): AICLK. Ceiling normalises the tap to 0..1.
 _AICLK_CEILING_MHZ = 1400.0
+
+# How often the background telemetry thread samples (seconds). A tt-smi snapshot
+# is ~0.3 s, so this is a light passive read — same cadence class as tt-toplike.
+_TELEMETRY_INTERVAL_S = 1.5
 
 # Most chips the corner instrument will draw. Above this we show _CHIP_CAP and
 # label the header "N/total" so it stays honest without becoming unreadable.
@@ -134,6 +147,80 @@ def read_aiclk_intensity() -> "tuple[float, float] | None":
     return _intensity_for(peak) if peak is not None else None
 
 
+# ── Power telemetry (the responsive signal; via tt-smi snapshot) ─────────────
+
+def parse_powers(snapshot: dict) -> "list[float | None]":
+    """Extract per-chip power (W) from a `tt-smi -s` snapshot dict, device
+    order preserved (None for a chip with no numeric power). Pure —
+    unit-testable without hardware."""
+    out: "list[float | None]" = []
+    for dev in snapshot.get("device_info", []) or []:
+        tel = dev.get("telemetry", {}) if isinstance(dev, dict) else {}
+        try:
+            out.append(float(tel.get("power")))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def read_chip_power_watts() -> "list[float | None]":
+    """Per-chip power (W) from a `tt-smi` snapshot. Runs a subprocess (~0.3 s)
+    — MUST be called off the GTK main thread. Returns [] on any failure (no
+    tt-smi, timeout, bad JSON) so the caller can fall back to AICLK."""
+    try:
+        proc = subprocess.run(
+            ["tt-smi", "-s", "--snapshot_no_tty"],
+            capture_output=True, text=True, timeout=8,
+        )
+        return parse_powers(json.loads(proc.stdout))
+    except Exception:
+        return []
+
+
+def power_intensity(watts: float) -> "tuple[float, float]":
+    """One chip's power -> (dram_bw, l1_fill) in 0..1, floor..ceiling normalised."""
+    span = _POWER_CEILING_W - _POWER_FLOOR_W
+    frac = (watts - _POWER_FLOOR_W) / span if span > 0 else 0.0
+    intensity = max(0.0, min(1.0, frac))
+    return (intensity, intensity * 0.85)
+
+
+def _readout_text(head: "str | None", display: int, actual: int) -> str:
+    """Header readout string: the headline value plus 'shown/total' when the
+    display is capped below the real chip count. Em dash when there's nothing."""
+    if head is None:
+        return "—"  # em dash
+    return "%s · %d/%d" % (head, display, actual) if display < actual else head
+
+
+def sample_telemetry(display: int, actual: int) -> "tuple[str, list]":
+    """Sample the hardware and return `(readout_text, per_chip_pairs)` where each
+    pair is `(dram_bw, l1_fill)` or None. Prefers per-chip POWER (graded, tracks
+    real load); falls back to AICLK when tt-smi isn't available. Pure w.r.t. GTK
+    (does subprocess/sysfs I/O only) — call from the background thread."""
+    powers = read_chip_power_watts()
+    if powers:
+        pairs = [
+            power_intensity(powers[i]) if i < len(powers) and powers[i] is not None
+            else None
+            for i in range(display)
+        ]
+        present = [w for w in powers if w is not None]
+        head = ("%d W" % round(max(present))) if present else None
+        return _readout_text(head, display, actual), pairs
+
+    # Fallback: sysfs AICLK (instant, but a coarse/near-binary signal).
+    clocks = read_chip_clocks()
+    pairs = [
+        _intensity_for(clocks[i]) if i < len(clocks) and clocks[i] is not None
+        else None
+        for i in range(display)
+    ]
+    present = [c for c in clocks if c is not None]
+    head = ("%d MHz" % max(present)) if present else None
+    return _readout_text(head, display, actual), pairs
+
+
 # ── Layout: how to arrange N chip canvases in the corner instrument ──────────
 
 _GAP = 4  # px between chip canvases
@@ -175,7 +262,9 @@ class ActivityVizWidget(Gtk.Box):
         self._arch = arch
         self._webview = None
         self._pending_js: "list[str]" = []
-        self._telemetry_timer: "int | None" = None
+        self._tel_thread: "threading.Thread | None" = None
+        self._tel_stop: "threading.Event | None" = None
+        self._tel_running = False
         self._mode = "idle"
         self.on_close = None  # set by host -> untoggle Watch
 
@@ -338,44 +427,48 @@ class ActivityVizWidget(Gtk.Box):
         self.set_mode(None)
         self.set_running(False)
 
-    # ── Live telemetry tap ───────────────────────────────────────────────────
+    # ── Live telemetry tap (background thread; power via tt-smi) ─────────────
     def _start_telemetry(self) -> None:
-        if self._telemetry_timer is not None:
+        if self._tel_thread is not None:
             return
-        self._tick_telemetry()  # immediate first sample
-        self._telemetry_timer = GLib.timeout_add(1000, self._tick_telemetry)
+        self._tel_running = True
+        self._tel_stop = threading.Event()
+        self._tel_thread = threading.Thread(
+            target=self._telemetry_loop, args=(self._tel_stop,), daemon=True
+        )
+        self._tel_thread.start()
 
     def _stop_telemetry(self) -> None:
-        if self._telemetry_timer is not None:
-            GLib.source_remove(self._telemetry_timer)
-            self._telemetry_timer = None
-        # Blank the readout so a stale MHz number doesn't linger after stop.
+        self._tel_running = False
+        if self._tel_stop is not None:
+            self._tel_stop.set()
+        self._tel_thread = None
+        # Blank the readout so a stale value doesn't linger after stop.
         if getattr(self, "_readout_lbl", None) is not None:
             self._readout_lbl.set_label("")
 
-    def _tick_telemetry(self) -> bool:
-        clocks = read_chip_clocks()
-        present = [c for c in clocks if c is not None]
-        peak = max(present) if present else None
+    def _telemetry_loop(self, stop: "threading.Event") -> None:
+        """Background poll: read per-chip power (tt-smi, ~0.3 s) or fall back to
+        sysfs AICLK, then hand the result to the main thread. Does NO GTK work
+        here — the subprocess would otherwise block the UI (GTK threading rule).
+        Exits promptly when `stop` is set (via `stop.wait`, not sleep)."""
+        while not stop.is_set():
+            readout, pairs = sample_telemetry(self._chip_display, self._chip_actual)
+            GLib.idle_add(self._apply_sample, readout, pairs)
+            stop.wait(_TELEMETRY_INTERVAL_S)
 
-        # Header readout: real peak clock, plus "shown/total" when capped.
+    def _apply_sample(self, readout: str, pairs) -> bool:
+        """Main-thread: update the header readout + feed each chip its intensity.
+        A late sample arriving after stop is ignored (`_tel_running`)."""
+        if not self._tel_running:
+            return False
         if self._readout_lbl is not None:
-            if peak is None:
-                self._readout_lbl.set_label("—")  # em dash
-            elif self._chip_display < self._chip_actual:
-                self._readout_lbl.set_label(
-                    "%d MHz · %d/%d" % (peak, self._chip_display, self._chip_actual)
-                )
-            else:
-                self._readout_lbl.set_label("%d MHz" % peak)
-
-        # Per-chip: each drawn chip pulses with ITS OWN clock (honest).
-        for i in range(self._chip_display):
-            mhz = clocks[i] if i < len(clocks) else None
-            if mhz is not None:
-                dram, l1 = _intensity_for(mhz)
+            self._readout_lbl.set_label(readout)
+        for i, pair in enumerate(pairs):
+            if pair is not None:
+                dram, l1 = pair
                 self._eval(
                     "window.__viz&&window.__viz.setChipStats(%d,{dram_bw:%.3f,l1_fill:%.3f})"
                     % (i, dram, l1)
                 )
-        return True  # keep polling until _stop_telemetry
+        return False  # one-shot idle callback
