@@ -485,7 +485,7 @@ def test_cta_reflects_edited_image_param_panel_widgets(monkeypatch):
     # Model selection now lives in the SCOPED dropdown (Task 6), not the
     # panel's own (unmounted, invisible) model row — see _panel_of's docstring
     # and RoleZonePanel's "model field is never placed in any zone" contract.
-    view._model_dropdown.set_selected(1)  # sdxl (server_manager order: flux, sdxl, ...)
+    view._model_dropdown.set_selected(2)  # sdxl (server_manager order: flux, flux-dev, sdxl, ...)
 
     view._cta_btn.emit("clicked")
 

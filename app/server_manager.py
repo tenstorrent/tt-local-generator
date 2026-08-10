@@ -108,6 +108,7 @@ MODEL_DISPLAY_NAMES: dict = {
     "skyreels": "SkyReels",
     "wan2.2-i2v": "Wan2.2 I2V",
     "animate": "Animate",
+    "flux-dev": "FLUX.1-dev",
 }
 
 
@@ -165,6 +166,15 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-flux.1-schnell",
             capabilities=("image",),
+        ),
+        ServerDef(
+            key="flux-dev",
+            label="FLUX.1-dev",
+            script="start_flux_dev.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-flux.1-dev",
+            capabilities=("image",),
+            benefit="Higher-fidelity image (more steps than schnell). Blackhole P300X2.",
         ),
         ServerDef(
             key="sdxl",

@@ -1142,6 +1142,29 @@ def _artgen_backend(model: "str | None") -> BackendSpec:
                        _MAX_WAIT_LLM)
 
 
+def _match_server_key(m: str, keys: "list[str]") -> "str | None":
+    """Resolve *m* (a lowercased model string) to one of *keys* — a
+    server_manager key or a canonical model id fragment.
+
+    An EXACT match against *any* key wins outright, checked in a pass over
+    ALL keys before any substring fallback is even attempted. This matters
+    once one key is itself a substring of another (e.g. "flux" inside
+    "flux-dev", "wan2.2" inside "wan2.2-i2v"): a single combined `m == k or k
+    in m` loop would let the shorter key's substring hit shadow the longer
+    key's own exact match purely by iteration order (bug found when
+    "flux-dev" was added right after "flux" — `m="flux-dev"` matched "flux"
+    first because "flux" is contained in "flux-dev"). Only when nothing
+    equals *m* verbatim do we fall back to "key contained in m", for legacy
+    callers that pass a looser hint string rather than a real key.
+    """
+    if m in keys:
+        return m
+    for k in keys:
+        if k in m:
+            return k
+    return None
+
+
 def _backend_for(class_type: str, inputs: dict) -> "BackendSpec | None":
     """Return the backend a node needs, or None when no switch is required.
 
@@ -1154,11 +1177,7 @@ def _backend_for(class_type: str, inputs: dict) -> "BackendSpec | None":
     if class_type == "TTLGTextToImage":
         m = str(model or "").lower()
         image_keys = [s.key for s in sm.servers_for_capability("image")]
-        key = None
-        for k in image_keys:                 # exact server-key match wins
-            if m == k or k in m:
-                key = k
-                break
+        key = _match_server_key(m, image_keys)
         if key is None:                      # legacy substrings
             if "flux" in m: key = "flux"
             elif "sdxl" in m or (m.startswith("sd") ): key = "sdxl" if "sdxl" in sm.SERVERS else "flux"
@@ -1169,11 +1188,7 @@ def _backend_for(class_type: str, inputs: dict) -> "BackendSpec | None":
     if class_type == "TTLGImageToVideo":
         m = str(model or "").lower()
         video_keys = [s.key for s in sm.servers_for_capability("video")]
-        key = None
-        for k in video_keys:                 # exact server-key match wins
-            if m == k or k in m:
-                key = k
-                break
+        key = _match_server_key(m, video_keys)
         if key is None:                      # legacy substrings
             if "skyreels" in m: key = "skyreels"
             elif "wan" in m: key = "wan2.2"

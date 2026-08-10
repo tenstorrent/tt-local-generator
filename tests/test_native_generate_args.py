@@ -35,6 +35,9 @@ def _mw():
 VIDEO = Medium(
     id="video", label="Video", icon="🎥", kind="video", source="native", generator=None)
 
+IMAGE = Medium(
+    id="image", label="Image", icon="🖼️", kind="image", source="native", generator=None)
+
 
 def test_video_animate_model_routes_to_animate_source():
     obj = _mw()
@@ -78,3 +81,18 @@ def test_video_wan_i2v_without_seed_image_raises():
     params = {"prompt": "hi", "model": "wan2.2-i2v-a14b", "seed_image_path": ""}
     with pytest.raises(mw._NativeGenerateGuardError):
         obj._native_generate_args(VIDEO, params)
+
+
+def test_image_flux_dev_routes_image_source():
+    obj = _mw()
+    params = {"prompt": "hi", "model": "flux.1-dev"}
+    _args, kwargs = obj._native_generate_args(IMAGE, params)
+    assert kwargs["model_source"] == "image"
+    assert kwargs["image_model_key"] == "flux-dev"
+
+
+def test_image_flux_schnell_unchanged():
+    obj = _mw()
+    params = {"prompt": "hi", "model": "flux.1-schnell"}
+    _args, kwargs = obj._native_generate_args(IMAGE, params)
+    assert kwargs["image_model_key"] == "flux"

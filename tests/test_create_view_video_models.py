@@ -13,6 +13,7 @@ import create_param_panels as cpp
 from create_mediums import Medium
 
 VIDEO = Medium(id="video", label="Video", icon="🎥", kind="video", source="native", generator=None)
+IMAGE = Medium(id="image", label="Image", icon="🖼️", kind="image", source="native", generator=None)
 
 def test_video_scoped_keys_animatediff_first_and_animate_present(monkeypatch):
     view = cv.CreateView.__new__(cv.CreateView)
@@ -33,3 +34,11 @@ def test_video_model_id_to_key_inverts_wan_i2v():
     import main_window as mw
     assert mw._VIDEO_MODEL_ID_TO_KEY["wan2.2-i2v-a14b"] == "wan2.2-i2v"
     assert cpp._VIDEO_MODEL_IDS["wan2.2-i2v"] == "wan2.2-i2v-a14b"
+
+
+def test_image_scoped_keys_include_flux_dev():
+    view = cv.CreateView.__new__(cv.CreateView)
+    view._active_medium = IMAGE
+    view._status_service = None
+    keys = view._scoped_model_keys(IMAGE)
+    assert "flux" in keys and "flux-dev" in keys

@@ -507,6 +507,7 @@ _IMAGE_MODEL_CHOICES: "list[tuple[str, str]]" = [
 # ImageGenerationWorker. Mirrors ControlPanel's `_IMAGE_MODEL_IDS`.
 _IMAGE_MODEL_IDS: "dict[str, str]" = {
     "flux": "flux.1-schnell",
+    "flux-dev": "flux.1-dev",
     "sdxl": "stable-diffusion-xl-base-1.0",
     "z-image-turbo": "z-image-turbo",
     "motif": "motif-image-6b-preview",
