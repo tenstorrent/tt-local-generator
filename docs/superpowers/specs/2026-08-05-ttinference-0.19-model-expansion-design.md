@@ -49,6 +49,26 @@ support up to date and expand the media model surface. Analysis of upstream
 - **audio_tts / cnn / embedding** catalogs, SD3.5-large, Qwen-Image, galaxy-only
   Wan2.2-I2V variants — no P300 support or out of scope for a creative app.
 
+## Follow-up track (approved): patch-strategy modernization
+
+tt-vscode-toolkit's `content/lessons/monkeypatch-ttnn.md` (validated on p300c) +
+its `content/templates/monkeypatch/tt_patches.py` harness codify the rule
+**"patch to CHANGE behavior, wrap to ADD behavior; editing the source tree is the
+last resort"**, judged on *smallest trace* + *upgrade-safety* (fail loud, don't
+drift silently). Our `patches/media_server_config/**`, `patches/tt_dit/**`, and
+`patches/models/experimental/tt_dit/**` are whole-file bind-mount copies — the
+last-resort strategy at scale — which is exactly why they drift silently against
+each media-image refresh and why `apply_patches.sh` Steps 7/8/9 rotted
+undetected. **Approved direction (separate effort, not this release):** migrate
+the "add a symbol / change a default / register a runner" patches to a runtime
+`tt_patches.py`-style harness applied before import (via the media container's
+entrypoint / `sitecustomize`), with `version_at_most` guards + a `verify()`/
+fail-loud missing-target gate so a stale-or-absorbed patch SCREAMS instead of
+drifting. Highest-ROI/lowest-risk first: `constants.py` symbol/default overrides,
+`dit_runners.py` trace-region bumps, `runner_fabric.py` runner registration.
+Genuinely-deep `tt_dit` pipeline bug-fixes may stay whole-file copies for now, but
+gain a fail-loud version guard. See [[reference_media_patch_monkeypatch_strategy]].
+
 ## Hard constraints
 
 - **HARDWARE VALIDATION IS THE USER'S, ON QB2.** Nothing here can be validated
