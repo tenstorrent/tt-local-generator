@@ -62,3 +62,19 @@ def test_video_plain_model_unchanged():
     assert kw["model_source"] == "video"
     assert kw["video_model_key"] == "wan2"
     assert kw["animatediff_args"] is None
+
+
+def test_video_wan_i2v_with_seed_image_routes_video():
+    obj = _mw()
+    params = {"prompt": "hi", "model": "wan2.2-i2v-a14b",
+              "seed_image_path": "/tmp/seed.png"}
+    _args, kwargs = obj._native_generate_args(VIDEO, params)
+    assert kwargs["model_source"] == "video"
+    assert kwargs["video_model_key"] == "wan2.2-i2v"
+
+
+def test_video_wan_i2v_without_seed_image_raises():
+    obj = _mw()
+    params = {"prompt": "hi", "model": "wan2.2-i2v-a14b", "seed_image_path": ""}
+    with pytest.raises(mw._NativeGenerateGuardError):
+        obj._native_generate_args(VIDEO, params)

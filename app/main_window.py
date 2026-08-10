@@ -1654,6 +1654,7 @@ _VIDEO_MODEL_IDS: dict = {
     "wan2":         "wan2.2-t2v",
     "mochi":        "mochi-1-preview",
     "skyreels":     "skyreels-v2-i2v-14b-540p",
+    "wan2.2-i2v":   "wan2.2-i2v-a14b",
     "animatediff":  "animatediff-blackhole",
     "animate":      "wan2.2-animate-14b",   # Video-model routing only; not a panel choice
 }
@@ -9498,10 +9499,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # 6579) so both surfaces enforce the same rule. Blocked BEFORE
         # calling `_on_generate`/`_on_enqueue` at all — no worker is started
         # and nothing is queued.
-        if model_key == "skyreels" and not params.get("seed_image_path"):
+        # Wan2.2-I2V is the same kind of image-to-video model as SkyReels
+        # (Task 5, ttinference-0.19 model expansion) — it needs the same
+        # gate, so the guard covers both keys rather than growing a second
+        # near-identical block.
+        if model_key in ("skyreels", "wan2.2-i2v") and not params.get("seed_image_path"):
             raise _NativeGenerateGuardError(
-                "SkyReels I2V requires a starting image — add one to the "
-                "seed image well before generating."
+                "This image-to-video model requires a starting image — add one "
+                "to the seed image well before generating."
             )
         # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
         # used to pick the video worker from `self._controls.get_video_model()`

@@ -962,7 +962,7 @@ def test_skyreels_without_seed_image_blocks_generation_and_shows_error(monkeypat
 
     obj._on_generate.assert_not_called()
     assert fake_create_view._result_panel.calls[-1][0] == "show_error"
-    assert "SkyReels" in fake_create_view._result_panel.calls[-1][1]
+    assert "requires a starting image" in fake_create_view._result_panel.calls[-1][1]
     # `_fail_create_job` must clear the flag, exactly like every other
     # early-return guard (worker-busy, disk space, artgen-no-generator) —
     # otherwise the panel would be stuck "pending" forever.
@@ -1477,8 +1477,8 @@ def test_create_while_busy_skyreels_guard_blocks_enqueue_without_touching_active
     assert obj._create_job_active is True  # untouched — still the first job's flag
     assert fake_create_view._result_panel.calls == []  # no show_error from _fail_create_job
     obj._set_status.assert_called_with(
-        "SkyReels I2V requires a starting image — add one to the "
-        "seed image well before generating."
+        "This image-to-video model requires a starting image — add one "
+        "to the seed image well before generating."
     )
 
 
@@ -1978,8 +1978,8 @@ def test_theme_set_skyreels_guard_blocks_enqueue(monkeypatch):
 
     assert obj._queue == []
     obj._set_status.assert_any_call(
-        "SkyReels I2V requires a starting image — add one to the "
-        "seed image well before generating."
+        "This image-to-video model requires a starting image — add one "
+        "to the seed image well before generating."
     )
 
 

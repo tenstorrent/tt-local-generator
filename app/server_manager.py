@@ -106,6 +106,7 @@ MODEL_DISPLAY_NAMES: dict = {
     "wan2.2": "Wan 2.2",
     "mochi": "Mochi",
     "skyreels": "SkyReels",
+    "wan2.2-i2v": "Wan2.2 I2V",
     "animate": "Animate",
 }
 
@@ -206,6 +207,15 @@ SERVERS: dict[str, ServerDef] = {
             runner_key="tt-skyreels-v2-i2v",
             capabilities=("video",),
             benefit="Fast video from a seed image (image-to-video). Blackhole.",
+        ),
+        ServerDef(
+            key="wan2.2-i2v",
+            label="Wan2.2-I2V-A14B  (Blackhole)",
+            script="start_wan_i2v.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-wan2.2-i2v",
+            capabilities=("video",),
+            benefit="Animate a still image into video (image-to-video). Blackhole P300X2.",
         ),
         ServerDef(
             key="prompt-server",

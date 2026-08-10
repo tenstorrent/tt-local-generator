@@ -818,6 +818,7 @@ _VIDEO_MODEL_IDS: "dict[str, str]" = {
     "wan2": "wan2.2-t2v",
     "mochi": "mochi-1-preview",
     "skyreels": "skyreels-v2-i2v-14b-540p",
+    "wan2.2-i2v": "wan2.2-i2v-a14b",
     "animatediff": "animatediff-blackhole",
     "animate": "wan2.2-animate-14b",   # Video-model routing only; not a panel choice
 }
