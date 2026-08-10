@@ -9117,10 +9117,10 @@ class MainWindow(Gtk.ApplicationWindow):
                 if video_model_key not in MODELS_WITH_FIXED_FRAMES:
                     num_frames_arg = clip_frames(video_model_key, slot)
 
-                # For I2V models (skyreels), base64-encode the seed image and send
-                # it to the server as the conditioning frame.
+                # For I2V models (skyreels, wan2.2-i2v), base64-encode the seed
+                # image and send it to the server as the conditioning frame.
                 image_b64: "str | None" = None
-                if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
+                if video_model_key in ("skyreels", "wan2.2-i2v") and seed_image_path and Path(seed_image_path).is_file():
                     with open(seed_image_path, "rb") as _f:
                         _raw = _f.read()
                     _ext = Path(seed_image_path).suffix.lower().lstrip(".")
