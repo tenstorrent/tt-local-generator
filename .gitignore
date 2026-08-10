@@ -56,3 +56,7 @@ vendor/tt-animatediff/.claude/
 experiments/
 generated/
 docs/docs/
+
+# Compiled bytecode inside patches/ (never track)
+patches/**/__pycache__/
+patches/**/*.pyc

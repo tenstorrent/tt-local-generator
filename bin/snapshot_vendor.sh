@@ -24,10 +24,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENDOR_DIR="$REPO_ROOT/vendor/tt-inference-server"
 VENDOR_SHA_FILE="$REPO_ROOT/vendor/VENDOR_SHA"
 
-# SHA pinned to the same image as DOCKER_IMAGE in start_wan_qb2.sh:
-#   ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+# SHA pinned to tt-inference-server v0.19.0 (LLM-only point release).
+# Media image is unchanged from 0.18.0: tt-media-inference-server:0.18.0-c49bb76
+# Artgen vLLM image: vllm-tt-metal-src-release …:0.19.0-b204341-9bd099c
 # Update this when bumping the inference server version.
-DEFAULT_SHA="bac8b3471c8b1234567890abcdef1234567890ab"   # placeholder — set real SHA
+DEFAULT_SHA="399ce0b5c98067fd41cc3ba978d2742b15e8ac4e"
 UPSTREAM_REPO="https://github.com/tenstorrent/tt-inference-server.git"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
