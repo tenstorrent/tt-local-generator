@@ -1,3 +1,32 @@
+tt-local-generator (0.76.0) noble; urgency=medium
+
+  * chore(vendor): get current with tt-inference-server v0.19.0.
+    - Re-pinned vendor SHA to 399ce0b (v0.19.0, an LLM-only point release;
+      the media Docker image is unchanged at 0.18.0-c49bb76).
+    - Artgen vLLM image preference bumped to 0.19.0-b204341-9bd099c
+      (Llama-3.1-8B P300 uplift, newer tt-metal base), older tags kept as
+      fallbacks.
+    - Repaired apply_patches.sh: Step 7 (Wan2.2-Animate) now appends to the
+      dev/video.yaml catalog like Step 6, instead of the dead model_spec.py
+      injection that broke in the 0.18.0 YAML migration; retired the also-dead
+      Steps 8 (DeepSeek) and 9 (SDXL). Removed a stray committed .pyc and
+      ignore future ones under patches/.
+  * feat(create): expand the media model surface with two in-catalog models.
+    - Wan2.2-I2V-A14B (image-to-video): new Video-picker model beside
+      SkyReels-I2V, reusing the seed-image plumbing (start_wan_i2v.sh,
+      server_manager key wan2.2-i2v, tt-model-wan2-i2v weights package).
+    - FLUX.1-dev (higher-fidelity image): new Image-picker model beside
+      FLUX.1-schnell (start_flux_dev.sh wraps start_flux.sh --dev,
+      server_manager key flux-dev, tt-model-flux-dev gated weights package).
+    - Reconciled the FLUX packages: tt-model-flux now downloads the ungated
+      FLUX.1-schnell and tt-model-flux-dev the gated FLUX.1-dev, so each
+      package maps cleanly to its server.
+    - Fixed a latent pipeline routing bug: pipeline_engine._backend_for now
+      exact-matches a server key before substring-sniffing, so flux no longer
+      shadows flux-dev (and wan2.2 no longer shadows wan2.2-i2v).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 10 Aug 2026 00:00:00 +0000
+
 tt-local-generator (0.75.0) noble; urgency=medium
 
   * feat(pipeline): Pipeline UX overhaul — self-explaining steps, per-step

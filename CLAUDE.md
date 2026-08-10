@@ -1339,6 +1339,14 @@ Tests are in `tests/` at repo root. Each file does `sys.path.insert(0, str(Path(
 
 `vendor/tt-inference-server/` is a shallow git clone of the upstream repo (gitignored due to 143 GB working tree). The pinned commit SHA is in `vendor/VENDOR_SHA`.
 
+**Pinned at v0.19.0** (`399ce0b`, since v0.76.0). v0.19.0 is an **LLM-only**
+point release (Llama-3.1-8B P300 uplift, new vLLM image) — the MEDIA catalog
+(`video.yaml`/`image.yaml`/`model_spec.py`) is byte-identical to 0.18.0, so the
+media Docker image stays `tt-media-inference-server:0.18.0-c49bb76` and the media
+bind-mount patches were NOT rebased. Only the **artgen vLLM** image preference
+moved (`start_artgen.sh` → `0.19.0-b204341-9bd099c`, older tags kept as
+fallbacks).
+
 ```bash
 cat vendor/VENDOR_SHA            # see what's pinned
 ./bin/apply_patches.sh           # apply patches/ to vendor/
@@ -1374,12 +1382,54 @@ the SkyReels T2V/I2V entries directly to `dev/video.yaml` as YAML text — same
 idempotent pattern (skip if the weights string is already present), just a
 different target file and format. `MODEL_SPEC_YAML` points at that file.
 
-**Not yet migrated:** Steps 7-9 (Animate `ModelSpecTemplate` injection, DeepSeek
-and SDXL version bumps) still target the legacy `model_spec.py` anchor. Step 7
-(Animate) is *already* failing with the same "could not find insertion anchor"
-error as of 0.18.0 — it was previously masked because Step 6 died first. If a
-model needs re-registering there, apply the same YAML-catalog treatment used for
-SkyReels rather than trying to fix the `model_spec.py` anchor.
+**Steps 7-9 repaired in v0.76.0.** Step 7 (Wan2.2-Animate) was rewritten to
+append to `dev/video.yaml` exactly like Step 6 (idempotent skip-if-weights-
+present guard, same `MODEL_SPEC_YAML` target) instead of the dead
+`model_spec.py` `ModelSpecTemplate(...)` injection. Steps 8 (DeepSeek P300X2
+version bump) and 9 (SDXL version bump) were **retired outright** — their
+`model_spec.py` anchors no longer exist in the YAML era and neither model is
+surfaced today. If either needs re-registering later, give it the same
+`video.yaml`/`image.yaml` append treatment as Steps 6/7 rather than reviving the
+`model_spec.py` anchor.
+
+### Media model expansion (v0.76.0): Wan2.2-I2V + FLUX.1-dev
+
+Both models are already in the shipped upstream catalog (P300X2, COMPLETE), so
+neither needs a patch — the work was app wiring + a start script + a weights
+`.deb` each.
+
+- **Wan2.2-I2V-A14B** (image-to-video) — `server_manager` key `wan2.2-i2v`
+  (cap `video`, `runner_key="tt-wan2.2-i2v"`), `bin/start_wan_i2v.sh` (modeled on
+  `start_wan_qb2.sh`: non-dev mode, media image `0.18.0-c49bb76`, P300X2 — it's
+  in-catalog so needs no bind-mount patch, unlike SkyReels-I2V). Lives in the
+  **Video** picker beside SkyReels-I2V and reuses the same seed-image guard
+  (`_native_generate_args` raises `_NativeGenerateGuardError` for
+  `("skyreels", "wan2.2-i2v")` when no seed image). Weights: `tt-model-wan2-i2v`
+  (ungated).
+- **FLUX.1-dev** (higher-fidelity image) — `server_manager` key `flux-dev`
+  (cap `image`, `runner_key="tt-flux.1-dev"`), `bin/start_flux_dev.sh` (a thin
+  wrapper: `exec start_flux.sh --dev "$@"` — `start_flux.sh` already supported
+  `--dev`). In the **Image** picker beside FLUX.1-schnell. No per-model step/
+  guidance branching — the app's existing image default (20 steps / guidance
+  3.5) is already dev-appropriate, which keeps `collect()` byte-identical.
+  Weights: `tt-model-flux-dev` (gated). The FLUX `.deb`s were reconciled so each
+  maps to its server: `tt-model-flux` → ungated FLUX.1-schnell,
+  `tt-model-flux-dev` → gated FLUX.1-dev (previously `tt-model-flux` confusingly
+  downloaded FLUX.1-dev).
+
+Both `_VIDEO_MODEL_IDS`/`_IMAGE_MODEL_IDS` maps are duplicated in
+`main_window.py` AND `create_param_panels.py` — new keys must be added to BOTH
+(inverse `*_ID_TO_KEY` maps are derived). `pipeline_engine._backend_for` gained
+`_match_server_key()` (exact-match pass BEFORE substring-sniffing) so `flux`
+can't shadow `flux-dev` and `wan2.2` can't shadow `wan2.2-i2v`.
+
+**Both `runner_key`s (`tt-wan2.2-i2v`, `tt-flux.1-dev`) are taken from the
+vendored `ModelRunners` enum + `runner_fabric.py` but are HARDWARE-CONFIRM-
+PENDING** — on QB2, start each server and `curl /tt-liveness`; if `runner_in_use`
+differs, update the `ServerDef.runner_key` (a wrong value silently reads the
+server as unhealthy). Nothing in this expansion was validatable from the dev
+session — the automated tests cover wiring only (ServerDef present, picker lists
+it, routing maps it, collect() unchanged), never actual generation.
 
 ### Patch philosophy — minimize divergence from upstream
 
