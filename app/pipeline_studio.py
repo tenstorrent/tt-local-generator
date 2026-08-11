@@ -3106,8 +3106,10 @@ class LiveRunView(Gtk.Box):
     (e.g. "sampling 5/25", "encoding") — used to be silently dropped. It now
     flows through `pipeline_progress.ProgressState`, a GTK-free reducer
     (`app/pipeline_progress.py`) that is the SINGLE place deciding what
-    `done_count`/`running_node`/`current_index` (used for the header's
-    "Step N of M") mean; this view only renders what the reducer computes —
+    `done_count`/`running_node`/`current_index` mean — `done_count` in
+    particular drives the header's "Step N of M" (a step counts only once it
+    finishes, not merely once it starts running); this view only renders
+    what the reducer computes —
     it never derives progress by reading back its own widget text. Per
     running step: the status glyph (`_step_status_labels`) is hidden and
     replaced by a real `Gtk.Spinner` (`_step_spinners`) for the duration —
@@ -3176,8 +3178,8 @@ class LiveRunView(Gtk.Box):
         self._elapsed_timers: "dict[str, int]" = {}
         self._elapsed_start: "dict[str, float]" = {}
         # The pure reducer (Task 6) driving done_count/running_node/
-        # current_index for the "Step N of M" header — rebuilt fresh in
-        # begin() for each run (None only before the first begin()).
+        # current_index; done_count feeds the "Step N of M" header — rebuilt
+        # fresh in begin() for each run (None only before the first begin()).
         self._progress: "pipeline_progress.ProgressState | None" = None
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -3192,10 +3194,10 @@ class LiveRunView(Gtk.Box):
         self._title_label.set_hexpand(True)
         header.append(self._title_label)
 
-        # "Step N of M" — driven entirely by self._progress (see
-        # _update_step_count_label); blank until a run has actually started
-        # (current_index == 0, i.e. before begin() or before the first node
-        # starts running).
+        # "Step N of M" — driven entirely by self._progress.done_count (see
+        # _update_step_count_label); reads "Step 0 of M" once a run has
+        # begun (a running-but-not-yet-done step doesn't count), blank only
+        # before the first begin() (self._progress is still None).
         self._step_count_label = Gtk.Label(label="")
         self._step_count_label.add_css_class("ps-step-count")
         header.append(self._step_count_label)
@@ -3577,14 +3579,12 @@ class LiveRunView(Gtk.Box):
         self._elapsed_start = {}
 
     def _update_step_count_label(self) -> None:
-        """Render the header's "Step {current_index} of {total}" from the
-        pure reducer — blank before any step has started running (index 0)
-        so a freshly-begin()'d view doesn't claim to be on "Step 0"."""
-        if self._progress is None or self._progress.current_index == 0:
+        if self._progress is None:
             self._step_count_label.set_label("")
             return
+        # Count DONE, not started (review: "Step N of M" over-reported before).
         self._step_count_label.set_label(
-            f"Step {self._progress.current_index} of {self._progress.total}"
+            f"Step {self._progress.done_count} of {self._progress.total}"
         )
 
     def _is_switch_line(self, text: str) -> bool:

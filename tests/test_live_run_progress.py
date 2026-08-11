@@ -35,6 +35,16 @@ def test_progress_state_defaults_before_any_update():
     assert st.status("1") is None
 
 
+def test_completed_predicate_and_done_count():
+    st = pp.ProgressState(total=3)
+    st.update("1", "running", ""); st.update("1", "done", "")
+    st.update("2", "running", "")
+    assert st.completed("1") is True
+    assert st.completed("2") is False   # running, not done
+    assert st.completed("3") is False   # never seen
+    assert st.done_count == 1
+
+
 def test_progress_state_failed_node_is_not_counted_done_but_stops_running():
     """A failed node should clear running_node without inflating done_count
     -- done_count is specifically "done", not "no longer running"."""

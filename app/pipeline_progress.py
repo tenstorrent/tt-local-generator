@@ -52,6 +52,10 @@ class ProgressState:
         """The latest status reported for *node_id*, or None if never updated."""
         return self._status.get(node_id)
 
+    def completed(self, node_id: str) -> bool:
+        """True iff this node has finished successfully (status == 'done')."""
+        return self._status.get(node_id) == "done"
+
     @property
     def done_count(self) -> int:
         return sum(1 for s in self._status.values() if s == "done")

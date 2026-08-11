@@ -1926,7 +1926,10 @@ def test_live_run_view_elapsed_timer_starts_and_freezes(monkeypatch):
     assert removed == [42]
 
 
-def test_live_run_view_header_step_count_tracks_running_node(monkeypatch):
+def test_live_run_view_header_step_count_tracks_done_not_started(monkeypatch):
+    # Header counts steps that have actually FINISHED, not merely started --
+    # a running-but-not-yet-done step must not inflate "Step N of M" (review:
+    # the started-count over-reported progress before this fix).
     from gi.repository import GLib
     from pipeline_studio import LiveRunView
     monkeypatch.setattr(GLib, "timeout_add", lambda *a, **k: 999)
@@ -1934,14 +1937,16 @@ def test_live_run_view_header_step_count_tracks_running_node(monkeypatch):
 
     view = LiveRunView()
     view.begin(_make_live_run())
-    assert view._step_count_label.get_label() == ""
+    assert view._step_count_label.get_label() == "Step 0 of 3"
 
     view.on_node_update("job", "1", "running", "")
-    assert view._step_count_label.get_label() == "Step 1 of 3"
+    assert view._step_count_label.get_label() == "Step 0 of 3"  # running != done
 
     view.on_node_update("job", "1", "done", "")
+    assert view._step_count_label.get_label() == "Step 1 of 3"
+
     view.on_node_update("job", "2", "running", "")
-    assert view._step_count_label.get_label() == "Step 2 of 3"
+    assert view._step_count_label.get_label() == "Step 1 of 3"
 
 
 def test_live_run_view_log_scroller_wrapped_in_collapsed_expander():
