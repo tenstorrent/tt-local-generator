@@ -389,6 +389,10 @@ class TestRunSubprocessPromptScheduleWiring:
         assert captured["prompt_schedule"] == [(0, "a"), (4, "b")]
 
     def test_remix_forwards_prompt_schedule_to_multichip_cmds(self, monkeypatch, tmp_path):
+        # run_subprocess early-returns if ad._PYTHON (tt-metal env) is absent —
+        # point it at the running python so the test is env-independent (CI has
+        # no ~/tt-metal), matching every other run_subprocess test here.
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))
         captured = {}
         real_multichip_cmds = ad._multichip_cmds
 
@@ -663,6 +667,7 @@ class TestSeamlessLoopWiring:
         assert ok       # base GIF is still valid even if the crossfade failed
 
     def test_remix_applies_seamless_loop_on_stitched_output(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))  # env-independent (CI has no tt-metal)
         calls = []
         monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
 
@@ -692,6 +697,7 @@ class TestSeamlessLoopWiring:
         assert calls == [(out_path, 2)]     # k = max(1, min(4, 8 // 4)) == 2
 
     def test_coherent_applies_seamless_loop_on_stitched_output(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ad, "_PYTHON", Path(sys.executable))  # env-independent (CI has no tt-metal)
         calls = []
         monkeypatch.setattr(ad, "_apply_seamless_loop", lambda p, k: calls.append((p, k)) or True)
         monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (True, ""))

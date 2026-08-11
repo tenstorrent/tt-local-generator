@@ -1,3 +1,18 @@
+tt-local-generator (0.77.5) noble; urgency=medium
+
+  * fix(ci): make the CI test job pass in its no-hardware/no-WebKit environment.
+    - Install python3-pil (Pillow): gallery/ansi-image/showcase tests build
+      image fixtures with PIL and errored on `import PIL` (~12 tests).
+    - test_animatediff_multichip: 3 run_subprocess tests now monkeypatch
+      ad._PYTHON to the running interpreter (like their siblings) so they don't
+      require a real ~/tt-metal env — they passed only because this dev box has
+      tt-metal installed.
+    - Deselect the three documented environment-level flakes (per CLAUDE.md) in
+      the CI pytest invocation, matching the prescribed local command.
+    (CI test-job/config only — no app behavior change.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 10:00:00 +0000
+
 tt-local-generator (0.77.4) noble; urgency=medium
 
   * fix(ci): guard artgen_detail's WebKit import (_WEBKIT_OK) so the test suite
