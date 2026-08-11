@@ -1981,6 +1981,94 @@ def test_live_run_view_log_scroller_wrapped_in_collapsed_expander():
     assert log_expander.get_label() == "Details"
 
 
+# ── Task 5: per-step output preview + per-chip rows ─────────────────────────
+#
+# These pin two things: on_log derives+stores output_dir from a runner
+# "LOG:<path>" line (mirroring pipeline_runner.PipelineRunner._parse_line's
+# own regex/layout), and on_node_update's "done" branch resolves+renders a
+# preview into the step's reserved slot. The first test below is taken
+# verbatim from the task brief -- note the log line's tmp_path has no
+# "<8digits>_<6digits>_" timestamp segment, so output_dir derivation is a
+# no-op (stays None) and the assertion only pins that the slot itself still
+# exists (never crashes) -- test_step_done_preview_renders_real_content_for_
+# resolvable_artifact below is the stronger, end-to-end companion that
+# monkeypatches Path.home() so resolution genuinely succeeds and a real
+# content widget lands in the slot.
+
+def test_step_done_renders_a_preview_thumbnail(tmp_path):
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    run = _make_live_run()
+    view.begin(run)
+    # simulate the runner announcing the output dir + a produced artifact
+    (tmp_path / "node1.png").write_bytes(b"\x89PNG\r\n\x1a\n")  # a file _resolve_artifact will find
+    view.on_log(f"LOG:{tmp_path}/run.log\n")   # LiveRunView derives output_dir
+    view.on_node_update("job", "1", "done", "")
+    assert view._step_preview.get("1") is not None   # a preview widget was placed
+
+
+def test_step_done_preview_renders_real_content_for_resolvable_artifact(monkeypatch, tmp_path):
+    """End-to-end companion to the brief's smoke test: with output_dir
+    genuinely resolvable (Path.home() monkeypatched so the runner's real
+    "workflow-runs/<timestamp>/" layout lands under tmp_path), a "done"
+    step's real artifact is rendered as an actual CHILD widget inside the
+    preview slot -- not merely left as the pre-existing empty box.
+
+    Uses TTLGArtgenGenerate (outputs=("artifact_path", ...), any extension
+    accepted by _resolve_artifact) with a plain .txt artifact so this
+    exercises the artgen_render.render_artifact_widget route without
+    needing real image/gif binary data to be valid.
+    """
+    from pipeline_studio import LiveRunView
+    from intent_vocab import intent_for
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ts = "20260101_120000"
+    output_dir = (
+        tmp_path / ".local" / "share" / "tt-local-generator" / "workflow-runs" / ts
+    )
+    output_dir.mkdir(parents=True)
+    (output_dir / "node1_verse.txt").write_text("a poem about tenstorrent hardware")
+
+    run = _make_live_run()
+    run.steps[0] = StepView(
+        node_id="1", intent=intent_for("TTLGArtgenGenerate"),
+        status="pending", artifact_path=None,
+    )
+
+    view = LiveRunView()
+    view.begin(run)
+    view.on_log(f"LOG:/some/logs/workflow/{ts}_run.log\n")
+    assert view._output_dir == str(output_dir)
+
+    view.on_node_update("job", "1", "done", "")
+
+    slot = view._step_preview["1"]
+    assert slot.get_first_child() is not None
+
+
+def test_active_tile_shows_per_chip_rows():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_node_update("job", "1", "running", "")
+    view.on_log("  chip0: Step 5/25\n")
+    view.on_log("  chip1: Step 6/25\n")
+    rows = view._chip_rows_for("1")
+    assert rows is not None and set(rows._chip_row_labels) == {0, 1}
+
+
+def test_no_running_step_means_chip_lines_create_no_rows():
+    """Before any step is "running" (self._progress.running_node is None),
+    a "chipN:" log line must not create/embed a ChipProgressRows anywhere --
+    there's no active tile to attribute it to."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_log("  chip0: Step 1/25\n")
+    assert view._chip_rows == {}
+
+
 # ── PipelineStudio: wire the loop (Open → Remix → Run → done) ──────────────
 #
 # SP-C Phase 2a Task 4 wired this loop by calling spec_remix.derive_spec(

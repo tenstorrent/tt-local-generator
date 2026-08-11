@@ -232,16 +232,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
+import artgen_render  # noqa: E402
 import capability_discovery  # noqa: E402
+import chip_progress  # noqa: E402
 from create_param_panels import ModifierPills, attach_inspire_button  # noqa: E402
 from field_roles import (  # noqa: E402
     MARKER_TIP, ROLE_BRIEF, ROLE_DIRECTION,
@@ -259,6 +263,7 @@ import pipeline_progress  # noqa: E402
 from pipeline_engine import _artgen_uses_llm, load_spec, topo_order  # noqa: E402
 from pipeline_runner import PipelineRunner  # noqa: E402
 from pipeline_store import PipelineStore  # noqa: E402
+import pipeline_view_model  # noqa: E402
 from pipeline_view_model import (  # noqa: E402
     RunView, StepView, build_run_view, final_index_for, list_run_views,
 )
@@ -785,6 +790,10 @@ _CSS = b"""
     border: 2px solid #FF6B6B;
     background-color: #1A3C47;
     opacity: 1;
+}
+.ps-tile-preview-thumb {
+    margin-top: 6px;
+    border-radius: 6px;
 }
 """
 
@@ -3164,9 +3173,34 @@ class LiveRunView(Gtk.Box):
     `self._step_tiles` (node_id -> tile widget). This is what makes the
     spine read at a glance: a glance down the horizontal strip shows which
     tiles are done, which one is lit up as active, and which are still
-    dashed-and-dim ahead. `self._step_preview` (node_id -> an empty slot
-    `Gtk.Widget` inside the tile) is reserved, unused, for a later task to
-    fill with a live per-step output preview.
+    dashed-and-dim ahead. `self._step_preview` (node_id -> a slot
+    `Gtk.Widget` inside the tile) is where Task 5 (below) places each
+    step's live output preview the moment it lands.
+
+    **Per-step output preview + per-chip rows (Task 5).** `on_log` derives
+    `self._output_dir` from the runner's own "LOG:<path>" line (mirroring
+    `pipeline_runner.PipelineRunner._parse_line`'s regex/layout exactly —
+    see `_track_output_dir`) so artifacts can be resolved WHILE the run is
+    still going, not only after the record is reloaded. Once a step reports
+    "done" (from `on_node_update` or, for whichever step was still running
+    when the whole run ended, `on_finished`'s own resolve loop),
+    `_render_step_preview` resolves its artifact via `pipeline_view_model.
+    _resolve_artifact` and drops a small (`_PREVIEW_THUMB_W`x
+    `_PREVIEW_THUMB_H`) widget into `self._step_preview[node_id]` — routed
+    by extension in `_build_preview_widget`: `.gif` gets a real animated
+    `artgen_render.AnimatedGifWidget`; raster images/video get this
+    module's existing static `_build_thumb_frame` (video via a poster
+    frame — full in-tile playback is a later drill-in slice, not this
+    task); every other artgen kind (svg/ans/json/py/txt/md/...) goes
+    through `artgen_render.render_artifact_widget`, the same dispatch
+    `ArtgenViewerWindow` uses. Every step of this is fail-soft — a missing/
+    corrupt artifact or a rendering error just leaves the slot as it was,
+    never crashes the in-progress run view. Separately, `on_log` also feeds
+    every raw line to whatever step `self._progress.running_node` says is
+    currently running via `_chip_rows_for(node_id).feed(line)` — a lazily-
+    created, lazily-embedded `chip_progress.ChipProgressRows` (Task 2's
+    "chipN: ..." lines from multi-chip AnimateDiff) that stays hidden until
+    a chip line actually arrives for that node.
     """
 
     __gsignals__ = {
@@ -3222,10 +3256,11 @@ class LiveRunView(Gtk.Box):
         # on_node_update/on_finished, in parallel with (never instead of) the
         # existing glyph/spinner/phase/elapsed updates below.
         self._step_tiles: "dict[str, Gtk.Widget]" = {}
-        # node_id -> an empty preview-slot Gtk.Widget inside that step's tile,
-        # reserved for Task 5 (per-step output preview) to fill with real
-        # content. Deliberately inert here -- this task is the structural
-        # spine/tile redesign only, no preview rendering.
+        # node_id -> the preview-slot Gtk.Widget inside that step's tile.
+        # Task 5 (per-step output preview) fills this once a step's artifact
+        # lands on disk -- see _render_step_preview -- by appending a small
+        # thumbnail/animated/reading-view widget as its child; it starts (and
+        # stays, for a step with no resolvable artifact) an empty Gtk.Box.
         self._step_preview: "dict[str, Gtk.Widget]" = {}
         # node_id -> GLib.timeout_add source id for that step's ticking
         # elapsed timer (only while "running"); node_id -> time.monotonic()
@@ -3237,6 +3272,32 @@ class LiveRunView(Gtk.Box):
         # current_index; done_count feeds the "Step N of M" header — rebuilt
         # fresh in begin() for each run (None only before the first begin()).
         self._progress: "pipeline_progress.ProgressState | None" = None
+
+        # ── Task 5: per-step output preview + per-chip rows ─────────────────
+        #
+        # output_dir isn't known until the runner's first "LOG:<path>" line
+        # arrives (on_log) -- mirrors pipeline_runner.PipelineRunner._parse_
+        # line's own derivation exactly (same regex, same workflow-runs/
+        # <timestamp> layout) so a mid-run preview resolves against the SAME
+        # directory the runner is actually writing artifacts into. None
+        # until that first LOG: line, and reset by begin() for a fresh run.
+        self._output_dir: "str | None" = None
+        # node_id -> that step's StepView (from begin()'s run.steps) so
+        # _render_step_preview can read `.intent` for _resolve_artifact --
+        # RunView.steps isn't otherwise kept around after begin() builds the
+        # tiles from it.
+        self._run_steps: "dict[str, StepView]" = {}
+        # node_id -> that step's "main" content Gtk.Box (the same column
+        # _build_step_tile assembles the intent row / meta row / preview
+        # slot into). Used by _chip_rows_for to lazily embed a
+        # ChipProgressRows for whichever step is currently running, right
+        # below the existing phase/elapsed meta row.
+        self._step_main_boxes: "dict[str, Gtk.Widget]" = {}
+        # node_id -> that step's ChipProgressRows (multi-chip AnimateDiff's
+        # "chipN: ..." log lines, Task 2) -- lazily created by
+        # _chip_rows_for() the first time a chip line arrives for that node;
+        # stays hidden (see ChipProgressRows' own docstring) until fed.
+        self._chip_rows: "dict[str, chip_progress.ChipProgressRows]" = {}
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.set_margin_top(18)
@@ -3353,6 +3414,13 @@ class LiveRunView(Gtk.Box):
         self._step_meta_rows = {}
         self._step_tiles = {}
         self._step_preview = {}
+        # Task 5: fresh run -> no known output_dir yet, no stale per-step
+        # StepView/main-box/chip-row bookkeeping from whatever run this
+        # widget last showed.
+        self._output_dir = None
+        self._run_steps = {step.node_id: step for step in run.steps}
+        self._step_main_boxes = {}
+        self._chip_rows = {}
 
         last_index = len(run.steps)
         for index, step in enumerate(run.steps, start=1):
@@ -3420,6 +3488,8 @@ class LiveRunView(Gtk.Box):
         self._update_phase_label(node_id, status, detail)
         self._update_elapsed_timer(node_id, status)
         self._update_step_count_label()
+        if status == "done":
+            self._render_step_preview(node_id)
 
     def on_log(self, line: str) -> None:
         """Append one raw stdout line to the live log tail.
@@ -3427,6 +3497,15 @@ class LiveRunView(Gtk.Box):
         Board-switch lines (per the mockup: "resetting boards", "starting
         server") are styled as first-class "switch" rows instead of plain
         log text — see _is_switch_line and this class's docstring.
+
+        Task 5 additions, both purely additive to the existing log-tail
+        append above: a "LOG:<path>" line also derives+stores
+        `self._output_dir` (see `_track_output_dir`) so a step's produced
+        artifact can be resolved mid-run, not just after the run record is
+        reloaded; every line is also offered to the currently-running
+        step's `ChipProgressRows` (multi-chip AnimateDiff's "chipN: ..."
+        lines, Task 2) — `feed()` is a harmless no-op for any line that
+        isn't chip-shaped, so ordinary log lines pass through untouched.
         """
         text = line.rstrip("\n")
         row = Gtk.Label(label=text)
@@ -3434,6 +3513,21 @@ class LiveRunView(Gtk.Box):
         row.set_wrap(True)
         row.add_css_class("ps-log-switch" if self._is_switch_line(text) else "ps-log-line")
         self._log_box.append(row)
+
+        if line.startswith("LOG:"):
+            self._track_output_dir(line)
+
+        running_node = self._progress.running_node if self._progress is not None else None
+        if running_node is not None:
+            rows = self._chip_rows_for(running_node)
+            if rows is not None:
+                # ChipProgressRows.feed anchors its "chipN: ..." match at the
+                # START of the string (re.match); the runner's actual chip
+                # lines arrive indented ("  chip0: Step 5/25") since they're
+                # tee'd straight from the subprocess's own log formatting, so
+                # strip leading/trailing whitespace before offering it up —
+                # feed() is a harmless no-op for anything still non-chip-shaped.
+                rows.feed(text.strip())
 
     def on_finished(self, success: bool) -> None:
         """Resolve any step still "running" to done/failed, then emit run-done.
@@ -3446,6 +3540,11 @@ class LiveRunView(Gtk.Box):
         Task 6: also resolves each such step's spinner/phase label and
         cancels (with a final freeze, not a reset) its elapsed timer — a
         step that just finished should stop ticking, not vanish its "12s".
+
+        Task 5: a step resolved to "done" here (it was still "running" when
+        the run ended — the common case for the LAST step) gets the same
+        preview-render pass on_node_update's own "done" branch gives every
+        earlier step, so the final step's artifact shows up too.
         """
         resolved = "done" if success else "failed"
         for node_id, status in list(self._step_status.items()):
@@ -3458,6 +3557,8 @@ class LiveRunView(Gtk.Box):
                 self._update_spinner(node_id, resolved)
                 self._update_phase_label(node_id, resolved, "")
                 self._cancel_elapsed_timer(node_id)
+                if resolved == "done":
+                    self._render_step_preview(node_id)
 
         self._update_step_count_label()
         if self._run_id is not None:
@@ -3507,9 +3608,11 @@ class LiveRunView(Gtk.Box):
         state class via `_set_tile_state`) meant to sit shoulder-to-shoulder
         in a horizontal spine rather than stack in a vertical list. An empty
         preview-slot `Gtk.Box` is appended at the end of `main` and
-        registered into `self._step_preview[step.node_id]` -- reserved for
-        Task 5 (per-step output preview) to fill; this task never puts
-        anything inside it.
+        registered into `self._step_preview[step.node_id]` -- filled by
+        Task 5's `_render_step_preview` once this step's artifact lands.
+        `main` itself is also registered into `self._step_main_boxes`
+        (Task 5) so `_chip_rows_for` can later embed a `ChipProgressRows`
+        into it if this step turns out to be multi-chip AnimateDiff.
         """
         tile = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         tile.add_css_class("ps-tile")
@@ -3567,13 +3670,19 @@ class LiveRunView(Gtk.Box):
             model_label.add_css_class("ps-step-model")
             main.append(model_label)
 
-        # Preview slot (Task 5's seam) — empty by design here; this task is
-        # structural only. Registered by node_id so a later task can find and
-        # fill it without touching the tile-building code at all.
+        # Preview slot (Task 5) — starts empty; _render_step_preview fills it
+        # once this step's artifact lands on disk. Registered by node_id so
+        # that method can find and fill it without touching tile-building.
         preview_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         preview_slot.add_css_class("ps-tile-preview")
         main.append(preview_slot)
         self._step_preview[step.node_id] = preview_slot
+
+        # Task 5: remember this step's "main" column too, keyed by node_id,
+        # so _chip_rows_for can lazily embed a ChipProgressRows into it
+        # later (a running step's per-chip breakdown isn't known at tile-
+        # build time — it only shows up if/when "chipN:" log lines arrive).
+        self._step_main_boxes[step.node_id] = main
 
         tile.append(main)
         return tile, status_label, phase_label, elapsed_label, spinner, meta_row
@@ -3745,6 +3854,149 @@ class LiveRunView(Gtk.Box):
             text = detail or status
         self._health_note.set_label(f"⚠ {text}" if text else "")
         self._health_note.set_visible(bool(text))
+
+    # ── Task 5: per-step output preview + per-chip rows ─────────────────────
+
+    # Small — this is a spine-tile decoration, not the full-size OpenView
+    # preview (PREVIEW_W/H=420x260) or hero (Task 7). Full playback/zoom is
+    # a later drill-in slice; this task's job is "see something land here".
+    _PREVIEW_THUMB_W, _PREVIEW_THUMB_H = 120, 80
+
+    def _track_output_dir(self, line: str) -> None:
+        """Derive+store `self._output_dir` from a "LOG:<path>" line.
+
+        Mirrors `pipeline_runner.PipelineRunner._parse_line`'s own
+        derivation exactly — same regex, same
+        `workflow-runs/<timestamp>/` layout — so a mid-run preview resolves
+        against the SAME directory the runner is actually writing artifacts
+        into. This view gets the raw line via `on_log` rather than reading
+        the run record's `output_dir` back off `PipelineStore` (which isn't
+        updated until that same LOG: line is *also* persisted there by the
+        runner — this is the faster, in-process path).
+
+        A log path with no `<8digits>_<6digits>_` timestamp segment (e.g. a
+        hand-built test line, or a future logging change) leaves
+        `self._output_dir` at whatever it already was — never guesses, never
+        raises.
+        """
+        log_path = line[4:].strip()
+        m = re.search(r'(\d{8}_\d{6})_', log_path)
+        if not m:
+            return
+        self._output_dir = str(
+            Path.home() / ".local" / "share" / "tt-local-generator"
+            / "workflow-runs" / m.group(1)
+        )
+
+    def _render_step_preview(self, node_id: str) -> None:
+        """Resolve *node_id*'s produced artifact (if any) and drop a small
+        preview widget into its tile's reserved slot (`self._step_preview`).
+
+        Called from `on_node_update` the moment a step reports "done", and
+        from `on_finished`'s own running->done/failed resolve loop for
+        whichever step (usually the last one) was still "running" when the
+        whole run ended — see both call sites.
+
+        Fail-soft by construction, at every level: no known step/slot/
+        output_dir, no resolvable artifact, or any exception raised while
+        building the widget (a corrupt file, an unsupported extension, a
+        missing optional renderer dependency, ...) all just leave the slot
+        as it was — this is decoration on top of a live "watch it run" view,
+        so a rendering hiccup must never take down the run itself.
+        """
+        try:
+            step = self._run_steps.get(node_id)
+            slot = self._step_preview.get(node_id)
+            if step is None or slot is None or self._output_dir is None:
+                return
+            path = pipeline_view_model._resolve_artifact(
+                Path(self._output_dir), node_id, step.intent
+            )
+            if not path:
+                return
+            widget = self._build_preview_widget(path)
+            if widget is None:
+                return
+            while child := slot.get_first_child():
+                slot.remove(child)
+            slot.append(widget)
+        except Exception:
+            log.debug(
+                "pipeline live-preview render failed for node %s", node_id,
+                exc_info=True,
+            )
+
+    def _build_preview_widget(self, path: str) -> "Gtk.Widget | None":
+        """Build a small preview widget for *path*, routed by file extension.
+
+        Three routes, matching the brief's "reuse existing widgets" rule —
+        this module never grows a second copy of any of these renderers:
+
+        - `.gif` -> `artgen_render.AnimatedGifWidget` (animated) — "see it
+          as it lands" means seeing the motion, not a frozen first frame.
+        - raster image / video -> `_build_thumb_frame` (this module's own
+          static-frame builder, already shared by Discover/Open — video
+          gets a poster frame via `_poster_frame_for`). A static frame is
+          the deliberate, brief-accepted scope here; full in-tile playback
+          is a later drill-in slice.
+        - anything else (svg/ans/json/py/txt/md/... — every artgen kind) ->
+          `artgen_render.render_artifact_widget`, the same ext->renderer
+          dispatch `ArtgenViewerWindow` uses, fed a minimal duck-typed
+          stand-in record (this view only has a bare path for a
+          still-running node, never a real `MediaRecord`).
+
+        Returns None (never raises) for anything none of the above can
+        render — `_render_step_preview` already wraps this call in a
+        try/except, but this method degrades on its own too since callers
+        (and its own tests) may invoke it directly.
+        """
+        ext = Path(path).suffix.lower()
+        try:
+            if ext == ".gif":
+                widget = artgen_render.AnimatedGifWidget(path)
+                widget.set_size_request(self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H)
+                return widget
+            if ext in _POSTER_VIDEO_EXTS or ext in (".png", ".jpg", ".jpeg"):
+                return _build_thumb_frame(
+                    path, self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H,
+                    "ps-tile-preview-thumb",
+                )
+            record = SimpleNamespace(file_path=path, generator_type="", params_dict={})
+            widget = artgen_render.render_artifact_widget(record)
+            widget.set_size_request(self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H)
+            return widget
+        except Exception:
+            log.debug("pipeline live-preview widget build failed for %s", path,
+                      exc_info=True)
+            return None
+
+    def _chip_rows_for(self, node_id: str) -> "chip_progress.ChipProgressRows | None":
+        """Return *node_id*'s `ChipProgressRows`, lazily creating + embedding
+        it into that step's tile the first time a chip line arrives for it.
+
+        Embedded in the tile's "main" column (`self._step_main_boxes`),
+        appended after the intent/meta rows and preview slot already built
+        by `_build_step_tile`. `ChipProgressRows` itself stays hidden (see
+        its own docstring) until `feed()` actually upserts a chip row, so a
+        step whose logs never mention "chipN:" (every non-multi-chip step)
+        never shows an empty box.
+
+        Returns None for an unknown node_id — a stale callback delivered
+        after `begin()` was called again for a different run, or a node_id
+        the runner invented — same silent-no-op discipline every other
+        per-node lookup in this view follows (e.g. `on_node_update`'s own
+        unknown-node_id guard).
+        """
+        rows = self._chip_rows.get(node_id)
+        if rows is not None:
+            return rows
+        main = self._step_main_boxes.get(node_id)
+        if main is None:
+            return None
+        rows = chip_progress.ChipProgressRows()
+        main.append(rows)
+        self._chip_rows[node_id] = rows
+        return rows
 
 
 class PipelineStudio(Gtk.Box):
