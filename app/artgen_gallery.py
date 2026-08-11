@@ -17,7 +17,9 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk
+gi.require_version("Gdk", "4.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
 import gallery_layout
@@ -311,8 +313,18 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
         img.set_content_fit(Gtk.ContentFit.COVER)
         return img
     if ext == ".gif" and fp.exists():
-        # No thumbnail — fall back to first frame via animation widget (static).
-        return _AnimatedGifWidget(str(fp))
+        # No thumbnail — render a genuinely STATIC first frame, NOT a live
+        # _AnimatedGifWidget: the latter runs a GLib decode timer continuously
+        # in the grid, contradicting the "avoid 60+ timers" note above (review
+        # M4). Hover still swaps in a live animation.
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(str(fp))
+            img = Gtk.Picture.new_for_paintable(
+                Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            img.set_content_fit(Gtk.ContentFit.COVER)
+            return img
+        except Exception:
+            return _AnimatedGifWidget(str(fp))  # unreadable: last-resort
 
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
         img = Gtk.Picture.new_for_filename(rec.thumbnail_path)

@@ -1,3 +1,18 @@
+tt-local-generator (0.77.3) noble; urgency=medium
+
+  * fix: whole-branch review Minor findings M1–M4 (docs/branch-review-2026-08-11.md).
+    - M1: create_view guards the WebKit import (_WEBKIT_OK) and degrades the
+      reading view to plain text — the Create surface imports without WebKit.
+    - M2: pipeline-final artgen registration runs off-thread (thumbnail/record/
+      store I/O on a daemon thread, gallery refresh via GLib.idle_add), matching
+      the native path — no UI hitch on a large .ans/.json artifact.
+    - M3: documented the deliberate coherent-multichip per-segment timeout
+      (total ≈ N×timeout) in run_subprocess / _run_coherent_chain.
+    - M4: no-thumbnail GIF gallery cards render a static first frame instead of
+      a live AnimatedGifWidget (no continuous decode timer in the grid).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 08:00:00 +0000
+
 tt-local-generator (0.77.2) noble; urgency=medium
 
   * fix: whole-branch code review — 3 Critical + 5 Important defects fixed

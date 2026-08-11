@@ -151,22 +151,23 @@ contradicting the module's "honest placeholder" goal.
 
 ---
 
-## Minor (documented; fix opportunistically)
+## Minor (M1–M4 FIXED in `1a1…`; M5 is an intentional non-bug)
 
-- **M1** `create_view.py` imports WebKit unconditionally at module scope (no
-  `_WEBKIT_OK` guard like `activity_viz.py`) — a box without `gir1.2-webkit-6.0`
-  fails to import the whole Create surface instead of degrading.
-- **M2** `_register_pipeline_final_artgen` does thumbnail/disk/gallery I/O
-  synchronously on the GTK main thread, unlike its off-thread native sibling
-  (`_register_pipeline_final_native`, fixed for the same hitch class earlier).
-- **M3** AnimateDiff `coherent` multi-chip mode gives each segment the full
-  `timeout` sequentially, so wall-clock can reach N× the documented single-`timeout`
-  bound (docstring/behavior mismatch; `remix` mode correctly shares a deadline).
-- **M4** No-thumbnail GIF gallery cards fall back to a live `AnimatedGifWidget`
-  (continuous decode timer in the grid), contradicting the adjacent "avoid 60+
-  timers" comment (pre-existing).
-- **M5** `ArtgenParamPanel.collect()` returns `{}` before `build()` (documented,
-  intentional; asymmetry with the native panels' defaulted dicts — keep documented).
+- **M1** ✅ `create_view.py` now guards the WebKit import (`_WEBKIT_OK`) and the
+  reading view degrades to plain scrollable text — a box without
+  `gir1.2-webkit-6.0` imports the whole Create surface instead of failing.
+- **M2** ✅ `_register_pipeline_final_artgen` now does its thumbnail/record/store
+  I/O on a daemon thread with the gallery refresh via `GLib.idle_add`, matching
+  the native sibling (no main-thread hitch on a large `.ans`/`.json` artifact).
+- **M3** ✅ Documented the deliberate `coherent`-mode exception (each segment
+  gets the full `timeout`; total ≈ N×`timeout`) in both `run_subprocess` and
+  `_run_coherent_chain` — a per-segment budget would truncate a valid long chain,
+  so the behavior is intentional, now stated.
+- **M4** ✅ No-thumbnail GIF gallery cards render a genuinely static first frame
+  (`GdkPixbuf`/`Gdk.Texture`) instead of a live `AnimatedGifWidget` — no decode
+  timer runs in the grid; hover still animates.
+- **M5** (no change) `ArtgenParamPanel.collect()` returns `{}` before `build()` —
+  documented, intentional; kept documented.
 
 ## Verified clean (no action)
 

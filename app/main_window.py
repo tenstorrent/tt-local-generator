@@ -7336,7 +7336,15 @@ class MainWindow(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _register_pipeline_final_artgen(self, run_view, artifact_path: str) -> None:
-        """Artgen-kind pipeline final → media_store.MediaRecord + artgen gallery refresh."""
+        """Artgen-kind pipeline final → media_store.MediaRecord + artgen gallery refresh.
+
+        Mirrors `_register_pipeline_final_native` (review M2): this method is
+        reached on the GTK main thread (via `GLib.idle_add` from
+        `PipelineStudio`'s `on_run_complete`), and `make_thumbnail` can
+        rasterize a large `.ans`/`.json` grid — so the thumbnail + record build
+        + `media_store` write (pure I/O, no GTK objects) run on a daemon thread;
+        only the final `artgen_gallery.refresh()` widget touch is posted back
+        via `GLib.idle_add`."""
         import uuid
         from datetime import datetime, timezone
 
@@ -7344,38 +7352,60 @@ class MainWindow(Gtk.ApplicationWindow):
         from media_store import MediaRecord
         from media_store import media_store as _ms
 
-        out_path = Path(artifact_path)
-        thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+        def run() -> None:
+            try:
+                out_path = Path(artifact_path)
+                thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+                try:
+                    thumb_path = make_thumbnail(out_path, thumb_path)
+                except Exception:
+                    thumb_path = Path("")
+
+                rec = MediaRecord(
+                    id=str(uuid.uuid4()),
+                    media_type="artgen",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    file_path=str(out_path),
+                    thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                    prompt=f"Pipeline: {run_view.title}"[:500],
+                    model_id="pipeline",
+                    generator_type="pipeline",
+                    params=json.dumps({
+                        "_pipeline_run_id": run_view.run_id,
+                        "recipe": run_view.recipe,
+                    }),
+                    starred=0,
+                )
+                # Duck-typed alias — see `_create_generate_artgen`'s identical
+                # comment: `CreateResultPanel`/gallery code reads
+                # `media_file_path`, which plain `MediaRecord` doesn't declare.
+                rec.media_file_path = str(out_path)
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
+                GLib.idle_add(self._finish_register_pipeline_final_artgen)
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "failed to build artgen pipeline final record for run %s",
+                    getattr(run_view, "run_id", None), exc_info=True,
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_register_pipeline_final_artgen(self) -> bool:
+        """Main-thread tail of `_register_pipeline_final_artgen`: the one real
+        widget touch (artgen gallery refresh), fail-soft like every other
+        registration path here."""
         try:
-            thumb_path = make_thumbnail(out_path, thumb_path)
+            artgen_gallery = getattr(self, "_artgen_gallery", None)
+            if artgen_gallery is not None:
+                artgen_gallery.refresh()
         except Exception:
-            thumb_path = Path("")
-
-        rec = MediaRecord(
-            id=str(uuid.uuid4()),
-            media_type="artgen",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            file_path=str(out_path),
-            thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
-            prompt=f"Pipeline: {run_view.title}"[:500],
-            model_id="pipeline",
-            generator_type="pipeline",
-            params=json.dumps({
-                "_pipeline_run_id": run_view.run_id,
-                "recipe": run_view.recipe,
-            }),
-            starred=0,
-        )
-        # Duck-typed alias — see `_create_generate_artgen`'s identical comment:
-        # `CreateResultPanel`/gallery code reads `media_file_path`, which plain
-        # `MediaRecord` doesn't declare.
-        rec.media_file_path = str(out_path)
-        _ms.add(rec)
-        _ms.ensure_auto_playlists()
-
-        artgen_gallery = getattr(self, "_artgen_gallery", None)
-        if artgen_gallery is not None:
-            artgen_gallery.refresh()
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to refresh artgen gallery for pipeline final", exc_info=True,
+            )
+        return GLib.SOURCE_REMOVE
 
     # ── Breadcrumb / live-context routing (RN-2 Task 2) ─────────────────────────
 

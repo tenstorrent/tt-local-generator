@@ -865,6 +865,12 @@ def run_subprocess(
     single subprocess as before.
 
     timeout applies to the slowest chip (all processes must finish within it).
+    EXCEPTION (review M3): in `coherent` multi-chip mode, segments run
+    SEQUENTIALLY (segment N needs N-1's latents), and each segment gets the
+    full `timeout` on its own — so total wall-clock is bounded by
+    `num_segments * timeout`, not a single `timeout`. This is deliberate (a
+    per-segment budget could truncate a legitimately long chain); size any
+    UI-facing overall-timeout expectation accordingly.
 
     `prompt_schedule` (list of (frame_index, prompt) tuples) is forwarded to
     generate.py as repeated `--prompt-schedule FRAME:PROMPT` args — on the
@@ -1292,6 +1298,11 @@ def _run_coherent_chain(
     Each segment renders the FULL `frames` count — Coherent is a continuous
     animation N segments LONGER than a single run, not the same length
     divided into pieces. Total output frame count is `num_segments * frames`.
+
+    Timeout note (review M3): each segment's subprocess gets the full `timeout`
+    independently, so the whole chain can take up to `num_segments * timeout`
+    wall-clock — this is by design (a shared budget could truncate a valid long
+    chain); see `run_subprocess`'s docstring.
     """
     import tempfile
 

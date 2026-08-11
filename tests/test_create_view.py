@@ -2822,3 +2822,13 @@ def test_reset_create_split_is_one_shot_never_busy_spins(make_create_view):
     assert cv._reset_create_split_once() is False   # unallocated -> give up, not retry
     cv._split_initialized = True
     assert cv._reset_create_split_once() is False    # already snapped -> no-op
+
+
+def test_reading_webview_degrades_without_webkit(monkeypatch):
+    """Review M1: create_view must import even without WebKit, and the reading
+    view degrades to a plain scrollable text fallback instead of failing."""
+    import create_view
+    from gi.repository import Gtk
+    monkeypatch.setattr(create_view, "_WEBKIT_OK", False)
+    w = create_view._build_reading_webview("<h1>ignored</h1>", fallback_text="raw text")
+    assert isinstance(w, Gtk.ScrolledWindow)  # not a WebView

@@ -96,6 +96,17 @@ def _patch_native_threading(monkeypatch):
     monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
 
 
+@pytest.fixture(autouse=True)
+def _sync_registration_threading(monkeypatch):
+    """BOTH `_register_pipeline_final_{native,artgen}` now do their heavy work on
+    a background thread and post the gallery touch via `GLib.idle_add` (review M2
+    made the artgen path async too, matching the native sibling). Run both inline
+    for every test in this module so registration can be asserted synchronously.
+    Harmless for the no-register paths (a non-done run never starts a thread)."""
+    monkeypatch.setattr(mw.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+
 # ── artgen-kind final (.gif) -> media_store.MediaRecord ──────────────────────
 
 def test_gif_final_registers_media_record_with_pipeline_provenance(tmp_path):

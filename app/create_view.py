@@ -91,8 +91,19 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
-gi.require_version("WebKit", "6.0")
-from gi.repository import GLib, Gtk, Pango, WebKit  # noqa: E402
+from gi.repository import GLib, Gtk, Pango  # noqa: E402
+# WebKit is only needed for the artgen "reading view" (verse/markdown/code/
+# palette). Guard it like activity_viz/artgen_render do (_WEBKIT_OK) so a box
+# missing gir1.2-webkit-6.0 still imports the whole Create surface and just
+# degrades the reading view to plain text, instead of failing to import at all
+# (review M1).
+try:
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import WebKit  # noqa: E402
+    _WEBKIT_OK = True
+except (ImportError, ValueError):
+    WebKit = None  # type: ignore
+    _WEBKIT_OK = False
 
 import artgen_render  # noqa: E402
 import gtk_layout  # noqa: E402
@@ -3044,7 +3055,7 @@ def _artifact_kind(path: str, generator_type: "Optional[str]" = None) -> str:
     return "unknown"
 
 
-def _build_reading_webview(html: str) -> Gtk.Widget:
+def _build_reading_webview(html: str, fallback_text: "str | None" = None) -> Gtk.Widget:
     """Build a WebKit "reading" view pre-loaded with `html`.
 
     Mirrors `ArtgenDetail._load_html`/`_on_webview_realize`'s realize-
@@ -3055,7 +3066,26 @@ def _build_reading_webview(html: str) -> Gtk.Widget:
     WebView is built per call, so the pending HTML can simply live in this
     closure instead of an instance attribute — same fix, simpler because
     the lifetime is 1:1 with the widget.
+
+    When WebKit isn't available (`_WEBKIT_OK` False), degrades to a plain
+    scrollable text view of `fallback_text` (the raw artifact content) rather
+    than failing (review M1).
     """
+    if not _WEBKIT_OK:
+        lbl = Gtk.Label(
+            label=fallback_text if fallback_text is not None
+            else "Reading view needs WebKit (install gir1.2-webkit-6.0)."
+        )
+        lbl.set_wrap(True)
+        lbl.set_selectable(True)
+        lbl.set_xalign(0.0)
+        lbl.set_yalign(0.0)
+        lbl.add_css_class("create-result-reading")
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_hexpand(True)
+        scroller.set_vexpand(True)
+        scroller.set_child(lbl)
+        return scroller
     webview = WebKit.WebView()
     try:
         webview.get_settings().set_enable_javascript(False)
@@ -3574,7 +3604,7 @@ class CreateResultPanel(Gtk.Box):
                     raw, title=doc_title, verse_mode=(gen_type == "verse")
                 )
 
-            webview = _build_reading_webview(html)
+            webview = _build_reading_webview(html, fallback_text=raw)
             return webview
 
         # Missing file, unreadable file, or an unrecognised extension — an
