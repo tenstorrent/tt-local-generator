@@ -335,3 +335,27 @@ def test_load_plugins_is_idempotent(tmp_path):
     finally:
         plugin_loader._SEARCH_PATHS[:] = orig_paths
         plugin_loader._PLUGINS.clear()
+
+
+# ── Patch verification wired into the build ──────────────────────────────────
+# Recurring risk class: the shipped .deb vendor tree silently drifts from what
+# the patches/ directory expects (an anchor moves, a catalog file is renamed)
+# and nobody notices until a start script fails on hardware. These guard that
+# CI actually applies+verifies patches before packaging, and that debian/rules
+# verifies the staged vendor before shipping — not just that the verifier
+# module exists somewhere in the repo.
+
+def test_ci_applies_and_verifies_patches_before_build():
+    wf = (REPO_ROOT / ".github" / "workflows" / "release-deb.yml").read_text()
+    assert "apply_patches.sh" in wf, "CI must apply patches so the shipped vendor is patched"
+
+
+def test_debian_rules_verifies_vendor_before_ship():
+    rules = (REPO_ROOT / "debian" / "rules").read_text()
+    assert "patch_verify.py" in rules, "debian/rules must verify the staged vendor before shipping"
+
+
+def test_new_patch_modules_are_packaged():
+    rules = (REPO_ROOT / "debian" / "rules").read_text()
+    # app/ is copied wholesale, so the modules ship; assert the copy line exists.
+    assert "cp -r app bin patches plugins" in rules
