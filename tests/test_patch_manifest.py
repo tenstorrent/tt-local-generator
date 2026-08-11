@@ -33,3 +33,14 @@ def test_bind_mounts_are_discovered_with_correct_dest():
 
 def test_manifest_is_internally_consistent():
     assert pm.manifest_issues() == []
+
+
+def test_models_tree_is_orphaned_not_a_bind_mount():
+    # patches/models/ has no apply_patches.sh mount loop, so its files must NOT
+    # be bind_mount entries (that would report false-green); they must surface
+    # as orphans instead.
+    bind_targets = [e.target for e in pm.PATCHES if e.kind == "bind_mount"]
+    assert not any(t.startswith("patches/models/") for t in bind_targets)
+    orphans = pm.orphaned_patch_files()
+    assert any(o.startswith("patches/models/") for o in orphans)
+    assert len(orphans) >= 2  # t5 encoder + motif pipeline today

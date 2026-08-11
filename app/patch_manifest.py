@@ -10,13 +10,24 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent  # app/ -> repo root
 _PATCHES = _REPO_ROOT / "patches"
 
-# dest-base per bind-mount source tree — mirrors the mount loops in
-# bin/apply_patches.sh (media_server_config -> tt-metal/server, etc.).
+# dest-base per bind-mount source tree — mirrors the mount loops that actually
+# exist in bin/apply_patches.sh: media_server_config (Step 4, unconditional) and
+# tt_dit (Step 2, --dev-mode only). ONLY trees a real mount loop delivers belong
+# here — a bind_mount entry asserts a *delivered* patch, so listing an
+# undelivered tree would report false-green.
 _BIND_TREES: dict[str, str] = {
     "media_server_config": "tt-metal/server",
     "tt_dit": "tt-metal/models/tt_dit",
-    "models": "tt-metal/models",
 }
+
+# patches/ subtrees that contain patch files but that NO apply_patches.sh mount
+# loop delivers — so their files are orphaned (present but never reach the
+# container). patches/models/ is documented in patches/README.md as mounting to
+# ~/tt-metal/models/, but no mount loop implements that (a pre-existing
+# doc-vs-reality gap). We surface these as a loud WARNING instead of masking
+# them with a false-green bind_mount probe. Resolve by wiring a mount loop or
+# deleting the files — a separate decision from this verification harness.
+_ORPHAN_TREES: tuple[str, ...] = ("models",)
 
 # Optional per-file metadata for auto-discovered bind-mount patches, keyed by
 # "<tree>/<rel>". (premise, version_ceiling). Absent -> ("", None).
@@ -90,6 +101,21 @@ def _discover_bind_mounts(patches_root: Path = _PATCHES) -> tuple[PatchEntry, ..
 
 def manifest(patches_root: Path = _PATCHES) -> tuple[PatchEntry, ...]:
     return _DECLARED + _discover_bind_mounts(patches_root)
+
+
+def orphaned_patch_files(patches_root: Path = _PATCHES) -> list[str]:
+    """`*.py` files under an _ORPHAN_TREES subtree — present under patches/ but
+    delivered by no apply_patches.sh mount loop. Returned as repo-relative paths
+    so the verifier can surface them as a loud (non-fatal) warning instead of the
+    harness silently masking an undelivered patch."""
+    out: list[str] = []
+    for tree in _ORPHAN_TREES:
+        root = patches_root / tree
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*.py")):
+            out.append(f"patches/{f.relative_to(patches_root).as_posix()}")
+    return out
 
 
 PATCHES: tuple[PatchEntry, ...] = manifest()

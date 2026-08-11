@@ -69,6 +69,7 @@ def _current_vendor_version(vendor_root: Path) -> str | None:
 def verify(vendor_root, entries=None) -> list[ProbeResult]:
     """Run every probe; collect ALL results (never stop at the first failure)."""
     vendor_root = Path(vendor_root)
+    scan_orphans = entries is None  # only for the real full-manifest run
     entries = entries if entries is not None else pm.PATCHES
     current = _current_vendor_version(vendor_root)
     results: list[ProbeResult] = []
@@ -118,6 +119,16 @@ def verify(vendor_root, entries=None) -> list[ProbeResult]:
                     f"patch may be absorbed upstream — re-check ({e.premise})"))
             else:
                 results.append(ProbeResult(e.id, True, "bind_mount", f"{e.id}: ok"))
+
+    # Orphaned patch files: present under patches/ but delivered by no mount loop
+    # — surface loudly (warning, not error) instead of masking them. Only on the
+    # real full-manifest run (not synthetic-entries test calls).
+    if scan_orphans:
+        for orphan in pm.orphaned_patch_files():
+            results.append(ProbeResult(
+                f"orphan:{orphan}", False, "warning",
+                f"orphaned patch: {orphan} exists but no apply_patches.sh mount "
+                "loop delivers it (see patches/README.md) — wire a loop or delete it"))
 
     return results
 

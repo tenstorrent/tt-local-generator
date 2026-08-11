@@ -1452,7 +1452,11 @@ its canonical example):
   (the model_spec.py→video.yaml move IS the drift); `bind_mount` → patch source
   exists + `py_compile`s, with a soft `version_ceiling` "may be absorbed" warning.
   CLI: `python3 app/patch_verify.py --vendor <tree>` (exits non-zero on drift) /
-  `--manifest-only`.
+  `--manifest-only`. It also surfaces **orphaned patch files** as loud (non-fatal)
+  warnings — `patches/models/**` exists and `patches/README.md` says it mounts to
+  `~/tt-metal/models/`, but no `apply_patches.sh` mount loop actually delivers it
+  (a pre-existing doc-vs-reality gap; resolve by wiring a loop or deleting the
+  files). Only `media_server_config` + `tt_dit` are real bind-mount trees.
 - **`apply_patches.sh` gates on it** up front (Step 0) — a drifted anchor aborts
   the whole run loudly instead of half-patching. (The per-step inject aborts
   already existed; this adds all-checks-up-front + bind-mount coverage.)

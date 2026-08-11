@@ -103,3 +103,19 @@ def test_absorbed_patch_warns_not_errors(tmp_path):
     results = pv.verify(vroot, (entry,))
     assert any(r.level == "warning" and not r.ok for r in results)
     assert [r for r in results if r.level == "error" and not r.ok] == []
+
+
+def test_full_manifest_verify_surfaces_orphans_as_warnings(tmp_path):
+    # A full-manifest run (entries=None) appends a warning per orphaned patch
+    # file and never an error for them.
+    root = tmp_path / "tt-inference-server"
+    (root / "workflows" / "model_specs" / "dev").mkdir(parents=True)
+    (root / "workflows" / "run_docker_server.py").write_text(
+        "    for key, value in docker_env_vars.items():\n")
+    (root / "workflows" / "model_specs" / "dev" / "video.yaml").write_text("- x\n")
+    results = pv.verify(root)  # entries=None -> real manifest + orphan scan
+    orphan_warns = [r for r in results if r.id.startswith("orphan:")]
+    assert orphan_warns, "orphaned patches must be surfaced"
+    assert all(r.level == "warning" for r in orphan_warns)
+    # Orphans are warnings, so the gate (errors only) still passes.
+    assert [r for r in results if r.level == "error" and not r.ok] == []
