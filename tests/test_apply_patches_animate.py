@@ -39,3 +39,9 @@ def _extract_step7_python(script_text):
 def _animate_block(text):
     i = text.find('Wan2.2-Animate')
     return text[max(0, i-200):i+200] if i >= 0 else ''
+
+def test_apply_patches_calls_the_verify_gate():
+    text = SCRIPT.read_text()
+    # The verifier must be invoked as a gate (fail-loud) before patching.
+    assert "patch_verify.py" in text
+    assert "--vendor" in text

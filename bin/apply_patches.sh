@@ -73,6 +73,18 @@ if [[ ! -f "$RDS" ]]; then
     exit 1
 fi
 
+# ── Gate: verify every patch premise still holds before touching anything ────
+# A drifted injector anchor or a moved catalog file aborts the whole run here,
+# loudly, instead of producing a half-patched vendor tree (the Steps-7/8/9 class
+# of bug). Pure/stdlib; needs no hardware.
+echo "0. Verifying patch premises against $TT_INFER"
+if ! /usr/bin/python3 "$REPO_ROOT/app/patch_verify.py" --vendor "$TT_INFER"; then
+    echo "ERROR: patch verification failed — see messages above. Aborting." >&2
+    echo "  A patch's target moved/renamed upstream. Fix the patch or the" >&2
+    echo "  manifest (app/patch_manifest.py) before re-running." >&2
+    exit 1
+fi
+
 echo "Applying patches to: $TT_INFER"
 echo ""
 
