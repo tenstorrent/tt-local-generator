@@ -82,3 +82,24 @@ def test_cli_exits_nonzero_on_missing_anchor(tmp_path):
 
 def test_cli_manifest_only_passes_on_real_manifest():
     assert pv.main(["--manifest-only"]) == 0
+
+
+def test_current_vendor_version_reads_sibling_file(tmp_path):
+    vroot = tmp_path / "tt-inference-server"
+    vroot.mkdir(parents=True)
+    (tmp_path / "VENDOR_VERSION").write_text("0.19.0\n")
+    assert pv._current_vendor_version(vroot) == "0.19.0"
+
+
+def test_absorbed_patch_warns_not_errors(tmp_path):
+    vroot = tmp_path / "tt-inference-server"
+    (vroot / "workflows").mkdir(parents=True)
+    (tmp_path / "VENDOR_VERSION").write_text("0.30.0\n")  # above the ceiling
+    entry = pm.PatchEntry(
+        id="bind-ceiling", kind="bind_mount",
+        target="app/patch_verify.py",  # any real, compilable file under repo root
+        dest="tt-metal/server/x.py", version_ceiling="0.19.0",
+    )
+    results = pv.verify(vroot, (entry,))
+    assert any(r.level == "warning" and not r.ok for r in results)
+    assert [r for r in results if r.level == "error" and not r.ok] == []
