@@ -33,8 +33,18 @@ from typing import Callable, Optional
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
-gi.require_version("WebKit", "6.0")
-from gi.repository import Gio, GLib, Gtk, Pango, WebKit
+from gi.repository import Gio, GLib, Gtk, Pango
+# WebKit powers the rich "reading view" (verse/markdown/palette). Guard it like
+# activity_viz/artgen_render/create_view (_WEBKIT_OK) so this module — imported
+# transitively by main_window — still imports on a box (or CI runner) without
+# gir1.2-webkit-6.0, degrading the reading view to plain text (review M1 / CI fix).
+try:
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import WebKit  # noqa: E402
+    _WEBKIT_OK = True
+except (ImportError, ValueError):
+    WebKit = None  # type: ignore
+    _WEBKIT_OK = False
 
 from media_store import media_store as _ms, MediaRecord
 
@@ -168,17 +178,32 @@ class ArtgenDetail(Gtk.Box):
         text_scroll.set_child(self._text_view)
         self._art_stack.add_named(text_scroll, "text")
 
-        # Markdown reading view — rich, cozy rendering for verse / palette / freeform
-        self._webview = WebKit.WebView()
-        self._webview.get_settings().set_enable_javascript(False)
-        self._webview.set_hexpand(True)
-        self._webview.set_vexpand(True)
-        self._art_stack.add_named(self._webview, "reading")
+        # Markdown reading view — rich WebKit rendering for verse / palette /
+        # freeform; degrades to a plain scrollable text view without WebKit.
         # Pending HTML to load once the WebView is realized. load_html() called
         # before realize is a silent no-op that leaves the widget white — we
         # queue the content here and flush it in _on_webview_realize().
         self._pending_html: str | None = None
-        self._webview.connect("realize", self._on_webview_realize)
+        if _WEBKIT_OK:
+            self._webview = WebKit.WebView()
+            self._webview.get_settings().set_enable_javascript(False)
+            self._webview.set_hexpand(True)
+            self._webview.set_vexpand(True)
+            self._art_stack.add_named(self._webview, "reading")
+            self._webview.connect("realize", self._on_webview_realize)
+            self._reading_fallback = None
+        else:
+            self._webview = None
+            self._reading_fallback = Gtk.Label()
+            self._reading_fallback.set_wrap(True)
+            self._reading_fallback.set_selectable(True)
+            self._reading_fallback.set_xalign(0.0)
+            self._reading_fallback.set_yalign(0.0)
+            _reading_scroll = Gtk.ScrolledWindow()
+            _reading_scroll.set_hexpand(True)
+            _reading_scroll.set_vexpand(True)
+            _reading_scroll.set_child(self._reading_fallback)
+            self._art_stack.add_named(_reading_scroll, "reading")
 
         art_box.append(self._art_stack)
         body.append(art_box)
@@ -372,7 +397,14 @@ class ArtgenDetail(Gtk.Box):
         that leaves the widget white — this is the white-screen bug seen when
         opening a palette or verse from the gallery before the panel has been
         shown for the first time.  Queue the content and flush on realize.
+
+        Without WebKit (`self._webview is None`), degrades to plain text in the
+        fallback label (tags stripped) — see the constructor (review M1/CI fix).
         """
+        if self._webview is None:
+            import re
+            self._reading_fallback.set_label(re.sub(r"<[^>]+>", "", html))
+            return
         if self._webview.get_realized():
             self._webview.load_html(html, "about:blank")
         else:

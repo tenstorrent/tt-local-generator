@@ -1,3 +1,16 @@
+tt-local-generator (0.77.4) noble; urgency=medium
+
+  * fix(ci): guard artgen_detail's WebKit import (_WEBKIT_OK) so the test suite
+    collects on CI runners without gir1.2-webkit-6.0. The CI job installs
+    gir1.2-gtk-4.0 but not WebKit, so artgen_detail's unconditional
+    require_version("WebKit") raised "Namespace WebKit not available" at import,
+    failing collection of every test that transitively imports main_window /
+    create_view (10 collection errors). artgen_detail now degrades its reading
+    view to plain text without WebKit, matching create_view (M1) and the
+    activity_viz/artgen_render/artgen_watch guards.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 09:00:00 +0000
+
 tt-local-generator (0.77.3) noble; urgency=medium
 
   * fix: whole-branch review Minor findings M1–M4 (docs/branch-review-2026-08-11.md).
