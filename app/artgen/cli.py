@@ -63,6 +63,11 @@ _COMMON_ARGS = [
                        help="HTTP read timeout in seconds (default: 600; raise for slow/large models)")),
     ("--simulate", dict(action="store_true",
                         help="Print the prompt without calling the LLM")),
+    ("--no-library", dict(dest="no_library", action="store_true",
+                          help="Do NOT register the artifact into the Library "
+                               "(media store) — it IS saved there by default so "
+                               "it shows up in the GUI. (An explicit --output "
+                               "path already writes there instead of the Library.)")),
 ]
 
 
@@ -264,8 +269,9 @@ def _cmd_animatediff(args) -> None:
                 }),
                 starred=0,
             )
-            _ms.add(rec)
-            _ms.ensure_auto_playlists()
+            if not getattr(args, "no_library", False):
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
         except Exception as _e:
             print(f"  [media-store: {_e}]")
 
@@ -397,8 +403,9 @@ def cmd_artgen(args) -> None:
                 params=json.dumps(params),
                 starred=0,
             )
-            _ms.add(rec)
-            _ms.ensure_auto_playlists()
+            if not getattr(args, "no_library", False):
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
         except Exception as _e:
             # Graceful fallback: save to cwd without media-store registration
             out_path = Path(gen.default_output())

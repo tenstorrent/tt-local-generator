@@ -1,3 +1,14 @@
+tt-local-generator (0.78.0) noble; urgency=medium
+
+  * feat(tt-ctl): generations are saved to the Library by default; opt out with
+    --no-library. `tt-ctl run` already persisted via the worker and `tt-ctl
+    artgen` via media_store — both now expose a consistent --no-library flag
+    that skips Library registration (the media file is still written to disk).
+    Registered the two QB2-validation artifacts (Wan2.2-I2V mp4, FLUX.1-dev jpg)
+    into the Library.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 11:00:00 +0000
+
 tt-local-generator (0.77.5) noble; urgency=medium
 
   * fix(ci): make the CI test job pass in its no-hardware/no-WebKit environment.

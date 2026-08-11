@@ -1091,6 +1091,8 @@ Or via the CLI:
 ./tt-ctl start all             # wan2.2 + prompt-server (QB2 / P300X2 recommended set)
 ./tt-ctl start --single-chip    # artgen-qwen3-8b + prompt-server (single Blackhole card or CPU-only)
 ./tt-ctl servers               # live health of every managed service
+./tt-ctl run "a koi pond"       # generate now; SAVED TO THE LIBRARY by default
+./tt-ctl run "..." --no-library  # ...unless you opt out (also on `artgen`)
 ```
 
 All scripts accept `--gui` (non-blocking, skips the interactive tail).

@@ -102,3 +102,26 @@ def test_animatediff_cli_route_does_not_touch_real_storage_dir(tmp_path, monkeyp
     assert any(
         r.prompt.startswith(marker) for r in isolated_records
     ), "expected record was not found in the isolated media store"
+
+
+def test_animatediff_cli_route_no_library_skips_media_store(tmp_path, monkeypatch):
+    """--no-library: the artgen CLI still runs, but does NOT register the
+    artifact into the Library (media store). Library-by-default remains the
+    behavior when the flag is absent (test above)."""
+    monkeypatch.chdir(tmp_path)
+    marker = f"nolib-marker-{uuid.uuid4()}"
+    monkeypatch.setattr(ad, "run_subprocess", MagicMock(return_value=(True, "")))
+    monkeypatch.setattr(ad, "check_hardware", lambda: (True, "ok", 1))
+    monkeypatch.setattr(ad, "make_gif_thumbnail", lambda *a, **k: None)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--no-library", dest="no_library", action="store_true")
+    ad.AnimateDiffGenerator().add_args(parser)
+    args = parser.parse_args(["--prompt", marker, "--no-library"])
+
+    artgen_cli._cmd_animatediff(args)
+
+    recs = _ms.media_store.query(media_type="artgen", generator_type="animatediff")
+    assert not any(r.prompt.startswith(marker) for r in recs), \
+        "--no-library must NOT register the artifact into the Library"

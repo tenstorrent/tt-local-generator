@@ -938,6 +938,12 @@ def cmd_run(args):
         sys.exit(1)
 
     store  = HistoryStore()
+    # Library-by-default: the worker calls store.append(record) internally to
+    # register the result in the Library (media store), so it appears in the
+    # GUI. Opt OUT with --no-library, which neutralizes that one append (the
+    # media file is still written to disk, just not tracked in the Library).
+    if getattr(args, "no_library", False):
+        store.append = lambda *a, **k: None
     prompt = args.prompt
     steps  = getattr(args, "steps", 30)
     seed   = getattr(args, "seed",  -1)
@@ -1143,6 +1149,9 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--neg",   default="", metavar="NEG_PROMPT")
     r.add_argument("--model", default="video",
                    choices=["video", "image", "animate", "skyreels", "mochi"])
+    r.add_argument("--no-library", dest="no_library", action="store_true",
+                   help="Do NOT register the result into the Library — it IS "
+                        "saved there by default so it shows up in the GUI.")
 
     # generate
     gen = sub.add_parser(
