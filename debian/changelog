@@ -1,3 +1,23 @@
+tt-local-generator (0.77.2) noble; urgency=medium
+
+  * fix: whole-branch code review — 3 Critical + 5 Important defects fixed
+    (report: docs/branch-review-2026-08-11.md), each with a regression test.
+    - C1: per-step Remix model picker now reaches the executed spec (apply_edits
+      inserts a 'model' edit even when the node had no pre-existing key).
+    - C2: seeded Muse goals (e.g. palette/text → looping animation) no longer
+      discard the seed (a param can't clobber a wired canonical input).
+    - C3: artgen models report readiness per-model, not all six at once
+      (_check_sdef matches the loaded /v1/models id to each ServerDef.model_id).
+    - I1: AnimateDiff is always-live in the pipeline composer (no-server gen).
+    - I2: Forge transform failures show a status instead of silently aborting
+      when an artgen Create medium is active.
+    - I3/I4: fixed a leaked GIF decode timer (orphaned hover-swap widget) and a
+      leaked telemetry daemon thread (no-WebKit activity viz teardown).
+    - I5: exported showcase pages label a done-but-unembeddable step as
+      'unavailable' instead of 'pending'.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 06:00:00 +0000
+
 tt-local-generator (0.77.1) noble; urgency=medium
 
   * fix(bin): start_wan_i2v.sh sets MODEL_SPECS_ENV=dev so run.py finds the model.
