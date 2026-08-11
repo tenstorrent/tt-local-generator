@@ -1,3 +1,24 @@
+tt-local-generator (0.77.0) noble; urgency=medium
+
+  * feat(patches): fail-loud patch-verification harness.
+    - New app/patch_manifest.py (declarative source of truth for every patch
+      and injector step) + app/patch_verify.py (host-side probes: inject
+      anchors present, append targets exist, bind-mount sources compile;
+      version_at_most soft absorbed-patch warning). Both pure/stdlib-only.
+    - apply_patches.sh gates on the verifier up front, so a drifted injector
+      anchor or a moved catalog file aborts the run loudly instead of shipping
+      a half-patched vendor tree (the Steps-7/8/9 class of bug).
+    - CI (release-deb.yml) now applies AND verifies patches at build time, so
+      the shipped .deb vendor tree is actually patched — previously it shipped
+      unpatched. debian/rules gains a verify-before-ship gate (plus a marker
+      grep asserting the injects were applied) so a local build fails loud too.
+    - snapshot_vendor.sh stamps vendor/VENDOR_VERSION for the absorbed-patch
+      warning; quickstart.sh surfaces patch-drift status.
+    - Image-diff drift detection (docker create/cp) remains a declared
+      follow-up; the manifest's bind_mount dest/version_ceiling are its hooks.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 10 Aug 2026 12:00:00 +0000
+
 tt-local-generator (0.76.0) noble; urgency=medium
 
   * chore(vendor): get current with tt-inference-server v0.19.0.

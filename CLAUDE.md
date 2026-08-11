@@ -1431,6 +1431,45 @@ server as unhealthy). Nothing in this expansion was validatable from the dev
 session — the automated tests cover wiring only (ServerDef present, picker lists
 it, routing maps it, collect() unchanged), never actual generation.
 
+### Patch verification (v0.77.0) — fail loud on drift
+
+Silent patch drift is what let `apply_patches.sh` Steps 7/8/9 rot undetected
+after the 0.18.0 YAML migration. The fix is a **fail-loud verification harness**,
+not a change to the bind-mount strategy (bind-mounting whole new modules is
+correct per tt-vscode-toolkit's `monkeypatch-ttnn.md`, which cites this repo as
+its canonical example):
+
+- **`app/patch_manifest.py`** (pure/stdlib) — the single declarative source of
+  truth: one `PatchEntry` per patch/injector step. `inject`/`append` entries are
+  hand-declared with their anchors; `bind_mount` entries are auto-discovered by
+  walking `patches/{media_server_config,tt_dit,models}` with the same dest
+  formula the mount loops use. 18 entries today; `manifest_issues()` is the
+  internal-consistency check.
+- **`app/patch_verify.py`** (pure/stdlib) — host-side probes borrowing the
+  toolkit's `PatchError`/`version_at_most`/`verify` philosophy (NOT its
+  in-process `wrap`/`set_default` — we add no container hook). Per kind: `inject`
+  → anchor string present in the vendored target; `append` → target file exists
+  (the model_spec.py→video.yaml move IS the drift); `bind_mount` → patch source
+  exists + `py_compile`s, with a soft `version_ceiling` "may be absorbed" warning.
+  CLI: `python3 app/patch_verify.py --vendor <tree>` (exits non-zero on drift) /
+  `--manifest-only`.
+- **`apply_patches.sh` gates on it** up front (Step 0) — a drifted anchor aborts
+  the whole run loudly instead of half-patching. (The per-step inject aborts
+  already existed; this adds all-checks-up-front + bind-mount coverage.)
+- **Build path matched:** CI (`release-deb.yml`) now **applies AND verifies**
+  patches after the vendor snapshot, so the shipped `.deb` vendor is actually
+  patched (it previously shipped **unpatched** — nothing on the packaged path ran
+  `apply_patches.sh`). `debian/rules` has a verify-before-ship gate (+ a
+  `tt_dit_patches_dir` marker grep asserting the injects were applied). The two
+  new `app/` modules package for free via the existing `cp -r app …`.
+  `snapshot_vendor.sh` stamps `vendor/VENDOR_VERSION` (the `version_at_most`
+  input); `quickstart.sh` surfaces drift status.
+- **Deferred (declared hooks, not built):** true image-diff drift detection
+  (`docker create/cp` the media image, diff each `bind_mount` patch against
+  upstream to catch *moved*/*absorbed* patches) plugs into the manifest's
+  `bind_mount` `dest`/`version_ceiling` fields. See
+  `docs/superpowers/specs/2026-08-10-patch-verification-harness-design.md`.
+
 ### Patch philosophy — minimize divergence from upstream
 
 **Goal: always use the latest and greatest features in each tt-inference-server release.**

@@ -31,6 +31,13 @@ git pull
 ./bin/apply_patches.sh           # re-applies patches to updated vendor/
 ```
 
+> **Bumping the vendored version/SHA (since v0.77.0):** update `vendor/VENDOR_VERSION`
+> alongside `vendor/VENDOR_SHA`, then run
+> `python3 app/patch_verify.py --vendor vendor/tt-inference-server` — it fails loud
+> naming any injector anchor or catalog path the new upstream moved (the drift
+> signal that Steps 7/8/9 lacked). A `version_ceiling` warning means a patch may
+> now be absorbed upstream and can potentially be dropped.
+
 Stop any running server before restarting:
 
 ```bash

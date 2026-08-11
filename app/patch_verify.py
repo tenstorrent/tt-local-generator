@@ -9,15 +9,12 @@ loud instead of shipping silently. Pure/stdlib-only.
 from __future__ import annotations
 
 import argparse
-import logging
 import py_compile
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import patch_manifest as pm
-
-logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
