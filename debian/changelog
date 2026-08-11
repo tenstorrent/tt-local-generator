@@ -1,3 +1,19 @@
+tt-local-generator (0.77.1) noble; urgency=medium
+
+  * fix(bin): start_wan_i2v.sh sets MODEL_SPECS_ENV=dev so run.py finds the model.
+    - QB2 hardware testing revealed Wan2.2-I2V-A14B-Diffusers lives ONLY in the
+      dev model catalog (workflows/model_specs/dev/video.yaml), not prod. With
+      MODEL_SPECS_ENV defaulting to prod, non-dev run.py rejected it as an
+      "invalid choice" and the server never started. Setting MODEL_SPECS_ENV=dev
+      (env var only — NOT --dev-mode, which can break device init on this image)
+      selects the dev catalog for spec lookup while leaving device init intact.
+    - Validated on QB2 (P300X2): the server now launches, reaches "Application
+      startup complete", initializes all four chips, and creates the Wan-I2V
+      pipeline. (Full weight load additionally needs free disk for the
+      tt_dit_cache — unrelated to this fix.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 00:00:00 +0000
+
 tt-local-generator (0.77.0) noble; urgency=medium
 
   * feat(patches): fail-loud patch-verification harness.

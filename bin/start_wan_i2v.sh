@@ -135,7 +135,12 @@ if [[ -z "$JWT_SECRET" ]]; then
     exit 1
 fi
 
-MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
+# MODEL_SPECS_ENV=dev: Wan2.2-I2V-A14B-Diffusers lives ONLY in the dev model
+# catalog (workflows/model_specs/dev/video.yaml), not prod — without this,
+# run.py rejects it as an "invalid choice". This selects the dev catalog for
+# spec lookup WITHOUT enabling --dev-mode (which bind-mounts the tt_dit pipeline
+# hotpatches and, per start_wan_qb2.sh, can break device init on this image).
+MODEL_SPECS_ENV=dev MODEL_SOURCE=huggingface JWT_SECRET="$JWT_SECRET" python3 run.py \
     --model Wan2.2-I2V-A14B-Diffusers \
     --workflow server \
     --tt-device p300x2 \
