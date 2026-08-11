@@ -30,6 +30,7 @@ left absent) so the run continues; required nodes still fail-fast.
 from __future__ import annotations
 import base64
 import json
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -923,26 +924,52 @@ def _append_flag_value(argv: "list[str]", flag: str, value) -> None:
     argv.append(str(value))
 
 
-def _run_tt_ctl(argv: "list[str]", timeout: int = 600):
-    """Run ``tt-ctl <argv...>`` as a subprocess, capturing output.
+def _run_tt_ctl(argv: "list[str]", timeout: int = 600,
+                 emit: "Callable[[str], None] | None" = None):
+    """Run ``tt-ctl <argv...>`` as a subprocess.
 
-    Mirrors the subprocess.run pattern already used by `_import_artifact`'s
-    ffmpeg call: `stdin=DEVNULL` so a stalled CLI can never block waiting on
-    terminal input, `capture_output=True` so stdout/stderr are available for
-    a useful error message. Raises RuntimeError on nonzero exit so callers
-    don't have to repeat the check.
+    Default (``emit=None``): unchanged capture-and-return behavior, byte for
+    byte with the original implementation. Mirrors the subprocess.run pattern
+    already used by `_import_artifact`'s ffmpeg call: `stdin=DEVNULL` so a
+    stalled CLI can never block waiting on terminal input, `capture_output=True`
+    so stdout/stderr are available for a useful error message. Raises
+    RuntimeError on nonzero exit so callers don't have to repeat the check.
+
+    With ``emit`` given: streams the child's stdout line-by-line to *emit*
+    instead of capturing it, so a long-running plugin's progress lines (e.g.
+    AnimateDiff's per-chip ``chipN: Step N/M`` lines from
+    `animatediff._make_drain`'s `on_progress`) reach the pipeline run stream
+    live instead of being captured and discarded on exit. `_h_animatediff` is
+    the only caller that passes this. No wall-clock *timeout* is enforced on
+    this path — the AnimateDiff generator already bounds its own subprocess
+    internally, so a second bound here would just duplicate that with no way
+    to recover the partial-progress lines already streamed; see the v0.75.0
+    pipeline Stage "making-of" plan for context.
     """
-    import subprocess
-    result = subprocess.run(
-        [str(TT_CTL), *argv],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"tt-ctl {' '.join(argv)} failed (exit {result.returncode}): "
-            f"{(result.stderr or result.stdout).strip()}"
+    cmd = [str(TT_CTL), *argv]
+    if emit is None:
+        result = subprocess.run(
+            cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
         )
-    return result
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"tt-ctl {' '.join(argv)} failed (exit {result.returncode}): "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        return result
+
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        for line in proc.stdout:
+            emit(line.rstrip("\n"))
+    finally:
+        rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError(f"tt-ctl {' '.join(argv)} failed (exit {rc})")
+    return None
 
 
 @register("TTLGArtgenGenerate")
@@ -1040,7 +1067,15 @@ def _h_animatediff(nid, inp, ctx):
     for item in inp.get("prompt_schedule") or []:
         argv += ["--prompt-schedule", _normalize_prompt_schedule_entry(item)]
 
-    _run_tt_ctl(argv, timeout=1800)  # animatediff generation can run long
+    # Streaming emit=... tees the child's chipN: progress lines into the
+    # pipeline run stream as LOG: lines (Task 2, pipeline Stage "making-of")
+    # so PipelineRunner/LiveRunView can show per-chip progress live instead
+    # of the lines being captured and discarded on exit. Blank lines are
+    # dropped rather than emitted as empty LOG: lines.
+    _run_tt_ctl(
+        argv, timeout=1800,
+        emit=lambda s: ctx.emit(f"LOG:{s}") if s.strip() else None,
+    )
     return {"gif_path": gif}
 
 

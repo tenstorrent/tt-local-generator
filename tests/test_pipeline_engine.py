@@ -798,7 +798,7 @@ def test_animatediff_dry_run_key():
 def test_animatediff_builds_argv_basic_flags(monkeypatch):
     calls = {}
 
-    def fake_run_tt_ctl(argv, timeout=600):
+    def fake_run_tt_ctl(argv, timeout=600, emit=None):
         calls["argv"] = argv
 
     monkeypatch.setattr(eng, "_run_tt_ctl", fake_run_tt_ctl)
@@ -834,7 +834,7 @@ def test_animatediff_builds_argv_basic_flags(monkeypatch):
 def test_animatediff_per_chip_prompts_repeated(monkeypatch):
     calls = {}
     monkeypatch.setattr(eng, "_run_tt_ctl",
-                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+                         lambda argv, timeout=600, emit=None: calls.__setitem__("argv", argv))
     eng.HANDLERS["TTLGAnimateDiff"]("22", {
         "prompt": "p", "per_chip_prompts": ["chip0 scene", "chip1 scene"],
     }, _ctx())
@@ -846,7 +846,7 @@ def test_animatediff_per_chip_prompts_repeated(monkeypatch):
 def test_animatediff_prompt_schedule_pairs_and_strings_both_normalize(monkeypatch):
     calls = {}
     monkeypatch.setattr(eng, "_run_tt_ctl",
-                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+                         lambda argv, timeout=600, emit=None: calls.__setitem__("argv", argv))
     eng.HANDLERS["TTLGAnimateDiff"]("23", {
         "prompt": "p",
         "prompt_schedule": [[0, "spring meadow"], "16:snowfall"],
@@ -859,7 +859,7 @@ def test_animatediff_prompt_schedule_pairs_and_strings_both_normalize(monkeypatc
 def test_animatediff_bool_flag_true_emits_bare_flag(monkeypatch):
     calls = {}
     monkeypatch.setattr(eng, "_run_tt_ctl",
-                         lambda argv, timeout=600: calls.__setitem__("argv", argv))
+                         lambda argv, timeout=600, emit=None: calls.__setitem__("argv", argv))
     eng.HANDLERS["TTLGAnimateDiff"]("24", {"prompt": "p", "lightning": True}, _ctx())
     assert "--lightning" in calls["argv"]
 
