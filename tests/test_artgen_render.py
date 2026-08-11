@@ -566,3 +566,19 @@ def test_render_artifact_widget_missing_file_degrades_gracefully(tmp_path):
     missing = tmp_path / "gone.txt"  # never written
     widget = render_artifact_widget(_Rec(str(missing), generator_type="freeform"))
     _assert_webview_or_fallback(widget)
+
+
+def test_cancel_animation_stops_timer_without_realize(tmp_path):
+    """Review I3: a widget discarded before ever being realized (so its
+    `unrealize` handler can never fire) must still be able to cancel its decode
+    timer via the public cancel_animation() — used by the gallery hover-swap's
+    bail-out path when the card is torn down before the idle attach runs."""
+    widget = _make_multiframe_gif_widget(tmp_path)
+    if widget is None:
+        pytest.skip("PIL/display/GTK4 unavailable")
+    assert widget._timer_id is not None      # timer armed at construction
+    widget.cancel_animation()
+    assert widget._timer_id is None          # cancelled without realize/unrealize
+    assert widget._iter is None
+    widget.cancel_animation()                # idempotent
+    assert widget._timer_id is None

@@ -245,3 +245,19 @@ def test_fanout_step_renders_a_tile_per_artifact():
         assert f"data:image/png;base64,{p}" in html
     # ...and the hero still (a0) is embedded exactly once (hero, not hero+gallery)
     assert html.count(f"data:image/png;base64,{paths[0]}") == 1
+
+
+def test_placeholder_done_but_unembeddable_reads_unavailable_not_pending():
+    """Review I5: a DONE step whose artifact can't be embedded must not render
+    as 'pending' on the shared showcase page."""
+    from showcase import _placeholder_tile
+    html = _placeholder_tile("Make an image", "done")
+    assert "unavailable" in html
+    assert "pending" not in html
+
+
+def test_placeholder_genuinely_pending_still_reads_pending():
+    from showcase import _placeholder_tile
+    html = _placeholder_tile("Make an image", "pending")
+    assert "pending" in html
+    assert "unavailable" not in html

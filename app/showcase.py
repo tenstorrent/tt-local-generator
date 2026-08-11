@@ -162,9 +162,23 @@ def _hero_html(run_view: RunView, encode_asset: EncodeAssetFn) -> "tuple[str, st
 
 
 def _placeholder_tile(label: str, status: str) -> str:
-    """An honest "we don't have this yet / it failed" tile — never a fabricated asset."""
-    status_word = status if status in ("pending", "running", "failed") else "pending"
-    glyph = "&#9679;" if status_word == "running" else ("&#10005;" if status_word == "failed" else "&#182;")
+    """An honest "we don't have this yet / it failed / can't embed it" tile —
+    never a fabricated asset.
+
+    A DONE step reaches here only when its artifact couldn't be embedded
+    (unsupported output kind, unreadable/oversized file) — it must NOT read as
+    "pending" (review I5), so a completed status maps to "unavailable" rather
+    than collapsing to the not-yet-done word."""
+    if status in ("done", "completed", "succeeded"):
+        status_word = "unavailable"
+    elif status in ("pending", "running", "failed"):
+        status_word = status
+    else:
+        status_word = "pending"
+    glyph = ("&#9679;" if status_word == "running"
+             else "&#10005;" if status_word == "failed"
+             else "&#8709;" if status_word == "unavailable"  # ∅ done-but-unembeddable
+             else "&#182;")  # pilcrow: genuinely pending
     return (
         f'<div class="art placeholder {_esc(status_word)}">'
         f'<div class="im placeholder-mark">{glyph}</div>'

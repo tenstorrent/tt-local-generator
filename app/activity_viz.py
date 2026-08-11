@@ -341,6 +341,15 @@ class ActivityVizWidget(Gtk.Box):
         header.append(close_btn)
         self.append(header)
 
+        # Stop the telemetry daemon thread when THIS widget is torn down —
+        # connected unconditionally (on the Box itself, not just the WebView)
+        # so the no-WebKit stub path below is covered too. Without this, a
+        # no-WebKit build that ever called set_running(True) would leak the
+        # 1.5s tt-smi-spawning daemon thread forever after teardown (review I4).
+        # _stop_telemetry is idempotent, so the WebView's own unrealize hook
+        # (WebKit path) firing as well is harmless.
+        self.connect("unrealize", lambda *_a: self._stop_telemetry())
+
         if not _WEBKIT_OK:
             self._webview = None  # inert stub — header still ticks the readout
             return

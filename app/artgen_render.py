@@ -679,6 +679,15 @@ class AnimatedGifWidget(Gtk.Picture):
         self.set_playing(not self._playing)
         return self._playing
 
+    def cancel_animation(self) -> None:
+        """Stop and release the decode timer for a widget being discarded
+        WITHOUT having been realized. `_on_unrealize` (the only other teardown)
+        can never fire for a widget that was never attached — e.g. an
+        idle-deferred hover-swap that bails before attaching this widget — so
+        without this its `GLib.timeout_add` decode loop would run forever on an
+        invisible Picture (review I3). Idempotent; safe on a static image."""
+        self._on_unrealize(self)
+
     def _on_unrealize(self, _widget) -> None:
         if self._timer_id is not None:
             GLib.source_remove(self._timer_id)

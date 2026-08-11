@@ -322,3 +322,28 @@ def test_hide_stops_telemetry_and_calms():
     assert ("running", False) in fake.calls
     assert ("mode", None) in fake.calls
     assert fake.visible is False
+
+
+def test_activity_viz_stops_telemetry_on_unrealize(monkeypatch):
+    """Review I4: teardown must stop the telemetry daemon thread even in the
+    no-WebKit stub path — the unrealize handler is connected on the widget
+    itself, not only on the WebView (which is None without WebKit). Forcing the
+    no-WebKit path also keeps the test from constructing a real WebKit WebView,
+    which segfaults the bwrap sandbox in CI (see CLAUDE.md)."""
+    import os
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        pytest.skip("no GTK4 display available")
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401
+    except Exception:
+        pytest.skip("GTK4 not available")
+    import activity_viz
+    monkeypatch.setattr(activity_viz, "_WEBKIT_OK", False)  # stub path, no WebView
+    w = activity_viz.ActivityVizWidget()
+    assert w._webview is None  # confirms we exercised the no-WebKit branch
+    called = []
+    monkeypatch.setattr(w, "_stop_telemetry", lambda: called.append(True))
+    w.emit("unrealize")
+    assert called == [True], "unrealize must stop telemetry (even no-WebKit)"

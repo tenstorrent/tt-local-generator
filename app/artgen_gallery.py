@@ -718,6 +718,12 @@ class ArtgenGallery(Gtk.Box):
                 # Re-check at idle time: the card may have been detached (grid
                 # rebuilt) or already swapped to this very widget in between.
                 if content_zone.get_parent() is None or _zone_content[0] is None:
+                    # Card detached (grid rebuilt) before this idle ran:
+                    # new_widget was never attached, so it will never be
+                    # realized/unrealized — cancel its animation timer now or
+                    # it leaks forever (review I3).
+                    if hasattr(new_widget, "cancel_animation"):
+                        new_widget.cancel_animation()
                     return False
                 old = _zone_content[0]
                 if old is new_widget:
