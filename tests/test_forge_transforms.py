@@ -514,3 +514,31 @@ def test_on_transform_finished_refreshes_artgen_gallery_for_artgen_record(tmp_pa
     mw_inst._store.append.assert_not_called()
     mw_inst._image_gallery.load_history.assert_not_called()
     assert result is False
+
+
+# ── Review I2: _on_error must not crash when a transform fails while an ────────
+#    artgen Create medium is active (artgen has no GalleryWidget) ──────────────
+def test_on_error_tolerates_artgen_active_medium():
+    import main_window as mw
+    obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._gen_gallery = None                       # no native job in flight
+    obj._current_medium_source = lambda: "artgen"  # artgen Create medium active
+    fake_video = MagicMock()                       # a real GalleryWidget stand-in
+    obj._video_gallery = fake_video
+    obj._image_gallery = MagicMock()
+    obj._animate_gallery = MagicMock()
+    obj._artgen_gallery = MagicMock()
+    obj._screensaver_uninhibit = lambda: None
+    obj._last_error_log_path = None
+    obj._create_job_active = False
+    status = []
+    obj._set_status = lambda m: status.append(m)
+    drained = []
+    obj._start_next_queued = lambda: drained.append(True)
+
+    # Must NOT raise (previously _gallery_for_type('artgen') ValueError aborted it)
+    obj._on_error("Transform 'rmbg' failed: boom")
+
+    assert status and "Error" in status[0]        # user actually saw the error
+    assert drained == [True]                        # queue drain still ran
+    fake_video.remove_pending.assert_called_once()  # fell back to a real gallery

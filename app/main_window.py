@@ -10714,7 +10714,20 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_error(self, message: str) -> bool:
         from log_viewer import detect_log_path, shorten_error
-        gallery = self._gen_gallery or self._active_gallery()
+        # _on_error is shared by native generation AND the Forge transform path
+        # (_on_transform_card). When a transform fails while an artgen Create
+        # medium is active, `_active_gallery()` -> `_gallery_for_type("artgen")`
+        # RAISES (ArtgenGallery isn't a GalleryWidget) — which used to abort the
+        # rest of this handler, swallowing the error with no status shown
+        # (review I2). Tolerate it here (the one shared error choke point): fall
+        # back to a real GalleryWidget whose remove_pending() harmlessly no-ops,
+        # so the status message / job-clearing / queue-drain below still run.
+        gallery = self._gen_gallery
+        if gallery is None:
+            try:
+                gallery = self._active_gallery()
+            except ValueError:
+                gallery = self._video_gallery
         gallery.remove_pending()
         self._gen_gallery = None
         self._screensaver_uninhibit()
