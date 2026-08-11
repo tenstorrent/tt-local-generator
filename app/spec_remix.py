@@ -162,6 +162,14 @@ def apply_edits(spec: dict, edits: "dict[str, dict[str, Any]]") -> dict:
             continue
         for key, new_value in node_edits.items():
             if key not in inputs:
+                # A "model" edit is a legitimate INSERT: the per-step model
+                # picker owns a node's backend selection, and Muse-built specs
+                # carry no literal "model" key to pre-seed it — so requiring the
+                # key to pre-exist silently dropped every picker choice on a
+                # freshly-composed pipeline (whole-branch review C1). Every OTHER
+                # unknown key is still ignored (guards stale/typo'd UI edits).
+                if key == "model":
+                    inputs[key] = new_value
                 continue  # unknown key — ignore
             if _is_wire(inputs[key]):
                 continue  # never overwrite a wire
@@ -341,8 +349,10 @@ def seed_spec(steps: "list[tuple[str, dict]]", *,
     Node ids are minted ``"1"``, ``"2"``, ``"3"``, ... in list order. Step
     i+1's ``intent.input_key`` is wired to ``[str(i+1), prev_intent.outputs[0]]``
     when that intent declares a canonical input; caller-supplied *params* are
-    merged on top (a param with the same key as the canonical input wins,
-    mirroring ``add_step``).
+    merged on top, EXCEPT a param on the canonical input_key does NOT overwrite
+    a wire/seed already placed there (the wire/seed wins, so seeded content is
+    never silently discarded — see whole-branch review C2). A param still
+    provides the canonical value in blank-canvas mode where no wire/seed exists.
 
     ``seed_artifact=(path, kind)``: the FIRST step consumes it as starting
     material. If step 0's intent has a canonical input whose ``input_kind``
@@ -389,8 +399,20 @@ def seed_spec(steps: "list[tuple[str, dict]]", *,
             if intent.input_key:
                 inputs[intent.input_key] = path
 
+        # A wire (from the previous step) or a seed literal may already occupy
+        # the canonical input_key. A caller param on that SAME key must NOT
+        # clobber it — doing so silently discards the seed/prepended content
+        # (whole-branch review C2: the "looping-animation" goal's placeholder
+        # "prompt" literal was overwriting the palette/text seed wire, so every
+        # seeded run produced the generic default). Params still apply freely to
+        # every other key, and still provide the canonical value in blank-canvas
+        # mode (no wire/seed → the key is absent here → param fills it).
+        wired_key = intent.input_key if intent.input_key in inputs else None
         if params:
-            inputs.update(params)
+            for k, v in params.items():
+                if k == wired_key:
+                    continue  # wire/seed wins over a literal on the wired input
+                inputs[k] = v
 
         spec[node_id] = {"class_type": class_type, "inputs": inputs}
         prev_id, prev_intent = node_id, intent

@@ -468,3 +468,56 @@ def test_seed_spec_seed_artifact_kind_mismatch_raises():
 def test_seed_spec_empty_raises():
     with pytest.raises(ValueError):
         spec_remix.seed_spec([])
+
+
+# ── Whole-branch review C1: apply_edits must INSERT a "model" edit ────────────
+def test_apply_edits_inserts_model_key_when_absent():
+    """A per-step model-picker choice must reach the executed spec even though
+    Muse-built specs carry no pre-existing "model" input (review C1)."""
+    from spec_remix import apply_edits
+    spec = {"1": {"class_type": "TTLGTextToImage", "inputs": {"prompt": "a cat"}}}
+    out = apply_edits(spec, {"1": {"model": "sdxl"}})
+    assert out["1"]["inputs"]["model"] == "sdxl"
+    # original untouched (apply_edits is non-mutating)
+    assert "model" not in spec["1"]["inputs"]
+
+
+def test_apply_edits_still_ignores_other_unknown_keys():
+    """Only "model" gets the insert exemption — stale/typo'd keys stay ignored."""
+    from spec_remix import apply_edits
+    out = apply_edits({"1": {"class_type": "X", "inputs": {"prompt": "a"}}},
+                      {"1": {"bogus_key": "y"}})
+    assert "bogus_key" not in out["1"]["inputs"]
+
+
+def test_apply_edits_overwrites_existing_model_literal():
+    from spec_remix import apply_edits
+    out = apply_edits({"1": {"class_type": "X", "inputs": {"model": "flux"}}},
+                      {"1": {"model": "sdxl"}})
+    assert out["1"]["inputs"]["model"] == "sdxl"
+
+
+# ── Whole-branch review C2: a param must not clobber a wired canonical input ──
+def test_seed_spec_param_does_not_clobber_wired_canonical_input():
+    """When a step's canonical input is satisfied by a wire from the previous
+    step, a caller param on that same key must be ignored (the wire wins), so
+    seeded/prepended content is never silently discarded (review C2)."""
+    from spec_remix import seed_spec
+    # step 1 emits text (prompt); step 2 (AnimateDiff) canonical input is prompt,
+    # AND carries a literal "prompt" param that must NOT overwrite the wire.
+    spec = seed_spec([
+        ("TTLGPaletteToPrompt", {"prompt": "palette: #1a2b3c, dusk"}),
+        ("TTLGAnimateDiff", {"seamless_loop": True, "prompt": "GENERIC DEFAULT"}),
+    ])
+    ad = spec["2"]["inputs"]
+    assert ad["prompt"] == ["1", "prompt"], "wire must survive the param"
+    assert ad["seamless_loop"] is True, "non-canonical params still apply"
+
+
+def test_seed_spec_param_fills_canonical_input_in_blank_canvas():
+    """With no wire/seed on the canonical input (single step), a param DOES
+    provide the value — blank-canvas placeholders keep working."""
+    from spec_remix import seed_spec
+    spec = seed_spec([("TTLGAnimateDiff", {"seamless_loop": True,
+                                           "prompt": "a dreamy looping scene"})])
+    assert spec["1"]["inputs"]["prompt"] == "a dreamy looping scene"
