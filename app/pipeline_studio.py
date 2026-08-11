@@ -758,6 +758,34 @@ _CSS = b"""
     padding: 8px 16px;
     font-size: 12.5px;
 }
+.ps-tile {
+    background-color: #1A3C47;
+    border: 1px solid alpha(#74C5DF, 0.16);
+    border-radius: 12px;
+    padding: 12px;
+    min-width: 200px;
+}
+.ps-tile-upcoming {
+    background-color: #0F2A35;
+    border: 1px dashed alpha(#6f948d, 0.4);
+    opacity: 0.65;
+}
+.ps-tile-active {
+    border: 2px solid #4FD1C5;
+    background-color: #1A3C47;
+    box-shadow: 0 0 10px alpha(#4FD1C5, 0.45);
+    opacity: 1;
+}
+.ps-tile-done {
+    border: 2px solid #27AE60;
+    background-color: #1A3C47;
+    opacity: 1;
+}
+.ps-tile-failed {
+    border: 2px solid #FF6B6B;
+    background-color: #1A3C47;
+    opacity: 1;
+}
 """
 
 _css_applied = False
@@ -3076,9 +3104,13 @@ class MuseView(Gtk.Box):
 class LiveRunView(Gtk.Box):
     """Live-run page: watch a pipeline run's progress in real time (SP-C Phase 2a Task 3).
 
-    Renders one row per `RunView.steps` (intent-labelled, same verb/noun/model
-    presentation as Open/RemixView) plus a scrolling live-log tail, per the
-    validated mockup at
+    Renders one tile per `RunView.steps` (intent-labelled, same verb/noun/
+    model presentation as Open/RemixView), laid out left-to-right in a
+    horizontal, horizontally-scrollable "recipe spine" (arrow labels between
+    tiles) rather than the flat vertical status-row list this view started
+    as — see the "Pipeline UX overhaul" section of this repo's CLAUDE.md for
+    the recipe-spine restructure (Task 4) — plus a scrolling live-log tail,
+    per the validated mockup at
     `.superpowers/brainstorm/988333-1783804257/content/run-watch.html`. Unlike
     Discover/Open/RemixView, data doesn't arrive once through a `set_*()`
     call — `begin(run)` renders the initial PENDING state, and three handler
@@ -3124,6 +3156,17 @@ class LiveRunView(Gtk.Box):
     raw log tail is demoted into a collapsed-by-default `Gtk.Expander`
     ("Details") — `on_log` still appends into the same `_log_box`, just
     nested one level deeper now.
+
+    **Recipe spine (Task 4).** Beyond the glyph/spinner/phase/elapsed detail
+    above, each tile ALSO carries a lifecycle CSS class of its own —
+    `ps-tile-upcoming`/`-active`/`-done`/`-failed` — set by `_set_tile_state`
+    from the same `on_node_update`/`on_finished` call sites, registered in
+    `self._step_tiles` (node_id -> tile widget). This is what makes the
+    spine read at a glance: a glance down the horizontal strip shows which
+    tiles are done, which one is lit up as active, and which are still
+    dashed-and-dim ahead. `self._step_preview` (node_id -> an empty slot
+    `Gtk.Widget` inside the tile) is reserved, unused, for a later task to
+    fill with a live per-step output preview.
     """
 
     __gsignals__ = {
@@ -3164,13 +3207,26 @@ class LiveRunView(Gtk.Box):
         # node_id -> the step's Gtk.Spinner (shown instead of the glyph while
         # "running"), phase sub-label (set from on_node_update's `detail`),
         # elapsed-time label, and the row containing both (whose visibility
-        # this view toggles as a unit) — populated by _build_step_row/begin(),
+        # this view toggles as a unit) — populated by _build_step_tile/begin(),
         # addressed by node_id from on_node_update/on_finished exactly like
         # _step_status_labels above.
         self._step_spinners: "dict[str, Gtk.Spinner]" = {}
         self._step_phase_labels: "dict[str, Gtk.Label]" = {}
         self._step_elapsed_labels: "dict[str, Gtk.Label]" = {}
         self._step_meta_rows: "dict[str, Gtk.Widget]" = {}
+        # Task 4 (recipe-spine restructure): node_id -> that step's tile
+        # widget (the same widget _build_step_tile calls "row" -- a tile IS
+        # a row, just laid out horizontally now and carrying a lifecycle CSS
+        # class instead of living in a flat vertical list). _set_tile_state
+        # swaps ps-tile-upcoming/-active/-done/-failed on this widget from
+        # on_node_update/on_finished, in parallel with (never instead of) the
+        # existing glyph/spinner/phase/elapsed updates below.
+        self._step_tiles: "dict[str, Gtk.Widget]" = {}
+        # node_id -> an empty preview-slot Gtk.Widget inside that step's tile,
+        # reserved for Task 5 (per-step output preview) to fill with real
+        # content. Deliberately inert here -- this task is the structural
+        # spine/tile redesign only, no preview rendering.
+        self._step_preview: "dict[str, Gtk.Widget]" = {}
         # node_id -> GLib.timeout_add source id for that step's ticking
         # elapsed timer (only while "running"); node_id -> time.monotonic()
         # the step started running, so the tick and the final freeze-on-
@@ -3215,13 +3271,21 @@ class LiveRunView(Gtk.Box):
         body.set_vexpand(True)
         self.append(body)
 
+        # Task 4 (recipe-spine restructure): the flat vertical status-row
+        # list is now a horizontal "spine" of step tiles -- scroll
+        # sideways through the recipe instead of down a list. Attribute
+        # name (`_steps_box`) is unchanged so existing tests/callers that
+        # walk it (e.g. to inspect a tile's internal widget structure)
+        # keep working; only its orientation and the ScrolledWindow's
+        # scroll axis flipped.
         steps_scroller = Gtk.ScrolledWindow()
-        steps_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        steps_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         steps_scroller.set_vexpand(True)
         steps_scroller.set_hexpand(True)
         body.append(steps_scroller)
 
-        self._steps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self._steps_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._steps_box.add_css_class("ps-spine")
         self._steps_box.set_margin_top(10)
         self._steps_box.set_margin_bottom(18)
         self._steps_box.set_margin_start(18)
@@ -3287,18 +3351,25 @@ class LiveRunView(Gtk.Box):
         self._step_phase_labels = {}
         self._step_elapsed_labels = {}
         self._step_meta_rows = {}
+        self._step_tiles = {}
+        self._step_preview = {}
 
+        last_index = len(run.steps)
         for index, step in enumerate(run.steps, start=1):
-            row, status_label, phase_label, elapsed_label, spinner, meta_row = (
-                self._build_step_row(index, step)
+            tile, status_label, phase_label, elapsed_label, spinner, meta_row = (
+                self._build_step_tile(index, step)
             )
-            self._steps_box.append(row)
+            self._steps_box.append(tile)
+            if index < last_index:
+                self._steps_box.append(self._build_spine_arrow())
             self._step_status[step.node_id] = "pending"
             self._step_status_labels[step.node_id] = status_label
             self._step_phase_labels[step.node_id] = phase_label
             self._step_elapsed_labels[step.node_id] = elapsed_label
             self._step_spinners[step.node_id] = spinner
             self._step_meta_rows[step.node_id] = meta_row
+            self._step_tiles[step.node_id] = tile
+            self._set_tile_state(step.node_id, "pending")
 
         self._progress = pipeline_progress.ProgressState(total=len(run.steps))
         self._update_step_count_label()
@@ -3342,6 +3413,7 @@ class LiveRunView(Gtk.Box):
 
         self._step_status[node_id] = status
         self._set_status_glyph(label, status)
+        self._set_tile_state(node_id, status)
         if self._progress is not None:
             self._progress.update(node_id, status, detail)
         self._update_spinner(node_id, status)
@@ -3380,6 +3452,7 @@ class LiveRunView(Gtk.Box):
             if status == "running":
                 self._step_status[node_id] = resolved
                 self._set_status_glyph(self._step_status_labels[node_id], resolved)
+                self._set_tile_state(node_id, resolved)
                 if self._progress is not None:
                     self._progress.update(node_id, resolved, "")
                 self._update_spinner(node_id, resolved)
@@ -3390,15 +3463,29 @@ class LiveRunView(Gtk.Box):
         if self._run_id is not None:
             self.emit("run-done", self._run_id)
 
-    # ── Row building / helpers ───────────────────────────────────────────────
+    # ── Tile building / helpers ──────────────────────────────────────────────
 
-    def _build_step_row(
+    # status -> the tile-level lifecycle CSS class swapped by _set_tile_state.
+    # Deliberately a SEPARATE map from _STATUS_CSS (which colors the small
+    # glyph label) -- a tile's border/background reads at a glance from
+    # across the horizontal spine, so it needs its own bolder vocabulary
+    # ("upcoming"/"active" instead of "pending"/"running").
+    _TILE_STATE_CSS = {
+        "pending": "ps-tile-upcoming",
+        "running": "ps-tile-active",
+        "done": "ps-tile-done",
+        "failed": "ps-tile-failed",
+    }
+
+    def _build_step_tile(
         self, index: int, step: StepView
     ) -> "tuple[Gtk.Widget, Gtk.Label, Gtk.Label, Gtk.Label, Gtk.Spinner, Gtk.Widget]":
-        """Build one PENDING step row; returns (row, status_label, phase_label,
+        """Build one PENDING step tile; returns (tile, status_label, phase_label,
         elapsed_label, spinner, meta_row) so begin() can keep every widget
         reference this view addresses by node_id from on_node_update/
-        on_finished for later in-place updates.
+        on_finished for later in-place updates -- same 6-tuple shape this
+        method has always returned, back when it built a flat vertical row
+        (`_build_step_row`) instead of a card in the horizontal spine.
 
         Fix #1 (cohesive intent label): one combined "verb noun" label with
         the status glyph inline, matching OpenView/RemixView's identical
@@ -3414,14 +3501,23 @@ class LiveRunView(Gtk.Box):
         `intent_row` holding the phase sub-label + elapsed label together,
         so `_update_phase_label`/`_update_elapsed_timer` can show/hide both
         as one unit.
+
+        Task 4 (recipe-spine restructure) additions: the outer widget is
+        now a "tile" (`ps-tile` base class; begin() layers on the lifecycle
+        state class via `_set_tile_state`) meant to sit shoulder-to-shoulder
+        in a horizontal spine rather than stack in a vertical list. An empty
+        preview-slot `Gtk.Box` is appended at the end of `main` and
+        registered into `self._step_preview[step.node_id]` -- reserved for
+        Task 5 (per-step output preview) to fill; this task never puts
+        anything inside it.
         """
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        row.add_css_class("ps-step")
+        tile = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        tile.add_css_class("ps-tile")
 
         n_label = Gtk.Label(label=str(index))
         n_label.add_css_class("ps-step-n")
         n_label.set_valign(Gtk.Align.START)
-        row.append(n_label)
+        tile.append(n_label)
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         main.set_hexpand(True)
@@ -3471,8 +3567,48 @@ class LiveRunView(Gtk.Box):
             model_label.add_css_class("ps-step-model")
             main.append(model_label)
 
-        row.append(main)
-        return row, status_label, phase_label, elapsed_label, spinner, meta_row
+        # Preview slot (Task 5's seam) — empty by design here; this task is
+        # structural only. Registered by node_id so a later task can find and
+        # fill it without touching the tile-building code at all.
+        preview_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        preview_slot.add_css_class("ps-tile-preview")
+        main.append(preview_slot)
+        self._step_preview[step.node_id] = preview_slot
+
+        tile.append(main)
+        return tile, status_label, phase_label, elapsed_label, spinner, meta_row
+
+    def _build_spine_arrow(self) -> Gtk.Label:
+        """A plain "→" separator between two tiles in the horizontal spine.
+
+        Deliberately just a str label (no widget-level connective logic) —
+        same "arrows are decoration, not data" rule DiscoverView/OpenView's
+        recipe chips already follow, reusing their `ps-chip-arrow` styling
+        so an arrow reads identically whether it's between two Discover
+        chips or two live-run tiles.
+        """
+        arrow = Gtk.Label(label="→")
+        arrow.add_css_class("ps-chip-arrow")
+        arrow.set_valign(Gtk.Align.CENTER)
+        return arrow
+
+    def _set_tile_state(self, node_id: str, status: str) -> None:
+        """Swap *node_id*'s tile onto the CSS class matching *status*.
+
+        Mirrors `_set_status_glyph`'s "remove every known class, then add
+        the resolved one" shape so a tile can never end up wearing two
+        lifecycle classes at once (e.g. still `ps-tile-active` after
+        resolving to `ps-tile-done`). An unknown node_id (stale callback
+        after a fresh `begin()`, same guard `on_node_update` already applies
+        before calling this) or unrecognized status is a silent no-op/
+        fallback-to-upcoming, never a crash.
+        """
+        tile = self._step_tiles.get(node_id)
+        if tile is None:
+            return
+        for css in self._TILE_STATE_CSS.values():
+            tile.remove_css_class(css)
+        tile.add_css_class(self._TILE_STATE_CSS.get(status, "ps-tile-upcoming"))
 
     def _set_status_glyph(self, label: Gtk.Label, status: str) -> None:
         """Update *label*'s glyph text and status CSS class in place."""

@@ -1716,6 +1716,25 @@ def test_live_run_view_begin_shows_all_steps_pending():
         assert label.get_label() == "•"
 
 
+def test_live_run_builds_a_tile_per_step_with_states():
+    """Task 4 (recipe-spine restructure): LiveRunView renders a tile per step
+    (registered in _step_tiles, keyed by node_id) whose CSS class tracks its
+    lifecycle state -- upcoming (pending, not yet reached) / active (running)
+    / done -- swapped in place by _set_tile_state, called from
+    on_node_update/on_finished exactly like the pre-existing status-glyph/
+    spinner/phase/elapsed updates."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    assert len(view._step_tiles) == 3
+    # pending tiles carry the upcoming/ghost class
+    assert "ps-tile-upcoming" in view._step_tiles["1"].get_css_classes()
+    view.on_node_update("job", "1", "running", "")
+    assert "ps-tile-active" in view._step_tiles["1"].get_css_classes()
+    view.on_node_update("job", "1", "done", "")
+    assert "ps-tile-done" in view._step_tiles["1"].get_css_classes()
+
+
 def test_live_run_view_step_row_has_single_combined_intent_label():
     """Fix #1 (review follow-up — MINOR): LiveRunView._build_step_row also
     renders ONE combined 'verb noun' label (ps-step-intent) with the status
