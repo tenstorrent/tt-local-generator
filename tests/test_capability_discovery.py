@@ -435,3 +435,20 @@ def test_default_capabilities_is_thin_wrapper_and_returns_native_caps():
     assert isinstance(caps, list)
     assert caps
     assert any(c.source == "native" for c in caps)
+
+
+def test_animatediff_always_live_no_server(monkeypatch=None):
+    """Review I1: TTLGAnimateDiff is a self-contained no-server Blackhole
+    generator — it must be live in the composer even with every backend down
+    (it was wrongly gated on the 'media' family). Reached via the text-input
+    'add a step' path (compatible_intents('text'))."""
+    caps = cd.discover_capabilities(
+        "text",
+        is_plugin_loaded=lambda n: True,
+        is_backend_up=lambda f: False,   # every backend down
+        mcp_reader=_fake_mcp_reader,
+    )
+    ad = next((c for c in caps if c.class_type == "TTLGAnimateDiff"), None)
+    assert ad is not None, "AnimateDiff should be offered as a text-consuming step"
+    assert ad.live is True
+    assert ad.reason is None

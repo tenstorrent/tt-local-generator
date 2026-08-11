@@ -81,7 +81,11 @@ class Capability:
 _NATIVE_BACKEND_FAMILY: dict = {
     "TTLGTextToImage": "media",     # image server (FLUX/SDXL/...)
     "TTLGImageToVideo": "media",    # video server (Wan2.2/SkyReels/Mochi)
-    "TTLGAnimateDiff": "media",     # hardware-accelerated animate backend
+    # TTLGAnimateDiff is deliberately NOT here: it's a self-contained no-server
+    # Blackhole generator (pipeline_engine._h_animatediff shells out to tt-ctl
+    # directly, uses_llm=False), so it must never be gated on a media server
+    # being up — falls through to always-live, matching its "immediate path to
+    # a result" guarantee (review I1).
     "TTLGGenerateText": "llm",      # chat/text LLM (artgen/prompt-gen)
     "TTLGArtgenGenerate": "llm",    # artgen is LLM-backed by default
 }

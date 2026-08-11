@@ -372,6 +372,16 @@ def restart(
     return start(key, gui=gui, timeout=start_timeout)
 
 
+def _norm_model_id(model_id: str) -> str:
+    """Normalize a model id for shared-port /v1/models matching: last path
+    segment, lowercased, non-alphanumerics stripped — so 'Qwen/Qwen3-8B', the
+    served '--model Qwen3-8B', and 'qwen3-8b' all compare equal. Mirrors
+    model_status.match_model_id's normalization (kept local to avoid a
+    server_manager -> model_status import cycle)."""
+    seg = (model_id or "").rstrip("/").split("/")[-1].lower()
+    return "".join(ch for ch in seg if ch.isalnum())
+
+
 def _check_sdef(sdef: ServerDef, timeout: float) -> bool:
     """Return True if sdef's service is up and (when runner_key is set) the
     correct model is loaded.
@@ -388,11 +398,23 @@ def _check_sdef(sdef: ServerDef, timeout: float) -> bool:
     url = _sc.health_url(sdef.key, sdef.health_url)
     try:
         resp = urllib.request.urlopen(url, timeout=timeout)
-        if sdef.runner_key is None:
-            return True
         body = resp.read().decode("utf-8", errors="replace")
-        data = json.loads(body)
-        return data.get("runner_in_use") == sdef.runner_key
+        if sdef.runner_key is not None:
+            data = json.loads(body)
+            return data.get("runner_in_use") == sdef.runner_key
+        if sdef.model_id and url.rstrip("/").endswith("/v1/models"):
+            # Shared-port LLM family: all six artgen-* ServerDefs share
+            # :8002/v1/models with no runner_key, so a bare 2xx would mark
+            # EVERY artgen key healthy the moment ANY one model answers (review
+            # C3). The OpenAI /v1/models body names the loaded model — confirm
+            # it matches THIS ServerDef's model_id so health is per-model at the
+            # source (every status_all consumer benefits, not just ModelStatus).
+            data = json.loads(body)
+            served = [m.get("id", "") for m in data.get("data", [])
+                      if isinstance(m, dict)]
+            want = _norm_model_id(sdef.model_id)
+            return any(_norm_model_id(s) == want for s in served)
+        return True
     except Exception:
         return False
 
