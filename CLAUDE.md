@@ -1,5 +1,95 @@
 # tt-local-generator — developer notes
 
+## Pipeline Stage — the live making-of (Slice 1, v0.79.0)
+
+`LiveRunView` (`app/pipeline_studio.py`) used to be a text ticker: a spinner +
+raw phase string + elapsed timer per step, the real hardware story buried in a
+collapsed log, no per-step artifact, no honest progress, no cancel, and a
+back button that dead-ended. It's now a **making-of** — you watch the machine
+build your thing. This is Slice 1 of the approved "Stage" direction
+([[project_stage_pipeline_direction]]); the per-step **drill-in inspector** on
+completed runs, **Create** progress polish, and the blank-canvas
+**compose front door** are later slices. Everything here is pure display over
+the same `PipelineRunner` signals — `collect()` and the run spec are
+byte-identical whether the new UI or the old one rendered them. Palette is the
+app's **main** scheme (teal `#4FD1C5` on deep blue-gray `#0F2A35`), NOT the
+docs-site forest-teal; every `_CSS` byte literal stays ASCII-only.
+
+- **Recipe spine, done-counting progress** (`app/pipeline_progress.py` +
+  `LiveRunView`). The flat vertical status list is a horizontal **spine** of
+  step tiles in a `ScrolledWindow` — `_step_tiles[node_id]` with a lifecycle
+  CSS class swapped by `_set_tile_state` (`_TILE_STATE_CSS`:
+  `ps-tile-upcoming`/`-active`/`-done`/`-failed`; an unknown status like
+  `"cancelled"` falls back to dim `ps-tile-upcoming`). `ProgressState` gained
+  `completed(node_id)`/`done_count`; the header's "Step N of M" now reads
+  `done_count` — a step counts once it **finishes**, not once it starts.
+- **Per-step output preview as it lands.** `on_log` derives `self._output_dir`
+  from the runner's first `LOG:<path>` line (mirroring
+  `pipeline_runner.PipelineRunner._parse_line`'s regex/layout exactly) so an
+  artifact resolves *mid-run*. When a step reports `done` (from
+  `on_node_update`, or `on_finished`'s resolve loop for whatever step was
+  still running at run-end), `_render_step_preview` resolves it via
+  `pipeline_view_model._resolve_artifact` and drops a small widget into
+  `self._step_preview[node_id]`: `.gif` → animated `artgen_render.
+  AnimatedGifWidget`; raster/video → the module's static `_build_thumb_frame`
+  (video = poster; full in-tile playback is a later drill-in slice); every
+  other artgen kind → `artgen_render.render_artifact_widget` (same dispatch
+  `ArtgenViewerWindow` uses). Fully fail-soft — a missing/corrupt artifact or
+  a render error leaves the slot untouched, never crashes the live view.
+  **Known cost (tracked):** the artgen-text/ansi/json/py branch builds a real
+  `WebKit.WebView` reading-view per done text-ish step; it degrades fail-soft
+  but a lighter static `artgen_thumb.make_thumbnail` tile would be more
+  idiomatic for a thumbnail — a candidate follow-up.
+- **Per-chip AnimateDiff, preserved and shared** (`app/chip_progress.py`).
+  The per-chip live rows (`CreateResultPanel`'s old `_upsert_chip_row`/
+  `_pending_chip_box`) were extracted into `ChipProgressRows(Gtk.Box)`
+  (`feed(line)->bool`, `reset`, `snapshot`, `restore`; `CHIP_LINE_RE`
+  anchored at index 0) — Create and the Stage's active tile both embed the
+  **same** widget. The load-bearing seam that makes them appear in a pipeline
+  run: multi-chip AnimateDiff's `chipN:` lines used to be swallowed by
+  `pipeline_engine._run_tt_ctl`'s `subprocess.run(capture_output=True)`.
+  `_run_tt_ctl(argv, timeout=, emit=None)` now, when `emit` is provided,
+  `Popen(stdout=PIPE, stderr=STDOUT)` + drains line-by-line calling `emit`;
+  `_h_animatediff` forwards each line as `ctx.emit("LOG:"+line)`, so the raw
+  chip lines reach `LiveRunView.on_log`, which feeds the running node's
+  `ChipProgressRows` (lines arrive indented, so `on_log` `.strip()`s before
+  `feed`). The `emit=None` path is byte-identical to the old capture.
+- **tensix-viz as the ambient machine** (`app/activity_viz.py`,
+  `ActivityVizWidget`). Embedded in the Stage, **lazily** — `LiveRunView.
+  __init__` builds nothing (WebKit-free at construction, guarded by a test;
+  eager construction segfaults the bwrap sandbox in CI); `_ensure_activity_viz`
+  (mirroring `CreateView._ensure_activity_viz`, try/except fail-soft) builds +
+  corner-pins it from `begin()`, into a `Gtk.Overlay` wrapping the spine
+  scroller. Driven by the run: a step going `running` calls `set_running(True)`
+  + `set_mode_str(_viz_mode_for_intent(step.intent))` (pure map:
+  image→diffusion, video/gif→video, text→thinking, else→inference);
+  `on_finished`/`mark_cancelled` call `set_idle()`. `set_mode_str(mode)` is a
+  new thin public passthrough to `_apply_mode` (the view has a mode *string*,
+  not a `Medium`). Board-switch `LOG` lines (`_SWITCH_MARKERS`) also populate a
+  first-class `_switch_status` label next to the header, not only the collapsed
+  Details log. **Accepted, flagged (final-review sign-off):** unlike
+  `CreateResultPanel`'s opt-in 👁 Watch, `begin()` builds the viz on *every*
+  run — a WebKit web-process SIGTRAP is not a Python exception, so on a machine
+  with WebKit present-but-unspawnable every run would crash. Moot on the QB2
+  target (WebKit verified working; the bwrap case is CI-only, neutralized by a
+  global `tests/conftest.py` autouse fixture forcing
+  `activity_viz._WEBKIT_OK=False` for every test — it weakens no coverage since
+  the WebView-asserting tests read the separate `artgen_render`/`create_view`
+  `_WEBKIT_OK` globals).
+- **Stop + no dead-end.** A `◼ Stop` button in the run page's back bar →
+  `_on_stop_run` → `self._runner.cancel()` (stored on the single launch path
+  `_on_run_remix`; `cancel()` is a safe no-op on a finished runner) +
+  `LiveRunView.mark_cancelled()` (flips only `pending`/`running` tiles to
+  `cancelled` ⊘ via `LiveRunView`'s OWN `{**OpenView..., "cancelled": ...}`
+  glyph/CSS copies — the `OpenView` class dicts are never mutated). The run
+  page's `← Back` was repointed from the SHARED `_on_back_to_open` (still used
+  correctly by the remix page → `open`) to a new `_on_run_back` → `discover`;
+  Back only navigates, it never cancels — the run keeps going and its result
+  lands in Discover. Two tracked minors: `mark_cancelled` doesn't update the
+  `ProgressState` reducer (a trailing log line can briefly route to a cancelled
+  tile; self-heals next run) and uses the bulk timer-cancel rather than a
+  per-node freeze (elapsed label ≤1s off).
+
 ## Pipeline UX overhaul (v0.75.0)
 
 Nine-task program closing the gap between what Pipeline Studio's step cards

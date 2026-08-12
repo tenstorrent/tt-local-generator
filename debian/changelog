@@ -1,3 +1,26 @@
+tt-local-generator (0.79.0) noble; urgency=medium
+
+  * feat(pipeline): the pipeline live run is now a "making-of" (Slice 1). The
+    flat status ticker is replaced by a left-to-right recipe spine of step
+    tiles (done / active / upcoming), each previewing its own output the
+    moment it lands (animated gif, raster/video thumb, or the artgen rich
+    reading view). Multi-chip AnimateDiff now shows one live row per chip
+    inside the active tile — its `chipN:` lines, previously swallowed by the
+    engine's captured subprocess, are streamed into the pipeline via a new
+    `_run_tt_ctl(emit=...)` seam and rendered through the shared
+    `chip_progress.ChipProgressRows` widget Create already uses. The
+    tensix-viz hardware animation is embedded as the run's ambient machine
+    (lazy, fail-soft, driven by the active step's mode), and the
+    board-reset / server-start log lines are surfaced as a first-class
+    status instead of hidden in the collapsed Details log. "Step N of M"
+    now counts steps that are *done*, not merely started; a Stop button
+    cancels the runner and marks remaining steps cancelled; and the run
+    page's Back no longer dead-ends on a blank Open — it routes to Discover
+    while the run keeps going. Display-only: `collect()` and the run spec
+    are byte-identical; the app's main teal/blue-gray palette throughout.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 15:30:00 +0000
+
 tt-local-generator (0.78.0) noble; urgency=medium
 
   * feat(tt-ctl): generations are saved to the Library by default; opt out with
