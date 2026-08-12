@@ -33,13 +33,16 @@ docs-site forest-teal; every `_CSS` byte literal stays ASCII-only.
   `self._step_preview[node_id]`: `.gif` → animated `artgen_render.
   AnimatedGifWidget`; raster/video → the module's static `_build_thumb_frame`
   (video = poster; full in-tile playback is a later drill-in slice); every
-  other artgen kind → `artgen_render.render_artifact_widget` (same dispatch
-  `ArtgenViewerWindow` uses). Fully fail-soft — a missing/corrupt artifact or
-  a render error leaves the slot untouched, never crashes the live view.
-  **Known cost (tracked):** the artgen-text/ansi/json/py branch builds a real
-  `WebKit.WebView` reading-view per done text-ish step; it degrades fail-soft
-  but a lighter static `artgen_thumb.make_thumbnail` tile would be more
-  idiomatic for a thumbnail — a candidate follow-up.
+  other artgen kind (svg/ans/json/py/txt/md) → a **static** thumbnail:
+  `artgen_thumb.make_thumbnail` → the same `_build_thumb_frame` the raster
+  branch uses (a real color-grid/swatch/monospace/vector PNG, honest
+  placeholder otherwise). This is the module's fixed-contract static-tile
+  surface, deliberately NOT `artgen_render.render_artifact_widget`'s WebKit
+  reading-view — the tile must not spawn a web process per text-ish step on
+  top of the ambient viz (final-review item (b), Taylor's call; the earlier
+  WebKit route was swapped out). Full rich rendering is the Slice-2 drill-in.
+  Fully fail-soft — a missing/corrupt artifact or a render error leaves the
+  slot untouched, never crashes the live view.
 - **Per-chip AnimateDiff, preserved and shared** (`app/chip_progress.py`).
   The per-chip live rows (`CreateResultPanel`'s old `_upsert_chip_row`/
   `_pending_chip_box`) were extracted into `ChipProgressRows(Gtk.Box)`
@@ -67,15 +70,17 @@ docs-site forest-teal; every `_CSS` byte literal stays ASCII-only.
   new thin public passthrough to `_apply_mode` (the view has a mode *string*,
   not a `Medium`). Board-switch `LOG` lines (`_SWITCH_MARKERS`) also populate a
   first-class `_switch_status` label next to the header, not only the collapsed
-  Details log. **Accepted, flagged (final-review sign-off):** unlike
-  `CreateResultPanel`'s opt-in 👁 Watch, `begin()` builds the viz on *every*
-  run — a WebKit web-process SIGTRAP is not a Python exception, so on a machine
-  with WebKit present-but-unspawnable every run would crash. Moot on the QB2
-  target (WebKit verified working; the bwrap case is CI-only, neutralized by a
-  global `tests/conftest.py` autouse fixture forcing
-  `activity_viz._WEBKIT_OK=False` for every test — it weakens no coverage since
-  the WebView-asserting tests read the separate `artgen_render`/`create_view`
-  `_WEBKIT_OK` globals).
+  Details log. **Ratified default-on (final-review sign-off, Taylor
+  2026-08-11):** unlike `CreateResultPanel`'s opt-in 👁 Watch, `begin()` builds
+  the viz on *every* run — the "visible machine, not a toggle you hunt for"
+  principle. A WebKit web-process SIGTRAP is not a Python exception, so on a
+  machine with WebKit present-but-unspawnable every run would crash; accepted
+  because the QB2 target has WebKit verified working, and the bwrap/CI case is
+  neutralized by a global `tests/conftest.py` autouse fixture forcing
+  `activity_viz._WEBKIT_OK=False` for every test (it weakens no coverage — the
+  WebView-asserting tests read the separate `artgen_render`/`create_view`
+  `_WEBKIT_OK` globals). A future spawnability probe / opt-in is a possible
+  follow-up if a broken-WebKit host ever matters.
 - **Stop + no dead-end.** A `◼ Stop` button in the run page's back bar →
   `_on_stop_run` → `self._runner.cancel()` (stored on the single launch path
   `_on_run_remix`; `cancel()` is a safe no-op on a finished runner) +
