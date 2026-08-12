@@ -310,6 +310,22 @@ def test_cycle_mode_advances_and_wraps(monkeypatch):
     assert w._mode_lbl.get_label().startswith("◉")
 
 
+def test_set_mode_str_calls_apply_mode(monkeypatch):
+    """`set_mode_str` (added for Pipeline Studio's LiveRunView, Slice 1 Task 6)
+    is a thin passthrough to `_apply_mode` — callers that already have a mode
+    STRING (e.g. `pipeline_studio._viz_mode_for_intent`) don't need to fake up
+    a `create_mediums.Medium`-shaped object just to drive the viz."""
+    _gtk_or_skip()
+    import activity_viz
+    monkeypatch.setattr(activity_viz, "_WEBKIT_OK", False)  # stay off WebKit
+    from activity_viz import ActivityVizWidget
+    w = ActivityVizWidget()
+    applied = []
+    monkeypatch.setattr(w, "_apply_mode", lambda m: applied.append(m))
+    w.set_mode_str("diffusion")
+    assert applied == ["diffusion"]
+
+
 def test_hide_stops_telemetry_and_calms():
     _gtk_or_skip()
     from create_view import CreateResultPanel

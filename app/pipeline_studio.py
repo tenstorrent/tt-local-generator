@@ -701,6 +701,15 @@ _CSS = b"""
     border-radius: 8px;
     padding: 4px 10px;
 }
+.ps-switch-status {
+    font-size: 11px;
+    font-family: monospace;
+    font-weight: 650;
+    color: #3a2a00;
+    background-color: #F6BC42;
+    border-radius: 8px;
+    padding: 3px 10px;
+}
 .ps-log-panel {
     background-color: #040d0c;
     border-left: 1px solid alpha(#74C5DF, 0.16);
@@ -3110,6 +3119,32 @@ class MuseView(Gtk.Box):
         self._message_label.set_visible(False)
 
 
+# ── LiveRunView's ambient-machine mode mapping (pure, GTK-free) ────────────
+#
+# activity_viz.mode_for_medium takes a create_mediums.Medium (`.id`/`.source`)
+# — a pipeline step has no such thing, only an intent_vocab.Intent with an
+# `output_kind`. This is the equivalent mapping for that vocabulary, kept as
+# a standalone pure function (unit-tested without GTK/WebKit) rather than
+# constructing a fake Medium duck-type just to reuse mode_for_medium.
+_VIZ_MODE_BY_OUTPUT_KIND = {
+    "image": "diffusion",
+    "video": "video",
+    "gif": "video",
+    "text": "thinking",
+}
+
+
+def _viz_mode_for_intent(intent) -> str:
+    """The tensix-viz animation mode that best evokes the work behind
+    *intent* (an intent_vocab.Intent, or None for an unresolved step) — image
+    output reads as diffusion, video/gif as video, text as thinking; anything
+    else (playlist/None-output/no intent at all) falls back to the generic
+    "inference" pulse, mirroring activity_viz.mode_for_medium's own
+    catch-all."""
+    kind = getattr(intent, "output_kind", None)
+    return _VIZ_MODE_BY_OUTPUT_KIND.get(kind, "inference")
+
+
 class LiveRunView(Gtk.Box):
     """Live-run page: watch a pipeline run's progress in real time (SP-C Phase 2a Task 3).
 
@@ -3299,6 +3334,14 @@ class LiveRunView(Gtk.Box):
         # stays hidden (see ChipProgressRows' own docstring) until fed.
         self._chip_rows: "dict[str, chip_progress.ChipProgressRows]" = {}
 
+        # Slice 1 Task 6: the tensix-viz ambient machine. NOT built here —
+        # WebKit is heavy and eager construction segfaults the bwrap sandbox
+        # in CI (see activity_viz.py / create_view.py's own lazy pattern).
+        # Stays None until _ensure_activity_viz() succeeds (first begin());
+        # every drive call below is guarded on this being non-None so a
+        # failed/skipped build degrades to a harmless no-op, never a crash.
+        self._activity_viz = None
+
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         header.set_margin_top(18)
         header.set_margin_start(18)
@@ -3326,6 +3369,19 @@ class LiveRunView(Gtk.Box):
         self._health_note.set_visible(False)
         header.append(self._health_note)
 
+        # Slice 1 Task 6: board-switch LOG lines ("resetting boards",
+        # "starting server" — see _SWITCH_MARKERS) used to be visible only
+        # inside the collapsed "Details" expander. Promoted here as a
+        # first-class ambient status next to the header so "the machine is
+        # switching backends" reads at a glance, without opening Details.
+        # Hidden until the first switch line arrives (on_log); reset by
+        # begin() so a previous run's status can never bleed into a new one.
+        self._switch_status = Gtk.Label(label="")
+        self._switch_status.set_xalign(0)
+        self._switch_status.add_css_class("ps-switch-status")
+        self._switch_status.set_visible(False)
+        header.append(self._switch_status)
+
         self.append(header)
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -3343,7 +3399,20 @@ class LiveRunView(Gtk.Box):
         steps_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         steps_scroller.set_vexpand(True)
         steps_scroller.set_hexpand(True)
-        body.append(steps_scroller)
+
+        # Slice 1 Task 6: the ambient-machine viz corner-pins into an Overlay
+        # over the step spine (never a plain Box — an expanding child of a
+        # plain Box gets stretched to fill it instead of pinned to a corner,
+        # the same MVP bug activity_viz.py's own docstring warns about).
+        # Wrapping only the spine (not the whole `body`, which also holds the
+        # log Details expander) keeps `body`'s own two-child structure
+        # (spine, then Details) exactly as it was — existing structural
+        # tests that walk `body`'s children are unaffected.
+        self._stage_overlay = Gtk.Overlay()
+        self._stage_overlay.set_child(steps_scroller)
+        self._stage_overlay.set_hexpand(True)
+        self._stage_overlay.set_vexpand(True)
+        body.append(self._stage_overlay)
 
         self._steps_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._steps_box.add_css_class("ps-spine")
@@ -3401,6 +3470,10 @@ class LiveRunView(Gtk.Box):
         self._title_label.set_label(run.title)
         self._health_note.set_visible(False)
         self._health_note.set_label("")
+        # Slice 1 Task 6: a board-switch status from a PREVIOUS run showing in
+        # this same (reused) widget must not bleed into the new one.
+        self._switch_status.set_visible(False)
+        self._switch_status.set_label("")
 
         while child := self._steps_box.get_first_child():
             self._steps_box.remove(child)
@@ -3442,6 +3515,49 @@ class LiveRunView(Gtk.Box):
         self._progress = pipeline_progress.ProgressState(total=len(run.steps))
         self._update_step_count_label()
 
+        # Slice 1 Task 6: first begin() lazily builds the ambient-machine
+        # viz; a later begin() (widget reused for a second run) is a no-op —
+        # _ensure_activity_viz guards on self._activity_viz already being set.
+        self._ensure_activity_viz()
+
+    # ── Ambient machine (tensix-viz) ─────────────────────────────────────────
+
+    def _ensure_activity_viz(self) -> None:
+        """Build the tensix-viz ambient-machine widget ONCE, pin it into the
+        step-spine's bottom-right corner, and wire its own ✕ to idle it back
+        down. Mirrors create_view.CreateView._ensure_activity_viz's lazy,
+        fail-soft shape exactly: WebKit is a heavy JS-engine/web-process cost
+        (and eager construction segfaults the bwrap sandbox in nested-sandbox
+        CI), so this is called from begin() — never __init__ — and any
+        failure (no WebKit, no overlay yet) just leaves the viz a harmless
+        no-op; every drive call elsewhere is guarded on `_activity_viz is not
+        None`."""
+        if self._activity_viz is not None:
+            return
+        overlay = getattr(self, "_stage_overlay", None)
+        if overlay is None:
+            return
+        try:
+            from activity_viz import ActivityVizWidget
+            viz = ActivityVizWidget()
+        except Exception:
+            return
+        # Corner-pin: bottom-right of the step spine, same margins as
+        # CreateView's instance (clears an overlay scrollbar if one appears).
+        viz.set_halign(Gtk.Align.END)
+        viz.set_valign(Gtk.Align.END)
+        viz.set_margin_bottom(8)
+        viz.set_margin_end(18)
+        # There's no separate Watch toggle on this surface (unlike Create) —
+        # the viz's own ✕ just calms it back to idle in place.
+        viz.on_close = self._on_activity_viz_close
+        overlay.add_overlay(viz)
+        self._activity_viz = viz
+
+    def _on_activity_viz_close(self) -> None:
+        if self._activity_viz is not None:
+            self._activity_viz.set_idle()
+
     # ── PipelineRunner callback handlers ─────────────────────────────────────
     #
     # Signatures below match pipeline_runner.PipelineRunner exactly: it
@@ -3467,6 +3583,14 @@ class LiveRunView(Gtk.Box):
         still updated exactly as before (`_set_status_glyph`), just hidden
         behind the spinner while "running" — every existing glyph-text
         assertion in tests/test_pipeline_studio.py keeps working unchanged.
+
+        Slice 1 Task 6: a step going "running" also wakes the ambient-machine
+        viz (telemetry tap on) and re-points its animation mode at THIS
+        step's `Intent.output_kind` via `_viz_mode_for_intent` — the chips
+        visibly pulse with whatever the active step is actually doing.
+        Guarded on `_activity_viz is not None` so a skipped/failed lazy build
+        (or the synthetic __health__ signal, handled above and returned from
+        already) never touches it.
         """
         if job == "__health__":
             self._show_health_note(node_id, status, detail)
@@ -3488,6 +3612,11 @@ class LiveRunView(Gtk.Box):
         self._update_phase_label(node_id, status, detail)
         self._update_elapsed_timer(node_id, status)
         self._update_step_count_label()
+        if status == "running" and self._activity_viz is not None:
+            self._activity_viz.set_running(True)
+            step = self._run_steps.get(node_id)
+            intent = step.intent if step is not None else None
+            self._activity_viz.set_mode_str(_viz_mode_for_intent(intent))
         if status == "done":
             self._render_step_preview(node_id)
 
@@ -3506,13 +3635,25 @@ class LiveRunView(Gtk.Box):
         step's `ChipProgressRows` (multi-chip AnimateDiff's "chipN: ..."
         lines, Task 2) — `feed()` is a harmless no-op for any line that
         isn't chip-shaped, so ordinary log lines pass through untouched.
+
+        Slice 1 Task 6: a board-switch line is ALSO surfaced as a first-class
+        `self._switch_status` label next to the header (see _is_switch_line)
+        — "the machine is switching backends" is a feature worth seeing
+        without opening the collapsed Details expander, not just log noise
+        to bury there. This is purely additive: the line still gets its
+        existing styled row in `_log_box` below, unchanged.
         """
         text = line.rstrip("\n")
+        is_switch = self._is_switch_line(text)
         row = Gtk.Label(label=text)
         row.set_xalign(0)
         row.set_wrap(True)
-        row.add_css_class("ps-log-switch" if self._is_switch_line(text) else "ps-log-line")
+        row.add_css_class("ps-log-switch" if is_switch else "ps-log-line")
         self._log_box.append(row)
+
+        if is_switch:
+            self._switch_status.set_label(self._switch_status_text(text))
+            self._switch_status.set_visible(True)
 
         if line.startswith("LOG:"):
             self._track_output_dir(line)
@@ -3545,6 +3686,10 @@ class LiveRunView(Gtk.Box):
         the run ended — the common case for the LAST step) gets the same
         preview-render pass on_node_update's own "done" branch gives every
         earlier step, so the final step's artifact shows up too.
+
+        Slice 1 Task 6: the run is over either way (success or failure) —
+        calm the ambient-machine viz back to idle (mode idle + telemetry
+        tap stopped), guarded on it having actually been built.
         """
         resolved = "done" if success else "failed"
         for node_id, status in list(self._step_status.items()):
@@ -3561,6 +3706,8 @@ class LiveRunView(Gtk.Box):
                     self._render_step_preview(node_id)
 
         self._update_step_count_label()
+        if self._activity_viz is not None:
+            self._activity_viz.set_idle()
         if self._run_id is not None:
             self.emit("run-done", self._run_id)
 
@@ -3835,6 +3982,18 @@ class LiveRunView(Gtk.Box):
     def _is_switch_line(self, text: str) -> bool:
         lowered = text.lower()
         return any(marker in lowered for marker in self._SWITCH_MARKERS)
+
+    @staticmethod
+    def _switch_status_text(text: str) -> str:
+        """Strip the runner's leading "LOG:" marker (and surrounding
+        whitespace) from a board-switch line so the ambient status label
+        reads like a plain sentence instead of raw runner-log formatting —
+        e.g. "LOG:  resetting boards (flux → skyreels)" ->
+        "resetting boards (flux → skyreels)"."""
+        stripped = text
+        if stripped.startswith("LOG:"):
+            stripped = stripped[len("LOG:"):]
+        return stripped.strip()
 
     def _show_health_note(self, node_id: str, status: str, detail: str) -> None:
         """Render the runner's synthetic __health__ signal as a small note.

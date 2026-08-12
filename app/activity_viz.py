@@ -467,6 +467,15 @@ class ActivityVizWidget(Gtk.Box):
         update the header caption. Independent of the telemetry tap."""
         self._apply_mode(mode_for_medium(medium) if medium is not None else "idle")
 
+    def set_mode_str(self, mode: str) -> None:
+        """Directly activate a tensix-viz mode string, bypassing the medium
+        mapping. For callers that already have a mode name in their own
+        domain vocabulary (e.g. Pipeline Studio's `_viz_mode_for_intent`,
+        keyed off `Intent.output_kind` rather than a `create_mediums.Medium`)
+        — a thin, explicit alternative to `set_mode` rather than forcing
+        every caller through a `Medium`-shaped duck-type."""
+        self._apply_mode(mode)
+
     def cycle_mode(self) -> None:
         """Advance to the next tensix-viz mode (title-click manual override).
         The auto-driver reasserts the medium's mode on the next job."""

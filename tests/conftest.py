@@ -140,3 +140,33 @@ def _isolate_app_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(_as, "settings", fresh, raising=False)
     monkeypatch.setattr(_cpp, "_settings", fresh, raising=False)
     monkeypatch.setattr(_mw, "_settings", fresh, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _keep_activity_viz_webkit_free(monkeypatch):
+    """Force `activity_viz.ActivityVizWidget` to build its WebKit-less stub
+    (header/mode-label only, no real `WebKit.WebView`) for every test in the
+    suite.
+
+    Root cause this guards against: Pipeline Studio's `LiveRunView.begin()`
+    (Stage ambient-machine, v0.75.x) lazily but UNCONDITIONALLY builds a real
+    `ActivityVizWidget` the first time a run starts — there's no opt-in Watch
+    toggle on that surface, unlike Create's. Constructing a real
+    `WebKit.WebView` crashes this sandbox/nested-CI environment outright
+    (`bwrap: setting up uid map: Permission denied` -> SIGTRAP that kills the
+    whole pytest process, not a catchable Python exception) — the same
+    documented "nested-sandbox bwrap" crash class this repo's CLAUDE.md
+    already calls out for `CreateResultPanel` (live rendering is verified on
+    the real display instead, where WebKit works fine).
+
+    Before this fixture existed, only `test_activity_viz.py`'s own tests
+    manually patched `_WEBKIT_OK` per-test; nothing protected the OTHER ~15
+    test files that transitively construct a real `LiveRunView`/
+    `PipelineStudio` (test_pipeline_library_registration.py,
+    test_pipeline_hero.py, test_main_window_pipelines.py, ...) from hitting
+    this the moment `begin()` started calling `_ensure_activity_viz()`.
+    Global + autouse, mirroring `_isolate_pipeline_store`/`_isolate_media_store`
+    above, so no individual test file needs to know this crash class exists.
+    """
+    import activity_viz
+    monkeypatch.setattr(activity_viz, "_WEBKIT_OK", False)

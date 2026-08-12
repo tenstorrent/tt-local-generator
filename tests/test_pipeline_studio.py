@@ -1981,6 +1981,181 @@ def test_live_run_view_log_scroller_wrapped_in_collapsed_expander():
     assert log_expander.get_label() == "Details"
 
 
+# ── Slice 1 Task 6: tensix-viz as the Stage's ambient machine ───────────────
+#
+# The viz is lazily embedded (WebKit is heavy; __init__ must stay WebKit-free
+# for CI/bwrap) and driven by the active step's Intent.output_kind, not a
+# create_mediums.Medium (pipeline steps don't have one) — see
+# `_viz_mode_for_intent`. Board-switch LOG lines are ALSO promoted to a
+# first-class `_switch_status` label next to the header, in addition to (not
+# instead of) the existing collapsed-Details log append.
+
+def test_live_run_construction_is_webkit_free():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    assert getattr(view, "_activity_viz", None) is None  # not built at construction
+
+
+def test_live_run_begin_builds_the_viz_lazily():
+    """begin() is the first point a viz is ever attempted (fail-soft: a real
+    WebKit failure would leave it None, but on a normal dev/CI box with
+    WebKit-6.0 available it builds successfully)."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    assert view._activity_viz is not None
+    assert view._activity_viz.get_parent() is view._stage_overlay
+
+
+class _FakeViz:
+    """Records set_running/set_mode_str/set_idle without touching WebKit — a
+    stand-in for ActivityVizWidget, mirroring test_activity_viz.py's _FakeViz."""
+    def __init__(self):
+        self.calls = []
+
+    def set_running(self, b):
+        self.calls.append(("run", b))
+
+    def set_mode_str(self, mode):
+        self.calls.append(("mode", mode))
+
+    def set_idle(self):
+        self.calls.append(("idle", None))
+
+
+def test_live_run_drives_viz_mode_and_running():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view._activity_viz = _FakeViz()  # inject (bypass the lazy WebKit build)
+
+    view.on_node_update("job", "1", "running", "")
+
+    assert ("run", True) in view._activity_viz.calls
+    # step "1" is TTLGTextToImage -> output_kind "image" -> "diffusion" mode.
+    assert ("mode", "diffusion") in view._activity_viz.calls
+
+
+def test_live_run_viz_mode_tracks_each_step_output_kind():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    fake = _FakeViz()
+    view._activity_viz = fake
+
+    view.on_node_update("job", "2", "running", "")  # TTLGImageToVideo -> video
+    assert ("mode", "video") in fake.calls
+    fake.calls.clear()
+
+    view.on_node_update("job", "3", "running", "")  # TTLGGenerateText -> thinking
+    assert ("mode", "thinking") in fake.calls
+
+
+def test_live_run_health_update_does_not_drive_viz():
+    """job=='__health__' is a synthetic non-step signal — it must never be
+    mistaken for a real step going 'running' and spuriously wake the viz."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    fake = _FakeViz()
+    view._activity_viz = fake
+
+    view.on_node_update("__health__", "__chips__", "degraded", "hint")
+
+    assert fake.calls == []
+
+
+def test_live_run_on_finished_idles_the_viz():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    fake = _FakeViz()
+    view._activity_viz = fake
+
+    view.on_node_update("job", "1", "running", "")
+    fake.calls.clear()
+    view.on_finished(True)
+
+    assert ("idle", None) in fake.calls
+
+
+def test_live_run_viz_drive_is_a_harmless_noop_before_lazy_build():
+    """Injecting nothing (the real lazy-build path failed, or begin() was
+    never called) must never crash on_node_update/on_finished — every drive
+    call is guarded `if self._activity_viz is not None`."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view._activity_viz = None  # simulate a failed/skipped lazy build
+
+    view.on_node_update("job", "1", "running", "")
+    view.on_finished(True)  # must not raise
+
+
+def test_viz_mode_for_intent_maps_output_kind():
+    from pipeline_studio import _viz_mode_for_intent
+    from intent_vocab import intent_for
+
+    assert _viz_mode_for_intent(intent_for("TTLGTextToImage")) == "diffusion"
+    assert _viz_mode_for_intent(intent_for("TTLGImageToVideo")) == "video"
+    assert _viz_mode_for_intent(intent_for("TTLGGenerateText")) == "thinking"
+    assert _viz_mode_for_intent(None) == "inference"
+
+
+def test_viz_mode_for_intent_gif_is_video_and_unknown_is_inference():
+    from pipeline_studio import _viz_mode_for_intent
+    from types import SimpleNamespace as _SN
+
+    assert _viz_mode_for_intent(_SN(output_kind="gif")) == "video"
+    assert _viz_mode_for_intent(_SN(output_kind="playlist")) == "inference"
+    assert _viz_mode_for_intent(_SN(output_kind=None)) == "inference"
+
+
+def test_live_run_on_log_switch_line_promoted_to_ambient_status():
+    """A board-switch LOG line still appends into the collapsed _log_box (per
+    the pre-existing test above) AND now also surfaces as a first-class,
+    visible `_switch_status` label next to the header — so "the machine is
+    switching backends" is readable without opening Details."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    assert view._switch_status.get_visible() is False  # hidden until a switch line arrives
+
+    view.on_log("LOG:  resetting boards (flux → skyreels)")
+
+    assert view._switch_status.get_visible() is True
+    assert "resetting boards" in view._switch_status.get_label()
+    # Still appended to the collapsed log tail too — additive, not a replacement.
+    last = view._log_box.get_last_child()
+    assert last.has_css_class("ps-log-switch")
+
+
+def test_live_run_on_log_plain_line_does_not_touch_switch_status():
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_log("NODE:1:running:")
+
+    assert view._switch_status.get_visible() is False
+
+
+def test_live_run_begin_resets_switch_status():
+    """begin() is repeat-safe: a switch status left over from a previous run
+    must not bleed into the next one shown in the same widget."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_log("LOG: starting server flux")
+    assert view._switch_status.get_visible() is True
+
+    view.begin(_make_live_run())
+
+    assert view._switch_status.get_visible() is False
+    assert view._switch_status.get_label() == ""
+
+
 # ── Task 5: per-step output preview + per-chip rows ─────────────────────────
 #
 # These pin two things: on_log derives+stores output_dir from a runner
