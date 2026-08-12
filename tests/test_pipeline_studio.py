@@ -3012,3 +3012,66 @@ def test_open_view_fanout_step_renders_a_grid_of_all_stills():
     grid = view._step_thumb_frames["1"]
     assert isinstance(grid, Gtk.FlowBox)
     assert grid.observe_children().get_n_items() == len(paths)
+
+
+# ── Task 7: Stop + no dead-end ───────────────────────────────────────────────
+
+def test_stop_cancels_runner_and_marks_remaining():
+    """Stop button -> runner.cancel() (guarded) + LiveRunView.mark_cancelled()."""
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+    runner = MagicMock()
+    studio._runner = runner
+    studio._on_stop_run(None)
+    runner.cancel.assert_called_once()
+
+
+def test_stop_with_no_runner_is_a_safe_no_op():
+    """A stray Stop click before any run launched (self._runner is None)
+    must not raise -- mark_cancelled() should still run harmlessly."""
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+    assert studio._runner is None
+    studio._on_stop_run(None)  # must not raise
+
+
+def test_mark_cancelled_resolves_pending_and_running_but_not_done():
+    """Driving a live run partway through, then calling mark_cancelled(),
+    resolves every still-pending/running node to "cancelled" while a
+    genuinely-finished ("done") node keeps its real terminal state."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+
+    view.on_node_update("job", "1", "running", "")
+    view.on_node_update("job", "1", "done", "")
+    view.on_node_update("job", "2", "running", "")
+    # node "3" is left "pending" (never started)
+
+    view.mark_cancelled()
+
+    assert view._step_status["1"] == "done"
+    assert view._step_status["2"] == "cancelled"
+    assert view._step_status["3"] == "cancelled"
+    assert view._step_status_labels["2"].get_label() == "⊘"
+    assert view._step_status_labels["3"].get_label() == "⊘"
+    assert view._step_status_labels["1"].get_label() == "✓"
+
+
+def test_run_back_goes_to_discover_not_blank_open():
+    """The run page's Back must never land on a stale/blank Open page for a
+    Muse-launched run (no _current_run_view/_current_spec_path set)."""
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+    studio._current_run_view = None
+    studio._on_run_back(None)
+    assert studio.stack.get_visible_child_name() == "discover"
+
+
+def test_remix_back_still_goes_to_open():
+    """Guard: the shared _on_back_to_open handler (still used by the remix
+    page's own back button) must be untouched by the run-page back fix."""
+    from pipeline_studio import PipelineStudio
+    studio = PipelineStudio()
+    studio._on_back_to_open(None)
+    assert studio.stack.get_visible_child_name() == "open"

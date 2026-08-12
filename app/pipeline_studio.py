@@ -3247,9 +3247,14 @@ class LiveRunView(Gtk.Box):
     # Reuse OpenView's status glyph/CSS maps — same status vocabulary
     # (done/running/pending/failed) and same visual language, so a step
     # looks identical whether you're browsing it after the fact (OpenView)
-    # or watching it happen live (this view).
-    _STATUS_GLYPH = OpenView._STATUS_GLYPH
-    _STATUS_CSS = OpenView._STATUS_CSS
+    # or watching it happen live (this view). LiveRunView additionally needs
+    # a "cancelled" entry (Stop button, Task 7) that OpenView has no use for
+    # (a saved run is never "cancelled" after the fact) — copy the dicts
+    # instead of mutating OpenView's, so OpenView's own status vocabulary is
+    # untouched. "cancelled" reuses the existing "pending" CSS class (a dim/
+    # dashed "didn't finish" look) rather than inventing new CSS.
+    _STATUS_GLYPH = {**OpenView._STATUS_GLYPH, "cancelled": "⊘"}
+    _STATUS_CSS = {**OpenView._STATUS_CSS, "cancelled": "ps-status-pending"}
 
     # Substrings (case-insensitive) that mark a LOG: line as a board-switch
     # event per the mockup ("LOG:  resetting boards (flux → skyreels)",
@@ -3710,6 +3715,30 @@ class LiveRunView(Gtk.Box):
             self._activity_viz.set_idle()
         if self._run_id is not None:
             self.emit("run-done", self._run_id)
+
+    def mark_cancelled(self) -> None:
+        """Stop button (Task 7) → resolve every not-yet-finished step to
+        "cancelled" so the Stage reads consistently instead of freezing
+        mid-spin on whatever was running the instant Stop was pressed.
+
+        Deliberately narrower than `on_finished`: only steps still "pending"
+        or "running" are touched — a step already "done"/"failed" keeps its
+        real terminal state, since the run genuinely got that far. Unlike
+        `on_finished`, this does NOT emit "run-done" — cancelling here is a
+        pure UI resolution; the runner itself (already asked to `cancel()`
+        by the caller) is the one that decides whether/how the run record
+        itself gets closed out.
+        """
+        for node_id, status in list(self._step_status.items()):
+            if status in ("pending", "running"):
+                self._step_status[node_id] = "cancelled"
+                self._set_status_glyph(self._step_status_labels[node_id], "cancelled")
+                self._set_tile_state(node_id, "cancelled")
+                self._update_spinner(node_id, "cancelled")
+
+        self._cancel_all_elapsed_timers()
+        if self._activity_viz is not None:
+            self._activity_viz.set_idle()
 
     # ── Tile building / helpers ──────────────────────────────────────────────
 
@@ -4202,6 +4231,14 @@ class PipelineStudio(Gtk.Box):
         self._current_run_view: "Optional[RunView]" = None
         self._current_spec_path: "Optional[str]" = None
 
+        # The PipelineRunner driving the currently-visible (or last-launched)
+        # run — Task 7's Stop button needs a live handle to call `.cancel()`
+        # on. None until the first `_on_run_remix` launches a run; a stale
+        # reference after a run finishes is harmless (`cancel()` on an
+        # already-finished runner is a no-op) since Stop is only reachable
+        # from the run page anyway.
+        self._runner: "Optional[PipelineRunner]" = None
+
         # The seed_artifact `show_muse()` was last called with — remembered
         # purely so `_on_muse_goal_chosen` can pick the right remix title
         # ("a new pipeline" vs. f"your {kind}") without MuseView itself
@@ -4310,8 +4347,17 @@ class PipelineStudio(Gtk.Box):
         run_back_btn = Gtk.Button(label="← Back")
         run_back_btn.add_css_class("ps-open-back")
         run_back_btn.add_css_class("ps-btn-ghost")
-        run_back_btn.connect("clicked", self._on_back_to_open)
+        run_back_btn.connect("clicked", self._on_run_back)
         run_back_bar.append(run_back_btn)
+
+        # Task 7: Stop cancels the actual runner (self._runner.cancel()) and
+        # resolves every still-pending/running Stage tile to "cancelled" —
+        # separate from Back, which only navigates away and never cancels.
+        run_stop_btn = Gtk.Button(label="◼ Stop")
+        run_stop_btn.add_css_class("ps-btn-ghost")
+        run_stop_btn.connect("clicked", self._on_stop_run)
+        run_back_bar.append(run_stop_btn)
+
         run_page.append(run_back_bar)
 
         self.live_run = LiveRunView()
@@ -4357,6 +4403,33 @@ class PipelineStudio(Gtk.Box):
 
     def _on_back_to_open(self, _button: Gtk.Button) -> None:
         self.stack.set_visible_child_name("open")
+
+    def _on_run_back(self, _button: Gtk.Button) -> None:
+        """Run page's "← Back" → Discover, never the stale/blank Open page.
+
+        A Muse-launched run (the common path since the recipe/build flow)
+        never populates `_current_run_view`/`_current_spec_path` — OpenView
+        was built for browsing a run opened FROM Discover, not for a run
+        just launched from Remix. Routing Back to "open" in that case landed
+        on a blank page with no way out (the dead-end this task fixes).
+        Discover is always populated (or empty-but-legible) and the run
+        itself is unaffected — it keeps driving PipelineRunner's callbacks
+        in the background regardless of which stack page is visible; its
+        result still lands in Discover/Library when it finishes.
+        """
+        self.stack.set_visible_child_name("discover")
+
+    def _on_stop_run(self, _button: Gtk.Button) -> None:
+        """Stop button → cancel the actual runner and freeze the Stage.
+
+        Guarded on `self._runner` being set (a run must have actually been
+        launched via `_on_run_remix`) so a stray click before any run starts
+        is a harmless no-op. `LiveRunView.mark_cancelled()` always runs
+        (even if there's no runner) so the visible tiles never look stuck.
+        """
+        if self._runner is not None:
+            self._runner.cancel()
+        self.live_run.mark_cancelled()
 
     def _on_remix_request(self, _widget: "OpenView", node_id: str) -> None:
         """OpenView's "Remix from here"/"Remix whole pipeline" → open RemixView.
@@ -4453,6 +4526,7 @@ class PipelineStudio(Gtk.Box):
         self.stack.set_visible_child_name("run")
 
         runner = PipelineRunner(idle_add=GLib.idle_add)
+        self._runner = runner
         runner.start(
             derived_path,
             jobs,
