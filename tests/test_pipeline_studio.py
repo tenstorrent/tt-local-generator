@@ -2227,10 +2227,34 @@ def test_active_tile_shows_per_chip_rows():
     view = LiveRunView()
     view.begin(_make_live_run())
     view.on_node_update("job", "1", "running", "")
-    view.on_log("  chip0: Step 5/25\n")
-    view.on_log("  chip1: Step 6/25\n")
+    # Feed the REAL runner form: multi-chip AnimateDiff's per-chip lines reach
+    # on_log wrapped by the engine seam (_h_animatediff emits each raw line as
+    # ctx.emit("LOG:"+s)), so the runner delivers "LOG:  chipN: ...", NOT a
+    # bare "chipN: ...". Feeding the bare form here previously masked the bug
+    # where the "LOG:" prefix defeated ChipProgressRows.feed's index-0 regex.
+    view.on_log("LOG:  chip0: Step 5/25\n")
+    view.on_log("LOG:  chip1: Step 6/25\n")
     rows = view._chip_rows_for("1")
     assert rows is not None and set(rows._chip_row_labels) == {0, 1}
+
+
+def test_per_chip_rows_survive_engine_LOG_prefix():
+    """Regression (final-review C1): the Task 2 engine seam wraps AnimateDiff's
+    per-chip lines as "LOG:<line>", and the subprocess itself indents them, so
+    on_log receives "LOG:  chip0: Step 5/25". on_log must strip BOTH the "LOG:"
+    prefix and the indentation before ChipProgressRows.feed (whose regex is
+    anchored at index 0) — otherwise the per-chip rows the spec says must NOT
+    regress in the pipeline making-of silently never render."""
+    from pipeline_studio import LiveRunView
+    view = LiveRunView()
+    view.begin(_make_live_run())
+    view.on_node_update("job", "1", "running", "")
+    view.on_log("LOG:  chip0: Step 5/25\n")
+    rows = view._chip_rows_for("1")
+    assert rows is not None
+    assert 0 in rows._chip_row_labels
+    # The rendered row shows the parsed phase text, with the LOG:/indent gone.
+    assert "Step 5/25" in rows._chip_row_labels[0].get_label()
 
 
 def test_no_running_step_means_chip_lines_create_no_rows():

@@ -3668,12 +3668,19 @@ class LiveRunView(Gtk.Box):
             rows = self._chip_rows_for(running_node)
             if rows is not None:
                 # ChipProgressRows.feed anchors its "chipN: ..." match at the
-                # START of the string (re.match); the runner's actual chip
-                # lines arrive indented ("  chip0: Step 5/25") since they're
-                # tee'd straight from the subprocess's own log formatting, so
-                # strip leading/trailing whitespace before offering it up —
-                # feed() is a harmless no-op for anything still non-chip-shaped.
-                rows.feed(text.strip())
+                # START of the string (re.match), so the line has to be
+                # unwrapped down to the bare "chipN: ..." first. In the
+                # pipeline host these lines reach us wrapped by the engine
+                # seam: _h_animatediff emits each raw AnimateDiff line as
+                # ctx.emit("LOG:" + s), so the runner delivers
+                # "LOG:  chip0: Step 5/25" — the "LOG:" prefix AND the
+                # subprocess's own leading indentation both have to come off
+                # (drop "LOG:" like _track_output_dir/_switch_status_text do,
+                # then strip whitespace) or the regex never matches and the
+                # per-chip rows silently never render. feed() is a harmless
+                # no-op for anything still non-chip-shaped.
+                feed_line = text[4:] if text.startswith("LOG:") else text
+                rows.feed(feed_line.strip())
 
     def on_finished(self, success: bool) -> None:
         """Resolve any step still "running" to done/failed, then emit run-done.
