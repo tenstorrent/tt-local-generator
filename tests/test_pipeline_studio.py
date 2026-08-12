@@ -2191,8 +2191,11 @@ def test_step_done_preview_renders_real_content_for_resolvable_artifact(monkeypa
 
     Uses TTLGArtgenGenerate (outputs=("artifact_path", ...), any extension
     accepted by _resolve_artifact) with a plain .txt artifact so this
-    exercises the artgen_render.render_artifact_widget route without
-    needing real image/gif binary data to be valid.
+    exercises the static-thumbnail route (artgen_thumb.make_thumbnail ->
+    _build_thumb_frame — the WebKit-free fixed-contract tile surface, per
+    final-review item (b)) without needing real image/gif binary data to be
+    valid. The child widget placed is the thumb frame (or its honest
+    placeholder), never a WebKit reading-view.
     """
     from pipeline_studio import LiveRunView
     from intent_vocab import intent_for
@@ -2220,6 +2223,30 @@ def test_step_done_preview_renders_real_content_for_resolvable_artifact(monkeypa
 
     slot = view._step_preview["1"]
     assert slot.get_first_child() is not None
+
+
+def test_artgen_tile_preview_is_webkit_free_static_thumb(monkeypatch, tmp_path):
+    """Final-review item (b): a text-ish artgen artifact's tile preview must go
+    through the static make_thumbnail -> _build_thumb_frame route, NOT
+    artgen_render.render_artifact_widget (which builds a WebKit reading-view /
+    web process per step). Guard: fail the test if the WebKit route is taken."""
+    import artgen_render
+    from pipeline_studio import LiveRunView
+
+    def _boom(*_a, **_k):
+        raise AssertionError("tile preview must not call render_artifact_widget")
+
+    monkeypatch.setattr(artgen_render, "render_artifact_widget", _boom)
+
+    art = tmp_path / "node1.json"
+    art.write_text('{"colors": [{"hex": "#4FD1C5"}, {"hex": "#0F2A35"}]}')
+
+    view = LiveRunView()
+    widget = view._build_preview_widget(str(art))
+    # A real widget came back (the static thumb frame), and the WebKit route
+    # was never entered (else _boom would have raised).
+    assert widget is not None
+    assert isinstance(widget, Gtk.Box)
 
 
 def test_active_tile_shows_per_chip_rows():

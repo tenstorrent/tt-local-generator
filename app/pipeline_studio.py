@@ -230,9 +230,11 @@ Five pieces:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -244,6 +246,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, GObject, Gtk  # noqa: E402
 
 import artgen_render  # noqa: E402
+import artgen_thumb  # noqa: E402
 import capability_discovery  # noqa: E402
 import chip_progress  # noqa: E402
 from create_param_panels import ModifierPills, attach_inspire_button  # noqa: E402
@@ -446,6 +449,18 @@ def _build_thumb_frame(path: "str | None", width: int, height: int,
         placeholder.set_valign(Gtk.Align.CENTER)
         frame.append(placeholder)
     return frame
+
+
+def _stage_preview_thumb_path(src: str) -> Path:
+    """A deterministic scratch PNG path for a Stage tile's static thumbnail of
+    *src*. Keyed by a hash of the source path so re-rendering the same
+    artifact reuses (overwrites) one file instead of littering; lives under a
+    dedicated temp subdir, never the user's Library. Transient by design — the
+    tile is rebuilt on every run."""
+    digest = hashlib.sha1(src.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    cache_dir = Path(tempfile.gettempdir()) / "ttlg-stage-thumbs"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"{digest}.png"
 
 
 # Comfortable reading/gallery column width (fix #5, user feedback: Discover/
@@ -3226,9 +3241,12 @@ class LiveRunView(Gtk.Box):
     `artgen_render.AnimatedGifWidget`; raster images/video get this
     module's existing static `_build_thumb_frame` (video via a poster
     frame — full in-tile playback is a later drill-in slice, not this
-    task); every other artgen kind (svg/ans/json/py/txt/md/...) goes
-    through `artgen_render.render_artifact_widget`, the same dispatch
-    `ArtgenViewerWindow` uses. Every step of this is fail-soft — a missing/
+    task); every other artgen kind (svg/ans/json/py/txt/md/...) gets a
+    static thumbnail PNG (`artgen_thumb.make_thumbnail`) drawn through the
+    same `_build_thumb_frame` — the fixed-contract static-tile surface, not
+    `artgen_render`'s WebKit reading-view (final-review item (b): a lighter
+    tile that doesn't spawn a web process per text-ish step). Every step of
+    this is fail-soft — a missing/
     corrupt artifact or a rendering error just leaves the slot as it was,
     never crashes the in-progress run view. Separately, `on_log` also feeds
     every raw line to whatever step `self._progress.running_node` says is
@@ -4135,10 +4153,16 @@ class LiveRunView(Gtk.Box):
           the deliberate, brief-accepted scope here; full in-tile playback
           is a later drill-in slice.
         - anything else (svg/ans/json/py/txt/md/... — every artgen kind) ->
-          `artgen_render.render_artifact_widget`, the same ext->renderer
-          dispatch `ArtgenViewerWindow` uses, fed a minimal duck-typed
-          stand-in record (this view only has a bare path for a
-          still-running node, never a real `MediaRecord`).
+          a STATIC thumbnail: `artgen_thumb.make_thumbnail` renders a real
+          color-grid (`.ans`), swatch-grid (`.json` palette), monospace
+          (`.py`/`.md`) or vector (`.svg`) PNG (an honest placeholder for
+          anything it can't preview), drawn through the SAME
+          `_build_thumb_frame` the raster branch uses. This is
+          pipeline_studio's documented fixed-contract static-tile surface —
+          deliberately NOT `artgen_render`'s rich/animated WebKit
+          reading-view, which would spawn a web process per text-ish step on
+          top of the ambient viz (final-review item (b); Taylor chose the
+          static-thumb swap). Full rich rendering is the Slice-2 drill-in.
 
         Returns None (never raises) for anything none of the above can
         render — `_render_step_preview` already wraps this call in a
@@ -4156,10 +4180,16 @@ class LiveRunView(Gtk.Box):
                     path, self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H,
                     "ps-tile-preview-thumb",
                 )
-            record = SimpleNamespace(file_path=path, generator_type="", params_dict={})
-            widget = artgen_render.render_artifact_widget(record)
-            widget.set_size_request(self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H)
-            return widget
+            # Every other artgen kind -> a static thumbnail PNG, then the same
+            # frame builder as raster. make_thumbnail is fail-soft (returns an
+            # honest-placeholder path it can't preview), and _build_thumb_frame
+            # degrades to its own placeholder if the PNG won't load — so this
+            # never raises and never touches WebKit.
+            thumb = artgen_thumb.make_thumbnail(Path(path), _stage_preview_thumb_path(path))
+            return _build_thumb_frame(
+                str(thumb), self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H,
+                "ps-tile-preview-thumb",
+            )
         except Exception:
             log.debug("pipeline live-preview widget build failed for %s", path,
                       exc_info=True)
