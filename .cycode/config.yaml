@@ -1,0 +1,44 @@
+# Cycode configuration — SAST false-positive exclusions.
+#
+# Cycode's SAST engine has NO inline / per-line suppression annotation (no
+# `# cycode:ignore`), and its config exclusions are scoped by rule-ID or by
+# PATH — not by line. The two findings below are both in one file, so this is
+# the narrowest in-repo lever available (path-scoped, SAST only — narrower than
+# a repo-wide `.cycodeignore`, which would also drop secrets/SCA/IaC scanning).
+#
+# Excluded findings (Cycode "Unsanitized user input in file path", MEDIUM):
+#   - app/pipeline_engine.py:93   load_spec(path) -> json.loads(Path(path).read_text())
+#   - app/pipeline_engine.py:1372 run(output_dir) -> Path(output_dir).mkdir(...)
+#
+# Why these are false positives for THIS application:
+#   tt-local-generator is a SINGLE-USER desktop creative tool. Both flagged
+#   paths are the OPERATOR'S OWN input: `spec` and `--output-dir` are argparse
+#   args passed by the app's own bin/run_workflow.sh shim (the output dir is the
+#   app-generated ~/.local/share/tt-local-generator/workflow-runs/<timestamp>/
+#   directory) or by the operator on their own CLI. There is no untrusted /
+#   remote input source (verified: no network/shared/imported spec path exists —
+#   specs are generated locally by recipes/spec_remix) and no privilege boundary
+#   a crafted path could cross: the "attacker" and "victim" would be the same
+#   user, who already owns the filesystem being operated on. A "safelist" base
+#   would only stop the operator from placing their OWN files where they want,
+#   buying no security.
+#
+# TRADEOFF (accepted): this drops app/pipeline_engine.py from SAST entirely, so
+# a genuinely new SAST-class issue introduced here later would not be flagged.
+# The engine invokes subprocesses via argv lists (never shell=True) and writes
+# artifacts only under the controlled ctx.output_dir, so the residual risk is
+# low — but changes to this file warrant manual security review since automated
+# SAST no longer covers it. If Cycode rule-IDs become available (via the Cycode
+# console or `cycode ignore -t sast --by-rule <id>`), prefer a rule-scoped
+# exclusion of the file-path rule over this whole-file path exclusion.
+#
+# NOTE: the sibling findings that WERE genuinely actionable are fixed in code,
+# not suppressed here:
+#   - tests/test_workflow_runner.py fake interpreter chmod 0o755 -> 0o700
+#   - app/patch_verify.py vendor-tree joins routed through _safe_join()
+#     (abspath + expected-base containment)
+
+exclusions:
+  sast:
+    paths:
+      - app/pipeline_engine.py
