@@ -66,6 +66,25 @@ def _current_vendor_version(vendor_root: Path) -> str | None:
         return None
 
 
+def _safe_join(base: Path, rel: str) -> "Path | None":
+    """Join manifest-declared *rel* onto *base* and confirm it resolves WITHIN
+    base. Returns the resolved path, or None if it escapes (a '..' traversal or
+    an absolute path) — the caller treats None exactly like a missing target.
+
+    `rel` comes from the in-repo patch manifest (`patch_manifest.PATCHES`), not
+    user input, so this never triggers in practice; it's an asserted invariant
+    and the abspath + expected-base containment check (the SAST 'file path'
+    rule's own recommended remediation) rather than reading a joined path
+    blindly."""
+    base_resolved = base.resolve()
+    candidate = (base_resolved / rel).resolve()
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError:
+        return None
+    return candidate
+
+
 def verify(vendor_root, entries=None) -> list[ProbeResult]:
     """Run every probe; collect ALL results (never stop at the first failure)."""
     vendor_root = Path(vendor_root)
@@ -76,8 +95,8 @@ def verify(vendor_root, entries=None) -> list[ProbeResult]:
 
     for e in entries:
         if e.kind == "inject":
-            target = vendor_root / e.target
-            if not target.is_file():
+            target = _safe_join(vendor_root, e.target)
+            if target is None or not target.is_file():
                 results.append(ProbeResult(e.id, False, "error",
                     f"{e.id}: inject target missing: {e.target}"))
                 continue
@@ -91,8 +110,8 @@ def verify(vendor_root, entries=None) -> list[ProbeResult]:
                 results.append(ProbeResult(e.id, True, "error", f"{e.id}: ok"))
 
         elif e.kind == "append":
-            target = vendor_root / e.target
-            if not target.is_file():
+            target = _safe_join(vendor_root, e.target)
+            if target is None or not target.is_file():
                 results.append(ProbeResult(e.id, False, "error",
                     f"{e.id}: append target missing: {e.target} "
                     f"(catalog moved? — {e.premise})"))
@@ -100,8 +119,8 @@ def verify(vendor_root, entries=None) -> list[ProbeResult]:
                 results.append(ProbeResult(e.id, True, "error", f"{e.id}: ok"))
 
         elif e.kind == "bind_mount":
-            src = _REPO_ROOT / e.target
-            if not src.is_file():
+            src = _safe_join(_REPO_ROOT, e.target)
+            if src is None or not src.is_file():
                 results.append(ProbeResult(e.id, False, "error",
                     f"{e.id}: patch source missing: {e.target}"))
                 continue

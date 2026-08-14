@@ -1017,7 +1017,11 @@ def _write_fake_python_recorder(tmp_path: Path, record_file: Path) -> Path:
         f'echo "$@" >> "{record_file}"\n'
         "exit 0\n"
     )
-    fake.chmod(0o755)
+    # Owner rwx only (0o700): the test runs the fake interpreter as the same
+    # user that wrote it, so it never needs group/other read+exec. Keeps the
+    # throwaway helper least-privilege (satisfies the SAST permissive-perms
+    # check) without changing what the test exercises.
+    fake.chmod(0o700)
     return fake
 
 
