@@ -181,7 +181,15 @@ class PossibilitiesWall(Gtk.Box):
     def _build_art(self, kind: str, payload, medium) -> Gtk.Widget:
         if kind == "thumb":
             try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(payload, _TILE_W, _TILE_H, False)
+                # Zoom-to-fill (like CSS `object-fit: cover`), never stretch.
+                # preserve_aspect_ratio=True keeps the image undistorted, loaded
+                # into a generous 2x box so ContentFit.COVER (below) can crop-to-
+                # fill the tile crisply. The old `False` here pre-stretched the
+                # pixbuf to the exact tile size, distorting a non-square image
+                # and leaving COVER nothing to crop.
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    payload, _TILE_W * 2, _TILE_H * 2, True
+                )
                 pic = Gtk.Picture.new_for_pixbuf(pb)
                 pic.set_content_fit(Gtk.ContentFit.COVER)
                 return pic

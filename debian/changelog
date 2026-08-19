@@ -1,3 +1,16 @@
+tt-local-generator (0.85.0) noble; urgency=medium
+
+  * fix(ui): the "Start Something" wall tiles zoom-to-fill instead of stretching.
+    The exemplar image was loaded with preserve_aspect_ratio=False, pre-stretching
+    it to the exact tile size and distorting any non-square image (worst on the
+    rectangular Image tile) — which also defeated the ContentFit.COVER already
+    set on the Picture. Now the pixbuf loads undistorted into a generous box and
+    COVER crops-to-fill like CSS object-fit: cover. (This was the only
+    preserve_aspect_ratio=False left in the app; every other thumbnail already
+    preserves aspect + COVERs.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 22:00:00 +0000
+
 tt-local-generator (0.84.0) noble; urgency=medium
 
   * fix(ui): re-skin the primary-action buttons from the docs-site accent blue
