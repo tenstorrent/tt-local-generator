@@ -43,6 +43,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gio, Gtk, Pango
 
 from api_client import APIClient
+import app_settings
 from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
@@ -5589,25 +5590,35 @@ class MainWindow(Gtk.ApplicationWindow):
         self._build_menu_actions()
 
         # ── Pipelines: set apart from the four-verb loop as the advanced tool ──
-        _loop_div = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        _loop_div.add_css_class("loop-nav-divider")
-        loop_nav_row.append(_loop_div)
+        # Gated behind app_settings.PIPELINE_MODE_ENABLED (default off, see
+        # task-5-brief.md — "remix without pipeline mode"): when the flag is
+        # off, neither the divider nor the toggle is built/appended at all,
+        # and `self._pipelines_btn` stays `None`. Every other reference to
+        # `_pipelines_btn` in this file already guards with
+        # `getattr(self, "_pipelines_btn", None)`, so a `None` toggle is a
+        # safe no-op everywhere else.
+        self._pipelines_btn = None
+        if app_settings.PIPELINE_MODE_ENABLED:
+            _loop_div = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            _loop_div.add_css_class("loop-nav-divider")
+            loop_nav_row.append(_loop_div)
 
-        # ── Pipelines nav entry ────────────────────────────────────────────────
-        # Deliberately NOT part of ControlPanel's video/animate/image/artgen
-        # radio group: those buttons drive _set_source's generation-mode state
-        # (_model_source, prompt placeholder, chip vocab, model rows, ...) which
-        # has nothing to do with browsing already-finished runs. Keeping this
-        # button independent means _set_source and the source toggle group are
-        # completely untouched by this feature — see task-5-brief.md.
-        self._pipelines_btn = Gtk.ToggleButton(label="🧩 Pipelines")
-        self._pipelines_btn.add_css_class("attractor-launch-btn")
-        self._pipelines_btn.set_tooltip_text(
-            "Pipeline Studio — browse finished multi-step runs and open one\n"
-            "to see every step (Discover + Open)."
-        )
-        self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
-        loop_nav_row.append(self._pipelines_btn)
+            # ── Pipelines nav entry ──────────────────────────────────────────
+            # Deliberately NOT part of ControlPanel's video/animate/image/artgen
+            # radio group: those buttons drive _set_source's generation-mode
+            # state (_model_source, prompt placeholder, chip vocab, model rows,
+            # ...) which has nothing to do with browsing already-finished runs.
+            # Keeping this button independent means _set_source and the source
+            # toggle group are completely untouched by this feature — see
+            # task-5-brief.md.
+            self._pipelines_btn = Gtk.ToggleButton(label="🧩 Pipelines")
+            self._pipelines_btn.add_css_class("attractor-launch-btn")
+            self._pipelines_btn.set_tooltip_text(
+                "Pipeline Studio — browse finished multi-step runs and open one\n"
+                "to see every step (Discover + Open)."
+            )
+            self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
+            loop_nav_row.append(self._pipelines_btn)
 
         # Standalone Servers control's "Servers ▾" button (SP-3b Task 2) —
         # mounted here instead of ControlPanel's own (now-hidden) one.
@@ -5744,7 +5755,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # uses (artgen mediums) — no new generation code, no reimplemented
         # worker launching.
         self._create_view = CreateView(
-            on_inspiration=self._on_loop_nav_remix,
+            on_inspiration=self._on_loop_nav_remix if app_settings.PIPELINE_MODE_ENABLED else None,
             on_create=self._on_create_generate,
             status_service=self._status_service,
             inspire_fn=self._create_inspire_fn,
@@ -7064,14 +7075,19 @@ class MainWindow(Gtk.ApplicationWindow):
         else:
             self._hide_pipelines()
 
-    def _show_pipelines(self) -> None:
-        """Mount Pipeline Studio full-width, constructing it lazily on first use.
+    def _ensure_pipeline_studio(self) -> None:
+        """Lazily construct Pipeline Studio and mount it on `_gallery_stack`.
+
+        Split out of `_show_pipelines` (task-5-brief.md) so `_remix_as_pipeline`
+        can reach a constructed `_pipeline_studio` without also running
+        `_show_pipelines`' Discover-landing/crumb/context-tray side effects —
+        needed for the PIPELINE_MODE_ENABLED-off path, which must enter the
+        studio scoped straight to the Muse and never touch Discover.
 
         `PipelineStudio` scans run history off-thread as soon as it is built
         (see pipeline_studio.py), so it is deliberately NOT constructed at
-        startup — only here, the first time the "Pipelines" toggle is
-        activated. Subsequent activations reuse the same instance and its
-        already-loaded Discover page.
+        startup — only here, the first time it's needed. Subsequent calls
+        reuse the same instance.
         """
         if self._pipeline_studio is None:
             from pipeline_studio import PipelineStudio
@@ -7081,9 +7097,29 @@ class MainWindow(Gtk.ApplicationWindow):
             # so a pipeline step's text field gets the identical two-mode
             # fresh/remix behavior, not a forked pipeline-only prompt-gen path.
             self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn,
-                                                    status_service=self._status_service,
-                                                    on_run_complete=self._register_pipeline_final)
+                status_service=self._status_service,
+                on_run_complete=self._register_pipeline_final,
+                # task-5-brief.md (remix-without-pipeline-mode): the studio
+                # needs to know whether pipeline mode is showing so it can
+                # hide its own Discover-only chrome when entered scoped
+                # straight to the Muse, and `on_leave` is its own "Back"
+                # seam for that flag-off path — routes back to the app
+                # Library rather than the studio's Discover.
+                pipeline_mode_enabled=app_settings.PIPELINE_MODE_ENABLED,
+                on_leave=self._on_pipeline_leave,
+            )
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
+
+    def _show_pipelines(self) -> None:
+        """Mount Pipeline Studio full-width, constructing it lazily on first use.
+
+        Built on `_ensure_pipeline_studio` (above); this half additionally
+        lands on the studio's Discover page every time — Pipeline Studio's
+        front door — and drives the crumb/context-tray/detail-pane state
+        that Discover-first entry needs. `_remix_as_pipeline`'s flag-off path
+        skips this in favor of entering scoped straight to the Muse.
+        """
+        self._ensure_pipeline_studio()
 
         # Always land on Discover, never a stale Open page from a previous
         # visit — Discover is Pipeline Studio's front door every time.
@@ -7120,6 +7156,12 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         self._sync_gallery_to_source(self._current_medium_source())
         self._detail_wrap.set_visible(True)
+
+    def _on_pipeline_leave(self) -> None:
+        """Studio Back (flag OFF) -> return to the app Library. The run keeps
+        running in the background; its result is already registered to the
+        Library on run-done."""
+        self._hide_pipelines()
 
     # Extensions a pipeline final's artifact can carry, and which Library
     # record shape each maps to. Any extension outside both sets (shouldn't
@@ -7511,12 +7553,23 @@ class MainWindow(Gtk.ApplicationWindow):
             if record.media_exists and kind is not None:
                 seed_artifact = (record.media_file_path, kind, record.thumbnail_path)
 
-        # Activate the Pipelines area the same way the toolbar toggle does.
-        pipelines_btn = getattr(self, "_pipelines_btn", None)
-        if pipelines_btn is not None and not pipelines_btn.get_active():
-            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+        if app_settings.PIPELINE_MODE_ENABLED:
+            # Activate the Pipelines area the same way the toolbar toggle does.
+            pipelines_btn = getattr(self, "_pipelines_btn", None)
+            if pipelines_btn is not None and not pipelines_btn.get_active():
+                pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+            else:
+                self._show_pipelines()
         else:
-            self._show_pipelines()
+            # Pipeline mode hidden (task-5-brief.md): enter the studio scoped
+            # straight to the Muse goal chooser — never the studio's Discover.
+            # `_pipelines_btn` doesn't exist in this configuration at all, so
+            # this skips the toggle dance entirely rather than guard it.
+            self._ensure_pipeline_studio()
+            self._gallery_stack.set_visible_child_name("pipelines")
+            for _b in getattr(self, "_loop_nav", {}).values():
+                if _b.get_active():
+                    _b.set_active(False)
 
         self._pipeline_studio.show_muse(seed_artifact=seed_artifact)
 

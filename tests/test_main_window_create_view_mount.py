@@ -32,13 +32,14 @@ def test_create_view_is_constructed_and_mounted_as_gallery_stack_child():
     assert 'self._gallery_stack.add_named(self._create_view, "create")' in _SRC
 
 
-def test_create_view_inspiration_door_wired_to_muse_bridge():
-    """Task 7: the inspiration door hands off to the existing Muse seam —
-    `_on_loop_nav_remix` already does exactly the unseeded `show_muse()`
-    activation dance (see its docstring), so CreateView's zero-arg
-    `on_inspiration` callable is wired straight to it — no reimplementation.
+def test_inspiration_door_wired_only_when_flag_on():
+    """Task 5 (remix-without-pipeline-mode): the inspiration door hands off
+    to the existing Muse seam — `_on_loop_nav_remix` already does exactly the
+    unseeded `show_muse()` activation dance (see its docstring) — but only
+    when pipeline mode is enabled; CreateView omits its Inspiration door
+    entirely (`on_inspiration=None`) when the flag is off.
     """
-    assert "on_inspiration=self._on_loop_nav_remix" in _SRC
+    assert "on_inspiration=self._on_loop_nav_remix if app_settings.PIPELINE_MODE_ENABLED else None" in _SRC
 
 
 def test_create_view_on_create_wired_to_real_generation():

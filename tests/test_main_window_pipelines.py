@@ -375,7 +375,14 @@ def test_remix_as_pipeline_activates_via_pipelines_toggle_button(tmp_path, monke
     a real inactive ToggleButton wired exactly as production wires it, and asserts
     the button ends up active AND show_muse is reached with the resolved tuple via
     that toggle→signal path. Removing the `set_active(True)` branch must break this.
+
+    This is the flag-ON path specifically (task-5-brief.md): PIPELINE_MODE_ENABLED
+    is False by default, in which case `_remix_as_pipeline` never touches
+    `_pipelines_btn` at all — see test_remix_flag_off_enters_muse_not_discover
+    below for that branch.
     """
+    import main_window as mw
+    monkeypatch.setattr(mw.app_settings, "PIPELINE_MODE_ENABLED", True, raising=False)
     obj = _make_mw_for_remix(tmp_path, monkeypatch)
     obj._pipelines_btn = Gtk.ToggleButton()
     obj._pipelines_btn.connect("toggled", obj._on_pipelines_toggled)
@@ -541,6 +548,72 @@ def test_remix_as_pipeline_generation_record_path_unaffected_by_media_record_bra
     obj._pipeline_studio.show_muse.assert_called_once_with(
         seed_artifact=(str(img_path), "image", rec.thumbnail_path)
     )
+
+
+# ── Task 5 (remix-without-pipeline-mode): flag-OFF routing ──────────────────
+#
+# When app_settings.PIPELINE_MODE_ENABLED is False, `_remix_as_pipeline` must
+# never route through the studio's Discover page (there's no "Pipelines"
+# toggle to activate at all — `_pipelines_btn` stays None) — it enters the
+# studio scoped straight to the Muse goal chooser. `_on_pipeline_leave` is
+# the studio's "Back" seam for that flag-off path, returning to the app
+# Library via the existing `_hide_pipelines`.
+
+class _FakeStack:
+    """Records the last `set_visible_child_name` call — enough to assert
+    which gallery-stack page routing landed on without a real Gtk.Stack."""
+
+    def __init__(self):
+        self.last = None
+
+    def set_visible_child_name(self, name):
+        self.last = name
+
+
+def test_remix_flag_off_enters_muse_not_discover(tmp_path, monkeypatch):
+    import main_window as mw
+
+    monkeypatch.setattr(mw.app_settings, "PIPELINE_MODE_ENABLED", False, raising=False)
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._remix_as_pipeline = mw.MainWindow._remix_as_pipeline.__get__(obj)
+
+    calls = {"discover": 0, "muse": None, "ensured": 0}
+
+    class _FakeStudio:
+        def show_discover(self):
+            calls["discover"] += 1
+
+        def show_muse(self, seed_artifact=None):
+            calls["muse"] = seed_artifact
+
+    obj._pipeline_studio = _FakeStudio()
+    monkeypatch.setattr(obj, "_ensure_pipeline_studio", lambda: calls.__setitem__("ensured", 1))
+    obj._gallery_stack = _FakeStack()
+    obj._loop_nav = {}
+
+    img_path = tmp_path / "art.png"
+    img_path.write_bytes(b"fake-png")
+    rec = _make_record(media_type="image", image_path=str(img_path))
+
+    obj._remix_as_pipeline(rec)
+
+    assert calls["ensured"] == 1
+    assert calls["muse"] is not None            # seeded muse
+    assert calls["discover"] == 0               # never lands on studio Discover
+    assert obj._gallery_stack.last == "pipelines"
+
+
+def test_on_pipeline_leave_returns_to_library(tmp_path, monkeypatch):
+    import main_window as mw
+
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._on_pipeline_leave = mw.MainWindow._on_pipeline_leave.__get__(obj)
+    hidden = []
+    monkeypatch.setattr(obj, "_hide_pipelines", lambda: hidden.append(True))
+
+    obj._on_pipeline_leave()
+
+    assert hidden == [True]
 
 
 def test_main_window_wires_artgen_gallery_on_remix_as_pipeline_source():

@@ -80,8 +80,10 @@ def test_attractor_btn_appended_to_loop_nav_row():
     assert "row.append(self._attractor_btn)" in _SRC
 
 
-def test_pipelines_btn_appended_to_loop_nav_row():
-    assert "loop_nav_row.append(self._pipelines_btn)" in _SRC
+def test_pipelines_btn_appended_only_when_flag_on():
+    # the append is now guarded by the flag, not unconditional
+    assert "if app_settings.PIPELINE_MODE_ENABLED" in _SRC
+    assert "loop_nav_row.append(self._pipelines_btn)" in _SRC   # still present, now inside the guard
 
 
 def test_servers_button_appended_to_loop_nav_row():
