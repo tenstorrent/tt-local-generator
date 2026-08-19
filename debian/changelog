@@ -1,3 +1,18 @@
+tt-local-generator (0.82.0) noble; urgency=medium
+
+  * fix(engine): the Pipeline Studio per-step model picker now actually routes
+    to the picked artgen model. The picker writes the raw server_manager key
+    (e.g. "artgen-qwen3-8b") into the node's model input, but
+    _artgen_key_for_model only matched the ServerDef --model display string
+    (e.g. "Qwen3-8B"), so every picker-driven artgen node silently fell back to
+    ARTGEN_DETECT (auto-detect) instead of the chosen model. It now matches the
+    raw server key exact-first (mirroring the native _match_server_key rule),
+    then falls back to the --model display / HF-id string for hand-authored and
+    legacy specs. Regression tests cover both paths. (Follow-up to the PR #23
+    deep-review; no other engine/run-spec/collect() behaviour changed.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 19:30:00 +0000
+
 tt-local-generator (0.81.0) noble; urgency=medium
 
   * fix: deep-review findings on the branch (posted to PR #23), each with a

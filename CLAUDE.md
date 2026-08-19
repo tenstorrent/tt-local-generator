@@ -51,12 +51,16 @@ subprocess calls throughout; no unsafe deserialization; `collect()`/
 `_VIDEO_MODEL_IDS`/`_IMAGE_MODEL_IDS` in sync across both copies; the risky
 seams all genuinely tested.
 
-**Known follow-ups (NOT fixed this pass — see the PR comment):** the Pipeline
-Studio per-step model picker writes a raw `server_manager` key into
-`inputs["model"]`, but `pipeline_engine._artgen_key_for_model` matches
-`ServerDef` `--model` *display* strings, so picker-driven artgen nodes always
-resolve to `ARTGEN_DETECT` (auto-detect) instead of the picked model — a real
-routing bug worth its own fix. Also deliberately deferred: making
+**Picker→engine model-key routing (fixed v0.82.0).** The Pipeline Studio
+per-step model picker writes a raw `server_manager` key into `inputs["model"]`
+(via `ModelPickerRow.selected_key()`), but `pipeline_engine._artgen_key_for_model`
+only matched `ServerDef` `--model` *display* strings, so picker-driven artgen
+nodes silently fell back to `ARTGEN_DETECT` (auto-detect) instead of the picked
+model. `_artgen_key_for_model` now matches the raw server key **exact-first**
+(mirroring `_match_server_key`) before the `--model` display / HF-id fallback
+that hand-authored and legacy specs rely on.
+
+**Deliberately deferred (documented):** making
 `ArtgenDetail`'s WebKit build lazy (works on the real display; latent), the
 Pipeline Studio `#1B8EB1` palette drift (may be deliberate accents), and several
 low/informational items (video async-envelope handling, failed-run hero,
