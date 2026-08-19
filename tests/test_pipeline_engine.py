@@ -864,6 +864,64 @@ def test_animatediff_bool_flag_true_emits_bare_flag(monkeypatch):
     assert "--lightning" in calls["argv"]
 
 
+# ── _run_tt_ctl streaming path: failure detail preserved (deep-review fix) ────
+#
+# Bug: the streaming (emit=...) branch merges stderr into stdout and tees each
+# line to `emit`, but on a non-zero exit it raised a bare
+# "tt-ctl ... failed (exit N)" with no detail — everything useful had already
+# been streamed away. The non-streaming branch, by contrast, always included
+# captured stderr/stdout in the RuntimeError. Fixed by keeping a bounded
+# `deque(maxlen=20)` tail of the streamed lines and appending it to the raise,
+# so an AnimateDiff pipeline failure on real hardware is diagnosable again.
+
+class _FakePopen:
+    """Minimal stand-in for subprocess.Popen exercising the streaming path:
+    `.stdout` is an iterable of lines, `.wait()` returns the fixed exit code."""
+    def __init__(self, lines, returncode):
+        self.stdout = iter(lines)
+        self._returncode = returncode
+
+    def wait(self):
+        return self._returncode
+
+
+def test_run_tt_ctl_streaming_failure_includes_tail_detail(monkeypatch):
+    lines = ["chip0: Step 1/20\n", "chip0: Step 2/20\n", "ERROR: device hung\n"]
+    monkeypatch.setattr(eng.subprocess, "Popen",
+                         lambda *a, **k: _FakePopen(lines, 1))
+    emitted = []
+    with pytest.raises(RuntimeError) as exc_info:
+        eng._run_tt_ctl(["artgen", "animatediff"], emit=emitted.append)
+    # Every streamed line still reached emit (streaming behavior unchanged).
+    assert emitted == [l.rstrip("\n") for l in lines]
+    # The raise carries the last streamed line as diagnosable detail.
+    assert "ERROR: device hung" in str(exc_info.value)
+    assert "exit 1" in str(exc_info.value)
+
+
+def test_run_tt_ctl_streaming_failure_tail_is_bounded(monkeypatch):
+    lines = [f"line {i}\n" for i in range(50)]
+    monkeypatch.setattr(eng.subprocess, "Popen",
+                         lambda *a, **k: _FakePopen(lines, 1))
+    with pytest.raises(RuntimeError) as exc_info:
+        eng._run_tt_ctl(["artgen", "animatediff"], emit=lambda s: None)
+    msg = str(exc_info.value)
+    # Only the last 20 lines are retained — the tail is bounded, not the
+    # full (potentially huge) history of a long-running stream.
+    assert "line 49" in msg
+    assert "line 30" in msg   # last 20 of 50 => lines 30..49
+    assert "line 29" not in msg
+    assert "line 0" not in msg
+
+
+def test_run_tt_ctl_streaming_success_returns_none_no_raise(monkeypatch):
+    lines = ["chip0: Step 1/20\n", "chip0: done\n"]
+    monkeypatch.setattr(eng.subprocess, "Popen",
+                         lambda *a, **k: _FakePopen(lines, 0))
+    result = eng._run_tt_ctl(["artgen", "animatediff"], emit=lambda s: None)
+    assert result is None
+
+
 # ── Task 4b: backend server-switching, optional-node failures, dry-run parity ──
 #
 # The engine now orchestrates backend switching (Issue 1): before dispatching a
@@ -1010,6 +1068,75 @@ def test_run_backend_change_triggers_reset_and_start(monkeypatch, tmp_path):
     assert resets == [("", "flux"), ("flux", "skyreels")]
 
 
+# ── ARTGEN_DETECT bookkeeping (deep-review Finding 2) ────────────────────────
+#
+# ARTGEN_DETECT never stops/resets on its own (it may reuse a live LLM
+# anywhere), but the review flagged that `run()` also never RECORDED what it
+# started as `current_backend` — so a later node whose model maps to that
+# exact same concrete artgen key would hit the `elif` branch and stop+reset+
+# restart a server that was just confirmed healthy (needless churn on
+# fragile hardware). Fix: `_start_server` propagates `_real_start_server`'s
+# return value (the confirmed key, or None when unknown), and `run()` only
+# ever uses it to fill in `current_backend` when known — never to skip a
+# switch it can't actually vouch for.
+
+def test_run_artgen_detect_confirmed_start_prevents_matching_restart(monkeypatch, tmp_path):
+    """Confirmed case: ARTGEN_DETECT itself started the default artgen LLM
+    (nothing was already up), so _start_server can name exactly what's
+    running. A later node whose model resolves to that SAME concrete key
+    must not trigger a second start or any stop/reset."""
+    starts, resets = [], []
+    monkeypatch.setattr(eng, "_stop_and_reset",
+                        lambda next_key, current, *, dry_run, emit: resets.append((current, next_key)))
+
+    def fake_start_server(key, health_url, max_wait, *, dry_run, emit):
+        starts.append(key)
+        if key == eng.ARTGEN_DETECT:
+            return eng._ARTGEN_DEFAULT_KEY  # simulates: nothing detected, default started
+        return key
+    monkeypatch.setattr(eng, "_start_server", fake_start_server)
+    _stub_handler_helpers(monkeypatch)
+
+    spec = {
+        "1": {"class_type": "TTLGGenerateText", "inputs": {"prompt": "p1"}},
+        "2": {"class_type": "TTLGGenerateText",
+              "inputs": {"prompt": "p2", "model": "Qwen3-8B"}},  # -> artgen-qwen3-8b (the default)
+    }
+    eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+
+    assert starts == [eng.ARTGEN_DETECT]  # node 2 caused no second start
+    assert resets == []                   # ...and no stop/reset either
+
+
+def test_run_artgen_detect_unknown_resolution_still_switches_for_concrete_key(monkeypatch, tmp_path):
+    """Conservative half of the same fix: when ARTGEN_DETECT instead reused
+    an already-running endpoint it can't confidently name (_start_server
+    returns None), a later concrete-key node must still get its ordinary
+    full stop/reset/start — the new bookkeeping must never cause a switch
+    to be wrongly skipped, only ever a redundant one to be prevented."""
+    starts, resets = [], []
+    monkeypatch.setattr(eng, "_stop_and_reset",
+                        lambda next_key, current, *, dry_run, emit: resets.append((current, next_key)))
+
+    def fake_start_server(key, health_url, max_wait, *, dry_run, emit):
+        starts.append(key)
+        if key == eng.ARTGEN_DETECT:
+            return None  # simulates: reused an already-up endpoint, identity unknown
+        return key
+    monkeypatch.setattr(eng, "_start_server", fake_start_server)
+    _stub_handler_helpers(monkeypatch)
+
+    spec = {
+        "1": {"class_type": "TTLGGenerateText", "inputs": {"prompt": "p1"}},
+        "2": {"class_type": "TTLGGenerateText",
+              "inputs": {"prompt": "p2", "model": "Qwen3-8B"}},
+    }
+    eng.run(spec, dry_run=False, emit=lambda s: None, output_dir=str(tmp_path))
+
+    assert starts == [eng.ARTGEN_DETECT, "artgen-qwen3-8b"]
+    assert resets == [("", "artgen-qwen3-8b")]
+
+
 # ── _real_start_server: fail-fast on a failed backend start ─────────────────
 #
 # Bug observed on hardware: `tt-ctl start skyreels` exited non-zero
@@ -1123,6 +1250,55 @@ def test_real_start_server_still_times_out_when_never_ready(monkeypatch):
 
     # Polled repeatedly (every 30s) up to the 1-minute deadline, not fail-fast.
     assert len(get_json_calls) >= 2
+
+
+# ── _real_start_server: confirmed-key return contract (deep-review Finding 2) ─
+#
+# `run()`'s ARTGEN_DETECT bookkeeping fix (above) depends on `_real_start_
+# server` truthfully reporting what it knows: the exact key on an ordinary
+# confirmed start, the same for ARTGEN_DETECT's "nothing was up, I started
+# the default" path, and None (never a guess) when ARTGEN_DETECT instead
+# reused an endpoint it did not itself start.
+
+def test_real_start_server_returns_resolved_key_on_ordinary_success(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(eng, "time", clock)
+    monkeypatch.setattr(eng.sm, "start", lambda key, *a, **k: [_fake_completed(0)])
+    monkeypatch.setattr(eng, "_get_json", lambda url, timeout=30: {"model_ready": True})
+
+    result = eng._real_start_server("skyreels", "http://localhost:8000/health", 60,
+                                    emit=lambda s: None)
+    assert result == "skyreels"
+
+
+def test_real_start_server_artgen_detect_returns_default_key_when_it_starts_it(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(eng, "time", clock)
+    monkeypatch.setattr(eng.sm, "start", lambda key, *a, **k: [_fake_completed(0)])
+    monkeypatch.setattr(eng, "_get_json", lambda url, timeout=30: {"model_ready": True})
+
+    import artgen as _ag
+    monkeypatch.setattr(_ag, "detect_artgen_endpoint", lambda: (None, None))
+
+    result = eng._real_start_server(eng.ARTGEN_DETECT, "http://localhost:8002/health", 30,
+                                    emit=lambda s: None)
+    assert result == eng._ARTGEN_DEFAULT_KEY
+
+
+def test_real_start_server_artgen_detect_returns_none_when_reusing_existing(monkeypatch):
+    """An already-running endpoint is reused without ever calling sm.start —
+    its identity is intentionally NOT guessed at, so the caller's bookkeeping
+    stays honest about what it actually knows."""
+    import artgen as _ag
+    monkeypatch.setattr(_ag, "detect_artgen_endpoint",
+                        lambda: ("http://localhost:9009", "some-custom-model"))
+    start_calls = []
+    monkeypatch.setattr(eng.sm, "start", lambda key, *a, **k: start_calls.append(key))
+
+    result = eng._real_start_server(eng.ARTGEN_DETECT, "http://localhost:8002/health", 30,
+                                    emit=lambda s: None)
+    assert result is None
+    assert start_calls == []  # pure reuse — nothing was started
 
 
 def test_run_1964_real_backend_sequence(monkeypatch, tmp_path):

@@ -34,6 +34,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -945,6 +946,13 @@ def _run_tt_ctl(argv: "list[str]", timeout: int = 600,
     internally, so a second bound here would just duplicate that with no way
     to recover the partial-progress lines already streamed; see the v0.75.0
     pipeline Stage "making-of" plan for context.
+
+    On a non-zero exit, the error mirrors the non-streaming branch as closely
+    as this path allows: since stderr is merged into the streamed stdout (and
+    therefore already handed to *emit* / discarded by the caller), a bounded
+    tail of the last streamed lines (``deque(maxlen=20)``) is captured and
+    appended to the RuntimeError so an AnimateDiff failure stays diagnosable
+    instead of surfacing only a bare "failed (exit N)" with no detail.
     """
     cmd = [str(TT_CTL), *argv]
     if emit is None:
@@ -962,13 +970,20 @@ def _run_tt_ctl(argv: "list[str]", timeout: int = 600,
         cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True,
     )
+    tail: "deque[str]" = deque(maxlen=20)
     try:
         for line in proc.stdout:
-            emit(line.rstrip("\n"))
+            stripped = line.rstrip("\n")
+            tail.append(stripped)
+            emit(stripped)
     finally:
         rc = proc.wait()
     if rc != 0:
-        raise RuntimeError(f"tt-ctl {' '.join(argv)} failed (exit {rc})")
+        detail = "\n".join(tail).strip()
+        raise RuntimeError(
+            f"tt-ctl {' '.join(argv)} failed (exit {rc})"
+            + (f": {detail}" if detail else "")
+        )
     return None
 
 
@@ -1272,7 +1287,7 @@ def _tt_smi_reset() -> None:
 
 
 def _real_start_server(key: str, health_url: "str | None", max_wait: int,
-                       emit: Callable[[str], None]) -> None:
+                       emit: Callable[[str], None]) -> "str | None":
     """Start a backend server and poll its health URL until ready.
 
     Ports start_server() from bin/run_worlds_fair.sh. For the ARTGEN_DETECT
@@ -1280,6 +1295,17 @@ def _real_start_server(key: str, health_url: "str | None", max_wait: int,
     (any port) via artgen.detect_artgen_endpoint and, only if none is up, starts
     the default artgen LLM. Raises RuntimeError if the server never becomes
     ready within *max_wait* minutes.
+
+    Returns the ``server_manager`` key that is now confirmed running, when
+    known with certainty — i.e. whenever THIS call is the one that performed
+    the start (the ordinary non-sentinel path, and the ARTGEN_DETECT "nothing
+    detected, so start the default" path). Returns ``None`` when ARTGEN_DETECT
+    instead reused an already-running endpoint found by
+    `detect_artgen_endpoint` — deliberately NOT guessed at by mapping the
+    detected model id back to a key, since that mapping could be wrong and
+    `run()`'s backend-switch bookkeeping must never claim more confidence
+    than this function actually has (see `run()`'s ARTGEN_DETECT handling,
+    deep-review Finding 2).
     """
     key_to_start = key
     if key == ARTGEN_DETECT:
@@ -1290,7 +1316,7 @@ def _real_start_server(key: str, health_url: "str | None", max_wait: int,
             base, model = None, None
         if base:
             emit(f"LOG:  LLM already up at {base} ({model}) — no start needed")
-            return
+            return None
         key_to_start = _ARTGEN_DEFAULT_KEY
         emit(f"LOG:  no LLM detected — starting default {key_to_start}")
 
@@ -1318,7 +1344,7 @@ def _real_start_server(key: str, health_url: "str | None", max_wait: int,
         )
 
     if not health_url:
-        return
+        return key_to_start
     deadline = time.time() + max_wait * 60
     while time.time() < deadline:
         time.sleep(30)
@@ -1328,7 +1354,7 @@ def _real_start_server(key: str, health_url: "str | None", max_wait: int,
             continue
         if data.get("model_ready") or data.get("data"):
             emit(f"LOG:  ✅ {key_to_start} ready")
-            return
+            return key_to_start
     raise RuntimeError(f"{key_to_start} did not become ready within {max_wait} min")
 
 
@@ -1355,15 +1381,23 @@ def _stop_and_reset(next_key: str, current: str, *, dry_run: bool,
 
 
 def _start_server(key: str, health_url: "str | None", max_wait: int, *,
-                  dry_run: bool, emit: Callable[[str], None]) -> None:
+                  dry_run: bool, emit: Callable[[str], None]) -> "str | None":
     """Start backend *key* and wait for readiness.
 
-    In dry_run it only emits an intended-start log line — no tt-ctl / network.
+    In dry_run it only emits an intended-start log line — no tt-ctl / network
+    — and returns None: `_real_start_server` (the only thing that can confirm
+    a resolved key, see its docstring) is never invoked on this path, so
+    dry-run bookkeeping in `run()` can never learn a concrete ARTGEN_DETECT
+    resolution (matches dry-run's existing "no hardware truth available"
+    contract).
+
+    Returns whatever `_real_start_server` returns on the real path (the
+    confirmed-running key, or None when unknown).
     """
     if dry_run:
         emit(f"LOG:  [dry-run] tt-ctl start {key}")
-        return
-    _real_start_server(key, health_url, max_wait, emit)
+        return None
+    return _real_start_server(key, health_url, max_wait, emit)
 
 
 def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = print,
@@ -1395,7 +1429,10 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
     _persist()  # empty up front, so even an immediate failure leaves a file
     # Backend currently active across the node loop ("" = none started yet).
     # ARTGEN_DETECT is handled out-of-band (it never stops/resets — it reuses
-    # whatever LLM happens to be up) so it does not participate in this tracking.
+    # whatever LLM happens to be up), so it never triggers a switch itself.
+    # It DOES update current_backend below, but only when _start_server can
+    # confirm with certainty which concrete key ended up running (deep-review
+    # Finding 2) — see the ARTGEN_DETECT branch's comment.
     current_backend = ""
     for nid in topo_order(spec):
         node = spec[nid]
@@ -1408,8 +1445,24 @@ def run(spec: dict, *, dry_run: bool = False, emit: Callable[[str], None] = prin
                 # Reuse any already-running LLM; only start one if none is up.
                 # Deliberately does NOT stop/reset the current backend, so a
                 # live LLM elsewhere is never killed.
-                _start_server(backend.key, backend.health_url, backend.max_wait,
-                              dry_run=dry_run, emit=emit)
+                #
+                # Bookkeeping (deep-review Finding 2): `_start_server` returns
+                # the concrete server_manager key it confirms is now running
+                # ONLY when it is certain (it just started the default itself)
+                # — None when it merely reused an already-up endpoint it can't
+                # confidently name. Recording the confirmed key here means a
+                # LATER node that names that exact same concrete key sees it
+                # in `current_backend` and skips the redundant stop+reset+
+                # restart it would otherwise do to a server that was just
+                # confirmed healthy (needless churn on fragile hardware). When
+                # the resolved key is unknown, current_backend is left as-is —
+                # this can only cause a later exact match to be MISSED
+                # (falling back to today's always-safe full switch), never a
+                # switch to be wrongly skipped.
+                resolved = _start_server(backend.key, backend.health_url,
+                                         backend.max_wait, dry_run=dry_run, emit=emit)
+                if resolved:
+                    current_backend = resolved
             elif backend.key != current_backend:
                 _stop_and_reset(backend.key, current_backend,
                                 dry_run=dry_run, emit=emit)
