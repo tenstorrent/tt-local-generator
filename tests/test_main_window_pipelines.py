@@ -113,6 +113,42 @@ def test_show_pipelines_reuses_instance_on_second_activation(tmp_path, monkeypat
     assert obj._pipeline_studio is first
 
 
+def test_ensure_pipeline_studio_flag_on_passes_on_leave_none(tmp_path, monkeypatch):
+    """Regression (final-review fix): `_ensure_pipeline_studio` constructed
+    `PipelineStudio(..., on_leave=self._on_pipeline_leave)` UNCONDITIONALLY,
+    but `PipelineStudio._on_run_back` / `_on_back_to_discover` gate on
+    `if self._on_leave is not None:` rather than on the pipeline-mode flag.
+    So with the flag ON, the studio's own Back buttons called `on_leave` ->
+    `_hide_pipelines()` (ejecting to the app Library) instead of keeping the
+    pre-existing "-> discover" behavior (design spec §D: "When the flag is
+    ON (on_leave=None), _on_run_back keeps today's -> 'discover' behavior").
+    Real wiring must pass `on_leave=None` when the flag is on.
+    """
+    import main_window as mw
+
+    monkeypatch.setattr(mw.app_settings, "PIPELINE_MODE_ENABLED", True, raising=False)
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    obj._ensure_pipeline_studio()
+
+    assert obj._pipeline_studio._on_leave is None
+
+
+def test_ensure_pipeline_studio_flag_off_passes_on_pipeline_leave(tmp_path, monkeypatch):
+    """Flag OFF (remix-without-pipeline-mode path) keeps on_leave wired to
+    `_on_pipeline_leave`, the studio's own Back-to-Library seam -- unchanged
+    by the final-review fix above.
+    """
+    import main_window as mw
+
+    monkeypatch.setattr(mw.app_settings, "PIPELINE_MODE_ENABLED", False, raising=False)
+    obj = _make_mw(tmp_path, monkeypatch)
+
+    obj._ensure_pipeline_studio()
+
+    assert obj._pipeline_studio._on_leave == obj._on_pipeline_leave
+
+
 def test_hide_pipelines_restores_current_source_view(tmp_path, monkeypatch):
     """Leaving Pipelines restores the gallery/side-panel state for the active source."""
     obj = _make_mw(tmp_path, monkeypatch)

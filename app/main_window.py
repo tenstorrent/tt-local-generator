@@ -7106,7 +7106,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 # seam for that flag-off path — routes back to the app
                 # Library rather than the studio's Discover.
                 pipeline_mode_enabled=app_settings.PIPELINE_MODE_ENABLED,
-                on_leave=self._on_pipeline_leave,
+                on_leave=self._on_pipeline_leave if not app_settings.PIPELINE_MODE_ENABLED else None,
             )
             self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
 
