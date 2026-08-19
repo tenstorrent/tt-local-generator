@@ -51,6 +51,7 @@ class GenerationRecord:
     model: str = ""                    # Model identifier, e.g. "wan2.2-t2v", "mochi-1-preview", "flux.1-dev"
     extra_meta: dict = field(default_factory=dict)  # Free-form server response metadata
     starred: int = 0                     # 0 | 1 — mirrors media_store.MediaRecord.starred
+    generator_type: "str | None" = None  # provenance for records folded into video (e.g. "animatediff", "animate")
 
     @classmethod
     def new(
@@ -133,7 +134,7 @@ class GenerationRecord:
         seed_image_path: str = "",
         model: str = "",
     ) -> "GenerationRecord":
-        """Create a new animation record with media_type='animate'."""
+        """Create a new Video record produced by Wan2.2-Animate (.mp4)."""
         ts = datetime.now(timezone.utc)
         ts_str = ts.strftime("%Y%m%d_%H%M%S")
         return cls(
@@ -147,8 +148,9 @@ class GenerationRecord:
             created_at=ts.isoformat(),
             duration_s=duration_s,
             seed_image_path=seed_image_path,
-            media_type="animate",
+            media_type="video",
             model=model,
+            generator_type="animate",
         )
 
     @classmethod
@@ -164,7 +166,7 @@ class GenerationRecord:
         duration_s: float = 0.0,
         model: str = "",
     ) -> "GenerationRecord":
-        """Create a new AnimateDiff record with media_type='animatediff' and .gif extension.
+        """Create a new Video record produced by AnimateDiff (.gif).
 
         video_path and thumbnail_path must be the paths already used by the caller so
         the record stays consistent with the files on disk.
@@ -180,8 +182,9 @@ class GenerationRecord:
             thumbnail_path=thumbnail_path,
             created_at=ts.isoformat(),
             duration_s=duration_s,
-            media_type="animatediff",
+            media_type="video",
             model=model,
+            generator_type="animatediff",
         )
 
     @property
@@ -242,7 +245,7 @@ class HistoryStore:
             thumbnail_path=record.thumbnail_path,
             prompt=record.prompt,
             model_id=record.model,
-            generator_type=None,
+            generator_type=record.generator_type,
             params=json.dumps({
                 "negative_prompt":     record.negative_prompt,
                 "num_inference_steps": record.num_inference_steps,

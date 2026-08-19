@@ -185,3 +185,37 @@ def test_by_model_excludes_workflow_records(monkeypatch, tmp_path):
     assert counts["wan2.2-t2v"] == 1,     "wrong count for wan2.2-t2v"
     assert "workflow" not in counts,       "bare 'workflow' model_id leaked into By Model"
     assert "workflow-v2" not in counts,    "versioned workflow model_id leaked into By Model"
+
+
+def test_new_animatediff_and_animate_are_video_with_generator_type():
+    """AnimateDiff/Animate record factories must write media_type='video' plus a
+    generator_type provenance stamp, not their own bespoke media_type strings."""
+    ad = GenerationRecord.new_animatediff(job_id="j1", prompt="p", negative_prompt="",
+                                          num_inference_steps=6, seed=42,
+                                          video_path="/x/a.gif", thumbnail_path="/x/a.png")
+    assert ad.media_type == "video"
+    assert ad.generator_type == "animatediff"
+    assert ad.video_path.endswith(".gif")
+
+    an = GenerationRecord.new_animate(job_id="j2", prompt="p", negative_prompt="",
+                                      num_inference_steps=20, seed=1)
+    assert an.media_type == "video"
+    assert an.generator_type == "animate"
+    assert an.video_path.endswith(".mp4")
+
+
+def test_append_persists_generator_type(monkeypatch, tmp_path):
+    """HistoryStore.append() must persist record.generator_type into media_store,
+    not hardcode None — otherwise provenance is lost the moment a record round-trips."""
+    _patch_store(monkeypatch, tmp_path)
+    from media_store import media_store as _ms
+
+    store = HistoryStore()
+    rec = GenerationRecord.new_animatediff(job_id="j3", prompt="p", negative_prompt="",
+                                           num_inference_steps=6, seed=42,
+                                           video_path="/x/b.gif", thumbnail_path="/x/b.png")
+    store.append(rec)
+
+    got = _ms.get("j3")
+    assert got.media_type == "video"
+    assert got.generator_type == "animatediff"
