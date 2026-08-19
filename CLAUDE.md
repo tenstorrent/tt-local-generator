@@ -570,8 +570,9 @@ badge.
 A full media-type × display-context audit found the rich rendering logic for
 each artgen kind — ANSI grid parsing, palette swatches, the animated-gif
 driver, codeart/markdown formatting — copy-pasted across 3-4 places
-(`artgen_detail.py`, `artgen_watch.py`, `artgen_gallery.py`, TT-TV's
-`attractor.py`) and drifted apart. Worst case: TT-TV's ANSI parser only
+(`artgen_detail.py`, `artgen_watch.py` [since removed as dead code, see
+v0.81.0 note below], `artgen_gallery.py`, TT-TV's `attractor.py`) and
+drifted apart. Worst case: TT-TV's ANSI parser only
 understood the legacy `\x1b[48;5;Nm ` (bg+space) escape form, so every ANSI
 artifact made with the current generator (which emits only
 `\x1b[38;5;Nm█`, fg+block) rendered as raw escape-code gibberish — a live
@@ -579,9 +580,8 @@ bug, not a hypothetical one.
 
 **`app/artgen_render.py` is now the single leaf module** every context
 imports from — it may import `gi`/Gtk/GdkPixbuf/GLib and stdlib only, and
-must never import `artgen_detail`/`artgen_watch`/`artgen_gallery`/
-`create_view`/`attractor` (the reverse is fine; that would be a cycle). It
-provides:
+must never import `artgen_detail`/`artgen_gallery`/`create_view`/`attractor`
+(the reverse is fine; that would be a cycle). It provides:
 - `parse_ansi_grid(raw) -> list[list[(char, fg_hex_or_None, bg_hex_or_None)]]`
   — the ONE parser that understands BOTH ANSI pixel formats the `ansi`
   generator has emitted over time (legacy bg+space and current fg+block),
@@ -596,10 +596,10 @@ provides:
 - `AnimatedGifWidget` (a self-driving `Gtk.Picture` that cancels its own
   `GLib.timeout_add` timer on unrealize) and `drive_gif_animation` (the
   same iterator-driving logic for callers that reuse one persistent
-  `Gtk.Picture` across records, e.g. `ArtgenDetail`/`ArtgenWatch`).
+  `Gtk.Picture` across records, e.g. `ArtgenDetail`).
 
 **The per-context showcase guarantee:** every one of `CreateResultPanel`
-(`create_view.py`), `ArtgenDetail`, `ArtgenWatch`, `artgen_gallery`'s card
+(`create_view.py`), `ArtgenDetail`, `artgen_gallery`'s card
 content (`make_card_content`), and the TT-TV attractor now renders each
 artgen media type's RICH form — vector `Gtk.Picture` for svg, swatch grid
 for palette json, colored character grid for ansi, formatted reading view
@@ -608,7 +608,13 @@ animated `GdkPixbufAnimationIter` for gif (never the GStreamer `Gtk.Video`
 path, which is documented elsewhere in this file as unreliable for gif) —
 in every context, not just the one context someone happened to build first.
 `CreateResultPanel` in particular never shows "Result file not found" for
-an artgen kind that actually generated successfully.
+an artgen kind that actually generated successfully. (`ArtgenWatch`/
+`artgen_watch.py` — named above as one of the pre-unification copy-paste
+sites — was itself never wired into a live surface after that unification;
+it was deleted outright as dead code in v0.81.0, alongside `pipeline_panel.py`
+[superseded by `pipeline_studio.py`] and the standalone `batch_generate.py`
+CLI [no `bin`/`tt-ctl`/`debian` invocation path], mirroring how
+`pipeline_portfolio_view.py` was removed below.)
 
 **Known, accepted static-degrade:** `pipeline_studio`'s node/hero
 thumbnails are a fast, fixed-contract pixbuf-grid surface (`_build_thumb_frame`)
