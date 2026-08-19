@@ -13,11 +13,12 @@ so it keeps getting "relegated back to artgen" and can't simply be Video:
 |---|---|---|
 | `media_type="animatediff"`, gen `None`, `.gif` | 55 | the Video gallery (via `media_type in ("video","animatediff")` filters) |
 | `media_type="artgen"`, gen `"animatediff"`, `.gif` | 73 | the **Artgen** gallery ← the "relegated" ones |
-| `media_type="animate"`, gen `None`, `.mp4` | 1 | Wan2.2-Animate (a *different* generator — out of scope, see Open decision) |
+| `media_type="animate"`, gen `None`, `.mp4` | 1 | Wan2.2-Animate — **now in scope**, folded into video (decision below) |
 
-**Goal:** all AnimateDiff media is **`media_type="video"`** — past, present, and
-future — while keeping its AnimateDiff identity (`model_id`/`generator_type`) and
-its stats, and without a rendering change (a `.gif` is still a `.gif`).
+**Goal:** all AnimateDiff **and Wan2.2-Animate** media is **`media_type="video"`**
+— past, present, and future — while keeping each one's identity
+(`model_id`/`generator_type`) and its stats, and without a rendering change (a
+`.gif` is still a `.gif`, an `.mp4` is still an `.mp4`).
 
 ## Key facts (from investigation — these de-risk the change)
 
@@ -50,16 +51,18 @@ versioned migration (gated by `PRAGMA user_version` so it runs once per DB, but
 written idempotently regardless):
 
 ```sql
-UPDATE media
-   SET media_type = 'video',
-       generator_type = 'animatediff'
- WHERE media_type = 'animatediff'
-    OR generator_type = 'animatediff';
+-- AnimateDiff (.gif) -> video
+UPDATE media SET media_type='video', generator_type='animatediff'
+ WHERE media_type='animatediff' OR generator_type='animatediff';
+-- Wan2.2-Animate (.mp4) -> video
+UPDATE media SET media_type='video', generator_type='animate'
+ WHERE media_type='animate' OR generator_type='animate';
 ```
 
-- Flips all 128 AnimateDiff records to `media_type="video"` and stamps
-  `generator_type="animatediff"` (the 55 native ones had `generator_type=None`;
-  they gain the provenance label). Files are untouched (still `.gif`).
+- Flips all 128 AnimateDiff records + the Wan2.2-Animate record to
+  `media_type="video"`, stamping `generator_type="animatediff"` / `"animate"`
+  respectively (records that had `generator_type=None` gain the provenance
+  label). Files are untouched (gifs stay `.gif`, the animate mp4 stays `.mp4`).
 - **Params untouched** (per decision). No schema change.
 - Runs automatically on every install's `media_store` load, so all past data
   self-heals with no user action.
@@ -68,7 +71,9 @@ UPDATE media
 - `history_store.GenerationRecord.new_animatediff(...)` currently sets
   `media_type="animatediff"` (`history_store.py:183`). Change it to
   `media_type="video"`, `generator_type="animatediff"` (keep the `.gif`
-  `video_path` and the video-shaped params it already records).
+  `video_path` and the video-shaped params it already records). Likewise
+  `new_animate(...)` (`history_store.py:150`, `media_type="animate"`) →
+  `media_type="video"`, `generator_type="animate"` (keep the `.mp4`).
 - **Audit every other AnimateDiff generation entry point** and make each write
   `media_type="video", generator_type="animatediff"` — in particular the artgen
   plugin path (`_create_generate_artgen`'s animatediff branch, `main_window.py`)
@@ -84,9 +89,9 @@ Now that no record is `media_type="animatediff"`:
   (`video_path.endswith(".gif")`) they already fall back to, at every `is_gif`
   site (`main_window.py` DetailPanel/GenerationCard/VideoPlayerWindow ~2272,
   2386, 2881, 3226, 3612). A gif is a gif **by file**, full stop.
-- Drop `"animatediff"` from the media_type filters `in ("video","animatediff")`
-  (`main_window.py:7978`, `history_store.py:335`) → leave `("video",)` (plus
-  `"animate"` only if the Open decision folds it in).
+- Drop both `"animatediff"` and `"animate"` from the media_type filters
+  `in ("video","animate","animatediff")` (`main_window.py:7978`,
+  `history_store.py:335`) → leave `("video",)`.
 - `GenerationRecord.new_animatediff` no longer implies a distinct media_type; its
   contract becomes "a Video record made by AnimateDiff (`.gif`)".
 
@@ -96,13 +101,14 @@ eligible for the Video "Start Something" tile** (`possibilities` queries
 `media_type="video"`) — closing the "the Video tile is a bare gradient" gap noted
 earlier. (No extra work; it just follows from the type.)
 
-## Open decision (confirm at spec review)
-- **Fold `media_type="animate"` (Wan2.2-Animate, the 1 `.mp4`) into `"video"` too?**
-  It's already an mp4 and history groups it with video, so recommendation is
-  **yes** for a single unified "video" type — but it's a distinct generator, so
-  it is **NOT** included in the migration/cleanup above unless confirmed. If yes,
-  the migration's WHERE also matches `media_type='animate'` (with
-  `generator_type='animate'` stamped) and the filters drop `"animate"` too.
+## Resolved decisions
+- **Fold `media_type="animate"` (Wan2.2-Animate) into `"video"`: YES** (Taylor).
+  Included above — the migration's second UPDATE, the `new_animate` factory
+  change, and dropping `"animate"` from the filters. It's an `.mp4`, so it
+  renders through the normal `Gtk.Video` path (no gif concern); `generator_type=
+  "animate"` + `model_id="wan2.2-animate-14b"` preserve its identity.
+- **Params for the 73 older artgen-path AnimateDiff records: leave as-is**
+  (Taylor) — no back-filling fields that were never recorded.
 
 ## Risks / invariants
 - **Idempotent, reversible-by-data migration.** Files are never modified (gifs
