@@ -7,7 +7,8 @@
 #
 # A token is still read from debconf (if one was entered for a co-installed
 # gated model) to avoid API rate limits. The token is immediately wiped from
-# the debconf database and is passed only as a transient CLI argument.
+# the debconf database and is passed only via the transient HF_TOKEN
+# environment variable (never on argv, which is world-readable).
 #
 # If the download fails the script prints retry instructions and exits 0.
 
@@ -51,8 +52,8 @@ echo ""
 
 if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     if [[ -n "$TOKEN" ]]; then
-        runuser -u "$REAL_USER" -- \
-            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        HF_TOKEN="$TOKEN" runuser -w HF_TOKEN -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || {
             echo ""
             echo "ERROR: model download failed."
@@ -73,7 +74,7 @@ if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     fi
 else
     if [[ -n "$TOKEN" ]]; then
-        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+        HF_TOKEN="$TOKEN" "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
             echo ""
             echo "ERROR: model download failed."
             echo "Retry manually (no token required):"

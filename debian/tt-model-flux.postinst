@@ -5,7 +5,8 @@
 # HuggingFace cache. FLUX.1-schnell is publicly available (Apache-2.0) —
 # no license acceptance or account is required. The HF token is optional
 # and, if provided, is read from debconf, immediately wiped, and passed
-# as a CLI argument — it is never stored to disk by this script.
+# to the download helper via the HF_TOKEN environment variable (never on
+# argv, which is world-readable) — it is never stored to disk by this script.
 #
 # If the download fails (bad network, disk full, etc.) the script prints
 # retry instructions and exits 0 so apt does not roll back the package or
@@ -53,8 +54,8 @@ echo ""
 if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     # Run as the real user so the cache lands in their home directory.
     if [[ -n "$TOKEN" ]]; then
-        runuser -u "$REAL_USER" -- \
-            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        HF_TOKEN="$TOKEN" runuser -w HF_TOKEN -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || {
             echo ""
             echo "ERROR: model download failed."
@@ -76,7 +77,7 @@ if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
 else
     # No sudo context — run directly (will write to /root/.cache).
     if [[ -n "$TOKEN" ]]; then
-        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+        HF_TOKEN="$TOKEN" "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
             echo ""
             echo "ERROR: model download failed."
             echo "Retry manually:"

@@ -3,7 +3,8 @@
 #
 # Downloads Wan-AI/Wan2.2-Animate-14B-Diffusers (~30 GB) into the real user's
 # HuggingFace cache. The HF token is read from debconf, immediately wiped,
-# and passed as a CLI argument — it is never stored to disk by this script.
+# and passed to the download helper via the HF_TOKEN environment variable
+# (never on argv, which is world-readable) — it is never stored to disk here.
 #
 # If the download fails (bad network, disk full, etc.) the script prints
 # retry instructions and exits 0 so apt does not roll back the package or
@@ -43,8 +44,8 @@ echo ""
 
 if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     if [[ -n "$TOKEN" ]]; then
-        runuser -u "$REAL_USER" -- \
-            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        HF_TOKEN="$TOKEN" runuser -w HF_TOKEN -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || {
             echo ""
             echo "ERROR: model download failed."
@@ -63,7 +64,7 @@ if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     fi
 else
     if [[ -n "$TOKEN" ]]; then
-        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+        HF_TOKEN="$TOKEN" "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
             echo ""
             echo "ERROR: model download failed."
             echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"
