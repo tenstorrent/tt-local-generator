@@ -1,3 +1,13 @@
+tt-local-generator (0.86.1) noble; urgency=medium
+
+  * fix(create): re-render the bundled Ansi "Start Something" tile as a real
+    color grid. Its source record's cached thumbnail predated the artgen_thumb
+    fix that parses .ans into a color-grid PNG, so the tile showed raw escape
+    text instead of the art; regenerated from the .ans source with the current
+    renderer (26-color grid, 320×240).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 23:40:00 +0000
+
 tt-local-generator (0.86.0) noble; urgency=medium
 
   * feat(create): ship curated "Start Something" tile art for a clean install.
