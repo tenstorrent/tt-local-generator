@@ -197,7 +197,7 @@ def test_main_window_source_wires_inspire_fn_at_both_construction_sites():
     # treatment, and check the two new seams are present too.
     assert "on_run_complete=self._register_pipeline_final," in src
     assert "pipeline_mode_enabled=app_settings.PIPELINE_MODE_ENABLED," in src
-    assert "on_leave=self._on_pipeline_leave," in src
+    assert "on_leave=self._on_pipeline_leave if not app_settings.PIPELINE_MODE_ENABLED else None," in src
 
     create_view_src = (Path(__file__).parent.parent / "app" / "create_view.py").read_text()
     assert "inspire_fn=self._inspire_fn,\n                prompt_type_getter=self._inspire_prompt_type," in create_view_src
