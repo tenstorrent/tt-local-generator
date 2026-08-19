@@ -1161,15 +1161,23 @@ def _artgen_uses_llm(plugin_name: "str | None") -> bool:
 def _artgen_key_for_model(model: "str | None") -> "str | None":
     """Map an LLM model string to its artgen server_manager start key.
 
-    Matches the node's model against each artgen ServerDef's ``--model``
-    extra_arg, normalising away any HuggingFace org prefix
-    (``meta-llama/Llama-3.3-70B-Instruct`` → ``llama-3.3-70b-instruct``) and
+    Accepts EITHER a raw server_manager key (what the Pipeline Studio per-step
+    model picker writes via ModelPickerRow.selected_key(), e.g.
+    "artgen-qwen3-8b") — matched exact-first, mirroring _match_server_key —
+    OR a --model display / HF-id string (hand-authored / legacy specs, e.g.
+    "meta-llama/Llama-3.3-70B-Instruct"), normalising the HF org prefix and
     case. Returns None when *model* is empty or matches no artgen server — the
     caller then falls back to ARTGEN_DETECT.
     """
     if not model:
         return None
-    want = str(model).rsplit("/", 1)[-1].strip().lower()
+    m = str(model).strip()
+    # 1. Exact server_manager key (the picker writes the raw key).
+    for sdef in sm.SERVERS.values():
+        if "artgen" in sdef.capabilities and sdef.key == m:
+            return sdef.key
+    # 2. Fall back to the --model display string.
+    want = m.rsplit("/", 1)[-1].lower()
     for sdef in sm.SERVERS.values():
         if "artgen" not in sdef.capabilities:
             continue

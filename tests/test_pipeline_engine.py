@@ -1013,6 +1013,43 @@ def test_backend_for_unknown_class_type_returns_none():
     assert eng._backend_for("SomethingElse", {}) is None
 
 
+# ---- _artgen_key_for_model (deep-review follow-up: the Pipeline Studio
+# per-step model picker writes a raw server_manager KEY into inputs["model"]
+# via ModelPickerRow.selected_key(), e.g. "artgen-qwen3-8b" — not the
+# --model display string. This must resolve to itself, exact-first, mirroring
+# _match_server_key, while the legacy --model-display / HF-id path (used by
+# hand-authored specs) must keep working. ----
+
+def test_artgen_key_for_model_none_and_empty_return_none():
+    assert eng._artgen_key_for_model(None) is None
+    assert eng._artgen_key_for_model("") is None
+
+
+def test_artgen_key_for_model_unknown_string_returns_none():
+    assert eng._artgen_key_for_model("some-unknown-llm") is None
+
+
+def test_artgen_key_for_model_raw_server_key_resolves_to_itself():
+    # NEW behavior (the picker path). Derive a real artgen key at test time
+    # rather than hardcoding one, so this stays valid if SERVERS changes.
+    artgen_keys = [k for k, s in eng.sm.SERVERS.items() if "artgen" in s.capabilities]
+    assert artgen_keys, "expected at least one artgen ServerDef in server_manager.SERVERS"
+    key = artgen_keys[0]
+    assert eng._artgen_key_for_model(key) == key
+
+
+def test_artgen_key_for_model_display_string_regression():
+    # Existing behavior: the --model extra_arg display string still resolves.
+    assert eng._artgen_key_for_model("Qwen3-8B") == "artgen-qwen3-8b"
+
+
+def test_artgen_key_for_model_hf_id_with_org_prefix_regression():
+    # Existing behavior: hand-authored / legacy specs pass an HF-id-style
+    # string with an org prefix — normalised away before matching.
+    assert (eng._artgen_key_for_model("meta-llama/Llama-3.3-70B-Instruct")
+            == "artgen-llama-3.3-70b")
+
+
 # ---- switching inside run() (switch helpers mocked) ----
 
 def _stub_handler_helpers(monkeypatch):
