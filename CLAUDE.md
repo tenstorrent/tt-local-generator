@@ -60,12 +60,25 @@ model. `_artgen_key_for_model` now matches the raw server key **exact-first**
 (mirroring `_match_server_key`) before the `--model` display / HF-id fallback
 that hand-authored and legacy specs rely on.
 
-**Deliberately deferred (documented):** making
-`ArtgenDetail`'s WebKit build lazy (works on the real display; latent), the
-Pipeline Studio `#1B8EB1` palette drift (may be deliberate accents), and several
-low/informational items (video async-envelope handling, failed-run hero,
-`_stage_preview_thumb_path` `/tmp` growth, ffmpeg concat quoting, SVG external
-refs).
+**Lazy WebKit in `ArtgenDetail` (fixed v0.83.0).** `ArtgenDetail.__init__` used
+to build its reading-view `WebKit.WebView()` eagerly (gated only import-time by
+`_WEBKIT_OK`); it now builds it lazily on first reading render via
+`_ensure_webview()` (fail-soft), as a `"reading-web"` stack child, degrading to
+the plain-text `_reading_fallback` (`"reading"`) without WebKit — mirroring the
+`activity_viz` precedent. (Eager *construction* didn't actually crash CI here —
+only realize/load spawns the web process — so this was a consistency + startup-
+cost fix, not a live-crash fix.)
+
+**Deliberately deferred (documented):** the Pipeline Studio `#1B8EB1` palette
+drift — the docs-site primary-accent blue is used as the primary-button
+background on live Studio/Create surfaces (`.ps-btn-primary`, `.ps-remix-all`,
+`.ps-remix-run-btn`, `.ps-chip-arrow`, `.create-watch-btn:checked`) where the
+main app's primary color is teal `#4FD1C5` on `#0F2A35`; the `#74C5DF`/`#6FABA0`/
+`#F6BC42` uses are docs-site semantic hues used as semantic accents (teal
+borders / green "done" / yellow "active/warning"), a defensible-but-inconsistent
+design call. And the low/informational items (video async-envelope handling,
+failed-run hero, `_stage_preview_thumb_path` `/tmp` growth, ffmpeg concat
+quoting, SVG external refs).
 
 ## Hiding pipeline mode (v0.80.0)
 

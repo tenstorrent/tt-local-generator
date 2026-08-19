@@ -1,3 +1,15 @@
+tt-local-generator (0.83.0) noble; urgency=medium
+
+  * refactor(artgen): ArtgenDetail builds its reading-view WebKit WebView
+    lazily — on the first reading render — instead of at construction, mirroring
+    the activity_viz lazy pattern. Keeps a web-process-backed widget off the
+    app-startup path (and off tests that never open a reading view), fail-soft:
+    the reading view is a "reading-web" stack child built on demand, degrading
+    to the plain-text fallback without WebKit. Behavior once a reading view is
+    shown is unchanged. (Deep-review follow-up; no other module touched.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 20:30:00 +0000
+
 tt-local-generator (0.82.0) noble; urgency=medium
 
   * fix(engine): the Pipeline Studio per-step model picker now actually routes
