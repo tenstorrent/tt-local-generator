@@ -4339,6 +4339,7 @@ class PipelineStudio(Gtk.Box):
         muse_back_btn.add_css_class("ps-btn-ghost")
         muse_back_btn.connect("clicked", self._on_back_to_discover)
         muse_back_bar.append(muse_back_btn)
+        self._muse_back_btn = muse_back_btn
         muse_page.append(muse_back_bar)
 
         def _compose_fn(medium, literal, on_done):

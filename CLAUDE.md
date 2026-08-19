@@ -1,5 +1,66 @@
 # tt-local-generator — developer notes
 
+## Hiding pipeline mode (v0.80.0)
+
+Pipeline authoring (the DAG editor, the "🧩 Pipelines" nav entry, the
+blank-canvas Inspiration door) is now OFF by default, behind
+`app_settings.PIPELINE_MODE_ENABLED` — read from env `TTLG_PIPELINE_MODE`
+(default off) as a **module attribute**, not a function call, specifically so
+tests can `monkeypatch.setattr(app_settings, "PIPELINE_MODE_ENABLED", True)`
+without touching the environment. 🔀 Remix is unaffected as a *feature* — it
+still works everywhere — but its destination changed shape. This is
+reversible by construction: flag ON restores today's full pipeline UI
+byte-for-byte, nothing was deleted, only gated. See
+[[project_stage_pipeline_direction]] for the approved direction this
+finalizes.
+
+**The three gated doors:**
+1. **`🧩 Pipelines` loop-nav toggle** (`main_window.py`) — `_pipelines_btn` is
+   never constructed at all when the flag is off (not hidden — absent), so
+   every call site that touches it does `getattr(self, "_pipelines_btn",
+   None)` and guards for `None`.
+2. **CreateView's Inspiration door** — `on_inspiration=self.
+   _on_loop_nav_remix if app_settings.PIPELINE_MODE_ENABLED else None`; a
+   `None` callable means `CreateView` never renders that door's tile at all
+   (an existing "omit if unset" contract, not a new special case).
+3. **The `RemixView` DAG editor** — `PipelineStudio`'s Muse goal-chosen
+   handler skips straight to a run instead of opening the node/edge canvas
+   when the flag is off (below).
+
+**The reshaped seeded-remix path.** `MainWindow._remix_as_pipeline` (the
+single "🔀 Remix" handler wired from every gallery/detail surface) branches
+on the flag:
+- **Flag OFF:** `_ensure_pipeline_studio()` (constructs `PipelineStudio`
+  lazily, without needing `_pipelines_btn`) + sets the `_gallery_stack` page
+  to `"pipelines"` directly + deactivates any active loop-nav toggle, then
+  calls `show_muse(seed_artifact=...)` — landing on the goal chooser only,
+  never the studio's own "Discover" page. `PipelineStudio._on_muse_goal_chosen`
+  then calls `_launch_run(derived_path, edits)` directly instead of opening
+  `remix_view`/the DAG editor, taking the user straight to the Stage
+  (`LiveRunView`). On completion the run's deliverable registers into the
+  Library exactly like every other generation path (v0.75.0's
+  `_register_pipeline_final`, untouched by this change).
+- **Flag ON:** unchanged — the toolbar toggle dance, studio Discover, and the
+  DAG editor all behave exactly as before.
+
+**The `on_leave` seam.** `PipelineStudio(on_leave=self._on_pipeline_leave)` —
+when pipeline mode is off, both the Muse's back button and the Stage's Back
+button call `on_leave` instead of routing to the studio's own Discover page.
+`MainWindow._on_pipeline_leave` calls `_hide_pipelines()`, which returns the
+gallery stack and loop-nav to wherever the app's Library was before Remix was
+opened. A run started this way keeps running even after Back is pressed — the
+runner isn't tied to the page being visible, only display drops away.
+`_muse_back_btn`'s label reflects the same flag: `"← Discover"` when pipeline
+mode is on (a real page to return to), `"← Back"` when it's off (leaves to
+the app, never names a hidden page) — guarded by
+`tests/test_pipeline_studio.py::test_flag_off_reachable_surfaces_have_no_pipeline_jargon`,
+which also asserts the Muse's seeded heading ("Make this image into…") never
+leaks pipeline-authoring words ("pipeline"/"recipe") on the flag-off path.
+
+**Untouched by this change:** `pipeline_engine.py`, run-spec construction,
+and every `collect()` contract — this is a UI-reachability change only, not a
+behavior change to what a run actually does.
+
 ## Pipeline Stage — the live making-of (Slice 1, v0.79.0)
 
 `LiveRunView` (`app/pipeline_studio.py`) used to be a text ticker: a spinner +

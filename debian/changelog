@@ -1,3 +1,19 @@
+tt-local-generator (0.80.0) noble; urgency=medium
+
+  * feat(pipeline): pipeline authoring is now hidden by default, behind
+    `TTLG_PIPELINE_MODE` (off unless set). With the flag off there is no
+    🧩 Pipelines nav entry, no blank-canvas Inspiration door in Create, and
+    no DAG editor anywhere in the app — 🔀 Remix instead goes straight from
+    the goal chooser to a run (the Stage), and the finished artifact lands
+    in the Library exactly like every other generation path. Leaving the
+    goal chooser or a running Stage returns to the Library, never to a
+    hidden studio "Discover" page, and a run keeps going if you leave it.
+    Fully reversible: setting `TTLG_PIPELINE_MODE=1` restores today's full
+    pipeline UI byte-for-byte — nothing was deleted, only gated. The
+    engine, run spec, and every `collect()` contract are untouched.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 12:00:00 +0000
+
 tt-local-generator (0.79.0) noble; urgency=medium
 
   * feat(pipeline): the pipeline live run is now a "making-of" (Slice 1). The

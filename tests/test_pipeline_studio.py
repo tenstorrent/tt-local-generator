@@ -3223,3 +3223,17 @@ def test_flag_on_run_back_goes_to_discover():
     studio = ps.PipelineStudio()   # on_leave=None
     studio._on_run_back(None)
     assert studio.stack.get_visible_child_name() == "discover"
+
+
+def test_flag_off_reachable_surfaces_have_no_pipeline_jargon():
+    """Flag-OFF-reachable Remix surfaces (Muse goal chooser + its back button)
+    must not surface pipeline-authoring jargon."""
+    import pipeline_studio as ps
+    studio = ps.PipelineStudio(pipeline_mode_enabled=False)
+    # Muse seeded heading reads as "make this into", not pipeline-speak.
+    studio.muse.set_context(("/tmp/x.png", "image", None))
+    heading = studio.muse._heading_label.get_label().lower()
+    assert "pipeline" not in heading and "recipe" not in heading
+    # The Muse back button leaves to the app (Task 4), so it must not say
+    # "Discover" (a hidden studio page) when pipeline mode is off.
+    assert studio._muse_back_btn.get_label() == "← Back"
