@@ -851,6 +851,7 @@ def _make_mw_lifecycle(monkeypatch):
     with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
         obj = mw.MainWindow.__new__(mw.MainWindow)
 
+    obj._alive = True  # guard added to _on_progress/_on_finished/_on_error; harness predates it
     obj._set_status = MagicMock()
     obj._controls = MagicMock()
     # SP-3d-3: `_on_generate`'s AnimateDiff-blackhole chip-busy guard now

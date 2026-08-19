@@ -521,6 +521,7 @@ def test_on_transform_finished_refreshes_artgen_gallery_for_artgen_record(tmp_pa
 def test_on_error_tolerates_artgen_active_medium():
     import main_window as mw
     obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._alive = True                              # guard added in _on_error; harness predates it
     obj._gen_gallery = None                       # no native job in flight
     obj._current_medium_source = lambda: "artgen"  # artgen Create medium active
     fake_video = MagicMock()                       # a real GalleryWidget stand-in

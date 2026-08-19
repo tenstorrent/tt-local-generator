@@ -3411,3 +3411,15 @@ def test_flag_off_reachable_surfaces_have_no_pipeline_jargon():
     # The Muse back button leaves to the app (Task 4), so it must not say
     # "Discover" (a hidden studio page) when pipeline mode is off.
     assert studio._muse_back_btn.get_label() == "← Back"
+
+
+def test_open_back_button_label_flag_aware():
+    """Regression (deep-review Fix B): the OpenView back button was
+    hardcoded "← Discover" regardless of pipeline mode, even though its
+    handler (`_on_back_to_discover`) already leaves to the app Library when
+    flag-off (there's no Discover to return to in that build). It must be
+    flag-aware exactly like `_muse_back_btn` already is."""
+    import pipeline_studio as ps
+
+    assert ps.PipelineStudio()._open_back_btn.get_label() == "← Discover"
+    assert ps.PipelineStudio(pipeline_mode_enabled=False)._open_back_btn.get_label() == "← Back"

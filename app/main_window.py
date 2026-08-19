@@ -7570,6 +7570,9 @@ class MainWindow(Gtk.ApplicationWindow):
             for _b in getattr(self, "_loop_nav", {}).values():
                 if _b.get_active():
                     _b.set_active(False)
+            # Full-width, same as _show_pipelines: the studio has its own
+            # layout and a visible detail pane just squeezes the Muse.
+            self._detail_wrap.set_visible(False)
 
         self._pipeline_studio.show_muse(seed_artifact=seed_artifact)
 
@@ -10745,6 +10748,8 @@ class MainWindow(Gtk.ApplicationWindow):
     # ── Worker callbacks (all called on main thread via GLib.idle_add) ─────────
 
     def _on_progress(self, message: str, pending: "PendingCard | None") -> bool:
+        if not self._alive:
+            return False
         self._set_status(message)
         if pending is not None:
             pending.update_status(message)
@@ -10756,6 +10761,8 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_finished(self, record: GenerationRecord) -> bool:
+        if not self._alive:
+            return False
         gallery = self._gen_gallery or self._gallery_for_type(record.media_type)
         # `replace_pending_with` degrades gracefully when there's no pending
         # card to replace (the Create-job case, where _on_generate skipped
@@ -10796,6 +10803,8 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_error(self, message: str) -> bool:
+        if not self._alive:
+            return False
         from log_viewer import detect_log_path, shorten_error
         # _on_error is shared by native generation AND the Forge transform path
         # (_on_transform_card). When a transform fails while an artgen Create

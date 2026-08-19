@@ -639,6 +639,60 @@ def test_remix_flag_off_enters_muse_not_discover(tmp_path, monkeypatch):
     assert obj._gallery_stack.last == "pipelines"
 
 
+def test_remix_flag_off_hides_detail_pane(tmp_path, monkeypatch):
+    """Regression (deep-review Fix A): the flag-OFF branch used to leave
+    `_detail_wrap` visible, so the studio rendered squeezed beside it — the
+    flag-ON path (`_show_pipelines`) already hides it for exactly this
+    reason. `_detail_wrap` must be hidden here too."""
+    import main_window as mw
+
+    monkeypatch.setattr(mw.app_settings, "PIPELINE_MODE_ENABLED", False, raising=False)
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._remix_as_pipeline = mw.MainWindow._remix_as_pipeline.__get__(obj)
+
+    class _FakeStudio:
+        def show_muse(self, seed_artifact=None):
+            pass
+
+    obj._pipeline_studio = _FakeStudio()
+    monkeypatch.setattr(obj, "_ensure_pipeline_studio", lambda: None)
+    # Real Gtk.Box already set up by _make_mw, visible True.
+    assert obj._detail_wrap.get_visible() is True
+
+    rec = _make_record(media_type="image", image_path=str(tmp_path / "art.png"))
+
+    obj._remix_as_pipeline(rec)
+
+    assert obj._detail_wrap.get_visible() is False
+
+
+def test_worker_callbacks_noop_after_close(tmp_path, monkeypatch):
+    """`_on_progress`/`_on_finished`/`_on_error` are `GLib.idle_add` targets
+    that can fire after the window has closed (`_alive = False`, set in
+    `do_close_request`) if a worker thread finishes late. Each must guard on
+    `self._alive` as its first line, exactly like `_on_status_snapshot`
+    already does, so a post-close callback can't touch torn-down widgets.
+
+    This harness object has none of the collaborators these methods would
+    normally touch (`_set_status`, `_gen_gallery`, `_create_view`, ...) — if
+    the `_alive` guard didn't return first, any of these calls would raise
+    `AttributeError` instead of returning `False`.
+    """
+    import main_window as mw
+
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._on_progress = mw.MainWindow._on_progress.__get__(obj)
+    obj._on_finished = mw.MainWindow._on_finished.__get__(obj)
+    obj._on_error = mw.MainWindow._on_error.__get__(obj)
+    obj._alive = False
+
+    rec = _make_record()
+
+    assert obj._on_progress("x", None) is False
+    assert obj._on_finished(rec) is False
+    assert obj._on_error("x") is False
+
+
 def test_on_pipeline_leave_returns_to_library(tmp_path, monkeypatch):
     import main_window as mw
 

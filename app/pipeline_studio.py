@@ -4317,11 +4317,14 @@ class PipelineStudio(Gtk.Box):
         open_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         open_back_bar.set_margin_top(10)
         open_back_bar.set_margin_start(18)
-        open_back_btn = Gtk.Button(label="← Discover")
+        open_back_btn = Gtk.Button(
+            label="← Discover" if self._pipeline_mode_enabled else "← Back"
+        )
         open_back_btn.add_css_class("ps-open-back")
         open_back_btn.add_css_class("ps-btn-ghost")
         open_back_btn.connect("clicked", self._on_back_to_discover)
         open_back_bar.append(open_back_btn)
+        self._open_back_btn = open_back_btn
         open_page.append(open_back_bar)
 
         self.open_view = OpenView()
