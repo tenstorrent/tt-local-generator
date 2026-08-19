@@ -5,11 +5,14 @@ tile's art resolves in priority order so creative options are present whether
 you have 0 saved pieces or 600, WITHOUT the app hard-depending on shipped
 sample assets:
 
-  1. YOUR latest piece of that medium (personal; gets richer as you create)
-  2. a CURATED sample — from a "demo"/favorites playlist if you have one, or
-     (future) an optional curated-samples .deb that drops records into the
-     same store. Discovered by name via `curated_playlist_matcher`.
-  3. a per-medium GRADIENT + the medium's icon (always works, no assets).
+  1. a STARRED piece of that medium — an explicit user pick wins over
+     everything ("star an image and it becomes this tile").
+  2. a hand-picked BUNDLED example that ships with the app (only some mediums,
+     e.g. the Image tile) — the default before you've starred your own.
+  3. a CURATED sample — from a "demo"/favorites playlist (or a per-type
+     playlist), star-sorted. Discovered by name via `curated_playlist_matcher`.
+  4. (native mediums only) YOUR most recent piece of that medium.
+  5. a per-medium GRADIENT + the medium's icon (always works, no assets).
 
 Tapping a tile calls `on_pick(medium, example_idea)` — the Create surface uses
 that to seed its existing composer (select the medium chip + fill the prompt
@@ -63,10 +66,10 @@ _GRADIENT_CLASS_BY_KIND = {
 _TILE_W, _TILE_H = 200, 104
 
 # Curated BUNDLED tile art that ships with the app (app/assets/), keyed by
-# medium id. Always present, so it's the top-priority source for a tile — used
-# for mediums where a specific hand-picked example reads better than "your
-# latest". The Image tile uses a World's Fair (Montreal Expo 67) generated
-# image rather than whatever raster you happened to make last.
+# medium id. The DEFAULT tile art for these mediums until you star your own
+# piece of the medium (a star overrides it — see _resolve_tile_art) — a
+# hand-picked example that reads better than an arbitrary recent generation.
+# The Image tile uses a World's Fair (Montreal Expo 67) generated image.
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _BUNDLED_TILE_ART = {
     "image": "tile-image-montreal-1967.jpg",
@@ -232,8 +235,9 @@ class PossibilitiesWall(Gtk.Box):
                     return ("thumb", t)
         except Exception:
             pass
-        # A hand-picked BUNDLED example (ships with the app) wins over
-        # everything — e.g. the Image tile's World's Fair Montreal '67 image.
+        # 2. A hand-picked BUNDLED example (ships with the app) — the default
+        #    when you haven't starred your own piece of this medium (e.g. the
+        #    Image tile's World's Fair Montreal '67 image).
         bundled = _bundled_tile_art_path(medium)
         if bundled is not None:
             return ("thumb", bundled)
