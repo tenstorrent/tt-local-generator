@@ -2350,7 +2350,8 @@ def test_pipeline_studio_run_remix_writes_composed_spec_creates_run_and_starts_r
     REMIXES_DIR via spec_remix.write_spec, create a provisional PipelineStore
     run record for the WRITTEN path, show it in LiveRunView and switch to
     "run", then construct a PipelineRunner and start() it with the written
-    path and LiveRunView's own handlers bound directly as its callbacks."""
+    path and (run-id-gated wrappers around) LiveRunView's own handlers as
+    its callbacks."""
     import pipeline_studio
 
     remixes_dir = tmp_path / "remixes"
@@ -2383,6 +2384,20 @@ def test_pipeline_studio_run_remix_writes_composed_spec_creates_run_and_starts_r
     from pipeline_studio import PipelineStudio
     studio = PipelineStudio()
 
+    # Deep-review fix (one-run-at-a-time + run-id gating): `_launch_run` now
+    # wraps each callback so a SUPERSEDED run's late callbacks can't touch
+    # `self.live_run` (see `_launch_run`'s docstring). That means the kwargs
+    # PipelineRunner.start() receives are no longer the bound methods
+    # themselves, just wrappers that forward to them while the run stays
+    # active -- spy on the bound methods to verify the forwarding still
+    # happens, rather than asserting identity with the raw method objects.
+    node_spy = MagicMock()
+    log_spy = MagicMock()
+    finished_spy = MagicMock()
+    monkeypatch.setattr(studio.live_run, "on_node_update", node_spy)
+    monkeypatch.setattr(studio.live_run, "on_log", log_spy)
+    monkeypatch.setattr(studio.live_run, "on_finished", finished_spy)
+
     studio.remix_view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
     studio.remix_view._field_widgets["1"]["prompt"].set_text("a new prompt")
 
@@ -2404,14 +2419,20 @@ def test_pipeline_studio_run_remix_writes_composed_spec_creates_run_and_starts_r
     assert create_kwargs["param_overrides"] == edits
 
     # PipelineRunner constructed with GLib.idle_add, started with the written
-    # path and LiveRunView's handlers bound directly.
+    # path and (gated wrappers around) LiveRunView's handlers.
     mock_runner_cls.assert_called_once_with(idle_add=pipeline_studio.GLib.idle_add)
     start_args, start_kwargs = mock_runner_instance.start.call_args
     assert start_args[0] == written_path
-    assert start_kwargs["on_node_update"] == studio.live_run.on_node_update
-    assert start_kwargs["on_log"] == studio.live_run.on_log
-    assert start_kwargs["on_run_finished"] == studio.live_run.on_finished
     assert start_kwargs["run_id"] == "provisional-run-1"
+
+    # This run is still the active one, so its wrapped callbacks forward to
+    # LiveRunView's real handlers unchanged.
+    start_kwargs["on_node_update"]("1", "done", "")
+    node_spy.assert_called_once_with("1", "done", "")
+    start_kwargs["on_log"]("a log line")
+    log_spy.assert_called_once_with("a log line")
+    start_kwargs["on_run_finished"](True)
+    finished_spy.assert_called_once_with(True)
 
     assert studio.stack.get_visible_child_name() == "run"
     assert list(studio.live_run._step_status_labels.keys()) == ["1", "2", "3"]
@@ -2659,6 +2680,159 @@ def test_launch_run_starts_runner_and_shows_run_page(monkeypatch, tmp_path):
     assert started["run_id"] == "run-xyz"
     assert studio.stack.get_visible_child_name() == "run"
     assert studio._runner is not None
+
+
+def test_launch_run_cancels_prior_active_runner(monkeypatch, tmp_path):
+    """Deep-review fix: Run page's Back does NOT cancel a run (it keeps
+    driving headless), so a user can Back out, open/remix another spec, and
+    launch a second run while the first is still executing. Two concurrent
+    pipeline runs would both drive backend start/stop and could contend/
+    hard-lock the fragile QB2 hardware, so `_launch_run` must cancel any
+    still-active prior runner before starting a new one -- unconditionally,
+    since `PipelineRunner.cancel()` is documented as a safe no-op on an
+    already-finished runner.
+    """
+    import pipeline_studio as ps
+
+    studio = ps.PipelineStudio()
+
+    prior_runner = MagicMock()
+    studio._runner = prior_runner
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self, derived_path, jobs, **kw):
+            pass
+
+    class _FakeStore:
+        def create_run(self, **kw):
+            return "run-new"
+
+        def get_run(self, rid):
+            return {}
+
+    monkeypatch.setattr(ps, "PipelineRunner", _FakeRunner)
+    monkeypatch.setattr(ps, "PipelineStore", _FakeStore)
+    monkeypatch.setattr(ps, "build_run_view", lambda rec: _make_live_run())
+
+    studio._launch_run(str(tmp_path / "x.json"), {})
+
+    prior_runner.cancel.assert_called_once()
+    # The new runner replaces the cancelled one -- Stop still has a live
+    # handle to the run that's actually now visible.
+    assert isinstance(studio._runner, _FakeRunner)
+
+
+def test_launch_run_cancel_noop_when_no_prior_runner(monkeypatch, tmp_path):
+    """The cancel-prior-runner guard must not blow up on the very first
+    launch, when `self._runner` is still None."""
+    import pipeline_studio as ps
+
+    studio = ps.PipelineStudio()
+    assert studio._runner is None
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self, derived_path, jobs, **kw):
+            pass
+
+    class _FakeStore:
+        def create_run(self, **kw):
+            return "run-only"
+
+        def get_run(self, rid):
+            return {}
+
+    monkeypatch.setattr(ps, "PipelineRunner", _FakeRunner)
+    monkeypatch.setattr(ps, "PipelineStore", _FakeStore)
+    monkeypatch.setattr(ps, "build_run_view", lambda rec: _make_live_run())
+
+    # Must not raise.
+    studio._launch_run(str(tmp_path / "x.json"), {})
+    assert studio._runner is not None
+
+
+def test_superseded_run_callbacks_are_gated(monkeypatch, tmp_path):
+    """Deep-review fix, part 2: cancelling a subprocess doesn't un-schedule
+    callbacks already in flight -- a superseded run's terminal
+    `on_run_finished(False)` can still be delivered (via GLib.idle_add) AFTER
+    the new run's `begin()` has repointed `self.live_run` at the new run.
+    Each callback handed to PipelineRunner.start() must be wrapped so it only
+    forwards to `self.live_run` while its captured run_id is still
+    `self._active_run_id` -- a superseded run's callbacks must be silent
+    no-ops, while the currently-active run's own callbacks still forward
+    normally.
+    """
+    import pipeline_studio as ps
+
+    studio = ps.PipelineStudio()
+
+    captured_starts = []
+    run_ids = iter(["run-1", "run-2"])
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self, derived_path, jobs, **kw):
+            captured_starts.append(kw)
+
+        def cancel(self) -> None:
+            pass
+
+    class _FakeStore:
+        def create_run(self, **kw):
+            return next(run_ids)
+
+        def get_run(self, rid):
+            return {}
+
+    monkeypatch.setattr(ps, "PipelineRunner", _FakeRunner)
+    monkeypatch.setattr(ps, "PipelineStore", _FakeStore)
+    monkeypatch.setattr(ps, "build_run_view", lambda rec: _make_live_run())
+
+    finished_calls = []
+    node_calls = []
+    log_calls = []
+    monkeypatch.setattr(studio.live_run, "on_finished",
+                         lambda *a, **k: finished_calls.append(a))
+    monkeypatch.setattr(studio.live_run, "on_node_update",
+                         lambda *a, **k: node_calls.append(a))
+    monkeypatch.setattr(studio.live_run, "on_log",
+                         lambda *a, **k: log_calls.append(a))
+
+    # Launch run 1 -- captures its (gated) callbacks bound to run_id "run-1".
+    studio._launch_run(str(tmp_path / "one.json"), {})
+    assert len(captured_starts) == 1
+    run1_cbs = captured_starts[0]
+    assert studio._active_run_id == "run-1"
+
+    # Launch run 2 -- supersedes run 1; _active_run_id moves to "run-2".
+    studio._launch_run(str(tmp_path / "two.json"), {})
+    assert len(captured_starts) == 2
+    run2_cbs = captured_starts[1]
+    assert studio._active_run_id == "run-2"
+
+    # Run 1's stray late callbacks (as if its subprocess exit fired after
+    # run 2 already started) must be no-ops now.
+    run1_cbs["on_run_finished"](True)
+    run1_cbs["on_node_update"]("1", "done", "")
+    run1_cbs["on_log"]("some line")
+    assert finished_calls == []
+    assert node_calls == []
+    assert log_calls == []
+
+    # Run 2's own callbacks, meanwhile, forward normally.
+    run2_cbs["on_run_finished"](True)
+    run2_cbs["on_node_update"]("1", "done", "")
+    run2_cbs["on_log"]("some line")
+    assert finished_calls == [(True,)]
+    assert node_calls == [("1", "done", "")]
+    assert log_calls == [("some line",)]
 
 
 # ── MuseView (SP-C Phase 2b-3 Task 4 — goal-first "start from scratch") ─────

@@ -4288,6 +4288,14 @@ class PipelineStudio(Gtk.Box):
         # from the run page anyway.
         self._runner: "Optional[PipelineRunner]" = None
 
+        # The run_id `_launch_run` most recently started — the gate that
+        # keeps a SUPERSEDED prior run's late-arriving callbacks (delivered
+        # via GLib.idle_add, so they can land after a newer run has already
+        # begun) from mutating the now-visible run's tiles or firing a stray
+        # "run-done" for it. See `_launch_run`'s `_guarded` wrapper. None
+        # until the first run launches.
+        self._active_run_id: "Optional[str]" = None
+
         # The seed_artifact `show_muse()` was last called with — remembered
         # purely so `_on_muse_goal_chosen` can pick the right remix title
         # ("a new pipeline" vs. f"your {kind}") without MuseView itself
@@ -4595,7 +4603,40 @@ class PipelineStudio(Gtk.Box):
         runner for an already-written seed/derived spec at *derived_path*
         with *edits* as param overrides. Shared by _on_run_remix (RemixView's
         composed graph) and _on_muse_goal_chosen's flag-OFF straight-to-run
-        path (a fresh muse seed, no edits)."""
+        path (a fresh muse seed, no edits).
+
+        Two safety/correctness fixes live here (deep-review fix, see
+        .superpowers/sdd/pr23-review-fixes/):
+
+        1. **One pipeline run at a time.** Run page's "← Back" deliberately
+           does NOT cancel a run (see `_on_run_back`'s docstring) — a run
+           keeps driving PipelineRunner's callbacks headless while the user
+           browses elsewhere. That means a second `_launch_run` (Back, then
+           Muse/Remix again, then Run) can be reached while a PRIOR runner
+           is still alive. Two concurrent pipeline runs would both drive
+           backend start/stop and could contend/hard-lock the fragile QB2
+           hardware (see reference_qb2_card924055_fragility) — launching a
+           new run supersedes the previous one, so any still-active prior
+           runner is cancelled up front. `PipelineRunner.cancel()` is a safe
+           no-op when there's nothing to terminate (guards
+           `self._proc and self._proc.poll() is None`), so this is harmless
+           when `self._runner` is None or already finished.
+        2. **Run-id-gated callbacks.** Cancelling a subprocess doesn't
+           un-schedule callbacks already in flight — a superseded run's
+           terminal `on_run_finished(False)` can still arrive (via
+           GLib.idle_add) AFTER this new run's `begin()` has repointed
+           `self.live_run` at the new run. Undguarded, that stray call would
+           resolve/register the NEW run and fire a bogus "run-done" for it
+           (and stray NODE:/LOG: lines would mutate the new run's
+           identically-numbered tiles). `_active_run_id` records which run
+           is current; each of the three callbacks handed to this launch's
+           runner is wrapped to only forward when its captured run_id still
+           matches `self._active_run_id` at call time — a superseded run's
+           callbacks silently no-op instead of touching the live view.
+        """
+        if self._runner is not None:
+            self._runner.cancel()
+
         jobs = _default_remix_jobs()
         store = PipelineStore()
         run_id = store.create_run(
@@ -4612,15 +4653,26 @@ class PipelineStudio(Gtk.Box):
         self.live_run.begin(run_view)
         self.stack.set_visible_child_name("run")
 
+        self._active_run_id = run_id
+
+        def _guarded(cb, rid=run_id):
+            """Only forward to *cb* while *rid* is still the active run --
+            see this method's docstring, fix 2."""
+            def _fwd(*args, **kwargs):
+                if rid == self._active_run_id:
+                    return cb(*args, **kwargs)
+                return None
+            return _fwd
+
         runner = PipelineRunner(idle_add=GLib.idle_add)
         self._runner = runner
         runner.start(
             derived_path,
             jobs,
             param_overrides=edits,
-            on_node_update=self.live_run.on_node_update,
-            on_run_finished=self.live_run.on_finished,
-            on_log=self.live_run.on_log,
+            on_node_update=_guarded(self.live_run.on_node_update),
+            on_run_finished=_guarded(self.live_run.on_finished),
+            on_log=_guarded(self.live_run.on_log),
             run_id=run_id,
         )
 
