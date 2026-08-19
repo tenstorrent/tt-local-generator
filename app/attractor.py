@@ -561,14 +561,23 @@ def _load_artgen_text(box: Gtk.Box, file_path: str) -> None:
     box.append(scroll)
 
 
+def _is_gif_record(record) -> bool:
+    """True iff this record's media file is a .gif (so it must animate via
+    AnimatedGifWidget, not the fragile Gtk.Video/GStreamer path). Keyed on the
+    file extension, not media_type, since AnimateDiff gifs are now
+    media_type='video'."""
+    p = (getattr(record, "video_path", "") or getattr(record, "file_path", "") or "")
+    return p.lower().endswith(".gif")
+
+
 def _load_animated_gif(box: Gtk.Box, file_path: str) -> None:
     """Render an animated GIF into *box* via the shared GdkPixbufAnimationIter
     widget (`AnimatedGifWidget`) instead of GStreamer/`Gtk.Video`.
 
     Used for both artgen AnimateDiff gifs (previously frozen on frame 1 by
-    the "unknown extension -> static thumbnail" fallback) and native
-    `media_type == "animatediff"` records (previously routed through the
-    fragile Gtk.Video GStreamer path -- documented unreliable for gif in
+    the "unknown extension -> static thumbnail" fallback) and any record
+    whose media file is a `.gif` (previously routed through the fragile
+    Gtk.Video GStreamer path -- documented unreliable for gif in
     main_window.py:2110). `_clear_box` unparents any prior child first,
     which fires that widget's own "unrealize" handler and cancels its GLib
     timer -- no manual timer bookkeeping needed here, matching how
@@ -1683,12 +1692,16 @@ class AttractorWindow(Gtk.Window):
             if path:
                 slot._picture.set_filename(path)
             slot._picture.set_visible(True)
-        elif media_type == "animatediff":
-            # Native AnimateDiff gif: animate via the shared
-            # GdkPixbufAnimationIter widget, same as artgen gifs -- NOT the
-            # fragile GStreamer Gtk.Video path (documented unreliable for gif
-            # in main_window.py:2110). Identical on Linux and macOS since it
-            # never touches GStreamer/_USE_SYSTEM_PLAYER.
+        elif _is_gif_record(record):
+            # Video-typed .gif (native AnimateDiff, now media_type="video"):
+            # animate via the shared GdkPixbufAnimationIter widget, same as
+            # artgen gifs -- NOT the fragile GStreamer Gtk.Video path
+            # (documented unreliable for gif in main_window.py:2110).
+            # Identical on Linux and macOS since it never touches
+            # GStreamer/_USE_SYSTEM_PLAYER. Decided by file extension, not
+            # media_type, since AnimateDiff records are media_type="video"
+            # now -- only genuinely video (.mp4) records fall through to the
+            # branches below.
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
                 slot._gst_player.close()
@@ -1779,7 +1792,7 @@ class AttractorWindow(Gtk.Window):
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
             )
-        elif getattr(record, "media_type", "video") == "animatediff":
+        elif _is_gif_record(record):
             # Animated GIFs: rendered via GdkPixbufAnimationIter/AnimatedGifWidget
             # (see _load_animated_gif), which loops indefinitely on its own GLib
             # timer and never emits a "finished" signal, so use a fixed dwell

@@ -1,16 +1,40 @@
 """Unit tests for AttractorPool — no GTK required."""
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
-from attractor import AttractorPool
+from attractor import AttractorPool, _is_gif_record
 
 def _rec(media_type="video", duration_s=5.0):
     r = MagicMock()
     r.media_type = media_type
     r.duration_s = duration_s
     return r
+
+def test_is_gif_record_true_for_video_typed_gif_via_video_path():
+    # The regression this task fixes: AnimateDiff records are now
+    # media_type="video", but their file is still a .gif -- the predicate
+    # must key off the extension, not media_type.
+    rec = SimpleNamespace(media_type="video", video_path="/tmp/clip.gif")
+    assert _is_gif_record(rec) is True
+
+
+def test_is_gif_record_false_for_mp4():
+    rec = SimpleNamespace(media_type="video", video_path="/tmp/clip.mp4")
+    assert _is_gif_record(rec) is False
+
+
+def test_is_gif_record_true_via_file_path_when_no_video_path():
+    rec = SimpleNamespace(file_path="/tmp/art.gif")
+    assert _is_gif_record(rec) is True
+
+
+def test_is_gif_record_false_when_no_paths_present():
+    rec = SimpleNamespace()
+    assert _is_gif_record(rec) is False
+
 
 def test_pool_order_covers_all_records():
     recs = [_rec() for _ in range(5)]
