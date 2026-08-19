@@ -215,11 +215,21 @@ def test_on_destroy_marks_dead_and_tears_down(monkeypatch):
     assert win._slot_a in unloaded and win._slot_b in unloaded
 
 
-def test_generation_loop_exits_when_run_id_superseded():
+def test_generation_loop_exits_when_run_id_superseded(monkeypatch):
     """A generation loop from a SUPERSEDED start() (run_id mismatch) must exit
     immediately, not run forever — the zombie-loop race on a fast close->reopen
     (stop() sets the Event, start() clears it; a thread mid-body never sees the
-    set, so a per-run token is the real guard)."""
+    set, so a per-run token is the real guard).
+
+    "Didn't hang" is a weak signal on its own (a regressed gate could still
+    return after doing an iteration of real work). Prove it actually bailed
+    at the `while ... and self._run_id == run_id` gate — before the loop body
+    runs at all — by spying on the per-iteration work the body performs
+    (`_get_queue_depth`/`_get_is_generating`/`_get_server_status`, each read
+    at the top of every pass, and `prompt_client.generate_prompt`, the actual
+    generation call further down) and asserting every one of them was called
+    ZERO times.
+    """
     import threading
     import attractor
     win = attractor.AttractorWindow.__new__(attractor.AttractorWindow)
@@ -227,5 +237,22 @@ def test_generation_loop_exits_when_run_id_superseded():
     win._auto_generate = True
     win._model_source = "video"
     win._run_id = 5                        # the current run
+
+    # Spies on every per-iteration work call the loop body makes. If the
+    # run_id gate regressed (e.g. dropped from the `while` condition), the
+    # loop would enter its body and call these before this test's assertions
+    # ever run — a direct, deterministic proof, unlike relying on a hang.
+    win._get_queue_depth = MagicMock(name="_get_queue_depth")
+    win._get_is_generating = MagicMock(name="_get_is_generating")
+    win._get_server_status = MagicMock(name="_get_server_status")
+    generate_prompt = MagicMock(name="generate_prompt")
+    monkeypatch.setattr(attractor.prompt_client, "generate_prompt", generate_prompt)
+
     # A loop launched for an OLD run (1) must bail immediately (returns == exits).
-    attractor.AttractorWindow._generation_loop(win, run_id=1)
+    result = attractor.AttractorWindow._generation_loop(win, run_id=1)
+
+    assert result is None
+    win._get_queue_depth.assert_not_called()
+    win._get_is_generating.assert_not_called()
+    win._get_server_status.assert_not_called()
+    generate_prompt.assert_not_called()

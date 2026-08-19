@@ -898,16 +898,45 @@ def test_remix_view_run_with_bool_edit_emits_changed_field_only():
     assert received == [(_REMIX_SPEC_PATH, {"3": {"loop": False}})]
 
 
-def test_remix_view_model_label_shown_only_when_present():
-    """TTLGTextToImage -> model_label 'FLUX' should render; TTLGImageToVideo's
-    ParamField labels themselves are unaffected either way — this just checks
-    the step card doesn't crash/omit rendering when building both kinds."""
+def test_remix_view_model_label_shown_only_when_present(monkeypatch):
+    """TTLGTextToImage's intent carries `model_label="FLUX"` (and
+    TTLGImageToVideo carries "SkyReels"); TTLGAnimateDiff's carries `None`.
+    `_build_step_card` (app/pipeline_studio.py) renders that as a static
+    `Gtk.Label(..., css_class="ps-step-model")` under `elif
+    intent.model_label:` — but ONLY when `capability_for_intent(class_type)`
+    resolves to no capability; when it resolves to one (as it does today for
+    all three of this fixture's class_types: image/video/animatediff), a
+    live `ModelPickerRow` is built in that slot instead and the static label
+    is skipped entirely (that picker path has its own coverage in
+    test_model_picker.py). To exercise this test's actual namesake guard in
+    isolation, force `capability_for_intent` to return None for every
+    class_type — that removes the picker from the equation and proves the
+    label itself renders exactly for the steps whose intent has one."""
+    import pipeline_studio as ps
     from pipeline_studio import RemixView
+
+    monkeypatch.setattr(ps, "capability_for_intent", lambda class_type: None)
+
     view = RemixView()
     view.set_run(_make_remix_run(), _REMIX_SPEC_PATH)
-    # No assertion beyond "did not raise" plus the fields already asserted
-    # above — model-label rendering reuses OpenView's already-tested
-    # `if step.intent.model_label:` guard pattern.
+
+    # Confirms the picker path was truly bypassed (i.e. the labels found
+    # below come from the static-model_label guard, not incidentally from
+    # ModelPickerRow's own rendering).
+    assert view._model_pickers == {}
+
+    model_label_texts = [
+        w.get_label()
+        for w in _walk_widgets(view)
+        if isinstance(w, Gtk.Label) and w.has_css_class("ps-step-model")
+    ]
+
+    # Node "1" (TTLGTextToImage) and node "2" (TTLGImageToVideo) both have a
+    # non-empty model_label and must each render exactly one label with that
+    # text. Node "3" (TTLGAnimateDiff, model_label=None) must render none —
+    # so the total count matches the count of steps that actually have one,
+    # not just "some labels appeared somewhere."
+    assert sorted(model_label_texts) == ["FLUX", "SkyReels"]
 
 
 def test_remix_view_set_run_is_repeat_safe():
