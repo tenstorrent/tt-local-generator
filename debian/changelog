@@ -1,3 +1,30 @@
+tt-local-generator (0.81.0) noble; urgency=medium
+
+  * fix: deep-review findings on the branch (posted to PR #23), each with a
+    regression test.
+    - pipeline: one pipeline run at a time — launching a new run cancels the
+      prior runner and gates runner callbacks by run-id, so a superseded run
+      can no longer drive/register the wrong live view (and two concurrent
+      backend-switching runs can't contend on the hardware).
+    - security: the HuggingFace token is passed via the HF_TOKEN environment
+      variable (preserved across runuser with -w), never on argv — it is no
+      longer visible in the world-readable /proc/<pid>/cmdline during a
+      download. Applies to download_model.sh and all model postinst scripts.
+    - shell: the default (flag-off) Remix path now hides the detail pane so the
+      goal chooser isn't cramped; the OpenView back button is flag-aware; and
+      the worker progress/finished/error callbacks honour the _alive guard so a
+      job finishing after window-close can't touch torn-down widgets.
+    - engine: _run_tt_ctl preserves the tail of streamed output in its error
+      message on non-zero exit (AnimateDiff pipeline failures are diagnosable
+      again); ARTGEN_DETECT now records the confirmed backend it started so a
+      later same-target node skips a redundant stop/reset/start (can only
+      prevent needless churn, never skip a needed switch).
+    - chore: removed dead code (pipeline_panel.py, artgen_watch.py,
+      batch_generate.py) and strengthened two smoke tests to assert their
+      named behaviour. No engine/run-spec/collect() contract changed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 18:00:00 +0000
+
 tt-local-generator (0.80.0) noble; urgency=medium
 
   * feat(pipeline): pipeline authoring is now hidden by default, behind

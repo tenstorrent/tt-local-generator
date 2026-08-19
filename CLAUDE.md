@@ -1,5 +1,68 @@
 # tt-local-generator — developer notes
 
+## PR#23 deep-review fixes (v0.81.0)
+
+A cross-cutting adversarial review of the whole `feat/pipeline-editor` branch
+(6 parallel agents: correctness, GTK-threading, security, invariants,
+test-integrity, adversarial-diff; findings hand-verified) was posted to PR #23
+and its actionable items fixed here (each with a regression test, reviewed):
+
+- **One pipeline run at a time** (`pipeline_studio.PipelineStudio._launch_run`):
+  launching a new run now `cancel()`s the prior runner (safe no-op if it already
+  finished) AND wraps the runner's `on_node_update`/`on_finished`/`on_log` in a
+  `_guarded(cb, rid=run_id)` closure that only forwards while `rid ==
+  self._active_run_id`. Before this, a run left running via "← Back" (which
+  deliberately doesn't cancel) could have its completion resolve/register a
+  *later* run and cross-contaminate its tiles — and two concurrent
+  backend-switching runs could contend on the fragile QB2 hardware. Navigating
+  away (Back) still keeps a lone run going; only starting a *new* run supersedes it.
+- **HF token off argv** (`bin/download_model.sh` + all `debian/tt-model-*.postinst`):
+  the token now travels via the `HF_TOKEN` env var (`runuser -w HF_TOKEN`
+  preserves it across the PAM env reset; the helper `export`s it for `hf`),
+  never on a command line — `/proc/<pid>/cmdline` is world-readable, `/environ`
+  is owner-only. The helper still *accepts* `--token`/env/token-files as input.
+- **Flag-off Remix + lifecycle** (`main_window`, `pipeline_studio`): the default
+  (pipeline-mode-off) `_remix_as_pipeline` branch now hides `_detail_wrap` like
+  `_show_pipelines` does (the goal chooser was rendering cramped beside the
+  leftover detail pane); the OpenView back button label is flag-aware; and
+  `_on_progress`/`_on_finished`/`_on_error` gained the `if not self._alive:
+  return False` guard `_on_status_snapshot` already used.
+- **Engine** (`pipeline_engine`): streaming `_run_tt_ctl(emit=…)` keeps a
+  `deque(maxlen=20)` tail of streamed lines and includes it in the `RuntimeError`
+  on non-zero exit (AnimateDiff *pipeline* failures are diagnosable again — the
+  bare "exit N" lost stderr); and `_real_start_server` now returns the key it
+  *confirms* running (or `None` when it reused an endpoint without confirming
+  identity), which `run()` uses to advance `current_backend` — so a later
+  same-target node skips a redundant stop/reset/start. This can only *prevent*
+  needless backend-switch churn, never skip a genuinely-needed switch (opus-
+  verified against adversarial sequences — important on the fragile hardware).
+- **Dead code removed:** `app/pipeline_panel.py`, `app/artgen_watch.py`,
+  `app/batch_generate.py` (no live importers) + `tests/test_pipeline_panel.py`,
+  like `pipeline_portfolio_view.py` before them. (`remix_popover.py`/
+  `remix_dispatch.py` stay — those are intentionally-kept, unit-tested unwired
+  code.) A few historical `ArtgenWatch` mentions remain in `artgen_render.py`/
+  `artgen_detail.py` code comments as accurate architectural history.
+- **Two smoke tests strengthened** to assert their named behaviour (the RemixView
+  model-label render; the attractor superseded-run loop doing zero work).
+
+**Verified-clean by the review (no change needed):** no `shell=True` / argv-list
+subprocess calls throughout; no unsafe deserialization; `collect()`/
+`_collect_params()` byte-stability; `_CSS` byte literals ASCII-only;
+`_VIDEO_MODEL_IDS`/`_IMAGE_MODEL_IDS` in sync across both copies; the risky
+seams all genuinely tested.
+
+**Known follow-ups (NOT fixed this pass — see the PR comment):** the Pipeline
+Studio per-step model picker writes a raw `server_manager` key into
+`inputs["model"]`, but `pipeline_engine._artgen_key_for_model` matches
+`ServerDef` `--model` *display* strings, so picker-driven artgen nodes always
+resolve to `ARTGEN_DETECT` (auto-detect) instead of the picked model — a real
+routing bug worth its own fix. Also deliberately deferred: making
+`ArtgenDetail`'s WebKit build lazy (works on the real display; latent), the
+Pipeline Studio `#1B8EB1` palette drift (may be deliberate accents), and several
+low/informational items (video async-envelope handling, failed-run hero,
+`_stage_preview_thumb_path` `/tmp` growth, ffmpeg concat quoting, SVG external
+refs).
+
 ## Hiding pipeline mode (v0.80.0)
 
 Pipeline authoring (the DAG editor, the "🧩 Pipelines" nav entry, the
