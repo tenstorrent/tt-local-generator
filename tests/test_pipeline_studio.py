@@ -3173,3 +3173,53 @@ def test_remix_back_still_goes_to_open():
     studio = PipelineStudio()
     studio._on_back_to_open(None)
     assert studio.stack.get_visible_child_name() == "open"
+
+
+# ── pipeline_mode_enabled / on_leave seams (remix-without-pipeline-mode) ─────
+
+def test_flag_off_muse_goal_goes_straight_to_run(monkeypatch, tmp_path):
+    import pipeline_studio as ps
+    studio = ps.PipelineStudio(pipeline_mode_enabled=False)
+    launched = {}
+    monkeypatch.setattr(studio, "_launch_run",
+                        lambda p, e: launched.update(path=p, edits=e))
+    monkeypatch.setattr(ps, "write_spec", lambda spec, base, d: str(tmp_path / "muse.json"))
+    monkeypatch.setattr(ps, "REMIXES_DIR", tmp_path)
+
+    studio._on_muse_goal_chosen(studio.muse, {"1": {"class_type": "TTLGArtgenGenerate", "inputs": {}}})
+
+    assert launched["path"] == str(tmp_path / "muse.json")
+    assert launched["edits"] == {}
+    # never routed through the DAG editor
+    assert studio.stack.get_visible_child_name() != "remix"
+
+
+def test_flag_off_backs_call_on_leave(monkeypatch):
+    import pipeline_studio as ps
+    left = []
+    studio = ps.PipelineStudio(pipeline_mode_enabled=False, on_leave=lambda: left.append(True))
+    studio._on_run_back(None)
+    studio._on_back_to_discover(None)
+    assert left == [True, True]
+    # did NOT switch to the studio's discover page
+    assert studio.stack.get_visible_child_name() != "discover"
+
+
+def test_flag_on_muse_goal_uses_dag_editor(monkeypatch, tmp_path):
+    import pipeline_studio as ps
+    studio = ps.PipelineStudio()   # default: pipeline_mode_enabled=True
+    monkeypatch.setattr(ps, "write_spec", lambda spec, base, d: str(tmp_path / "muse.json"))
+    monkeypatch.setattr(ps, "REMIXES_DIR", tmp_path)
+    seen = {}
+    monkeypatch.setattr(studio.remix_view, "load_seed_spec",
+                        lambda p, t: seen.update(path=p, title=t))
+    studio._on_muse_goal_chosen(studio.muse, {"1": {"class_type": "TTLGArtgenGenerate", "inputs": {}}})
+    assert seen["path"] == str(tmp_path / "muse.json")
+    assert studio.stack.get_visible_child_name() == "remix"
+
+
+def test_flag_on_run_back_goes_to_discover():
+    import pipeline_studio as ps
+    studio = ps.PipelineStudio()   # on_leave=None
+    studio._on_run_back(None)
+    assert studio.stack.get_visible_child_name() == "discover"

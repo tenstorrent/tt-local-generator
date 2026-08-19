@@ -4238,6 +4238,8 @@ class PipelineStudio(Gtk.Box):
         inspire_fn: "Callable[[str, str, Callable[[str], None], Callable[[str], None]], None] | None" = None,
         status_service=None,
         on_run_complete: "Optional[Callable[[RunView], None]]" = None,
+        pipeline_mode_enabled: bool = True,
+        on_leave: "Optional[Callable[[], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add_css_class("ps-studio")
@@ -4260,6 +4262,16 @@ class PipelineStudio(Gtk.Box):
         # with Create's. `None` (every pre-existing caller/test) degrades to
         # the picker's own no-service fallback.
         self._status_service = status_service
+
+        # When False (shipping default in main_window), the DAG editor and the
+        # studio's own Discover are hidden: a Muse-chosen goal runs immediately
+        # and Back leaves the studio via on_leave. True keeps today's full
+        # pipeline UI. See spec 2026-08-19-remix-without-pipeline-mode-design.
+        self._pipeline_mode_enabled = pipeline_mode_enabled
+        # Called (when set) by the Muse/run Back buttons instead of routing to
+        # the studio's own Discover — main_window uses it to return to the app
+        # Library.
+        self._on_leave = on_leave
 
         # The run currently shown on the Open page — the source for
         # "Remix ..." (either button on OpenView). None until the first
@@ -4320,7 +4332,9 @@ class PipelineStudio(Gtk.Box):
         muse_back_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         muse_back_bar.set_margin_top(10)
         muse_back_bar.set_margin_start(18)
-        muse_back_btn = Gtk.Button(label="← Discover")
+        muse_back_btn = Gtk.Button(
+            label="← Discover" if self._pipeline_mode_enabled else "← Back"
+        )
         muse_back_btn.add_css_class("ps-open-back")
         muse_back_btn.add_css_class("ps-btn-ghost")
         muse_back_btn.connect("clicked", self._on_back_to_discover)
@@ -4404,7 +4418,14 @@ class PipelineStudio(Gtk.Box):
 
         self.stack.add_titled(run_page, "run", "Run")
 
-        self.stack.set_visible_child_name("discover")
+        # With pipeline mode off, the studio's own Discover is hidden
+        # entirely (per spec 2026-08-19-remix-without-pipeline-mode-design) —
+        # land on Muse instead, since main_window's flag-OFF door #3 entry
+        # goes straight to a seeded Muse anyway and never routes through
+        # Discover. Flag-ON keeps today's Discover-first landing.
+        self.stack.set_visible_child_name(
+            "discover" if self._pipeline_mode_enabled else "muse"
+        )
 
         self._load_runs_async()
 
@@ -4436,6 +4457,11 @@ class PipelineStudio(Gtk.Box):
             self._on_open_run_cb(run_id)
 
     def _on_back_to_discover(self, _button: Gtk.Button) -> None:
+        """Discover/Muse back → Discover, or `on_leave()` when the studio's
+        own Discover is hidden (pipeline mode off)."""
+        if self._on_leave is not None:
+            self._on_leave()
+            return
         self.stack.set_visible_child_name("discover")
 
     def _on_back_to_open(self, _button: Gtk.Button) -> None:
@@ -4453,7 +4479,13 @@ class PipelineStudio(Gtk.Box):
         itself is unaffected — it keeps driving PipelineRunner's callbacks
         in the background regardless of which stack page is visible; its
         result still lands in Discover/Library when it finishes.
+
+        When `on_leave` is set (pipeline mode off), it is called instead —
+        there is no studio Discover to route back to.
         """
+        if self._on_leave is not None:
+            self._on_leave()
+            return
         self.stack.set_visible_child_name("discover")
 
     def _on_stop_run(self, _button: Gtk.Button) -> None:
@@ -4500,9 +4532,18 @@ class PipelineStudio(Gtk.Box):
         already describes the OUTCOME ("A poster"), not the starting point,
         so this titles the Remix page around what the user started FROM
         instead, matching RemixView's "Remixing · <run title>" convention.
+
+        When pipeline mode is disabled, there is no DAG editor to hand the
+        seed spec to — it runs immediately via `_launch_run`, skipping
+        RemixView and the "remix" page entirely.
         """
         REMIXES_DIR.mkdir(parents=True, exist_ok=True)
         derived_path = write_spec(spec, "muse", str(REMIXES_DIR))
+
+        if not self._pipeline_mode_enabled:
+            # Pipeline mode hidden: skip the DAG editor, run the seed as-is.
+            self._launch_run(derived_path, {})
+            return
 
         if self._muse_seed_artifact is None:
             title = "a new pipeline"
