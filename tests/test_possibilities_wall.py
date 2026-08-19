@@ -192,6 +192,21 @@ def test_starred_piece_is_top_priority_over_bundled(tmp_path):
     assert path != bundled
 
 
+def test_starred_video_typed_gif_is_video_tile_art(tmp_path):
+    """AnimateDiff/Wan2.2-Animate media is now media_type="video" (the
+    animatediff-is-video migration folds it in, keeping the .gif file as-is).
+    A starred one of those .gif records should surface on the Video tile
+    exactly like any other starred video piece — pins the knock-on benefit
+    that a starred AnimateDiff gif can be the Video "Start Something" tile."""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("video", kind="video")]
+    starred_gif = tmp_path / "starred.gif"
+    starred_gif.write_bytes(b"GIF89a")
+    store = _FakeStore(latest={("video", None): [_rec("video", thumb=str(starred_gif), starred=1)]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    assert wall._resolve_tile_art(meds[0]) == ("thumb", str(starred_gif))
+
+
 def test_no_starred_still_uses_existing_tiers(tmp_path):
     """With nothing starred, resolution is unchanged: bundled tier still wins
     for the Image tile (regression guard alongside

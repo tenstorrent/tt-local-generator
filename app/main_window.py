@@ -2268,10 +2268,7 @@ class GenerationCard(Gtk.Box):
         # GIFs (AnimateDiff) use GdkPixbufAnimationIter instead of GStreamer —
         # GStreamer's gifparse plugin does not support reliable seeking so the
         # notify::ended → seek(0) loop that works for MP4s fails silently for GIFs.
-        _is_gif = (
-            self._record.media_type == "animatediff"
-            or self._record.video_path.endswith(".gif")
-        )
+        _is_gif = self._record.video_path.endswith(".gif")
         self._gif_pic: "Gtk.Picture | None" = None
         self._gif_iter: "GdkPixbuf.PixbufAnimationIter | None" = None
         self._gif_timer_id: "int | None" = None
@@ -2383,9 +2380,7 @@ class GenerationCard(Gtk.Box):
         # Buttons: Save, Iterate, and Trash (play/fullscreen are in the detail panel).
         # Trash is right-aligned to keep it visually separated from the safe actions.
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        is_gif = self._record.media_type == "animatediff" or (
-            self._record.video_path.endswith(".gif")
-        )
+        is_gif = self._record.video_path.endswith(".gif")
         export_label = "💾 Save GIF" if is_gif else (
             "💾 Save" if self._record.media_type == "image" else "💾 Save"
         )
@@ -2877,10 +2872,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             img_ctrl.append(open_full_btn)
             content.append(img_ctrl)
         elif record.video_exists:
-            _is_gif = (
-                record.media_type == "animatediff"
-                or record.video_path.endswith(".gif")
-            )
+            _is_gif = record.video_path.endswith(".gif")
             if _is_gif:
                 # GIF: drive via GdkPixbufAnimationIter (GStreamer seek unreliable)
                 self._detail_gif_pic = Gtk.Picture()
@@ -3223,9 +3215,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         content.append(sep)
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        is_gif_detail = record.media_type == "animatediff" or (
-            record.video_path.endswith(".gif")
-        )
+        is_gif_detail = record.video_path.endswith(".gif")
         export_label = "💾 Export GIF" if is_gif_detail else (
             "💾 Export" if record.media_type == "image" else "💾 Export"
         )
@@ -3583,8 +3573,8 @@ class VideoPlayerWindow(Gtk.Window):
       - Space → play / pause (GIF branch below pauses/resumes the frame timer
         via `AnimatedGifWidget.toggle_playing()` -- see `_toggle_play`)
 
-    GIF branch: AnimateDiff `.gif` records (media_type == "animatediff", or
-    any video_path literally ending in ".gif") are NOT played via Gtk.Video --
+    GIF branch: AnimateDiff `.gif` records (any video_path literally ending
+    in ".gif") are NOT played via Gtk.Video --
     the app avoids Gtk.Video for gifs everywhere else (DetailPanel drives them
     frame-by-frame via GdkPixbufAnimationIter instead, since GStreamer seeking
     on a gif is unreliable) -- so the fullscreen window uses the same
@@ -3608,10 +3598,7 @@ class VideoPlayerWindow(Gtk.Window):
         self.set_child(outer)
 
         # ── Video / GIF player ───────────────────────────────────────────────
-        is_gif = (
-            record.media_type == "animatediff"
-            or record.video_path.endswith(".gif")
-        )
+        is_gif = record.video_path.endswith(".gif")
         if is_gif:
             # Self-driving animated Gtk.Picture -- same widget the Discover
             # galleries use for gif thumbnails/hover-preview. It manages its
@@ -7974,8 +7961,11 @@ class MainWindow(Gtk.ApplicationWindow):
         # Route each record to the gallery that matches its media type.
         # GalleryWidget.load_history() replaces existing cards rather than
         # appending, so calling this method more than once is safe.
-        # animatediff GIFs live in the video gallery (same as _gallery_for_type routing).
-        video_recs   = [r for r in records if r.media_type in ("video", "animatediff")]
+        # AnimateDiff/Wan2.2-Animate GIFs are media_type=="video" (the
+        # animatediff-is-video migration folded them in), so they live in the
+        # video gallery like any other video record (same as _gallery_for_type
+        # routing) — no separate media_type check needed here anymore.
+        video_recs   = [r for r in records if r.media_type == "video"]
         animate_recs = [r for r in records if r.media_type == "animate"]
         image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
@@ -10581,7 +10571,7 @@ class MainWindow(Gtk.ApplicationWindow):
         remote_pending = [
             r for r in self._remote_records.values()
             if r.id not in local_ids
-            and r.media_type in ("video", "animate")
+            and r.media_type == "video"
             and (rec_meta := r.extra_meta or {}).get("_inventory_video_url", "")
             # Only queue records that have an inventory URL to download from.
         ]
@@ -10589,7 +10579,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Local history records missing their video file on disk.
         local_missing = [
             r for r in self._store.all_records()
-            if r.media_type in ("video", "animate") and not r.video_exists and r.id
+            if r.media_type == "video" and not r.video_exists and r.id
         ]
 
         total = len(remote_pending) + len(local_missing)

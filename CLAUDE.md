@@ -1,5 +1,70 @@
 # tt-local-generator — developer notes
 
+## AnimateDiff is Video (v0.87.0)
+
+`media_type=="animatediff"` never actually needed to be its own media type —
+it was always a video (a `.gif`), just tagged differently, and Wan2.2-Animate
+(`media_type=="animate"`) had the same problem. That split forced every
+gif-aware code path (main_window's several `is_gif` checks, the TT-TV
+attractor, gallery routing) to special-case a bespoke media_type on top of
+the real signal (the file extension), and it kept both records' galleries
+separate from the unified Video gallery the "Video is Video" (v0.61.0)
+Create-surface merge had already established. This closes the gap between
+the two, end to end:
+
+- **The migration** (`app/media_store.py::MediaStore._migrate_media_types`,
+  gated by `_MEDIA_TYPE_MIGRATION_VERSION`/`PRAGMA user_version` so it runs
+  exactly once per DB and is idempotent if re-run): two `UPDATE`s fold
+  `media_type IN ("animatediff", "animate")` (and any row that already had
+  that `generator_type` from a prior partial write) into
+  `media_type="video"`, stamping `generator_type="animatediff"` /
+  `"animate"` for provenance. Files, `params`, `model_id`, and `starred` are
+  never touched — only the two taxonomy columns change. Runs inside
+  `MediaStore.__init__`, right after `_migrate_from_json`.
+- **The factories** (`app/history_store.py::GenerationRecord.new_animatediff`
+  / `new_animate`) construct NEW records the same way going forward:
+  `media_type="video"` + `generator_type="animatediff"`/`"animate"` from the
+  start, so no future record ever needs the migration to catch up.
+  `HistoryStore.append` (`_ms.add(MediaRecord(...))`) persists
+  `generator_type` straight through — it was already a plain field on
+  `MediaRecord`, just never populated by these two factories before.
+- **The artgen path is dead for animatediff.** `create_mediums.discover_mediums`
+  explicitly skips `key == "animatediff"` when building the artgen medium
+  list ("Folded into the Video medium as a model … no longer its own chip" —
+  see "Video is Video" v0.61.0) — the native `new_animatediff` factory above
+  is the only record-creation path left; the artgen plugin classes still
+  exist (generation logic unchanged) but never produce their own gallery
+  entry anymore.
+- **Gif detection moved from media_type to file extension.** Every
+  `main_window.py` site that used to branch on
+  `record.media_type == "animatediff" or record.video_path.endswith(".gif")`
+  (the `GenerationCard`/`DetailPanel` inline players, `VideoPlayerWindow`'s
+  fullscreen branch — five sites total) now just checks
+  `record.video_path.endswith(".gif")` — the `media_type=="animatediff"`
+  half was dead weight after the migration (no record has that media_type
+  anymore) and the `.gif` half was always sufficient on its own.
+  `attractor.py::_is_gif_record` already worked this way (Task 3 of this
+  effort, prior to this cleanup task). Filter tidy in the same spirit:
+  `main_window.py`'s video-gallery-routing filter and the two remote/local
+  video-download filters, plus `history_store.py::HistoryStore._to_gen`'s
+  video-vs-image path resolution, dropped their now-redundant
+  `"animate"`/`"animatediff"` alternatives and check `media_type == "video"`
+  alone.
+- **Identity and stats are preserved, on purpose.** The ~73 pre-migration
+  records written by the OLD artgen path have a leaner `params` blob than a
+  native-path AnimateDiff record (missing some of the newer fields the
+  native factory populates) — this is left AS-IS by decision, not a bug to
+  backfill; they still render, animate, star, and export correctly via the
+  extension-based gif path, they just carry less metadata than a
+  freshly-generated one.
+- **Knock-on benefit:** because AnimateDiff/Animate rows are `media_type==
+  "video"` now, `possibilities.PossibilitiesWall`'s starred-tier query
+  (`store.query(media_type="video", ...)`) picks up a starred AnimateDiff
+  `.gif` for free — it can surface as the Video "Start Something" tile,
+  which it structurally could not do while it lived under a separate
+  media_type. See `tests/test_possibilities_wall.py::
+  test_starred_video_typed_gif_is_video_tile_art`.
+
 ## PR#23 deep-review fixes (v0.81.0)
 
 A cross-cutting adversarial review of the whole `feat/pipeline-editor` branch

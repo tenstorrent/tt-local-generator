@@ -1,3 +1,19 @@
+tt-local-generator (0.87.0) noble; urgency=medium
+
+  * chore(pipeline): AnimateDiff + Wan2.2-Animate media is now
+    `media_type="video"` — past records via an idempotent `media_store`
+    migration (`PRAGMA user_version`-gated), future records via the
+    `new_animatediff`/`new_animate` factories — keeping `model_id` and a
+    `generator_type` provenance stamp ("animatediff"/"animate") so identity
+    is never lost. gif rendering is now driven by the file extension
+    everywhere (main_window's `is_gif` checks + the TT-TV attractor's
+    gif detection), not by a bespoke `media_type=="animatediff"` special
+    case, so a video-typed `.gif` still animates correctly. Files and
+    params are untouched; a starred AnimateDiff gif can now surface as the
+    Video "Start Something" tile.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 23:50:00 +0000
+
 tt-local-generator (0.86.1) noble; urgency=medium
 
   * fix(create): re-render the bundled Ansi "Start Something" tile as a real
