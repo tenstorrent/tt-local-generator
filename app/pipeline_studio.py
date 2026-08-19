@@ -525,7 +525,7 @@ _CSS = b"""
     color: #dcefe9;
 }
 .ps-chip-arrow {
-    color: #1B8EB1;
+    color: #4FD1C5;
     font-weight: 700;
 }
 .ps-card {
@@ -535,8 +535,8 @@ _CSS = b"""
     padding: 10px;
 }
 .ps-btn-primary {
-    background-color: #1B8EB1;
-    color: #fff;
+    background-color: #4FD1C5;
+    color: #0F2A35;
     border-radius: 9px;
 }
 .ps-btn-ghost {
@@ -623,8 +623,8 @@ _CSS = b"""
     font-size: 10.5px;
 }
 .ps-remix-all {
-    background-color: #1B8EB1;
-    color: #fff;
+    background-color: #4FD1C5;
+    color: #0F2A35;
     border-radius: 8px;
     padding: 7px 13px;
     font-size: 12px;
@@ -659,8 +659,8 @@ _CSS = b"""
     padding: 6px 9px;
 }
 .ps-remix-run-btn {
-    background-color: #1B8EB1;
-    color: #fff;
+    background-color: #4FD1C5;
+    color: #0F2A35;
     border-radius: 9px;
     padding: 10px 16px;
     font-size: 13px;

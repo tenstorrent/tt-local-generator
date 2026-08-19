@@ -69,16 +69,21 @@ the plain-text `_reading_fallback` (`"reading"`) without WebKit — mirroring th
 only realize/load spawns the web process — so this was a consistency + startup-
 cost fix, not a live-crash fix.)
 
-**Deliberately deferred (documented):** the Pipeline Studio `#1B8EB1` palette
-drift — the docs-site primary-accent blue is used as the primary-button
-background on live Studio/Create surfaces (`.ps-btn-primary`, `.ps-remix-all`,
-`.ps-remix-run-btn`, `.ps-chip-arrow`, `.create-watch-btn:checked`) where the
-main app's primary color is teal `#4FD1C5` on `#0F2A35`; the `#74C5DF`/`#6FABA0`/
-`#F6BC42` uses are docs-site semantic hues used as semantic accents (teal
-borders / green "done" / yellow "active/warning"), a defensible-but-inconsistent
-design call. And the low/informational items (video async-envelope handling,
-failed-run hero, `_stage_preview_thumb_path` `/tmp` growth, ffmpeg concat
-quoting, SVG external refs).
+**Palette: primary-button drift fixed (v0.84.0).** The docs-site primary-accent
+blue `#1B8EB1` was being used as the primary-button background on live surfaces
+(`.ps-btn-primary`, `.ps-remix-all`, `.ps-remix-run-btn`, `.ps-chip-arrow`,
+`.create-watch-btn:checked`) where the main app's primary color is teal
+`#4FD1C5` on `#0F2A35`. Re-skinned all five to `#4FD1C5` background + `#0F2A35`
+ink (the chip arrow to `#4FD1C5` text), so the primary actions match the
+tt-vscode-toolkit variant used everywhere else. **Kept as-is (deliberate):** the
+`#74C5DF`/`#6FABA0`/`#F6BC42` docs-site *semantic* hues used as semantic accents
+(faint teal borders / green "done" / yellow "active/warning") — the editor
+variant has no semantic set of its own, so these read as an intentional design
+choice, not drift.
+
+**Deliberately deferred (documented):** the low/informational review items —
+video async-envelope handling, failed-run hero label, `_stage_preview_thumb_path`
+`/tmp` growth, ffmpeg concat-list quoting, SVG external `<image>` refs.
 
 ## Hiding pipeline mode (v0.80.0)
 

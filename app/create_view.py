@@ -615,7 +615,7 @@ _CSS = b"""
     color: #81E6D9;
 }
 .create-watch-btn:checked {
-    background-color: #1B8EB1;
+    background-color: #4FD1C5;
     color: #0F2A35;
     border-color: #4FD1C5;
 }

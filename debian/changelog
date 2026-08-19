@@ -1,3 +1,15 @@
+tt-local-generator (0.84.0) noble; urgency=medium
+
+  * fix(ui): re-skin the primary-action buttons from the docs-site accent blue
+    (#1B8EB1) to the app's own teal (#4FD1C5 on #0F2A35 ink), matching the
+    tt-vscode-toolkit palette used everywhere else. Affects Pipeline Studio's
+    Run/Remix primary buttons (.ps-btn-primary, .ps-remix-all, .ps-remix-run-btn),
+    the inter-step chip arrow (.ps-chip-arrow), and Create's Watch toggle
+    (.create-watch-btn:checked). Docs-site semantic accents (#74C5DF borders /
+    #6FABA0 done / #F6BC42 active) are intentionally left as semantic colors.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 21:15:00 +0000
+
 tt-local-generator (0.83.0) noble; urgency=medium
 
   * refactor(artgen): ArtgenDetail builds its reading-view WebKit WebView
