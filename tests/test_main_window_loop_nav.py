@@ -207,6 +207,30 @@ def test_loop_nav_create_routes_to_create_view(tmp_path, monkeypatch):
     assert obj._pipelines_btn.get_active() is False
 
 
+def test_loop_nav_create_refreshes_possibilities_wall(tmp_path, monkeypatch):
+    """Entering Create rebuilds the "Start Something" wall so a star made
+    elsewhere (Discover/Library) since the last visit shows up without an
+    app restart — regression for 'I starred an image for the Image tile,
+    but the tile didn't switch to it.'"""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+    obj._create_view = MagicMock()
+
+    obj._loop_nav["create"].set_active(True)
+
+    obj._create_view.refresh_possibilities.assert_called_once()
+
+
+def test_loop_nav_create_without_create_view_does_not_raise(tmp_path, monkeypatch):
+    """The harness (and some real early-lifecycle states) has no
+    `_create_view` at all -- must degrade to a no-op, not raise."""
+    obj = _make_mw(tmp_path, monkeypatch)
+    obj._build_loop_nav()
+    assert getattr(obj, "_create_view", None) is None
+
+    obj._loop_nav["create"].set_active(True)  # must not raise
+
+
 def test_loop_nav_create_unchecks_pipelines_toggle(tmp_path, monkeypatch):
     """If Pipelines was showing (shares `_gallery_stack`), Create must
     uncheck its toggle — same stale-toggle fix `_on_source_change` already

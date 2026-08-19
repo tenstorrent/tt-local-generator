@@ -131,3 +131,25 @@ def test_collect_params_unchanged_by_pick_non_default_medium(monkeypatch):
 
     assert picked == manual
     assert view._active_medium.id == m.id
+
+
+def test_refresh_possibilities_calls_wall_refresh(monkeypatch):
+    """`refresh_possibilities` rebuilds the wall so a star made elsewhere
+    (Discover/Library) shows up on Create's tiles without an app restart."""
+    view = _make_view(monkeypatch)
+
+    calls = []
+    real_wall = view._possibilities
+    assert real_wall is not None
+    monkeypatch.setattr(real_wall, "refresh", lambda: calls.append(True))
+
+    view.refresh_possibilities()
+    assert calls == [True]
+
+
+def test_refresh_possibilities_is_noop_without_a_wall(monkeypatch):
+    """A view whose wall failed to construct (or was never built) must not
+    raise — refresh_possibilities is a fail-soft convenience call."""
+    view = _make_view(monkeypatch)
+    view._possibilities = None
+    view.refresh_possibilities()  # must not raise

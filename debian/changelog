@@ -1,3 +1,18 @@
+tt-local-generator (0.85.1) noble; urgency=medium
+
+  * fix(create): a starred piece becomes its medium's "Start Something" tile.
+    `PossibilitiesWall._resolve_tile_art` resolved a hardcoded bundled example
+    (e.g. the Image tile's Montreal '67 asset) BEFORE curated playlists and
+    the native "latest" fallback, so an explicitly-starred image could never
+    win the tile — and even a correct resolution wouldn't show until restart,
+    since the wall was only built once. Fixed both: an explicit STARRED piece
+    of the medium is now the TOP-priority tier (starring IS curation, so it
+    overrides even the bundled default), and `CreateView.refresh_possibilities()`
+    rebuilds the wall each time `_on_loop_nav_create` shows Create, so a star
+    made in Discover/Library appears immediately, no restart needed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 00:00:00 +0000
+
 tt-local-generator (0.85.0) noble; urgency=medium
 
   * fix(ui): the "Start Something" wall tiles zoom-to-fill instead of stretching.

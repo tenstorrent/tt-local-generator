@@ -1959,6 +1959,17 @@ class CreateView(Gtk.Box):
 
         return row
 
+    def refresh_possibilities(self) -> None:
+        """Rebuild the "Start Something" wall so newly-starred/created work is
+        reflected. Fail-soft + no-op when the wall wasn't built."""
+        wall = getattr(self, "_possibilities", None)
+        if wall is None:
+            return
+        try:
+            wall.refresh()
+        except Exception:
+            pass
+
     def _on_possibility_picked(self, medium: Medium, idea: str) -> None:
         """Seed the existing composer from a possibilities-wall tile: select
         the medium chip (fires `_select_medium` -> `_swap_panel` via the same

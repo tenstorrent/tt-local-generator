@@ -41,6 +41,8 @@ class _FakeStore:
 
     def query(self, media_type=None, generator_type=None, starred=None, limit=None):
         recs = self._latest.get((media_type, generator_type), [])
+        if starred:
+            recs = [r for r in recs if getattr(r, "starred", 0)]
         return recs[:limit] if limit else recs
 
     def list_playlists(self):
@@ -50,8 +52,8 @@ class _FakeStore:
         return self._playlist_recs.get(pid, [])
 
 
-def _rec(mt, gt=None, thumb="/x.png"):
-    return SimpleNamespace(media_type=mt, generator_type=gt, thumbnail_path=thumb, file_path=thumb, prompt="p")
+def _rec(mt, gt=None, thumb="/x.png", starred=0):
+    return SimpleNamespace(media_type=mt, generator_type=gt, thumbnail_path=thumb, file_path=thumb, prompt="p", starred=starred)
 
 
 def test_wall_builds_one_card_per_medium(tmp_path, monkeypatch):
@@ -160,3 +162,40 @@ def test_empty_store_builds_all_gradient_no_exception(tmp_path):
     meds = [_medium("image"), _medium("video", kind="video"), _medium("ansi", kind="text", source="artgen", generator="ansi")]
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=_FakeStore())
     assert wall.card_count() == 3
+
+
+def test_starred_piece_is_top_priority_over_bundled(tmp_path):
+    """An explicitly STARRED piece of a medium beats even the bundled default —
+    starring IS curation, so it wins over the hardcoded Montreal '67 Image tile
+    art. Regression for: 'I starred an image for the Image tile, but the tile
+    didn't switch to it.'"""
+    import os
+    import possibilities
+    from possibilities import PossibilitiesWall
+    meds = [_medium("image")]
+    starred_thumb = tmp_path / "starred.png"
+    starred_thumb.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(starred_thumb), starred=1)]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    kind, path = wall._resolve_tile_art(meds[0])
+    assert kind == "thumb"
+    assert path == str(starred_thumb)
+    # sanity: this really did beat the bundled asset, not just coincide with it
+    bundled = os.path.join(possibilities._ASSETS_DIR, "tile-image-montreal-1967.jpg")
+    assert path != bundled
+
+
+def test_no_starred_still_uses_existing_tiers(tmp_path):
+    """With nothing starred, resolution is unchanged: bundled tier still wins
+    for the Image tile (regression guard alongside
+    test_image_tile_uses_bundled_worlds_fair_art)."""
+    import os
+    import possibilities
+    from possibilities import PossibilitiesWall
+    meds = [_medium("image")]
+    recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
+    store = _FakeStore(latest={("image", None): [_rec("image", thumb=str(recent))]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    kind, path = wall._resolve_tile_art(meds[0])
+    assert kind == "thumb"
+    assert path == os.path.join(possibilities._ASSETS_DIR, "tile-image-montreal-1967.jpg")

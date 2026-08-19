@@ -6984,6 +6984,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.set_visible_child_name("create")
         self._set_crumbs([Crumb("✨ Create")])
 
+        # Rebuild the "Start Something" wall so a star made elsewhere
+        # (Discover/Library) since the last visit shows up here without an
+        # app restart. Guarded: some tests build a bare MainWindow via
+        # __new__ without `_create_view`.
+        cv = getattr(self, "_create_view", None)
+        if cv is not None:
+            cv.refresh_possibilities()
+
         # Create is full-width: CreateView carries its OWN result area
         # (CreateResultPanel), so the Discover detail pane has no role here.
         # Leaving it visible showed a dead "← Click a card to preview"

@@ -219,6 +219,19 @@ class PossibilitiesWall(Gtk.Box):
     def _resolve_tile_art(self, medium):
         mt = "artgen" if medium.source == "artgen" else medium.id
         gt = medium.generator if medium.source == "artgen" else None
+        # 1. An explicit user pick wins over everything — the most-recent
+        #    STARRED piece of this medium. Starring IS curation (unlike an
+        #    arbitrary recent generation, which we deliberately don't surface),
+        #    so it overrides even the bundled default: "star an image and it
+        #    becomes this tile."
+        try:
+            for r in (self._store.query(media_type=mt, generator_type=gt,
+                                        starred=True, limit=1) or []):
+                t = getattr(r, "thumbnail_path", None)
+                if t and os.path.exists(t):
+                    return ("thumb", t)
+        except Exception:
+            pass
         # A hand-picked BUNDLED example (ships with the app) wins over
         # everything — e.g. the Image tile's World's Fair Montreal '67 image.
         bundled = _bundled_tile_art_path(medium)
