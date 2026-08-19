@@ -2614,6 +2614,53 @@ def test_pipeline_studio_full_loop_finish_returns_to_open(monkeypatch, tmp_path)
     )
 
 
+def test_launch_run_starts_runner_and_shows_run_page(monkeypatch, tmp_path):
+    """`_launch_run` is the extracted body of `_on_run_remix` from
+    `jobs = _default_remix_jobs()` onward -- callable directly with an
+    already-written spec path and an edits dict, with no RemixView/spec_path
+    computation required. This is the flag-ON regression guard for Task 3's
+    pure refactor (see .superpowers/sdd/2026-08-19-remix-without-pipeline-mode/
+    task-3-brief.md): a later task reuses this method for the flag-OFF
+    straight-to-run path.
+    """
+    import pipeline_studio as ps
+
+    studio = ps.PipelineStudio()
+
+    started = {}
+
+    class _FakeRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self, derived_path, jobs, **kw):
+            started["derived_path"] = derived_path
+            started["jobs"] = jobs
+            started["overrides"] = kw.get("param_overrides")
+            started["run_id"] = kw.get("run_id")
+
+    class _FakeStore:
+        def create_run(self, **kw):
+            started["create_kw"] = kw
+            return "run-xyz"
+
+        def get_run(self, rid):
+            return {}
+
+    kw_spec = str(tmp_path / "muse.json")
+    monkeypatch.setattr(ps, "PipelineRunner", _FakeRunner)
+    monkeypatch.setattr(ps, "PipelineStore", _FakeStore)
+    monkeypatch.setattr(ps, "build_run_view", lambda rec: _make_live_run())
+
+    studio._launch_run(kw_spec, {"n": 1})
+
+    assert started["derived_path"] == kw_spec
+    assert started["overrides"] == {"n": 1}
+    assert started["run_id"] == "run-xyz"
+    assert studio.stack.get_visible_child_name() == "run"
+    assert studio._runner is not None
+
+
 # ── MuseView (SP-C Phase 2b-3 Task 4 — goal-first "start from scratch") ─────
 #
 # `goals_fn`/`wingit_pipeline_fn`/`seed_spec_fn` are injected seams (default

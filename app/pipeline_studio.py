@@ -4546,6 +4546,14 @@ class PipelineStudio(Gtk.Box):
         final_spec = _with_preserved_top_level_metadata(remix_view.current_spec(), spec_path)
         derived_path = write_spec(final_spec, Path(spec_path).stem, str(REMIXES_DIR))
 
+        self._launch_run(derived_path, edits)
+
+    def _launch_run(self, derived_path: str, edits: dict) -> None:
+        """Create the provisional run record, show the Stage, and start the
+        runner for an already-written seed/derived spec at *derived_path*
+        with *edits* as param overrides. Shared by _on_run_remix (RemixView's
+        composed graph) and _on_muse_goal_chosen's flag-OFF straight-to-run
+        path (a fresh muse seed, no edits)."""
         jobs = _default_remix_jobs()
         store = PipelineStore()
         run_id = store.create_run(
