@@ -179,31 +179,33 @@ class ArtgenDetail(Gtk.Box):
         self._art_stack.add_named(text_scroll, "text")
 
         # Markdown reading view — rich WebKit rendering for verse / palette /
-        # freeform; degrades to a plain scrollable text view without WebKit.
-        # Pending HTML to load once the WebView is realized. load_html() called
-        # before realize is a silent no-op that leaves the widget white — we
-        # queue the content here and flush it in _on_webview_realize().
+        # freeform; degrades to a plain scrollable text view without WebKit
+        # (or before the WebView has been built at all — see below).
+        #
+        # LAZY BUILD (deep-review consistency finding, pr23-review-fixes/f8):
+        # `WebKit.WebView()` is a web-process-backed widget — constructing one
+        # for EVERY `ArtgenDetail()` regardless of whether a reading view is
+        # ever shown is wasted cost on the startup path and on every test that
+        # builds this widget but never opens one. Mirrors `activity_viz`'s lazy
+        # pattern: the plain-text fallback is ALWAYS built (so there is always
+        # something to show/degrade to), and the real WebView is built on
+        # first use by `_ensure_webview()` — see that method for the fail-soft
+        # build itself. Pending HTML to load once the WebView is realized:
+        # load_html() called before realize is a silent no-op that leaves the
+        # widget white — we queue the content here and flush it in
+        # _on_webview_realize().
         self._pending_html: str | None = None
-        if _WEBKIT_OK:
-            self._webview = WebKit.WebView()
-            self._webview.get_settings().set_enable_javascript(False)
-            self._webview.set_hexpand(True)
-            self._webview.set_vexpand(True)
-            self._art_stack.add_named(self._webview, "reading")
-            self._webview.connect("realize", self._on_webview_realize)
-            self._reading_fallback = None
-        else:
-            self._webview = None
-            self._reading_fallback = Gtk.Label()
-            self._reading_fallback.set_wrap(True)
-            self._reading_fallback.set_selectable(True)
-            self._reading_fallback.set_xalign(0.0)
-            self._reading_fallback.set_yalign(0.0)
-            _reading_scroll = Gtk.ScrolledWindow()
-            _reading_scroll.set_hexpand(True)
-            _reading_scroll.set_vexpand(True)
-            _reading_scroll.set_child(self._reading_fallback)
-            self._art_stack.add_named(_reading_scroll, "reading")
+        self._webview = None
+        self._reading_fallback = Gtk.Label()
+        self._reading_fallback.set_wrap(True)
+        self._reading_fallback.set_selectable(True)
+        self._reading_fallback.set_xalign(0.0)
+        self._reading_fallback.set_yalign(0.0)
+        _reading_scroll = Gtk.ScrolledWindow()
+        _reading_scroll.set_hexpand(True)
+        _reading_scroll.set_vexpand(True)
+        _reading_scroll.set_child(self._reading_fallback)
+        self._art_stack.add_named(_reading_scroll, "reading")
 
         art_box.append(self._art_stack)
         body.append(art_box)
@@ -388,7 +390,34 @@ class ArtgenDetail(Gtk.Box):
             raw = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
             html = _build_reading_html(kind, raw, gen_type=gen_type, params=p)
             self._load_html(html)
-            self._art_stack.set_visible_child_name("reading")
+
+    def _ensure_webview(self) -> bool:
+        """Build the real `WebKit.WebView` on first use; return True if a
+        usable webview exists afterward, else False.
+
+        Lazy-build seam (see the constructor's docstring above): nothing calls
+        this until a reading-view render actually needs one. Fail-soft,
+        mirroring `activity_viz.ActivityVizWidget`'s own WebKit-construction
+        guard — a WebView failing to construct for any reason degrades to the
+        plain-text fallback exactly like WebKit being entirely unavailable,
+        rather than raising out of a render.
+        """
+        if self._webview is not None:
+            return True
+        if not _WEBKIT_OK:
+            return False
+        try:
+            wv = WebKit.WebView()
+            wv.get_settings().set_enable_javascript(False)
+            wv.set_hexpand(True)
+            wv.set_vexpand(True)
+            wv.connect("realize", self._on_webview_realize)
+            self._art_stack.add_named(wv, "reading-web")
+            self._webview = wv
+            return True
+        except Exception:
+            self._webview = None
+            return False
 
     def _load_html(self, html: str) -> None:
         """Load HTML into the WebView, deferring until it is realized.
@@ -398,17 +427,22 @@ class ArtgenDetail(Gtk.Box):
         opening a palette or verse from the gallery before the panel has been
         shown for the first time.  Queue the content and flush on realize.
 
-        Without WebKit (`self._webview is None`), degrades to plain text in the
-        fallback label (tags stripped) — see the constructor (review M1/CI fix).
+        Without WebKit (`_ensure_webview()` returns False — no WebKit at all,
+        or it failed to build), degrades to plain text in the fallback label
+        (tags stripped) — see the constructor (review M1/CI fix) — and shows
+        the always-present "reading" stack child. With a usable webview,
+        shows the lazily-built "reading-web" child instead.
         """
-        if self._webview is None:
+        if not self._ensure_webview():
             import re
             self._reading_fallback.set_label(re.sub(r"<[^>]+>", "", html))
+            self._art_stack.set_visible_child_name("reading")
             return
         if self._webview.get_realized():
             self._webview.load_html(html, "about:blank")
         else:
             self._pending_html = html
+        self._art_stack.set_visible_child_name("reading-web")
 
     def _on_webview_realize(self, _widget) -> None:
         """Flush any HTML that was queued before the WebView was realized."""
