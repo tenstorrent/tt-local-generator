@@ -30,6 +30,8 @@ _FILTER_EXPR_RE = re.compile(
 )
 
 
+_MEDIA_TYPE_MIGRATION_VERSION = 1  # AnimateDiff/Animate -> video
+
 STORAGE_DIR     = Path.home() / ".local" / "share" / "tt-video-gen"
 ARTGEN_DIR      = STORAGE_DIR / "artgen"
 ARTGEN_THUMB_DIR = ARTGEN_DIR / "thumbnails"
@@ -111,6 +113,26 @@ class MediaStore:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
         self._migrate_from_json()
+        self._migrate_media_types()
+
+    def _migrate_media_types(self) -> None:
+        """Fold AnimateDiff (.gif) and Wan2.2-Animate (.mp4) records into
+        media_type='video', stamping generator_type for provenance. Gated by
+        PRAGMA user_version so it runs once per DB; the UPDATEs are idempotent
+        regardless. Files/params are untouched. See
+        docs/superpowers/specs/2026-08-19-animatediff-is-video-design.md."""
+        with self._lock:
+            ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
+            if ver >= _MEDIA_TYPE_MIGRATION_VERSION:
+                return
+            self._conn.execute(
+                "UPDATE media SET media_type='video', generator_type='animatediff' "
+                "WHERE media_type='animatediff' OR generator_type='animatediff'")
+            self._conn.execute(
+                "UPDATE media SET media_type='video', generator_type='animate' "
+                "WHERE media_type='animate' OR generator_type='animate'")
+            self._conn.execute(f"PRAGMA user_version={_MEDIA_TYPE_MIGRATION_VERSION}")
+            self._conn.commit()
 
     def _migrate_from_json(self) -> None:
         """One-time migration from history.json + playlists.json. No-op if already done."""
