@@ -1,3 +1,16 @@
+tt-local-generator (0.86.0) noble; urgency=medium
+
+  * feat(create): ship curated "Start Something" tile art for a clean install.
+    Only the Image tile had a bundled default (Montreal '67); every other tile
+    showed a bare gradient on a fresh install. Promoted a curated example
+    (from starred favorites) as the bundled default for image, ansi, verse,
+    landscape, constellation, and codeart, so a first run shows real art on
+    those tiles. video and palette have no curated default yet and still fall
+    through to the per-kind gradient. A user's OWN starred piece of a medium
+    still overrides the bundled default (the starred tier added in 0.85.1).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 23:00:00 +0000
+
 tt-local-generator (0.85.1) noble; urgency=medium
 
   * fix(create): a starred piece becomes its medium's "Start Something" tile.

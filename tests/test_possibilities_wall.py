@@ -95,17 +95,19 @@ def test_art_per_type_playlist_matches_by_name(tmp_path):
     """A per-type playlist (name = plural of the generator, e.g. "Ansis") is a
     curated source even though it doesn't match the demo/favorite name pattern."""
     from possibilities import PossibilitiesWall
-    meds = [_medium("ansi", kind="text", source="artgen", generator="ansi")]
+    # `palette` has no bundled default (unlike ansi/verse/etc.), so the
+    # per-type playlist tier is what's under test here.
+    meds = [_medium("palette", kind="image", source="artgen", generator="palette")]
     thumb = tmp_path / "a.png"; thumb.write_bytes(b"\x89PNG\r\n")
-    store = _FakeStore(playlists=[{"id": "p", "name": "Ansis"}],
-                       playlist_recs={"p": [_rec("artgen", "ansi", str(thumb))]})
+    store = _FakeStore(playlists=[{"id": "p", "name": "Palettes"}],
+                       playlist_recs={"p": [_rec("artgen", "palette", str(thumb))]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(thumb))
 
 
-def test_image_tile_uses_bundled_worlds_fair_art(tmp_path):
-    """The Image tile shows the bundled World's Fair (Montreal '67) image as its
-    TOP-priority art — over curated playlists and over your latest image."""
+def test_image_tile_uses_bundled_default_when_nothing_starred(tmp_path):
+    """The Image tile shows its bundled default image over curated playlists and
+    over your latest image (a starred pick would still override it — tier 1)."""
     import os
     import possibilities
     from possibilities import PossibilitiesWall
@@ -115,7 +117,8 @@ def test_image_tile_uses_bundled_worlds_fair_art(tmp_path):
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     kind, path = wall._resolve_tile_art(meds[0])
     assert kind == "thumb"
-    assert path == os.path.join(possibilities._ASSETS_DIR, "tile-image-montreal-1967.jpg")
+    assert path == os.path.join(possibilities._ASSETS_DIR,
+                                possibilities._BUNDLED_TILE_ART["image"])
     assert os.path.exists(path)   # the asset actually ships
 
 
@@ -137,21 +140,25 @@ def test_artgen_medium_stays_gradient_when_no_curated_even_with_recent(tmp_path)
     surface on the tile (that put unflattering/test artifacts there) — no
     curated -> gradient, even if a recent exists."""
     from possibilities import PossibilitiesWall
-    meds = [_medium("ansi", kind="text", source="artgen", generator="ansi")]
+    # `palette` has no bundled default, so with no curated playlist + only a
+    # recent (not starred) it must fall through to the gradient.
+    meds = [_medium("palette", kind="image", source="artgen", generator="palette")]
     recent = tmp_path / "r.png"; recent.write_bytes(b"\x89PNG\r\n")
-    store = _FakeStore(latest={("artgen", "ansi"): [_rec("artgen", "ansi", str(recent))]})
+    store = _FakeStore(latest={("artgen", "palette"): [_rec("artgen", "palette", str(recent))]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0])[0] == "gradient"
 
 
 def test_art_prefers_starred_within_curated(tmp_path):
     from possibilities import PossibilitiesWall
-    meds = [_medium("verse", kind="text", source="artgen", generator="verse")]
+    # `palette` has no bundled default, so the curated-playlist tier (and its
+    # starred-first ordering) is what's under test.
+    meds = [_medium("palette", kind="image", source="artgen", generator="palette")]
     plain = tmp_path / "plain.png"; plain.write_bytes(b"\x89PNG\r\n")
     star = tmp_path / "star.png"; star.write_bytes(b"\x89PNG\r\n")
-    r_plain = _rec("artgen", "verse", str(plain)); r_plain.starred = 0
-    r_star = _rec("artgen", "verse", str(star)); r_star.starred = 1
-    store = _FakeStore(playlists=[{"id": "p", "name": "Verses"}],
+    r_plain = _rec("artgen", "palette", str(plain)); r_plain.starred = 0
+    r_star = _rec("artgen", "palette", str(star)); r_star.starred = 1
+    store = _FakeStore(playlists=[{"id": "p", "name": "Palettes"}],
                        playlist_recs={"p": [r_plain, r_star]})
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(star))
@@ -198,4 +205,5 @@ def test_no_starred_still_uses_existing_tiers(tmp_path):
     wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
     kind, path = wall._resolve_tile_art(meds[0])
     assert kind == "thumb"
-    assert path == os.path.join(possibilities._ASSETS_DIR, "tile-image-montreal-1967.jpg")
+    assert path == os.path.join(possibilities._ASSETS_DIR,
+                                possibilities._BUNDLED_TILE_ART["image"])

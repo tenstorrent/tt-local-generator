@@ -72,7 +72,17 @@ _TILE_W, _TILE_H = 200, 104
 # The Image tile uses a World's Fair (Montreal Expo 67) generated image.
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _BUNDLED_TILE_ART = {
-    "image": "tile-image-montreal-1967.jpg",
+    # Curated clean-install defaults, promoted from starred favorites so a
+    # fresh install's wall shows real art on these tiles instead of a bare
+    # gradient. A user's OWN starred piece of the medium still overrides these
+    # (tier 1 in _resolve_tile_art). video/palette have no curated default yet
+    # and fall through to the per-kind gradient.
+    "image": "tile-image-3ad8978c.png",
+    "ansi": "tile-ansi-9eb3f7f4.png",
+    "verse": "tile-verse-0719899b.png",
+    "landscape": "tile-landscape-faa70536.png",
+    "constellation": "tile-constellation-23026e1d.png",
+    "codeart": "tile-codeart-791456d8.png",
 }
 
 
