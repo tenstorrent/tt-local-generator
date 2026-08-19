@@ -1450,30 +1450,37 @@ class CreateView(Gtk.Box):
 
         model_btn = Gtk.ToggleButton(label="\U0001f5a5 Start with a model")
         model_btn.add_css_class("create-door-btn")
-        model_btn.add_css_class("create-door-btn-mid")
         model_btn.set_tooltip_text(
             "Start from a running or runnable model — the medium follows the model."
         )
 
-        inspiration_btn = Gtk.ToggleButton(label="\U0001f30c Start with inspiration")
-        inspiration_btn.add_css_class("create-door-btn")
-        inspiration_btn.add_css_class("create-door-btn-right")
-        inspiration_btn.set_tooltip_text("Hand off to the Muse for a creative spark.")
-
+        show_inspiration = self._on_inspiration is not None
+        # The right-most door gets the right-rounded corner; that's the
+        # inspiration door when present, else the model door.
+        model_btn.add_css_class(
+            "create-door-btn-mid" if show_inspiration else "create-door-btn-right"
+        )
         model_btn.set_group(idea_btn)
-        inspiration_btn.set_group(idea_btn)
 
         idea_btn.connect("toggled", lambda b: b.get_active() and self._set_entry_mode("idea"))
         model_btn.connect("toggled", lambda b: b.get_active() and self._set_entry_mode("model"))
-        inspiration_btn.connect(
-            "toggled", lambda b: b.get_active() and self._set_entry_mode("inspiration")
-        )
 
         row.append(idea_btn)
         row.append(model_btn)
-        row.append(inspiration_btn)
+        self._doors = {"idea": idea_btn, "model": model_btn}
 
-        self._doors = {"idea": idea_btn, "model": model_btn, "inspiration": inspiration_btn}
+        if show_inspiration:
+            inspiration_btn = Gtk.ToggleButton(label="\U0001f30c Start with inspiration")
+            inspiration_btn.add_css_class("create-door-btn")
+            inspiration_btn.add_css_class("create-door-btn-right")
+            inspiration_btn.set_tooltip_text("Hand off to the Muse for a creative spark.")
+            inspiration_btn.set_group(idea_btn)
+            inspiration_btn.connect(
+                "toggled", lambda b: b.get_active() and self._set_entry_mode("inspiration")
+            )
+            row.append(inspiration_btn)
+            self._doors["inspiration"] = inspiration_btn
+
         idea_btn.set_active(True)
         return row
 

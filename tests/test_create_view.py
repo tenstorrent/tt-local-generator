@@ -219,6 +219,24 @@ def test_create_view_builds(monkeypatch):
     assert isinstance(view, Gtk.Box)
 
 
+def test_inspiration_door_omitted_when_unwired(monkeypatch):
+    """When on_inspiration is None (pipeline mode hidden), the doors row has
+    only idea + model — no Inspiration door — and model becomes the
+    right-most door (right-rounded corner)."""
+    view = _make_view(monkeypatch, on_inspiration=None)
+    assert set(view._doors.keys()) == {"idea", "model"}
+    assert view._doors["model"].has_css_class("create-door-btn-right")
+
+
+def test_inspiration_door_present_when_wired(monkeypatch):
+    """When on_inspiration is a callable, all three doors exist exactly as
+    today: idea (left), model (mid), inspiration (right)."""
+    view = _make_view(monkeypatch, on_inspiration=lambda: None)
+    assert set(view._doors.keys()) == {"idea", "model", "inspiration"}
+    assert view._doors["inspiration"].has_css_class("create-door-btn-right")
+    assert view._doors["model"].has_css_class("create-door-btn-mid")
+
+
 class _FakeStatusService:
     """Minimal stand-in for `model_status.ModelStatusService` exposing
     exactly the surface CreateView consumes (`snapshot()`/`subscribe(cb)`),
@@ -808,7 +826,9 @@ def test_cta_reflects_edited_artgen_param_panel_widgets(monkeypatch):
 # ── Doors ─────────────────────────────────────────────────────────────────
 
 def test_idea_door_is_default_active(monkeypatch):
-    view = _make_view(monkeypatch)
+    # Inspiration door only exists when wired — pass a callback so all three
+    # doors are present to check mutual-exclusivity of default state.
+    view = _make_view(monkeypatch, on_inspiration=lambda: None)
     assert view._entry_mode == "idea"
     assert view._doors["idea"].get_active() is True
     assert view._doors["model"].get_active() is False
@@ -838,9 +858,13 @@ def test_inspiration_door_calls_on_inspiration(monkeypatch):
 
 
 def test_inspiration_door_is_safe_with_no_callback(monkeypatch):
-    """No on_inspiration injected -> switching to that door must not raise."""
+    """No on_inspiration injected -> the door itself is omitted (see
+    test_inspiration_door_omitted_when_unwired), but the internal
+    `_set_entry_mode` guard that used to protect the door's click handler
+    must still be safe to call directly (defense in depth)."""
     view = _make_view(monkeypatch)
-    view._doors["inspiration"].set_active(True)  # must not raise
+    assert "inspiration" not in view._doors
+    view._set_entry_mode("inspiration")  # must not raise
     assert view._entry_mode == "inspiration"
 
 
