@@ -19,6 +19,7 @@ known keys.
 
 import json
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,17 @@ log = logging.getLogger(__name__)
 
 STORAGE_DIR = Path.home() / ".local" / "share" / "tt-video-gen"
 SETTINGS_FILE = STORAGE_DIR / "settings.json"
+
+# ── Feature flags (dev/env only — NOT persisted user settings) ────────────────
+# Pipeline mode (browse runs / blank-canvas compose / DAG editor) is not ready
+# for primetime. OFF by default: the pipeline surfaces are hidden and seeded
+# 🔀 Remix routes straight to the run + Library. Set TTLG_PIPELINE_MODE=1 to
+# restore the full pipeline UI unchanged. Read once at import.
+# See docs/superpowers/specs/2026-08-19-remix-without-pipeline-mode-design.md.
+PIPELINE_MODE_ENABLED: bool = (
+    os.environ.get("TTLG_PIPELINE_MODE", "").strip().lower()
+    in ("1", "true", "yes", "on")
+)
 
 # ── Defaults for every known key ──────────────────────────────────────────────
 
