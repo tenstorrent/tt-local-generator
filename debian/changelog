@@ -1,3 +1,15 @@
+tt-local-generator (0.92.1) noble; urgency=medium
+
+  * demo-collection: give the two color-palette swatch items real captions
+    (were "Color palette 3/4" stubs) — "World's Fair 1964 — palette study in …",
+    tying them to the 1964 workflow they came from.
+  * docs(docker): `docker/README.md` corrected — the directory ships nothing by
+    default (bundles are git-ignored, not in the .deb; the app pulls images from
+    GHCR at runtime). The stale 7.9 GB 0.11.1 bundle + its orphaned Git LFS
+    object were removed to reclaim ~15 GB (.git 8.0 GB → 573 MB).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 14:10:00 +0000
+
 tt-local-generator (0.92.0) noble; urgency=medium
 
   * feat: bundle a curated demo collection (27 items, ~10 MiB) so a fresh
