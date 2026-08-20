@@ -289,6 +289,36 @@ cd ~/code/tt-local-generator
 
 ---
 
+## Converting an older library
+
+`tt-ctl convert-library` brings an older `media.db` library up to current
+conventions. It fixes two things:
+
+- **AnimateDiff/Animate showing up as "artgen" instead of video** — a normal
+  app upgrade already auto-folds these into `media_type="video"` the first
+  time the app opens the DB, so most people never need this. This tool adds
+  the same fold as a standalone, dry-run-capable, headless command that can
+  target any DB file — useful for scripting, remote/no-GUI machines, or
+  checking a library before touching it.
+- **Stale ANSI/palette thumbnails** — artgen thumbnails rendered by an older
+  version of the thumbnail renderer (raw escape codes or raw JSON shown as
+  text instead of a real color grid / swatch grid). The app does **not**
+  auto-run this sweep; it only happens when you ask for it.
+
+```bash
+./tt-ctl convert-library            # dry run — shows what would change
+./tt-ctl convert-library --apply    # perform the conversion
+./tt-ctl convert-library --apply --backup   # ...backing up the DB first
+./tt-ctl convert-library --db /path/to/media.db --apply   # a non-default library
+```
+
+Both conversions are idempotent and fail-soft: running it again after
+everything is already converted folds 0 records, and a single unreadable
+record never aborts the rest of the run. Pass `--no-thumbnails` to skip the
+thumbnail sweep and only perform the media-type fold.
+
+---
+
 ## Features
 
 ### Generating

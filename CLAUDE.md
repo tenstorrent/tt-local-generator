@@ -1,5 +1,47 @@
 # tt-local-generator — developer notes
 
+## Library converter — `tt-ctl convert-library` (v0.88.0)
+
+A standalone, dry-run-capable CLI for bringing an older `media.db` library
+up to current conventions — `app/library_convert.py` (`analyze`/`apply`),
+wired as `tt-ctl convert-library` (`--apply` / `--db PATH` /
+`--no-thumbnails` / `--backup`; dry-run by default).
+
+- **Media-type fold, exposed and reusable.** The AnimateDiff/Animate ->
+  `media_type="video"` fold SQL (see "AnimateDiff is Video" below) was
+  extracted out of `MediaStore._migrate_media_types` into a module-level
+  `media_store.fold_media_types(conn) -> int`, called two ways: gated (the
+  app's own once-per-DB `PRAGMA user_version` startup migration, unchanged
+  behavior — `tests/test_media_store.py` still green) and ungated (this
+  tool, so it always applies regardless of `user_version` — useful for
+  dry-run/headless/arbitrary-DB use). **Bug fixed in the same extraction:**
+  the original UPDATE's `WHERE media_type='animatediff' OR
+  generator_type='animatediff'` clause kept matching an already-folded row
+  forever (the surviving `generator_type` stamp never stops matching the OR
+  clause) — harmless under the gate (which only ever calls it once), but it
+  meant an ungated caller's rowcount was never truthfully idempotent. Added
+  a `media_type != 'video'` guard to both UPDATEs; first-run behavior is
+  byte-identical, a second call now correctly folds 0.
+- **Stale-thumbnail regeneration, NOT auto-run by the app.** For every
+  `media_type='artgen'` record whose source file exists and isn't `.gif`,
+  `apply()` re-renders its thumbnail via `artgen_thumb.make_thumbnail` into
+  a temp file and verifies it (GdkPixbuf loads it, both dimensions > 1 —
+  i.e. not `make_thumbnail`'s own 1x1 placeholder degrade) before replacing
+  the original thumbnail file in place; failures/skips are counted, never
+  raised past the per-record `try`. **Gotcha found while building this:**
+  several `make_thumbnail` branches (`.ans`/`.json`/`.txt`/`.md`/`.py`) call
+  `PIL.Image.save(path)` with no explicit `format=`, so PIL infers the
+  format from the path's extension — a temp filename ending in `.tmp`
+  silently failed to save and fell back to the placeholder instead of
+  raising. Fixed by giving the temp target a real `.png` extension
+  (`library_convert._regenerate_one_thumbnail`); the final file always lands
+  at the ORIGINAL `thumbnail_path` regardless of what extension the
+  intermediate render used (covers `make_thumbnail`'s svg-render-failure
+  fallback, which renames to `.svg` on its own).
+- `analyze()` is strictly read-only (opens the DB via a `file:...?mode=ro`
+  sqlite URI) and reports `fold_pending`/`thumbs_pending` counts for the
+  dry-run report `cmd_convert_library` prints by default.
+
 ## AnimateDiff is Video (v0.87.0)
 
 `media_type=="animatediff"` never actually needed to be its own media type —

@@ -92,6 +92,38 @@ class MediaRecord:
             return {}
 
 
+def fold_media_types(conn: sqlite3.Connection) -> int:
+    """Fold legacy AnimateDiff (.gif) and Wan2.2-Animate (.mp4) records into
+    media_type='video', stamping generator_type for provenance.
+
+    Extracted out of MediaStore._migrate_media_types so it can be reused
+    ungated (by app/library_convert.py's `tt-ctl convert-library`) as well as
+    gated (by the app's own once-per-DB PRAGMA user_version migration).
+    Both UPDATEs are idempotent -- the `media_type != 'video'` guard means a
+    row already folded on a prior call is never matched again (without it,
+    a row's surviving generator_type='animatediff'/'animate' stamp would
+    keep matching the OR clause forever, re-"folding" a no-op every call --
+    harmless in the gated caller, which only ever calls this once per DB,
+    but the whole point of exposing this ungated is a caller that MIGHT call
+    it twice against the same DB and needs a truthful zero back). Does NOT
+    commit; callers own the transaction.
+
+    Returns the total rowcount across both UPDATEs (0 if nothing matched).
+    """
+    total = 0
+    cur = conn.execute(
+        "UPDATE media SET media_type='video', generator_type='animatediff' "
+        "WHERE media_type != 'video' "
+        "AND (media_type='animatediff' OR generator_type='animatediff')")
+    total += cur.rowcount if cur.rowcount > 0 else 0
+    cur = conn.execute(
+        "UPDATE media SET media_type='video', generator_type='animate' "
+        "WHERE media_type != 'video' "
+        "AND (media_type='animate' OR generator_type='animate')")
+    total += cur.rowcount if cur.rowcount > 0 else 0
+    return total
+
+
 class MediaStore:
     """
     SQLite-backed media store. Instantiate with a db_path for testing;
@@ -118,19 +150,15 @@ class MediaStore:
     def _migrate_media_types(self) -> None:
         """Fold AnimateDiff (.gif) and Wan2.2-Animate (.mp4) records into
         media_type='video', stamping generator_type for provenance. Gated by
-        PRAGMA user_version so it runs once per DB; the UPDATEs are idempotent
-        regardless. Files/params are untouched. See
+        PRAGMA user_version so it runs once per DB; the UPDATEs (delegated to
+        module-level `fold_media_types`) are idempotent regardless. Files/
+        params are untouched. See
         docs/superpowers/specs/2026-08-19-animatediff-is-video-design.md."""
         with self._lock:
             ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
             if ver >= _MEDIA_TYPE_MIGRATION_VERSION:
                 return
-            self._conn.execute(
-                "UPDATE media SET media_type='video', generator_type='animatediff' "
-                "WHERE media_type='animatediff' OR generator_type='animatediff'")
-            self._conn.execute(
-                "UPDATE media SET media_type='video', generator_type='animate' "
-                "WHERE media_type='animate' OR generator_type='animate'")
+            fold_media_types(self._conn)
             self._conn.execute(f"PRAGMA user_version={_MEDIA_TYPE_MIGRATION_VERSION}")
             self._conn.commit()
 

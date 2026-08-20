@@ -1,3 +1,22 @@
+tt-local-generator (0.88.0) noble; urgency=medium
+
+  * feat(tt-ctl): add `convert-library` — migrate/repair an older media
+    library. Extracted the fold SQL out of `media_store._migrate_media_types`
+    into a reusable `media_store.fold_media_types(conn)` (now idempotent via
+    a `media_type != 'video'` guard, called both by the app's own gated
+    startup migration and by the new tool ungated) and added
+    `app/library_convert.py`: `analyze()` (read-only dry-run report) and
+    `apply()` (fold AnimateDiff/Animate records to `media_type="video"`, and
+    optionally re-render every non-gif artgen thumbnail with the current
+    `artgen_thumb.make_thumbnail` renderer, fixing thumbnails baked by an
+    older renderer that showed raw ANSI escapes/JSON as text instead of a
+    color grid / swatch grid). Dry-run by default, `--apply` to write,
+    `--backup` to copy the DB first, `--no-thumbnails` to skip the
+    thumbnail sweep, `--db PATH` for an arbitrary library. Both conversions
+    are idempotent and fail-soft (a single bad record never aborts the run).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 20 Aug 2026 07:37:44 -0700
+
 tt-local-generator (0.87.0) noble; urgency=medium
 
   * chore(pipeline): AnimateDiff + Wan2.2-Animate media is now
