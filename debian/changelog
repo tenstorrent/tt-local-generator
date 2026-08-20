@@ -1,3 +1,21 @@
+tt-local-generator (0.89.0) noble; urgency=medium
+
+  * fix(create): "Start something" tiles no longer repeat the same sample
+    prompt. Every medium (native image/video + every artgen generator) now
+    has its OWN pool of distinct, art-type-specific example lines, rotated so
+    repeat visits vary and no two tiles echo each other — replacing the single
+    per-medium string whose per-kind fallback made image/skyline/geometric/
+    circuit all read "a Moog Minimoog...". When a tile shows an explicitly
+    STARRED piece, the tile's real prompt is used as the example, so the copy
+    describes exactly what's on the tile. `possibilities.py`; pure/GTK-testable.
+  * fix(watch): center each tensix-viz chip grid within its cell. The grid was
+    drawn from a fixed top-left pad with floored cell sizes, piling all the
+    slack on the right/bottom so the grid read as shoved to the left; now the
+    leftover is split evenly (tensix-viz `src/chip.js`, rebuilt + re-bundled;
+    86 sister-repo tests green).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 08:25:00 +0000
+
 tt-local-generator (0.88.0) noble; urgency=medium
 
   * feat(tt-ctl): add `convert-library` — migrate/repair an older media

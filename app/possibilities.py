@@ -30,31 +30,122 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GdkPixbuf  # noqa: E402
 
 
-# Example ideas seed the composer on a tile pick. Drawn straight from the app's
-# OWN sources so they read in the house voice, not generic filler:
-#   - native mediums (image/video/animate): representative lines from the
-#     prompt generator's seed corpus (app/prompts/markov_seed.txt).
-#   - artgen mediums: the evocative THEMES behind curated "favorite" productions
-#     (the per-type playlists — Verses, Ansis, Palettes, Codearts, … — and
-#     "The Demo"), not the templated internal prompts.
-# Keyed by medium id, with a per-kind fallback for an unknown/new medium.
-_EXAMPLE_IDEAS_BY_ID = {
-    "image": "a Moog Minimoog on a kitchen table in a dark apartment, one desk lamp",
-    "video": "a crop picker walks an empty furrow at 5am, the valley still grey",
-    "animate": "an elderly fisherman turns toward the horizon, a quiet smile at dawn",
-    "verse": "the final cartridge, the last checkpoint",
-    "ansi": "a death's-head moth, glowing wings spread wide",
-    "palette": "a bioluminescent tidal flat at 3am",
-    "landscape": "an otherworldly, dreamlike vista",
-    "constellation": "an invented star chart",
-    "codeart": "the nature of recursion",
+# Example ideas seed the composer on a tile pick. Each medium has its OWN pool
+# of distinct, evocative lines written in that art type's voice — a color
+# palette, a poem, an ANSI moth and a photographic still should never suggest
+# the same thing. The wall rotates through a pool (see `_pick_from_pool`) so
+# repeat visits vary and no two tiles echo each other. Every medium the app can
+# surface (native image/video + every artgen generator) has an entry here, so
+# nothing falls back to a generic per-kind line and duplicates a neighbor.
+#
+# These are the DEFAULT suggestions. When a tile actually shows an explicitly
+# STARRED piece of the medium (tier 1 of `_resolve_tile_art`), the tile's real
+# prompt is used instead — the copy then describes exactly what's on the tile
+# (see `_example_for`).
+_EXAMPLE_POOLS_BY_ID = {
+    # native
+    "image": [
+        "a Moog Minimoog on a kitchen table, one desk lamp, Hopper stillness",
+        "a rain-slick Tokyo alley reflecting a single red sign",
+        "a lighthouse keeper reading by lantern while the storm leans in",
+        "a greenhouse overrun with ferns, morning fog on the glass",
+        "a chrome diner at closing time, cold coffee and neon",
+    ],
+    "video": [
+        "a crop picker walks an empty furrow at 5am, the valley still grey",
+        "steam curls off a city grate as a train rumbles underneath",
+        "a paper boat rides the gutter stream after the rain stops",
+        "curtains breathe in an empty room, afternoon light shifting",
+        "a welder's sparks arc across a dark garage in slow motion",
+    ],
+    # artgen — text
+    "verse": [
+        "the final cartridge, the last checkpoint",
+        "what the tide leaves, and what it takes back",
+        "a letter never sent, folded twice",
+        "the hum a house keeps after everyone leaves",
+        "instructions for forgetting a name",
+    ],
+    "freeform": [
+        "a manifesto for a machine that dreams",
+        "found notes from a city that never woke",
+        "the user manual for a feeling",
+        "an inventory of things almost said",
+    ],
+    "codeart": [
+        "the nature of recursion",
+        "a function that returns its own shadow",
+        "an infinite loop that learns to rest",
+        "sorting a list of small regrets",
+    ],
+    # artgen — visual (SVG / grid / swatches)
+    "landscape": [
+        "twin moons over a salt desert",
+        "a floating archipelago at dusk",
+        "canyons carved from colored glass",
+        "an otherworldly, dreamlike vista",
+    ],
+    "skyline": [
+        "a neon megacity in the rain",
+        "a retro-future skyline at golden hour",
+        "silhouetted towers under a slow aurora",
+        "a harbor city waking at dawn",
+    ],
+    "constellation": [
+        "the constellation of the Forgotten Clockmaker",
+        "a zodiac for deep-sea creatures",
+        "stars that spell a lost alphabet",
+        "an invented star chart",
+    ],
+    "geometric": [
+        "nested impossible polygons",
+        "a tessellation that never quite repeats",
+        "concentric order dissolving into noise",
+        "a mandala built from circuitry",
+    ],
+    "circuit": [
+        "a schematic for a machine that hums lullabies",
+        "copper traces branching like river deltas",
+        "a synth patch drawn as a city map",
+        "the wiring diagram of a heartbeat",
+    ],
+    "palette": [
+        "a bioluminescent tidal flat at 3am",
+        "the colors of a thunderstorm over wheat",
+        "a sun-bleached seaside postcard",
+        "embers and ash after the bonfire",
+    ],
+    "ansi": [
+        "a death's-head moth, wings spread and glowing",
+        "a chrome dragon coiled around a full moon",
+        "a neon skull grinning in the void",
+        "a pixel spaceship crossing a lo-fi planet",
+    ],
+    "ansi-image": [
+        "a portrait rebuilt from color blocks",
+        "a photograph dissolved into terminal glyphs",
+        "a landscape redrawn in 256 colors",
+    ],
+    # artgen — gif (folded into Video today, kept for completeness)
+    "animatediff": [
+        "an elderly fisherman turns toward the horizon at dawn",
+        "a paper crane unfolds itself in reverse",
+        "a candle flame bends in an unseen draft",
+    ],
 }
-_EXAMPLE_IDEAS_BY_KIND = {
-    "image": "a Moog Minimoog on a kitchen table, one desk lamp, Hopper stillness",
-    "video": "a crop picker walks an empty furrow at 5am, the valley still grey",
-    "gif": "an elderly fisherman turns toward the horizon, a quiet smile at dawn",
-    "text": "the final cartridge, the last checkpoint",
+# Per-KIND fallback pools — only reached by a brand-new medium id not yet listed
+# above (a freshly dropped-in plugin). Kept generic on purpose; add the real
+# medium to `_EXAMPLE_POOLS_BY_ID` when it lands.
+_EXAMPLE_POOLS_BY_KIND = {
+    "image": _EXAMPLE_POOLS_BY_ID["image"],
+    "video": _EXAMPLE_POOLS_BY_ID["video"],
+    "gif": _EXAMPLE_POOLS_BY_ID["animatediff"],
+    "text": [
+        "a small truth told in a strange voice",
+        "something worth saying, said sideways",
+    ],
 }
+_FALLBACK_EXAMPLE = "something new"
 # Deterministic per-kind gradient CSS class (defined in main_window _CSS via
 # `poss-grad-*`). Falls back to `poss-grad-image`.
 _GRADIENT_CLASS_BY_KIND = {
@@ -96,10 +187,19 @@ def _bundled_tile_art_path(medium) -> "Optional[str]":
     return p if os.path.exists(p) else None
 
 
+def _pool_for(medium) -> list:
+    """The example-idea pool for a medium: its own list, else a per-kind
+    fallback, else a single generic line. Never empty."""
+    return (_EXAMPLE_POOLS_BY_ID.get(getattr(medium, "id", None))
+            or _EXAMPLE_POOLS_BY_KIND.get(getattr(medium, "kind", None))
+            or [_FALLBACK_EXAMPLE])
+
+
 def example_idea_for(medium) -> str:
-    return (_EXAMPLE_IDEAS_BY_ID.get(medium.id)
-            or _EXAMPLE_IDEAS_BY_KIND.get(medium.kind)
-            or "something new")
+    """A stable default example for a medium (the first of its pool). The wall
+    itself rotates through the pool per build — see `PossibilitiesWall.
+    _pick_from_pool` — but external callers get a deterministic single line."""
+    return _pool_for(medium)[0]
 
 
 def _default_curated_matcher(name: str) -> bool:
@@ -119,6 +219,7 @@ class PossibilitiesWall(Gtk.Box):
         self._store = store
         self._match = curated_playlist_matcher or _default_curated_matcher
         self._cards = 0
+        self._pool_i: dict = {}  # per-medium rotation cursor into its example pool
 
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         head.add_css_class("possibilities-head")
@@ -168,7 +269,6 @@ class PossibilitiesWall(Gtk.Box):
         card = Gtk.Button()
         card.add_css_class("possibilities-card")
         card.set_size_request(_TILE_W, _TILE_H)
-        card.connect("clicked", lambda _b, mm=medium: self._activate_card(mm))
 
         overlay = Gtk.Overlay()
         kind, payload = self._resolve_tile_art(medium)
@@ -176,12 +276,18 @@ class PossibilitiesWall(Gtk.Box):
         art.set_size_request(_TILE_W, _TILE_H)
         overlay.set_child(art)
 
+        # The example line is computed ONCE here and captured in the click
+        # closure, so what the caption shows is exactly what tapping seeds —
+        # including the tie-to-shown case (a starred piece's own prompt).
+        example = self._example_for(medium)
+        card.connect("clicked", lambda _b, mm=medium, ex=example: self._activate_card(mm, ex))
+
         cap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         cap.add_css_class("possibilities-cap")
         cap.set_valign(Gtk.Align.END)
         med = Gtk.Label(label=f"{medium.icon} {medium.label}", xalign=0.0)
         med.add_css_class("possibilities-med")
-        eg = Gtk.Label(label=f"e.g. {example_idea_for(medium)}", xalign=0.0)
+        eg = Gtk.Label(label=f"e.g. {example}", xalign=0.0)
         eg.add_css_class("possibilities-eg")
         eg.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
         cap.append(med)
@@ -215,6 +321,47 @@ class PossibilitiesWall(Gtk.Box):
         icon.set_hexpand(True); icon.set_vexpand(True)
         box.append(icon)
         return box
+
+    def _pick_from_pool(self, medium) -> str:
+        """Next example line for a medium, rotating through its pool so repeat
+        builds vary and no two tiles land on the same generic filler."""
+        pool = _pool_for(medium)
+        mid = getattr(medium, "id", None)
+        i = self._pool_i.get(mid, 0) % len(pool)
+        self._pool_i[mid] = i + 1
+        return pool[i]
+
+    def _starred_record_for(self, medium):
+        """The starred record whose art the tile actually shows (tier 1 of
+        `_resolve_tile_art`), or None. Mirrors that tier's exact condition
+        (starred + a thumbnail that exists on disk) so the copy can only ever
+        describe a piece that is genuinely the one on the tile."""
+        mt = "artgen" if medium.source == "artgen" else medium.id
+        gt = medium.generator if medium.source == "artgen" else None
+        try:
+            for r in (self._store.query(media_type=mt, generator_type=gt,
+                                        starred=True, limit=1) or []):
+                t = getattr(r, "thumbnail_path", None)
+                if t and os.path.exists(t):
+                    return r
+        except Exception:
+            pass
+        return None
+
+    def _example_for(self, medium) -> str:
+        """The example line for a tile. When the tile shows an explicitly
+        STARRED piece, use that piece's own prompt — the copy then describes
+        exactly what's on the tile ("make one like THIS"). Otherwise rotate
+        through the medium's curated pool. Falls back safely on any error."""
+        try:
+            rec = self._starred_record_for(medium)
+            if rec is not None:
+                prompt = (getattr(rec, "prompt", "") or "").strip()
+                if prompt:
+                    return prompt
+        except Exception:
+            pass
+        return self._pick_from_pool(medium)
 
     def _is_curated_for(self, name: str, key: str) -> bool:
         """A playlist is a curated art source for a medium if it's a
@@ -297,12 +444,16 @@ class PossibilitiesWall(Gtk.Box):
                     return ("thumb", t)
         return ("gradient", None)
 
-    def _activate_card(self, medium) -> None:
+    def _activate_card(self, medium, example: "Optional[str]" = None) -> None:
+        # `example` is the exact line the tapped tile displayed (passed from
+        # _make_card so caption and seed always match); surprise()/direct calls
+        # pass None and we resolve it fresh.
+        idea = example if example is not None else self._example_for(medium)
         # Unlike the art-resolution swallows (which degrade to a valid gradient),
         # a raising `on_pick` is an integration bug in the Create-surface wiring,
         # not a cosmetic miss — leave a stderr breadcrumb instead of a silent no-op.
         try:
-            self._on_pick(medium, example_idea_for(medium))
+            self._on_pick(medium, idea)
         except Exception as exc:  # pragma: no cover - defensive
             print(f"PossibilitiesWall: on_pick failed for {getattr(medium, 'id', '?')}: {exc}",
                   file=sys.stderr)

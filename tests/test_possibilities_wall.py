@@ -207,6 +207,50 @@ def test_starred_video_typed_gif_is_video_tile_art(tmp_path):
     assert wall._resolve_tile_art(meds[0]) == ("thumb", str(starred_gif))
 
 
+def test_example_ideas_are_distinct_per_medium(tmp_path):
+    """Every medium suggests something specific to its own art type -- no two
+    tiles collapse to the same generic line (the old per-kind fallback made
+    image/skyline/geometric/circuit all read 'a Moog Minimoog...')."""
+    from possibilities import PossibilitiesWall
+    meds = [
+        _medium("image"),
+        _medium("video", kind="video"),
+        _medium("skyline", kind="image", source="artgen", generator="skyline"),
+        _medium("geometric", kind="image", source="artgen", generator="geometric"),
+        _medium("circuit", kind="image", source="artgen", generator="circuit"),
+        _medium("palette", kind="image", source="artgen", generator="palette"),
+        _medium("verse", kind="text", source="artgen", generator="verse"),
+        _medium("freeform", kind="text", source="artgen", generator="freeform"),
+    ]
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=_FakeStore())
+    lines = [wall._example_for(m) for m in meds]
+    assert len(set(lines)) == len(lines), f"duplicate example lines: {lines}"
+
+
+def test_pool_rotates_so_repeat_builds_vary(tmp_path):
+    """A medium's pool rotates, so a rebuilt/re-shown tile doesn't always show
+    the same suggestion."""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("image")]
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=_FakeStore())
+    first = wall._pick_from_pool(meds[0])
+    second = wall._pick_from_pool(meds[0])
+    assert first != second
+
+
+def test_example_ties_to_shown_starred_prompt(tmp_path):
+    """When a tile shows an explicitly STARRED piece, the example line is that
+    piece's own prompt -- the copy describes exactly what's on the tile."""
+    from possibilities import PossibilitiesWall
+    meds = [_medium("image")]
+    thumb = tmp_path / "s.png"; thumb.write_bytes(b"\x89PNG\r\n")
+    r = _rec("image", thumb=str(thumb), starred=1)
+    r.prompt = "a heron mid-stride on wet slate"
+    store = _FakeStore(latest={("image", None): [r]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    assert wall._example_for(meds[0]) == "a heron mid-stride on wet slate"
+
+
 def test_no_starred_still_uses_existing_tiers(tmp_path):
     """With nothing starred, resolution is unchanged: bundled tier still wins
     for the Image tile (regression guard alongside

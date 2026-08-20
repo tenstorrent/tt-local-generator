@@ -233,10 +233,10 @@ var _TensixVizBundle = (() => {
     const pad = 8;
     const w = this._logicalW;
     const h = this._logicalH;
-    this._padX = pad;
-    this._padY = pad;
     this._cellW = Math.floor((w - pad * 2) / chip.cols);
     this._cellH = Math.floor((h - pad * 2) / chip.rows);
+    this._padX = Math.max(pad, Math.floor((w - this._cellW * chip.cols) / 2));
+    this._padY = Math.max(pad, Math.floor((h - this._cellH * chip.rows) / 2));
     this._dram = [];
     this._compute = [];
     for (var row = 0; row < chip.rows; row++) {
@@ -511,7 +511,11 @@ var _TensixVizBundle = (() => {
         if (v > maxVal) maxVal = v;
       }
     }
+    var HEAT_FLOOR = 0.35;
+    var prevScale = this._heatScale || 0;
+    this._heatScale = Math.max(maxVal, prevScale * 0.94, HEAT_FLOOR);
     if (maxVal === 0) return;
+    maxVal = this._heatScale;
     for (let row = cg.rowStart; row <= cg.rowEnd; row++) {
       for (let col = cg.colStart; col <= cg.colEnd; col++) {
         if (chip.coreType(col, row) !== "tensix") continue;
@@ -888,9 +892,14 @@ var _TensixVizBundle = (() => {
       kdGlow: 0
       // current DRAM glow for kernel_dispatch (decays per frame)
     };
+    var _lastTickMs = 0;
+    var _dtScale = 1;
     var MODES = {
       idle: function(c2, r2) {
-        return Math.min(1, prev[r2][c2] * 0.9 + (Math.random() < 0.03 ? Math.random() * 0.35 : 0));
+        var k = typeof _dtScale === "number" && _dtScale > 0 ? _dtScale : 1;
+        var decay = Math.pow(0.9, k);
+        var pop = 1 - Math.pow(1 - 0.03, k);
+        return Math.min(1, prev[r2][c2] * decay + (Math.random() < pop ? Math.random() * 0.35 : 0));
       },
       inference: function(c2, r2) {
         var wave = t % 1 * W;
@@ -992,6 +1001,9 @@ var _TensixVizBundle = (() => {
     }
     function tick() {
       if (self._animGen !== gen) return;
+      var _now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      _dtScale = _lastTickMs ? Math.min((_now - _lastTickMs) / (1e3 / 60), 6) : 1;
+      _lastTickMs = _now;
       t += 0.012;
       if (self._showMemory) {
         _mem.phase += 0.012;

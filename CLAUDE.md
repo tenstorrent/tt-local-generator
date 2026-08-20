@@ -1,5 +1,40 @@
 # tt-local-generator — developer notes
 
+## "Start something" copy + tensix-grid centering (v0.89.0)
+
+Two small Create-surface polish fixes:
+
+- **Distinct, art-type-specific tile suggestions (`app/possibilities.py`).**
+  The "Start something" wall used to hold ONE example string per medium in
+  `_EXAMPLE_IDEAS_BY_ID` with a per-*kind* fallback — so every medium not in
+  the dict (freeform/skyline/geometric/circuit/ansi-image) fell back to the
+  same generic image/text line, and image/skyline/geometric/circuit all read
+  "a Moog Minimoog…". Replaced with `_EXAMPLE_POOLS_BY_ID`: a *pool* of
+  distinct, house-voice lines per medium, one entry for EVERY medium the app
+  can surface (native image/video + every artgen generator), plus generic
+  per-kind fallback pools only for a brand-new unlisted plugin. `_pick_from_pool`
+  rotates a per-medium cursor (`self._pool_i`) so repeat builds vary and no two
+  tiles echo each other. `example_idea_for(medium)` stays a stable single line
+  (pool[0]) for external callers/tests; `_resolve_tile_art`'s 2-tuple contract
+  is untouched (many tests depend on it).
+  - **Tie-to-shown:** `_example_for(medium)` prefers a STARRED piece's own
+    `prompt` when that piece is exactly what the tile displays — resolved by
+    `_starred_record_for`, which mirrors `_resolve_tile_art`'s tier-1 condition
+    (starred + thumbnail exists on disk) so the copy can only ever describe the
+    art actually on the tile. The line is computed ONCE in `_make_card` and
+    captured in the click closure, so caption and what-tapping-seeds always
+    match. Deliberately scoped to the starred tier only — NOT arbitrary recents
+    or artgen's templated internal prompts (the same reason those are curated-
+    only for tile *art*). Fail-soft → pool line on any error.
+- **Centered chip grid in the 👁 Watch viz (tensix-viz `src/chip.js`).**
+  `_computeLayout` floored `_cellW`/`_cellH` and drew from a fixed top-left pad,
+  so `cols*_cellW < w-2*pad` piled ALL the slack on the right/bottom — the grid
+  read as shoved left inside its cell (visible in the 2×2 corner instrument).
+  Now `_padX`/`_padY` split the leftover evenly (`max(pad, floor((w -
+  cellW*cols)/2))`), centering the grid. Edited in the SISTER repo
+  `~/code/tensix-viz`, `node build.js` + 86 tests green, re-bundled into
+  `app/assets/tensix-viz/tensix-viz.js` (never hand-edit the generated bundle).
+
 ## Library converter — `tt-ctl convert-library` (v0.88.0)
 
 A standalone, dry-run-capable CLI for bringing an older `media.db` library
