@@ -766,6 +766,7 @@ class AnimateDiffGenerationWorker:
         lightning: bool = False,
         lightning_steps: int = 4,
         multi_chip: bool = True,
+        multichip_mode: "str | None" = None,
         device_id: "int | None" = None,
         chain_from: "str | None" = None,
         chain_save: "str | None" = None,
@@ -786,6 +787,7 @@ class AnimateDiffGenerationWorker:
         self._lightning = lightning
         self._lightning_steps = lightning_steps
         self._multi_chip = multi_chip
+        self._multichip_mode = multichip_mode
         self._device_id = device_id
         self._chain_from = chain_from
         self._chain_save = chain_save
@@ -866,15 +868,17 @@ class AnimateDiffGenerationWorker:
                 elapsed = int(time.monotonic() - start_time)
                 on_progress(f"{msg}  ({elapsed}s)")
 
-        # The main-window "Use all chips in parallel" checkbox only sets
-        # self._multi_chip (a bool) — it has no concept of remix vs coherent.
-        # run_subprocess() defaults multichip_mode to "off", so without this
-        # mapping the checkbox was a silent no-op: effective_chips could be
-        # >1 but multichip_mode stayed "off" and every run fell through to
-        # the single-chip path. Map the boolean to "remix" (seed-spread
-        # glitch across chips using default ramp/stitch settings), which is
-        # the intended "use all chips" behaviour for this simple checkbox.
-        multichip_mode = "remix" if (self._multi_chip and effective_chips > 1) else "off"
+        # The Create AnimateDiff options expose a Multi-chip selector that
+        # picks the ACTUAL engine mode: "off" (single chip), "remix" (seed-
+        # spread independent clips, stitched) or "coherent" (sequential latent-
+        # chained segments -> one continuous longer video). It arrives here as
+        # `self._multichip_mode`. Legacy/None callers (older tests, and any code
+        # path that only set the boolean) fall back to "remix" — the historical
+        # meaning of `multi_chip=True`, preserving byte-identical behaviour.
+        # Either way it is gated on genuinely having >1 chip to use: a single
+        # effective chip is always "off", never remix/coherent.
+        mode_sel = self._multichip_mode if self._multichip_mode is not None else "remix"
+        multichip_mode = mode_sel if (self._multi_chip and effective_chips > 1) else "off"
 
         ok, err = run_subprocess(
             prompt=self._prompt,

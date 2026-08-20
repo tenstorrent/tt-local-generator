@@ -1,3 +1,18 @@
+tt-local-generator (0.90.0) noble; urgency=medium
+
+  * feat(create): AnimateDiff multi-chip mode is now selectable in the GUI —
+    Remix (varied clips across chips) / Coherent (one longer latent-chained
+    video) / Off (single chip). Previously the Create surface only had a "use
+    all chips in parallel" checkbox and `worker.py` hardwired `multichip_mode =
+    "remix"`, so Coherent was reachable only from the CLI. A new `multichip_mode`
+    string now threads panel -> `_ANIMATEDIFF_DEFAULTS` -> `AnimateDiffGeneration
+    Worker` -> `run_subprocess(--multichip-mode)`; the `multi_chip` bool is kept
+    (derived: mode != "off") for back-compat, and a None/legacy mode still maps
+    to "remix" (byte-identical to the old behaviour). `app/create_param_panels.py`,
+    `app/worker.py`, `app/main_window.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 11:15:00 +0000
+
 tt-local-generator (0.89.3) noble; urgency=medium
 
   * fix(pipeline): TTLGMontage concat list is apostrophe-safe. `_write_concat_list`

@@ -248,16 +248,37 @@ def test_video_panel_animatediff_args_reflect_widget_values():
     panel._ad_temporal_alpha.set_value(0.7)
     panel._ad_neg_prompt.set_text("oversaturated")
     panel._ad_chain_save.set_active(True)
-    panel._ad_multi_chip.set_active(False)
+    panel._ad_multichip_mode.set_selected(2)  # "Off — single chip"
 
     args = panel.collect()["animatediff_args"]
     assert args["temporal_alpha"] == 0.7
     assert args["negative_prompt"] == "oversaturated"
     assert args["chain_save"] is True
+    # "Off" -> single chip: the derived boolean is False and the mode is "off".
     assert args["multi_chip"] is False
+    assert args["multichip_mode"] == "off"
     # Untouched fields keep their defaults.
     assert args["mode"] == "blackhole"
     assert args["lightning"] is False
+
+
+def test_video_panel_multichip_selector_maps_mode_and_bool():
+    """The 3-way Multi-chip selector drives BOTH the engine `multichip_mode`
+    string and the legacy `multi_chip` bool (True unless "Off")."""
+    panel = VideoParamPanel()
+    panel.build()
+
+    # Default (index 0) is Remix.
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("remix", True)
+
+    panel._ad_multichip_mode.set_selected(1)  # "Coherent — one longer video"
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("coherent", True)
+
+    panel._ad_multichip_mode.set_selected(2)  # "Off — single chip"
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("off", False)
 
 
 def test_video_panel_lightning_steps_row_hidden_until_lightning_and_cpu():

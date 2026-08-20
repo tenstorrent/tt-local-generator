@@ -1,5 +1,37 @@
 # tt-local-generator — developer notes
 
+## AnimateDiff multi-chip mode in the GUI (v0.90.0)
+
+The Create surface's AnimateDiff options had only a boolean "Use all chips in
+parallel" checkbox, and `worker.py` hardwired `multichip_mode = "remix" if
+(multi_chip and effective_chips > 1) else "off"` — so **Coherent mode (sequential
+latent-chained segments → one continuous longer video) was unreachable from the
+GUI**, CLI-only (`animatediff.py --multichip-mode {off,remix,coherent}`). Now the
+panel has a 3-way **Multi-chip** selector (Remix / Coherent / Off), threaded end
+to end:
+
+- **`create_param_panels.py`** — the checkbox `_ad_multi_chip` is replaced by a
+  `Gtk.DropDown` `_ad_multichip_mode` (`_ANIMATEDIFF_MULTICHIP_CHOICES`, default
+  "Remix …"). `_collect_animatediff_args` maps the label →
+  `multichip_mode` via `_ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE` and derives the
+  legacy `multi_chip` bool as `mode != "off"` — so BOTH keys are present and
+  consistent. `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode="remix"`.
+- **`worker.py`** — `AnimateDiffGenerationWorker` gained `multichip_mode: str |
+  None = None`; line ~877 now uses `mode_sel = self._multichip_mode if not None
+  else "remix"`, gated on `multi_chip and effective_chips > 1` (a single
+  effective chip is always "off"). **Back-compat is exact:** a None/legacy mode
+  → "remix", byte-identical to the old boolean behaviour (older worker tests
+  pass unchanged).
+- **`main_window.py`** — `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode="remix"`;
+  the worker construction passes `multichip_mode=ad["multichip_mode"]`.
+- **Invariant:** `multi_chip` is kept everywhere (defaults, worker param,
+  `_make_mw` decouple tests) so nothing downstream that still reads it breaks;
+  the selector just additionally carries the explicit engine mode. Tests:
+  `test_worker_animatediff.py::TestMultichipMode` (coherent flows to
+  `run_subprocess`; None→remix; single-chip→off), `test_create_param_panels.py`
+  (selector → mode+bool mapping), plus the `test_main_window_create_generate.py`
+  full-args pass-through updated for the new key.
+
 ## "Start something" copy + tensix-grid centering (v0.89.0)
 
 Two small Create-surface polish fixes:
