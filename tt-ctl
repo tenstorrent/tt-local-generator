@@ -21,6 +21,12 @@ Usage:
     tt-ctl queue clear              Empty the queue (does not cancel in-flight jobs)
     tt-ctl history [N]              Show last N completed generations (default 10)
     tt-ctl recover                  List server jobs not in local history
+    tt-ctl convert-library          Migrate/repair an older media library — dry run
+                                    by default; folds legacy AnimateDiff/Animate
+                                    records to media_type='video' and re-renders
+                                    stale artgen thumbnails.
+                                    Example: tt-ctl convert-library --apply --backup
+                                    Flags: --apply  --db PATH  --no-thumbnails  --backup
     tt-ctl run "prompt"             Run one generation right now (blocking)
                                     Flags: --steps N  --model wan2|mochi|flux
                                            --server URL  --neg "negative prompt"
@@ -922,6 +928,60 @@ def cmd_recover(args):
               "the prompt with:  tt-ctl queue add \"<prompt>\""))
 
 
+# ── convert-library ──────────────────────────────────────────────────────────
+
+def cmd_convert_library(args):
+    """Migrate/repair an older media library: fold legacy AnimateDiff/Animate
+    records into media_type='video', and (optionally) re-render stale artgen
+    thumbnails with the current renderer.
+
+    Dry-run by default — nothing is written unless --apply is passed.
+    """
+    # Imported lazily so plain `tt-ctl --help` / other subcommands never pay
+    # for artgen_thumb's rendering deps (PIL etc) or media_store's sqlite
+    # setup.
+    import library_convert
+
+    db_path = Path(args.db).expanduser() if getattr(args, "db", None) else library_convert.default_db_path()
+
+    if not getattr(args, "apply", False):
+        try:
+            report = library_convert.analyze(db_path)
+        except FileNotFoundError as exc:
+            print(red(str(exc)))
+            sys.exit(1)
+        print(bold(f"Library: {db_path}"))
+        print(f"  Would fold {report['fold_pending']} record(s) to media_type='video' "
+              "(legacy AnimateDiff/Animate).")
+        print(f"  Would re-render {report['thumbs_pending']} artgen thumbnail(s).")
+        print()
+        print(dim("Run with --apply to perform. (dry run — nothing written)"))
+        return
+
+    try:
+        report = library_convert.apply(
+            db_path,
+            regen_thumbnails=not getattr(args, "no_thumbnails", False),
+            backup=getattr(args, "backup", False),
+        )
+    except FileNotFoundError as exc:
+        print(red(str(exc)))
+        sys.exit(1)
+
+    print(bold(f"Library: {db_path}"))
+    if report.get("backup_path"):
+        print(f"  Backed up to: {report['backup_path']}")
+    print(green(f"  Folded {report['folded']} record(s) to media_type='video'."))
+    if getattr(args, "no_thumbnails", False):
+        print(dim("  Thumbnail regeneration skipped (--no-thumbnails)."))
+    else:
+        print(green(f"  Regenerated {report['thumbs_regenerated']} thumbnail(s)."))
+        if report["thumbs_skipped"]:
+            print(dim(f"  Skipped {report['thumbs_skipped']} (missing source/thumbnail path)."))
+        if report["thumbs_failed"]:
+            print(yellow(f"  {report['thumbs_failed']} thumbnail(s) failed to render — left as-is."))
+
+
 # ── run ───────────────────────────────────────────────────────────────────────
 
 def cmd_run(args):
@@ -938,6 +998,12 @@ def cmd_run(args):
         sys.exit(1)
 
     store  = HistoryStore()
+    # Library-by-default: the worker calls store.append(record) internally to
+    # register the result in the Library (media store), so it appears in the
+    # GUI. Opt OUT with --no-library, which neutralizes that one append (the
+    # media file is still written to disk, just not tracked in the Library).
+    if getattr(args, "no_library", False):
+        store.append = lambda *a, **k: None
     prompt = args.prompt
     steps  = getattr(args, "steps", 30)
     seed   = getattr(args, "seed",  -1)
@@ -1102,6 +1168,21 @@ def _build_parser() -> argparse.ArgumentParser:
     # recover
     sub.add_parser("recover", help="List server jobs not in local history")
 
+    # convert-library
+    cl = sub.add_parser(
+        "convert-library",
+        help="Migrate/repair an older media library (media-type fold + thumbnail regen)",
+    )
+    cl.add_argument("--apply", action="store_true",
+                    help="Perform the conversion (default: dry run, nothing written)")
+    cl.add_argument("--db", default=None, metavar="PATH",
+                    help="Path to media.db (default: the standard library path, "
+                         "~/.local/share/tt-video-gen/media.db)")
+    cl.add_argument("--no-thumbnails", action="store_true", dest="no_thumbnails",
+                    help="Skip stale artgen thumbnail regeneration")
+    cl.add_argument("--backup", action="store_true",
+                    help="Copy the DB aside before mutating it (only meaningful with --apply)")
+
     # artgen
     _build_artgen_parser(sub)
 
@@ -1143,6 +1224,9 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--neg",   default="", metavar="NEG_PROMPT")
     r.add_argument("--model", default="video",
                    choices=["video", "image", "animate", "skyreels", "mochi"])
+    r.add_argument("--no-library", dest="no_library", action="store_true",
+                   help="Do NOT register the result into the Library — it IS "
+                        "saved there by default so it shows up in the GUI.")
 
     # generate
     gen = sub.add_parser(
@@ -1202,6 +1286,7 @@ def main():
         "server":   cmd_server,
         "logs":     cmd_logs,
         "recover":          cmd_recover,
+        "convert-library":  cmd_convert_library,
         "run":              cmd_run,
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,

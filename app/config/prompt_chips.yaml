@@ -181,3 +181,351 @@
       text: "perfectly symmetrical composition"
       tip: "Mirror-perfect balance"
       for: [image]
+
+# ── Feeling (shared across all artgen types) ─────────────────────────────────
+# Cross-type mood bank -- reaches every artgen generator via load_chips_for_artgen.
+
+- name: Feeling
+  for: [artgen]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "serene"
+      text: "serene, unhurried"
+      tip: "Calm, still, at ease"
+
+    - label: "chaotic"
+      text: "chaotic energy"
+      tip: "Restless, tangled, alive"
+
+    - label: "nostalgic"
+      text: "nostalgic, faded like an old photograph"
+      tip: "Wistful, half-remembered"
+
+    - label: "dreamlike"
+      text: "dreamlike, surreal logic"
+      tip: "Soft edges, impossible geometry"
+
+    - label: "stark"
+      text: "stark, minimal, unadorned"
+      tip: "Bare, exacting, no excess"
+
+    - label: "lush"
+      text: "lush, saturated, overgrown"
+      tip: "Abundant color and texture"
+
+# ── Palette (color-scheme artgen) ────────────────────────────────────────────
+
+- name: Mood
+  for: [palette]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "moody"
+      text: "moody, low-key"
+      tip: "Shadowed, brooding"
+
+    - label: "sun-bleached"
+      text: "sun-bleached, washed out"
+      tip: "Faded by light and time"
+
+    - label: "neon-noir"
+      text: "neon-noir"
+      tip: "Electric color against deep dark"
+
+    - label: "pastel"
+      text: "soft pastel"
+      tip: "Gentle, powdery tones"
+
+    - label: "jewel-tone"
+      text: "rich jewel tones"
+      tip: "Saturated ruby, emerald, sapphire"
+
+    - label: "earthy"
+      text: "earthy, natural tones"
+      tip: "Clay, moss, bark, stone"
+
+- name: Era
+  for: [palette]
+  chips:
+    - label: "Y2K"
+      text: "Y2K, chrome and cyber-optimism"
+      tip: "Early-2000s digital sheen"
+
+    - label: "art-deco"
+      text: "art-deco"
+      tip: "Gilded geometric glamour"
+
+    - label: "vaporwave"
+      text: "vaporwave"
+      tip: "Pink-and-cyan retro-futurism"
+
+    - label: "70s film"
+      text: "1970s film stock"
+      tip: "Warm grain, muted contrast"
+
+- name: Source
+  for: [palette]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "coral reef"
+      text: "colors of a coral reef"
+      tip: "Vivid marine hues"
+
+    - label: "autumn forest"
+      text: "colors of an autumn forest"
+      tip: "Rust, gold, deep green"
+
+    - label: "city at dusk"
+      text: "colors of a city at dusk"
+      tip: "Neon against fading light"
+
+    - label: "desert dawn"
+      text: "colors of a desert at dawn"
+      tip: "Sand, rose, pale sky"
+
+- name: Harmony
+  for: [palette]
+  chips:
+    - label: "complementary"
+      text: "complementary color harmony"
+      tip: "Opposites on the color wheel"
+
+    - label: "monochrome"
+      text: "monochrome, one hue in many shades"
+      tip: "A single color, fully explored"
+
+    - label: "analogous"
+      text: "analogous color harmony"
+      tip: "Neighboring hues, unified feel"
+
+    - label: "high-contrast"
+      text: "high-contrast, clashing accents"
+      tip: "Bold, deliberate friction"
+
+# ── Verse (poem/text artgen) ─────────────────────────────────────────────────
+
+- name: Form
+  for: [verse]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "haiku"
+      text: "a haiku"
+      tip: "Three lines, 5-7-5"
+
+    - label: "sonnet"
+      text: "a sonnet"
+      tip: "Fourteen lines, turning argument"
+
+    - label: "free verse"
+      text: "free verse, no fixed meter"
+      tip: "Unrhymed, unmetered"
+
+    - label: "litany"
+      text: "a litany, repeating refrain"
+      tip: "Chant-like accumulation"
+
+- name: Tone
+  for: [verse]
+  chips:
+    - label: "elegiac"
+      text: "elegiac, mourning what's lost"
+      tip: "A lament"
+
+    - label: "playful"
+      text: "playful, light-footed"
+      tip: "Wit and lightness"
+
+    - label: "ominous"
+      text: "ominous, foreboding"
+      tip: "Something waits beneath"
+
+    - label: "tender"
+      text: "tender, gentle"
+      tip: "Close, careful, warm"
+
+- name: Voice
+  for: [verse]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "first-person"
+      text: "written in first person"
+      tip: "An 'I' speaking directly"
+
+    - label: "oracular"
+      text: "oracular, prophetic voice"
+      tip: "Speaking as if foretelling"
+
+    - label: "a letter"
+      text: "written as a letter to someone"
+      tip: "Addressed, intimate"
+
+    - label: "overheard"
+      text: "as if overheard, half in the middle of things"
+      tip: "A fragment caught in passing"
+
+# ── ANSI (text-mode / terminal art) ──────────────────────────────────────────
+
+- name: Scene
+  for: [ansi]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "demoscene"
+      text: "demoscene style"
+      tip: "90s PC-demo bravado"
+
+    - label: "cyberpunk terminal"
+      text: "cyberpunk terminal"
+      tip: "Hacked-console vibe"
+
+    - label: "90s BBS"
+      text: "1990s BBS ANSI art"
+      tip: "Dial-up bulletin board era"
+
+    - label: "amber CRT"
+      text: "amber monochrome CRT"
+      tip: "Old-terminal glow"
+
+- name: Subject
+  for: [ansi]
+  chips:
+    - label: "dragon"
+      text: "a dragon"
+      tip: "Classic BBS centerpiece"
+
+    - label: "skull"
+      text: "a skull"
+      tip: "Menacing, iconic"
+
+    - label: "spaceship"
+      text: "a spaceship"
+      tip: "Sleek sci-fi silhouette"
+
+    - label: "logo"
+      text: "a bold logo mark"
+      tip: "Crisp, brand-like shape"
+
+- name: Look
+  for: [ansi]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "minimal"
+      text: "minimal, sparse linework"
+      tip: "Few strokes, lots of void"
+
+    - label: "dense"
+      text: "dense, packed detail"
+      tip: "Every cell doing work"
+
+    - label: "neon-on-black"
+      text: "neon-on-black"
+      tip: "Electric color against void"
+
+# ── Landscape (scenic artgen) ────────────────────────────────────────────────
+
+- name: Biome
+  for: [landscape]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "alpine"
+      text: "alpine, jagged peaks"
+      tip: "High-mountain terrain"
+
+    - label: "tundra"
+      text: "tundra, wind-scoured and open"
+      tip: "Cold, treeless expanse"
+
+    - label: "archipelago"
+      text: "archipelago, scattered islands"
+      tip: "Sea-broken land"
+
+    - label: "dunes"
+      text: "dunes, wind-carved sand"
+      tip: "Desert wave forms"
+
+- name: Light
+  for: [landscape]
+  chips:
+    - label: "golden hour"
+      text: "golden hour light"
+      tip: "Warm low-angle sun"
+
+    - label: "blue hour"
+      text: "blue hour, just after sunset"
+      tip: "Cool twilight calm"
+
+    - label: "storm-front"
+      text: "storm-front light, dark sky and one shaft of sun"
+      tip: "Dramatic weather break"
+
+- name: Style
+  for: [landscape]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "ukiyo-e"
+      text: "ukiyo-e woodblock style"
+      tip: "Japanese print tradition"
+
+    - label: "matte-painting"
+      text: "matte-painting, cinematic scale"
+      tip: "Grand, composited vista"
+
+# ── Codeart (generative code/ASCII artgen) ───────────────────────────────────
+
+- name: Structure
+  for: [codeart]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "recursive"
+      text: "recursive, self-similar structure"
+      tip: "Patterns within patterns"
+
+    - label: "generative grid"
+      text: "generative grid, procedural tiling"
+      tip: "Systematic repetition"
+
+    - label: "glitch"
+      text: "glitch aesthetic, broken symmetry"
+      tip: "Deliberate digital corruption"
+
+    - label: "organic algorithm"
+      text: "organic algorithmic form, like growth"
+      tip: "Rule-based but lifelike"
+
+# ── Freeform (open-ended artgen) ─────────────────────────────────────────────
+
+- name: Spark
+  for: [freeform]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "unexpected pairing"
+      text: "an unexpected pairing of two unrelated things"
+      tip: "Collide two ideas"
+
+    - label: "small and strange"
+      text: "something small and strange, easy to miss"
+      tip: "Quiet, odd detail"
+
+    - label: "impossible object"
+      text: "an impossible object or place"
+      tip: "Defies its own logic"

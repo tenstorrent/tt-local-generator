@@ -31,12 +31,62 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 
 from artgen import ArtGenerator, register
+
+
+@dataclass
+class ChipParams:
+    """Per-chip generation parameters for a multi-chip run."""
+    prompt: str
+    seed: int
+    temporal_alpha: float
+    motion_adapter_alpha: float
+
+
+def _linspace(lo: float, hi: float, n: int) -> "list[float]":
+    """n evenly spaced values from lo to hi inclusive (n>=1)."""
+    if n <= 1:
+        return [lo]
+    return [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+
+
+def build_remix_plan(
+    *,
+    base_prompt: str,
+    base_seed: int,
+    base_temporal_alpha: float,
+    base_motion_alpha: float,
+    num_chips: int,
+    per_chip_prompts: "list[str] | None" = None,
+    seed_spread: int = 1,
+    ramp: str = "none",
+    ramp_lo: float = 0.0,
+    ramp_hi: float = 1.0,
+) -> "list[ChipParams]":
+    """Build a per-chip plan for Remix mode. See module docstring / spec."""
+    prompts = list(per_chip_prompts or [])
+    temporal = _linspace(ramp_lo, ramp_hi, num_chips) if ramp == "temporal" \
+        else [base_temporal_alpha] * num_chips
+    motion = _linspace(ramp_lo, ramp_hi, num_chips) if ramp == "motion" \
+        else [base_motion_alpha] * num_chips
+    plan: list[ChipParams] = []
+    for i in range(num_chips):
+        p = prompts[i] if i < len(prompts) and prompts[i] else base_prompt
+        plan.append(ChipParams(
+            prompt=p,
+            seed=base_seed + i * seed_spread,
+            temporal_alpha=temporal[i],
+            motion_adapter_alpha=motion[i],
+        ))
+    return plan
+
 
 # Structured log for every animatediff run — written alongside generated GIFs
 # so failures are self-contained and don't require a running GUI to diagnose.
@@ -97,6 +147,15 @@ class AnimateDiffGenerator(ArtGenerator):
     name = "animatediff"
     description = "Blackhole-accelerated animated GIF via TTNN UNet with cross-frame temporal attention"
     output_ext = ".gif"
+    # Bypasses the LLM pipeline entirely (see build_prompt below) — a
+    # self-contained Blackhole diffusion GIF generator, not a chat-LLM
+    # consumer. Overriding the ArtGenerator base's True default lets
+    # pipeline_engine._backend_for skip starting/switching a chat-LLM server
+    # for this generator, and lets create_mediums.default_mediums thread the
+    # same fact into the Create surface's Medium.uses_llm (CreateView's
+    # scoped model dropdown then offers AnimateDiff itself as the model
+    # instead of asking the user to pick a chat model it never uses).
+    uses_llm = False
 
     def build_prompt(self, args) -> str:
         # Not used — animatediff bypasses the LLM pipeline entirely.
@@ -151,6 +210,46 @@ class AnimateDiffGenerator(ArtGenerator):
                             "Skipping up1 up2 is fastest with minimal quality loss.")
         p.add_argument("--count", type=int, default=1,
                        help="Number of GIFs to generate in sequence (default: 1)")
+        # Multi-chip (run_subprocess already accepts these; flags were missing)
+        p.add_argument("--multichip-mode", default="off", dest="multichip_mode",
+                       choices=["off", "remix", "coherent"],
+                       help="Multi-chip strategy: off (single chip), remix "
+                            "(independent per-chip clips, stitched), coherent "
+                            "(sequential latent-chained segments). Default: off")
+        p.add_argument("--per-chip-prompt", action="append", default=None,
+                       dest="per_chip_prompts", metavar="TEXT",
+                       help="Per-chip prompt override for --multichip-mode remix "
+                            "(repeatable, one per chip in order; falls back to "
+                            "--prompt for chips without an override)")
+        p.add_argument("--seed-spread", type=int, default=1, dest="seed_spread",
+                       help="Per-chip seed increment for remix mode (default: 1)")
+        p.add_argument("--ramp", default="none", choices=["none", "temporal", "motion"],
+                       help="Interpolate a parameter across chips in remix mode: "
+                            "temporal (temporal-alpha) or motion (motion-adapter-alpha). "
+                            "Default: none")
+        p.add_argument("--ramp-lo", type=float, default=0.0, dest="ramp_lo",
+                       help="Ramp low endpoint (default: 0.0)")
+        p.add_argument("--ramp-hi", type=float, default=1.0, dest="ramp_hi",
+                       help="Ramp high endpoint (default: 1.0)")
+        p.add_argument("--stitch-order", default="interleave", dest="stitch_order",
+                       choices=["interleave", "concatenate"],
+                       help="How remix-mode per-chip clips are combined into the "
+                            "final GIF (default: interleave)")
+        # Prompt travel / looping
+        p.add_argument("--prompt-schedule", action="append", default=None,
+                       dest="prompt_schedule", metavar="FRAME:PROMPT",
+                       help="Keyframe a prompt change at a given frame index "
+                            "(repeatable, e.g. --prompt-schedule 0:'spring meadow' "
+                            "--prompt-schedule 16:'snowfall'), forwarded to generate.py "
+                            "for the single-chip path and for --multichip-mode remix "
+                            "(identically to every chip). NOT yet supported with "
+                            "--multichip-mode coherent — it is dropped (with a "
+                            "warning) for that mode.")
+        p.add_argument("--loop", default="none", choices=["none", "seamless"],
+                       help="Post-process the final GIF into a seamless loop by "
+                            "crossfading its last few frames into its first few "
+                            "(default: none). Applied once to the single-chip, "
+                            "remix-stitched, or coherent-stitched output.")
 
     def default_output(self) -> Path:
         return Path("animatediff.gif")
@@ -250,6 +349,7 @@ def _build_cmd(
     motion_adapter: str | None,
     motion_adapter_alpha: float,
     motion_adapter_skip: list[str] | None,
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
 ) -> list[str]:
     """Assemble the generate.py command list for a single-chip invocation."""
     cmd = [
@@ -284,39 +384,171 @@ def _build_cmd(
         cmd += ["--motion-adapter-alpha", str(motion_adapter_alpha)]
         if motion_adapter_skip:
             cmd += ["--motion-adapter-skip"] + list(motion_adapter_skip)
+    if prompt_schedule:
+        for frame, keyframe_prompt in prompt_schedule:
+            cmd += ["--prompt-schedule", f"{frame}:{keyframe_prompt}"]
     return cmd
 
 
-def _stitch_gifs(shard_paths: list[Path], out_path: Path) -> bool:
-    """Concatenate GIF frames from multiple chip shards into a single output GIF.
+def _multichip_cmds(
+    *,
+    script: Path,
+    shard_paths: "list[Path]",
+    mode: str,
+    negative_prompt: str,
+    frames_per_chip: int,
+    steps: int,
+    lightning: bool,
+    lightning_steps: int,
+    motion_adapter: "str | None",
+    motion_adapter_skip: "list[str] | None",
+    chips: "list[ChipParams]",
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
+) -> "list[list[str]]":
+    """Build one generate.py argv per chip from the per-chip plan.
 
-    Each shard contains consecutive frames from one chip (chip 0 → frames 0..K-1,
-    chip 1 → frames K..2K-1, etc.). Correct stitching is simple concatenation in
-    chip order, NOT interleaving.
+    Each chip gets its own prompt/seed/temporal_alpha/motion_adapter_alpha
+    (from `chips[i]`) and `--device-id i`; every other flag (mode, negative
+    prompt, frame count, steps, lightning, motion adapter name/skip list) is
+    shared across all chips. `prompt_schedule`, if given, is likewise the SAME
+    for every chip — prompt travel is a time-axis feature applied within each
+    chip's own frames, while per-chip prompts remain the spatial (across-chip)
+    lever; the two features coexist rather than compete.
+    """
+    cmds: list[list[str]] = []
+    for i, cp in enumerate(chips):
+        cmds.append(_build_cmd(
+            script=script, out_path=shard_paths[i], mode=mode,
+            prompt=cp.prompt, negative_prompt=negative_prompt,
+            frames=frames_per_chip, steps=steps, seed=cp.seed,
+            temporal_alpha=cp.temporal_alpha,
+            lightning=lightning, lightning_steps=lightning_steps,
+            device_id=i,
+            chain_from=None, chain_save=None, chain_alpha=0.6,
+            motion_adapter=motion_adapter,
+            motion_adapter_alpha=cp.motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+            prompt_schedule=prompt_schedule,
+        ))
+    return cmds
+
+
+def _autovary_prompts(base: str, n: int, call_fn) -> "list[str]":
+    """Ask the LLM for n themed one-line variations of *base*.
+
+    Returns exactly n prompts. On any error or shortfall, unfilled slots use
+    *base* — never raises, never blocks generation.
+    """
+    try:
+        system = (
+            "You write short, vivid image/animation prompt variations. "
+            "Given a base prompt, output exactly N variations, one per line, "
+            "no numbering, no commentary — each a single line."
+        )
+        user = f"Base prompt: {base}\nWrite {n} variations, one per line."
+        raw = call_fn(user, system=system, max_tokens=256) or ""
+        lines = [ln.strip(" -\t") for ln in raw.splitlines() if ln.strip()]
+        out = lines[:n]
+    except Exception:
+        _log.exception("auto-vary failed; falling back to base prompt")
+        out = []
+    while len(out) < n:
+        out.append(base)
+    return out
+
+
+def _stitch_gifs(shard_paths: list[Path], out_path: Path, interleave: bool = False) -> bool:
+    """Combine GIF frames from multiple chip/segment shards into a single output GIF.
+
+    Shards are combined in one of two orderings — this makes no assumption
+    about temporal frame-slicing. Each shard is an independent render (its
+    own chip's clip in Remix mode, or its own segment in Coherent mode), not
+    a contiguous slice of one longer clip:
+      - interleave=False (default): shards are concatenated in the given
+        order — shard 0's frames in full, then shard 1's, etc. Used by
+        Coherent mode (segments play back-to-back to form one continuous
+        clip) and by Remix mode when `stitch_order="concatenate"`.
+      - interleave=True: frames are round-robined across shards (shard0[0],
+        shard1[0], shard2[0], ..., shard0[1], shard1[1], ...), skipping shards
+        once they run out of frames. This produces the "glitchy" look Remix
+        mode is named for (`stitch_order="interleave"`, the default there) —
+        each output frame hops between distinct per-chip renders.
+
+    Frames are preserved as RGB (not palette-native) so all shards can share a
+    single output palette (quantized from a composite sample of every frame),
+    avoiding banding from re-quantizing every frame independently. Per-frame
+    `duration` is preserved from each source frame, in its position in the
+    final ordering.
 
     Returns True on success. Leaves out_path untouched on failure.
     """
     try:
         from PIL import Image
 
-        # Collect all frames from each shard in chip order
-        all_frames: list[Image.Image] = []
+        # Collect each shard's frames + durations separately so both orderings
+        # (concatenate vs interleave) can be built from the same data.
+        per_shard_frames: list[list[Image.Image]] = []
+        per_shard_durs: list[list[int]] = []
         for p in shard_paths:
+            shard_frames: list[Image.Image] = []
+            shard_durs: list[int] = []
             with Image.open(p) as img:
+                default_dur = int(img.info.get("duration", 100) or 100)
                 for i in range(getattr(img, "n_frames", 1)):
                     img.seek(i)
-                    all_frames.append(img.copy().convert("RGBA"))
+                    shard_frames.append(img.copy().convert("RGB"))
+                    shard_durs.append(int(img.info.get("duration", default_dur) or default_dur))
+            per_shard_frames.append(shard_frames)
+            per_shard_durs.append(shard_durs)
 
-        interleaved = all_frames
+        if interleave:
+            import itertools
 
-        if not interleaved:
+            # Pair each shard's frames with their own durations up front, so
+            # zip_longest can walk both in lockstep without any index lookups
+            # back into the per_shard_* lists.
+            per_shard_pairs = [
+                list(zip(frames, durs))
+                for frames, durs in zip(per_shard_frames, per_shard_durs)
+            ]
+            ordered: list[Image.Image] = []
+            ordered_durs: list[int] = []
+            for tup in itertools.zip_longest(*per_shard_pairs):
+                for pair in tup:
+                    if pair is not None:
+                        fr, dur = pair
+                        ordered.append(fr)
+                        ordered_durs.append(dur)
+        else:
+            ordered = [f for shard in per_shard_frames for f in shard]
+            ordered_durs = [d for shard in per_shard_durs for d in shard]
+
+        if not ordered:
             return False
 
+        # Shared palette: quantize a composite sampled from EVERY frame, then
+        # apply that one palette to all frames. This keeps colors consistent
+        # across shard boundaries (avoids per-frame re-quantization banding)
+        # without crushing later frames' colors. Building the palette from
+        # frame 0 alone (as a naive "shared palette" might) is a real trap:
+        # if frame 0 is a narrow-gamut chip render (e.g. mostly one hue),
+        # its quantized palette only contains colors it happened to use, and
+        # every subsequent frame gets remapped to its NEAREST available
+        # color — silently crushing distinct colors from other chips/frames
+        # onto whatever frame 0 contained. Sampling all frames avoids that.
+        thumb = (64, 64)
+        composite = Image.new("RGB", (thumb[0], thumb[1] * len(ordered)))
+        for i, fr in enumerate(ordered):
+            composite.paste(fr.resize(thumb), (0, i * thumb[1]))
+        palette_src = composite.quantize(colors=256)
+        quantized = [f.quantize(palette=palette_src) for f in ordered]
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        interleaved[0].save(
+        quantized[0].save(
             out_path,
             save_all=True,
-            append_images=interleaved[1:],
+            append_images=quantized[1:],
+            duration=ordered_durs,
             loop=0,
             format="GIF",
         )
@@ -326,144 +558,168 @@ def _stitch_gifs(shard_paths: list[Path], out_path: Path) -> bool:
         return False
 
 
-def run_subprocess(
-    prompt: str,
+def _apply_seamless_loop(gif_path: Path, k: int) -> bool:
+    """Crossfade the last `k` frames of `gif_path` into its first `k` frames,
+    in place, so looped playback (last frame -> first frame on restart)
+    doesn't read as a hard cut.
+
+    For offset j in 0..k-1, the tail frame at index (N-k+j) is alpha-blended
+    toward the head frame at index j:
+
+        frame[N-k+j] = (1-a_j) * frame[N-k+j]  +  a_j * frame[j]
+
+    with a_j = (j+1)/(k+1) ramping from just above 0 (the first tail frame,
+    barely touched) to just below 1 (the very last frame, nearly replaced by
+    its paired head frame) — never hitting either endpoint exactly, so no
+    tail frame becomes a byte-identical duplicate of a head frame.
+
+    Frame count, per-frame duration, and loop=0 are all preserved; only pixel
+    content of the k tail frames changes. Uses the same shared-palette
+    quantization approach as `_stitch_gifs` (composite-sample the whole clip,
+    quantize once, apply to every frame) to avoid re-quantization banding.
+
+    Returns True on success. On any failure (missing file, corrupt GIF, too
+    few frames, encode error mid-write, etc.) the file is left untouched and
+    False is returned — mirrors `_stitch_gifs`'s defensive style so a failed
+    crossfade never corrupts an otherwise-valid GIF.
+
+    Implementation note: the final save writes to a temp file in the SAME
+    directory as `gif_path`, then atomically `os.replace()`s it over the
+    original. PIL's `Image.save()` opens its destination in "w+b" — which
+    truncates it — before the encoder writes a single frame. Saving directly
+    to `gif_path` would mean an encode failure partway through (corrupt frame
+    data, OOM, etc.) leaves a truncated/partial file where the valid original
+    used to be, even though the function still returns False claiming the
+    file was untouched. Writing to a sibling temp file confines that risk to
+    the temp file; `os.replace()` on the same filesystem is atomic, so
+    `gif_path` either keeps its original bytes or becomes the fully-written
+    new file — never something in between.
+    """
+    import os
+    import tempfile
+
+    tmp_path: "Path | None" = None
+    try:
+        from PIL import Image
+
+        frames: list[Image.Image] = []
+        durs: list[int] = []
+        with Image.open(gif_path) as img:
+            default_dur = int(img.info.get("duration", 100) or 100)
+            n = getattr(img, "n_frames", 1)
+            for i in range(n):
+                img.seek(i)
+                frames.append(img.copy().convert("RGB"))
+                durs.append(int(img.info.get("duration", default_dur) or default_dur))
+
+        if n < 2:
+            return False
+
+        # Clamp k so the head and tail windows never overlap each other or
+        # themselves (e.g. a caller-supplied k larger than n/2 on a very
+        # short clip) — better to crossfade a smaller window than to blend a
+        # frame into itself or double-blend an already-blended frame.
+        k = max(1, min(k, n // 2))
+
+        for j in range(k):
+            a = (j + 1) / (k + 1)
+            tail_idx = n - k + j
+            frames[tail_idx] = Image.blend(frames[tail_idx], frames[j], a)
+
+        # Shared palette across every frame (same rationale as _stitch_gifs:
+        # a composite sample avoids per-frame re-quantization banding and
+        # avoids crushing colors onto one narrow-gamut frame's palette).
+        thumb = (64, 64)
+        composite = Image.new("RGB", (thumb[0], thumb[1] * len(frames)))
+        for i, fr in enumerate(frames):
+            composite.paste(fr.resize(thumb), (0, i * thumb[1]))
+        palette_src = composite.quantize(colors=256)
+        quantized = [f.quantize(palette=palette_src) for f in frames]
+
+        fd, tmp_name = tempfile.mkstemp(
+            suffix=".gif", prefix=".seamless_tmp_", dir=str(gif_path.parent)
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        quantized[0].save(
+            tmp_path,
+            save_all=True,
+            append_images=quantized[1:],
+            duration=durs,
+            loop=0,
+            format="GIF",
+        )
+        os.replace(tmp_path, gif_path)
+        tmp_path = None  # replaced onto gif_path; nothing left to clean up
+        return True
+    except Exception:
+        _log.exception("seamless-loop crossfade failed for %s", gif_path)
+        return False
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _finalize_seamless_loop(
     out_path: Path,
-    mode: str = "blackhole",
-    frames: int = 8,
-    steps: int = 25,
-    seed: int = 42,
-    negative_prompt: str = "blurry, low quality",
-    temporal_alpha: float = 0.35,
-    lightning: bool = False,
-    lightning_steps: int = 4,
-    device_id: int | None = None,
-    chain_from: str | None = None,
-    chain_save: str | None = None,
-    chain_alpha: float = 0.6,
-    motion_adapter: str | None = None,
-    motion_adapter_alpha: float = 1.0,
-    motion_adapter_skip: list[str] | None = None,
+    loop: str,
+    frames: int,
     on_progress: Callable[[str], None] | None = None,
-    timeout: int = 1800,
-    num_chips: int | None = None,
-) -> tuple[bool, str]:
-    """Run the unified generate.py, using all available Blackhole chips in parallel.
+) -> None:
+    """Apply the seamless-loop crossfade to a just-produced GIF, if requested.
 
-    Multi-chip strategy: N separate processes, one per chip (--device-id 0..N-1).
-    Each process generates frames//N consecutive frames from the same prompt and
-    seed, then their GIF shards are concatenated in order.  This is frame-level
-    data parallelism — each chip runs a full independent denoising run on its
-    slice, not tensor-parallelism within a single UNet call.
+    Called once at each of run_subprocess's three success returns (single-chip,
+    remix-stitched, coherent-stitched) so the post-process isn't duplicated
+    three times. A no-op when loop != "seamless". A crossfade failure is
+    non-fatal — it's logged (and surfaced via on_progress if given) but the
+    base GIF is already valid, so the caller still reports success.
+    """
+    if loop != "seamless":
+        return
+    k = max(1, min(4, frames // 4))
+    if not _apply_seamless_loop(out_path, k):
+        _log.warning(
+            "seamless-loop crossfade failed for %s (k=%d) — GIF remains valid but not loop-blended",
+            out_path, k,
+        )
+        if on_progress:
+            on_progress("Note: seamless-loop post-process failed; GIF is valid but not loop-blended")
 
-    Background: the SD demo UNet (wormhole) calls ttnn.to_torch() without a
-    mesh_composer in its weight-loading path, so ShardTensorToMesh across a
-    multi-chip MeshDevice crashes at model-load time.  The correct multi-chip
-    approach is N independent 1×1 MeshDevice processes.  TTNN is also not
-    thread-safe, so even the create_submeshes path must run chips sequentially.
-    Separate processes are the only way to get true concurrent chip utilisation.
 
-    When mode=="blackhole", device_id is None, and num_chips > 1:
-      - frames must be divisible by num_chips (falls back to single-chip if not)
-      - chain_from/chain_save are single-chip only (fall back to single-chip)
-      - All processes run concurrently; wall-clock time ≈ single-chip time.
+def _run_one(
+    cmd: "list[str]",
+    *,
+    timeout: int,
+    env: dict,
+    run_id: str,
+    on_progress: Callable[[str], None] | None,
+) -> "tuple[bool, str]":
+    """Run one generate.py subprocess to completion, draining its stdout.
 
-    For single-chip runs, cpu/sim modes, or explicit device_id pins: runs a
-    single subprocess as before.
+    This is the single-process run+drain+timeout block shared by the
+    single-chip path in run_subprocess() and each per-segment invocation in
+    _run_coherent_chain(). Extracted so there is exactly one Popen/drain
+    implementation instead of duplicating it per caller.
 
-    timeout applies to the slowest chip (all processes must finish within it).
+    Writes a run log to `_LOG_DIR / f"run_{run_id}.log"` (callers that need
+    the traditional `run_{run_id}_{out_path.stem}.log` naming — the
+    single-chip path — pass a run_id that already has the stem folded in).
+    Streams matching lines to on_progress the same way the original
+    single-chip path did (Frame/Step/Generating/Loading/chain/adapter/
+    lightning/Error/Traceback/fatal/ARC).
+
+    Does NOT check whether the expected output file was produced — that is
+    caller-specific (single-chip checks out_path; the coherent chain relies
+    on _stitch_gifs failing if a segment's GIF is missing) so it stays out
+    of this shared helper.
 
     Returns (success, error_message). error_message is "" on success.
     """
-    _ensure_log_handler()
-    import threading, tempfile, datetime as _dt
-
-    script = _SCRIPT_DIR / "examples" / "generate.py"
-    if not script.exists():
-        return False, (
-            f"AnimateDiff generate.py not found: {script}\n"
-            "Ensure the vendor/tt-animatediff submodule is initialised (git submodule update --init)."
-        )
-
-    if not _PYTHON.exists():
-        return False, (
-            f"tt-metal Python env not found: {_PYTHON}\n"
-            "Run: cd ~/tt-metal && ./build_metal.sh"
-        )
-
-    import os
-    env = os.environ.copy()
-    env["TT_METAL_ARCH_NAME"] = "blackhole"
-    env["TT_METAL_HOME"] = str(_TT_METAL)
-    env["PYTHONUNBUFFERED"] = "1"
-
-    run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    _log.info("run_start run_id=%s mode=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
-              run_id, mode, out_path, prompt, frames, steps, seed)
-
-    # ── Decide: multi-chip parallel or single-chip ────────────────────────────
-    effective_chips = num_chips if (num_chips and num_chips > 1) else 1
-    use_multi = (
-        mode == "blackhole"
-        and device_id is None
-        and effective_chips > 1
-        and frames % effective_chips == 0
-        # chain continuity only makes sense on a single chip for now
-        and chain_from is None
-        and chain_save is None
-    )
-
-    if mode == "blackhole" and device_id is None and effective_chips > 1 and frames % effective_chips != 0:
-        _log.warning(
-            "frames=%d is not divisible by num_chips=%d — falling back to single chip. "
-            "Choose a frame count divisible by %d for multi-chip: %s",
-            frames, effective_chips, effective_chips,
-            [effective_chips * k for k in range(1, 9)],
-        )
-        if on_progress:
-            on_progress(
-                f"Note: {frames} frames not divisible by {effective_chips} chips — "
-                f"running on chip 0 only. Use a multiple of {effective_chips} for full parallelism."
-            )
-
-    if use_multi:
-        return _run_multi_chip(
-            script=script,
-            out_path=out_path,
-            mode=mode,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            frames=frames,
-            steps=steps,
-            seed=seed,
-            temporal_alpha=temporal_alpha,
-            lightning=lightning,
-            lightning_steps=lightning_steps,
-            num_chips=effective_chips,
-            motion_adapter=motion_adapter,
-            motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip,
-            on_progress=on_progress,
-            timeout=timeout,
-            run_id=run_id,
-            env=env,
-        )
-
-    # ── Single-chip path ──────────────────────────────────────────────────────
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = _build_cmd(
-        script=script, out_path=out_path, mode=mode,
-        prompt=prompt, negative_prompt=negative_prompt,
-        frames=frames, steps=steps, seed=seed, temporal_alpha=temporal_alpha,
-        lightning=lightning, lightning_steps=lightning_steps,
-        device_id=device_id,
-        chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
-        motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-        motion_adapter_skip=motion_adapter_skip,
-    )
-
-    run_log_path = _LOG_DIR / f"run_{run_id}_{out_path.stem}.log"
-    _log.info("single-chip cmd: %s", " ".join(str(c) for c in cmd))
+    run_log_path = _LOG_DIR / f"run_{run_id}.log"
+    _log.info("cmd run_id=%s: %s", run_id, " ".join(str(c) for c in cmd))
 
     all_output: list[str] = []
 
@@ -520,10 +776,294 @@ def run_subprocess(
         _log.error("run_failed run_id=%s rc=%d log=%s", run_id, rc, run_log_path)
         return False, msg
 
+    return True, ""
+
+
+def run_subprocess(
+    prompt: str,
+    out_path: Path,
+    mode: str = "blackhole",
+    frames: int = 8,
+    steps: int = 25,
+    seed: int = 42,
+    negative_prompt: str = "blurry, low quality",
+    temporal_alpha: float = 0.35,
+    lightning: bool = False,
+    lightning_steps: int = 4,
+    device_id: int | None = None,
+    chain_from: str | None = None,
+    chain_save: str | None = None,
+    chain_alpha: float = 0.6,
+    motion_adapter: str | None = None,
+    motion_adapter_alpha: float = 1.0,
+    motion_adapter_skip: list[str] | None = None,
+    on_progress: Callable[[str], None] | None = None,
+    timeout: int = 1800,
+    num_chips: int | None = None,
+    script: Path | None = None,
+    multichip_mode: str = "off",
+    per_chip_prompts: list[str] | None = None,
+    seed_spread: int = 1,
+    ramp: str = "none",
+    ramp_lo: float = 0.0,
+    ramp_hi: float = 1.0,
+    stitch_order: str = "interleave",
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
+    loop: str = "none",
+) -> tuple[bool, str]:
+    """Run the unified generate.py, optionally spreading work across Blackhole chips.
+
+    Multi-chip strategy: N separate processes, one per chip (--device-id 0..N-1),
+    coordinated per `multichip_mode` — there is no single "consecutive frame
+    slice" model. Off runs one chip; Remix has each chip render its OWN
+    independent clip (different seed/prompt/alpha) which are then stitched
+    together (interleaved or concatenated); Coherent runs chips sequentially,
+    each rendering the full frame count and latent-chaining from the previous
+    segment, producing one continuous animation N segments longer. See the
+    `multichip_mode` breakdown below for details. In every case this is
+    process-level parallelism/sequencing — each chip runs a full independent
+    denoising run, never tensor-parallelism within a single UNet call.
+
+    Background: the SD demo UNet (wormhole) calls ttnn.to_torch() without a
+    mesh_composer in its weight-loading path, so ShardTensorToMesh across a
+    multi-chip MeshDevice crashes at model-load time.  The correct multi-chip
+    approach is N independent 1×1 MeshDevice processes.  TTNN is also not
+    thread-safe, so even the create_submeshes path must run chips sequentially.
+    Separate processes are the only way to get true concurrent chip utilisation.
+
+    When mode=="blackhole", device_id is None, and num_chips > 1, `multichip_mode`
+    picks WHAT the chips do (guards below must all hold; otherwise this always
+    falls back to single-chip regardless of `multichip_mode`):
+      - "off"      — ignore num_chips; run the classic single-chip path.
+      - "remix"    — each chip renders an independent clip from its own plan
+                     entry (see `build_remix_plan`: per_chip_prompts, seed_spread,
+                     ramp/ramp_lo/ramp_hi control how chips diverge), then the
+                     shard GIFs are combined per `stitch_order` ("interleave"
+                     round-robins frames for the classic glitch look;
+                     "concatenate" plays each chip's clip back-to-back).
+      - "coherent" — chips are NOT used in parallel; instead num_chips becomes
+                     the segment count for `_run_coherent_chain`, which runs
+                     segments sequentially on one chip, latent-chaining each
+                     from the previous for visual continuity. Each segment
+                     renders the FULL `frames` count (not frames/num_segments),
+                     so the total output is `num_segments * frames` — Coherent
+                     produces a continuous animation N× LONGER than a single
+                     run, not the same length split into pieces.
+    Guards (required for either mode to engage; same as the old `use_multi`
+    gate, except the divisibility requirement is remix-only — see below):
+      - "remix" additionally requires frames to be divisible by num_chips,
+        since remix splits/stitches shard frames sized frames/num_chips each
+        (falls back to single-chip if not divisible; coherent has no such
+        requirement since every segment renders the full `frames` count)
+      - chain_from/chain_save are single-chip only (fall back to single-chip)
+
+    `script`, if given, overrides the auto-resolved generate.py path and skips
+    the existence check below (caller's responsibility) — used by tests to
+    inject a fake path without touching the filesystem.
+
+    For single-chip runs, cpu/sim modes, or explicit device_id pins: runs a
+    single subprocess as before.
+
+    timeout applies to the slowest chip (all processes must finish within it).
+    EXCEPTION (review M3): in `coherent` multi-chip mode, segments run
+    SEQUENTIALLY (segment N needs N-1's latents), and each segment gets the
+    full `timeout` on its own — so total wall-clock is bounded by
+    `num_segments * timeout`, not a single `timeout`. This is deliberate (a
+    per-segment budget could truncate a legitimately long chain); size any
+    UI-facing overall-timeout expectation accordingly.
+
+    `prompt_schedule` (list of (frame_index, prompt) tuples) is forwarded to
+    generate.py as repeated `--prompt-schedule FRAME:PROMPT` args — on the
+    single-chip path directly, and on the remix multi-chip path identically
+    to every chip (prompt travel is a time-axis feature within each chip's
+    own frames; per-chip prompts remain the spatial lever and the two
+    coexist). It is NOT threaded into the coherent multi-chip path.
+
+    `loop` ("none"|"seamless"): when "seamless", the final stitched/single
+    GIF is crossfaded via `_apply_seamless_loop()` right before every success
+    return (single-chip, remix-stitched, coherent-stitched) so it loops
+    without a visible seam. A crossfade failure only logs a warning — the
+    base GIF is already valid, so the run is still reported as successful.
+
+    Returns (success, error_message). error_message is "" on success.
+    """
+    _ensure_log_handler()
+    import tempfile, datetime as _dt
+
+    if script is None:
+        script = _SCRIPT_DIR / "examples" / "generate.py"
+        if not script.exists():
+            return False, (
+                f"AnimateDiff generate.py not found: {script}\n"
+                "Ensure the vendor/tt-animatediff submodule is initialised (git submodule update --init)."
+            )
+
+    if not _PYTHON.exists():
+        return False, (
+            f"tt-metal Python env not found: {_PYTHON}\n"
+            "Run: cd ~/tt-metal && ./build_metal.sh"
+        )
+
+    import os
+    env = os.environ.copy()
+    env["TT_METAL_ARCH_NAME"] = "blackhole"
+    env["TT_METAL_HOME"] = str(_TT_METAL)
+    env["PYTHONUNBUFFERED"] = "1"
+
+    run_id = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _log.info("run_start run_id=%s mode=%s out=%s prompt=%r frames=%d steps=%d seed=%d",
+              run_id, mode, out_path, prompt, frames, steps, seed)
+
+    # ── Decide: multi-chip (remix/coherent) or single-chip ────────────────────
+    # Replaces the old `use_multi` gate. Multi-chip requires blackhole + no pin
+    # + >1 chip + no chain continuity; `multichip_mode` then chooses remix
+    # (independent per-chip clips, stitched) vs coherent (sequential
+    # latent-chained segments) vs off (ignore num_chips entirely).
+    #
+    # The frames-divisible-by-chips requirement is REMIX-ONLY: remix splits
+    # `frames` into `frames // num_chips`-sized shards, one per chip, so an
+    # uneven split would silently drop frames. Coherent has no such
+    # constraint — every segment renders the FULL `frames` count (see
+    # `_run_coherent_chain`), so it routes regardless of divisibility.
+    effective_chips = num_chips if (num_chips and num_chips > 1) else 1
+    _base_ok = (
+        mode == "blackhole"
+        and device_id is None
+        and effective_chips > 1
+        # chain continuity only makes sense on a single chip for now
+        and chain_from is None
+        and chain_save is None
+    )
+    _remix_divisible = frames % effective_chips == 0
+    _multi_ok = _base_ok and (multichip_mode != "remix" or _remix_divisible)
+
+    if _base_ok and multichip_mode == "remix" and not _remix_divisible:
+        _log.warning(
+            "frames=%d is not divisible by num_chips=%d — falling back to single chip. "
+            "Choose a frame count divisible by %d for multi-chip remix: %s",
+            frames, effective_chips, effective_chips,
+            [effective_chips * k for k in range(1, 9)],
+        )
+        if on_progress:
+            on_progress(
+                f"Note: {frames} frames not divisible by {effective_chips} chips — "
+                f"running on chip 0 only. Use a multiple of {effective_chips} for full parallelism."
+            )
+
+    if _multi_ok and multichip_mode == "remix":
+        chips = build_remix_plan(
+            base_prompt=prompt,
+            base_seed=seed,
+            base_temporal_alpha=temporal_alpha,
+            base_motion_alpha=motion_adapter_alpha,
+            num_chips=effective_chips,
+            per_chip_prompts=per_chip_prompts,
+            seed_spread=seed_spread,
+            ramp=ramp,
+            ramp_lo=ramp_lo,
+            ramp_hi=ramp_hi,
+        )
+        return _run_multi_chip(
+            script=script,
+            out_path=out_path,
+            mode=mode,
+            chips=chips,
+            negative_prompt=negative_prompt,
+            frames=frames,
+            steps=steps,
+            lightning=lightning,
+            lightning_steps=lightning_steps,
+            num_chips=effective_chips,
+            motion_adapter=motion_adapter,
+            motion_adapter_skip=motion_adapter_skip,
+            on_progress=on_progress,
+            timeout=timeout,
+            run_id=run_id,
+            env=env,
+            interleave=(stitch_order == "interleave"),
+            prompt_schedule=prompt_schedule,
+            loop=loop,
+        )
+
+    if _multi_ok and multichip_mode == "coherent":
+        # Coherent's segment chain is built by _run_coherent_chain, which has
+        # no prompt_schedule parameter at all — full coherent prompt-travel
+        # (cross-segment, frame-offset-aware) is a future follow-up. Without
+        # this check, a caller passing both flags would have the schedule
+        # silently discarded with no indication anything was dropped. Warn
+        # once, here, right where the coherent path is selected, then proceed
+        # with everything else normal (schedule dropped).
+        if prompt_schedule:
+            _log.warning(
+                "prompt_schedule=%r requested with multichip_mode=coherent, but "
+                "coherent mode does not yet support prompt-schedule keyframes — "
+                "ignoring the schedule for this run.",
+                prompt_schedule,
+            )
+            if on_progress:
+                on_progress(
+                    "Note: --prompt-schedule is not yet supported in coherent "
+                    "multichip mode and is being ignored for this run."
+                )
+        return _run_coherent_chain(
+            script=script,
+            out_path=out_path,
+            mode=mode,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            frames=frames,
+            steps=steps,
+            seed=seed,
+            temporal_alpha=temporal_alpha,
+            lightning=lightning,
+            lightning_steps=lightning_steps,
+            num_segments=effective_chips,
+            motion_adapter=motion_adapter,
+            motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+            on_progress=on_progress,
+            timeout=timeout,
+            run_id=run_id,
+            env=env,
+            loop=loop,
+        )
+
+    # else: fall through to single-chip path (multichip_mode=="off", or the
+    # _multi_ok guards weren't met — e.g. non-divisible frames, a device_id
+    # pin, cpu/sim mode, or an active chain_from/chain_save).
+
+    # ── Single-chip path ──────────────────────────────────────────────────────
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = _build_cmd(
+        script=script, out_path=out_path, mode=mode,
+        prompt=prompt, negative_prompt=negative_prompt,
+        frames=frames, steps=steps, seed=seed, temporal_alpha=temporal_alpha,
+        lightning=lightning, lightning_steps=lightning_steps,
+        device_id=device_id,
+        chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
+        motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+        motion_adapter_skip=motion_adapter_skip,
+        prompt_schedule=prompt_schedule,
+    )
+
+    # run_id passed to _run_one folds in out_path.stem so the per-run log file
+    # keeps its traditional name (run_<run_id>_<stem>.log) — _run_one itself
+    # only knows the run_id string handed to it, not out_path.
+    single_run_id = f"{run_id}_{out_path.stem}"
+    run_log_path = _LOG_DIR / f"run_{single_run_id}.log"
+
+    ok, err = _run_one(
+        cmd, timeout=timeout, env=env, run_id=single_run_id, on_progress=on_progress,
+    )
+    if not ok:
+        return False, err
+
     if not out_path.exists():
         msg = f"Script exited 0 but no output file was produced (log: {run_log_path})"
         _log.error("run_no_output run_id=%s", run_id)
         return False, msg
+
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
 
     _log.info("run_success run_id=%s out=%s", run_id, out_path)
     return True, ""
@@ -533,33 +1073,42 @@ def _run_multi_chip(
     script: Path,
     out_path: Path,
     mode: str,
-    prompt: str,
+    chips: "list[ChipParams]",
     negative_prompt: str,
     frames: int,
     steps: int,
-    seed: int,
-    temporal_alpha: float,
     lightning: bool,
     lightning_steps: int,
     num_chips: int,
     motion_adapter: str | None,
-    motion_adapter_alpha: float,
     motion_adapter_skip: list[str] | None,
     on_progress: Callable[[str], None] | None,
     timeout: int,
     run_id: str,
     env: dict,
+    interleave: bool = False,
+    prompt_schedule: "list[tuple[int, str]] | None" = None,
+    loop: str = "none",
 ) -> tuple[bool, str]:
-    """Spawn one generate.py process per chip in parallel, concatenate results.
+    """Spawn one generate.py process per chip in parallel, then stitch results.
 
-    Frame distribution: chip 0 → frames 0..K-1, chip 1 → frames K..2K-1, etc.
-    All chips use the same seed so the base noise composition is consistent across
-    the full animation.  Shard GIFs are concatenated in chip order by _stitch_gifs().
+    Each chip renders `frames_per_chip` frames from its OWN ChipParams entry
+    in `chips` (its own prompt, seed, temporal_alpha, motion_adapter_alpha) —
+    chips are NOT temporal slices of one longer clip. `generate.py` has no
+    frame-offset concept and every chip is deterministic (same seed → identical
+    frames), so this is per-chip variation, not frame-range partitioning.
+    The resulting shard GIFs are combined by `_stitch_gifs()`, either
+    concatenated in chip order (interleave=False) or round-robined across
+    shards (interleave=True) — see `_stitch_gifs` docstring for when each
+    ordering is appropriate.
 
     Each chip gets its own temp output path and log file. All processes are
     launched simultaneously and joined with the shared timeout.
     """
-    import threading, tempfile
+    if len(chips) != num_chips:
+        raise ValueError(f"chips/num_chips mismatch: {len(chips)} vs {num_chips}")
+
+    import tempfile
 
     frames_per_chip = frames // num_chips
     tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_multi_"))
@@ -576,22 +1125,17 @@ def _run_multi_chip(
     drain_threads: list[threading.Thread] = []
     chip_outputs: list[list[str]] = [[] for _ in range(num_chips)]
 
+    cmds = _multichip_cmds(
+        script=script, shard_paths=shard_paths, mode=mode,
+        negative_prompt=negative_prompt, frames_per_chip=frames_per_chip,
+        steps=steps, lightning=lightning, lightning_steps=lightning_steps,
+        motion_adapter=motion_adapter, motion_adapter_skip=motion_adapter_skip,
+        chips=chips, prompt_schedule=prompt_schedule,
+    )
+
     for chip_idx in range(num_chips):
         chip_log = _LOG_DIR / f"run_{run_id}_chip{chip_idx}.log"
-        cmd = _build_cmd(
-            script=script, out_path=shard_paths[chip_idx], mode=mode,
-            prompt=prompt, negative_prompt=negative_prompt,
-            frames=frames_per_chip, steps=steps,
-            # Same seed on every chip — each chip generates a different temporal
-            # slice but they should share the same base composition/colour palette.
-            seed=seed,
-            temporal_alpha=temporal_alpha,
-            lightning=lightning, lightning_steps=lightning_steps,
-            device_id=chip_idx,
-            chain_from=None, chain_save=None, chain_alpha=0.6,
-            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip,
-        )
+        cmd = cmds[chip_idx]
         _log.info("chip%d cmd: %s", chip_idx, " ".join(str(c) for c in cmd))
 
         output_buf = chip_outputs[chip_idx]
@@ -678,7 +1222,7 @@ def _run_multi_chip(
     if on_progress:
         on_progress(f"All {num_chips} chips done — stitching {frames} frames…")
 
-    ok = _stitch_gifs(shard_paths, out_path)
+    ok = _stitch_gifs(shard_paths, out_path, interleave=interleave)
 
     # Clean up temp shard files
     for p in shard_paths:
@@ -693,10 +1237,147 @@ def _run_multi_chip(
     if not out_path.exists():
         return False, "Stitch reported success but output file missing"
 
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
+
     _log.info("multi-chip run_success run_id=%s chips=%d out=%s", run_id, num_chips, out_path)
     if on_progress:
         on_progress(f"Done — {frames} frames from {num_chips} chips → {out_path.name}")
     return True, ""
+
+
+def build_coherent_segments(*, num_segments: int, frames_per_segment: int, base_seed: int) -> "list[dict]":
+    """Plan sequential latent-chained segments for Coherent mode.
+
+    Segment 0 saves latents; each later segment chains from the previous and
+    (unless last) saves for the next. All segments share base_seed.
+    """
+    segs: list[dict] = []
+    for i in range(num_segments):
+        segs.append({
+            "index": i,
+            "frames": frames_per_segment,
+            "seed": base_seed,
+            "chain_from": i > 0,
+            "chain_save": i < num_segments - 1,
+        })
+    return segs
+
+
+def _run_coherent_chain(
+    *,
+    script: Path,
+    out_path: Path,
+    mode: str,
+    prompt: str,
+    negative_prompt: str,
+    frames: int,
+    steps: int,
+    seed: int,
+    temporal_alpha: float,
+    lightning: bool,
+    lightning_steps: int,
+    num_segments: int,
+    motion_adapter: str | None,
+    motion_adapter_alpha: float,
+    motion_adapter_skip: list[str] | None,
+    on_progress: Callable[[str], None] | None,
+    timeout: int,
+    run_id: str,
+    env: dict,
+    loop: str = "none",
+) -> "tuple[bool, str]":
+    """Run num_segments generate.py passes sequentially, chaining latents via
+    --chain-save/--chain-from for visual continuity, then concatenate the
+    per-segment GIFs into one continuous animation via _stitch_gifs.
+
+    Unlike the Remix multi-chip path (independent chips, each rendering its
+    own unrelated clip), Coherent mode is inherently sequential: segment N
+    needs segment N-1's saved latents before it can start, so segments run
+    one after another on a single chip rather than in parallel processes.
+
+    Each segment renders the FULL `frames` count — Coherent is a continuous
+    animation N segments LONGER than a single run, not the same length
+    divided into pieces. Total output frame count is `num_segments * frames`.
+
+    Timeout note (review M3): each segment's subprocess gets the full `timeout`
+    independently, so the whole chain can take up to `num_segments * timeout`
+    wall-clock — this is by design (a shared budget could truncate a valid long
+    chain); see `run_subprocess`'s docstring.
+    """
+    import tempfile
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tt_ad_coherent_"))
+    segs = build_coherent_segments(num_segments=num_segments,
+                                   frames_per_segment=frames, base_seed=seed)
+    # Precompute every segment's GIF/latent path up front (mirrors
+    # _run_multi_chip's shard_paths) so the finally-block cleanup below can
+    # remove them all regardless of which segment (if any) fails partway
+    # through the loop — not just the ones that finished successfully.
+    seg_paths = [tmp_dir / f"seg_{s['index']}.gif" for s in segs]
+    latent_paths = [tmp_dir / f"seg_{s['index']}.pt" for s in segs]
+
+    total_frames = frames * num_segments
+    _log.info(
+        "coherent run_id=%s segments=%d frames=%d/segment (%d total) tmp=%s",
+        run_id, num_segments, frames, total_frames, tmp_dir,
+    )
+
+    try:
+        prev_latent: "Path | None" = None
+        for s in segs:
+            seg_out = seg_paths[s["index"]]
+            latent_out = latent_paths[s["index"]]
+            cmd = _build_cmd(
+                script=script, out_path=seg_out, mode=mode, prompt=prompt,
+                negative_prompt=negative_prompt, frames=s["frames"], steps=steps,
+                seed=s["seed"], temporal_alpha=temporal_alpha,
+                lightning=lightning, lightning_steps=lightning_steps, device_id=0,
+                chain_from=str(prev_latent) if s["chain_from"] and prev_latent else None,
+                chain_save=str(latent_out) if s["chain_save"] else None,
+                chain_alpha=0.6,
+                motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+                motion_adapter_skip=motion_adapter_skip,
+            )
+            if on_progress:
+                on_progress(f"Coherent segment {s['index']+1}/{num_segments}…")
+            ok, err = _run_one(
+                cmd, timeout=timeout, env=env, run_id=f"{run_id}_seg{s['index']}",
+                on_progress=on_progress,
+            )
+            if not ok:
+                return False, f"coherent segment {s['index']} failed: {err}"
+            if s["chain_save"]:
+                prev_latent = latent_out
+
+        if on_progress:
+            on_progress(f"All {num_segments} segments done — stitching {total_frames} frames…")
+
+        if not _stitch_gifs(seg_paths, out_path):
+            return False, "coherent stitch failed"
+
+        if not out_path.exists():
+            return False, "Stitch reported success but output file missing"
+
+        _finalize_seamless_loop(out_path, loop, total_frames, on_progress)
+
+        _log.info("coherent run_success run_id=%s segments=%d total_frames=%d out=%s",
+                  run_id, num_segments, total_frames, out_path)
+        return True, ""
+    finally:
+        # Best-effort cleanup of per-segment shard GIFs and chained latent
+        # (.pt) files, mirroring _run_multi_chip's shard cleanup. This is a
+        # finally (not post-loop code) so it runs on BOTH the success path
+        # and every early `return False, ...` above — previously this temp
+        # dir and its contents were never removed on any path, leaking a
+        # `tt_ad_coherent_*` directory of segment GIFs + latents per run.
+        for p in seg_paths:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+        for p in latent_paths:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+        try: tmp_dir.rmdir()
+        except Exception: pass
 
 
 def make_gif_thumbnail(gif_path: Path, thumb_path: Path) -> bool:

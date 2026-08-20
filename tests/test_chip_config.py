@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 import pytest
 from pathlib import Path
-from chip_config import load_chips, ChipEntry, ChipCategory
+from chip_config import load_chips, load_chips_for_artgen, surprise_pool, ChipEntry, ChipCategory
 
 def _yaml(content: str, tmp_path: Path) -> Path:
     p = tmp_path / "chips.yaml"
@@ -154,3 +154,57 @@ def test_malformed_yaml_missing_text_raises_value_error(tmp_path):
 def test_empty_yaml_returns_empty_list(tmp_path):
     p = _yaml("", tmp_path)
     assert load_chips("video", p) == []
+
+
+# ── surprise chips ────────────────────────────────────────────────────────────
+
+def test_surprise_chip_needs_no_text(tmp_path):
+    cfg = _yaml(
+        "- name: Mood\n"
+        "  for: [palette]\n"
+        "  chips:\n"
+        "    - {label: '🎲 Surprise', surprise: true}\n"
+        "    - {label: 'moody', text: 'moody'}\n",
+        tmp_path)
+    cats = load_chips("palette", cfg)
+    chips = cats[0].chips
+    assert chips[0].surprise is True and chips[0].text == ""
+    assert chips[1].surprise is False
+
+
+def test_non_surprise_chip_still_requires_text(tmp_path):
+    cfg = _yaml("- name: X\n  for: [palette]\n  chips:\n    - {label: 'a'}\n", tmp_path)
+    with pytest.raises(ValueError):
+        load_chips("palette", cfg)
+
+
+# ── load_chips_for_artgen ─────────────────────────────────────────────────────
+
+def test_load_chips_for_artgen_merges_type_and_shared(tmp_path):
+    cfg = _yaml(
+        "- name: Palette Mood\n  for: [palette]\n  chips:\n    - {label: 'moody', text: 'moody'}\n"
+        "- name: Feeling\n  for: [artgen]\n  chips:\n    - {label: 'serene', text: 'serene'}\n"
+        "- name: Camera\n  for: [video, image]\n  chips:\n    - {label: 'cine', text: 'cinematic'}\n",
+        tmp_path)
+    cats = load_chips_for_artgen("palette", cfg)
+    names = [c.name for c in cats]
+    assert "Palette Mood" in names and "Feeling" in names   # type + shared
+    assert "Camera" not in names                             # photo bank excluded
+
+
+def test_load_chips_for_artgen_type_with_no_banks_gets_shared_only(tmp_path):
+    cfg = _yaml("- name: Feeling\n  for: [artgen]\n  chips:\n    - {label: 'serene', text: 'serene'}\n", tmp_path)
+    cats = load_chips_for_artgen("verse", cfg)
+    assert [c.name for c in cats] == ["Feeling"]
+
+
+# ── surprise_pool ─────────────────────────────────────────────────────────────
+
+def test_surprise_pool_excludes_surprise_chip(tmp_path):
+    cfg = _yaml(
+        "- name: Mood\n  for: [palette]\n  chips:\n"
+        "    - {label: '🎲 Surprise', surprise: true}\n"
+        "    - {label: 'moody', text: 'moody'}\n    - {label: 'lush', text: 'lush'}\n",
+        tmp_path)
+    cat = load_chips("palette", cfg)[0]
+    assert surprise_pool(cat) == ["moody", "lush"]

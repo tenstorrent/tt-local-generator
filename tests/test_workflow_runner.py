@@ -7,8 +7,12 @@ calls, Docker commands, and board-reset operations are either bypassed by
 
 Test groups
 -----------
-1. Dry-run output      — run_workflow.sh emits LOG:, step markers, exits 0,
-                         does not connect to localhost:8000.
+1. Dry-run output      — run_workflow.sh emits LOG:, NODE: progress signals,
+                         does not connect to localhost:8000. (Since Task 3,
+                         run_workflow.sh is a thin shim over
+                         app/pipeline_engine.py; "exits 0" is xfail until
+                         Task 4 normalizes 1964-worlds-fair.json's wire keys
+                         to match the engine's generic output contract.)
 2. _apply_overrides    — patch a spec, verify resulting JSON is valid with
                          the override values in place.
 3. Progress protocol   — _on_run_stdout line-parsing: LOG:, ⏳ SkyReels:,
@@ -191,10 +195,18 @@ def test_dry_run_log_file_created(tmp_path):
 @_skip_no_spec
 def test_dry_run_emits_step_markers(tmp_path):
     """
-    run_workflow.sh --dry-run must emit at least one step-marker line (starting
-    with ══) so that the progress label in WorkflowPopover updates as nodes run.
+    run_workflow.sh --dry-run must emit at least one per-node progress signal
+    so a progress label can update as nodes run.
 
-    The example workflow has 9 nodes; we expect at least one ══ Node N line.
+    As of Task 3, run_workflow.sh is a thin shim over app/pipeline_engine.py:
+    the old hardcoded script's "══ Node N: ... ══" headers are gone — the
+    engine emits "NODE:<id>:running:<class_type>" instead (the same signal
+    app/pipeline_runner.py._parse_line parses). We assert on that protocol
+    now rather than the retired bash-specific formatting.
+
+    The example workflow has 9 nodes; we expect at least one NODE:<id>:running
+    line before the (currently expected, Task-4-scoped) failure partway
+    through the graph.
     """
     result = subprocess.run(
         ["bash", str(_RUN_WORKFLOW_SH), str(_EXAMPLE_WORKFLOW), "--dry-run"],
@@ -204,18 +216,13 @@ def test_dry_run_emits_step_markers(tmp_path):
         env={**os.environ, "HOME": str(tmp_path)},
     )
 
-    step_lines = [
+    running_lines = [
         ln for ln in result.stdout.splitlines()
-        if ln.startswith("══")
+        if ln.startswith("NODE:") and ":running:" in ln
     ]
-    assert step_lines, (
-        f"Expected step-marker lines (starting with ══) in stdout — got none.\n"
+    assert running_lines, (
+        f"Expected at least one 'NODE:<id>:running:<...>' line in stdout — got none.\n"
         f"stdout: {result.stdout[:800]}"
-    )
-    # At least one step line should mention "Node"
-    node_markers = [ln for ln in step_lines if "Node" in ln or "node" in ln]
-    assert node_markers, (
-        f"Expected a '══ Node N:' line, step lines found: {step_lines}"
     )
 
 
@@ -375,7 +382,7 @@ def test_apply_overrides_with_real_spec():
         # Metadata keys preserved
         assert "_description" in data
         # Other nodes untouched
-        assert data["8"]["inputs"]["prompt"] == ["7", "poem"], (
+        assert data["8"]["inputs"]["prompt"] == ["7", "text"], (
             "Node 8's inter-node wire must remain as-is after override"
         )
     finally:
@@ -976,6 +983,117 @@ def test_no_records_produces_empty_count():
     """Empty history → empty by-model count."""
     counts = _simulate_by_model_count([])
     assert counts == {}
+
+
+# ===========================================================================
+# Group 7 — --dry-run flag gating (Critical bug regression)
+# ===========================================================================
+#
+# Bug: run_workflow.sh built the final engine invocation with
+# ${DRY_RUN:+--dry-run}. DRY_RUN is initialized unconditionally to "0" or
+# "1", and ${VAR:+word} expands to `word` whenever VAR is set to ANY
+# non-empty value -- including the string "0". So --dry-run was appended on
+# EVERY invocation, real or not. app/pipeline_runner.py launches real runs as
+# ["bash", "bin/run_workflow.sh", spec] (no --dry-run arg), so real pipeline
+# runs silently executed in dry-run mode and no-op'd while reporting success.
+#
+# These tests point PYTHON3 at a fake recorder script (via env var) so we can
+# inspect the exact argv the shim hands to the engine, without touching
+# hardware, Docker, or the network.
+# ===========================================================================
+
+
+def _write_fake_python_recorder(tmp_path: Path, record_file: Path) -> Path:
+    """
+    Write an executable fake "python3" that records its argv (everything
+    after the interpreter itself) as a single space-joined line appended to
+    `record_file`, then exits 0. Used to observe exactly what run_workflow.sh
+    hands to `$PYTHON3 app/pipeline_engine.py ...` without running the real
+    engine.
+    """
+    fake = tmp_path / "fake_python3"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$@" >> "{record_file}"\n'
+        "exit 0\n"
+    )
+    # Owner rwx only (0o700): the test runs the fake interpreter as the same
+    # user that wrote it, so it never needs group/other read+exec. Keeps the
+    # throwaway helper least-privilege (satisfies the SAST permissive-perms
+    # check) without changing what the test exercises.
+    fake.chmod(0o700)
+    return fake
+
+
+@_skip_no_shell
+@_skip_no_spec
+def test_dry_run_flag_only_passed_in_dry_mode(tmp_path):
+    """
+    Regression test for the Critical --dry-run-always-on bug.
+
+    Runs run_workflow.sh twice against a fake PYTHON3 recorder:
+      1. real mode   — no --dry-run arg at all
+      2. dry mode    — "--dry-run" as $2
+
+    Asserts the recorded engine argv reflects each mode correctly: real mode
+    must NOT contain --dry-run, dry mode MUST contain it.
+    """
+    tmp_home = tmp_path / "home"
+    tmp_home.mkdir()
+    record_file = tmp_path / "recorded_args.txt"
+    fake_python = _write_fake_python_recorder(tmp_path, record_file)
+
+    env = {
+        **os.environ,
+        "HOME": str(tmp_home),
+        "PYTHON3": str(fake_python),
+    }
+
+    result_real = subprocess.run(
+        ["bash", str(_RUN_WORKFLOW_SH), str(_EXAMPLE_WORKFLOW)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert result_real.returncode == 0, (
+        f"Real-mode invocation must exit 0 (fake engine always exits 0).\n"
+        f"stdout: {result_real.stdout[:600]}\nstderr: {result_real.stderr[:300]}"
+    )
+
+    result_dry = subprocess.run(
+        ["bash", str(_RUN_WORKFLOW_SH), str(_EXAMPLE_WORKFLOW), "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert result_dry.returncode == 0, (
+        f"Dry-mode invocation must exit 0 (fake engine always exits 0).\n"
+        f"stdout: {result_dry.stdout[:600]}\nstderr: {result_dry.stderr[:300]}"
+    )
+
+    assert record_file.exists(), (
+        "Fake PYTHON3 recorder was never invoked — PYTHON3 env override is "
+        "not being respected by run_workflow.sh"
+    )
+    lines = record_file.read_text().splitlines()
+    assert len(lines) == 2, (
+        f"Expected exactly 2 recorded engine invocations, got {len(lines)}: {lines}"
+    )
+    real_args, dry_args = lines[0], lines[1]
+
+    assert str(_EXAMPLE_WORKFLOW) in real_args
+    assert "--output-dir" in real_args
+    assert "--dry-run" not in real_args, (
+        f"BUG: real-mode invocation (no --dry-run arg passed to the shim) "
+        f"must NOT pass --dry-run to the engine. Recorded args: {real_args!r}"
+    )
+
+    assert "--dry-run" in dry_args, (
+        f"Dry-mode invocation (--dry-run arg passed to the shim) must pass "
+        f"--dry-run through to the engine. Recorded args: {dry_args!r}"
+    )
 
 
 # ===========================================================================

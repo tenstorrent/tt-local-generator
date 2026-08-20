@@ -39,6 +39,13 @@ from gi.repository import GLib, Gio, Gtk, Pango  # noqa: E402
 import prompt_client  # noqa: E402
 from app_settings import settings as _settings  # noqa: E402
 from history_store import STORAGE_DIR as _STORAGE_DIR  # noqa: E402
+# Shared artgen rendering (media-showcase-everywhere, Task 1): the single
+# ANSI parser (understands BOTH the current fg+block and legacy bg+space
+# escape formats) and the self-managed GdkPixbufAnimationIter gif widget.
+# Replaces attractor's own bespoke ANSI parser (which only understood the
+# legacy format -- see _load_artgen_ansi below) and the fragile GStreamer
+# Gtk.Video path for animated gifs.
+from artgen_render import parse_ansi_grid, AnimatedGifWidget  # noqa: E402
 
 _DISK_SPACE_MIN_BYTES = 18 * 1024 ** 3   # 18 GB — pause TT-TV generation below this
 
@@ -554,6 +561,33 @@ def _load_artgen_text(box: Gtk.Box, file_path: str) -> None:
     box.append(scroll)
 
 
+def _is_gif_record(record) -> bool:
+    """True iff this record's media file is a .gif (so it must animate via
+    AnimatedGifWidget, not the fragile Gtk.Video/GStreamer path). Keyed on the
+    file extension, not media_type, since AnimateDiff gifs are now
+    media_type='video'."""
+    p = (getattr(record, "video_path", "") or getattr(record, "file_path", "") or "")
+    return p.lower().endswith(".gif")
+
+
+def _load_animated_gif(box: Gtk.Box, file_path: str) -> None:
+    """Render an animated GIF into *box* via the shared GdkPixbufAnimationIter
+    widget (`AnimatedGifWidget`) instead of GStreamer/`Gtk.Video`.
+
+    Used for both artgen AnimateDiff gifs (previously frozen on frame 1 by
+    the "unknown extension -> static thumbnail" fallback) and any record
+    whose media file is a `.gif` (previously routed through the fragile
+    Gtk.Video GStreamer path -- documented unreliable for gif in
+    main_window.py:2110). `_clear_box` unparents any prior child first,
+    which fires that widget's own "unrealize" handler and cancels its GLib
+    timer -- no manual timer bookkeeping needed here, matching how
+    `create_view.CreateResultPanel` and `artgen_gallery` swap this widget
+    in and out.
+    """
+    _clear_box(box)
+    box.append(AnimatedGifWidget(file_path))
+
+
 class _ColorSwatchArea(Gtk.DrawingArea):
     """Full-width color swatch strip — used for palette artgen display in TT-TV."""
 
@@ -633,55 +667,27 @@ def _load_artgen_palette(box: Gtk.Box, file_path: str) -> None:
         box.append(lore_lbl)
 
 
-# xterm-256 standard colors (indices 0-15)
-_XTERM_STANDARD: list = [
-    (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
-    (0, 0, 128), (128, 0, 128), (0, 128, 128), (192, 192, 192),
-    (128, 128, 128), (255, 0, 0), (0, 255, 0), (255, 255, 0),
-    (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
-]
-_XTERM_CUBE_STEPS: list = [0, 95, 135, 175, 215, 255]
+def _ansi_grid_to_rgb_rows(grid: list) -> list:
+    """Convert `artgen_render.parse_ansi_grid`'s `(char, fg_hex, bg_hex)` cell
+    grid into the rectangular `(r, g, b)` rows `_AnsiCanvas` paints.
 
-
-def _xterm256_to_rgb(n: int) -> tuple:
-    """Convert an xterm-256 color index to (r, g, b) ints 0-255."""
-    if n < 16:
-        return _XTERM_STANDARD[n]
-    if n < 232:
-        n -= 16
-        r = n // 36
-        g = (n // 6) % 6
-        b = n % 6
-        return (_XTERM_CUBE_STEPS[r], _XTERM_CUBE_STEPS[g], _XTERM_CUBE_STEPS[b])
-    v = 8 + (n - 232) * 10
-    return (v, v, v)
-
-
-def _parse_ansi_grid(text: str) -> list:
-    """Parse ANSI xterm-256 background-color pixel art into a 2-D list of
-    (r, g, b) tuples.  Handles both ESC[48;5;Nm (256-color) and ESC[4Xm
-    (16-color) background codes.
-
-    Some generators write the octal escape as bare ASCII digits "033[" (no
-    actual ESC byte, no backslash).  Normalise those to a real ESC byte before
-    pattern matching so both variants are accepted.
+    Parsing the ANSI escape sequences themselves is delegated entirely to the
+    shared, single-source-of-truth parser in `artgen_render.py` (handles both
+    the current fg+block and legacy bg+space pixel formats) -- this function
+    only decides which color CHANNEL to paint per cell, mirroring
+    `artgen_render.ansi_to_html`'s rule exactly: a space character shows its
+    background color (the legacy bg+space format); any other character shows
+    its foreground color (the current fg+block format). A cell with no color
+    on the relevant channel (still at its default, or just SGR-0 reset)
+    paints black.
     """
-    import re as _re
-    # Normalise bare octal "033[" → ESC byte (some LLM/generator output)
-    text = _re.sub(r"(?<!\x1b)033\[", "\x1b[", text)
     rows: list = []
-    for line in text.splitlines():
-        pixels: list = []
-        # Match ESC[48;5;Nm (256-color background) followed by one space pixel
-        for m in _re.finditer(r"\x1b\[48;5;(\d+)m ", line):
-            pixels.append(_xterm256_to_rgb(int(m.group(1))))
-        # Fall back to ESC[4Xm 16-color backgrounds if no 256-color found
-        if not pixels:
-            for m in _re.finditer(r"\x1b\[4(\d)m ", line):
-                idx = int(m.group(1))
-                pixels.append(_xterm256_to_rgb(idx))
-        if pixels:
-            rows.append(pixels)
+    for row in grid:
+        pixels = []
+        for ch, fg, bg in row:
+            colour_hex = bg if ch == " " else fg
+            pixels.append(_parse_hex_color(colour_hex) if colour_hex else (0, 0, 0))
+        rows.append(pixels)
     return rows
 
 
@@ -713,15 +719,23 @@ class _AnsiCanvas(Gtk.DrawingArea):
 
 
 def _load_artgen_ansi(box: Gtk.Box, file_path: str) -> None:
-    """Render an ANSI pixel-art artifact into *box* using a cairo DrawingArea."""
+    """Render an ANSI pixel-art artifact into *box* using a cairo DrawingArea.
+
+    Parsing is delegated to `artgen_render.parse_ansi_grid` -- the single
+    place that understands ANSI escape sequences -- so this can never drift
+    from the `ansi` generator again. This used to be a bespoke regex that
+    only matched the legacy `\\x1b[48;5;Nm ` (bg+space) format, which meant
+    every artifact the generator's CURRENT `\\x1b[38;5;Nm█` (fg+block) format
+    produced parsed to an empty grid and fell back to raw escape-code text.
+    """
     _clear_box(box)
     try:
         text = Path(file_path).read_text(encoding="utf-8", errors="replace")
     except Exception:
         text = ""
-    rows = _parse_ansi_grid(text)
-    if rows:
-        canvas = _AnsiCanvas(rows)
+    grid = parse_ansi_grid(text)
+    if grid:
+        canvas = _AnsiCanvas(_ansi_grid_to_rgb_rows(grid))
         box.append(canvas)
     else:
         # No parseable ANSI — fall back to raw text so something shows.
@@ -758,9 +772,23 @@ class AttractorWindow(Gtk.Window):
         get_playlists: "Callable[[], list]" = lambda: [],  # for channel switcher dropdown
         get_all_records: "Callable[[], list]" = lambda: [],  # full unfiltered record set for model channels
         get_animate_inputs: "Callable[[], tuple[str, str]] | None" = None,  # animate TT-TV inputs
+        application=None,                     # Gtk.Application to associate BEFORE realize
+        on_hide=None,                         # called when the kiosk is closed (hidden, not destroyed)
     ) -> None:
         _log.debug("AttractorWindow.__init__ - %d records, model_source=%s", len(records), model_source)
         super().__init__(title="TT-TV")
+        # Associate with the Gtk.Application IMMEDIATELY — before `_build()` /
+        # `self.maximize()` below can realize the window. On Wayland the
+        # xdg-toplevel's app_id (which KDE uses for the taskbar icon) is fixed at
+        # first realize; if `set_application` lands AFTER the window has already
+        # mapped (as it did when the caller set it post-construction, which a
+        # warm/second launch could hit), the toplevel gets NO app_id — the
+        # generic GTK fallback icon — and a window not properly owned by the app
+        # also fails to route close/destroy, so it can't be closed until the app
+        # quits. Setting it here, pre-realize, makes every launch identical.
+        if application is not None:
+            self.set_application(application)
+        self._on_hide = on_hide   # MainWindow bookkeeping when the kiosk is hidden (closed)
         self._system_prompt = system_prompt
         self._model_source = model_source
         self._on_enqueue = on_enqueue
@@ -791,6 +819,7 @@ class AttractorWindow(Gtk.Window):
         self._pool = AttractorPool(video_records)
         self._gen_stop = threading.Event()
         self._paused = False
+        self._run_id: int = 0             # per-start() token; loop threads exit when it changes
         self._pending_advance_source: int | None = None  # GLib source id
         self._watched_stream = None          # stream we connected notify::ended to
         self._stream_handler_id: int | None = None  # handler ID so we can disconnect
@@ -837,11 +866,12 @@ class AttractorWindow(Gtk.Window):
         ctrl.connect("key-pressed", self._on_key)
         self.add_controller(ctrl)
 
+        # `destroy` fires only at real teardown (app shutdown) — a normal close
+        # HIDES this persistent window (see `_on_close_requested`).
         self.connect("destroy", self._on_destroy)
-        # Explicitly destroy (not merely hide) when the user clicks X or the Stop
-        # button calls close().  GTK4's default close-request can hide the window
-        # instead of destroying it, leaving _attractor_win non-None and preventing
-        # a fresh open on the second launch.
+        # Intercept close (X / Stop / Escape) to hide + soft-stop instead of
+        # letting GTK's default destroy it (destroying strands the GL context —
+        # see `_on_close_requested`).
         self.connect("close-request", self._on_close_requested)
 
     # ── Event handlers ────────────────────────────────────────────────────
@@ -849,7 +879,12 @@ class AttractorWindow(Gtk.Window):
     def _on_key(self, _ctrl, keyval, _keycode, _state) -> bool:
         name = Gtk.accelerator_name(keyval, 0)
         if name == "Escape":
-            self.close()
+            # Defer close() out of the key-controller dispatch (idle_add). Even
+            # though close() now only HIDES (persistent window), invoking it
+            # synchronously mid-key-dispatch is still best avoided; letting the
+            # key event fully unwind first is harmless and keeps the controller
+            # tidy.
+            GLib.idle_add(self.close)
             return True
         if name == "f":
             if self.is_fullscreen():
@@ -863,45 +898,68 @@ class AttractorWindow(Gtk.Window):
         return False
 
     def _on_close_requested(self, _win) -> bool:
-        """Force full window destruction on close so _on_destroy always fires.
+        """Persistent-window model: HIDE + soft-stop, never DESTROY.
 
-        GTK4's default close-request handler may merely hide the window, which
-        would leave _attractor_win non-None in MainWindow and break the second
-        launch.  We explicitly call destroy() then return True so GTK doesn't
-        do a redundant second close.
+        Destroying the kiosk window tore down its GdkGLContext; GStreamer's
+        gtkglsink then left that dead context dangling in its process-wide
+        GstGLDisplay cache, so the NEXT kiosk's video failed to embed and became
+        a bare, app-id-less GL surface that couldn't be closed (only quitting
+        the app tore it down — the reported "reopened window won't close" bug,
+        independent of how many videos had played). Reusing ONE window keeps the
+        GL context valid across every reopen. `stop()` halts playback +
+        generation and releases the running pipelines; the window (and its GL
+        context) stay alive, hidden, until the next `start()`. `_on_hide` lets
+        MainWindow do its bookkeeping (purge the TT-TV queue, close the Watch
+        context). App shutdown still destroys the window normally (-> _on_destroy).
         """
-        self.destroy()
-        return True  # we handled it
+        self.stop()
+        self.set_visible(False)
+        if self._on_hide is not None:
+            try:
+                self._on_hide()
+            except Exception:
+                _log.exception("attractor on_hide callback raised")
+        return True  # handled; do NOT destroy
 
-    def _on_destroy(self, _win) -> None:
-        """Stop the generation loop and cancel any pending timers."""
-        # Mark dead FIRST so any idle/timer callbacks that fire after this
-        # point (e.g. queued by the generation thread mid-call) silently bail
-        # instead of touching destroyed widgets.
-        self._alive = False
-        # Log a stack trace so we can see what triggered the close.
-        _log.info("=== Attractor stopped ===\n%s", "".join(traceback.format_stack()))
+    def stop(self) -> None:
+        """Soft stop: halt playback + the generation/status loops and release
+        every running video pipeline, but KEEP the window and its GdkGLContext
+        alive so a later `start()` reuses them. Idempotent."""
+        if not self._started:
+            return
+        self._started = False
+        self._teardown_playback()
+
+    def _teardown_playback(self) -> None:
+        """Stop threads, cancel timers, unsubscribe D-Bus, and release every
+        running video pipeline (slots + graveyard). Shared by `stop()` (window
+        survives) and `_on_destroy` (window is being destroyed)."""
         self._gen_stop.set()
         self._att_poll_stop.set()
-        # Unsubscribe from screensaver D-Bus signals.
-        if getattr(self, "_dbus_conn", None):
-            for sub_id in getattr(self, "_dbus_sub_ids", []):
-                try:
-                    self._dbus_conn.signal_unsubscribe(sub_id)
-                except Exception:
-                    pass
+        self._unsubscribe_screensaver()
         if self._pending_advance_source is not None:
             GLib.source_remove(self._pending_advance_source)
             self._pending_advance_source = None
         if self._graveyard_timer:
             GLib.source_remove(self._graveyard_timer)
             self._graveyard_timer = 0
+        # Release each graveyard widget's pipeline BEFORE dropping the refs.
+        for _vid in self._video_graveyard:
+            _stream = _vid.get_media_stream()
+            if _stream is not None:
+                try:
+                    _stream.pause()
+                except Exception:
+                    pass
+            try:
+                _vid.set_file(None)
+            except Exception:
+                pass
         self._video_graveyard.clear()
         if self._pending_flash_source:
             GLib.source_remove(self._pending_flash_source)
             self._pending_flash_source = 0
-        # Disconnect the notify::ended handler so a late-firing signal after
-        # window destruction doesn't call _advance() on a dead widget tree.
+        # Disconnect the notify::ended handler so a late signal doesn't advance.
         if self._watched_stream is not None and self._stream_handler_id is not None:
             try:
                 self._watched_stream.disconnect(self._stream_handler_id)
@@ -909,15 +967,31 @@ class AttractorWindow(Gtk.Window):
                 pass
         self._watched_stream = None
         self._stream_handler_id = None
-        # macOS: close any open GstPlayer pipelines so fds are released promptly.
-        if _USE_SYSTEM_PLAYER:
-            for slot in (self._slot_a, self._slot_b):
-                gst = getattr(slot, "_gst_player", None)
-                if gst is not None:
-                    try:
-                        gst.close()
-                    except Exception:
-                        pass
+        # Release BOTH video-slot pipelines on every platform (pause -> NULL).
+        # `_unload_slot_video` pauses-then-releases on Linux and closes the
+        # GstPlayer on macOS — the teardown the screen-lock path already does.
+        _unload_slot_video(self._slot_a)
+        _unload_slot_video(self._slot_b)
+
+    def _unsubscribe_screensaver(self) -> None:
+        """Drop every screensaver D-Bus subscription (session + system bus) on
+        the connection each was registered on, so a `start()` after `stop()`
+        doesn't accumulate duplicate lock/unlock handlers."""
+        for _conn, _sub_id in getattr(self, "_dbus_sub_ids", []):
+            try:
+                _conn.signal_unsubscribe(_sub_id)
+            except Exception:
+                pass
+        self._dbus_sub_ids = []
+
+    def _on_destroy(self, _win) -> None:
+        """Real window destruction (app shutdown). Mark dead FIRST so any late
+        idle/timer callbacks bail instead of touching destroyed widgets, then
+        run the shared teardown."""
+        self._alive = False
+        _log.info("=== Attractor destroyed ===")
+        self._started = False
+        self._teardown_playback()
 
     def _toggle_pause(self) -> None:
         """Toggle playback pause. Generation loop is unaffected."""
@@ -1301,18 +1375,37 @@ class AttractorWindow(Gtk.Window):
         """
         Begin playback and start the generation loop daemon thread.
         Must be called after the window is presented so the display is ready.
+
+        RESTARTABLE: a persistent kiosk calls `start()` again after `stop()`
+        (i.e. a "reopen" of the hidden window). No-op if already running.
         """
-        if not self._alive:
+        if not self._alive or self._started:
             return
         self._started = True
+        # A pause toggled before the last close must NOT persist across a
+        # reopen — else _advance() bails on `_paused` and the kiosk reopens
+        # permanently blank with no user-reachable recovery.
+        self._paused = False
+        # Per-run token: bump it every start() and hand it to the loop threads.
+        # A `threading.Event` only breaks a thread sitting IN `.wait()`; a
+        # thread mid-body when stop() sets and start() re-clears the event never
+        # observes the set and would run forever (double tt-smi / double
+        # auto-gen after a fast close→reopen). The loops re-check `_run_id ==
+        # run_id` each iteration and exit once superseded.
+        self._run_id += 1
+        _run_id = self._run_id
+        # Clear the stop Events (stop() set them) so the fresh loop threads
+        # started below don't exit on their first `.wait()`.
+        self._gen_stop.clear()
+        self._att_poll_stop.clear()
         _log.info("=== Attractor started - pool size: %d, auto_generate: %s ===",
                   self._pool.size, self._auto_generate)
         self._subscribe_screensaver()
         if self._pool.size > 0:
             self._advance()
         if self._auto_generate:
-            threading.Thread(target=self._generation_loop, daemon=True).start()
-        threading.Thread(target=self._att_status_poll_loop, daemon=True).start()
+            threading.Thread(target=self._generation_loop, args=(_run_id,), daemon=True).start()
+        threading.Thread(target=self._att_status_poll_loop, args=(_run_id,), daemon=True).start()
 
     def _subscribe_screensaver(self) -> None:
         """Subscribe to screen-lock signals from every known source.
@@ -1335,7 +1428,7 @@ class AttractorWindow(Gtk.Window):
         """
         self._dbus_conn = None
         self._dbus_sys_conn = None
-        self._dbus_sub_ids: list[int] = []
+        self._dbus_sub_ids: list = []   # list[(Gio.DBusConnection, sub_id)] — see _unsubscribe_screensaver
         self._screen_locked = False   # dedup: ignore duplicate lock/unlock signals
 
         # ── Session bus: ScreenSaver ActiveChanged (KDE, GNOME, etc.) ─────
@@ -1352,7 +1445,7 @@ class AttractorWindow(Gtk.Window):
                     Gio.DBusSignalFlags.NONE,
                     self._on_screensaver_active_changed,
                 )
-                self._dbus_sub_ids.append(sub_id)
+                self._dbus_sub_ids.append((bus, sub_id))
             _log.debug("screensaver session-bus subscriptions OK (sub_ids=%s)",
                        self._dbus_sub_ids)
         except Exception as exc:
@@ -1372,7 +1465,7 @@ class AttractorWindow(Gtk.Window):
                     Gio.DBusSignalFlags.NONE,
                     self._on_logind_lock_signal,
                 )
-                self._dbus_sub_ids.append(sub_id)
+                self._dbus_sub_ids.append((sys_bus, sub_id))
             _log.debug("screensaver logind system-bus subscriptions OK")
         except Exception as exc:
             _log.warning("screensaver logind system-bus subscription failed: %s", exc)
@@ -1527,6 +1620,22 @@ class AttractorWindow(Gtk.Window):
                           EOS fires the _on_gst_eos callback, which triggers advance.
         """
         media_type = getattr(record, "media_type", "video")
+
+        # Unconditionally clear the text/gif box before dispatching on the new
+        # record's media type. If the slot's LAST load was a gif, `_text_box`
+        # may still hold a live AnimatedGifWidget whose GLib.timeout_add
+        # decode timer only stops on "unrealize" -- and every non-gif branch
+        # below merely does `slot._text_box.set_visible(False)`, which hides
+        # the widget without unparenting it, so the timer would otherwise
+        # keep firing (and calling set_paintable on a hidden widget) forever.
+        # `_clear_box` unparents any child, firing unrealize and cancelling
+        # the timer. This is a no-op when `_text_box` is already empty or
+        # about to be cleared again by the branch's own helper (_load_artgen_
+        # text/_load_artgen_palette/_load_artgen_ansi/_load_animated_gif all
+        # call `_clear_box` themselves before appending), so it's safe to run
+        # on every call regardless of the branch taken below.
+        _clear_box(slot._text_box)
+
         if media_type == "artgen":
             slot._video.set_visible(False)
             if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
@@ -1555,6 +1664,14 @@ class AttractorWindow(Gtk.Window):
                 _load_artgen_text(slot._text_box, file_path)
                 slot._picture.set_visible(False)
                 slot._text_box.set_visible(True)
+            elif ext == ".gif":
+                # Artgen AnimateDiff gif: animate via the shared
+                # GdkPixbufAnimationIter widget instead of falling through to
+                # the "unknown extension -> static thumbnail" branch below,
+                # which froze every artgen gif on frame 1.
+                _load_animated_gif(slot._text_box, file_path)
+                slot._picture.set_visible(False)
+                slot._text_box.set_visible(True)
             elif thumb_path and Path(thumb_path).exists():
                 # Unknown extension but has a rendered thumbnail — show it.
                 slot._picture.set_filename(thumb_path)
@@ -1575,6 +1692,27 @@ class AttractorWindow(Gtk.Window):
             if path:
                 slot._picture.set_filename(path)
             slot._picture.set_visible(True)
+        elif _is_gif_record(record):
+            # Video-typed .gif (native AnimateDiff, now media_type="video"):
+            # animate via the shared GdkPixbufAnimationIter widget, same as
+            # artgen gifs -- NOT the fragile GStreamer Gtk.Video path
+            # (documented unreliable for gif in main_window.py:2110).
+            # Identical on Linux and macOS since it never touches
+            # GStreamer/_USE_SYSTEM_PLAYER. Decided by file extension, not
+            # media_type, since AnimateDiff records are media_type="video"
+            # now -- only genuinely video (.mp4) records fall through to the
+            # branches below.
+            slot._video.set_visible(False)
+            if _USE_SYSTEM_PLAYER and slot._gst_player is not None:
+                slot._gst_player.close()
+                slot._gst_player.widget.set_visible(False)
+            slot._picture.set_visible(False)
+            path = getattr(record, "video_path", None)
+            if path:
+                _load_animated_gif(slot._text_box, path)
+                slot._text_box.set_visible(True)
+            else:
+                slot._text_box.set_visible(False)
         elif _USE_SYSTEM_PLAYER:
             # macOS video: use GstPlayer (gtk4paintablesink → Gtk.Picture).
             # Gtk.Video has no backend on the Homebrew GTK4 bottle.
@@ -1654,9 +1792,11 @@ class AttractorWindow(Gtk.Window):
             self._pending_advance_source = GLib.timeout_add(
                 image_dwell_ms, self._on_advance_timer
             )
-        elif getattr(record, "media_type", "video") == "animatediff":
-            # Animated GIFs: GStreamer loops them indefinitely instead of emitting
-            # notify::ended, so use a fixed dwell timer to advance after one loop.
+        elif _is_gif_record(record):
+            # Animated GIFs: rendered via GdkPixbufAnimationIter/AnimatedGifWidget
+            # (see _load_animated_gif), which loops indefinitely on its own GLib
+            # timer and never emits a "finished" signal, so use a fixed dwell
+            # timer to advance after one loop.
             # Default: 15 s (enough to see the full loop at least once for 8-frame GIFs).
             gif_dwell_ms = int(_settings.get("tttv_gif_dwell_s") * 1000)
             self._pending_advance_source = GLib.timeout_add(
@@ -1743,19 +1883,20 @@ class AttractorWindow(Gtk.Window):
 
     # ── Generation loop ───────────────────────────────────────────────────
 
-    def _generation_loop(self) -> None:
+    def _generation_loop(self, run_id: int = 0) -> None:
         """
         Background daemon thread. Continuously generates prompts and enqueues
         new generation jobs via on_enqueue callback.
 
         Back-pressure: if queue depth >= 3, waits 30 s before retrying (server
-        isn't consuming jobs fast enough). Stops when _gen_stop is set.
+        isn't consuming jobs fast enough). Stops when _gen_stop is set OR when a
+        newer start() has superseded this run (`_run_id != run_id`).
         """
         # AnimateDiff is slow (~5 min/frame); cap ahead-of-time queuing to 1 job.
         # Server-based models can queue up to 3 because jobs are seconds apart.
         _max_queue = 1 if self._model_source == "animatediff" else 3
 
-        while not self._gen_stop.wait(0.0) and self._auto_generate:
+        while not self._gen_stop.wait(0.0) and self._auto_generate and self._run_id == run_id:
             depth = self._get_queue_depth()
             generating = self._get_is_generating()
             GLib.idle_add(self._update_work_lbl, depth, generating)
@@ -2230,8 +2371,11 @@ class AttractorWindow(Gtk.Window):
         self._autogen_switch.handler_unblock_by_func(self._on_autogen_toggled)
 
         # If auto-gen just became enabled and wasn't before, start the thread.
+        # Pass the current `_run_id` so this loop isn't instantly superseded by
+        # the run-token gate (a bare spawn would default run_id=0 and exit).
         if self._auto_generate and not was_auto_gen and self._started and self._alive:
-            threading.Thread(target=self._generation_loop, daemon=True).start()
+            threading.Thread(target=self._generation_loop,
+                             args=(self._run_id,), daemon=True).start()
 
         # Flash to signal the channel change, then advance to the first video.
         self._trigger_channel_change()
@@ -2471,12 +2615,17 @@ class AttractorWindow(Gtk.Window):
 
         return "  ".join(parts)
 
-    def _att_status_poll_loop(self) -> None:
+    def _att_status_poll_loop(self, run_id: int = 0) -> None:
         """Background thread: polls server status, disk, and chip telemetry every 10 s.
 
         Two-stage chip read so the segment is never blank at startup:
           Stage 1 — sysfs clocks only (instant, posted before anything blocks).
           Stage 2 — full telemetry via tt-smi (may take up to ~13 s on cold start).
+
+        Exits when `_att_poll_stop` is set OR a newer start() has superseded this
+        run (`_run_id != run_id`) — otherwise a fast close→reopen while this
+        thread is blocked in a ~13 s tt-smi read would leave TWO poll loops
+        hammering the hardware (see reference_qb2_card924055_fragility).
         """
         # Stage 1: post an instant sysfs-only baseline so _att_chip_lbl is visible
         # immediately, before the slow tt-smi version check + snapshot run.
@@ -2486,7 +2635,7 @@ class AttractorWindow(Gtk.Window):
             shade_str = "".join(self._clock_to_shade(c, max_clk) for c in clocks)
             GLib.idle_add(self._apply_att_chip, f"{max_clk} MHz  {shade_str}")
 
-        while not self._att_poll_stop.is_set():
+        while not self._att_poll_stop.is_set() and self._run_id == run_id:
             ready, model = self._get_server_status()
             depth = self._get_queue_depth()
             generating = self._get_is_generating()

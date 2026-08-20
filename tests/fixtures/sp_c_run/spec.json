@@ -1,0 +1,7 @@
+{
+  "_spec_version": "comfyui-api-v1",
+  "1": {"class_type": "TTLGTextToImage", "inputs": {"model": "FLUX.1-schnell", "prompt": "a lighthouse at dusk", "width": 512, "height": 512}},
+  "2": {"class_type": "TTLGCaptionImage", "inputs": {"src": ["1", "image_path"], "prompt": ""}},
+  "3": {"class_type": "TTLGEstimateDepth", "inputs": {"src": ["1", "image_path"]}},
+  "4": {"class_type": "TTLGGenerateText", "inputs": {"prompt": "write about {caption}", "caption": ["2", "caption"]}}
+}

@@ -1,0 +1,32 @@
+{
+  "_comment": "Fixture for spec_remix tests — 3 nodes: scalar literals, a wired input, a bool.",
+  "_spec_version": "comfyui-api-v1",
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "text + number literal inputs, to be exercised by editable_params/derive_spec",
+    "inputs": {
+      "prompt": "a test prompt",
+      "steps": 4,
+      "negative_prompt": "blurry",
+      "_hint": "structural key must be excluded from editable params"
+    },
+    "outputs": ["image_path"]
+  },
+  "2": {
+    "class_type": "TTLGImageToVideo",
+    "_comment": "wired input (image comes from node 1) must be excluded from editable params",
+    "inputs": {
+      "image_path": ["1", "image_path"],
+      "num_frames": 33
+    },
+    "outputs": ["video_path"]
+  },
+  "3": {
+    "class_type": "TTLGAnimateDiff",
+    "_comment": "bool literal input",
+    "inputs": {
+      "loop": true
+    },
+    "outputs": ["gif_path"]
+  }
+}

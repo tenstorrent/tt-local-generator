@@ -1,505 +1,976 @@
-tt-local-generator (0.11.0) noble; urgency=medium
-
-  * artgen: run up to 3 generations concurrently (manual queue + auto-gen)
-    instead of strictly serial — chat backends batch requests, so this improves
-    throughput. Aggregate progress ("Generating N job(s)… Xs"); cap is the
-    _MAX_CONCURRENT_ARTGEN constant.
-  * artgen: raise the LLM call timeout 300s -> 600s so large code generations on
-    a 70B don't hit the client ceiling.
-  * codeart: add a plugins.html card and ship two starred example outputs
-    (recursion-tree.py, markov-poem.pl) under docs/assets/artgen/.
-  * Fix install-breaking quoting bug in the tt-model-z-image / tt-model-motif
-    debconf .config scripts (unmatched quote aborted the config step).
-  * Correct Z-Image-Turbo hardware label P300X2 -> P150X4 across the UI,
-    debian/control, and changelog (it runs on P150X4, per the start script).
-  * AnimateDiff multi-chip: bound the total drain-thread wait by a single shared
-    deadline instead of joining each thread with the full timeout (avoids
-    timeout*N wall-clock when multiple chips hang).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 08 Jul 2026 00:00:00 +0000
-
-tt-local-generator (0.10.0) noble; urgency=medium
-
-  * artgen: new "codeart" generator — source code as art. Args: --language,
-    --inspiration, --style (auto/quine/ascii/poem/oneliner/glitch/
-    unusually_verbose/function_oriented), and --should-compile (a prompt
-    directive, on by default). Python output is checked with a safe parse-only
-    validator (ast.parse, never executed); the result is recorded in the
-    artifact's params. Appears automatically in the GUI artgen panel and over
-    MCP.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 08 Jul 2026 00:00:00 +0000
-
-tt-local-generator (0.9.2) noble; urgency=medium
-
-  * artgen: auto-discover externally-started chat servers. Endpoint detection
-    now sweeps local ports for any OpenAI-compatible chat model instead of only
-    probing the app's own artgen (8002) and prompt-gen (8001) ports. A model
-    launched outside the app on a non-standard port (e.g. a vLLM Llama-3.3-70B
-    on 8003) is now found and used, and the tiny prompt-gen fallback is ranked
-    last so a real chat model always wins over it.
-  * mcp_server: route _make_call_fn through the same discovery for consistency.
-  * TTLG_ARTGEN_SCAN_PORTS env var overrides the swept port list.
-  * mcp_server: move default port 8003 -> 8120 (still TTLG_MCP_PORT-overridable)
-    so it no longer collides with a chat model started on 8003 and stays outside
-    the artgen port sweep. tt-ctl mcp-config and plugin docs updated to match.
-  * UI: the Servers popover (non-autohide, so it stays open while a service
-    boots) now dismisses when the main window loses focus, instead of lingering
-    on top of other applications' windows after an app switch.
-  * artgen: the panel's health indicator now uses the same endpoint discovery
-    as the generation router, so a model started on a non-standard port shows
-    as "on" (and its name is displayed) instead of falsely reading offline.
-    The 5s poll re-pings the cached endpoint and only re-sweeps when it drops.
-  * UI: the Servers popover reconciles its artgen rows against discovery, so the
-    row for the actually-loaded model lights up wherever it is served (and only
-    that row, fixing the prior quirk where all artgen rows lit whenever 8002 was
-    up).
-  * tests: fix stale test_worker_animatediff mocks (check_hardware now returns
-    a 3-tuple (ok, msg, num_chips) after the multi-chip change).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 07 Jul 2026 00:00:00 +0000
-
-tt-local-generator (0.9.1) noble; urgency=medium
-
-  * Add Z-Image-Turbo (P150X4, functional) and Motif-Image-6B-Preview
-    (P300X2, complete) image generation models.
-  * New start scripts: bin/start_z_image_turbo.sh, bin/start_motif.sh.
-  * Image tab gains a MODEL dropdown (FLUX / SDXL / Z-Image-Turbo / Motif)
-    with health-check auto-sync and preference persistence.
-  * server_manager.py: add z-image-turbo and motif ServerDef entries.
-  * tt-ctl: add log glob patterns for both new models.
-  * debian/control: add tt-model-z-image and tt-model-motif packages;
-    update tt-local-generator-models-all meta-package total (~360 GB).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 30 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.9.0) noble; urgency=medium
-
-  * Upgrade to tt-inference-server v0.17.0 (image 0.17.0-8c48a10).
-    Update DOCKER_IMAGE in start_wan_qb2.sh, start_flux.sh, start_animate.sh,
-    start_sdxl.sh; vendor/VENDOR_SHA → 48055de3d1b444e0dbce23cc378590eb6abc2ca5.
-  * Fix breaking API change in patches/media_server_config/tt_model_runners/dit_runners.py:
-    _wan22_pipeline_args: "prompt" → "prompts": [...], "negative_prompt" →
-    "negative_prompts": [...]; resolution param made optional; seed default 0.
-    TTWan22I2VDistillRunner.run: same prompt change, remove height/width/num_frames,
-    hardcode num_inference_steps=4, remove negative_prompt handling.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 30 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.8.2) noble; urgency=medium
-
-  * Add "Use all chips in parallel" checkbox to AnimateDiff Performance panel.
-    On by default; unchecking forces single-chip (chip 0) regardless of how
-    many Blackhole devices are detected. Ignored when Device ID is pinned.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 23 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.8.1) noble; urgency=medium
-
-  * Fix multi-chip AnimateDiff: use same seed on all chips (consistent base
-    composition), concatenate shard GIFs in chip order instead of interleaving.
-  * Clarify animatediff.py docs: multi-chip uses N separate processes (not
-    ShardTensorToMesh) because SD demo UNet weight loading is single-device only.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 23 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.8.0) noble; urgency=medium
-
-  * Upgrade vendor/tt-animatediff submodule from v0.1.0 to v0.9.0.
-  * Expose AnimateDiff v0.9 config panel in video tab: mode, negative prompt,
-    temporal alpha, lightning mode, chain continuity, MotionAdapter.
-  * Wire AnimateDiff into TT-TV endless mode: correct model_source, serverless
-    health check bypass, queue depth capped to 1 for slow generation.
-  * Add "📺 Start Endless" button in video tab when AnimateDiff is selected.
-  * Add ⊞ Grid / ▶ Player toggle in TT-TV sidebar for live GIF grid view.
-  * Fix TT-TV AnimateDiff playlist: GIFs now advance via dwell timer (15 s
-    default) since GStreamer loops GIFs without emitting notify::ended.
-  * Add AnimateDiff GIF dwell setting to Preferences → TT-TV.
-  * Add 🔀 Pipeline button in main toolbar to launch standalone pipeline app.
-  * Fix Theme Set mode: Qwen3-0.6B no longer echoes [prompt] placeholder.
-  * Fix missing .pipeline-run-job-failed CSS class.
-  * Fix PipelineTemplateCard showing grey placeholder boxes with no prior runs.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 22 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.7.4) noble; urgency=medium
-
-  * Remove WorkflowPopover from toolbar (workflows moved to tt-ctl only).
-  * Fix gallery scroll/tab-switch lag: ArtgenGallery GIF cards now show static
-    thumbnails at rest; animated widget only on hover — eliminates 62 concurrent
-    GLib.timeout_add timers saturating the GTK main loop.
-  * Add context menu rebuild guard: skip PopoverMenuBar relayout when tab source
-    unchanged.
-  * Hide GTK 4.14 built-in video mediacontrols overlay (eject button on hover).
-  * CI: add xvfb so @gtk_required tests run instead of silently skipping.
-  * Merge Pipeline tab, PipelinePortfolioView, and all retry/compat fixes from
-    feat/remix — now includes animated GIF Pipeline phase grid, portfolio view
-    for completed runs, and per-job retry buttons.
-  * Vendor tt-animatediff as git submodule (removes bundled app/animatediff/ copy).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 09 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.7.3) noble; urgency=medium
-
-  * Fix startup latency: defer ArtgenGallery.refresh() in ArtgenPanel._build()
-    via GLib.idle_add so it runs after the window paints. With 161 artgen records,
-    _rebuild_grid() was taking ~250 ms synchronously, making app startup feel slow
-    even with an empty video/image history. ArtgenPanel init drops from 302 ms
-    to 64 ms (5x improvement); window appears instantly.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.7.2) noble; urgency=medium
-
-  * Gallery pagination: show at most 48 cards per page in each gallery
-    (video / image / animate) with a prev/next pager bar showing
-    "1–48 of 310 · page 1/7". Reduces startup widget-realization cost
-    from 417 cards to 48, fixing the seconds-long startup delay and
-    sluggish tab switching that grew with the history size.
-  * Fix _on_transform_finished: called non-existent .rebuild(); changed
-    to .load_history() so transform results actually appear in gallery.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.7.1) noble; urgency=medium
-
-  * Fix scroll sluggishness: GLib.io_add_watch dead-pipe spin loop in
-    workflow_popover.py._on_run_stdout. When readline() returned "" at pipe
-    EOF, the old code returned SOURCE_CONTINUE before reaching the IO_HUP
-    handler, leaving the dead fd in GLib's watch table and spinning the main
-    loop on every idle iteration. Fixed by falling through to the IO_HUP
-    check on empty reads so SOURCE_REMOVE is returned and the watch removed.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 08 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.7.0) noble; urgency=medium
-
-  * Full v0.15.0 model validation on QB2 (P300X2). Validated models:
-    Wan2.2-T2V (360s), SkyReels-V2-I2V (90s), FLUX.1-schnell (3s),
-    SDXL/cpp_server (2s — fastest), Mochi-1 (19 min @ 64 steps, HQ),
-    Artgen Qwen3-8B / Llama-3.1-8B / Llama-3.3-70B / Qwen3-32B.
-  * FLUX.1-schnell promoted to default image model (no noise, 3s/image).
-  * SDXL via cpp_server: new start_sdxl.sh, fastest image generation (2s),
-    first test of the C++ inference backend on QB2.
-  * Mochi: request_processing_timeout bumped to 7200s (was 1000s);
-    full 64-step 97-frame generation now works end-to-end.
-  * Right-click transform menu on gallery cards (intent-first, forge-powered):
-    Remove background, Describe this, Show depth — powered by rmbg/blip/depth
-    plugins; results flow into Remix as seed images.
-  * Plugin transform logging: every transform writes a structured log visible
-    in Debug → Open Log Viewer under TRANSFORMS section.
-  * tt-ctl workflow subcommand: run/list ComfyUI-compatible workflow JSON specs.
-    1964 World's Fair example pipeline included.
-  * hidden_plugins setting: Preferences → Plugins lets users hide any video
-    model or artgen plugin from the UI without removing it.
-  * forge utility plugins: rmbg (background removal), blip (captioning),
-    depth (GLPN depth map) — all run via tenstorrent venv subprocess.
-  * Documentation: PERFORMANCE.md with validated timings, README and CLAUDE.md
-    accuracy pass for v0.15.0 reality, UPGRADE.md for 0.5→0.6 migration.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 01 Jun 2026 00:00:00 +0000
-
-tt-local-generator (0.6.0) noble; urgency=medium
-
-  * Upgrade tt-inference-server vendor pin to v0.15.0 (image 0.15.0-25891d3).
-    Patches rebased for new VLLMForge API, WAN_2_2_I2V variants, updated runner
-    and domain model patterns.
-  * Fix: /mnt/bonus bind-mount added to apply_patches.sh so Docker containers
-    can follow HuggingFace cache symlinks to non-standard storage locations.
-  * Fix: --no-auth flag added to all start scripts (v0.15.0 enables auth by
-    default; clients would receive 401 without this flag).
-  * Fix: Prometheus multiproc directory permissions corrected automatically on
-    container start (v0.15.0 creates /tmp/prometheus_multiproc as root, causing
-    PermissionError on first generation request).
-  * Validated on QB2 (P300x2): Wan2.2-T2V-A14B-Diffusers generates successfully.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 29 May 2026 00:00:00 +0000
-
-tt-local-generator (0.5.0) noble; urgency=medium
-
-  * Unified Remix UI: single "Remix" entry point on every card hover bar and
-    detail panel replaces scattered Animate, Use-as-seed, and Iterate buttons.
-    RemixPopover shows source thumbnail, ingredient checkboxes, live hint
-    preview, and target buttons derived from plugin manifests.
-  * Context-aware menu bar: File / Playlists / View fixed on left, dynamic
-    context slot on right changes title+contents per active source tab (Video,
-    Animate, Image, Art). Removes the static Generation/Prompt/TT-TV menus.
-  * Log viewer: Debug menu opens a sidebar-tree + content-pane window for
-    browsing AnimateDiff run logs, server logs, and prompt server logs with
-    error-line highlighting and copy-path/copy-all buttons.
-  * AnimateDiff multi-chip fix: generate_blackhole_v2.py now opens only
-    device_ids=[0] — UNet2D permute_conv_weights crashes on MeshShape([1,4]).
-  * ffmpeg utility plugin (plugins/ffmpeg/) provides extract_frame,
-    get_metadata, convert_to_gif, convert_to_mp4, resize as in-process
-    callables for the remix engine (utility plugins are not exposed via the
-    MCP server).
-  * Gallery density: View menu adds Comfortable/Compact card size toggle.
-  * PendingCard layout fix: fixed-size thumbnail placeholder prevents FlowBox
-    cell expansion during generation.
-  * Status bar fix: error messages capped at 80 chars; log path extracted and
-    stored; clicking status bar opens log viewer to the failing run log.
-  * Prompt bracket fix: _strip_instruction_leak now handles screenplay-format
-    [INT. X] headers and fully-bracket-wrapped prompts from guided LLM output.
-  * Deps: fastapi + uvicorn added for MCP server; markovify added to
-    setup_ubuntu.sh pip installs; requirements.txt updated.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 29 May 2026 10:00:00 -0700
-
-tt-local-generator (0.4.0) noble; urgency=medium
-
-  * Plugin system: generators are now MCP-native plugins in plugins/<name>/
-    with mcp.json manifests and plugin.py executors; plugin_loader discovers
-    them from plugins/ and ~/.config/tt-local-gen/plugins/ at startup.
-  * MCP server (app/mcp_server.py) exposes all loaded plugins as JSON-RPC 2.0
-    tools on port 8003; tt-ctl mcp-config prints the client configuration.
-  * tt-ctl plugin list: tabular view of all registered plugins with name,
-    media type, tab, hardware, and tool count.
-  * Remix graph: artgen.remix_targets_for() and RemixContext dataclass wire
-    up cross-generator remixing via accepts_remix_from in manifests.
-  * AnimateDiff: generated GIFs now persist in the Video tab across app
-    restarts (media_type "animatediff" was being silently dropped from the
-    video gallery on reload).
-  * AnimateDiff: subprocess timeout (default 30 min) kills runaway generation
-    and returns a clear error instead of blocking forever.
-  * Terminology: "Artgen" renamed to "Generative Art" throughout the UI and
-    website.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 27 May 2026 16:33:52 -0700
-
-tt-local-generator (0.3.3) noble; urgency=medium
-
-  * prompt engine: six structural slug templates rotate the syntactic shape
-    of every algorithmically-generated video/SkyReels prompt so the LLM
-    receives different sentence patterns on each call.
-  * prompt engine: UNEXPECTED_JUXTAPOSITIONS word bank (24 entries) injected
-    at 12 % probability as a sixth slot — surreal modifiers the LLM cannot
-    remove without violating its "keep every element" instruction.
-  * prompt engine: adaptive LLM sampling — temperature, top_p, and max_tokens
-    scale to model size (0.6 B → temp 1.05; 7-8 B → 0.85; 13-14 B → 0.75;
-    30 B+ → 0.65); small models (<3 B) run n=3 candidates and the one with
-    the highest content-word specificity score is selected.
-  * prompt engine: anti-repetition sliding window (last 20 slugs); slugs with
-    Jaccard similarity ≥ 0.35 against any recent slug are retried up to 5 times
-    before accepting the least-similar candidate.
-  * prompt engine: Markov state_size lowered 2 → 1 on the 498-line corpus,
-    producing genuinely wild sentence-level recombinations instead of near-
-    verbatim replay.
-  * artgen: circuit generator now defaults --circuit-style to random, cycling
-    through all diagram styles on each generation.
-  * artgen/ansi: _normalize_grid no longer strips trailing blank rows that fall
-    within the target canvas height — BBS void zones (rows 1-2, 18-20) are
-    intentional and must be preserved.
-  * settings: animatediff_frames preference added (default 8); Preferences
-    dialog exposes it with a SpinButton; replaces the hardcoded frames=8.
-  * tests: AnimateDiffGenerationWorker covered (hardware failure, subprocess
-    failure, happy path, cancellation); test_prompt_client updated to use
-    urllib.request mocking throughout.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 23 May 2026 10:00:00 -0700
-
-tt-local-generator (0.3.2) noble; urgency=medium
-
-  * artgen: ANSI generation rewritten as a 3-pass pipeline — ASCII structure
-    (spatial composition, plain chars, 1024 tokens) → block refinement (Unicode
-    block chars ░▒▓█▀▄▌▐, 1024 tokens) → colorization (xterm-256 foreground
-    \033[38;5;Nm█ per cell, 8192 tokens). Separating composition from character
-    selection from color assignment gives coherent imagery instead of palette strips.
-  * artgen: switch ANSI format from background+space (\033[48;5;Nm ) to
-    foreground+block (\033[38;5;Nm█) — brighter, more vibrant output in all terminals.
-  * artgen: ArtGenerator base class gains generate_artifact(args, call_fn) hook for
-    multi-pass pipelines; AnsiGenerator overrides it; all other generators use the
-    single-pass default. First prototype of the remix-mode multi-pass pattern.
-  * artgen cli: _make_call_fn() closure supports per-call max_tokens override so each
-    pipeline pass can tune its own token budget independently.
-  * artgen panel: updated to call generate_artifact() instead of inline pipeline;
-    accumulates usage across all passes in a single MediaRecord.
-  * docs: README and website explain the 3-pass ANSI pipeline; CLAUDE.md documents
-    the generate_artifact hook and multi-pass architecture.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 17:00:00 -0700
-
-tt-local-generator (0.3.1) noble; urgency=medium
-
-  * artgen: BBS ANSI style — new --ansi-style bbs mode with 80×25 canvas,
-    near-black void + neon palette, board identity (--board-name, --tagline),
-    and dedicated composition guidance. Includes generate_bbs_batch.sh with
-    18 invented BBS board splash screens.
-  * artgen: auto-detect best available LLM endpoint — tries port 8002 (artgen
-    LLM) first, falls back to port 8001 (Qwen3-0.6B prompt server). No config
-    needed; start a bigger model and every subsequent generation upgrades.
-  * artgen CLI: add --timeout flag (default 300s) — replaces the 30s hard limit
-    that was too short for large models on CPU.
-  * docs: emphasise QB2/Blackhole hardware specificity throughout README and
-    website; note Wormhole is not supported.
-  * docs/website: AnimateDiff GIF gallery — nine starred real-session outputs
-    embedded in both the artgen section and the prompt examples tab.
-  * fix: improve delete button error diagnostics in artgen gallery and detail
-    views (better exception logging when choose_finish fails).
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 21 May 2026 15:03:00 -0700
-
-tt-local-generator (0.3.0) noble; urgency=medium
-
-  * artgen: add AnimateDiff Blackhole generator — direct TTNN UNet runner via
-    generate_blackhole_v2.py, requires ~/tt-metal python_env and
-    ~/tt-scratchpad/tt-animatediff (developer scratchpad path, not packaged).
-    Gracefully degrades with an informative error when prerequisites are absent.
-  * Watch mode: animated GIFs now loop correctly — GIF frames are decoded via
-    GdkPixbuf.PixbufAnimation and driven by per-frame delay timers.  The GIF
-    timer lifecycle is separated from slideshow timers so it survives
-    _start_timers() / _stop_timers() restarts without being killed.
-  * Watch mode: rich rendering for palette, verse, and ANSI text artgen records.
-    Palette JSON renders as full-screen color swatch strip with name and lore;
-    verse/freeform text renders as large centered italic text on dark canvas;
-    ANSI art renders via existing HTML pipeline.  Plain Gtk.TextBuffer fallback
-    is now only for unknown types.
-  * Fix Playlist toolbar button on GTK 4.14: Gtk.MenuButton uses
-    gtk_popover_popup() internally (not gtk_widget_show()), so the deprecated
-    GtkWidget::show signal never fires.  Switched to notify::visible with a
-    get_visible() guard — popover now populates reliably on every GTK 4.x.
-  * setup_vendor.sh: auto-configure vendor/tt-inference-server/.env on fresh
-    clone — detects HF_TOKEN from environment variables and credential files,
-    prompts interactively when stdin is a terminal, generates a cryptographically
-    random JWT_SECRET via openssl rand.  No-ops if .env already present.
-  * postinst: generate vendor .env secrets automatically — JWT_SECRET is now
-    randomised with openssl rand instead of defaulting to a static string;
-    HF_TOKEN is sourced from the installing user's huggingface credential files
-    when available.  Removes the manual "edit .env" step from the checklist.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 22 May 2026 12:00:00 +0000
-
-tt-local-generator (0.2.7) noble; urgency=medium
-
-  * Packaging: add tt-model-animate (Wan2.2-Animate-14B, ~30 GB),
-    tt-model-skyreels-t2v (SkyReels-V2-DF-1.3B, ~12 GB), and
-    tt-model-skyreels-i2v (SkyReels-V2-I2V-14B, ~58 GB) model packages.
-    tt-model-skyreels-i2v declares Depends: tt-model-wan2-t2v because it
-    needs the Wan2.2 A14B diffusers checkpoint for VAE and T5 text encoder.
-  * Packaging: add tt-local-generator-models-all meta-package that depends
-    on all seven model packages for single-command complete installation.
-  * Website: remove incorrect hero CLI snippet (git clone && ./tt-gen skipped
-    all required setup steps). Git-clone install tab now lists all five steps
-    including setup_vendor.sh and apply_patches.sh with explanatory notes.
-  * INSTALL_deb.md: rewrite to cover both deb and clone paths clearly, with
-    full step-by-step instructions for each, model package list, and retry
-    helpers.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 21 May 2026 12:00:00 +0000
-
-tt-local-generator (0.2.6) noble; urgency=medium
-
-  * TT-TV artgen channels: fix empty pool — artgen MediaRecord objects are now
-    included in the attractor record set so named playlists containing artgen
-    items (Palettes, Landscapes, etc.) actually populate and play.
-  * TT-TV expert rendering: artgen artifacts are now rendered by content type.
-    SVG files → Gtk.Picture (full vector quality).  Palette JSON → full-screen
-    color swatch strip (_ColorSwatchArea, cairo) with the palette name and lore
-    text.  Verse/freeform/ANSI text → large centered italic text on dark canvas.
-    Unknown types fall back to thumbnail PNG.
-  * TT-TV channel switch: named-playlist and "All Videos" channels now fetch a
-    fresh record set from the store on every switch, so records added after
-    TT-TV opened (and artgen records not in the initial pool) are included.
-  * playlist_store: _to_pl now materialises record_ids for live/filter playlists
-    (artgen auto-playlists such as Landscapes, Palettes, etc.) so TT-TV channel
-    switching can match records by ID regardless of playlist type.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 16:30:00 +0000
-
-tt-local-generator (0.2.5) noble; urgency=medium
-
-  * Timestamps: store all created_at fields in UTC (ISO 8601 with +00:00
-    offset); display in the user's local timezone using 12-hour format
-    (e.g. "May 7  8:33 AM").  New time_utils module provides utc_now_iso(),
-    fmt_local_12h(), fmt_local_date(), fmt_local_time() — all callers updated.
-    Legacy naive timestamps (no timezone suffix) treated as UTC for backward
-    compatibility with existing records.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 07 May 2026 15:35:00 +0000
-
-tt-local-generator (0.2.4) noble; urgency=medium
-
-  * Vendor: update tt-inference-server to v0.13.0
-    (b5589534ca831de1852781a3b9902c212a24e329).  All 7 patch steps apply
-    cleanly — tt_dit hotpatches, media_server_config overrides, and HF_HOME
-    bind-mount all verified via --print-docker-cmd dry-run.
-
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 06 May 2026 17:10:00 +0000
-
-tt-local-generator (0.2.3) noble; urgency=medium
-
-  * SkyReels-V2-I2V-14B-540P: wire I2V endpoint, fix constants.py patch,
-    add TTSkyReelsI2VRunner to runner_fabric. api_client branches on image
-    presence to use /v1/videos/generations/i2v with image_prompts[] format.
-  * model_ready() probes both T2V and I2V endpoints so health check works
-    regardless of which model is running.
-  * Required-image UI treatment: amber pulsing border on seed well when
-    SkyReels I2V or Animate is selected without a conditioning image.
-    Generate button shows inline error if user tries to submit without one.
-    Source description label updated to say "requires starting image".
-  * Seed well CSS state (_update_seed_well_state) wired into _set_source,
-    _set_model, and _set_seed_image so required/has-seed CSS stays in sync.
-
- -- Tenstorrent <software@tenstorrent.com>  Tue, 06 May 2026 00:00:00 +0000
-
-tt-local-generator (0.2.2) noble; urgency=medium
-
-  * Massively expand prompt word banks: 10 new literary subject registers
-    (Homer, Chekhov, Borges, Dostoevsky, Woolf, García Márquez, Achebe,
-    Mishima, Bashō, Dickens) and 10 new historical/geographic setting
-    registers (Ancient, Medieval, Renaissance, Industrial Age, Wartime,
-    Colonial, Soviet, East Asia Historical, Global Cities, Sacred Spaces).
-  * Add .deb install section to homepage with gh release download instructions.
-  * Auto-create ~/Videos/tt-local-generator → ~/.local/share/tt-video-gen
-    symlink on install (postinst and setup_ubuntu.sh).
-  * Fix postinst home directory resolution via getent passwd instead of
-    hardcoded /home/$REAL_USER; guard against root user; pre-create target dir.
-  * Fix homepage Docker description to match actual postinst behavior.
-  * Refactor homepage tab-switching JS into shared initTabs() helper.
-
- -- Tenstorrent <software@tenstorrent.com>  Sun, 27 Apr 2026 00:00:00 +0000
-
-tt-local-generator (0.2.1) noble; urgency=medium
-
-  * Add VERSION file at repo root as single source of truth for the
-    application version.
-  * tt-ctl now reports the version via --version flag.
-  * prompt_server.py reads its FastAPI version from VERSION instead of a
-    hardcoded string.
-
- -- Tenstorrent <software@tenstorrent.com>  Fri, 24 Apr 2026 00:00:00 +0000
-
-tt-local-generator (0.2.0) noble; urgency=medium
-
-  * Add tt-model-wan2-t2v, tt-model-flux, tt-model-mochi, tt-model-qwen3
-    virtual/meta packages that download HuggingFace model weights at install
-    time via a shared bin/download_model.sh helper.
-  * Shared debconf key (tt-local-generator/hf-token, type: password) across
-    all four packages — token is prompted at most once per apt run, then
-    immediately wiped from the debconf database after use.
-  * Token discovery order: $HF_TOKEN env var → $HUGGING_FACE_HUB_TOKEN →
-    ${HF_HOME}/token → ~/.huggingface/token → /etc/tt-generator/hf_token →
-    interactive debconf prompt. Qwen3 (public model) suppresses the prompt.
-  * Download runs as the real (non-root) user via runuser so weights land in
-    the correct ~/.cache/huggingface/hub/ location.
-  * Download failures are non-fatal — apt does not roll back the package;
-    retry instructions are printed for manual re-runs.
-  * Expose /usr/bin/tt-local-gen-download-model as a globally-accessible
-    symlink to the shared helper for manual model (re-)downloads.
-  * FLUX.1-dev postinst prints gated-model guidance (license URL) on failure.
-
- -- Tenstorrent <software@tenstorrent.com>  Tue, 08 Apr 2026 00:00:00 +0000
-
-tt-local-generator (0.1.0) noble; urgency=medium
-
-  * Initial .deb packaging for Ubuntu 24.04 (Noble Numbat).
-  * Ships app/, bin/, patches/ and a vendored tt-inference-server snapshot
-    under /usr/lib/tt-local-generator/.
-  * postinst: adds Docker CE apt source, pulls inference image
-    (ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34),
-    installs markovify, creates vendor .env from .env.default on first install.
-  * prerm: stops all managed services before removal.
-  * Adds /usr/bin/tt-local-gen and /usr/bin/tt-local-gen-ctl as the
-    globally-namespaced entry points; tt-gen and tt-ctl are deprecated aliases.
-  * Desktop entry updated to Exec=/usr/bin/tt-local-gen.
-
- -- Tenstorrent <software@tenstorrent.com>  Mon, 07 Apr 2026 00:00:00 +0000
+tt-local-generator (0.89.2) noble; urgency=medium
+
+  * fix(convert-library): `--backup` no longer leaves a phantom 0-byte `.bak`
+    file when the online backup fails mid-copy. `sqlite3.connect()` materializes
+    the destination file before the copy runs, so a failure (disk full, I/O
+    error) previously left a misleading empty file that looked like a real
+    backup; `_backup_db` now removes the partial file and re-raises so the run
+    aborts loudly. `app/library_convert.py` + regression test.
+  * refactor(create): `possibilities._resolve_tile_art` tier-1 (starred art)
+    now shares `_starred_record_for` with `_example_for`, so a tile's art and
+    its tie-to-shown caption can never disagree about which starred piece is
+    shown. No behavior change.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 09:40:00 +0000
+
+tt-local-generator (0.89.1) noble; urgency=medium
+
+  * fix(create): "Start something" — a starred ARTGEN piece no longer dumps its
+    full composed prompt TEMPLATE into the tile caption/composer. The v0.89.0
+    tie-to-shown behavior surfaced a starred piece's stored `prompt`, but an
+    artgen record's prompt is the whole filled-in template (system framing +
+    placeholders), not the options the user configured. Tie-to-shown is now
+    scoped to NATIVE mediums (image/video), whose stored prompt IS the user's
+    brief; artgen tiles always use their curated theme pool. `possibilities.py`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 09:10:00 +0000
+
+tt-local-generator (0.89.0) noble; urgency=medium
+
+  * fix(create): "Start something" tiles no longer repeat the same sample
+    prompt. Every medium (native image/video + every artgen generator) now
+    has its OWN pool of distinct, art-type-specific example lines, rotated so
+    repeat visits vary and no two tiles echo each other — replacing the single
+    per-medium string whose per-kind fallback made image/skyline/geometric/
+    circuit all read "a Moog Minimoog...". When a tile shows an explicitly
+    STARRED piece, the tile's real prompt is used as the example, so the copy
+    describes exactly what's on the tile. `possibilities.py`; pure/GTK-testable.
+  * fix(watch): center each tensix-viz chip grid within its cell. The grid was
+    drawn from a fixed top-left pad with floored cell sizes, piling all the
+    slack on the right/bottom so the grid read as shoved to the left; now the
+    leftover is split evenly (tensix-viz `src/chip.js`, rebuilt + re-bundled;
+    86 sister-repo tests green).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 08:25:00 +0000
+
+tt-local-generator (0.88.0) noble; urgency=medium
+
+  * feat(tt-ctl): add `convert-library` — migrate/repair an older media
+    library. Extracted the fold SQL out of `media_store._migrate_media_types`
+    into a reusable `media_store.fold_media_types(conn)` (now idempotent via
+    a `media_type != 'video'` guard, called both by the app's own gated
+    startup migration and by the new tool ungated) and added
+    `app/library_convert.py`: `analyze()` (read-only dry-run report) and
+    `apply()` (fold AnimateDiff/Animate records to `media_type="video"`, and
+    optionally re-render every non-gif artgen thumbnail with the current
+    `artgen_thumb.make_thumbnail` renderer, fixing thumbnails baked by an
+    older renderer that showed raw ANSI escapes/JSON as text instead of a
+    color grid / swatch grid). Dry-run by default, `--apply` to write,
+    `--backup` to copy the DB first, `--no-thumbnails` to skip the
+    thumbnail sweep, `--db PATH` for an arbitrary library. Both conversions
+    are idempotent and fail-soft (a single bad record never aborts the run).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 20 Aug 2026 07:37:44 -0700
+
+tt-local-generator (0.87.0) noble; urgency=medium
+
+  * chore(pipeline): AnimateDiff + Wan2.2-Animate media is now
+    `media_type="video"` — past records via an idempotent `media_store`
+    migration (`PRAGMA user_version`-gated), future records via the
+    `new_animatediff`/`new_animate` factories — keeping `model_id` and a
+    `generator_type` provenance stamp ("animatediff"/"animate") so identity
+    is never lost. gif rendering is now driven by the file extension
+    everywhere (main_window's `is_gif` checks + the TT-TV attractor's
+    gif detection), not by a bespoke `media_type=="animatediff"` special
+    case, so a video-typed `.gif` still animates correctly. Files and
+    params are untouched; a starred AnimateDiff gif can now surface as the
+    Video "Start Something" tile.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 23:50:00 +0000
+
+tt-local-generator (0.86.1) noble; urgency=medium
+
+  * fix(create): re-render the bundled Ansi "Start Something" tile as a real
+    color grid. Its source record's cached thumbnail predated the artgen_thumb
+    fix that parses .ans into a color-grid PNG, so the tile showed raw escape
+    text instead of the art; regenerated from the .ans source with the current
+    renderer (26-color grid, 320×240).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 23:40:00 +0000
+
+tt-local-generator (0.86.0) noble; urgency=medium
+
+  * feat(create): ship curated "Start Something" tile art for a clean install.
+    Only the Image tile had a bundled default (Montreal '67); every other tile
+    showed a bare gradient on a fresh install. Promoted a curated example
+    (from starred favorites) as the bundled default for image, ansi, verse,
+    landscape, constellation, and codeart, so a first run shows real art on
+    those tiles. video and palette have no curated default yet and still fall
+    through to the per-kind gradient. A user's OWN starred piece of a medium
+    still overrides the bundled default (the starred tier added in 0.85.1).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 23:00:00 +0000
+
+tt-local-generator (0.85.1) noble; urgency=medium
+
+  * fix(create): a starred piece becomes its medium's "Start Something" tile.
+    `PossibilitiesWall._resolve_tile_art` resolved a hardcoded bundled example
+    (e.g. the Image tile's Montreal '67 asset) BEFORE curated playlists and
+    the native "latest" fallback, so an explicitly-starred image could never
+    win the tile — and even a correct resolution wouldn't show until restart,
+    since the wall was only built once. Fixed both: an explicit STARRED piece
+    of the medium is now the TOP-priority tier (starring IS curation, so it
+    overrides even the bundled default), and `CreateView.refresh_possibilities()`
+    rebuilds the wall each time `_on_loop_nav_create` shows Create, so a star
+    made in Discover/Library appears immediately, no restart needed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 00:00:00 +0000
+
+tt-local-generator (0.85.0) noble; urgency=medium
+
+  * fix(ui): the "Start Something" wall tiles zoom-to-fill instead of stretching.
+    The exemplar image was loaded with preserve_aspect_ratio=False, pre-stretching
+    it to the exact tile size and distorting any non-square image (worst on the
+    rectangular Image tile) — which also defeated the ContentFit.COVER already
+    set on the Picture. Now the pixbuf loads undistorted into a generous box and
+    COVER crops-to-fill like CSS object-fit: cover. (This was the only
+    preserve_aspect_ratio=False left in the app; every other thumbnail already
+    preserves aspect + COVERs.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 22:00:00 +0000
+
+tt-local-generator (0.84.0) noble; urgency=medium
+
+  * fix(ui): re-skin the primary-action buttons from the docs-site accent blue
+    (#1B8EB1) to the app's own teal (#4FD1C5 on #0F2A35 ink), matching the
+    tt-vscode-toolkit palette used everywhere else. Affects Pipeline Studio's
+    Run/Remix primary buttons (.ps-btn-primary, .ps-remix-all, .ps-remix-run-btn),
+    the inter-step chip arrow (.ps-chip-arrow), and Create's Watch toggle
+    (.create-watch-btn:checked). Docs-site semantic accents (#74C5DF borders /
+    #6FABA0 done / #F6BC42 active) are intentionally left as semantic colors.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 21:15:00 +0000
+
+tt-local-generator (0.83.0) noble; urgency=medium
+
+  * refactor(artgen): ArtgenDetail builds its reading-view WebKit WebView
+    lazily — on the first reading render — instead of at construction, mirroring
+    the activity_viz lazy pattern. Keeps a web-process-backed widget off the
+    app-startup path (and off tests that never open a reading view), fail-soft:
+    the reading view is a "reading-web" stack child built on demand, degrading
+    to the plain-text fallback without WebKit. Behavior once a reading view is
+    shown is unchanged. (Deep-review follow-up; no other module touched.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 20:30:00 +0000
+
+tt-local-generator (0.82.0) noble; urgency=medium
+
+  * fix(engine): the Pipeline Studio per-step model picker now actually routes
+    to the picked artgen model. The picker writes the raw server_manager key
+    (e.g. "artgen-qwen3-8b") into the node's model input, but
+    _artgen_key_for_model only matched the ServerDef --model display string
+    (e.g. "Qwen3-8B"), so every picker-driven artgen node silently fell back to
+    ARTGEN_DETECT (auto-detect) instead of the chosen model. It now matches the
+    raw server key exact-first (mirroring the native _match_server_key rule),
+    then falls back to the --model display / HF-id string for hand-authored and
+    legacy specs. Regression tests cover both paths. (Follow-up to the PR #23
+    deep-review; no other engine/run-spec/collect() behaviour changed.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 19:30:00 +0000
+
+tt-local-generator (0.81.0) noble; urgency=medium
+
+  * fix: deep-review findings on the branch (posted to PR #23), each with a
+    regression test.
+    - pipeline: one pipeline run at a time — launching a new run cancels the
+      prior runner and gates runner callbacks by run-id, so a superseded run
+      can no longer drive/register the wrong live view (and two concurrent
+      backend-switching runs can't contend on the hardware).
+    - security: the HuggingFace token is passed via the HF_TOKEN environment
+      variable (preserved across runuser with -w), never on argv — it is no
+      longer visible in the world-readable /proc/<pid>/cmdline during a
+      download. Applies to download_model.sh and all model postinst scripts.
+    - shell: the default (flag-off) Remix path now hides the detail pane so the
+      goal chooser isn't cramped; the OpenView back button is flag-aware; and
+      the worker progress/finished/error callbacks honour the _alive guard so a
+      job finishing after window-close can't touch torn-down widgets.
+    - engine: _run_tt_ctl preserves the tail of streamed output in its error
+      message on non-zero exit (AnimateDiff pipeline failures are diagnosable
+      again); ARTGEN_DETECT now records the confirmed backend it started so a
+      later same-target node skips a redundant stop/reset/start (can only
+      prevent needless churn, never skip a needed switch).
+    - chore: removed dead code (pipeline_panel.py, artgen_watch.py,
+      batch_generate.py) and strengthened two smoke tests to assert their
+      named behaviour. No engine/run-spec/collect() contract changed.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 19 Aug 2026 18:00:00 +0000
+
+tt-local-generator (0.80.0) noble; urgency=medium
+
+  * feat(pipeline): pipeline authoring is now hidden by default, behind
+    `TTLG_PIPELINE_MODE` (off unless set). With the flag off there is no
+    🧩 Pipelines nav entry, no blank-canvas Inspiration door in Create, and
+    no DAG editor anywhere in the app — 🔀 Remix instead goes straight from
+    the goal chooser to a run (the Stage), and the finished artifact lands
+    in the Library exactly like every other generation path. Leaving the
+    goal chooser or a running Stage returns to the Library, never to a
+    hidden studio "Discover" page, and a run keeps going if you leave it.
+    Fully reversible: setting `TTLG_PIPELINE_MODE=1` restores today's full
+    pipeline UI byte-for-byte — nothing was deleted, only gated. The
+    engine, run spec, and every `collect()` contract are untouched.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 19 Aug 2026 12:00:00 +0000
+
+tt-local-generator (0.79.0) noble; urgency=medium
+
+  * feat(pipeline): the pipeline live run is now a "making-of" (Slice 1). The
+    flat status ticker is replaced by a left-to-right recipe spine of step
+    tiles (done / active / upcoming), each previewing its own output the
+    moment it lands (animated gif, raster/video thumb, or the artgen rich
+    reading view). Multi-chip AnimateDiff now shows one live row per chip
+    inside the active tile — its `chipN:` lines, previously swallowed by the
+    engine's captured subprocess, are streamed into the pipeline via a new
+    `_run_tt_ctl(emit=...)` seam and rendered through the shared
+    `chip_progress.ChipProgressRows` widget Create already uses. The
+    tensix-viz hardware animation is embedded as the run's ambient machine
+    (lazy, fail-soft, driven by the active step's mode), and the
+    board-reset / server-start log lines are surfaced as a first-class
+    status instead of hidden in the collapsed Details log. "Step N of M"
+    now counts steps that are *done*, not merely started; a Stop button
+    cancels the runner and marks remaining steps cancelled; and the run
+    page's Back no longer dead-ends on a blank Open — it routes to Discover
+    while the run keeps going. Display-only: `collect()` and the run spec
+    are byte-identical; the app's main teal/blue-gray palette throughout.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 15:30:00 +0000
+
+tt-local-generator (0.78.0) noble; urgency=medium
+
+  * feat(tt-ctl): generations are saved to the Library by default; opt out with
+    --no-library. `tt-ctl run` already persisted via the worker and `tt-ctl
+    artgen` via media_store — both now expose a consistent --no-library flag
+    that skips Library registration (the media file is still written to disk).
+    Registered the two QB2-validation artifacts (Wan2.2-I2V mp4, FLUX.1-dev jpg)
+    into the Library.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 11:00:00 +0000
+
+tt-local-generator (0.77.5) noble; urgency=medium
+
+  * fix(ci): make the CI test job pass in its no-hardware/no-WebKit environment.
+    - Install python3-pil (Pillow): gallery/ansi-image/showcase tests build
+      image fixtures with PIL and errored on `import PIL` (~12 tests).
+    - test_animatediff_multichip: 3 run_subprocess tests now monkeypatch
+      ad._PYTHON to the running interpreter (like their siblings) so they don't
+      require a real ~/tt-metal env — they passed only because this dev box has
+      tt-metal installed.
+    - Deselect the three documented environment-level flakes (per CLAUDE.md) in
+      the CI pytest invocation, matching the prescribed local command.
+    (CI test-job/config only — no app behavior change.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 10:00:00 +0000
+
+tt-local-generator (0.77.4) noble; urgency=medium
+
+  * fix(ci): guard artgen_detail's WebKit import (_WEBKIT_OK) so the test suite
+    collects on CI runners without gir1.2-webkit-6.0. The CI job installs
+    gir1.2-gtk-4.0 but not WebKit, so artgen_detail's unconditional
+    require_version("WebKit") raised "Namespace WebKit not available" at import,
+    failing collection of every test that transitively imports main_window /
+    create_view (10 collection errors). artgen_detail now degrades its reading
+    view to plain text without WebKit, matching create_view (M1) and the
+    activity_viz/artgen_render/artgen_watch guards.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 09:00:00 +0000
+
+tt-local-generator (0.77.3) noble; urgency=medium
+
+  * fix: whole-branch review Minor findings M1–M4 (docs/branch-review-2026-08-11.md).
+    - M1: create_view guards the WebKit import (_WEBKIT_OK) and degrades the
+      reading view to plain text — the Create surface imports without WebKit.
+    - M2: pipeline-final artgen registration runs off-thread (thumbnail/record/
+      store I/O on a daemon thread, gallery refresh via GLib.idle_add), matching
+      the native path — no UI hitch on a large .ans/.json artifact.
+    - M3: documented the deliberate coherent-multichip per-segment timeout
+      (total ≈ N×timeout) in run_subprocess / _run_coherent_chain.
+    - M4: no-thumbnail GIF gallery cards render a static first frame instead of
+      a live AnimatedGifWidget (no continuous decode timer in the grid).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 08:00:00 +0000
+
+tt-local-generator (0.77.2) noble; urgency=medium
+
+  * fix: whole-branch code review — 3 Critical + 5 Important defects fixed
+    (report: docs/branch-review-2026-08-11.md), each with a regression test.
+    - C1: per-step Remix model picker now reaches the executed spec (apply_edits
+      inserts a 'model' edit even when the node had no pre-existing key).
+    - C2: seeded Muse goals (e.g. palette/text → looping animation) no longer
+      discard the seed (a param can't clobber a wired canonical input).
+    - C3: artgen models report readiness per-model, not all six at once
+      (_check_sdef matches the loaded /v1/models id to each ServerDef.model_id).
+    - I1: AnimateDiff is always-live in the pipeline composer (no-server gen).
+    - I2: Forge transform failures show a status instead of silently aborting
+      when an artgen Create medium is active.
+    - I3/I4: fixed a leaked GIF decode timer (orphaned hover-swap widget) and a
+      leaked telemetry daemon thread (no-WebKit activity viz teardown).
+    - I5: exported showcase pages label a done-but-unembeddable step as
+      'unavailable' instead of 'pending'.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 06:00:00 +0000
+
+tt-local-generator (0.77.1) noble; urgency=medium
+
+  * fix(bin): start_wan_i2v.sh sets MODEL_SPECS_ENV=dev so run.py finds the model.
+    - QB2 hardware testing revealed Wan2.2-I2V-A14B-Diffusers lives ONLY in the
+      dev model catalog (workflows/model_specs/dev/video.yaml), not prod. With
+      MODEL_SPECS_ENV defaulting to prod, non-dev run.py rejected it as an
+      "invalid choice" and the server never started. Setting MODEL_SPECS_ENV=dev
+      (env var only — NOT --dev-mode, which can break device init on this image)
+      selects the dev catalog for spec lookup while leaving device init intact.
+    - Validated on QB2 (P300X2): the server now launches, reaches "Application
+      startup complete", initializes all four chips, and creates the Wan-I2V
+      pipeline. (Full weight load additionally needs free disk for the
+      tt_dit_cache — unrelated to this fix.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 11 Aug 2026 00:00:00 +0000
+
+tt-local-generator (0.77.0) noble; urgency=medium
+
+  * feat(patches): fail-loud patch-verification harness.
+    - New app/patch_manifest.py (declarative source of truth for every patch
+      and injector step) + app/patch_verify.py (host-side probes: inject
+      anchors present, append targets exist, bind-mount sources compile;
+      version_at_most soft absorbed-patch warning). Both pure/stdlib-only.
+    - apply_patches.sh gates on the verifier up front, so a drifted injector
+      anchor or a moved catalog file aborts the run loudly instead of shipping
+      a half-patched vendor tree (the Steps-7/8/9 class of bug).
+    - CI (release-deb.yml) now applies AND verifies patches at build time, so
+      the shipped .deb vendor tree is actually patched — previously it shipped
+      unpatched. debian/rules gains a verify-before-ship gate (plus a marker
+      grep asserting the injects were applied) so a local build fails loud too.
+    - snapshot_vendor.sh stamps vendor/VENDOR_VERSION for the absorbed-patch
+      warning; quickstart.sh surfaces patch-drift status.
+    - Image-diff drift detection (docker create/cp) remains a declared
+      follow-up; the manifest's bind_mount dest/version_ceiling are its hooks.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 10 Aug 2026 12:00:00 +0000
+
+tt-local-generator (0.76.0) noble; urgency=medium
+
+  * chore(vendor): get current with tt-inference-server v0.19.0.
+    - Re-pinned vendor SHA to 399ce0b (v0.19.0, an LLM-only point release;
+      the media Docker image is unchanged at 0.18.0-c49bb76).
+    - Artgen vLLM image preference bumped to 0.19.0-b204341-9bd099c
+      (Llama-3.1-8B P300 uplift, newer tt-metal base), older tags kept as
+      fallbacks.
+    - Repaired apply_patches.sh: Step 7 (Wan2.2-Animate) now appends to the
+      dev/video.yaml catalog like Step 6, instead of the dead model_spec.py
+      injection that broke in the 0.18.0 YAML migration; retired the also-dead
+      Steps 8 (DeepSeek) and 9 (SDXL). Removed a stray committed .pyc and
+      ignore future ones under patches/.
+  * feat(create): expand the media model surface with two in-catalog models.
+    - Wan2.2-I2V-A14B (image-to-video): new Video-picker model beside
+      SkyReels-I2V, reusing the seed-image plumbing (start_wan_i2v.sh,
+      server_manager key wan2.2-i2v, tt-model-wan2-i2v weights package).
+    - FLUX.1-dev (higher-fidelity image): new Image-picker model beside
+      FLUX.1-schnell (start_flux_dev.sh wraps start_flux.sh --dev,
+      server_manager key flux-dev, tt-model-flux-dev gated weights package).
+    - Reconciled the FLUX packages: tt-model-flux now downloads the ungated
+      FLUX.1-schnell and tt-model-flux-dev the gated FLUX.1-dev, so each
+      package maps cleanly to its server.
+    - Fixed a latent pipeline routing bug: pipeline_engine._backend_for now
+      exact-matches a server key before substring-sniffing, so flux no longer
+      shadows flux-dev (and wan2.2 no longer shadows wan2.2-i2v).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 10 Aug 2026 00:00:00 +0000
+
+tt-local-generator (0.75.0) noble; urgency=medium
+
+  * feat(pipeline): Pipeline UX overhaul — self-explaining steps, per-step
+    model picker, live run progress, final-result hero, Library
+    registration.
+    - Step cards now render plain-language "Takes a prompt → makes an
+      image" flow lines and a one-sentence summary for marquee generative
+      intents (`intent_vocab.flow_line`/`Intent.summary`), instead of raw
+      `class_type` names.
+    - Each step whose intent has a model dimension
+      (`intent_vocab.capability_for_intent`) gets its own model picker
+      (new `app/model_picker.py`, shared/pure `picker_entries()` +
+      `ModelPickerRow` widget) reusing Create's `server_manager` display
+      names/benefits and `ModelStatusService` status dots — a deliberately
+      new module rather than extracting CreateView's own picker, to avoid
+      risking a Create regression; CreateView keeps its picker for now.
+    - `pipeline_engine._backend_for` now matches a step's selected model
+      against a real `server_manager` key FIRST, falling back to the old
+      substring-sniffing only when it doesn't match — so a per-step picker
+      selection always routes to the server it actually named.
+    - Live pipeline runs get a real progress display: a pure reducer
+      (`app/pipeline_progress.py::ProgressState`) drives a spinner, a
+      phase sub-label, and a per-step elapsed-time counter in
+      `LiveRunView`; the verbose run log is demoted to a collapsed
+      expander now that at-a-glance status doesn't need it.
+    - The run page's final deliverable is now promoted to a "Here's what
+      you made" hero (`pipeline_view_model.final_index_for`, `OpenView.
+      _build_hero`) — fixed a real bug where AnimateDiff's GIF output and
+      every visual artgen artifact (svg/ansi/palette/etc.) were silently
+      un-heroable (`_HERO_KINDS` was image/video only); both are heroable
+      now.
+    - Every pipeline run's final deliverable is registered into the
+      Library the instant the run finishes
+      (`MainWindow._register_pipeline_final`), fail-soft and deduped per
+      run id, using the same native/artgen record shapes every other
+      Library-writing path already produces.
+    - The legacy, unwired `app/pipeline_portfolio_view.py` (and its test)
+      is deleted outright — `OpenView`'s hero is the surviving run-showcase
+      surface.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 05 Aug 2026 00:00:00 +0000
+
+tt-local-generator (0.74.0) noble; urgency=medium
+
+  * feat(pills): per-artgen-type Direction pills.
+    - Each artgen medium (palette / verse / ansi / landscape / codeart /
+      freeform) now shows its OWN curated chip banks in the Direction zone
+      instead of the generic photo/video pills it inherited before (or no
+      pills at all) — palette gets Mood/Era/Source/Harmony, verse gets
+      Form/Tone/Voice, ansi gets Scene/Subject/Look, landscape gets
+      Biome/Light/Style, codeart gets Structure, freeform gets Spark.
+    - Every artgen type ALSO gets a shared cross-type "Feeling" mood bank
+      (`for: [artgen]` in `config/prompt_chips.yaml`), deduped against any
+      type-specific category of the same name
+      (`chip_config.load_chips_for_artgen`).
+    - New 🎲 Surprise chip: a category can mark one chip `surprise: true`
+      (no `text:` needed) to apply a random pill from that category's own
+      pool of non-surprise chips at click time (`chip_config.surprise_pool`,
+      `ChipEntry.surprise`); unlike a normal add-chip it never hides itself,
+      so it can be re-tapped for another random pick.
+    - `ModifierPills(kind, artgen=True)` routes to the new
+      `load_chips_for_artgen_kind` seam instead of the native
+      `load_chips_for_kind`; `RoleZonePanel` now keys an artgen medium's
+      pills by the medium's own type (`medium.id`) rather than its generic
+      output `kind`, so e.g. palette and landscape no longer share one
+      bank.
+    - Native image/video mediums are unaffected (still keyed by `kind`, same
+      banks as before); `collect()` is untouched on every surface — the
+      pills remain pure decoration on top of the prompt text, pinned by the
+      existing collect-equality test suite.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 05 Aug 2026 00:00:00 +0000
+
+tt-local-generator (0.73.0) noble; urgency=medium
+
+  * feat(remix): unify remix into pipelines, palette->AnimateDiff end to end.
+    Remix now means exactly one thing everywhere: seed a pipeline from an
+    artifact via the Muse.
+    - One remix affordance. Every surface (native GenerationCard,
+      DetailPanel, ArtgenGallery card, ArtgenDetail) used to show TWO remix
+      buttons — a "🔀 Remix" popover (RemixPopover -> _dispatch_remix, which
+      itself just opened Pipeline Studio's Muse, per the SP-3d-5 DISCOVERED
+      GAP note) and a separate "🧩 Remix as pipeline…" button doing the same
+      thing with more steps. Kept the single surviving button, relabeled
+      "🔀 Remix" (tooltip "Remix this into a pipeline"), wired to the
+      existing `_remix_as_pipeline` handler; deleted
+      `MainWindow._on_remix_card` / `_dispatch_remix` and all
+      `RemixPopover`/`on_remix` wiring. `remix_popover.py`/`remix_dispatch.py`
+      stay in-tree (still unit-tested) but are unreferenced from
+      main_window.py now.
+    - Palette artgen artifacts are now a seedable kind
+      (`artgen_kind.artgen_seed_kind` recognizes `generator_type=="palette"`
+      as kind `"palette"`), so a saved color palette can be dropped into the
+      Muse like any other artifact.
+    - New `Palette → Prompt` adapter node (`TTLGPaletteToPrompt`, registered
+      in `intent_vocab.ADAPTERS` / resolved via `adapter_for(seed_kind,
+      input_kind)`): a source node whose prompt is composed once at seed
+      time — LLM-polished when a prompt/chat model is reachable
+      (`prompt_client.llm_polish_or_none`), falling back to a deterministic
+      "colors + lore" literal (`palette_prompt.literal_prompt`) when no LLM
+      is running — and lands in the pipeline as a normal, editable text
+      field (no runtime LLM dependency; the engine handler is pure).
+    - The Muse now offers goals reachable through a registered adapter and
+      auto-inserts the adapter step ahead of the goal's own recipe
+      (`recipes.build_seed_spec(..., prepend_steps=)`), so picking an
+      AnimateDiff-shaped goal for a palette artifact wires
+      `Palette → Prompt`'s `prompt` output straight into AnimateDiff's
+      `prompt` input — palette remixes into AnimateDiff with zero manual
+      rewiring.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 12:00:00 +0000
+
+tt-local-generator (0.72.1) noble; urgency=medium
+
+  * fix(library): clicking a native (non-AnimateDiff) video now autoplays it in
+    the detail pane. The Linux inline Gtk.Video path was created with
+    autoplay=False + a ▶ Play button and never auto-started, so a selected mp4
+    sat on its first frame (GIFs auto-animated, macOS GstPlayer auto-played —
+    only this path didn't). Set autoplay=True (GTK-driven, so set_loop(True)
+    loops reliably) and start the play control as "⏸ Pause".
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 10:45:00 +0000
+
+tt-local-generator (0.72.0) noble; urgency=medium
+
+  * feat(create): per-chip progress breakdown for multi-chip AnimateDiff. The
+    result-panel progress used to show a single status line, so a parallel
+    multi-chip run (remix mode) interleaved every chip's "chipN: ..." log lines
+    into one flickering line. `CreateResultPanel.show_progress` now parses the
+    "chipN:" prefix and renders one live row per chip (all chips reported at
+    once) under the coordinator/phase status line; plain single-chip runs are
+    unchanged (the per-chip box stays hidden). Rows are restored from the
+    persisted per-chip state on a return-to-pending, and cleared when a fresh
+    job starts.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 10:15:00 +0000
+
+tt-local-generator (0.71.0) noble; urgency=medium
+
+  * feat(create): one-click clear on the prompt. The idea entry now shows a
+    clear (✕) icon whenever it has text; pressing it wipes the prompt and
+    refocuses, so you can start FRESH instead of Inspire always evolving the
+    current text (or having to select-all-delete by hand). The icon is hidden
+    when the entry is empty.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 09:35:00 +0000
+
+tt-local-generator (0.70.1) noble; urgency=medium
+
+  * fix(create): widen right gutters so the GTK4 overlay scrollbar can't cover
+    right-edge buttons. The scrollbar expands to ~13px on hover but the form/
+    result panes only had 8px right padding, so it overlapped the ✨ Inspire
+    buttons / dropdowns (form) and queue/recents controls (result pane). Bumped
+    `.create-form-pane`/`.create-result-pane` right padding to 18px and the
+    activity-viz end margin to 18px (clears its ✕).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 09:10:00 +0000
+
+tt-local-generator (0.70.0) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz shows much more data flow. Two changes: (1) the
+    telemetry tap now maps per-chip power to an activity scalar (curved, lower
+    ceiling so real diffusion load saturates) and shapes it via `shape_flow`
+    into dram_bw/l1_fill/writeback — a running job gets a floor so DRAM<->L1
+    particle flow is clearly visible and then intensifies with real load, rather
+    than being suppressed below the mode preset's own liveliness; (2) bundled
+    tensix-viz rebuilt with a `setMemoryStats({writeback})` override, so the viz
+    now shows BIDIRECTIONAL flow (L1->DRAM return particles, not just DRAM->L1
+    reads). tensix-viz source change committed in ~/code/tensix-viz (83 tests
+    pass) and re-bundled into app/assets/tensix-viz.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 05 Aug 2026 08:40:00 +0000
+
+tt-local-generator (0.69.0) noble; urgency=medium
+
+  * fix(create): keep the result-panel progress going through a whole QUEUE of
+    generations, not just the first. `_on_finished` clears `_create_job_active`
+    before draining, so each subsequent queued job ran with the flag False and
+    `_on_progress`/`_on_finished` skipped the panel (status bar only). Now
+    `_start_next_queued` re-engages the panel per job (mirrors
+    `_begin_create_job`: mark Create-owned + show pending) with the right medium
+    header/viz mode via new `_medium_for_queue_item` + `CreateView.medium_by_id`.
+    TT-TV/attractor auto-gen items (`from_attractor`) are excluded so they can't
+    hijack the Create preview.
+  * feat(create): "👁 Watch" viz — click the title to cycle animation modes.
+    A manual override that steps through all tensix-viz modes (idle/inference/
+    prefill/thinking/agents/diffusion/video/batch/explore/kernel_dispatch); the
+    auto-driver reasserts the medium's mode on the next job.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 19:30:00 +0000
+
+tt-local-generator (0.68.1) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz now drives the memory layer from per-chip POWER
+    draw, not AICLK. Investigation of "the viz barely responds during
+    AnimateDiff" found AICLK on Blackhole is effectively binary (~800 idle /
+    1350 boosted) and often sits pinned at 1350 even at rest, so it barely moved
+    during a job. Power draw is graded and tracks real utilisation (~18 W idle ->
+    150 W+ under diffusion), so each chip's memory layer now pulses with its own
+    real load and the header reads live watts. Read via a lightweight background
+    tt-smi poll (~0.3 s snapshot, 1.5 s cadence, off the GTK thread) since the
+    fast pyluwen lib is venv-only and the app runs system python; falls back to
+    sysfs AICLK when tt-smi is unavailable. New pure helpers parse_powers/
+    power_intensity/sample_telemetry (unit-tested).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:45:00 +0000
+
+tt-local-generator (0.68.0) noble; urgency=medium
+
+  * feat(create): "👁 Watch" viz — honest per-chip display + corner-lock +
+    header. Draws ONE tensix-viz chip per REAL detected chip
+    (/sys/class/tenstorrent/*, capped at 4 so a big system stays legible) and
+    feeds EACH chip its OWN AICLK into setMemoryStats — on a 4-chip QB2 you see
+    four chips, each pulsing with its own real clock. A compact header shows the
+    current mode + live peak MHz (+ "shown/total" when capped) + a ✕ to dismiss.
+    Repositioned to the result pane's BOTTOM-right, locked into the frame (the
+    MVP floated over the content because the WebView's expand propagated to the
+    Box — fixed with a no-expand fixed footprint so the overlay honours
+    halign/valign). Telemetry (set_running) is now decoupled from animation mode
+    (set_mode), so the live clock ticks the whole time Watch is on, not only
+    mid-job. New pure helpers chip_count/read_chip_clocks/grid_layout (unit-
+    tested). collect() still untouched.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:05:00 +0000
+
+tt-local-generator (0.67.0) noble; urgency=medium
+
+  * feat(create): optional "👁 Watch" hardware-activity viz (experiment). A
+    "👁 Watch" toggle in the Create CTA row reveals a small self-contained
+    tensix-viz chip animation (bundled app/assets/tensix-viz, zero deps) pinned
+    to the result pane's top-right corner. It animates the tensix-viz MODE that
+    matches whatever's generating (image->diffusion, video->video, LLM-art->
+    thinking) and — the stretch goal — pulses its memory layer with the chips'
+    REAL AICLK read straight from /sys/class/tenstorrent/*/tt_aiclk (same source
+    as the TT-TV chip HUD) via viz.setMemoryStats. New app/activity_viz.py
+    (WebKit.WebView + the artgen_detail realize-deferral pattern, JS enabled).
+    OFF by default and built LAZILY on first toggle (no WebKit cost otherwise);
+    fully fail-soft — no WebKit or no chips degrades to an inert stub / preset
+    animation and never breaks Create. CreateResultPanel drives the mode from
+    its show_pending/finished/error/idle lifecycle so the animation can't drift
+    from what's actually cooking.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 17:20:00 +0000
+
+tt-local-generator (0.66.1) noble; urgency=medium
+
+  * fix(create): _reset_create_split_once busy-spun a CPU core from launch until
+    Create was first opened — it returned True (retry) forever because the Paned
+    isn't allocated while the app sits on the Library gallery. Now it's one-shot
+    (always returns False), fired from the paned's `map` signal when Create
+    becomes visible; `_split_initialized` guards against re-snapping over a
+    manual drag. (Found by code review.)
+  * fix(tt-tv): the Watch-menu playlist/model channel entries still
+    destroy()+recreated the kiosk, reintroducing the exact GL-context strand the
+    v0.66.0 persistent-window fix exists to prevent. They now refilter the
+    existing window in place via `_switch_channel` (the same path the in-window
+    channel dropdown uses) — no destroy.
+  * fix(tt-tv): a fast close->reopen could leave zombie generation/status-poll
+    threads running forever (they gated only on a clearable threading.Event; a
+    thread mid-body when stop() sets and start() re-clears it never saw the set),
+    causing double tt-smi hardware churn and generating-while-"closed". Added a
+    per-start() run token (`_run_id`) that the loops re-check each iteration so a
+    superseded run exits. Fixed the in-window `_switch_channel` gen-loop spawn to
+    pass the token too.
+  * fix(tt-tv): `_paused` persisted across hide->reopen, so a kiosk paused before
+    closing reopened permanently blank with no recovery; start() now resets it.
+  * Refreshed stale comments left by the reverted v0.65.2-4 close-mechanics
+    theories (close-request/Escape/D-Bus annotation/context-dismiss docstring).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 20:15:00 +0000
+
+tt-local-generator (0.66.0) noble; urgency=medium
+
+  * fix(tt-tv): persistent kiosk window — the real fix for "reopened TT-TV won't
+    close". Live process inspection (py-spy/proc) showed the main loop was
+    HEALTHY and the bug was independent of how many videos played: destroying
+    and recreating the kiosk window stranded GStreamer's gtkglsink GL context in
+    its process-wide GstGLDisplay cache, so the SECOND window's video couldn't
+    embed and became a bare, app-id-less GL surface ("W" fallback icon) with no
+    close handler — only quitting the app tore it down. TT-TV now uses ONE
+    persistent window: closing it HIDES it and soft-stops playback/generation
+    (new AttractorWindow.stop()/_teardown_playback()), and reopening SHOWS the
+    same window and restarts (start() is now restartable). One window = one GL
+    context for the app's lifetime, so a reopen never recreates GL and can't
+    break; hide always closes cleanly. Bookkeeping (queue purge, Watch context)
+    moves to a MainWindow on_hide callback that keeps the window reference; the
+    window is only truly destroyed at app shutdown. Also fixes screensaver
+    D-Bus unsubscribe to track (connection, sub_id) pairs so restart doesn't
+    accumulate duplicate handlers.
+  * Reverts the v0.65.2-4 close-mechanics theories (destroy-dispatch, slot-leak,
+    app_id timing) as primary causes — they were adjacent; the slot-release
+    teardown is retained inside _teardown_playback.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 19:30:00 +0000
+
+tt-local-generator (0.65.4) noble; urgency=medium
+
+  * fix(tt-tv): associate the kiosk window with the Gtk.Application at
+    CONSTRUCTION (new `application=` arg to AttractorWindow), before `_build()`/
+    `maximize()` can realize it — instead of calling set_application() after
+    construction. On Wayland the xdg-toplevel app_id (KDE taskbar icon) is fixed
+    at first realize; a warm/second launch could realize during construction,
+    BEFORE the post-hoc set_application landed, so the second TT-TV window got
+    the generic GTK fallback icon AND wasn't fully owned by the app — which is
+    the window that then refused to close. Setting the application pre-realize
+    makes every launch identical. (Follow-up to the v0.65.3 pipeline-leak fix;
+    the user pinpointed the reopened window by its wrong icon.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:40:00 +0000
+
+tt-local-generator (0.65.3) noble; urgency=medium
+
+  * fix(tt-tv): actually fix the "reopened TT-TV window won't close" bug. Root
+    cause (found via a deeper trace): AttractorWindow._on_destroy released the
+    two video-slot GStreamer pipelines ONLY on macOS (`if _USE_SYSTEM_PLAYER`),
+    so on Linux every close leaked two live Gtk.Video pipelines. Accumulating
+    leaked pipelines flood the GLib main loop with gst_poll assertion failures
+    and exhaust fds, so a reopened kiosk's close/destroy work never gets
+    serviced — X / Stop / Escape all stop responding and only quitting the app
+    tears it down. _on_destroy now releases BOTH slots (and the graveyard
+    widgets) on every platform via _unload_slot_video, mirroring the screen-lock
+    release path that already did this correctly.
+  * Reverted the earlier close-request GLib.idle_add deferral (v0.65.2): the
+    destroy-during-dispatch theory was wrong, and deferring made closing depend
+    on the very idle queue the leak was starving. Destroy is synchronous again.
+  * Hardening: _on_attractor_closed now identity-guards the window reference so
+    a late destroy from a previous instance can't wipe a freshly-reopened one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 18:05:00 +0000
+
+tt-local-generator (0.65.2) noble; urgency=medium
+
+  * fix(tt-tv): after starting TT-TV, closing it, and reopening, the window
+    could stop responding to close (X / Stop / Escape) until the whole app was
+    shut down. The close-request handler destroyed the window synchronously
+    inside the close-request signal dispatch; that destroy-during-dispatch (the
+    same hazard the Escape handler already defers for) corrupted GTK's close/
+    event routing for the NEXT attractor window. The handler now defers the
+    destroy via GLib.idle_add so the close-request emission fully unwinds first.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 17:20:00 +0000
+
+tt-local-generator (0.65.1) noble; urgency=medium
+
+  * fix(nav): clicking Create (or Library) right after Pipelines did nothing.
+    The 🧩 Pipelines toggle sits outside the Create/Library radio group, and
+    entering Pipelines never cleared that group -- so the previously-active
+    loop-nav button stayed "active" while Pipeline Studio showed. Re-clicking
+    that same button emitted no "toggled" signal (a grouped toggle can't
+    re-activate itself), so its handler never ran and the view never switched.
+    _show_pipelines now clears the loop-nav radio group, so a later click on
+    Create/Library always changes state and fires. Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 16:55:00 +0000
+
+tt-local-generator (0.65.0) noble; urgency=medium
+
+  * feat(gallery): bigger card frames (tile 220x240 -> 260x272, thumbnail zone
+    200x112 -> 236x132) so both button rows — the persistent Save / convert /
+    trash row AND the hover Remix / Pipeline / star bar — fit inside the card
+    instead of being clipped at its edge, and so thumbnails fill more of the card.
+  * fix(gallery): the selection highlight is now an inset box-shadow ring instead
+    of a thicker (2px) border. box-shadow takes zero layout space, so selecting a
+    card can no longer change its size, shift its content, or jitter — fully
+    replacing the border-width + padding-compensation approach (which still left a
+    subtle jitter). Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 16:30:00 +0000
+
+tt-local-generator (0.64.4) noble; urgency=medium
+
+  * fix(gallery): selecting a card no longer shifts its neighbours. The
+    .card-selected / .card-selected-image styles thickened the border 1px -> 2px,
+    growing the card 1px per side; in the natural-size-packed FlowBox that shoved
+    every surrounding card over on each click. Padding is now compensated
+    (8px -> 7px) so a selected card keeps the exact same outer size (and content
+    position) while still showing its 2px accent border. Guarded by a test.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 15:45:00 +0000
+
+tt-local-generator (0.64.3) noble; urgency=medium
+
+  * fix(create): peeking at a recent while a generation is still running is no
+    longer a dead end. Clicking a recent used to overwrite the live
+    "Generating…" view (and stop its timer) with no way back. Now the pending
+    job is remembered independently of what the result area shows: opening a
+    recent mid-generation prepends a "⏳ Back to Generating…" control that
+    restores the live view (spinner + latest progress + real elapsed + prompt).
+    Progress messages that arrive while you're viewing a recent are stashed and
+    shown on return, and the pending state clears cleanly on finish/error.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 15:15:00 +0000
+
+tt-local-generator (0.64.2) noble; urgency=medium
+
+  * fix(gallery): gallery cards no longer overflow their cell on hover. Root
+    cause: the card's media/card zones (gallery_layout.pin_fixed_zone) pinned
+    only their MEASURED size via an overlay-anchor, but never clipped paint —
+    GtkOverlay's per-child clip defaults False and no Gtk.Overflow.HIDDEN was
+    set anywhere. So a hover-swapped Gtk.Video (which carries only a size-request
+    FLOOR, no content-fit ceiling, and reports the media's full resolution)
+    painted past the pinned zone and spilled over neighbouring cards; the action
+    bar could too. Fixed at the source: pin_fixed_zone now sets
+    set_overflow(HIDDEN) + set_clip_overlay on the pinned child, and both the
+    native GenerationCard and the artgen card clip themselves to their bounds
+    (respecting the rounded border). Covers video/image/animate AND artgen grids.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 14:30:00 +0000
+
+tt-local-generator (0.64.1) noble; urgency=medium
+
+  * feat(create): the Image tile in the Possibilities wall now shows a bundled,
+    hand-picked example — a World's Fair (Montreal Expo 67) generated image
+    (app/assets/tile-image-montreal-1967.jpg) — as its top-priority art, instead
+    of whatever raster you happened to make last. Other mediums are unchanged
+    (curated playlist, then your latest, then gradient).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 13:45:00 +0000
+
+tt-local-generator (0.64.0) noble; urgency=medium
+
+  * feat(create): the Direction modifier chips are now grouped as collapsible
+    CATEGORIES — each category is one compact row showing an icon (borrowed from
+    its first chip's emoji) + the category name + a dimmed hint of what's inside
+    (e.g. "cinematic, aerial, close-up …"). Expanding a category reveals its
+    add-chips. Replaces the "2 chips inline + N more" layout with far less visual
+    noise; de-dup / applied-pills behaviour is unchanged.
+  * feat(create): the Direction | Controls columns are capped at a comfortable
+    combined width (~940px, left-aligned) so they no longer stretch sparsely
+    across the now-uncapped, full-width form; the possibilities wall / prompt /
+    chip row above still use the full width.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 12:15:00 +0000
+
+tt-local-generator (0.63.0) noble; urgency=medium
+
+  * feat(create): the Create surface is now a resizable split, like browse mode.
+    The form lives on the LEFT and expands to fill up to the divider — no more
+    880px/1440px caps that floated the result pane in dead space on a wide
+    window — and the result is a DETAIL PANE docked on the RIGHT (default ~440px,
+    subtle left border). The divider is a draggable Gtk.Paned handle, so you can
+    widen the result over the form or give the form the whole width. Because the
+    result is a fixed side pane rather than a FlowBox cell whose natural width
+    steered the layout, it can no longer wrap below the form or jitter as its
+    text changes, so the old MaxWidthBin/prompt-width workarounds are obsolete
+    (removed `_build_panes`/`_TWO_PANE_MAX_WIDTH`).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 11:30:00 +0000
+
+tt-local-generator (0.62.2) noble; urgency=medium
+
+  * feat(create): Video is now the default-selected medium on open (the first
+    displayed chip). Video's default model is AnimateDiff, which runs locally
+    with no server to start, so a fresh Create works on a cold box without
+    picking anything. (Test fixtures that assumed Image-default now select Image
+    explicitly where they exercise image-specific behavior.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 10:45:00 +0000
+
+tt-local-generator (0.62.1) noble; urgency=medium
+
+  * fix(create): the Direction | Controls columns now actually render side by
+    side. The homogeneous FlowBox sized each cell to the WIDER column's natural
+    width, so with wide Direction chips it couldn't fit two per line and quietly
+    collapsed to one stacked column; replaced with a homogeneous horizontal Box
+    that forces a true 50/50 split (chips/controls just wrap tighter).
+  * feat(create): art-type row now leads with Video, then Image, then the
+    scenic/abstract/color kinds, ANSI, and the text kinds. The row DISPLAY order
+    changed but the default-selected medium stays Image, so a fresh Create still
+    generates what it did before.
+  * feat(create): "N more" / "less" modifier disclosures are now flat, muted
+    text links instead of full-size chip pills, so they stop competing with the
+    real add-chips and reclaim space.
+  * feat(create): native medium tiles (Image/Video/Animate) in the Possibilities
+    wall fall back to your most recent piece of that medium when there's no
+    curated sample, so the Image tile shows a real example instead of a bare
+    icon. Artgen tiles stay curated-only (no arbitrary test artifacts).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 10:15:00 +0000
+
+tt-local-generator (0.62.0) noble; urgency=medium
+
+  * feat(create): art-type chips (and the Possibilities wall) now read
+    most-visual -> most-textual — image/video/scenic/color first, ANSI as the
+    bridge, then the pure-text kinds (Code Art/Freeform/Verse) last. Display
+    sort only (create_mediums.sort_mediums_visual_first); default_mediums()
+    order is unchanged.
+  * feat(create): the param form uses its horizontal space better — Direction
+    (modifier chips) and Controls now sit SIDE BY SIDE in a two-column layout
+    (RoleZonePanel) instead of stacking and scrolling. Controls opens in its own
+    right-hand column (still collapsible). The form column widens 720 -> 880,
+    nudging the result pane a little further right while keeping it beside the
+    form. Reflows to a single column on a narrow window.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 04 Aug 2026 09:30:00 +0000
+
+tt-local-generator (0.61.4) noble; urgency=medium
+
+  * fix(create): the pending result card kept resizing while a job ran. The
+    status label (updated by progress messages) and the elapsed label (ticking
+    every second) had unbounded natural widths, so each text change nudged the
+    two-pane layout. Both are now bounded/centered (status caps at 40 chars and
+    wraps in place; elapsed is centered) and the card gets a min-width floor, so
+    a running job's changing text re-wraps in place instead of jittering the
+    card size.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 17:45:00 +0000
+
+tt-local-generator (0.61.3) noble; urgency=medium
+
+  * fix(create): the result pane jumped BELOW the form once generation started
+    (most visible with AnimateDiff's wide/tall options). Root cause was pure
+    size negotiation in the two-pane FlowBox: (1) the pending card's prompt
+    Gtk.Label wrapped but had no max-width-chars, so its natural width was the
+    full un-wrapped prompt (~1000px), ballooning the result pane; and (2) a wide
+    medium form sprawled its natural width past the intended ~660px column. Both
+    are now bounded — the prompt label caps at 48 chars, and the form column is
+    wrapped in a MaxWidthBin(720) — so the result pane keeps its side slot on a
+    wide window and only stacks below on a genuinely narrow one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 17:20:00 +0000
+
+tt-local-generator (0.61.2) noble; urgency=medium
+
+  * fix(create): the Video → AnimateDiff "Frame count" control rendered as one
+    giant stretched input — in the Controls FlowBox it shared a wrap-line with
+    the tall "AnimateDiff Options" group and its default valign=FILL stretched
+    it. Control rows are now anchored valign=START so each keeps its natural
+    height.
+  * feat(create): the Direction zone's "+N more…" disclosure is now a compact
+    inline pill beside the visible chips instead of its own full-width row per
+    category (reclaims a line for every chip category).
+  * feat(create): the collapsed "Controls" expander now advertises what's
+    inside (e.g. "Controls — Steps, Seed, Frame count, …") instead of a bare
+    "Controls", mirroring the Direction category labels.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 03 Aug 2026 16:40:00 +0000
+
+tt-local-generator (0.61.1) noble; urgency=medium
+
+  * fix(create): the model door's Wan2.2-Animate card was a silent dead end —
+    `_server_key_to_medium_id` had no rule for the "animate" capability once
+    Task 2 removed the native "animate" medium, so the click resolved to no
+    medium and no-opped. It now folds onto "video" (mirroring how
+    `_classify_server_key_for_model_door` already files Animate under the
+    Video model-door group), so clicking the card lands on the Video medium
+    with the Animate model preselected in the scoped dropdown.
+  * fix(create): the scoped model dropdown's collapsed/selected button was
+    still rendering the raw `ServerDef.label` implementation string (e.g.
+    "Wan2.2-T2V-A14B  (P300X2)") even though the popped-open list already
+    showed the friendly two-line name+benefit row. `_populate_model_dropdown`
+    now builds the collapsed `Gtk.StringList` from
+    `server_manager.display_name_for(key)` too, so no implementation string
+    is ever shown to the user, in either dropdown state.
+  * test: aligned `tests/test_create_view.py`'s `_fake_mediums()` with
+    production `default_mediums()` (native = image + video only, no more
+    stale native "animate" entry) — this fixture drift is what let the
+    model-door dead-end above ship untested. Updated the tests that relied on
+    the stale native-animate medium to use a local fixture instead, and added
+    coverage for the Animate-door-card -> Video-medium routing fix.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 16:30:00 -0700
+
+tt-local-generator (0.61.0) noble; urgency=medium
+
+  * feat(create): "Video is Video" — the video trio (Wan2.2/Mochi/SkyReels,
+    Wan2.2-Animate, and the AnimateDiff artgen generator) is one Video medium
+    now, not three separate chips. Animate and AnimateDiff are *models* inside
+    Video's scoped picker, selected the same way Wan2.2/Mochi/SkyReels are.
+  * feat(server_manager): `benefit_for`/`display_name_for` seam — the Create
+    model picker renders a friendly display name plus a short "what is this
+    good for" benefit tagline for every model/server key, including the
+    synthetic no-server `animatediff` entry.
+  * feat(create): AnimateDiff (local, no server to start) is the default Video
+    model whenever nothing on the video/animate hardware group is already
+    running — a job always has a same-instant path to a result.
+  * feat(create): picking the Animate model reveals Video's on-demand "Animate
+    needs" section (motion video / character image / mode) inline; every other
+    Video/Image job's `collect()` dict is unaffected.
+  * feat(create): routes the Animate model through `_native_generate_args` to
+    `AnimateGenerationWorker` (`model_source="animate"`), the same worker the
+    old dedicated Animate chip used — no capability lost, no duplicated engine.
+  * chore: existing artgen-`animatediff` records continue to render in the
+    artgen gallery unchanged; this is a Create-surface taxonomy change only.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 15:48:58 -0700
+
+tt-local-generator (0.60.4) noble; urgency=medium
+
+  * ui(create): remove the redundant second "Prompt" box. Artgen generators that
+    declare their own --prompt (AnimateDiff, Freeform, …) were surfacing a
+    "Prompt" field in "Your brief" that duplicated — and was overridden by — the
+    top "What do you want to make?" entry. RoleZonePanel now drops the prompt-key
+    field (like it already drops model), so there is ONE prompt per medium; the
+    generator's default still applies when the top entry is empty (collect()
+    unchanged). An artgen medium whose only brief field was the prompt now hides
+    its empty "Your brief" frame.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 03 Aug 2026 12:15:28 -0700
+

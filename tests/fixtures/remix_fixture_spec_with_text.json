@@ -1,0 +1,40 @@
+{
+  "_comment": "Task 3 (pipeline field roles) fixture — same 3 nodes as remix_fixture_spec.json PLUS a standalone text-output node (\"4\", TTLGGenerateText) with its own literal brief text field, so brief-text-field-on-a-text-node has a real node to assert against. Kept separate from remix_fixture_spec.json so every existing test that asserts an exact {\"1\",\"2\",\"3\"} node-id set stays untouched.",
+  "_spec_version": "comfyui-api-v1",
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "text + number literal inputs, to be exercised by editable_params/derive_spec",
+    "inputs": {
+      "prompt": "a test prompt",
+      "steps": 4,
+      "negative_prompt": "blurry",
+      "_hint": "structural key must be excluded from editable params"
+    },
+    "outputs": ["image_path"]
+  },
+  "2": {
+    "class_type": "TTLGImageToVideo",
+    "_comment": "wired input (image comes from node 1) must be excluded from editable params",
+    "inputs": {
+      "image_path": ["1", "image_path"],
+      "num_frames": 33
+    },
+    "outputs": ["video_path"]
+  },
+  "3": {
+    "class_type": "TTLGAnimateDiff",
+    "_comment": "bool literal input",
+    "inputs": {
+      "loop": true
+    },
+    "outputs": ["gif_path"]
+  },
+  "4": {
+    "class_type": "TTLGGenerateText",
+    "_comment": "standalone text-output node with a literal brief 'prompt' field — output_kind is 'text', so it must get no ModifierPills bank",
+    "inputs": {
+      "prompt": "narrate the scene"
+    },
+    "outputs": ["text"]
+  }
+}

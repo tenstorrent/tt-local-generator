@@ -2,7 +2,7 @@
 # start_wan_qb2.sh — Start the Wan2.2-T2V-A14B-Diffusers inference server on P300x2 (QB2).
 #
 # Uses the known-working configuration:
-#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10
+#   - Docker image: ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76
 #   - Non-dev mode (dev mode breaks device init on this image)
 #   - --host-hf-cache mounts the local HuggingFace cache so the 118 GB weights
 #     are found immediately inside the container (avoids the 1200s download timeout)
@@ -32,7 +32,7 @@ else
 fi
 
 HF_CACHE="$HOME/.cache/huggingface"
-DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.17.0-8c48a10"
+DOCKER_IMAGE="ghcr.io/tenstorrent/tt-media-inference-server:0.18.0-c49bb76"
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 LOG_GLOB="media_*_Wan2.2-T2V-A14B-Diffusers_p300x2_server.log"
 

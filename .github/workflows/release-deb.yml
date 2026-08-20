@@ -29,6 +29,13 @@ jobs:
           VENDOR_SHA="$(cat vendor/VENDOR_SHA)"
           bin/snapshot_vendor.sh --sha "$VENDOR_SHA"
 
+      - name: Apply + verify tt-inference-server patches
+        run: |
+          # Patch the freshly-snapshotted vendor tree so the shipped .deb vendor
+          # is actually patched; apply_patches.sh gates on app/patch_verify.py,
+          # so drift fails the release build loudly.
+          bin/apply_patches.sh vendor/tt-inference-server
+
       - name: Stamp debian/changelog with release version
         if: startsWith(github.ref, 'refs/tags/v')
         env:

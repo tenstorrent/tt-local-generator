@@ -66,12 +66,33 @@ Description: Wan2.2-T2V-A14B model weights (~118 GB) for tt-local-generator
  The model is publicly available; a HuggingFace account is not required,
  though providing a token avoids API rate limits.
 
+Package: tt-model-wan2-i2v
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: Wan2.2-I2V-A14B model weights for tt-local-generator
+ Downloads Wan-AI/Wan2.2-I2V-A14B-Diffusers from HuggingFace into
+ ~/.cache/huggingface/hub/. Required for the Wan2.2 image-to-video model
+ in the Video generation surface.
+ .
+ The model is publicly available; a HuggingFace account is not required,
+ though providing a token avoids API rate limits.
+
 Package: tt-model-flux
 Architecture: all
 Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
+Description: FLUX.1-schnell model weights for tt-local-generator
+ Downloads black-forest-labs/FLUX.1-schnell from HuggingFace. Required for
+ the FLUX.1-schnell model in the Image generation surface.
+ .
+ FLUX.1-schnell is publicly available (Apache-2.0) — a HuggingFace account
+ is not required, though providing a token avoids API rate limits.
+
+Package: tt-model-flux-dev
+Architecture: all
+Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
 Description: FLUX.1-dev model weights (~34 GB) for tt-local-generator
- Downloads black-forest-labs/FLUX.1-dev from HuggingFace. Required for
- the Image generation tab.
+ Downloads black-forest-labs/FLUX.1-dev from HuggingFace. Required for the
+ FLUX.1-dev model in the Image generation surface.
  .
  FLUX.1-dev is a gated model — you must accept its license at
  https://huggingface.co/black-forest-labs/FLUX.1-dev and provide a
@@ -151,7 +172,9 @@ Package: tt-local-generator-models-all
 Architecture: all
 Depends:
  tt-model-wan2-t2v,
+ tt-model-wan2-i2v,
  tt-model-flux,
+ tt-model-flux-dev,
  tt-model-mochi,
  tt-model-qwen3,
  tt-model-animate,

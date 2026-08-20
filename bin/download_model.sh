@@ -189,8 +189,18 @@ echo ""
 # --cache-dir is passed explicitly so the correct path is used even when
 # HF_HUB_CACHE is not exported in the current environment (e.g. postinst).
 DOWNLOAD_CMD=("$HF_CLI" download "$REPO" --cache-dir "$HF_HUB_CACHE_DIR")
+
+# SECURITY: hand the token to `hf` via the environment, NEVER on the command
+# line. `hf`/`huggingface-cli download` both honor $HF_TOKEN for auth, and a
+# process's environment (/proc/<pid>/environ, mode 0400 owner-only) is not
+# world-readable — unlike its argv (/proc/<pid>/cmdline), which any local user
+# can read for the entire (often very long) download. We still ACCEPT the token
+# via --token/env/token-files as input (above); only its transport to `hf`
+# changes. HUGGING_FACE_HUB_TOKEN is set alongside HF_TOKEN for consistency
+# with the token-search order documented in the header.
 if [[ -n "$TOKEN" ]]; then
-    DOWNLOAD_CMD+=(--token "$TOKEN")
+    export HF_TOKEN="$TOKEN"
+    export HUGGING_FACE_HUB_TOKEN="$TOKEN"
 fi
 
 # Run the download. Exit status is propagated to the caller.

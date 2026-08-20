@@ -305,6 +305,16 @@ else
     fi
 fi
 
+# Patch premises still hold? (fail-loud verify — catches drift the apply step
+# would otherwise hit.)
+_vroot="$REPO_ROOT/vendor/tt-inference-server"
+if [[ -d "$_vroot" ]] && /usr/bin/python3 "$REPO_ROOT/app/patch_verify.py" --vendor "$_vroot" >/dev/null 2>&1; then
+    pass "Patch premises verified"
+elif [[ -d "$_vroot" ]]; then
+    fail_s "Patch drift detected"
+    info "Fix: /usr/bin/python3 app/patch_verify.py --vendor vendor/tt-inference-server"
+fi
+
 # ── Step 5: GTK4 / PyGObject (informational) ─────────────────────────────────
 step 5 "GTK4 / PyGObject  (GUI only — prompt server works without this)"
 

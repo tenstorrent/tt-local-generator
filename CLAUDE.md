@@ -1,5 +1,708 @@
 # tt-local-generator — developer notes
 
+## "Start something" copy + tensix-grid centering (v0.89.0)
+
+Two small Create-surface polish fixes:
+
+- **Distinct, art-type-specific tile suggestions (`app/possibilities.py`).**
+  The "Start something" wall used to hold ONE example string per medium in
+  `_EXAMPLE_IDEAS_BY_ID` with a per-*kind* fallback — so every medium not in
+  the dict (freeform/skyline/geometric/circuit/ansi-image) fell back to the
+  same generic image/text line, and image/skyline/geometric/circuit all read
+  "a Moog Minimoog…". Replaced with `_EXAMPLE_POOLS_BY_ID`: a *pool* of
+  distinct, house-voice lines per medium, one entry for EVERY medium the app
+  can surface (native image/video + every artgen generator), plus generic
+  per-kind fallback pools only for a brand-new unlisted plugin. `_pick_from_pool`
+  rotates a per-medium cursor (`self._pool_i`) so repeat builds vary and no two
+  tiles echo each other. `example_idea_for(medium)` stays a stable single line
+  (pool[0]) for external callers/tests; `_resolve_tile_art`'s 2-tuple contract
+  is untouched (many tests depend on it).
+  - **Tie-to-shown (NATIVE mediums only, v0.89.1):** `_example_for(medium)`
+    prefers a STARRED piece's own `prompt` when that piece is exactly what the
+    tile displays — resolved by `_starred_record_for`, which mirrors
+    `_resolve_tile_art`'s tier-1 condition (starred + thumbnail exists on disk)
+    so the copy can only ever describe the art actually on the tile. The line is
+    computed ONCE in `_make_card` and captured in the click closure, so caption
+    and what-tapping-seeds always match. **Gated to `medium.source ==
+    "native"`** (image/video), whose stored `prompt` IS the user's creative
+    brief. Artgen is deliberately EXCLUDED: an artgen record's `prompt` is the
+    full COMPOSED PROMPT TEMPLATE (system framing + filled placeholders), not
+    the options the user configured — surfacing it dumped template text into the
+    caption and the composer (v0.89.0 bug, reported + fixed v0.89.1). Artgen
+    tiles always use their curated theme pool (the same reason artgen *art* is
+    curated-only). Fail-soft → pool line on any error. Regression:
+    `test_artgen_tile_never_shows_full_prompt_template`.
+- **Centered chip grid in the 👁 Watch viz (tensix-viz `src/chip.js`).**
+  `_computeLayout` floored `_cellW`/`_cellH` and drew from a fixed top-left pad,
+  so `cols*_cellW < w-2*pad` piled ALL the slack on the right/bottom — the grid
+  read as shoved left inside its cell (visible in the 2×2 corner instrument).
+  Now `_padX`/`_padY` split the leftover evenly (`max(pad, floor((w -
+  cellW*cols)/2))`), centering the grid. Edited in the SISTER repo
+  `~/code/tensix-viz`, `node build.js` + 86 tests green, re-bundled into
+  `app/assets/tensix-viz/tensix-viz.js` (never hand-edit the generated bundle).
+  **Bundle scope note:** the re-bundle also carried the two OTHER fixes already
+  on that tensix-viz branch (`fix/idle-flicker-and-frame-rate`, tensix-viz
+  PR #5) — a heatmap auto-scale floor/decay and frame-rate-independent idle
+  decay — since the bundle reflects the branch's full source state, not just the
+  centering commit. Both are intended upstream fixes, not drift; flagged here
+  because this bundle has no automated drift check (unlike the vendored
+  inference-server's `patch_verify.py`). Re-verify the bundle after any future
+  tensix-viz merge.
+
+## Library converter — `tt-ctl convert-library` (v0.88.0)
+
+A standalone, dry-run-capable CLI for bringing an older `media.db` library
+up to current conventions — `app/library_convert.py` (`analyze`/`apply`),
+wired as `tt-ctl convert-library` (`--apply` / `--db PATH` /
+`--no-thumbnails` / `--backup`; dry-run by default).
+
+- **Media-type fold, exposed and reusable.** The AnimateDiff/Animate ->
+  `media_type="video"` fold SQL (see "AnimateDiff is Video" below) was
+  extracted out of `MediaStore._migrate_media_types` into a module-level
+  `media_store.fold_media_types(conn) -> int`, called two ways: gated (the
+  app's own once-per-DB `PRAGMA user_version` startup migration, unchanged
+  behavior — `tests/test_media_store.py` still green) and ungated (this
+  tool, so it always applies regardless of `user_version` — useful for
+  dry-run/headless/arbitrary-DB use). **Bug fixed in the same extraction:**
+  the original UPDATE's `WHERE media_type='animatediff' OR
+  generator_type='animatediff'` clause kept matching an already-folded row
+  forever (the surviving `generator_type` stamp never stops matching the OR
+  clause) — harmless under the gate (which only ever calls it once), but it
+  meant an ungated caller's rowcount was never truthfully idempotent. Added
+  a `media_type != 'video'` guard to both UPDATEs; first-run behavior is
+  byte-identical, a second call now correctly folds 0.
+- **Stale-thumbnail regeneration, NOT auto-run by the app.** For every
+  `media_type='artgen'` record whose source file exists and isn't `.gif`,
+  `apply()` re-renders its thumbnail via `artgen_thumb.make_thumbnail` into
+  a temp file and verifies it (GdkPixbuf loads it, both dimensions > 1 —
+  i.e. not `make_thumbnail`'s own 1x1 placeholder degrade) before replacing
+  the original thumbnail file in place; failures/skips are counted, never
+  raised past the per-record `try`. **Gotcha found while building this:**
+  several `make_thumbnail` branches (`.ans`/`.json`/`.txt`/`.md`/`.py`) call
+  `PIL.Image.save(path)` with no explicit `format=`, so PIL infers the
+  format from the path's extension — a temp filename ending in `.tmp`
+  silently failed to save and fell back to the placeholder instead of
+  raising. Fixed by giving the temp target a real `.png` extension
+  (`library_convert._regenerate_one_thumbnail`); the final file always lands
+  at the ORIGINAL `thumbnail_path` regardless of what extension the
+  intermediate render used (covers `make_thumbnail`'s svg-render-failure
+  fallback, which renames to `.svg` on its own).
+- `analyze()` is strictly read-only (opens the DB via a `file:...?mode=ro`
+  sqlite URI) and reports `fold_pending`/`thumbs_pending` counts for the
+  dry-run report `cmd_convert_library` prints by default.
+- **`--backup` is WAL-safe** (`library_convert._backup_db`). A real
+  `media.db` runs in WAL mode (`MediaStore` sets `PRAGMA journal_mode=WAL`,
+  a persistent file-level setting), so recently-written rows can still live
+  in the `<db>-wal` sidecar until a checkpoint. A plain `shutil.copy2` of
+  only the main `.db` would silently yield an empty shell (`no such table:
+  media`) — worst case exactly when the safety net matters (a live GUI holds
+  the WAL open). The backup therefore uses SQLite's online backup API
+  (`src.backup(dst)`), which reads through a live connection and writes a
+  fully-checkpointed standalone copy. Regression-pinned by
+  `tests/test_library_convert.py::test_apply_backup_is_complete_for_wal_mode_db`,
+  which seeds through a real `MediaStore` (the earlier bare-`sqlite3`
+  fixture never engaged WAL — which is why the bug shipped).
+
+## AnimateDiff is Video (v0.87.0)
+
+`media_type=="animatediff"` never actually needed to be its own media type —
+it was always a video (a `.gif`), just tagged differently, and Wan2.2-Animate
+(`media_type=="animate"`) had the same problem. That split forced every
+gif-aware code path (main_window's several `is_gif` checks, the TT-TV
+attractor, gallery routing) to special-case a bespoke media_type on top of
+the real signal (the file extension), and it kept both records' galleries
+separate from the unified Video gallery the "Video is Video" (v0.61.0)
+Create-surface merge had already established. This closes the gap between
+the two, end to end:
+
+- **The migration** (`app/media_store.py::MediaStore._migrate_media_types`,
+  gated by `_MEDIA_TYPE_MIGRATION_VERSION`/`PRAGMA user_version` so it runs
+  exactly once per DB and is idempotent if re-run): two `UPDATE`s fold
+  `media_type IN ("animatediff", "animate")` (and any row that already had
+  that `generator_type` from a prior partial write) into
+  `media_type="video"`, stamping `generator_type="animatediff"` /
+  `"animate"` for provenance. Files, `params`, `model_id`, and `starred` are
+  never touched — only the two taxonomy columns change. Runs inside
+  `MediaStore.__init__`, right after `_migrate_from_json`.
+- **The factories** (`app/history_store.py::GenerationRecord.new_animatediff`
+  / `new_animate`) construct NEW records the same way going forward:
+  `media_type="video"` + `generator_type="animatediff"`/`"animate"` from the
+  start, so no future record ever needs the migration to catch up.
+  `HistoryStore.append` (`_ms.add(MediaRecord(...))`) persists
+  `generator_type` straight through — it was already a plain field on
+  `MediaRecord`, just never populated by these two factories before.
+- **The artgen path is dead for animatediff.** `create_mediums.discover_mediums`
+  explicitly skips `key == "animatediff"` when building the artgen medium
+  list ("Folded into the Video medium as a model … no longer its own chip" —
+  see "Video is Video" v0.61.0) — the native `new_animatediff` factory above
+  is the only record-creation path left; the artgen plugin classes still
+  exist (generation logic unchanged) but never produce their own gallery
+  entry anymore.
+- **Gif detection moved from media_type to file extension.** Every
+  `main_window.py` site that used to branch on
+  `record.media_type == "animatediff" or record.video_path.endswith(".gif")`
+  (the `GenerationCard`/`DetailPanel` inline players, `VideoPlayerWindow`'s
+  fullscreen branch — five sites total) now just checks
+  `record.video_path.endswith(".gif")` — the `media_type=="animatediff"`
+  half was dead weight after the migration (no record has that media_type
+  anymore) and the `.gif` half was always sufficient on its own.
+  `attractor.py::_is_gif_record` already worked this way (Task 3 of this
+  effort, prior to this cleanup task). Filter tidy in the same spirit:
+  `main_window.py`'s video-gallery-routing filter and the two remote/local
+  video-download filters, plus `history_store.py::HistoryStore._to_gen`'s
+  video-vs-image path resolution, dropped their now-redundant
+  `"animate"`/`"animatediff"` alternatives and check `media_type == "video"`
+  alone.
+- **Identity and stats are preserved, on purpose.** The ~73 pre-migration
+  records written by the OLD artgen path have a leaner `params` blob than a
+  native-path AnimateDiff record (missing some of the newer fields the
+  native factory populates) — this is left AS-IS by decision, not a bug to
+  backfill; they still render, animate, star, and export correctly via the
+  extension-based gif path, they just carry less metadata than a
+  freshly-generated one.
+- **Knock-on benefit:** because AnimateDiff/Animate rows are `media_type==
+  "video"` now, `possibilities.PossibilitiesWall`'s starred-tier query
+  (`store.query(media_type="video", ...)`) picks up a starred AnimateDiff
+  `.gif` for free — it can surface as the Video "Start Something" tile,
+  which it structurally could not do while it lived under a separate
+  media_type. See `tests/test_possibilities_wall.py::
+  test_starred_video_typed_gif_is_video_tile_art`.
+
+## PR#23 deep-review fixes (v0.81.0)
+
+A cross-cutting adversarial review of the whole `feat/pipeline-editor` branch
+(6 parallel agents: correctness, GTK-threading, security, invariants,
+test-integrity, adversarial-diff; findings hand-verified) was posted to PR #23
+and its actionable items fixed here (each with a regression test, reviewed):
+
+- **One pipeline run at a time** (`pipeline_studio.PipelineStudio._launch_run`):
+  launching a new run now `cancel()`s the prior runner (safe no-op if it already
+  finished) AND wraps the runner's `on_node_update`/`on_finished`/`on_log` in a
+  `_guarded(cb, rid=run_id)` closure that only forwards while `rid ==
+  self._active_run_id`. Before this, a run left running via "← Back" (which
+  deliberately doesn't cancel) could have its completion resolve/register a
+  *later* run and cross-contaminate its tiles — and two concurrent
+  backend-switching runs could contend on the fragile QB2 hardware. Navigating
+  away (Back) still keeps a lone run going; only starting a *new* run supersedes it.
+- **HF token off argv** (`bin/download_model.sh` + all `debian/tt-model-*.postinst`):
+  the token now travels via the `HF_TOKEN` env var (`runuser -w HF_TOKEN`
+  preserves it across the PAM env reset; the helper `export`s it for `hf`),
+  never on a command line — `/proc/<pid>/cmdline` is world-readable, `/environ`
+  is owner-only. The helper still *accepts* `--token`/env/token-files as input.
+- **Flag-off Remix + lifecycle** (`main_window`, `pipeline_studio`): the default
+  (pipeline-mode-off) `_remix_as_pipeline` branch now hides `_detail_wrap` like
+  `_show_pipelines` does (the goal chooser was rendering cramped beside the
+  leftover detail pane); the OpenView back button label is flag-aware; and
+  `_on_progress`/`_on_finished`/`_on_error` gained the `if not self._alive:
+  return False` guard `_on_status_snapshot` already used.
+- **Engine** (`pipeline_engine`): streaming `_run_tt_ctl(emit=…)` keeps a
+  `deque(maxlen=20)` tail of streamed lines and includes it in the `RuntimeError`
+  on non-zero exit (AnimateDiff *pipeline* failures are diagnosable again — the
+  bare "exit N" lost stderr); and `_real_start_server` now returns the key it
+  *confirms* running (or `None` when it reused an endpoint without confirming
+  identity), which `run()` uses to advance `current_backend` — so a later
+  same-target node skips a redundant stop/reset/start. This can only *prevent*
+  needless backend-switch churn, never skip a genuinely-needed switch (opus-
+  verified against adversarial sequences — important on the fragile hardware).
+- **Dead code removed:** `app/pipeline_panel.py`, `app/artgen_watch.py`,
+  `app/batch_generate.py` (no live importers) + `tests/test_pipeline_panel.py`,
+  like `pipeline_portfolio_view.py` before them. (`remix_popover.py`/
+  `remix_dispatch.py` stay — those are intentionally-kept, unit-tested unwired
+  code.) A few historical `ArtgenWatch` mentions remain in `artgen_render.py`/
+  `artgen_detail.py` code comments as accurate architectural history.
+- **Two smoke tests strengthened** to assert their named behaviour (the RemixView
+  model-label render; the attractor superseded-run loop doing zero work).
+
+**Verified-clean by the review (no change needed):** no `shell=True` / argv-list
+subprocess calls throughout; no unsafe deserialization; `collect()`/
+`_collect_params()` byte-stability; `_CSS` byte literals ASCII-only;
+`_VIDEO_MODEL_IDS`/`_IMAGE_MODEL_IDS` in sync across both copies; the risky
+seams all genuinely tested.
+
+**Picker→engine model-key routing (fixed v0.82.0).** The Pipeline Studio
+per-step model picker writes a raw `server_manager` key into `inputs["model"]`
+(via `ModelPickerRow.selected_key()`), but `pipeline_engine._artgen_key_for_model`
+only matched `ServerDef` `--model` *display* strings, so picker-driven artgen
+nodes silently fell back to `ARTGEN_DETECT` (auto-detect) instead of the picked
+model. `_artgen_key_for_model` now matches the raw server key **exact-first**
+(mirroring `_match_server_key`) before the `--model` display / HF-id fallback
+that hand-authored and legacy specs rely on.
+
+**Lazy WebKit in `ArtgenDetail` (fixed v0.83.0).** `ArtgenDetail.__init__` used
+to build its reading-view `WebKit.WebView()` eagerly (gated only import-time by
+`_WEBKIT_OK`); it now builds it lazily on first reading render via
+`_ensure_webview()` (fail-soft), as a `"reading-web"` stack child, degrading to
+the plain-text `_reading_fallback` (`"reading"`) without WebKit — mirroring the
+`activity_viz` precedent. (Eager *construction* didn't actually crash CI here —
+only realize/load spawns the web process — so this was a consistency + startup-
+cost fix, not a live-crash fix.)
+
+**Palette: primary-button drift fixed (v0.84.0).** The docs-site primary-accent
+blue `#1B8EB1` was being used as the primary-button background on live surfaces
+(`.ps-btn-primary`, `.ps-remix-all`, `.ps-remix-run-btn`, `.ps-chip-arrow`,
+`.create-watch-btn:checked`) where the main app's primary color is teal
+`#4FD1C5` on `#0F2A35`. Re-skinned all five to `#4FD1C5` background + `#0F2A35`
+ink (the chip arrow to `#4FD1C5` text), so the primary actions match the
+tt-vscode-toolkit variant used everywhere else. **Kept as-is (deliberate):** the
+`#74C5DF`/`#6FABA0`/`#F6BC42` docs-site *semantic* hues used as semantic accents
+(faint teal borders / green "done" / yellow "active/warning") — the editor
+variant has no semantic set of its own, so these read as an intentional design
+choice, not drift.
+
+**Deliberately deferred (documented):** the low/informational review items —
+video async-envelope handling, failed-run hero label, `_stage_preview_thumb_path`
+`/tmp` growth, ffmpeg concat-list quoting, SVG external `<image>` refs.
+
+## Hiding pipeline mode (v0.80.0)
+
+Pipeline authoring (the DAG editor, the "🧩 Pipelines" nav entry, the
+blank-canvas Inspiration door) is now OFF by default, behind
+`app_settings.PIPELINE_MODE_ENABLED` — read from env `TTLG_PIPELINE_MODE`
+(default off) as a **module attribute**, not a function call, specifically so
+tests can `monkeypatch.setattr(app_settings, "PIPELINE_MODE_ENABLED", True)`
+without touching the environment. 🔀 Remix is unaffected as a *feature* — it
+still works everywhere — but its destination changed shape. This is
+reversible by construction: flag ON restores today's full pipeline UI
+byte-for-byte, nothing was deleted, only gated. See
+[[project_stage_pipeline_direction]] for the approved direction this
+finalizes.
+
+**The three gated doors:**
+1. **`🧩 Pipelines` loop-nav toggle** (`main_window.py`) — `_pipelines_btn` is
+   never constructed at all when the flag is off (not hidden — absent), so
+   every call site that touches it does `getattr(self, "_pipelines_btn",
+   None)` and guards for `None`.
+2. **CreateView's Inspiration door** — `on_inspiration=self.
+   _on_loop_nav_remix if app_settings.PIPELINE_MODE_ENABLED else None`; a
+   `None` callable means `CreateView` never renders that door's tile at all
+   (an existing "omit if unset" contract, not a new special case).
+3. **The `RemixView` DAG editor** — `PipelineStudio`'s Muse goal-chosen
+   handler skips straight to a run instead of opening the node/edge canvas
+   when the flag is off (below).
+
+**The reshaped seeded-remix path.** `MainWindow._remix_as_pipeline` (the
+single "🔀 Remix" handler wired from every gallery/detail surface) branches
+on the flag:
+- **Flag OFF:** `_ensure_pipeline_studio()` (constructs `PipelineStudio`
+  lazily, without needing `_pipelines_btn`) + sets the `_gallery_stack` page
+  to `"pipelines"` directly + deactivates any active loop-nav toggle, then
+  calls `show_muse(seed_artifact=...)` — landing on the goal chooser only,
+  never the studio's own "Discover" page. `PipelineStudio._on_muse_goal_chosen`
+  then calls `_launch_run(derived_path, edits)` directly instead of opening
+  `remix_view`/the DAG editor, taking the user straight to the Stage
+  (`LiveRunView`). On completion the run's deliverable registers into the
+  Library exactly like every other generation path (v0.75.0's
+  `_register_pipeline_final`, untouched by this change).
+- **Flag ON:** unchanged — the toolbar toggle dance, studio Discover, and the
+  DAG editor all behave exactly as before.
+
+**The `on_leave` seam.** `PipelineStudio(on_leave=self._on_pipeline_leave)` —
+when pipeline mode is off, both the Muse's back button and the Stage's Back
+button call `on_leave` instead of routing to the studio's own Discover page.
+`MainWindow._on_pipeline_leave` calls `_hide_pipelines()`, which returns the
+gallery stack and loop-nav to wherever the app's Library was before Remix was
+opened. A run started this way keeps running even after Back is pressed — the
+runner isn't tied to the page being visible, only display drops away.
+`_muse_back_btn`'s label reflects the same flag: `"← Discover"` when pipeline
+mode is on (a real page to return to), `"← Back"` when it's off (leaves to
+the app, never names a hidden page) — guarded by
+`tests/test_pipeline_studio.py::test_flag_off_reachable_surfaces_have_no_pipeline_jargon`,
+which also asserts the Muse's seeded heading ("Make this image into…") never
+leaks pipeline-authoring words ("pipeline"/"recipe") on the flag-off path.
+
+**Untouched by this change:** `pipeline_engine.py`, run-spec construction,
+and every `collect()` contract — this is a UI-reachability change only, not a
+behavior change to what a run actually does.
+
+## Pipeline Stage — the live making-of (Slice 1, v0.79.0)
+
+`LiveRunView` (`app/pipeline_studio.py`) used to be a text ticker: a spinner +
+raw phase string + elapsed timer per step, the real hardware story buried in a
+collapsed log, no per-step artifact, no honest progress, no cancel, and a
+back button that dead-ended. It's now a **making-of** — you watch the machine
+build your thing. This is Slice 1 of the approved "Stage" direction
+([[project_stage_pipeline_direction]]); the per-step **drill-in inspector** on
+completed runs, **Create** progress polish, and the blank-canvas
+**compose front door** are later slices. Everything here is pure display over
+the same `PipelineRunner` signals — `collect()` and the run spec are
+byte-identical whether the new UI or the old one rendered them. Palette is the
+app's **main** scheme (teal `#4FD1C5` on deep blue-gray `#0F2A35`), NOT the
+docs-site forest-teal; every `_CSS` byte literal stays ASCII-only.
+
+- **Recipe spine, done-counting progress** (`app/pipeline_progress.py` +
+  `LiveRunView`). The flat vertical status list is a horizontal **spine** of
+  step tiles in a `ScrolledWindow` — `_step_tiles[node_id]` with a lifecycle
+  CSS class swapped by `_set_tile_state` (`_TILE_STATE_CSS`:
+  `ps-tile-upcoming`/`-active`/`-done`/`-failed`; an unknown status like
+  `"cancelled"` falls back to dim `ps-tile-upcoming`). `ProgressState` gained
+  `completed(node_id)`/`done_count`; the header's "Step N of M" now reads
+  `done_count` — a step counts once it **finishes**, not once it starts.
+- **Per-step output preview as it lands.** `on_log` derives `self._output_dir`
+  from the runner's first `LOG:<path>` line (mirroring
+  `pipeline_runner.PipelineRunner._parse_line`'s regex/layout exactly) so an
+  artifact resolves *mid-run*. When a step reports `done` (from
+  `on_node_update`, or `on_finished`'s resolve loop for whatever step was
+  still running at run-end), `_render_step_preview` resolves it via
+  `pipeline_view_model._resolve_artifact` and drops a small widget into
+  `self._step_preview[node_id]`: `.gif` → animated `artgen_render.
+  AnimatedGifWidget`; raster/video → the module's static `_build_thumb_frame`
+  (video = poster; full in-tile playback is a later drill-in slice); every
+  other artgen kind (svg/ans/json/py/txt/md) → a **static** thumbnail:
+  `artgen_thumb.make_thumbnail` → the same `_build_thumb_frame` the raster
+  branch uses (a real color-grid/swatch/monospace/vector PNG, honest
+  placeholder otherwise). This is the module's fixed-contract static-tile
+  surface, deliberately NOT `artgen_render.render_artifact_widget`'s WebKit
+  reading-view — the tile must not spawn a web process per text-ish step on
+  top of the ambient viz (final-review item (b), Taylor's call; the earlier
+  WebKit route was swapped out). Full rich rendering is the Slice-2 drill-in.
+  Fully fail-soft — a missing/corrupt artifact or a render error leaves the
+  slot untouched, never crashes the live view.
+- **Per-chip AnimateDiff, preserved and shared** (`app/chip_progress.py`).
+  The per-chip live rows (`CreateResultPanel`'s old `_upsert_chip_row`/
+  `_pending_chip_box`) were extracted into `ChipProgressRows(Gtk.Box)`
+  (`feed(line)->bool`, `reset`, `snapshot`, `restore`; `CHIP_LINE_RE`
+  anchored at index 0) — Create and the Stage's active tile both embed the
+  **same** widget. The load-bearing seam that makes them appear in a pipeline
+  run: multi-chip AnimateDiff's `chipN:` lines used to be swallowed by
+  `pipeline_engine._run_tt_ctl`'s `subprocess.run(capture_output=True)`.
+  `_run_tt_ctl(argv, timeout=, emit=None)` now, when `emit` is provided,
+  `Popen(stdout=PIPE, stderr=STDOUT)` + drains line-by-line calling `emit`;
+  `_h_animatediff` forwards each line as `ctx.emit("LOG:"+line)`, so the raw
+  chip lines reach `LiveRunView.on_log`, which feeds the running node's
+  `ChipProgressRows` (lines arrive indented, so `on_log` `.strip()`s before
+  `feed`). The `emit=None` path is byte-identical to the old capture.
+- **tensix-viz as the ambient machine** (`app/activity_viz.py`,
+  `ActivityVizWidget`). Embedded in the Stage, **lazily** — `LiveRunView.
+  __init__` builds nothing (WebKit-free at construction, guarded by a test;
+  eager construction segfaults the bwrap sandbox in CI); `_ensure_activity_viz`
+  (mirroring `CreateView._ensure_activity_viz`, try/except fail-soft) builds +
+  corner-pins it from `begin()`, into a `Gtk.Overlay` wrapping the spine
+  scroller. Driven by the run: a step going `running` calls `set_running(True)`
+  + `set_mode_str(_viz_mode_for_intent(step.intent))` (pure map:
+  image→diffusion, video/gif→video, text→thinking, else→inference);
+  `on_finished`/`mark_cancelled` call `set_idle()`. `set_mode_str(mode)` is a
+  new thin public passthrough to `_apply_mode` (the view has a mode *string*,
+  not a `Medium`). Board-switch `LOG` lines (`_SWITCH_MARKERS`) also populate a
+  first-class `_switch_status` label next to the header, not only the collapsed
+  Details log. **Ratified default-on (final-review sign-off, Taylor
+  2026-08-11):** unlike `CreateResultPanel`'s opt-in 👁 Watch, `begin()` builds
+  the viz on *every* run — the "visible machine, not a toggle you hunt for"
+  principle. A WebKit web-process SIGTRAP is not a Python exception, so on a
+  machine with WebKit present-but-unspawnable every run would crash; accepted
+  because the QB2 target has WebKit verified working, and the bwrap/CI case is
+  neutralized by a global `tests/conftest.py` autouse fixture forcing
+  `activity_viz._WEBKIT_OK=False` for every test (it weakens no coverage — the
+  WebView-asserting tests read the separate `artgen_render`/`create_view`
+  `_WEBKIT_OK` globals). A future spawnability probe / opt-in is a possible
+  follow-up if a broken-WebKit host ever matters.
+- **Stop + no dead-end.** A `◼ Stop` button in the run page's back bar →
+  `_on_stop_run` → `self._runner.cancel()` (stored on the single launch path
+  `_on_run_remix`; `cancel()` is a safe no-op on a finished runner) +
+  `LiveRunView.mark_cancelled()` (flips only `pending`/`running` tiles to
+  `cancelled` ⊘ via `LiveRunView`'s OWN `{**OpenView..., "cancelled": ...}`
+  glyph/CSS copies — the `OpenView` class dicts are never mutated). The run
+  page's `← Back` was repointed from the SHARED `_on_back_to_open` (still used
+  correctly by the remix page → `open`) to a new `_on_run_back` → `discover`;
+  Back only navigates, it never cancels — the run keeps going and its result
+  lands in Discover. Two tracked minors: `mark_cancelled` doesn't update the
+  `ProgressState` reducer (a trailing log line can briefly route to a cancelled
+  tile; self-heals next run) and uses the bulk timer-cancel rather than a
+  per-node freeze (elapsed label ≤1s off).
+
+## Pipeline UX overhaul (v0.75.0)
+
+Nine-task program closing the gap between what Pipeline Studio's step cards
+*could* show and what they actually did: raw `class_type`s instead of plain
+language, no per-step model choice, a log-only view of a running pipeline,
+and a dead-end "run finished" screen whose deliverable never reached the
+Library. Every seam below is GTK-free/pure where the task allowed, so the
+logic is unit-tested without a display; only the widget glue lives in
+`pipeline_studio.py`/`main_window.py`.
+
+- **Self-explaining steps** (`app/intent_vocab.py`): `flow_line(intent) ->
+  str` renders a plain "Takes a prompt → makes an image" line per step
+  (source nodes read "Makes …" with no "Takes" clause) from `Intent.
+  input_kind`/`output_kind` via the `_KIND_NOUN` map. `Intent.summary` is an
+  optional one-sentence, tool-agnostic description ("Turns your words into
+  an image.") populated for the marquee generative intents. `capability_for_
+  intent(class_type) -> str | None` (the `_CAPABILITY_FOR_INTENT` map) is the
+  seam that tells a step card which `server_manager` capability (if any) its
+  model picker should scope to — `None` for intents with no model dimension
+  (caption/rmbg/depth/prompt-compose/etc.), so those step cards never grow a
+  picker at all.
+- **`app/model_picker.py`** — a shared, GTK-optional per-capability model
+  picker, deliberately a NEW module rather than extracting CreateView's own
+  scoped dropdown (avoids risking a Create regression; migrating CreateView
+  onto this module is an explicit, not-yet-done follow-up — it keeps its own
+  picker for now). `picker_entries(capability, snapshot=None,
+  has_service=False) -> list[(key, display_name, benefit, dot)]` is the pure
+  core (mirrors `server_manager.display_name_for`/`benefit_for` +
+  `ModelStatusService`'s dot glyphs; `capability=="animatediff"` is a single
+  synthetic always-● entry, since AnimateDiff has no `ServerDef` to poll).
+  `ModelPickerRow(Gtk.Box)` wraps it in a `Gtk.DropDown` + benefit sub-label,
+  subscribing to `ModelStatusService` for live dot updates and guarding
+  against the double `notify::selected` fire GTK4's `set_model()` triggers
+  on every rebuild (`_suppress_change`, so a live status push can never look
+  like a spurious user re-pick). `pipeline_studio.py` builds one
+  `ModelPickerRow` per step whose intent has a `capability_for_intent`
+  match, keyed by node_id in `self._model_pickers`.
+- **`_backend_for` parity** (`app/pipeline_engine.py`): a step's picker is
+  worthless if the run doesn't honor it. `_backend_for` now tries an EXACT
+  `server_manager` key match against the node's `inputs["model"]` first
+  (`TTLGTextToImage`/`TTLGImageToVideo`), falling back to the old
+  substring-sniffing (`"flux" in m`, `"wan" in m`, …) only when the picked
+  value doesn't match a real key — so a `ModelPickerRow` selection always
+  routes to the actual server it named, never a same-family guess.
+- **Live run progress** (`app/pipeline_progress.py` + `LiveRunView` in
+  `pipeline_studio.py`): `ProgressState` is a pure reducer — `update(node_id,
+  status, detail)` folds one event, `current_index`/`done_count`/
+  `running_node`/`phase(node_id)` are read back to drive widgets;
+  `current_index` counts nodes in FIRST-started order, not declaration
+  order, so "Step N of M" matches what's actually happening on screen.
+  `LiveRunView` replaces each running step's status glyph with a real
+  `Gtk.Spinner`, shows the latest `detail` as a phase sub-label, and ticks a
+  per-step elapsed-time label (`GLib.timeout_add(1000, …)`, cancelled with a
+  final freeze — not a reset — on done/failed). The verbose log is demoted
+  to a collapsed `Gtk.Expander` now that the spinner/phase/elapsed row
+  carries the at-a-glance status.
+- **Final-result hero** (`app/pipeline_view_model.py` + `OpenView` in
+  `pipeline_studio.py`): `final_index_for(run) -> int | None` resolves which
+  step is the run's "Here's what you made" deliverable. `_HERO_KINDS` was
+  `{"image", "video"}`; AnimateDiff's `gif_path` output and every visual
+  artgen artifact (`TTLGArtgenGenerate`'s generic `artifact_path`, whose
+  intent alone can't distinguish a visual finale from prose) were silently
+  UN-heroable — a real bug, not hypothetical, since it also meant no Library
+  registration (below). Fixed: `_HERO_KINDS` now includes `"gif"`, and
+  `_ARTGEN_VISUAL_EXTS` (`.svg`/`.ans`/`.json`/`.gif`/`.png`/`.jpg`/`.jpeg`/
+  `.webp`) promotes a visual-looking "any"-kind artgen artifact to hero by
+  its own file extension, deliberately excluding `.txt`/`.py` (verse/
+  codeart prose keeps falling through to the existing text-only hero path).
+  `OpenView._build_hero` renders the resolved step exactly like an ordinary
+  step row (fan-out grid / single thumb frame / text block — never a new
+  rendering path), just larger, with ⛶ Fullscreen / ⤓ Save / ↪ In Library /
+  🔀 Remix actions. This hero is still the fixed-contract static
+  `_build_thumb_frame`, not `artgen_render`'s rich/animated rendering — see
+  the "Known, accepted static-degrade" note under "Media showcase
+  everywhere" below.
+- **Library registration** (`MainWindow._register_pipeline_final`, wired as
+  `PipelineStudio`'s `on_run_complete` callback, fired once per run from
+  `LiveRunView`'s "run-done"): resolves the hero step via `final_index_for`
+  and classifies its artifact by extension into ONE of the two record
+  shapes every other Library-writing path already produces — raster
+  (`.png`/`.jpg`/`.jpeg`) or `.mp4` become a native `history_store.
+  GenerationRecord` via the same gallery-add path `_on_finished` uses;
+  artgen kinds (`.gif`/`.svg`/`.ans`/`.json`/`.py`/`.md`) become a
+  `media_store.MediaRecord` (`generator_type="pipeline"`, provenance
+  `_pipeline_run_id`/`recipe` in `params`) mirroring `_create_generate_
+  artgen`/the `ansi-image` transform branch. Fail-soft end to end (no
+  resolvable hero, missing file, unrecognized extension, or any raised
+  error just means "register nothing," never a crash on the run-done
+  screen the user is looking at); `self._registered_pipeline_runs` (a set of
+  run ids) guards against double-registering the same run.
+- **Legacy portfolio view retired.** `app/pipeline_portfolio_view.py` (the
+  pre-Task-7 "done runs" grid) was dead/unwired code — nothing in
+  `main_window.py` ever constructed it — and was deleted outright along with
+  its test file rather than kept around unreachable; `OpenView`'s hero
+  (above) is the surviving, already-live run-showcase surface.
+
+## Remix is pipelines (v0.73.0)
+
+Remix used to mean two different things depending on which surface you clicked
+from (a quick popover vs. "Remix as pipeline…"). It now means exactly ONE
+thing everywhere: **seed a pipeline from an artifact, via the Muse.**
+
+- **One affordance, one destination.** `GenerationCard`, `DetailPanel`,
+  `ArtgenGallery`'s card, and `ArtgenDetail` each show a single "🔀 Remix"
+  button (tooltip "Remix this into a pipeline"), all wired to the same
+  `_remix_as_pipeline` handler in `main_window.py`, which opens Pipeline
+  Studio's Muse seeded with that artifact. `remix_popover.py` (`RemixPopover`)
+  and `remix_dispatch.py` (`dispatch_remix`) **remain in-tree and
+  unit-tested but are unwired** — `MainWindow._on_remix_card`/
+  `_dispatch_remix` and all `RemixPopover`/`on_remix` call sites were
+  deleted; nothing in `main_window.py` constructs a `RemixPopover` anymore.
+- **Palette is now a seedable kind.** `artgen_kind.artgen_seed_kind(file_path,
+  generator_type)` returns `"palette"` when `generator_type == "palette"`
+  (before this, a saved palette JSON wasn't a recognized remix-seed kind at
+  all), so a palette artifact can be dropped into the Muse like any image,
+  video, or text artifact.
+- **Cross-type adapter registry** (`app/intent_vocab.py`): `ADAPTERS: dict[
+  (seed_kind, input_kind), class_type]` plus `adapter_for(seed_kind,
+  input_kind) -> str | None`. Ships one entry —
+  `("palette", "text"): "TTLGPaletteToPrompt"` — but is designed to grow
+  (e.g. a future `("image", "text"): "TTLGCaptionImage"`) without touching
+  any call site. `intent_vocab.INTENTS["TTLGPaletteToPrompt"]` is a
+  **source-style** Intent (`input_key=None`, `input_kind=None`,
+  `output_kind="text"`, `outputs=("prompt",)`) — it has no runtime input
+  because its value is computed once, at seed time, not at run time.
+- **`TTLGPaletteToPrompt`** is a pure engine handler
+  (`pipeline_engine._h_palette_to_prompt`, `@register("TTLGPaletteToPrompt")`)
+  that does nothing but echo `inputs["prompt"]` straight through — the actual
+  composition (palette JSON -> prompt text, optionally LLM-polished) already
+  happened when the pipeline was seeded, so the node has **zero runtime
+  LLM/backend dependency** (mirrors the existing `TTLGPromptCompose`
+  template-substitution handler's "pure at run time" shape). The composed
+  text lands in the step's `inputs.prompt` as an ordinary, hand-editable
+  literal — nothing about it is special-cased in the step-card field editor.
+- **`app/palette_prompt.py`** (GTK-free): `load_palette(path) -> dict | None`
+  (parses a palette JSON, `None` on any failure — missing/unreadable/not an
+  object) and `literal_prompt(palette) -> str` — the deterministic,
+  guaranteed-to-work fallback: up to the first 6 hex colors plus the lore
+  sentence, joined as `"palette: #hex1 #hex2 ..., <lore>"`. This is the same
+  colors+lore extraction that used to be trapped inside
+  `remix_popover._build_hint`, now a shared pure helper.
+  **`prompt_client.llm_polish_or_none(source, seed_text) -> str | None`** is
+  the optional upgrade path: polishes the literal into more natural phrasing
+  via the prompt-gen LLM, returning `None` (not raising) if no LLM is
+  reachable — the adapter always has a usable prompt either way.
+- **`recipes.build_seed_spec(goal, *, seed_artifact=None, prepend_steps=())`**
+  gained `prepend_steps: tuple[tuple[class_type, params_dict], ...]` — steps
+  inserted before the goal's own `recipe_steps`. `seed_spec` chains each
+  step's primary output into the next step's input, so a prepended
+  text-output adapter wires straight into the goal's first step's text
+  input with no special-casing. **`recipes.goals_for(seed_output_kind=...)`**
+  now also offers a goal when the seed's kind doesn't directly match the
+  goal's first step's `input_kind` but `adapter_for(seed_output_kind,
+  first_input)` resolves one — i.e. the Muse offers AnimateDiff-shaped goals
+  for a palette seed, not just text-shaped ones.
+- **Muse `compose_fn` seam** (`pipeline_studio.py`): `MuseView.__init__`
+  takes an optional `compose_fn: Callable[[medium, literal, on_done], None]`.
+  `PipelineStudio`'s `_compose_fn` runs `prompt_client.llm_polish_or_none`
+  on a background `threading.Thread` and posts the result back via
+  `GLib.idle_add(on_done, polished or literal)` — the same off-thread +
+  idle_add shape as `main_window._create_inspire_fn`. `MuseView._choose_goal`
+  detects when the chosen goal needs the palette adapter
+  (`adapter_for(seed_kind, first_input) == "TTLGPaletteToPrompt"`), shows a
+  "Composing a prompt from your palette…" message, and on `on_done` prepends
+  a `("TTLGPaletteToPrompt", {"prompt": <text>, "_source_palette": path})`
+  step via `build_seed_spec(..., prepend_steps=(step,))` before emitting
+  `goal-chosen`. `compose_fn=None` (tests/standalone) falls back to the
+  synchronous literal — the adapter path never blocks on an LLM being
+  available. Every other goal (kind matches directly, or no adapter
+  registered) keeps the original synchronous build-and-emit path unchanged.
+- **Regression lock:** `tests/test_palette_to_animatediff_e2e.py` builds a
+  palette-seeded AnimateDiff spec via `build_seed_spec(..., prepend_steps=...)`
+  end to end (headless, no GTK — pure spec assembly + a dry `pipeline_engine`
+  handler call) and asserts the adapter's `prompt` output wire lands on
+  AnimateDiff's `prompt` input (`spec["2"]["inputs"]["prompt"] == ["1",
+  "prompt"]`), the topo order resolves, and the dry-run handler output
+  contains both the palette's hex color and its lore text.
+
+## "👁 Watch" hardware-activity viz (experiment, v0.67.0 · honest N-chip v0.68.0)
+
+`app/activity_viz.py` — `ActivityVizWidget(Gtk.Box)`, an OPTIONAL "watch the
+chip work while you generate" widget for the Create surface. Embeds the
+self-contained **tensix-viz** Canvas animation (bundled at
+`app/assets/tensix-viz/{tensix-viz.js,tensix-viz.css}`, copied from
+`~/code/tensix-viz`, **zero external deps** — 0 fetch/import/CDN, inlined into
+one `about:blank` HTML doc) in a `WebKit.WebView` (JS enabled), reusing the
+`artgen_detail` **realize-deferral** pattern (`evaluate_javascript`/`load_html`
+before realize is a silent no-op → queue in `_pending_js`, flush on `"realize"`;
+backlog bounded to 32 so a never-realized active viz can't leak telemetry
+calls). User loved the MVP and asked to develop it — see
+[[project_watch_activity_viz]].
+
+**Honest per-chip display (v0.68.0).** The widget draws ONE tensix-viz per REAL
+chip under `/sys/class/tenstorrent/` (`chip_count()`), capped at `_CHIP_CAP`
+(4) so a big system stays a legible corner instrument — 4-chip QB2 → a 2×2 grid
+(`grid_layout(n)` → `(cols, canvas_w, canvas_h)`). It does NOT use tensix-viz's
+`CardViz`/`SystemViz` (those hide their inner per-chip `TensixViz` instances);
+instead the inlined init script builds N canvases + a tiny `window.__viz`
+**facade** exposing `activate(mode)` (fans out, staggered), `setMemoryStats(s)`
+(all chips), and the net-new `setChipStats(i, s)` (ONE chip) — so each chip can
+be fed its OWN clock. `read_chip_clocks()` returns position-aligned per-chip
+AICLK (None for an unreadable chip, so index i always maps to chip i), and the
+1 s tap feeds `setChipStats(i, {dram_bw, l1_fill})` per chip. Maximally honest:
+each drawn chip pulses with its own real clock.
+
+Two decoupled controls: `set_mode(medium)` → `viz.activate(<mode>)` picks the
+animation MODE (`mode_for_medium`: image→`diffusion`, video/animate→`video`,
+animatediff→`diffusion`, any other artgen→`thinking`, else→`inference`; idle
+when None) and updates the header caption; `set_running(bool)` starts/stops the
+telemetry tap. They're separate so the **live readout ticks the whole time Watch
+is shown, not only mid-job** (`set_active`/`set_idle` remain as mode+running
+aliases). A compact **header** shows `◉ <mode>` (left) + a live power/clock
+readout (right, "N/total" when the display is capped) + a `✕` dismiss
+(`on_close` callback → flips the Watch toggle off).
+
+**Click the title to cycle modes (v0.69.0).** A `Gtk.GestureClick` on the
+header's mode label steps `cycle_mode()` through `_CYCLE_MODES` (all tensix-viz
+modes) — a manual override for exploring the animations. `set_mode`/`cycle_mode`
+share `_apply_mode(mode_str)`; the lifecycle auto-driver reasserts the medium's
+mode on the next job. The gesture is on the label (which fills the header) not
+the whole header, so it never conflicts with the `✕` button.
+
+**Telemetry signal = per-chip POWER draw, not AICLK (v0.68.1).** The MVP fed
+sysfs AICLK into `setMemoryStats`, but AICLK on Blackhole is effectively binary
+(~800 idle / 1350 boosted) and often pins at 1350 even at rest — so the memory
+layer barely moved during a job (the "AnimateDiff shows no difference" report).
+**Power is the graded, honest signal** (~18 W idle → 150 W+ under diffusion):
+`sample_telemetry(display, actual)` prefers per-chip power via
+`read_chip_power_watts()` (a `tt-smi -s --snapshot_no_tty` subprocess, ~0.3 s,
+parsed by pure `parse_powers`), converted to an **activity scalar 0..1** by
+`power_activity` (`_POWER_FLOOR_W`=15 … `_POWER_CEILING_W`=110, `**_POWER_CURVE`
+=0.6 perceptual boost), and **falls back to sysfs AICLK** (idle-relative
+800→1350 via `_clock_activity`) when tt-smi is absent.
+
+**Expressive data flow (v0.70.0).** The tap returns an activity scalar; the
+main-thread `_apply_sample` shapes it into flow via pure `shape_flow(activity,
+active)` → `(dram_bw, l1_fill, writeback)`. `active` = the animation mode isn't
+idle (a job is showing); an active job gets a FLOOR (dram≥0.35, writeback≥0.15)
+so DRAM↔L1 particle flow is clearly visible and then intensifies with real load,
+instead of the raw power value *suppressing* flow below the mode preset's own
+liveliness (the earlier "hard-override made it quieter than the canned preset"
+trap). **Bidirectional flow** needs a tensix-viz change: `setMemoryStats` now
+accepts an optional `writeback` (L1→DRAM return-particle density) override —
+committed in the sister repo `~/code/tensix-viz` (`src/chip.js`, `node build.js`,
+83 tests) and re-bundled into `app/assets/tensix-viz/`. Keep the bundle in sync
+by editing the source + rebuilding, never hand-editing the generated bundle. The subprocess CANNOT run on the GTK thread, so the tap
+is a **background daemon thread** (`_telemetry_loop`, `_TELEMETRY_INTERVAL_S`=1.5
+s, `stop.wait` for prompt cancel) that hands each sample to the main thread via
+`GLib.idle_add(self._apply_sample, …)` (which updates the readout + evals
+`setChipStats(i, …)` per chip; a late sample after stop is ignored via
+`_tel_running`). `pyluwen` (fast Rust telemetry) is venv-only and the app runs
+system `/usr/bin/python3`, so tt-smi is the portable read path. All pure helpers
+(`mode_for_medium`, `chip_count`, `read_chip_clocks`, `read_aiclk_peak_mhz`,
+`parse_powers`, `power_intensity`, `sample_telemetry`, `grid_layout`) are
+GTK-free and unit-tested; `arch="blackhole"` (QB2 is Blackhole).
+
+**Fail-soft + optional by construction.** OFF by default. No WebKit → inert
+stub (`_WEBKIT_OK` guard; header still shows, readout reads "—"); no chips →
+draw one idle chip and the tap no-ops; every `evaluate_javascript` is wrapped so
+a bad tick just skips. **Built LAZILY** — `CreateResultPanel.__init__` never
+constructs it (WebKit is a heavy JS-engine/web-process cost, and 7 test files
+build CreateResultPanel; eager construction also segfaults the WebKit bwrap
+sandbox under nested-sandbox CI). Instead:
+
+- The result pane is wrapped in a `Gtk.Overlay` (`CreateView._build_panes`,
+  `self._result_overlay`) so the viz can be pinned to the **bottom-right**
+  corner (halign END/valign END + bottom/end margins), locked into the frame.
+  **Corner-pin invariant:** the widget sets a fixed size + `hexpand/vexpand
+  False` (and so does its inner WebView) — an expanding overlay child gets
+  stretched to fill the pane instead of pinned (the MVP bug: it floated over
+  the content in the top-left).
+- CTA row has a `👁 Watch` `Gtk.ToggleButton` → `_on_watch_toggled` →
+  `_ensure_activity_viz()` builds the widget ONCE on first reveal, adds it to
+  the overlay, wires `viz.on_close` to the toggle, and injects it via
+  `CreateResultPanel.set_activity_viz(viz)`.
+- `CreateResultPanel` DRIVES the mode from its own lifecycle so the animation
+  can never drift from what's cooking: `show_pending`→`_drive_activity_active`
+  (only when `_activity_visible`), `show_finished`/`show_error`/`_show_empty`→
+  `_drive_activity_idle` (calms animation, keeps the clock ticking while
+  shown). `set_activity_visible(bool)` toggles the viz + `set_running` +
+  initial mode; turning Watch on mid-generation animates the in-flight medium
+  immediately.
+
+**Invariant preserved:** `_collect_params()`/`collect()` are untouched — the
+viz is pure decoration in the result pane, never a value-bearing widget. The
+paned end child is now a `Gtk.Overlay` wrapping the result scroller (was the
+scroller directly) — the only structural change, guarded by
+`test_create_view.py::test_paned_holds_scrolling_form_and_docked_result_detail_pane`.
+Tests: `tests/test_activity_viz.py` (pure helpers + a `_FakeViz` drives the
+CreateResultPanel wiring without WebKit; a regression guard asserts
+`CreateResultPanel.__init__` stays WebKit-free). Live rendering is
+user-verified on the real display (WebKit works there; the nested-sandbox
+`bwrap: Permission denied` crash is CI-only).
+
 ## artgen LLM endpoint discovery
 
 `artgen.detect_artgen_endpoint()` (`app/artgen/__init__.py`) picks the chat
@@ -62,6 +765,677 @@ token budget.
 **`--ansi-style bbs`:** BBS canvas is fixed at 40×20. Color guide specifies electric cyan
 (51, 87), toxic green (46, 82), hot magenta (201, 199), gold (226, 220). Zone rules
 constrain rows 1-2 and 18-20 to near-black void (232–234), rows 3-17 to the neon subject.
+
+## Right-click transform: image → ANSI art (`plugins/ansi-image/`, v0.51.0)
+
+`plugins/ansi-image/plugin.py` is a "forge transform" utility plugin
+(`x-ttlg.utility: true`, not a generator) — a pure-Pillow, in-process
+image → ANSI-art converter reusing `artgen_render._XTERM256_HEX` (the same
+256-entry xterm palette the ANSI renderer already uses, so quantization here
+can never drift from what the viewer draws). One color per cell only —
+`\x1b[38;5;Nm█`, foreground + full block — because `artgen_render.
+parse_ansi_grid` doesn't support two-color half-block cells; this is exactly
+the format the 3-pass `ansi` LLM generator emits too. `is_available()` is a
+bare `import PIL` check (Pillow, already a dependency elsewhere); no
+subprocess, no LLM, fully deterministic for a given input. Two color modes:
+`colors=256` (default, indices 16-255, the 6×6×6 cube + grayscale ramp — best
+for photographic gradients) or `colors=16` (indices 0-15, the classic DOS/BBS
+palette, for an intentional retro look).
+
+**Wired into the right-click transform menu** (`app/main_window.py`) as
+`"ansi-image"`, registered in the same three places as rmbg/blip/depth
+(`GenerationCard._on_right_click`'s `all_transforms`, `MainWindow.__init__`'s
+health pre-warm probe thread, and `_transform_available`'s dynamic plugin
+loader — no additional registration needed there since it dispatches by key
++ path convention). It is a SPECIAL CASE in `MainWindow._run_transform`,
+because it produces a different kind of record than the other three:
+
+- rmbg/blip/depth call a plugin fn shaped `fn(src, dest)` or `fn(src) -> str`
+  (the `_META` dict maps key → `(fn_name, ext_or_None, label)`) and always
+  return a native `history_store.GenerationRecord` (`media_type="image"`)
+  for the Image gallery.
+- `ansi-image`'s `image_to_ansi(src, cols=80, colors=256) -> str` takes no
+  destination and returns text, so `_run_transform` special-cases the key
+  entirely: writes the `.ans` file itself (`artgen_thumb.make_artgen_path`),
+  renders its thumbnail (`artgen_thumb.make_thumbnail` — the `.ans` branch
+  already draws a real color-grid PNG), and builds a
+  `media_store.MediaRecord` (`media_type="artgen"`,
+  `generator_type="ansi-image"`, `params` carrying `_source_id`/`_transform`
+  for provenance) — the exact record-construction pattern
+  `_create_generate_artgen` uses for Create's artgen mediums, right down to
+  the `rec.media_file_path` duck-typed alias and `_ms.add()` +
+  `_ms.ensure_auto_playlists()`. It still writes the same structured
+  `_TRANSFORMS_LOG_DIR` log file as every other transform.
+- `MainWindow._on_transform_finished` branches on the returned record's
+  `media_type`: `"artgen"` refreshes `self._artgen_gallery` (same as
+  `_on_create_artgen_done`) and is NEVER appended to `self._store` or handed
+  to `self._image_gallery` (wrong type, wrong gallery — those only ever see
+  `GenerationRecord`s). The rmbg/blip/depth path is byte-for-byte unchanged.
+
+Icon/label polish: `"ansi-image"` was added to `create_mediums.
+_ARTGEN_LABELS_ICONS` (`("ANSI Art", "▓")`) and `_ARTGEN_KIND`
+(`"image"`, same as the LLM `"ansi"` generator — both render as a color
+grid), and to `artgen_gallery._TYPE_EMOJI` (`"▓"`) for the gallery card
+badge.
+
+## Media showcase everywhere (`app/artgen_render.py`, v0.48.0)
+
+A full media-type × display-context audit found the rich rendering logic for
+each artgen kind — ANSI grid parsing, palette swatches, the animated-gif
+driver, codeart/markdown formatting — copy-pasted across 3-4 places
+(`artgen_detail.py`, `artgen_watch.py` [since removed as dead code, see
+v0.81.0 note below], `artgen_gallery.py`, TT-TV's `attractor.py`) and
+drifted apart. Worst case: TT-TV's ANSI parser only
+understood the legacy `\x1b[48;5;Nm ` (bg+space) escape form, so every ANSI
+artifact made with the current generator (which emits only
+`\x1b[38;5;Nm█`, fg+block) rendered as raw escape-code gibberish — a live
+bug, not a hypothetical one.
+
+**`app/artgen_render.py` is now the single leaf module** every context
+imports from — it may import `gi`/Gtk/GdkPixbuf/GLib and stdlib only, and
+must never import `artgen_detail`/`artgen_gallery`/`create_view`/`attractor`
+(the reverse is fine; that would be a cycle). It provides:
+- `parse_ansi_grid(raw) -> list[list[(char, fg_hex_or_None, bg_hex_or_None)]]`
+  — the ONE parser that understands BOTH ANSI pixel formats the `ansi`
+  generator has emitted over time (legacy bg+space and current fg+block),
+  plus 8/16-color SGR, 256-color, truecolor, and SGR-0 reset. Every other
+  ANSI-consuming context builds on this instead of re-walking escape codes.
+- `ansi_to_html`, `palette_to_html`, `md_to_html`, `code_to_html` — HTML
+  document builders for the "reading view" (`code_to_html` is deliberately
+  NOT routed through `md_to_html`'s prose/markdown pipeline — that dedents
+  and reflows text, which destroys Python's syntactically-significant
+  whitespace; codeart gets a plain HTML-escaped `<pre>` instead).
+- `derive_title`, `luminance` — small pure helpers shared by detail views.
+- `AnimatedGifWidget` (a self-driving `Gtk.Picture` that cancels its own
+  `GLib.timeout_add` timer on unrealize) and `drive_gif_animation` (the
+  same iterator-driving logic for callers that reuse one persistent
+  `Gtk.Picture` across records, e.g. `ArtgenDetail`).
+
+**The per-context showcase guarantee:** every one of `CreateResultPanel`
+(`create_view.py`), `ArtgenDetail`, `artgen_gallery`'s card
+content (`make_card_content`), and the TT-TV attractor now renders each
+artgen media type's RICH form — vector `Gtk.Picture` for svg, swatch grid
+for palette json, colored character grid for ansi, formatted reading view
+for verse/md, monospace indentation-preserved view for codeart `.py`,
+animated `GdkPixbufAnimationIter` for gif (never the GStreamer `Gtk.Video`
+path, which is documented elsewhere in this file as unreliable for gif) —
+in every context, not just the one context someone happened to build first.
+`CreateResultPanel` in particular never shows "Result file not found" for
+an artgen kind that actually generated successfully. (`ArtgenWatch`/
+`artgen_watch.py` — named above as one of the pre-unification copy-paste
+sites — was itself never wired into a live surface after that unification;
+it was deleted outright as dead code in v0.81.0, alongside `pipeline_panel.py`
+[superseded by `pipeline_studio.py`] and the standalone `batch_generate.py`
+CLI [no `bin`/`tt-ctl`/`debian` invocation path], mirroring how
+`pipeline_portfolio_view.py` was removed below.)
+
+**Known, accepted static-degrade:** `pipeline_studio`'s node/hero
+thumbnails are a fast, fixed-contract pixbuf-grid surface (`_build_thumb_frame`)
+— a placeholder/static tile for non-raster artgen types there is
+intentional, not a gap to close. They may eventually call
+`artgen_thumb.make_thumbnail` for a nicer static tile, but full rich/
+animated rendering doesn't fit that contract and is out of scope. (The standalone `pipeline_portfolio_view.py` this
+paragraph used to also name was deleted outright in the v0.75.0 Pipeline UX
+overhaul — it was dead/unwired code, never mounted anywhere; the run-final
+showcase job it would have done belongs to `OpenView`'s own hero, which
+predates it. See the v0.75.0 section below. `OpenView`'s hero is still this
+same static-thumb-frame contract, not `artgen_render`'s rich/animated
+rendering; it now additionally counts "gif" and visual artgen kinds
+[svg/ans/json/png/jpg] as heroable via `pipeline_view_model._HERO_KINDS`/
+`_ARTGEN_VISUAL_EXTS`, where before only image/video were.)
+
+**`artgen_thumb.make_thumbnail` now produces real thumbnails for every
+type it's asked to preview**, not just raster/svg: `.json` (palette) parses
+`colors: [{"hex": ...}, ...]` and draws a real swatch-grid PNG; `.ans`
+parses via `parse_ansi_grid` and draws a real color-grid PNG (never falls
+back to text-rendering the raw escape bytes — an unparseable/empty `.ans`
+degrades straight to the honest placeholder instead); `.py` codeart (and
+`.md`) get the existing monospace text-render (previously `.py` wasn't in
+the text allow-list at all and fell all the way through to the grey 1×1
+placeholder). Before this, `.json`/`.ans` fell into the generic text branch
+and got their raw syntax/escape bytes text-rendered as if they were prose
+— exactly the kind of garbage-PNG bug this module exists to prevent for
+binary formats; any blind `thumbnail_path` consumer (the Create recents
+strip, the attractor's slot fallback, pipeline-studio previews) now gets an
+honest preview.
+
+## Unified gallery interaction (v0.49.0)
+
+All galleries — native `GalleryWidget` (video/image/animate) AND `ArtgenGallery`
+— now share ONE interaction model: browse thumbnails → hover-preview →
+**single-click opens the detail in the shared right pane** → **double-click (or
+the pane's `⛶ Fullscreen` button) opens a maximized full-screen view**.
+
+- **Dual-renderer right pane.** `MainWindow._detail_wrap` holds `self._right_stack`
+  (a `Gtk.Stack`): child `"native"` = `self._detail` (`DetailPanel`, video/image/gif),
+  child `"artgen"` = `self._artgen_detail` (a shared `ArtgenDetail`). Native card
+  selection (`_on_card_selected`) shows `"native"`; artgen selection
+  (`_on_artgen_card_selected`, wired via `ArtgenGallery.on_card_activated`) shows
+  `"artgen"`. `_set_detail_pane_visible` (Task 1) is the single visibility toggle
+  (the ✕ dismiss bar + `win.toggle-detail` both route through it) — do NOT assume
+  `self._detail.get_parent() is _detail_wrap` anymore (the Stack sits between them).
+- **Artgen off the in-page overlay.** `ArtgenGallery` is grid-only again; the
+  `_detail_overlay`/`_grid_page`/`_show_detail` crash-workaround is gone. The right
+  pane is a *sibling subtree* of the grid, so switching it never unmaps a
+  `FlowBoxChild` mid-dispatch (the segfault class the overlay existed for). Artgen
+  card clicks now use the SAME mechanism as native cards: `_flow` is
+  `SelectionMode.NONE` + one `Gtk.GestureClick` per card (single → `on_card_activated`,
+  double → `ArtgenViewerWindow`) — no more FlowBox `child-activated`.
+- **Full-screen.** Native video/image via `VideoPlayerWindow`/`ImageViewerWindow`
+  (double-click a card or the pane's ⛶). **GIFs animate full-screen**:
+  `VideoPlayerWindow` has a GIF branch using `artgen_render.AnimatedGifWidget`
+  (`GdkPixbufAnimationIter`) instead of the seek-unreliable `Gtk.Video`. Artgen
+  media uses the net-new **`app/artgen_viewer.py::ArtgenViewerWindow`**
+  (svg/gif/ansi/palette/verse/markdown/code), which shares ONE ext→renderer
+  dispatch with `ArtgenDetail` via `artgen_render` (no duplicated render logic;
+  WebKit reading-views use the realize-deferral pattern).
+- `ArtgenDetail` gained the `⛶ Fullscreen` button and dropped its vestigial
+  "← Gallery" back button (the grid is always visible on the left now); its
+  `on_back` callback survives only to collapse the pane when a delete empties the
+  list. Switching the right pane away from artgen calls `ArtgenDetail.pause_animation()`
+  so a hidden artgen GIF's timer doesn't tick forever. Delete-sync is asymmetric:
+  grid hover-🗑 (`_on_artgen_card_deleted`) only clears the pane if it shows that
+  record; the detail's own 🗑 (`_on_artgen_detail_deleted`) calls
+  `ArtgenGallery.remove_record` to sync the grid.
+
+## Create surface (role zones, scoped models, modifier pills)
+
+The **Create** loop-nav verb opens `CreateView` (`app/create_view.py`), the
+role-grouped generation surface (v0.28.0). Three key ideas, each backed by a
+small unit — deliberately shared so pipeline field configuration can adopt them
+later:
+
+- **`app/field_roles.py`** — a pure (no-GTK) taxonomy. Every field has a **role**
+  (`ROLE_BRIEF` / `ROLE_DIRECTION` / `ROLE_CONTROL` → the three zones) and a
+  **marker** (`MARK_WORDS` ✎ raw text the model renders · `MARK_INTERPRETED` ✨
+  a value the model/LLM decides from · `MARK_EXACT` ⚙ deterministic, never read
+  by the model). `classify_native`, `classify_artgen`, `classify_pipeline_field`
+  are the single source of truth. Glyphs live in `MARKER_GLYPH` — Python strings
+  only, never inside a `b"""` CSS literal.
+- **`RoleZonePanel`** (in `app/create_param_panels.py`) — wraps any
+  `CreateParamPanel`, reads its `field_specs()`, and **re-parents** the panel's
+  already-built field widgets into the brief / Direction / collapsed-Controls
+  zones. It never rebuilds widgets, so `RoleZonePanel.collect()` is a verbatim
+  passthrough to `panel.collect()`. **Migration invariant:** that dict must stay
+  byte-for-byte compatible with what generation consumes — guarded by
+  `test_role_zone_panel.py`'s collect-equality tests. The `kind=="model"` field
+  is excluded here; CreateView's scoped dropdown owns model selection.
+- **`ModifierPills`** (same file) — the Direction zone's chip palette. Banks come
+  from `chip_config.load_chips(medium.kind)`; tapping an add-chip creates a
+  removable pill (the add-chip hides until removed), and `applied_text()` is
+  appended to the brief at generate time.
+
+**Models:** no persistent full-width strip (it overflowed — retired in 0.28.0).
+Within a medium, a scoped `Gtk.DropDown` lists only that medium's models. The
+"Start with a model" door is a grouped, wrapping grid (Image / Video / Animate /
+Text) classified by each `ServerDef.capabilities` via
+`_CAPABILITY_TO_MODEL_DOOR_GROUP` — **not** by `_server_key_to_medium_id` (that
+"first artgen medium" heuristic mis-files the chat-LLM backends under Animate;
+regression-guarded). Text cards return to the Idea door without changing the
+active medium.
+
+**LLM-free artgen mediums self-select as their own model (v0.47.3).** Every
+artgen medium used to be treated as chat-LLM-backed by `_scoped_model_keys`
+(cap="artgen" -> list the chat servers) — wrong for a self-contained
+generator like AnimateDiff (Blackhole diffusion GIF, no LLM involved at all).
+`Medium.uses_llm` (`create_mediums.py`, threaded from `ArtGenerator.uses_llm`
+via `discover_mediums`'s `uses_llm_for` param / `default_mediums()`'s real
+`artgen.get(name).uses_llm` lookup) marks this per generator. An artgen
+medium with `uses_llm=False` gets a single self-entry in its scoped dropdown
+(`[medium.id]`, label = `medium.label`, dot always "●", canonical `None` so
+`collect()`'s "model" override stays a no-op) instead of the chat-server
+list — being the only entry, it auto-selects, so the user is never asked to
+pick a model AnimateDiff never uses. LLM-backed artgen mediums (verse/ansi/
+landscape/…) are unaffected. Gotcha found mid-fix: `artgen.get(name)`
+resolves to whatever `plugins/<name>/plugin.py` defines (back-filled by
+`artgen._load_generators()` from `plugin_loader`), NOT the `@register`ed
+class in `app/artgen/generators/<name>.py` — for animatediff, `uses_llm =
+False` had to be set on BOTH classes (the plugin.py one is the one that
+actually matters at runtime; the generators/ one had already-registered
+side effects too, and matches the module the rest of this doc treats as
+canonical for its 3-pass-pipeline / hardware logic).
+
+**Width discipline:** the whole surface is wrapped in
+`gtk_layout.wrap_centered` (`MaxWidthBin`, extracted from `pipeline_studio`), and
+every multi-item row is a wrapping `Gtk.FlowBox` — width overflow is structurally
+impossible. Palette stays the tt-vscode-toolkit variant (`#4FD1C5`/`#0F2A35`).
+
+The legacy per-model tabs / ControlPanel / ArtgenPanel remain the reachable
+fallback until a real-generation smoke test on hardware; deleting them is a
+separate step.
+
+**Pipeline editor adoption (sub-project 2, v0.29.0).** The same vocabulary now
+drives `RemixView`'s node field editing (`app/pipeline_studio.py`), so a field
+means the same thing in Create and in Remix/Compose. `field_roles` gained a
+deepened `classify_pipeline_field` (classifies a `spec_remix.ParamField` by
+kind/value/key) and a pure `marker_prefix(marker)` label formatter shared by both
+surfaces. In each step card, fields are classified, ordered brief -> direction ->
+control, marker-prefixed (✎/✨/⚙ + tooltip), and the control fields sit under a
+per-card collapsed `Gtk.Expander` "Controls (N)". Brief text fields get a
+contextual `ModifierPills` (imported from `create_param_panels`; bank chosen by
+`intent_for(class_type).output_kind` via `_bank_kind_for_output` -- image/video/
+gif->animate, text/None->no bank), and `_collect_edits` folds each field's
+`applied_text()` into its value at Run time. **Edit-contract invariant preserved:**
+`_field_widgets`/`_field_meta` are populated for every field regardless of zone,
+and with no retype + no applied pill a field stays out of the edit diff (untouched
+run reproduces exactly). Known follow-up: `ModifierPills` re-reads
+`config/prompt_chips.yaml` per render (fail-soft, uncached) on both surfaces --
+cache `load_chips_for_kind` if render latency ever matters.
+
+**In-place results (v0.31.0).** Create is a two-pane surface: the form beside a
+`CreateResultPanel` (`app/create_view.py`), laid out in a `Gtk.FlowBox`
+(min1/max2 per line) so it's side-by-side when wide and stacked when narrow,
+inside `wrap_centered` at `_TWO_PANE_MAX_WIDTH` (1440, a true ceiling -> no
+overflow). Hitting Create shows a live pending state in the panel (spinner +
+elapsed), resolving in place to the finished image/video/text the instant it's
+done, and prepending to a session recents strip (cap 6). This is the
+[[project-see-result-immediately]] principle. Wiring: `main_window` marks a
+Create-launched job with `self._create_job_active` and forwards the lifecycle to
+`self._create_view._result_panel` -- native jobs via `_on_generate`'s
+progress/finished/error callbacks (the gallery pending card is SKIPPED for
+Create jobs, but the finished record still lands in the gallery/store, so
+Discover is unchanged -- the panel is additive), artgen jobs via
+`_on_create_artgen_finished`/`_fail_create_job` on the `tt-ctl` worker thread.
+**Every terminal path clears the flag** -- `_fail_create_job(reason)` is called
+on all `_on_generate` early returns (server busy / low disk / AnimateDiff-busy)
+and on artgen failure, so the panel never stays stuck on "pending" and the
+window-global flag never bleeds into an unrelated next job. Non-Create jobs
+(attractor/TT-TV) never touch the panel and keep their gallery pending card.
+**Per-chip progress (v0.72.0):** multi-chip AnimateDiff (remix mode) streams
+each chip's log lines prefixed `chipN:` (from `_run_multi_chip` in
+`artgen/generators/animatediff.py` — process-level parallelism, one 1×1
+MeshDevice process per chip). `CreateResultPanel.show_progress` parses
+`_CHIP_LINE_RE` and renders one live row per chip in `_pending_chip_box` (all
+chips at once) below the coordinator status line, instead of the chip lines
+interleaving into a single flickering label. `_chip_status` (index→latest line)
+is the persistent job state so `_render_pending` restores every row on a
+return-to-pending; reset on each `show_pending`. Plain (single-chip) runs never
+populate it, so the box stays hidden and the classic single status line is
+unchanged. (The 👁 Watch viz already showed all chips at once — this brings the
+textual progress to parity.)
+**Queue progress (v0.69.0):** `_start_next_queued` re-engages the panel for
+each queued job (sets `_create_job_active` + `show_pending` with the medium
+resolved by `_medium_for_queue_item`/`CreateView.medium_by_id`), so the panel's
+pending→progress→finished keeps running through a whole Theme-Set/queue drain —
+`_on_finished` clears the flag before draining, so without this only the first
+job showed in the panel. `from_attractor` items are excluded (they must not
+hijack the Create preview). Note: the artgen `MediaRecord` gets a `media_file_path` alias set so the
+panel's renderer (which reads that name, matching `GenerationRecord`) resolves
+the artifact; `MediaStore.add` reads only declared fields, so it's inert for
+persistence.
+
+**✨ Inspire — restored on every creative prompt entry (v0.50.0, regression
+fix).** SP-3d-5 deleted `ControlPanel`/`ArtgenPanel` (the per-field ✦ Inspire
+buttons went with them) in favor of the Create/Discover/Remix shell, but
+nothing grew a replacement — Create's idea door kept an Inspire button but
+(bug) always generated fresh, never reading the field first; every other
+prompt entry (artgen params, pipeline step fields) had none at all. Fixed as
+ONE shared implementation instead of forking it per surface:
+
+- **`create_param_panels.attach_inspire_button(entry, prompt_type_getter,
+  inspire_fn, *, label=, tooltip=)`** — the single seam. Click reads
+  `entry.get_text().strip()` as the seed: empty -> fresh generation; non-empty
+  -> the backend polishes/remixes those exact words. Calls
+  `inspire_fn(prompt_type, seed_text, on_result, on_error)`; both callbacks
+  are wrapped in `GLib.idle_add` so a same-thread test fake is as safe as a
+  real background thread, and a synchronously-raising `inspire_fn` is caught
+  (fail-soft). `MainWindow._create_inspire_fn(prompt_type, seed_text,
+  on_result, on_error)` is the one real implementation (backed by
+  `prompt_client.generate_prompt`) — every surface below reuses it, never a
+  forked prompt-gen path.
+- **Create idea door** (`CreateView._on_inspire_clicked`) — now reads
+  `_prompt_entry`'s current text as the seed before calling `_inspire_fn`
+  (previously hardcoded `""`).
+- **`ArtgenParamPanel`** (`create_param_panels.py`) — takes optional
+  `inspire_fn`/`prompt_type_getter` constructor params (default `None` -> no
+  ✨ buttons, migration-safe). Every field whose `_ArgSpec.kind == "str"` AND
+  `field_roles.classify_artgen(spec).role == ROLE_BRIEF`
+  (`_artgen_field_wants_inspire`) gets a button appended inside its row
+  (travels with the row if `RoleZonePanel` re-parents it). This is
+  deliberately narrower than "any str field": structured/enum-like config
+  strings (circuit's `--inputs`/`--gates`/`--circuit-style`, landscape's
+  `--palette`) and negations (`negative_prompt`) are excluded — reusing
+  `classify_artgen` as the single source of truth means the ✨ eligibility
+  test can never drift from `RoleZonePanel`'s own Brief/Direction zoning.
+  `classify_artgen` gained `"freeform"` (freeform's whole-prompt field) and
+  `"mood"` (palette's mood/theme seed) to its recognized-creative-dest set —
+  both are genuine prose the old ArtgenPanel gave Inspire to, but had fallen
+  through to Direction/interpreted. `CreateView._swap_panel` threads its own
+  `_inspire_fn`/`_inspire_prompt_type` into every artgen medium's panel.
+- **`RemixView`** (`pipeline_studio.py`) — takes an optional `inspire_fn`
+  constructor param (same default-`None` contract), threaded from
+  `PipelineStudio(inspire_fn=...)` -> `MainWindow._show_pipelines` (passes
+  `self._create_inspire_fn`). `_build_field_row` attaches a button to a
+  BRIEF-role `kind=="text"` field (excluding `_NEGATIVE_FIELD_KEYS` —
+  `negative_prompt`/`avoid`, mirroring `ModifierPills`' own exclusion, but
+  WITHOUT `ModifierPills`' "needs a chip bank" requirement — Inspire is
+  useful on a text-output node too). `_prompt_type_for_output(output_kind)`
+  maps the owning node's `Intent.output_kind` (image/video/gif->animate) to
+  the `generate_prompt()` source string, defaulting to "video".
+- **Hard invariant preserved:** `collect()` (bare `ArtgenParamPanel`,
+  `RoleZonePanel`-wrapped, and `RemixView._collect_edits`) is byte-for-byte
+  identical whether or not `inspire_fn` was supplied — the button is
+  decoration inside a field's row, never the value-bearing widget those
+  methods read. Pinned by dedicated collect-equality tests (as well as the
+  pre-existing `test_role_zone_panel.py` suite, unaffected by this change).
+
+## Per-artgen-type modifier pills (v0.74.0)
+
+Every artgen medium's Direction zone used to either inherit generic photo/
+video pills or show none at all — palette, verse, ansi, landscape, codeart,
+and freeform all looked the same as Image/Video's chip banks even though
+none of their categories (Camera/Shot, Lighting, Motion/Mood, …) apply to a
+color palette or a poem. Fixed with a per-type loader instead of forking
+`ModifierPills` per medium:
+
+- **`chip_config.load_chips_for_artgen(artgen_type, config_path=None)`**
+  (`app/chip_config.py`) — chip banks for one artgen TYPE: that type's own
+  categories (loaded via the existing `load_chips(tab, ...)`, just with
+  `tab=artgen_type` instead of `video`/`image`/`animate`) plus the shared
+  cross-type `"artgen"` mood bank, deduped by category name (type-specific
+  wins on a name collision). A type with no curated categories of its own
+  still gets the shared bank, so nothing renders empty.
+- **YAML convention** (`config/prompt_chips.yaml`) — a category's `for:`
+  list now also accepts artgen type keys (`palette`, `verse`, `ansi`,
+  `landscape`, `codeart`, `freeform`) alongside the native `video`/`image`/
+  `animate` keys, plus the special shared key `artgen` (currently just the
+  "Feeling" category — Content/Nostalgic/Whimsical/… moods that read
+  naturally across every artgen type). A category or chip omitting `for:`
+  still defaults to the native tabs only (`_ALL_TABS = {video, image,
+  animate}` in `load_chips`) — an artgen medium is NEVER handed a category
+  meant for native mediums just because it forgot to scope itself; every
+  artgen-facing category in the YAML explicitly opts in via `for:`.
+- **`ChipEntry.surprise` + `chip_config.surprise_pool(category)`** — a chip
+  can be declared `surprise: true` in YAML instead of a fixed `text:`
+  (`text` becomes optional exactly when `surprise` is set — `load_chips`
+  raises if both are missing). `surprise_pool` returns the `.text` of every
+  *non*-surprise chip in that category — the pool a Surprise tap draws from.
+  `ModifierPills._build_category_box` renders a `surprise=True` entry as a
+  `🎲`-styled add-chip (`create-addchip-surprise` CSS class) wired to
+  `_apply_surprise` instead of `_apply_entry`: `_pick_surprise(pool)` (a
+  pure, GTK-free `random.choice` helper) picks one pool entry, and a fresh
+  `ChipEntry` is appended to the applied-pills row so it reads as a normal
+  removable pill. Unlike a regular add-chip (which hides itself once
+  applied — the existing de-dup rule), the Surprise chip is NEVER hidden,
+  so it stays tappable for another random pick.
+- **`ModifierPills(kind, artgen=True)`** (`app/create_param_panels.py`) —
+  the widget's one new constructor flag. `artgen=True` routes construction
+  through `load_chips_for_artgen_kind(kind)` (a thin seam over
+  `chip_config.load_chips_for_artgen`, mirroring the existing
+  `load_chips_for_kind` seam for native mediums) instead of
+  `load_chips_for_kind(kind)`. Everything downstream (category Expanders,
+  add-chip buttons, applied-pills row, `applied_text()`) is unchanged code
+  path — only which categories get loaded differs.
+- **`RoleZonePanel` keys artgen mediums by their own type, not output
+  `kind`.** Previously every artgen medium's Direction bank was
+  `ModifierPills(medium.kind)` — palette and landscape both have
+  `kind=="image"`, so they shared one generic "image" bank. Now:
+  `medium.source == "artgen"` -> `ModifierPills(medium.id, artgen=True)`
+  (keyed by the medium's own id, e.g. `"palette"`/`"landscape"`, each
+  getting its own curated banks); every native medium is unchanged —
+  `ModifierPills(medium.kind)`, `artgen=False` (the default).
+- **`collect()` untouched, as always.** The pills are still pure decoration
+  appended to the prompt text via `applied_text()` — no value-bearing
+  widget changed shape. Pinned by the existing collect-equality suites
+  (`test_role_zone_panel.py`, `test_create_param_panels.py`) plus new
+  loader-call assertions for the artgen path.
+
+## Video is Video (v0.61.0)
+
+The video trio — Wan2.2/Mochi/SkyReels, Wan2.2-Animate, and the AnimateDiff
+artgen generator — used to be three separate Create chips (Video / Animate /
+AnimateDiff, each its own medium). They are now ONE **Video** medium; Animate
+and AnimateDiff are *models* inside Video's scoped picker, selected the same
+way Wan2.2/Mochi/SkyReels already were (`create_mediums.py` drops the
+`"animate"` `Medium` and skips `"animatediff"` in `discover_mediums`'s artgen
+loop — folded in, not deleted).
+
+- **Benefit-advertising picker.** `server_manager.benefit_for(key)` /
+  `display_name_for(key)` is the friendly-name/tagline seam every Video
+  picker entry renders through (`CreateView`'s scoped dropdown and the Model
+  door, `create_view.py`). `ServerDef.benefit`/label win when present;
+  `MODEL_BENEFITS`/`MODEL_DISPLAY_NAMES` cover keys with no `ServerDef` at all
+  (the synthetic `"animatediff"` entry) or whose raw label reads as an
+  implementation string rather than a picker-friendly name.
+- **AnimateDiff is the no-server default.** When nothing on the video/animate
+  hardware group is already running, Video's scoped dropdown auto-selects
+  AnimateDiff (index 0) instead of whatever `_DEFAULT_VIDEO_KEY` used to pick —
+  it needs no server start, so a Create job always has an immediate path to a
+  result. `_autoselect_running_model_index` checks BOTH the `"video"` and
+  `"animate"` capabilities for Video (unlike other mediums' single-capability
+  check) so an already-running Animate server is still preferred over the
+  AnimateDiff default.
+- **Animate's inputs reveal on demand.** Picking the Animate model in Video's
+  scoped dropdown reveals an inline "Animate needs" section (motion video /
+  character image / mode) built from the same `create_param_panels.
+  build_path_picker_row`/`build_mode_toggle_row` helpers `AnimateParamPanel`
+  used before the merge — no duplicated FileDialog wiring. `_collect_params()`
+  folds these into the params dict ONLY when the Animate model is selected;
+  every other Video/Image job's `collect()` output is byte-for-byte unchanged
+  (collect-equality guard test).
+  Section is hidden for every other model.
+- **Routing:** `MainWindow._native_generate_args` recognizes
+  `model_key == "animate"` (via `_VIDEO_MODEL_ID_TO_KEY`) and returns
+  `model_source="animate"` args/kwargs (`ref_video_path`/`ref_char_path`/
+  `animate_mode` pulled from the reveal-on-demand fields), routing to the same
+  `AnimateGenerationWorker` the old dedicated Animate chip used — the two
+  AnimateDiff code paths (native worker vs. artgen plugin) are the same
+  underlying engine, so merging the chip lost no capability.
+- **Retired:** the standalone `"animate"` `Medium` chip and the artgen
+  `"animatediff"` chip are gone from Create's doors/possibilities wall.
+  Existing artgen-`animatediff` `MediaRecord`s already in history are
+  UNAFFECTED and continue to render in the artgen gallery exactly as before —
+  this is a Create-surface taxonomy change, not a data-model or storage change.
+
+## Possibilities wall (v0.53.0)
+
+`app/possibilities.py` — `PossibilitiesWall`, a full-width "Start something"
+wall mounted as the FIRST child of `CreateView`'s form column
+(`CreateView.__init__`, before the doors row), one exemplar tile per
+`mediums_fn()` medium. Each tile's art resolves in a three-tier priority so
+the wall is never empty and never a hard dependency on shipped samples:
+
+1. **YOUR latest** piece of that medium (`media_store` query by
+   `media_type`/`generator_type`, newest first) — the wall gets richer as you
+   create.
+2. a **curated** sample — a record from a "demo"/favorites-style playlist
+   (`curated_playlist_matcher`, default matches name substrings
+   demo/sample/showcase/favorite). A future optional curated-samples `.deb`
+   that drops records into the same `media_store` on install is a natural
+   source for this tier; nothing in the wall hard-depends on one existing —
+   it's discovered by playlist name, not a special package hook.
+3. a per-kind **gradient + icon** (`poss-grad-*` CSS classes) — always works,
+   no assets, so a fresh profile with an empty store still shows a full wall
+   instead of a blank page.
+
+**Seeds the composer, does not replace it.** Tapping a tile (or "✨ Surprise
+me") calls `CreateView._on_possibility_picked(medium, idea)`, which only
+selects the medium chip (`self._chip_buttons[medium.id].set_active(True)` —
+the same "toggled" path a manual chip click takes), switches to the idea
+door, and fills `_prompt_entry`'s text. It never sets a generation param
+directly, so `_collect_params()` is byte-for-byte identical whether a tile
+was picked or the same medium + prompt were set by hand — pinned by
+`tests/test_create_view_possibilities.py::test_collect_params_unchanged_by_pick`.
+Constructed defensively in `CreateView.__init__` (try/except around
+`PossibilitiesWall(...)`, `self._possibilities = None` on failure, skipped in
+the mount) so a wall failure (e.g. the real `media_store` singleton raising
+during art resolution) can never break Create.
+
+## Model status (single source of truth)
+
+`app/model_status.py` — `ModelStatusService`, a **GUI-free** single source of
+truth for server/model state (v0.32.0, SP-1 of the coherent-shell program).
+One poll thread merges managed-server health (`server_manager.status_all`) with
+the artgen port-sweep (`artgen.detect_artgen_endpoint` -> any `artgen`/`prompt`
+capability server reads ready when a chat endpoint is up on any port), tracks a
+`starting` state (app-initiated via `note_starting()`, plus inferred-starting
+when a server's `health_url` port is open but health hasn't passed), and resolves
+each `server_manager.SERVERS` key to `Status.OFF/STARTING/READY/ERROR` via the
+pure `_resolve(...)`. Design notes:
+- **GUI-free**: no `gi` import; `server_manager`/`artgen` imports are LAZY (inside
+  the default `health_fn`/`detect_fn` callables) so the module imports standalone.
+- **Injectable**: `health_fn`/`detect_fn`/`clock`/`port_probe`/`poll_interval`/
+  `start_timeout` are constructor params -> tests drive `_tick()` directly with
+  fakes, no threads/sleeps/sockets.
+- **Lock discipline**: `_tick` does all I/O (health/detect/port probes) OUTSIDE
+  `self._lock`, takes the lock only to read/mutate `_starting`/`_ready_at` and
+  swap `_statuses`, and calls `_notify()` AFTER releasing (since `_notify` ->
+  `snapshot()` re-acquires the non-reentrant lock). Subscribers get change-only
+  notifications; a raising subscriber never breaks the loop.
+- **Consumers**: `snapshot()`/`status(key)`/`subscribe(cb)` and capability helpers
+  `ready_keys(cap)` (most-recently-ready first) / `starting_keys(cap)` /
+  `running_or_starting(cap)`.
+- **SP-2 wiring (v0.33.0):** `MainWindow` constructs + `start()`s the service on
+  open, `stop()`s it in `do_close_request`, hooks `note_starting`/`note_stopping`
+  at the server start/stop sites, and injects it into `CreateView`
+  (`status_service=`). CreateView subscribes (poll-thread callback -> `GLib.idle_add`
+  -> `_on_status_snapshot`), renders 3-state dots (◌/◐/●) via `_status_glyph` +
+  `_model_dot_glyph` on both the scoped dropdown and the Model door, and
+  auto-selects `running_or_starting(cap)` in `_populate_model_dropdown` (cap keyed
+  by `medium.id` -- the Animate medium's `kind` is "gif"; only in the fresh-populate
+  branch so a manual pick is preserved per the v0.28.1 fix). `status_service=None`
+  keeps CreateView's old boolean `status_all` fallback (tests/standalone).
+- **Still on their own pollers until SP-3 deletes them:** `MainWindow._health_loop`
+  (footer row + statusbar), `_refresh_servers_popover` (Servers popover),
+  `artgen_panel._check_health_bg`. SP-3 retires the vestiges and stands up one
+  surviving status control on the service.
+- **Running chat model identity (v0.47.0, 3 tasks).** The old artgen/prompt
+  reconciliation marked EVERY `("artgen","prompt")`-capability key READY the
+  moment any chat endpoint answered `/v1/models` anywhere — a Qwen3-8B on
+  port 8002 made Qwen3-32B/Llama-3.3-70B/etc. all read "ready" too, even
+  though only one was actually loaded. Fixed end to end:
+  - **Task 1** — `match_model_id(detected_id, servers)` (`app/model_status.py`)
+    normalizes both the detected `/v1/models` id and each candidate
+    `ServerDef.model_id`/`label` (last `/`-segment, lowercased, punctuation
+    stripped) and resolves the ONE `server_manager.SERVERS` key that
+    detected id belongs to, or `None` if it matches nothing registered.
+  - **Task 2** — `_tick()` calls `match_model_id` once per poll and only
+    marks *that* key detect-healthy; every other artgen/prompt key falls
+    back to its own (normally-absent) `health_fn` entry, so per-model
+    readiness is now correct. The resolved identity is exposed via
+    `running_artgen_model() -> ArtgenModelInfo(model_id, url, matched_key) |
+    None` (`matched_key` is `None` for a model started outside this app that
+    doesn't match any `ServerDef` — "something IS running, we just don't
+    have a name for it").
+  - **Task 3** — `CreateView` surfaces this: `_model_dot_glyph` (already
+    per-key) now lights ● for only the matched server; when
+    `running_artgen_model().matched_key is None`,
+    `_detected_model_key()` synthesizes a `__detected__:<model_id>` sentinel
+    that `_scoped_model_keys`/`_model_door_groups` inject as ONE additional
+    SELECTABLE entry — labeled `"<model_id> (detected)"`, always ●, in both
+    the Text/artgen scoped dropdown and the Model door's "Text" group.
+    `_autoselect_running_model_index` prefers the matched key when known,
+    else this synthetic entry, on a fresh medium populate (manual picks
+    still survive same-medium refreshes, per the v0.28.1 fix). The sentinel
+    is display/selection-only: it carries `canonical=None` in
+    `_model_dropdown_entries`, and artgen mediums never have a "model" key
+    in `collect()` at all, so it can never leak into a generation call —
+    guarded by a collect()-equality test
+    (`tests/test_create_view_detected_model.py`).
+
+## Retiring the vestiges (SP-3, DONE — v0.46.0)
+
+The app now rests entirely on the Create / Discover / Remix shell. The old
+per-medium tabs + ControlPanel + ArtgenPanel's generation sidebar +
+Generative-Art tab + duplicate server UI — all staged for deletion "only once
+every capability has a new home" — are gone. Decisions honored: server
+control is the compact top-bar `Servers ▾` wired to `ModelStatusService`;
+seed-image/i2i, "Inspire me" prompt-gen, attractor/TT-TV launch, the
+generation queue, and the status bar/server-log were all migrated (not
+dropped) before their old homes were deleted.
+
+- **SP-3a done (v0.34.0): `_on_generate` decoupled from ControlPanel.** It takes
+  `video_model_key`/`image_model_key`/`animatediff_args` params and reads NO
+  `self._controls.get_*` for model selection; module defaults `_DEFAULT_VIDEO_KEY`
+  /`_DEFAULT_IMAGE_KEY`/`_ANIMATEDIFF_DEFAULTS` mirror ControlPanel's old defaults.
+  All callers (legacy generate/enqueue, Create `_create_generate_native`, queue,
+  attractor) pass the model explicitly; the Create `_controls._video_model` sync
+  hack (v0.27.1) is gone. The legacy generate call site + the attractor path still
+  read `_controls` (legitimately — those ARE ControlPanel-driven); they go with
+  ControlPanel in SP-3d, where the attractor also needs a new model source.
+- **SP-3b done (v0.35.0): standalone `ServersControl`** (`app/servers_control.py`)
+  — `Servers ▾` popover (start/stop/restart, 3-state dots from the service via
+  `subscribe`, not polling) + server-log, lifted out of ControlPanel and mounted
+  persistently (`servers_button` in the top bar; `log_widget` on `root_box` — NOT
+  under `_ctrl_wrapper`, so it survives Discover + the SP-3d delete). ControlPanel's
+  `_servers_btn`/`_server_status_box`/`_srv_log` are hidden; `_refresh_servers_popover`
+  poll is unreachable (2 of 3 legacy pollers effectively gone). One aggregate dot
+  = the bottom `_hw_statusbar` (a `TODO(SP-3d)` marks re-pointing it at the service
+  when `_health_loop` retires).
+- **DECIDED: native AnimateDiff MIGRATES into Create** (never drop) — distinct
+  from the artgen `animatediff` plugin (also kept). SP-3c gives Create a native
+  AnimateDiff path carrying full `get_animatediff_args` config.
+- **SP-3d done in stages (v0.42.0–v0.44.0):** 3d-1/3d-2 rehomed every
+  SURVIVING `self._controls.*` read onto `ModelStatusService`/CreateView
+  (`_current_medium_source`/`_current_medium_model_key`/
+  `_running_generation_server`/`_resolve_attractor_model`, per
+  `.superpowers/sdd/sp3d-audit.md` §1); 3d-3 deleted the 5 dead `set_busy(...)`
+  call sites; 3d-4 collapsed the window to a 2-pane layout and folded Watch-
+  TT-TV/Pipelines/Servers ▾ into the loop-nav row (ControlPanel's
+  `toolbar_box`/`footer_box` are no longer mounted anywhere, though the class
+  itself is still constructed).
+- **SP-3d-6 done (v0.45.0), executed BEFORE 3d-5 (reorder — the legacy
+  pollers call ControlPanel setters, so they had to retire first):** the
+  three legacy health pollers (`_health_loop`/`_artgen_health_loop`/
+  `_prompt_gen_health_loop`, each its own thread pinging a different port) are
+  gone. `_hw_statusbar` is now driven entirely by
+  `self._status_service.subscribe(...)` (`_on_status_snapshot`/
+  `_render_status_snapshot`), resolving the `TODO(SP-3d)` marker at its
+  construction site — the same aggregation policy `ServersControl` uses
+  (READY > STARTING > ERROR > OFF), grouped by `server_manager.
+  servers_for_capability`.
+- **SP-3d-5 done (v0.46.0), the FINALE — `ControlPanel`/`ArtgenPanel`/
+  medium-tabs/Gen-Art tab deleted outright.** `ControlPanel` (~2650 lines) +
+  `AdvancedSettingsDialog` (its only client) + the medium-tab source toggle +
+  the Generative-Art tab are gone; every remaining `self._controls.*` read
+  was legacy-only (theme/inspire/prompt-gen setters, SHOT panel, startup
+  pre-select) and went with it. `ArtgenPanel`'s generation sidebar (redundant
+  with Create's own artgen mediums) and its `_check_health_bg` poller are
+  deleted with the class; Discover's "artgen" `_gallery_stack` page is now
+  the standalone `ArtgenGallery` it always wrapped (`self._artgen_gallery`),
+  wired identically to the three native `GalleryWidget`s. `_on_source_change`
+  is replaced by `_sync_gallery_to_source`/`_uncheck_pipelines_toggle_if_active`
+  — same gallery-switch/context-menu/pipelines-toggle behavior, minus the
+  ControlPanel-era "collapse the left/right panes for artgen" special case
+  (moot now that "artgen" is a plain gallery page, not a wide sidebar+preview
+  layout). Orphaned module-level dicts (`_MODEL_TO_SOURCE`/`_MODEL_TO_VIDEO_KEY`/
+  `_MODEL_DISPLAY_SERVER`/`_MODEL_TO_SERVER_KEY`/`_MODEL_TO_CAP`/
+  `_MODEL_TO_IMAGE_KEY`) removed too.
+  - **ACCEPTED, FLAGGED loss:** artgen **auto-generate** (`art-autogen`/
+    `art-autogen-delay` menu actions, `ArtgenPanel.toggle_auto_gen`/
+    `set_auto_gen_delay`) is gone — ArtgenPanel-sidebar-only, overlapped the
+    surviving TT-TV attractor. Recoverable from git if wanted back.
+  - **DISCOVERED GAP the SP-3d audit missed:** the quick "🔀 Remix" popover
+    (`RemixPopover` → `MainWindow._dispatch_remix` →
+    `remix_dispatch.dispatch_remix`, a pre-Create-shell feature from
+    `docs/superpowers/specs/2026-05-26-remix-ui-design.md`) depended on
+    `ControlPanel.switch_to_source`/`populate_prompts` and
+    `ArtgenPanel.set_generator`/`set_theme`. `_dispatch_remix` now opens
+    Pipeline Studio's Muse seeded with the popover's resolved artifact instead
+    (the same bridge "🧩 Remix as pipeline…" uses) rather than leave a
+    dangling call into deleted classes — an ACCEPTED, FLAGGED UX regression
+    (loses the popover's own target-type switch + inline single-step
+    regenerate). `remix_dispatch.dispatch_remix` itself is untouched and still
+    unit-tested, just no longer called from `main_window.py`.
+  - **ANOTHER GAP the SP-3d audit missed, FIXED in v0.47.2:** "wired
+    identically to the three native `GalleryWidget`s" (line above) was true
+    for `on_remix`/`on_remix_as_pipeline` but NOT for `on_card_activated` —
+    `main_window.py` never set it on `self._artgen_gallery`, so clicking an
+    artgen card silently did nothing (the native galleries' click path goes
+    through `DetailPanel`, which can't render artgen content anyway — SVG/
+    ANSI/palette/markdown). This orphaned `artgen_detail.py`/`ArtgenDetail`
+    entirely (no test file existed for it either). Fixed by making
+    `ArtgenGallery` self-contained again: it now owns an internal grid/detail
+    `Gtk.Stack` and un-orphans `ArtgenDetail` as its own in-page preview
+    (`_on_card_activated` defaults to `show_record` + switching the stack,
+    still calling any externally-wired `on_card_activated` additively;
+    detail delete/star/remix/remix-as-pipeline route back onto the gallery's
+    existing hover-action behavior). No `main_window.py` change was needed —
+    `on_remix`/`on_remix_as_pipeline` already flowed through;
+    `on_card_activated`/`on_card_deleted` staying unset degrades gracefully.
+    See `tests/test_artgen_gallery_preview.py`.
+  - Full details, every deleted symbol's grep-clean proof, and every test
+    file touched: `.superpowers/sdd/task-5-report.md`.
 
 ## Version discipline
 
@@ -132,6 +1506,8 @@ Or via the CLI:
 ./tt-ctl start all             # wan2.2 + prompt-server (QB2 / P300X2 recommended set)
 ./tt-ctl start --single-chip    # artgen-qwen3-8b + prompt-server (single Blackhole card or CPU-only)
 ./tt-ctl servers               # live health of every managed service
+./tt-ctl run "a koi pond"       # generate now; SAVED TO THE LIBRARY by default
+./tt-ctl run "..." --no-library  # ...unless you opt out (also on `artgen`)
 ```
 
 All scripts accept `--gui` (non-blocking, skips the interactive tail).
@@ -163,8 +1539,12 @@ Key parameters:
   Valid counts follow `(N-1) % 4 == 0`. Default: 33 frames (~1.4 s at 24 fps).
 - **`skyreels_num_frames`** setting in `app_settings.py` / Preferences dialog.
 - `GenerationWorker` accepts `num_frames=` and forwards it to `api_client`.
-- `start_skyreels.sh` requires `apply_patches.sh` to be run first (Step 6 injects
-  the `ModelSpecTemplate` into `model_spec.py` and copies runner patches).
+- `start_skyreels.sh` requires `apply_patches.sh` to be run first (Step 6 appends
+  the SkyReels T2V/I2V entries to the 0.18.0 YAML catalog,
+  `workflows/model_specs/dev/video.yaml`, and copies runner patches). Prior to
+  0.18.0 this injected a `ModelSpecTemplate(...)` into `model_spec.py` directly;
+  that file is no longer the registry's source of truth — see the "Vendored
+  tt-inference-server" section below.
 
 ## Directory layout
 
@@ -359,14 +1739,30 @@ xvfb-run --auto-servernum /usr/bin/python3 -m pytest tests/ -q
 ```
 
 `xvfb-run` is pre-installed on Ubuntu 24.04 (`apt install xvfb` if missing).
-One pre-existing failure (`test_forge_transforms::test_on_transform_finished_appends_and_refreshes`)
-and one environment skip (`test_regression_guards` when `docs/assets/` is absent) are expected.
+Three pre-existing, environment-level flakes are expected and should be
+deselected in full-suite runs (all three pass in isolation / are unrelated to
+app code): `test_forge_transforms::test_on_transform_finished_appends_and_refreshes`,
+`test_pipeline_engine.py::test_run_plugin_loads_and_calls_real_module` (a
+`cffi`/`cairosvg` version-mismatch that only surfaces under full-suite import
+ordering), and `test_role_zone_panel.py::test_prompt_field_hidden_but_still_collected_for_artgen`
+(confirmed by multiple reviewers this session to reproduce on the base branch,
+unrelated to app changes — passes in isolation, fails only under full-suite
+import ordering). Plus one environment skip (`test_regression_guards` when
+`docs/assets/` is absent).
 
 Tests are in `tests/` at repo root. Each file does `sys.path.insert(0, str(Path(__file__).parent.parent / "app"))` to import from `app/`. Tests mock all subprocess and network calls.
 
 ## Vendored `tt-inference-server`
 
 `vendor/tt-inference-server/` is a shallow git clone of the upstream repo (gitignored due to 143 GB working tree). The pinned commit SHA is in `vendor/VENDOR_SHA`.
+
+**Pinned at v0.19.0** (`399ce0b`, since v0.76.0). v0.19.0 is an **LLM-only**
+point release (Llama-3.1-8B P300 uplift, new vLLM image) — the MEDIA catalog
+(`video.yaml`/`image.yaml`/`model_spec.py`) is byte-identical to 0.18.0, so the
+media Docker image stays `tt-media-inference-server:0.18.0-c49bb76` and the media
+bind-mount patches were NOT rebased. Only the **artgen vLLM** image preference
+moved (`start_artgen.sh` → `0.19.0-b204341-9bd099c`, older tags kept as
+fallbacks).
 
 ```bash
 cat vendor/VENDOR_SHA            # see what's pinned
@@ -384,6 +1780,116 @@ The `patches/` directory contains:
 - `patches/media_server_config/tt_model_runners/skyreels_runner.py` / `skyreels_i2v_runner.py` — SkyReels T2V and I2V runners
 - `patches/media_server_config/domain/video_generate_request.py` — request-model extensions
 - `patches/tt_dit/` — pipeline fixes (bind-mounted only in dev_mode)
+
+### Model registry migrated to YAML in 0.18.0
+
+0.18.0 replaced the inline-Python `ModelSpecTemplate(...)` list in
+`workflows/model_spec.py` with YAML catalogs under
+`workflows/model_specs/{prod,dev}/*.yaml`, loaded by `load_templates_from_yaml()`.
+`--dev-mode` (used by all `start_*.sh` scripts) sets `MODEL_SPECS_ENV=dev`, so the
+catalog actually consulted is `dev/*.yaml` (video models → `dev/video.yaml`).
+
+**Consequence:** `apply_patches.sh`'s old text-injection anchor in `model_spec.py`
+(`"]\n\n# ... image_templates"`) no longer exists — `model_spec.py` isn't read
+for video models anymore. This broke SkyReels registration after the 0.18.0
+upgrade: the old Step 6/7 printed "ERROR: could not find insertion anchor" and
+SkyReels never registered, so `run.py --model SkyReels-V2-I2V-14B-540P` said
+"invalid choice". The fix (Step 6 in `apply_patches.sh`) now appends
+the SkyReels T2V/I2V entries directly to `dev/video.yaml` as YAML text — same
+idempotent pattern (skip if the weights string is already present), just a
+different target file and format. `MODEL_SPEC_YAML` points at that file.
+
+**Steps 7-9 repaired in v0.76.0.** Step 7 (Wan2.2-Animate) was rewritten to
+append to `dev/video.yaml` exactly like Step 6 (idempotent skip-if-weights-
+present guard, same `MODEL_SPEC_YAML` target) instead of the dead
+`model_spec.py` `ModelSpecTemplate(...)` injection. Steps 8 (DeepSeek P300X2
+version bump) and 9 (SDXL version bump) were **retired outright** — their
+`model_spec.py` anchors no longer exist in the YAML era and neither model is
+surfaced today. If either needs re-registering later, give it the same
+`video.yaml`/`image.yaml` append treatment as Steps 6/7 rather than reviving the
+`model_spec.py` anchor.
+
+### Media model expansion (v0.76.0): Wan2.2-I2V + FLUX.1-dev
+
+Both models are already in the shipped upstream catalog (P300X2, COMPLETE), so
+neither needs a patch — the work was app wiring + a start script + a weights
+`.deb` each.
+
+- **Wan2.2-I2V-A14B** (image-to-video) — `server_manager` key `wan2.2-i2v`
+  (cap `video`, `runner_key="tt-wan2.2-i2v"`), `bin/start_wan_i2v.sh` (modeled on
+  `start_wan_qb2.sh`: non-dev mode, media image `0.18.0-c49bb76`, P300X2 — it's
+  in-catalog so needs no bind-mount patch, unlike SkyReels-I2V). Lives in the
+  **Video** picker beside SkyReels-I2V and reuses the same seed-image guard
+  (`_native_generate_args` raises `_NativeGenerateGuardError` for
+  `("skyreels", "wan2.2-i2v")` when no seed image). Weights: `tt-model-wan2-i2v`
+  (ungated).
+- **FLUX.1-dev** (higher-fidelity image) — `server_manager` key `flux-dev`
+  (cap `image`, `runner_key="tt-flux.1-dev"`), `bin/start_flux_dev.sh` (a thin
+  wrapper: `exec start_flux.sh --dev "$@"` — `start_flux.sh` already supported
+  `--dev`). In the **Image** picker beside FLUX.1-schnell. No per-model step/
+  guidance branching — the app's existing image default (20 steps / guidance
+  3.5) is already dev-appropriate, which keeps `collect()` byte-identical.
+  Weights: `tt-model-flux-dev` (gated). The FLUX `.deb`s were reconciled so each
+  maps to its server: `tt-model-flux` → ungated FLUX.1-schnell,
+  `tt-model-flux-dev` → gated FLUX.1-dev (previously `tt-model-flux` confusingly
+  downloaded FLUX.1-dev).
+
+Both `_VIDEO_MODEL_IDS`/`_IMAGE_MODEL_IDS` maps are duplicated in
+`main_window.py` AND `create_param_panels.py` — new keys must be added to BOTH
+(inverse `*_ID_TO_KEY` maps are derived). `pipeline_engine._backend_for` gained
+`_match_server_key()` (exact-match pass BEFORE substring-sniffing) so `flux`
+can't shadow `flux-dev` and `wan2.2` can't shadow `wan2.2-i2v`.
+
+**Both `runner_key`s (`tt-wan2.2-i2v`, `tt-flux.1-dev`) are taken from the
+vendored `ModelRunners` enum + `runner_fabric.py` but are HARDWARE-CONFIRM-
+PENDING** — on QB2, start each server and `curl /tt-liveness`; if `runner_in_use`
+differs, update the `ServerDef.runner_key` (a wrong value silently reads the
+server as unhealthy). Nothing in this expansion was validatable from the dev
+session — the automated tests cover wiring only (ServerDef present, picker lists
+it, routing maps it, collect() unchanged), never actual generation.
+
+### Patch verification (v0.77.0) — fail loud on drift
+
+Silent patch drift is what let `apply_patches.sh` Steps 7/8/9 rot undetected
+after the 0.18.0 YAML migration. The fix is a **fail-loud verification harness**,
+not a change to the bind-mount strategy (bind-mounting whole new modules is
+correct per tt-vscode-toolkit's `monkeypatch-ttnn.md`, which cites this repo as
+its canonical example):
+
+- **`app/patch_manifest.py`** (pure/stdlib) — the single declarative source of
+  truth: one `PatchEntry` per patch/injector step. `inject`/`append` entries are
+  hand-declared with their anchors; `bind_mount` entries are auto-discovered by
+  walking `patches/{media_server_config,tt_dit,models}` with the same dest
+  formula the mount loops use. 18 entries today; `manifest_issues()` is the
+  internal-consistency check.
+- **`app/patch_verify.py`** (pure/stdlib) — host-side probes borrowing the
+  toolkit's `PatchError`/`version_at_most`/`verify` philosophy (NOT its
+  in-process `wrap`/`set_default` — we add no container hook). Per kind: `inject`
+  → anchor string present in the vendored target; `append` → target file exists
+  (the model_spec.py→video.yaml move IS the drift); `bind_mount` → patch source
+  exists + `py_compile`s, with a soft `version_ceiling` "may be absorbed" warning.
+  CLI: `python3 app/patch_verify.py --vendor <tree>` (exits non-zero on drift) /
+  `--manifest-only`. It also surfaces **orphaned patch files** as loud (non-fatal)
+  warnings — `patches/models/**` exists and `patches/README.md` says it mounts to
+  `~/tt-metal/models/`, but no `apply_patches.sh` mount loop actually delivers it
+  (a pre-existing doc-vs-reality gap; resolve by wiring a loop or deleting the
+  files). Only `media_server_config` + `tt_dit` are real bind-mount trees.
+- **`apply_patches.sh` gates on it** up front (Step 0) — a drifted anchor aborts
+  the whole run loudly instead of half-patching. (The per-step inject aborts
+  already existed; this adds all-checks-up-front + bind-mount coverage.)
+- **Build path matched:** CI (`release-deb.yml`) now **applies AND verifies**
+  patches after the vendor snapshot, so the shipped `.deb` vendor is actually
+  patched (it previously shipped **unpatched** — nothing on the packaged path ran
+  `apply_patches.sh`). `debian/rules` has a verify-before-ship gate (+ a
+  `tt_dit_patches_dir` marker grep asserting the injects were applied). The two
+  new `app/` modules package for free via the existing `cp -r app …`.
+  `snapshot_vendor.sh` stamps `vendor/VENDOR_VERSION` (the `version_at_most`
+  input); `quickstart.sh` surfaces drift status.
+- **Deferred (declared hooks, not built):** true image-diff drift detection
+  (`docker create/cp` the media image, diff each `bind_mount` patch against
+  upstream to catch *moved*/*absorbed* patches) plugs into the manifest's
+  `bind_mount` `dest`/`version_ceiling` fields. See
+  `docs/superpowers/specs/2026-08-10-patch-verification-harness-design.md`.
 
 ### Patch philosophy — minimize divergence from upstream
 
@@ -763,3 +2269,47 @@ Qwen servers on LAN don't get false-negative health checks.
 
 **Gallery ordering** fixed: `_load_history` now sorts merged local+remote records by
 `created_at` descending so downloaded records appear chronologically, not at the top.
+
+---
+
+## Ready-to-Run gate (RN-S, v0.55.0)
+
+`app/ready_to_run.py` (GUI-free) decides whether a Create job's required server
+needs starting/switching: `plan_switch(selected_model_key, status_of) ->
+SwitchPlan(target, conflict, needs_reset)`. `target` is `None` when the
+selection maps to no real `server_manager.SERVERS` key (empty selection, or a
+synthetic/self-contained medium like AnimateDiff) — nothing to gate.
+`conflict` is a currently READY/STARTING server sharing `target`'s hardware
+group (media: video/image/animate all share the port-8000 diffusion server;
+artgen servers share the port-8002 slot) that would have to be stopped +
+reset first.
+
+`MainWindow._ensure_server_ready_then(medium, params)` is the gate in front of
+`_on_create_generate`'s dispatch: ready/no-target -> `_launch_create_job`
+(the extracted former dispatch body) runs immediately, same as before; not
+ready -> `_confirm_start_server` shows a dialog naming the stop/reset/start
+plan, and only on **explicit accept** does `_perform_switch_then` run the
+switch on a background thread (stop conflict -> `pipeline_engine._tt_smi_reset()`
+if needed -> `server_manager.start` -> poll `is_healthy` -> `_launch_create_job`).
+All widget touches go through `GLib.idle_add`; `ServersControl`'s log and
+`ModelStatusService.note_starting/note_stopping` are reused, not duplicated.
+
+**Hard safety rule, non-negotiable:** the switch only ever executes after the
+user accepts the confirm dialog — never auto-run. Backend-switch churn has
+hard-locked this box before (see `reference_qb2_card924055_fragility` in
+memory); confirm-before-switch is the guard against that.
+
+**Bug found and fixed while wiring this up:** `ready_to_run.conflicting_server`
+originally did `str(status_of(key)).lower()` — but `model_status.Status` is a
+`(str, Enum)` whose `__str__` (Python 3.11+) returns `"Status.READY"`, not
+`"ready"`, so the live gate (fed real `Status` values by
+`ModelStatusService.status()`) would never have detected a conflict. Task 1's
+own tests only ever passed plain strings, masking it. Fixed by dropping the
+`str()` wrapper — `.lower()` alone works on both a plain string and a `Status`
+member (it operates on the underlying str data, unaffected by the Enum's
+`__str__` override).
+
+**Follow-ons (not done here):** Pipeline Studio already switches servers
+between steps with its own UX — worth reconciling with this confirm-dialog
+pattern later for consistency. A readiness-clarity pass on the Create option
+labels themselves is optional; the status dots already convey it.

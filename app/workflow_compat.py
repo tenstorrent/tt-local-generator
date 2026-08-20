@@ -39,6 +39,59 @@ COMPATIBILITY_MAP: dict[str, dict] = {
     "TTLGComposite":        {"ttlg": "TTLGComposite",        "optional": True},
     "TTLGSVGRender":        {"ttlg": "TTLGSVGRender",        "optional": True},
 
+    # TTLGArtgenGenerate — runs one artgen plugin (verse/palette/ansi/codeart/…)
+    # selected by inputs.plugin. Marked optional=True because a pipeline can
+    # still be useful without a generative-art step; validate_spec additionally
+    # checks that inputs.plugin names a registered artgen generator (see the
+    # plugin-name check below, in validate_spec).
+    #
+    # Output keys produced by this node (consumed downstream by node inputs
+    # that reference "<node_id>.<key>"):
+    #   artifact_path — always present; path to the raw generated artifact
+    #                   (the file the plugin's output_ext implies, e.g. .txt/.svg/.ans)
+    #   png_path      — present only when the plugin's output_ext is a raster
+    #                   image extension (e.g. palette/landscape/skyline SVGs
+    #                   rendered to PNG); absent for text-only plugins
+    #   text          — present only when the plugin's output_ext is a text
+    #                   extension (.txt/.ans/.md/…); the artifact's raw string
+    #                   content, for nodes that want to consume it directly
+    #                   (e.g. TTLGPromptCompose) without reading the file back
+    "TTLGArtgenGenerate": {"ttlg": "TTLGArtgenGenerate", "optional": True},
+
+    # TTLGMontage — stitches a LIST of images (e.g. the fan-out stills from a
+    # TTLGSplitText -> TTLGTextToImage batch) into one captioned slideshow mp4
+    # via ffmpeg. optional=True because the montage is a capstone convenience:
+    # if ffmpeg is missing/fails, or `images` is empty, the handler returns
+    # {"video_path": None} rather than raising — the run's individual stills
+    # still stand on their own even if the closing video can't be built.
+    #
+    # Output keys:
+    #   video_path — path to the rendered mp4, or None if the render failed
+    #                or was skipped (fail-soft; see _h_montage/_run_ffmpeg)
+    "TTLGMontage": {"ttlg": "TTLGMontage", "optional": True},
+
+    # TTLGAnimateDiff — Wan2.2-Animate-14B character animation to GIF.
+    #
+    # Output keys:
+    #   gif_path — path to the rendered GIF
+    #
+    # Recognized inputs:
+    #   prompt             — text guidance (optional; style only)
+    #   frames             — frame count
+    #   steps              — diffusion steps
+    #   seed               — RNG seed (single-chip / base seed for multichip)
+    #   negative_prompt    — negative guidance text
+    #   multichip_mode     — how multiple chips split/collaborate on the run
+    #   per_chip_prompts   — list of per-chip prompt overrides (multichip)
+    #   seed_spread        — per-chip seed offset strategy (multichip)
+    #   ramp               — enable prompt/seed ramping across the frame range
+    #   ramp_lo            — ramp start value
+    #   ramp_hi            — ramp end value
+    #   stitch_order       — order chip outputs are stitched into the final GIF
+    #   prompt_schedule    — list of (frame, prompt) pairs for time-varying prompts
+    #   loop               — whether the output GIF loops
+    "TTLGAnimateDiff": {"ttlg": "TTLGAnimateDiff", "optional": True},
+
     # ── Tier 2: Mapped ComfyUI standard nodes ─────────────────────────────────
     "KSampler": {
         "ttlg": "TTLGTextToImage", "optional": False,
@@ -155,6 +208,17 @@ def validate_spec(spec_path: str) -> ValidationResult:
         result.blocking.append(f"Cannot read spec: {e}")
         return result
 
+    # Best-effort load of the registered artgen plugin names, used below to
+    # validate TTLGArtgenGenerate's inputs.plugin. If artgen can't be imported
+    # (e.g. validate_spec is run outside the full app environment) or its
+    # generator registry is empty, skip the plugin check entirely rather than
+    # false-rejecting an otherwise-valid spec.
+    try:
+        from artgen import all_names as _artgen_all_names
+        known_artgen_plugins = set(_artgen_all_names())
+    except Exception:
+        known_artgen_plugins = set()
+
     for node_id, node in data.items():
         if node_id.startswith("_") or not isinstance(node, dict):
             continue
@@ -162,6 +226,19 @@ def validate_spec(spec_path: str) -> ValidationResult:
         class_type = node.get("class_type", "")
         if not class_type:
             continue
+
+        if class_type == "TTLGArtgenGenerate":
+            plugin = (node.get("inputs") or {}).get("plugin")
+            if not plugin:
+                result.ok = False
+                result.blocking.append(
+                    f"TTLGArtgenGenerate (node {node_id}) — missing required 'plugin' input"
+                )
+            elif known_artgen_plugins and plugin not in known_artgen_plugins:
+                result.ok = False
+                result.blocking.append(
+                    f"TTLGArtgenGenerate plugin '{plugin}' (node {node_id}) — unknown artgen plugin"
+                )
 
         entry = COMPATIBILITY_MAP.get(class_type)
         is_required = node.get("_required", False)

@@ -185,3 +185,58 @@ def test_by_model_excludes_workflow_records(monkeypatch, tmp_path):
     assert counts["wan2.2-t2v"] == 1,     "wrong count for wan2.2-t2v"
     assert "workflow" not in counts,       "bare 'workflow' model_id leaked into By Model"
     assert "workflow-v2" not in counts,    "versioned workflow model_id leaked into By Model"
+
+
+def test_new_animatediff_and_animate_are_video_with_generator_type():
+    """AnimateDiff/Animate record factories must write media_type='video' plus a
+    generator_type provenance stamp, not their own bespoke media_type strings."""
+    ad = GenerationRecord.new_animatediff(job_id="j1", prompt="p", negative_prompt="",
+                                          num_inference_steps=6, seed=42,
+                                          video_path="/x/a.gif", thumbnail_path="/x/a.png")
+    assert ad.media_type == "video"
+    assert ad.generator_type == "animatediff"
+    assert ad.video_path.endswith(".gif")
+
+    an = GenerationRecord.new_animate(job_id="j2", prompt="p", negative_prompt="",
+                                      num_inference_steps=20, seed=1)
+    assert an.media_type == "video"
+    assert an.generator_type == "animate"
+    assert an.video_path.endswith(".mp4")
+
+
+def test_append_persists_generator_type(monkeypatch, tmp_path):
+    """HistoryStore.append() must persist record.generator_type into media_store,
+    not hardcode None — otherwise provenance is lost the moment a record round-trips."""
+    _patch_store(monkeypatch, tmp_path)
+    from media_store import media_store as _ms
+
+    store = HistoryStore()
+    rec = GenerationRecord.new_animatediff(job_id="j3", prompt="p", negative_prompt="",
+                                           num_inference_steps=6, seed=42,
+                                           video_path="/x/b.gif", thumbnail_path="/x/b.png")
+    store.append(rec)
+
+    got = _ms.get("j3")
+    assert got.media_type == "video"
+    assert got.generator_type == "animatediff"
+
+
+def test_to_gen_round_trips_generator_type(monkeypatch, tmp_path):
+    """HistoryStore._to_gen() must carry generator_type from the underlying
+    MediaRecord back onto the reconstructed GenerationRecord.
+
+    This is the real READ path used by all_records()/delete() — previously
+    _to_gen() built GenerationRecord(...) without passing generator_type=,
+    so it silently defaulted to None for every record, permanently breaking
+    any caller that filters all_records() by generator_type (the Animate
+    Discover tab, the attractor's animate-input chaining)."""
+    _patch_store(monkeypatch, tmp_path)
+
+    store = HistoryStore()
+    rec = GenerationRecord.new_animate(job_id="j4", prompt="p", negative_prompt="",
+                                       num_inference_steps=20, seed=1)
+    store.append(rec)
+
+    reloaded = store.all_records()
+    assert len(reloaded) == 1
+    assert reloaded[0].generator_type == "animate"

@@ -29,7 +29,7 @@ Four worker classes, all with identical run_with_callbacks() interfaces:
     1. check_hardware() — fail fast if no Blackhole device
     2. run_subprocess() — generate_blackhole_v2.py via tt-metal Python env
     3. make_gif_thumbnail() — extract first frame as JPEG
-    4. Persist to history as media_type="animatediff"
+    4. Persist to history as media_type="video" (generator_type="animatediff")
 
 Communication back to the UI is via plain callbacks. The caller (GTK main window)
 wraps each callback in GLib.idle_add() so UI updates always happen on the main
@@ -71,6 +71,28 @@ def _safe_meta(data: dict) -> dict:
         k: v for k, v in data.items()
         if k not in _META_SKIP and not isinstance(v, (bytes, bytearray))
     }
+
+
+# Substrings a `requests` connection failure raises when the inference server
+# on port 8000 isn't up — used to turn a raw HTTPConnectionPool traceback into
+# an actionable message ("start the server").
+_CONN_DOWN_MARKERS = (
+    "Connection refused",
+    "Max retries exceeded",
+    "Failed to establish a new connection",
+    "NewConnectionError",
+)
+
+
+def _server_down_hint(err: Exception) -> "Optional[str]":
+    """If *err* looks like "the inference server isn't running", return a
+    friendly, actionable message; otherwise None (caller keeps its own text)."""
+    s = str(err)
+    if any(m in s for m in _CONN_DOWN_MARKERS):
+        return ("Couldn't reach the inference server on port 8000 — it isn't "
+                "running. Start it from the Servers menu (or the Start button), "
+                "then try again.")
+    return None
 
 
 class GenerationWorker:
@@ -161,7 +183,7 @@ class GenerationWorker:
                     image=self._image,
                 )
             except Exception as e:
-                on_error(f"Submit failed: {e}")
+                on_error(_server_down_hint(e) or f"Submit failed: {e}")
                 return
             on_progress(f"Job queued ({job_id[:8]}…)")
 
@@ -611,7 +633,7 @@ class ImageGenerationWorker:
             )
             server_meta = _safe_meta(server_meta)
         except Exception as e:
-            on_error(f"Image generation failed: {e}")
+            on_error(_server_down_hint(e) or f"Image generation failed: {e}")
             return
 
         if self._is_cancelled():
@@ -716,7 +738,8 @@ class AnimateDiffGenerationWorker:
 
     Produces an animated GIF in VIDEOS_DIR, then creates a thumbnail from the
     first frame. The result is stored as a GenerationRecord with media_type
-    "animatediff" and surfaces in the video gallery alongside MP4s.
+    "video" (generator_type="animatediff") and surfaces in the video gallery
+    alongside MP4s.
 
     Usage (GTK):
         gen = AnimateDiffGenerationWorker(store, prompt, ...)
@@ -843,6 +866,16 @@ class AnimateDiffGenerationWorker:
                 elapsed = int(time.monotonic() - start_time)
                 on_progress(f"{msg}  ({elapsed}s)")
 
+        # The main-window "Use all chips in parallel" checkbox only sets
+        # self._multi_chip (a bool) — it has no concept of remix vs coherent.
+        # run_subprocess() defaults multichip_mode to "off", so without this
+        # mapping the checkbox was a silent no-op: effective_chips could be
+        # >1 but multichip_mode stayed "off" and every run fell through to
+        # the single-chip path. Map the boolean to "remix" (seed-spread
+        # glitch across chips using default ramp/stitch settings), which is
+        # the intended "use all chips" behaviour for this simple checkbox.
+        multichip_mode = "remix" if (self._multi_chip and effective_chips > 1) else "off"
+
         ok, err = run_subprocess(
             prompt=self._prompt,
             out_path=out_path,
@@ -863,6 +896,7 @@ class AnimateDiffGenerationWorker:
             motion_adapter_skip=self._motion_adapter_skip,
             on_progress=_progress_fwd,
             num_chips=effective_chips,
+            multichip_mode=multichip_mode,
         )
 
         if not ok:

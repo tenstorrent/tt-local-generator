@@ -52,6 +52,31 @@ override_dh_install:
 	    fi; \
 	fi
 
+	# Verify-before-ship: the staged vendor tree must pass patch verification
+	# (fail loud instead of silently shipping an unpatched/drifted vendor).
+	# CI (release-deb.yml) applies patches before this point, so a local
+	# `dpkg-buildpackage` — which skips that CI-only step — must not silently
+	# ship an unpatched vendor either.
+	/usr/bin/python3 app/patch_verify.py \
+	    --vendor debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server
+	# Stricter check: patch_verify only confirms the injector ANCHOR still
+	# exists in run_docker_server.py — that's true even in an UNPATCHED tree,
+	# since applying the patch inserts a block *before* the anchor and leaves
+	# the anchor line itself untouched. It does not prove the inject actually
+	# landed. Since the staged tree is now expected to be patched (CI applies
+	# patches before packaging; see above), assert a concrete marker from the
+	# Step-2 inject block is present, so a reordered/skipped apply step fails
+	# the build loudly instead of shipping an unpatched vendor.
+	if ! grep -q tt_dit_patches_dir \
+	    debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/workflows/run_docker_server.py; then \
+	    echo "ERROR: staged vendor is unpatched (tt_dit_patches_dir inject" >&2; \
+	    echo "  missing from run_docker_server.py). Run" >&2; \
+	    echo "  'bin/apply_patches.sh vendor/tt-inference-server' before" >&2; \
+	    echo "  dpkg-buildpackage, or verify CI's apply+verify step ran" >&2; \
+	    echo "  before this build." >&2; \
+	    exit 1; \
+	fi
+
 	# Copy the top-level launchers and version file.
 	install -m 755 tt-gen tt-ctl \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/

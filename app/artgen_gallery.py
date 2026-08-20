@@ -17,10 +17,15 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 from media_store import media_store as _ms, MediaRecord
+import gallery_layout
+from artgen_render import AnimatedGifWidget as _AnimatedGifWidget
+from artgen_render import parse_ansi_grid
+from artgen_viewer import ArtgenViewerWindow
 
 
 # ── Rich card content builders ────────────────────────────────────────────────
@@ -29,6 +34,8 @@ _TYPE_EMOJI: dict[str, str] = {
     "landscape": "🏔", "skyline": "🌃", "verse": "✍",
     "constellation": "✦", "geometric": "⬡", "circuit": "⬟",
     "palette": "◼", "ansi": "▓", "freeform": "?",
+    "ansi-image": "▓",  # image->ANSI transform (Effort B Task 2) — same
+                        # color-grid render as the LLM "ansi" generator.
 }
 
 
@@ -185,123 +192,46 @@ def _text_preview_widget(text: str) -> Gtk.Box:
 
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
+#
+# Parsing lives in `artgen_render.parse_ansi_grid` (media-showcase-everywhere
+# Task 1/4) — this module used to carry its own bespoke escape-sequence
+# walker + xterm-256 table (the THIRD copy of ANSI-parsing logic the design
+# audit found, after artgen_detail/watch's and TT-TV attractor's). Deleted in
+# favor of delegating to the shared parser below, so a fourth drift point
+# can never appear.
 
-# xterm-256 color table: indices 0-255 → (r, g, b) in 0-255 range
-def _build_xterm256() -> list[tuple[int, int, int]]:
-    # 0-15: system colors (standard + bright)
-    sys16 = [
-        (0,0,0),(170,0,0),(0,170,0),(170,85,0),(0,0,170),(170,0,170),(0,170,170),(170,170,170),
-        (85,85,85),(255,85,85),(85,255,85),(255,255,85),(85,85,255),(255,85,255),(85,255,255),(255,255,255),
-    ]
-    table: list[tuple[int,int,int]] = list(sys16)
-    # 16-231: 6×6×6 color cube
-    for r6 in range(6):
-        for g6 in range(6):
-            for b6 in range(6):
-                def cv(x: int) -> int: return 0 if x == 0 else 55 + x * 40
-                table.append((cv(r6), cv(g6), cv(b6)))
-    # 232-255: grayscale
-    for k in range(24):
-        v = 8 + k * 10
-        table.append((v, v, v))
-    return table
-
-_XTERM256 = _build_xterm256()
-
-
-def _xterm_rgb01(n: int) -> tuple[float, float, float]:
-    r, g, b = _XTERM256[max(0, min(255, n))]
-    return r / 255, g / 255, b / 255
+_ANSI_CELL_DEFAULT: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 def _parse_ansi_cells(
     text: str,
     max_cols: int = 100,
     max_rows: int = 50,
-) -> list[tuple[int, int, tuple[float,float,float]]]:
+) -> list[tuple[int, int, tuple[float, float, float]]]:
     """
     Walk ANSI escape sequences and return (row, col, display_rgb) for every
-    character cell.  Handles both old format (\033[48;5;Nm SPACE, bg+space) and
-    new format (\033[38;5;Nm BLOCK, fg+block) — whichever color is non-default
-    wins, with bg taking priority when both are set.
-    Handles: SGR 0 (reset), 30-37/90-97 fg, 38;5;N / 38;2;R;G;B fg-256/truecolor,
-             40-47/100-107 bg, 48;5;N / 48;2;R;G;B bg-256/truecolor.
+    character cell, via the shared `artgen_render.parse_ansi_grid` — the
+    single place that understands both the legacy bg+space format
+    (`\\x1b[48;5;Nm `) and the current fg+block format the `ansi` generator
+    actually emits (`\\x1b[38;5;Nm█`).
+
+    Color resolution mirrors `artgen_render.ansi_to_html`: a space character
+    uses the cell's background color; any other character uses the
+    foreground color; an unset channel defaults to black. Cells are clipped
+    to `max_cols`/`max_rows` (this widget only ever draws a small preview
+    tile, unlike the full-viewport detail view).
     """
-    DEFAULT: tuple[float,float,float] = (0.0, 0.0, 0.0)
-    fg: tuple[float,float,float] = DEFAULT
-    bg: tuple[float,float,float] = DEFAULT
-    row = col = 0
-    cells: list[tuple[int,int,tuple[float,float,float]]] = []
-    i = 0
-
-    # Normalise escape variants to actual ESC byte (handles files saved before fix).
-    if "\x1b" not in text:
-        import re as _re
-        text = text.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b").replace("^[", "\x1b")
-        text = _re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
-
-    n = len(text)
-    while i < n:
-        ch = text[i]
-
-        if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
-            j = i + 2
-            while j < n and text[j] not in "ABCDEFGHJKSTfm":
-                j += 1
-            if j < n and text[j] == "m":
-                parts = text[i + 2 : j].split(";")
-                nums: list[int] = []
-                for p in parts:
-                    try:
-                        nums.append(int(p))
-                    except ValueError:
-                        nums.append(0)
-                k = 0
-                while k < len(nums):
-                    v = nums[k]
-                    if v == 0:
-                        fg = DEFAULT
-                        bg = DEFAULT
-                    elif 30 <= v <= 37:
-                        fg = _xterm_rgb01(v - 30)
-                    elif 90 <= v <= 97:
-                        fg = _xterm_rgb01(v - 90 + 8)
-                    elif v == 38:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            fg = _xterm_rgb01(nums[k + 2])
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            fg = (nums[k+2]/255, nums[k+3]/255, nums[k+4]/255)
-                            k += 4
-                    elif 40 <= v <= 47:
-                        bg = _xterm_rgb01(v - 40)
-                    elif 100 <= v <= 107:
-                        bg = _xterm_rgb01(v - 100 + 8)
-                    elif v == 48:
-                        if k + 1 < len(nums) and nums[k + 1] == 5 and k + 2 < len(nums):
-                            bg = _xterm_rgb01(nums[k + 2])
-                            k += 2
-                        elif k + 1 < len(nums) and nums[k + 1] == 2 and k + 4 < len(nums):
-                            bg = (nums[k+2]/255, nums[k+3]/255, nums[k+4]/255)
-                            k += 4
-                    k += 1
-            i = j + 1
-
-        elif ch == "\r":
-            col = 0
-            i += 1
-        elif ch == "\n":
-            row += 1
-            col = 0
-            i += 1
-        else:
-            if row < max_rows and col < max_cols:
-                # Use bg when set (old format); fall back to fg (new \033[38;5;Nm█ format).
-                color = bg if bg != DEFAULT else fg
-                cells.append((row, col, color))
-            col += 1
-            i += 1
-
+    grid = parse_ansi_grid(text)
+    cells: list[tuple[int, int, tuple[float, float, float]]] = []
+    for row_i, row in enumerate(grid):
+        if row_i >= max_rows:
+            break
+        for col_i, (ch, fg, bg) in enumerate(row):
+            if col_i >= max_cols:
+                break
+            color_hex = bg if ch == " " else fg
+            color = _hex_to_rgb01(color_hex) if color_hex else _ANSI_CELL_DEFAULT
+            cells.append((row_i, col_i, color))
     return cells
 
 
@@ -336,56 +266,12 @@ def _ansi_preview_widget(text: str) -> Gtk.DrawingArea:
 
 
 # ── Animated GIF card ─────────────────────────────────────────────────────────
-
-class _AnimatedGifWidget(Gtk.Picture):
-    """Gtk.Picture that self-drives a GdkPixbufAnimationIter loop.
-
-    Cancels its own timer when unrealized so it doesn't fire after removal.
-    """
-
-    def __init__(self, path: str):
-        super().__init__()
-        self._timer_id: "int | None" = None
-        self._iter: "GdkPixbuf.PixbufAnimationIter | None" = None
-        self.set_hexpand(True)
-        self.set_vexpand(True)
-        self.set_content_fit(Gtk.ContentFit.COVER)
-        self.connect("unrealize", self._on_unrealize)
-        try:
-            anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
-        except Exception:
-            return
-        if anim.is_static_image():
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
-            return
-        it = anim.get_iter(None)
-        self._iter = it
-        pb = it.get_pixbuf()
-        if pb:
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
-        delay = max(it.get_delay_time(), 10)
-        self._timer_id = GLib.timeout_add(delay, self._tick)
-
-    def _tick(self) -> bool:
-        if self._iter is None:
-            self._timer_id = None
-            return GLib.SOURCE_REMOVE
-        self._iter.advance(None)
-        pb = self._iter.get_pixbuf()
-        if pb is not None:
-            self.set_paintable(Gdk.Texture.new_for_pixbuf(pb))
-        delay = self._iter.get_delay_time()
-        if delay < 0:
-            self._timer_id = None
-            return GLib.SOURCE_REMOVE
-        self._timer_id = GLib.timeout_add(max(delay, 10), self._tick)
-        return GLib.SOURCE_REMOVE
-
-    def _on_unrealize(self, _widget) -> None:
-        if self._timer_id is not None:
-            GLib.source_remove(self._timer_id)
-            self._timer_id = None
-        self._iter = None
+# `_AnimatedGifWidget` moved to artgen_render.py (v0.48.0, media-showcase-
+# everywhere Task 1) as the public `AnimatedGifWidget` -- imported and
+# re-exported under this module's old private name above so every existing
+# caller (create_view.py's result-panel gif branch, this module's own hover
+# swap below, and the perf-regression / create-result-panel tests) is
+# untouched.
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -427,8 +313,18 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
         img.set_content_fit(Gtk.ContentFit.COVER)
         return img
     if ext == ".gif" and fp.exists():
-        # No thumbnail — fall back to first frame via animation widget (static).
-        return _AnimatedGifWidget(str(fp))
+        # No thumbnail — render a genuinely STATIC first frame, NOT a live
+        # _AnimatedGifWidget: the latter runs a GLib decode timer continuously
+        # in the grid, contradicting the "avoid 60+ timers" note above (review
+        # M4). Hover still swaps in a live animation.
+        try:
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(str(fp))
+            img = Gtk.Picture.new_for_paintable(
+                Gdk.Texture.new_for_pixbuf(anim.get_static_image()))
+            img.set_content_fit(Gtk.ContentFit.COVER)
+            return img
+        except Exception:
+            return _AnimatedGifWidget(str(fp))  # unreadable: last-resort
 
     if rec.thumbnail_path and Path(rec.thumbnail_path).exists():
         img = Gtk.Picture.new_for_filename(rec.thumbnail_path)
@@ -458,6 +354,13 @@ def make_card_content(rec: MediaRecord) -> Gtk.Widget:
 
 _STARRED_FILTER = "__starred__"
 
+# Natural height of the bottom badge/timestamp bar in _make_card (two
+# single-line, non-wrapping Labels -- deterministic regardless of content).
+# Measured empirically (xvfb) so the content zone above it can be pinned to
+# exactly (tile_h - _BOTTOM_BAR_H), making the WHOLE card's measured size a
+# true ceiling (== gallery_layout.TILE_H) instead of just a floor.
+_BOTTOM_BAR_H = 24
+
 
 class ArtgenGallery(Gtk.Box):
     """
@@ -473,14 +376,30 @@ class ArtgenGallery(Gtk.Box):
         self.on_card_activated: Optional[Callable[[str], None]] = None
         self.on_watch_requested: Optional[Callable[[Optional[str]], None]] = None
         self.on_card_deleted: Optional[Callable[[str], None]] = None
-        self.on_remix: Optional[Callable[["MediaRecord"], None]] = None
+        # Task 8 (remix-pipeline-unification): the parallel "🔀 Remix" popover
+        # seam (`on_remix`) is gone — `on_remix_as_pipeline` is the single
+        # remix affordance now, wired to the card's one remaining button.
+        self.on_remix_as_pipeline: Optional[Callable[["MediaRecord"], None]] = None
         self._active_filter: Optional[str] = None  # None = All, "__starred__" = starred only
         self._records: list[MediaRecord] = []
+        # Card tile size -- defaults to the SAME fixed tile as the native
+        # video/image/animate galleries (gallery_layout.TILE_W/TILE_H), kept
+        # in sync with gallery density via set_tile_size().
+        self._tile_w = gallery_layout.TILE_W
+        self._tile_h = gallery_layout.TILE_H
         self._build()
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
+        # Grid page: filter bar + separator + card grid. Unify-gallery-
+        # interaction-pattern Task 3 removed the in-page ArtgenDetail overlay
+        # that used to live alongside this -- see the removed Overlay/_show_
+        # detail machinery this replaced (git history / CLAUDE.md) and
+        # main_window.py's shared `_right_stack`, which now hosts ArtgenDetail
+        # as a SIBLING subtree instead of stacking it over this grid.
+        grid_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
         # Filter bar
         filter_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         filter_bar.set_margin_start(12)
@@ -501,30 +420,76 @@ class ArtgenGallery(Gtk.Box):
         watch_btn.connect("clicked", self._on_watch_clicked)
         filter_bar.append(watch_btn)
 
-        self.append(filter_bar)
-        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        grid_page.append(filter_bar)
+        grid_page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         # Card grid
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
+        # FlowBox grid settings -- IDENTICAL to the native video/image/animate
+        # galleries (GalleryWidget._flow in main_window.py), sourced from
+        # gallery_layout.py so switching Discover tabs never changes the grid.
+        # SelectionMode.NONE -- unify-gallery-interaction Task 6: click
+        # handling moves OFF the FlowBox (which used to own it via
+        # SelectionMode.SINGLE + "child-activated", a single-click-only
+        # mechanism) and ONTO a per-card Gtk.GestureClick built in
+        # _make_card, the SAME mechanism the native GenerationCard uses
+        # (main_window.py's _on_pressed). This lets one gesture distinguish
+        # single-click (select, via on_card_activated) from double-click
+        # (open ArtgenViewerWindow) instead of needing two different signals.
         self._flow = Gtk.FlowBox()
-        self._flow.set_max_children_per_line(8)
-        self._flow.set_min_children_per_line(3)
-        self._flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._flow.set_row_spacing(6)
-        self._flow.set_column_spacing(6)
+        self._flow.set_max_children_per_line(gallery_layout.FLOW_MAX_CHILDREN_PER_LINE)
+        self._flow.set_min_children_per_line(gallery_layout.FLOW_MIN_CHILDREN_PER_LINE)
+        self._flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._flow.set_row_spacing(gallery_layout.FLOW_ROW_SPACING)
+        self._flow.set_column_spacing(gallery_layout.FLOW_COLUMN_SPACING)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
         self._flow.set_margin_top(8)
         self._flow.set_margin_bottom(8)
-        self._flow.connect("child-activated", self._on_card_activated)
         scroll.set_child(self._flow)
         self._scroll = scroll
-        self.append(scroll)
+        grid_page.append(scroll)
+
+        self.append(grid_page)
 
     # ── Public ────────────────────────────────────────────────────────────────
+
+    def set_tile_size(self, width: int, height: int) -> None:
+        """
+        Resize every card to width x height and remember it for future cards.
+
+        Mirrors MainWindow._apply_gallery_density's handling of the native
+        video/image/animate galleries so switching gallery density resizes
+        the artgen gallery identically instead of leaving it at a stale or
+        differently-hardcoded size.
+
+        `overlay.set_size_request(width, height)` alone is NOT enough to
+        resize an already-built card: it only raises the outer Overlay's
+        minimum-size FLOOR, and `Gtk.Widget.set_size_request()` can never
+        shrink a widget below what its content already needs -- here, the
+        pinned `content_zone` built at the OLD tile size (see `_make_card`)
+        still dominates the measured size, so the card's true rendered size
+        wouldn't change. The fix is to also resize `content_zone`'s pinned
+        anchor in place via `gallery_layout.set_pinned_size()` (see its
+        docstring), recomputing content_h exactly like `_make_card` does so
+        the content zone + the fixed-height bottom badge/timestamp bar still
+        sum to exactly `height`.
+        """
+        self._tile_w = width
+        self._tile_h = height
+        content_h = max(height - _BOTTOM_BAR_H, 1)
+        child = self._flow.get_first_child()
+        while child is not None:
+            overlay = child.get_child()  # FlowBoxChild wraps our Gtk.Overlay
+            if overlay is not None:
+                overlay.set_size_request(width, height)
+                content_zone = getattr(overlay, "_content_zone", None)
+                if content_zone is not None:
+                    gallery_layout.set_pinned_size(content_zone, width, content_h)
+            child = child.get_next_sibling()
 
     def scroll_to_top(self) -> None:
         """Scroll the grid back to the top (call after prepending a new card)."""
@@ -543,6 +508,19 @@ class ArtgenGallery(Gtk.Box):
         self._records.insert(0, record)
         card = self._make_card(record)
         self._flow.prepend(card)
+
+    def remove_record(self, media_id: str) -> None:
+        """Remove one record from the in-memory list and rebuild grid+chips.
+
+        Mirrors `prepend_record`'s public, incremental-update style. Used by
+        the grid's own hover-delete flow (`_make_card`'s `_delete_confirmed`)
+        AND by `MainWindow` (unify-gallery-interaction-pattern Task 3) to
+        sync the grid after the shared right-pane `ArtgenDetail`'s OWN 🗑
+        deletes a record this grid doesn't otherwise know about.
+        """
+        self._records = [r for r in self._records if r.id != media_id]
+        self._rebuild_grid()
+        self._rebuild_chips()
 
     # ── Chips ─────────────────────────────────────────────────────────────────
 
@@ -581,29 +559,53 @@ class ArtgenGallery(Gtk.Box):
 
     # ── Grid ──────────────────────────────────────────────────────────────────
 
+    def _filtered_records(self) -> list[MediaRecord]:
+        """Return self._records narrowed by the active filter chip.
+
+        Shared by _rebuild_grid (what the grid page shows) and
+        MainWindow's _on_artgen_card_selected, which passes this list to
+        ArtgenDetail.show_record as the nav list it steps through with
+        ‹ / › -- so the two never disagree about which records are "in view".
+        """
+        if self._active_filter == _STARRED_FILTER:
+            return [r for r in self._records if r.starred]
+        return [r for r in self._records
+                if self._active_filter is None or r.generator_type == self._active_filter]
+
     def _rebuild_grid(self) -> None:
         while child := self._flow.get_first_child():
             self._flow.remove(child)
-        if self._active_filter == _STARRED_FILTER:
-            filtered = [r for r in self._records if r.starred]
-        else:
-            filtered = [r for r in self._records
-                        if self._active_filter is None or r.generator_type == self._active_filter]
-        for rec in filtered:
+        for rec in self._filtered_records():
             self._flow.append(self._make_card(rec))
 
     def _make_card(self, rec: MediaRecord) -> Gtk.Overlay:
+        tile_w, tile_h = self._tile_w, self._tile_h
         overlay = Gtk.Overlay()
-        overlay.set_size_request(110, 90)
+        overlay.set_size_request(tile_w, tile_h)
         overlay._media_id = rec.id  # stash for activation handler
         overlay.add_css_class("artgen-card")
+        # Hard boundary so a hover-swapped animation or the revealed action bar
+        # can't paint past the card and overlap neighbours (mirrors the native
+        # GenerationCard; the content_zone below also clips via pin_fixed_zone).
+        overlay.set_overflow(Gtk.Overflow.HIDDEN)
 
-        # Base: art content + bottom bar
+        # Base: art content + bottom bar.  The content widget's own natural
+        # size otherwise follows the underlying artwork's aspect ratio (a
+        # square 1024x1024 palette render vs. a 16:9 ANSI grid vs. a long
+        # text preview each want a different height) -- overlay.set_size_
+        # request above is only a MINIMUM, so without pinning, cards would
+        # balloon per-content just like the pre-fix GenerationCard
+        # (main_window.py) did.  gallery_layout.pin_fixed_zone caps the
+        # content's MEASURED size to a fixed area (tile_h minus the bottom
+        # badge/timestamp bar's own — constant, unwrapped-label — height) so
+        # every artgen card reports the identical size_request regardless of
+        # content, and matches the native galleries' tile size exactly.
         base = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         content = make_card_content(rec)
-        content.set_hexpand(True)
-        content.set_vexpand(True)
-        base.append(content)
+        content_h = max(tile_h - _BOTTOM_BAR_H, 1)
+        content_zone = gallery_layout.pin_fixed_zone(content, tile_w, content_h)
+        overlay._content_zone = content_zone  # stashed so set_tile_size() can resize it in place
+        base.append(content_zone)
         bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bottom.add_css_class("artgen-card-bottom")
         type_lbl = Gtk.Label(label=(rec.generator_type or "?")[:4])
@@ -668,25 +670,27 @@ class ArtgenGallery(Gtk.Box):
             if btn_idx != 1:
                 return
             _ms.delete(media_id)
-            self._records = [r for r in self._records if r.id != media_id]
-            self._rebuild_grid()
-            self._rebuild_chips()
+            self.remove_record(media_id)
             if self.on_card_deleted:
                 self.on_card_deleted(media_id)
 
         del_btn.connect("clicked", _on_delete)
         actions.append(del_btn)
 
-        seed_btn = Gtk.Button(label="🔀 Remix")
-        seed_btn.add_css_class("artgen-card-remix-btn")
-        seed_btn.set_tooltip_text("Remix this artwork into a new video or image")
+        # Single remix affordance (Task 8): opens Pipeline Studio's Muse
+        # scoped to this artifact. The former parallel "🔀 Remix" popover
+        # button is gone; this is relabeled to the canonical name.
+        pipeline_btn = Gtk.Button(label="🔀 Remix")
+        pipeline_btn.add_css_class("artgen-card-remix-btn")
+        pipeline_btn.set_tooltip_text("Remix this into a pipeline")
 
-        def _on_seed(_b, _rec=rec):
-            if self.on_remix:
-                self.on_remix(_rec)
+        def _on_pipeline_seed(_b, _rec=rec):
+            if self.on_remix_as_pipeline:
+                self.on_remix_as_pipeline(_rec)
 
-        seed_btn.connect("clicked", _on_seed)
-        actions.append(seed_btn)
+        pipeline_btn.connect("clicked", _on_pipeline_seed)
+        actions.append(pipeline_btn)
+        overlay._remix_as_pipeline_btn = pipeline_btn  # stashed for test access
 
         hover_rev.set_child(actions)
         overlay.add_overlay(hover_rev)
@@ -696,43 +700,106 @@ class ArtgenGallery(Gtk.Box):
         fp = Path(rec.file_path) if rec.file_path else Path()
         _is_gif = fp.suffix.lower() == ".gif" and fp.exists()
         _thumb_path = rec.thumbnail_path if (rec.thumbnail_path and Path(rec.thumbnail_path).exists()) else None
+        # Tracks the CURRENT overlay child of content_zone (a 1-element list so
+        # the nested closures below can mutate it).  Swapping content in/out of
+        # content_zone itself (remove_overlay/add_overlay) -- rather than
+        # ripping content_zone out of `base` and replacing it with a bare,
+        # unpinned widget as this used to do -- keeps the fixed-size pin
+        # (gallery_layout.pin_fixed_zone) intact across hover in/out, so a
+        # hovered GIF card can't grow/shrink the tile either.
+        _zone_content = [content]
+
+        def _swap_zone_content(new_widget: Gtk.Widget) -> None:
+            # CRASH FIX (v0.48.4): the actual overlay mutation is DEFERRED to an
+            # idle callback. `remove_overlay(old)` unparents (and, since nothing
+            # else holds a ref, FREES) the outgoing widget. Doing that free while
+            # GTK is still mid signal-dispatch on this card -- which is exactly
+            # when the motion "enter"/"leave" and click handlers run -- leaves a
+            # dangling widget pointer in GTK's in-flight layout/event machinery,
+            # so a subsequent `gtk_widget_compute_point` dereferences freed
+            # memory: `assertion 'GTK_IS_WIDGET (widget)' failed` then a
+            # nondeterministic SEGFAULT (reproduced: hover an AnimateDiff GIF
+            # card -> live-gif swap -> click -> crash). Running the swap at idle
+            # lets the current dispatch fully unwind before anything is freed.
+            new_widget.set_hexpand(True)
+            new_widget.set_vexpand(True)
+            new_widget.set_halign(Gtk.Align.FILL)
+            new_widget.set_valign(Gtk.Align.FILL)
+
+            def _do_swap() -> bool:
+                # Re-check at idle time: the card may have been detached (grid
+                # rebuilt) or already swapped to this very widget in between.
+                if content_zone.get_parent() is None or _zone_content[0] is None:
+                    # Card detached (grid rebuilt) before this idle ran:
+                    # new_widget was never attached, so it will never be
+                    # realized/unrealized — cancel its animation timer now or
+                    # it leaks forever (review I3).
+                    if hasattr(new_widget, "cancel_animation"):
+                        new_widget.cancel_animation()
+                    return False
+                old = _zone_content[0]
+                if old is new_widget:
+                    return False
+                # add BEFORE remove so the zone always has a child, then free
+                # the outgoing widget now that no dispatch is on the stack.
+                content_zone.add_overlay(new_widget)
+                content_zone.remove_overlay(old)
+                _zone_content[0] = new_widget
+                return False
+
+            GLib.idle_add(_do_swap)
 
         def _enter_card(*_):
             hover_rev.set_reveal_child(True)
             if _is_gif and _thumb_path:
                 anim = _AnimatedGifWidget(str(fp))
-                anim.set_hexpand(True)
-                anim.set_vexpand(True)
-                old = base.get_first_child()
-                if old is not None:
-                    base.remove(old)
-                base.prepend(anim)
+                _swap_zone_content(anim)
 
         def _leave_card(*_):
             hover_rev.set_reveal_child(False)
             if _is_gif and _thumb_path:
-                first = base.get_first_child()
-                if first is not None:
-                    base.remove(first)
                 still = Gtk.Picture.new_for_filename(_thumb_path)
-                still.set_content_fit(Gtk.ContentFit.COVER)
-                still.set_hexpand(True)
-                still.set_vexpand(True)
-                base.prepend(still)
+                still.set_content_fit(Gtk.ContentFit.CONTAIN)
+                _swap_zone_content(still)
 
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", _enter_card)
         motion.connect("leave", _leave_card)
         overlay.add_controller(motion)
 
+        # Primary click gesture -- unify-gallery-interaction Task 6. ONE
+        # Gtk.GestureClick per card handles both single- and double-click,
+        # the same mechanism native GenerationCard uses
+        # (main_window.py's _on_pressed): a single click (any press) selects
+        # the card into the shared right-pane detail view via
+        # on_card_activated (the FlowBox itself no longer does this --
+        # SelectionMode.NONE above), and a double click (n_press == 2) ALSO
+        # opens the artifact full-screen in ArtgenViewerWindow, mirroring
+        # GenerationCard's VideoPlayerWindow/ImageViewerWindow double-click
+        # branch. Guarded the same way: only opens if the artifact's file
+        # actually exists on disk (record.video_exists/image_exists there;
+        # a plain Path.exists() check here since MediaRecord has no such
+        # property).
+        click = Gtk.GestureClick()
+        click.set_button(1)
+
+        def _on_pressed(_gesture, n_press, _x, _y, _rec=rec, _ov=overlay):
+            if self.on_card_activated:
+                self.on_card_activated(_rec.id)
+            if n_press != 2:
+                return
+            fp = Path(_rec.file_path) if _rec.file_path else Path()
+            if not fp.exists():
+                return
+            win = ArtgenViewerWindow(_rec, _ov.get_root())
+            win.present()
+
+        click.connect("pressed", _on_pressed)
+        overlay.add_controller(click)
+
         return overlay
 
     # ── Signal handlers ───────────────────────────────────────────────────────
-
-    def _on_card_activated(self, _flow, child) -> None:
-        box = child.get_child()
-        if box and hasattr(box, "_media_id") and self.on_card_activated:
-            self.on_card_activated(box._media_id)
 
     def _on_watch_clicked(self, _btn) -> None:
         if self.on_watch_requested:

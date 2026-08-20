@@ -244,6 +244,45 @@ def test_purge_playlist_items(tmp_path):
     assert remaining == ["m1"]
 
 
+def test_animatediff_and_animate_fold_into_video(tmp_path):
+    from media_store import MediaStore, _SCHEMA
+    db = tmp_path / "m.db"
+    # Seed rows against the raw schema BEFORE any MediaStore ever opens this db.
+    # Opening a MediaStore first (on an empty table) would run the migration's
+    # gate-check, find nothing to fold, and immediately stamp
+    # PRAGMA user_version=1 -- which would then gate OUT these rows on the
+    # next open. Seeding via a bare sqlite3 connection instead matches the
+    # real-world scenario this migration targets: a pre-existing DB with
+    # legacy media_type values, opened for the first time by upgraded code.
+    import sqlite3
+    con = sqlite3.connect(db)
+    con.executescript(_SCHEMA)
+    def ins(id, mt, gt):
+        con.execute("INSERT INTO media (id,media_type,created_at,file_path,thumbnail_path,"
+                    "prompt,model_id,generator_type,params,starred) VALUES (?,?,?,?,?,?,?,?,?,0)",
+                    (id, mt, "2026-01-01T00:00:00", f"/x/{id}", "", "", "m", gt, "{}"))
+    ins("ad_native", "animatediff", None)
+    ins("ad_artgen", "artgen", "animatediff")
+    ins("anim",      "animate", None)
+    ins("vid",       "video", None)
+    ins("img",       "image", None)
+    ins("verse",     "artgen", "verse")
+    con.commit(); con.close()
+    # First-ever open of this db: migration runs and folds legacy rows into video.
+    ms2 = MediaStore(db_path=db)
+    def row(id):
+        return ms2._conn.execute("SELECT media_type, generator_type FROM media WHERE id=?", (id,)).fetchone()
+    assert row("ad_native") == ("video", "animatediff")
+    assert row("ad_artgen") == ("video", "animatediff")
+    assert row("anim")      == ("video", "animate")
+    assert row("vid")       == ("video", None)      # untouched
+    assert row("img")       == ("image", None)      # untouched
+    assert row("verse")     == ("artgen", "verse")  # untouched
+    # idempotent: a third open changes nothing
+    ms3 = MediaStore(db_path=db)
+    assert ms3._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
 def test_make_artgen_path(tmp_path):
     from media_store import make_artgen_path
     base = tmp_path / "artgen"

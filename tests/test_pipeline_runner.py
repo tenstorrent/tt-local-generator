@@ -147,6 +147,132 @@ def test_start_creates_run_record(monkeypatch, tmp_path):
     assert runs[0]["jobs"][0]["name"] == "test-job"
 
 
+def test_start_without_run_id_calls_create_run_not_update_pid(monkeypatch, tmp_path):
+    """Backward-compat: start() with no run_id= kwarg must behave exactly as
+    before -- mint a new record via create_run() and never touch update_pid
+    (that method only exists to adopt a CALLER-provided id). Regression guard
+    for the SP-C dual-run-record bug fix: existing callers that don't pass
+    run_id= must see zero behavior change."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 12345
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    mock_store.create_run.return_value = "minted-id"
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+    )
+
+    mock_store.create_run.assert_called_once()
+    mock_store.update_pid.assert_not_called()
+    assert runner._run_id == "minted-id"
+
+
+def test_start_with_run_id_adopts_record_instead_of_creating_new(monkeypatch, tmp_path):
+    """start(run_id=...) must ADOPT the given id -- set self._run_id = run_id
+    and call self._store.update_pid(run_id, pid) -- rather than minting a new
+    record via create_run(). This is the fix for the SP-C Remix->Run
+    dual-run-record bug: PipelineStudio._on_run_remix already creates a
+    provisional record and hands its RunView to LiveRunView.begin(); if
+    start() ALSO called create_run() internally (the old behavior), every
+    node/output/finish update from this run would land on a second, different
+    record that LiveRunView never saw -- Open's rebuild-on-finish would then
+    read the never-updated provisional record (all steps pending, no
+    artifacts) instead of the real results."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 55555
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+        run_id="fixed-id",
+    )
+
+    mock_store.create_run.assert_not_called()
+    mock_store.update_pid.assert_called_once_with("fixed-id", 55555)
+    assert runner._run_id == "fixed-id"
+
+
+def test_start_with_run_id_node_updates_target_adopted_id(monkeypatch, tmp_path):
+    """Once start(run_id=...) has adopted the id, node-signal parsing (which
+    reads self._run_id) must write updates to THAT id, not a runner-minted
+    one -- this is what makes the adopted record the single live record."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 55555
+    mock_popen.return_value.stdout = iter([])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+        run_id="fixed-id",
+    )
+
+    # _watch_stdout/_parse_line dispatch node updates using self._run_id --
+    # confirm it's the adopted id, then confirm a node update actually lands
+    # on that id via the store.
+    runner._parse_line("NODE:1:running:FLUX.1-schnell", "test-job")
+    mock_store.update_node.assert_called_once_with(
+        "fixed-id", "test-job", "1", "running", "FLUX.1-schnell"
+    )
+
+
+def test_start_with_run_id_finishes_caller_record_if_popen_raises(monkeypatch, tmp_path):
+    """SP-C Phase-2a final review fix: in the adopt path (run_id=... given),
+    self._run_id must be set BEFORE subprocess.Popen() runs so that if Popen
+    raises, the except block's `if self._run_id: finish_run(...)` still fires
+    for the CALLER's already-created provisional record -- otherwise that
+    record (pid=0, status="running") is orphaned forever because self._run_id
+    stayed None when the assignment lived after Popen inside the try."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=OSError("boom")))
+    from pipeline_runner import PipelineRunner
+    runner = PipelineRunner()
+    mock_store = MagicMock()
+    runner._store = mock_store
+    on_run_finished = MagicMock()
+
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=on_run_finished,
+        run_id="fixed-id",
+    )
+
+    mock_store.create_run.assert_not_called()
+    mock_store.finish_run.assert_called_once_with("fixed-id", success=False)
+    on_run_finished.assert_called_once_with(False)
+
+
 # ── Restart recovery ──────────────────────────────────────────────────────────
 
 def test_reattach_marks_interrupted_if_proc_dead(monkeypatch, tmp_path):
@@ -290,6 +416,54 @@ def test_tail_log_finally_reports_false_when_run_was_still_running(monkeypatch, 
 
     on_run_finished.assert_called_once_with(False)
     assert store.get_run(run_id)["status"] == "failed"
+
+
+# ── Live log tail (SP-C Phase 2a Task 4) ─────────────────────────────────────
+
+def test_watch_stdout_forwards_each_line_to_on_log(monkeypatch):
+    """_watch_stdout must dispatch every raw stdout line to on_log, verbatim,
+    in addition to the existing NODE:/LOG:/PLAYLIST: parsing — this is the
+    only source LiveRunView.on_log has for its live log tail (see
+    pipeline_studio.py's LiveRunView docstring)."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    runner = make_runner()
+    on_log = MagicMock()
+    runner._on_log = on_log
+
+    lines = ["NODE:1:running:FLUX.1-schnell\n", "LOG:/tmp/pipeline.log\n",
+             "some plain progress line\n"]
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(lines)
+    mock_proc.wait.return_value = MagicMock()  # non-int -> finally returns early
+    runner._proc = mock_proc
+
+    runner._watch_stdout("test-job")
+
+    assert on_log.call_args_list == [call(line) for line in lines]
+
+
+def test_start_default_on_log_is_none_backward_compatible(monkeypatch, tmp_path):
+    """start() without on_log= must not raise — every pre-existing caller/test
+    omits it, so the parameter must be fully optional."""
+    monkeypatch.setattr("pipeline_runner.GLib", MagicMock())
+    monkeypatch.setattr("pipeline_store._INDEX_PATH", tmp_path / "idx.json")
+    monkeypatch.setattr("pipeline_store._RUNS_DIR", tmp_path)
+    mock_popen = MagicMock()
+    mock_popen.return_value.pid = 12345
+    mock_popen.return_value.stdout = iter(["a line\n"])
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+    from pipeline_runner import PipelineRunner
+    from pipeline_store import PipelineStore
+    runner = PipelineRunner()
+    runner._store = PipelineStore()
+    runner.start(
+        spec_path=str(tmp_path / "spec.json"),
+        jobs=[{"name": "test-job", "prompt": "a test prompt"}],
+        param_overrides={},
+        on_node_update=MagicMock(),
+        on_run_finished=MagicMock(),
+    )
+    assert runner._on_log is None
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

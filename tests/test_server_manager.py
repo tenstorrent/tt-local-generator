@@ -242,3 +242,34 @@ class TestScriptPaths:
         assert (sm._REPO_ROOT / "bin").is_dir(), (
             f"_REPO_ROOT ({sm._REPO_ROOT}) should contain a bin/ directory"
         )
+
+
+def _models_response(served_id: str) -> MagicMock:
+    """Fake OpenAI /v1/models body naming the one loaded model (shared-port
+    artgen family). Used to prove per-model health at the source (review C3)."""
+    import json as _json
+    body = _json.dumps({"object": "list",
+                        "data": [{"id": served_id, "object": "model"}]}).encode()
+    mock = MagicMock()
+    mock.read.return_value = body
+    return mock
+
+
+def test_artgen_health_is_model_specific_not_blanket():
+    """Review C3: all six artgen-* ServerDefs share :8002/v1/models with no
+    runner_key. A 2xx must NOT mark every artgen key healthy — only the key
+    whose model_id matches the loaded model. Here Qwen3-8B is loaded."""
+    import server_manager as sm
+    with patch("urllib.request.urlopen", return_value=_models_response("Qwen3-8B")):
+        assert sm._check_sdef(sm.SERVERS["artgen-qwen3-8b"], 2.0) is True
+        # a DIFFERENT artgen model on the same shared URL must read NOT healthy
+        assert sm._check_sdef(sm.SERVERS["artgen-qwen3-32b"], 2.0) is False
+        assert sm._check_sdef(sm.SERVERS["artgen-llama-3.3-70b"], 2.0) is False
+
+
+def test_artgen_health_matches_org_prefixed_served_id():
+    """The served id may be the bare '--model' value or the HF repo path;
+    normalization matches both against the ServerDef's model_id."""
+    import server_manager as sm
+    with patch("urllib.request.urlopen", return_value=_models_response("Qwen/Qwen3-8B")):
+        assert sm._check_sdef(sm.SERVERS["artgen-qwen3-8b"], 2.0) is True

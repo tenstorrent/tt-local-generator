@@ -19,9 +19,11 @@ if _SYSTEM_DIST not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 
-def _make_record(media_type="animate", thumb="", image_path="", extra_meta=None):
+def _make_record(media_type="animate", thumb="", image_path="", extra_meta=None,
+                  generator_type=None):
     r = MagicMock()
     r.media_type = media_type
+    r.generator_type = generator_type
     r.thumbnail_path = thumb
     r.image_path = image_path
     r.extra_meta = extra_meta if extra_meta is not None else {}
@@ -56,8 +58,12 @@ def test_returns_last_frame_path_when_available(tmp_path):
     last_frame = tmp_path / "frame_last.jpg"
     last_frame.write_bytes(b"jpeg")
 
+    # Post-"animatediff is video" migration shape: media_type is "video" and
+    # generator_type=="animate" is the provenance stamp that identifies it as
+    # a Wan2.2-Animate record (see history_store.GenerationRecord.new_animate).
     rec = _make_record(
-        media_type="animate",
+        media_type="video",
+        generator_type="animate",
         thumb=str(tmp_path / "frame.jpg"),
         extra_meta={"last_frame_path": str(last_frame)},
     )
@@ -82,7 +88,8 @@ def test_falls_back_to_thumbnail_when_last_frame_missing(tmp_path):
     thumb.write_bytes(b"jpeg")
 
     rec = _make_record(
-        media_type="animate",
+        media_type="video",
+        generator_type="animate",
         thumb=str(thumb),
         extra_meta={"last_frame_path": "/nonexistent/frame_last.jpg"},
     )
@@ -98,6 +105,32 @@ def test_falls_back_to_thumbnail_when_last_frame_missing(tmp_path):
         ref_video, ref_char = fn()
 
     assert ref_char == str(thumb)
+
+
+def test_media_type_animate_without_generator_type_falls_through_to_flux(tmp_path):
+    """Regression pin: a record with media_type=='animate' but no
+    generator_type=='animate' stamp (the pre-migration shape this branch used
+    to match on) must NOT be treated as an animate record anymore — it should
+    fall through to the FLUX-image fallback, exactly the bug this fix
+    resolves (identification must be generator_type-based, not media_type)."""
+    img = tmp_path / "flux.jpg"
+    img.write_bytes(b"jpeg")
+
+    stale_rec = _make_record(media_type="animate", thumb="/some/thumb.jpg",
+                              extra_meta={"last_frame_path": "/some/last.jpg"})
+    flux_rec = _make_record(media_type="image", image_path=str(img))
+    obj = _make_mw_with_store([stale_rec, flux_rec])
+    fn = _bind(obj)
+
+    clips_data = {"locomotion": [{"mp4": "/clips/walk.mp4", "name": "walk", "thumb": ""}]}
+
+    with patch("animate_picker.BundledClipScanner") as MockScanner, \
+         patch("main_window._settings") as mock_settings:
+        mock_settings.get.return_value = "/clips"
+        MockScanner.return_value.scan.return_value = clips_data
+        ref_video, ref_char = fn()
+
+    assert ref_char == str(img)
 
 
 def test_falls_back_to_flux_image_when_no_animate_records(tmp_path):
@@ -151,3 +184,79 @@ def test_returns_empty_strings_when_no_clips():
 
     assert ref_video == ""
     assert ref_char == ""
+
+
+# ── Real-store round-trip companion test ───────────────────────────────────
+#
+# Every test above builds its record with `_make_record()`, a MagicMock whose
+# `.generator_type` is set directly by the test — it never goes through
+# HistoryStore.append()/all_records(), so it never exercises the real
+# `HistoryStore._to_gen()` read path. A final-review found _to_gen() dropped
+# generator_type entirely (defaulted to None for every record read back from
+# storage), which would have made the `r.generator_type != "animate"` check
+# in _get_animate_inputs() above always continue — i.e. the last-frame chain
+# would silently never fire in production, no matter how many of the tests
+# above passed. This test closes that gap: it persists a real GenerationRecord
+# through a real HistoryStore/MediaStore and reads it back via all_records()
+# before handing it to _get_animate_inputs(), so a regression in _to_gen's
+# generator_type passthrough would fail THIS test even if every hand-built-
+# record test above stayed green. (The narrower unit-level pin for _to_gen
+# itself lives in tests/test_history_store.py::test_to_gen_round_trips_generator_type.)
+def _real_store(monkeypatch, tmp_path):
+    import media_store as ms_mod
+    from media_store import MediaStore
+    import history_store as hs
+
+    fresh_ms = MediaStore(tmp_path / "media.db")
+    monkeypatch.setattr(ms_mod, "_media_store_singleton", fresh_ms)
+    monkeypatch.setattr(hs, "STORAGE_DIR", tmp_path)
+    monkeypatch.setattr(hs, "VIDEOS_DIR", tmp_path)
+    monkeypatch.setattr(hs, "IMAGES_DIR", tmp_path)
+    monkeypatch.setattr(hs, "THUMBNAILS_DIR", tmp_path)
+    return hs.HistoryStore()
+
+
+def test_real_store_round_trip_last_frame_wins_over_flux_fallback(monkeypatch, tmp_path):
+    """A Wan2.2-Animate record persisted via HistoryStore.append() and read
+    back via all_records() (the real _to_gen path, no MagicMock stubbing)
+    must still be identified as an animate record and win its last-frame
+    path over a FLUX image fallback — proving the generator_type stamp
+    survives the real storage round trip end to end."""
+    import main_window as mw
+    from history_store import GenerationRecord
+
+    store = _real_store(monkeypatch, tmp_path)
+
+    last_frame = tmp_path / "frame_last.jpg"
+    last_frame.write_bytes(b"jpeg")
+
+    animate_rec = GenerationRecord.new_animate(
+        job_id="anim-real", prompt="p", negative_prompt="",
+        num_inference_steps=20, seed=1,
+    )
+    animate_rec.extra_meta = {"last_frame_path": str(last_frame)}
+    store.append(animate_rec)
+
+    img = tmp_path / "flux.jpg"
+    img.write_bytes(b"jpeg")
+    flux_rec = GenerationRecord.new_image(
+        job_id="flux-real", prompt="p", negative_prompt="",
+        num_inference_steps=20, seed=1,
+    )
+    flux_rec.image_path = str(img)
+    store.append(flux_rec)
+
+    with patch("main_window.Gtk.ApplicationWindow.__init__", return_value=None):
+        obj = mw.MainWindow.__new__(mw.MainWindow)
+    obj._store = store
+    fn = _bind(obj)
+
+    clips_data = {"locomotion": [{"mp4": "/clips/walk.mp4", "name": "walk", "thumb": ""}]}
+
+    with patch("animate_picker.BundledClipScanner") as MockScanner, \
+         patch("main_window._settings") as mock_settings:
+        mock_settings.get.return_value = "/clips"
+        MockScanner.return_value.scan.return_value = clips_data
+        ref_video, ref_char = fn()
+
+    assert ref_char == str(last_frame)

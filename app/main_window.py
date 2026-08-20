@@ -13,10 +13,14 @@ Classes:
     GenerationCard   — card widget for one completed video
     GalleryWidget    — scrollable flow grid of GenerationCards
     PendingCard      — animated placeholder while a job runs
-    ControlPanel     — left panel: prompt form, queue, server status
     HealthWorker     — background thread for /tt-liveness polling
     RecoveryDialog   — modal listing unknown server jobs to re-attach
     MainWindow       — top-level Gtk.ApplicationWindow
+
+(ControlPanel and ArtgenPanel — the legacy left-panel prompt form/queue/
+server-status widget and the artgen generation sidebar — were deleted in
+SP-3d-5; the app rests entirely on the Create/Discover/Remix shell now.
+Discover still browses artgen media via the standalone `ArtgenGallery`.)
 """
 import base64
 import json
@@ -39,11 +43,22 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gio, Gtk, Pango
 
 from api_client import APIClient
+import app_settings
 from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
-from artgen_panel import ArtgenPanel
+from artgen_gallery import ArtgenGallery
+from artgen_detail import ArtgenDetail
+from artgen_render import AnimatedGifWidget
+import artgen_kind
+from create_view import CreateView
+import gallery_layout
 from history_store import GenerationRecord, HistoryStore
+from media_store import MediaRecord
+from model_status import ModelStatusService, Status
+from nav_state import NavState, Crumb, Context
+from nav_widgets import Breadcrumb, ContextTray
+from servers_control import ServersControl
 from worker import (
     AnimateDiffGenerationWorker,
     AnimateGenerationWorker,
@@ -69,7 +84,11 @@ if _USE_SYSTEM_PLAYER:
 # ── Tenstorrent dark palette as GTK CSS ───────────────────────────────────────
 
 _CSS = b"""
-/* -- Tenstorrent color palette -------------------------------------------- */
+/* -- Tenstorrent color palette --------------------------------------------------
+ * The main app is an editor/IDE-style surface, so per the global CLAUDE.md it
+ * uses the tt-vscode-toolkit variant (bright teal #4FD1C5 on deep blue-gray
+ * #0F2A35), NOT the docs-site forest-teal. (A brief unification to forest-teal
+ * was reverted 2026-07-13 -- keep this palette; it is the intended look here.) */
 @define-color tt_bg_panel    #0A1F28;
 @define-color tt_bg_darkest  #0F2A35;
 @define-color tt_bg_dark     #1A3C47;
@@ -226,13 +245,17 @@ scrollbar slider {
 scrollbar slider:hover {
     background-color: @tt_accent;
 }
+/* Selection ring via an INSET box-shadow, NOT a thicker border: box-shadow is
+   painted and takes ZERO layout space, so selecting a card cannot change its
+   size, shift its content, or jitter -- and therefore can never shove
+   neighbouring cards in the natural-size-packed FlowBox. (A border-width change
+   would; that was the layout-shift-on-click bug.) The 1px base .card border is
+   left untouched. */
 .card-selected {
-    border-color: @tt_accent;
-    border-width: 2px;
+    box-shadow: inset 0 0 0 2px @tt_accent;
 }
 .card-selected-image {
-    border-color: @tt_pink;
-    border-width: 2px;
+    box-shadow: inset 0 0 0 2px @tt_pink;
 }
 .type-badge-video {
     background-color: @tt_bg_dark;
@@ -339,6 +362,97 @@ scrollbar slider:hover {
 .source-btn-active:hover,
 .source-btn:checked:hover {
     background-color: @tt_accent_light;
+}
+.loop-nav-row {
+    padding: 6px 10px;
+    background-color: @tt_bg_darkest;
+    border-bottom: 1px solid @tt_border;
+}
+.loop-nav-btn {
+    background-color: @tt_bg_dark;
+    color: @tt_text_muted;
+    border: 1px solid @tt_border;
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 0;
+}
+.loop-nav-btn label {
+    padding: 0;
+    margin: 0;
+}
+.loop-nav-btn:hover {
+    background-color: @tt_border;
+    color: @tt_text;
+}
+.loop-nav-divider {
+    margin: 4px 12px;
+}
+.loop-nav-action {
+    color: @tt_accent;
+}
+.loop-nav-btn-active,
+.loop-nav-btn:checked {
+    background-color: @tt_accent;
+    color: @tt_bg_darkest;
+    border-color: @tt_accent;
+    font-weight: bold;
+}
+.loop-nav-btn-active:hover,
+.loop-nav-btn:checked:hover {
+    background-color: @tt_accent_light;
+}
+/* RN-2 Task 2: breadcrumb bar + live-context tray */
+.nav-breadcrumb-bar {
+    padding: 4px 12px;
+}
+.nav-crumb-link {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    min-height: 0;
+    color: @tt_accent;
+    font-weight: bold;
+}
+.nav-crumb-link:hover {
+    color: @tt_accent_light;
+    text-decoration: underline;
+}
+.nav-crumb-here {
+    color: @tt_text_muted;
+    font-weight: bold;
+}
+.nav-crumb-sep {
+    color: @tt_text_hint;
+}
+.nav-context-tray {
+    padding: 0 8px;
+}
+.nav-ctx-chip {
+    background-color: @tt_bg_dark;
+    border: 1px solid @tt_border;
+    border-radius: 12px;
+    padding: 2px 4px;
+}
+.nav-ctx-dot {
+    color: @tt_accent;
+    font-size: 10px;
+}
+.nav-ctx-open,
+.nav-ctx-close {
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    min-height: 0;
+    color: @tt_text;
+}
+.nav-ctx-open:hover,
+.nav-ctx-close:hover {
+    color: @tt_accent;
+}
+.discover-type-row {
+    padding: 6px 10px 0 10px;
 }
 .server-start-btn {
     background-color: @tt_bg_dark;
@@ -1390,6 +1504,31 @@ popover.picker-popover > contents {
 .log-footer-btn:hover {
     background: rgba(79, 209, 197, 0.25);
 }
+
+/* -- Possibilities wall ("Start something") on the Create surface ---------- */
+.possibilities-wall { padding: 6px 2px; }
+.possibilities-title { font-size: 20px; font-weight: bold; color: @tt_text; }
+.possibilities-surprise {
+    background-color: @tt_accent; color: @tt_bg_darkest;
+    border-radius: 10px; padding: 8px 16px; font-weight: bold;
+}
+.possibilities-card {
+    padding: 0; border-radius: 12px; border: 1px solid @tt_border;
+    background-color: @tt_bg_dark;
+}
+.possibilities-card:hover { border-color: @tt_accent; }
+.possibilities-cap {
+    padding: 8px 10px;
+    background-image: linear-gradient(to top, rgba(4,18,23,0.93), rgba(4,18,23,0.0));
+    border-radius: 0 0 12px 12px;
+}
+.possibilities-med { font-size: 13px; font-weight: bold; color: @tt_text; }
+.possibilities-eg { font-size: 11px; color: @tt_text_muted; }
+.possibilities-grad-icon { font-size: 34px; opacity: 0.55; }
+.poss-grad-image { background-image: linear-gradient(135deg, #123240, #3aa89e); }
+.poss-grad-video { background-image: linear-gradient(135deg, #123f4a, #e0a24a); }
+.poss-grad-gif   { background-image: linear-gradient(135deg, #1a2b4a, #7d3a8f); }
+.poss-grad-text  { background-image: linear-gradient(135deg, #0b1f28, #2b6373); }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -1407,8 +1546,32 @@ _VIDEO_CHIPS   = _load_chips_safe("video")
 _IMAGE_CHIPS   = _load_chips_safe("image")
 _ANIMATE_CHIPS = _load_chips_safe("animate")
 
-_THUMB_W = 200
-_THUMB_H = 112   # 16:9
+# Gallery-card tile sizing is centralised in gallery_layout.py (shared with
+# artgen_gallery.py -- see its docstring for the "why" of the uniform-size
+# fix). _THUMB_W/_THUMB_H are kept as local aliases since they're referenced
+# throughout this file (ffmpeg thumbnail dims, detail-panel sizing, etc.).
+_THUMB_W = gallery_layout.THUMB_W
+_THUMB_H = gallery_layout.THUMB_H   # 16:9
+_TILE_W = gallery_layout.TILE_W     # fixed OUTER card size -- both dimensions
+_TILE_H = gallery_layout.TILE_H
+
+
+def _gallery_density() -> str:
+    """
+    Return the live gallery-density setting ("comfortable" if never set).
+
+    Single accessor so every card constructor (read at BUILD time) and
+    `_apply_gallery_density` (read at menu-toggle time) resolve the setting
+    identically. "gallery_density" is deliberately absent from
+    `app_settings.DEFAULTS` (it's an opt-in toggle, only written once the
+    user actually switches density via the Discover menu), so a bare
+    `settings.get()` can return `None` — this centralises the
+    `or "comfortable"` fallback in one place instead of repeating it at
+    every call site.
+    """
+    return _settings.get("gallery_density") or "comfortable"
+
+
 _DETAIL_VIDEO_W = 400
 _DETAIL_VIDEO_H = 225
 
@@ -1469,19 +1632,158 @@ _SERVER_SCRIPTS: dict = {
     ("animate", ""):               ("start_animate.sh",         "Wan2.2-Animate"),
 }
 
+
+def _server_key_for_script(script_name: str) -> "str | None":
+    """Reverse-lookup a `server_manager.SERVERS` key from its launch script.
+
+    `_on_start_server`/`_on_stop_server` below resolve *which script* to run
+    from `_SERVER_SCRIPTS` (keyed by model_source/model_key, the legacy
+    Video/Image tab vocabulary) rather than a `server_manager.SERVERS` key
+    directly. `ModelStatusService.note_starting`/`note_stopping` need the
+    latter, so this bridges the two by matching on `ServerDef.script` — every
+    script in `_SERVER_SCRIPTS` corresponds to exactly one `SERVERS` entry.
+    Returns None (rather than raising) if no match is found, since a bad
+    match must never break the start/stop flow that calls it.
+    """
+    for key, sdef in _sm.SERVERS.items():
+        if sdef.script == script_name:
+            return key
+    return None
+
 # Maps short model keys to canonical model ID strings used in GenerationRecord.
 _VIDEO_MODEL_IDS: dict = {
     "wan2":         "wan2.2-t2v",
     "mochi":        "mochi-1-preview",
     "skyreels":     "skyreels-v2-i2v-14b-540p",
+    "wan2.2-i2v":   "wan2.2-i2v-a14b",
     "animatediff":  "animatediff-blackhole",
+    "animate":      "wan2.2-animate-14b",   # Video-model routing only; not a panel choice
 }
 _IMAGE_MODEL_IDS: dict = {
     "flux":           "flux.1-schnell",
+    "flux-dev":       "flux.1-dev",
     "sdxl":           "stable-diffusion-xl-base-1.0",
     "z-image-turbo":  "z-image-turbo",
     "motif":          "motif-image-6b-preview",
 }
+
+# Inverse of the two maps above: canonical server-side model id -> short key.
+# `create_param_panels.ImageParamPanel`/`VideoParamPanel.collect()` already
+# resolve their own "model" field to the CANONICAL id (they hold their own
+# duplicate copy of these dicts — see that module's CRITICAL STRATEGY note),
+# but `_on_generate`'s `model_id=` parameter expects the SHORT key (it does
+# `_IMAGE_MODEL_IDS.get(model_id or ..., default)` itself). CreateView's
+# `_on_create_generate` needs to invert back from canonical id to short key
+# before calling `_on_generate`, or every non-default model choice would
+# silently fall back to the default model.
+_IMAGE_MODEL_ID_TO_KEY: dict = {v: k for k, v in _IMAGE_MODEL_IDS.items()}
+_VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
+
+# SP-3a (decouple `_on_generate` from ControlPanel): the short-key fallbacks
+# `_on_generate` uses when a caller supplies neither an explicit
+# `video_model_key`/`image_model_key` nor a `model_id` it can resolve. These
+# mirror ControlPanel's own fresh-session defaults (`self._video_model =
+# "animatediff"`, `self._image_model = "flux"` in `ControlPanel.__init__`) so
+# a caller that omits model selection entirely still behaves the way it did
+# before `_on_generate` read those defaults off `self._controls`.
+_DEFAULT_VIDEO_KEY = "animatediff"
+_DEFAULT_IMAGE_KEY = "flux"
+
+# SP-3a follow-up fix (review finding): `_on_generate`'s AnimateDiff branch
+# indexes every one of these keys directly (`ad["mode"]`, `ad["chain_save"]`,
+# ...). Before this task, `ad` always came from a fresh
+# `self._controls.get_animatediff_args()` call, which — reading real GTK
+# widget state — ALWAYS returns every key. Now `ad` can be a caller-supplied
+# `animatediff_args` param that's `None` (a caller that never had AnimateDiff
+# in scope, e.g. an AnimateDiff `_QueueItem` persisted by a PRE-SP-3a build
+# and reloaded by `_restore_queue`, whose `queue.json` predates the
+# `"animatediff_args"` key entirely) or a partial dict. `_on_generate` merges
+# this default dict under whatever the caller passed
+# (`{**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}`) so a missing or
+# partial dict can never `KeyError`, while a full dict passes through
+# unchanged (caller values win). Values mirror
+# `ControlPanel._build_animatediff_box()`'s widget defaults exactly (see
+# `ControlPanel.get_animatediff_args()` a few hundred lines below — read that
+# method, not this comment, if the two ever drift).
+_ANIMATEDIFF_DEFAULTS: dict = dict(
+    mode="blackhole",
+    negative_prompt="blurry, low quality",
+    temporal_alpha=0.35,
+    lightning=False,
+    lightning_steps=4,
+    multi_chip=True,
+    device_id=None,
+    chain_from=None,
+    chain_save=False,
+    chain_alpha=0.6,
+    motion_adapter=None,
+    motion_adapter_alpha=1.0,
+    motion_adapter_skip=None,
+)
+
+
+def _theme_key_from_text(text: str) -> str:
+    """Map free text (Create's brief) to a `generate_theme.THEME_LIBRARY`
+    key by a loose, case-insensitive containment match against each key and
+    its display label.
+
+    SP-3d-1: `generate_theme.generate_theme()` only ever accepts a fixed
+    `theme_key` (or `""` for "pick randomly" — see that function's own
+    docstring); it has no free-text theme parameter to fork or extend. This
+    is how Create's "supply the theme text" launch actually influences which
+    theme gets used, without changing the backend's contract at all — the
+    same `generate_theme.generate_theme(theme_key=..., enhance=True)` call
+    ControlPanel's legacy Theme Set button already made. No match (including
+    an empty/blank brief) returns `""`, which `generate_theme.generate_theme`
+    already treats as "pick randomly" — identical to what ControlPanel's
+    Theme Set button did unconditionally (it never passed a theme_key at
+    all).
+    """
+    needle = (text or "").strip().lower()
+    if not needle:
+        return ""
+    import generate_theme
+    for key, spec in generate_theme.THEME_LIBRARY.items():
+        if key.replace("_", " ") in needle or spec.label.lower() in needle:
+            return key
+    return ""
+
+
+def _artgen_accepts_prompt(generator: str) -> bool:
+    """True if artgen generator *generator*'s own `add_args` declares a
+    `--prompt` argument (dest == "prompt").
+
+    Most artgen generators (verse/ansi/palette/landscape/…) have no common
+    `--prompt` flag at all — each has its own bespoke vocabulary (--theme,
+    --subject, --mood, …) — so `_create_generate_artgen` has always (by
+    design) skipped forwarding the idea-door's typed prompt to them: doing
+    so would raise an argparse "unrecognized argument" error.
+
+    The artgen "animatediff" plugin is the exception: `plugins/animatediff/
+    plugin.py`'s `add_args` DOES declare `--prompt` (default "a candle flame
+    flickering") — so when `_create_generate_artgen` skipped "prompt"
+    unconditionally, the user's typed prompt never reached it and every
+    AnimateDiff Create generation silently rendered the default candle
+    instead. This is the introspection this bug fix hangs the fix on: forward
+    "prompt" only for generators that actually declare it.
+
+    Reuses `create_param_panels._introspect_generator_args` — the SAME
+    "build a throwaway argparse.ArgumentParser, call the generator's own
+    add_args against it" approach `artgen_bool_flags` already relies on for
+    the FIX-3 bool-flag spelling — rather than duplicating that argparse
+    walk here. Same fail-soft contract: an unknown/broken generator name (or
+    any import/introspection failure) returns False, never raises — matching
+    the existing behavior of skipping "prompt" for every generator this
+    function doesn't recognize as accepting it.
+    """
+    try:
+        from create_param_panels import _introspect_generator_args
+        return any(
+            spec.dest == "prompt" for spec in _introspect_generator_args(generator)
+        )
+    except Exception:
+        return False
+
 
 # Phase markers for parsing server log output.  Each entry is (substring, phase_label).
 # Checked in order; the first match wins.  phase_label=None means no update (terminal state
@@ -1520,10 +1822,16 @@ def _apply_css() -> None:
 
 
 def _load_pixbuf(path: str, width: int, height: int) -> Optional[GdkPixbuf.Pixbuf]:
-    """Load and scale an image file; returns None on failure."""
+    """Load an image scaled to fit within width×height, preserving aspect ratio.
+
+    Uses new_from_file_at_scale(..., preserve_aspect_ratio=True) so the image is
+    fit (letterboxed) inside the box rather than force-stretched to it. The old
+    scale_simple(width, height) baked non-uniform distortion into the pixels for
+    any source whose aspect ratio didn't match the box (e.g. square 1024×1024
+    FLUX output in a 16:9 slot). Returns None on failure.
+    """
     try:
-        pb = GdkPixbuf.Pixbuf.new_from_file(path)
-        return pb.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, True)
     except Exception:
         return None
 
@@ -1545,24 +1853,33 @@ def _make_image_widget(path: str, width: int, height: int, placeholder: str = "�
 def _make_scalable_thumb(path: str, min_width: int, min_height: int,
                          placeholder: str = "🎬") -> Gtk.Widget:
     """
-    Load an image for gallery-card thumbnail display.  Unlike _make_image_widget
-    (which pre-scales to exact pixel dimensions), this version loads at the file's
-    native resolution and marks the Picture as expandable, so it fills the width
-    that the FlowBox cell allocates rather than being stuck at a fixed pixel size.
+    Build gallery-card thumbnail CONTENT: a Gtk.Picture that letterboxes
+    (aspect-preserving CONTAIN fit) into whatever area its container
+    allocates, or a placeholder Label if no thumbnail exists.
 
-    can_shrink=True  — widget may be allocated less than the image's natural size
-    hexpand=True     — widget fills the full horizontal cell width
-    size_request     — provides a hard minimum so cards never become too tiny
+    Regression note: this function used to ALSO call
+    `pic.set_size_request(min_width, min_height)` as a hard MINIMUM. That
+    only floors the widget's size — it does not cap it, so a Gtk.Picture's
+    own natural size (computed from the source image's intrinsic aspect
+    ratio when keep_aspect_ratio=True, the default) could still exceed that
+    floor for non-16:9 content (e.g. a square 1024x1024 image naturally
+    wants height == width, not the 16:9 floor), and Gtk.FlowBox
+    (non-homogeneous) honors that larger natural size — this was the root
+    cause of gallery cards growing/shrinking to match thumbnail aspect
+    ratio.  The caller now wraps this widget in
+    `gallery_layout.pin_fixed_zone(widget, THUMB_W, THUMB_H)`, which pins
+    the OUTER container's measured size regardless of this widget's own
+    natural size — so min_width/min_height are unused here and this widget
+    itself must NOT set its own size_request (that would just reintroduce a
+    (harmless, since it's overridden) but confusing floor).  Params are
+    kept for call-site/signature compatibility.
     """
     if path and Path(path).exists():
         pic = Gtk.Picture.new_for_filename(path)
         pic.set_can_shrink(True)
-        pic.set_hexpand(True)
-        pic.set_size_request(min_width, min_height)
+        pic.set_content_fit(Gtk.ContentFit.CONTAIN)
         return pic
     lbl = Gtk.Label(label=placeholder)
-    lbl.set_size_request(min_width, min_height)
-    lbl.set_hexpand(True)
     lbl.add_css_class("muted")
     return lbl
 
@@ -1584,6 +1901,35 @@ class _QueueItem:
     model_id: str = ""               # specific model within the category, e.g. "wan2", "mochi", "flux"
     job_id_override: str = ""        # non-empty → recovery item; skip submission, poll this job ID directly
     from_attractor: bool = False     # True → enqueued by TT-TV auto-gen; purged on attractor close
+    # SP-3a (decouple `_on_generate` from ControlPanel): captured at enqueue
+    # time (from whichever ControlPanel getter the enqueuing call site already
+    # had in hand) so `_start_next_queued` can replay the job without itself
+    # reading `self._controls` — `model_id` alone isn't enough because it's
+    # already a SHORT key (e.g. "wan2"), not the CANONICAL id that
+    # `_VIDEO_MODEL_ID_TO_KEY`/`_IMAGE_MODEL_ID_TO_KEY` invert, so those maps
+    # can't total-ly derive it back.
+    video_model_key: "str | None" = None    # e.g. "wan2" | "mochi" | "skyreels" | "animatediff"
+    image_model_key: "str | None" = None    # e.g. "flux" | "sdxl" | "z-image-turbo" | "motif"
+    animatediff_args: "dict | None" = None  # snapshot of get_animatediff_args() when relevant
+
+
+class _NativeGenerateGuardError(Exception):
+    """Raised by `MainWindow._native_generate_args` when a native medium's
+    collected params fail a hard pre-flight guard (currently only the
+    SkyReels-I2V "no seed image" case) and neither `_on_generate` nor
+    `_on_enqueue` should be called at all.
+
+    Deliberately just a message-carrying exception rather than a return-None
+    sentinel: `_create_generate_native` (the not-busy path) and
+    `_create_enqueue_native` (SP-3c-4's busy-path enqueue) need to react
+    DIFFERENTLY to the same guard failure — the former is the active job
+    itself, so it clears `_create_job_active` via `_fail_create_job`; the
+    latter is a REJECTED enqueue attempt for a job that never became active,
+    so it must leave the currently-running job's flag alone and only show a
+    status message. Keeping the guard logic itself in one place
+    (`_native_generate_args`) means both call sites can't drift out of sync
+    on what "invalid" means.
+    """
 
 
 # ── Forge plugin transform helpers ────────────────────────────────────────────
@@ -1631,7 +1977,7 @@ def _make_thumbnail_for(image_path: str, thumb_path: str) -> None:
 
 # ── Generation card ────────────────────────────────────────────────────────────
 
-class GenerationCard(Gtk.Frame):
+class GenerationCard(Gtk.Box):
     """
     Thumbnail card in the gallery. Click anywhere on the card to select it and
     show full details in the DetailPanel.
@@ -1639,30 +1985,70 @@ class GenerationCard(Gtk.Frame):
     Hover reveals: 🔀 Remix button, ☆/★ star toggle.
     select_cb(self) is called when the card is clicked.
     delete_cb(record) is called when the trash button is clicked.
-    remix_cb(record) is called when the Remix button is clicked (opens RemixPopover).
+    remix_cb is unused (Task 8: the former popover affordance is gone) — the
+      parameter survives only so callers passing it stay valid (always None now).
+    remix_as_pipeline_cb(record) is called when "🔀 Remix" is clicked
+      (opens Pipeline Studio's Muse scoped to this card's artifact) — this is
+      now the single remix affordance for the card.
     star_cb(record, starred: bool) is called when the star is toggled.
+
+    Base class is `Gtk.Box`, not `Gtk.Frame` (pre-density-fix history): a
+    plain Box has NO intrinsic themed border/chrome of its own (the ".card"
+    CSS class supplies border/radius/padding explicitly), whereas Gtk.Frame
+    draws its OWN ~1px border from GTK's built-in fallback stylesheet even
+    before any custom CSS loads. That extra, undeclared chrome sat on top of
+    whatever `self._card_zone` (see below) pinned the content to, so the
+    card's OWN measured size could never be pinned to an EXACT value -- only
+    to "pinned content size + a couple of untracked chrome pixels". Since
+    switching gallery density needs the card's measured size to land on
+    `gallery_layout.tile_size(density)` exactly (verified in tests via
+    `.measure()`), the base class had to lose that hidden offset.
     """
 
     def __init__(self, record: GenerationRecord, select_cb, delete_cb,
-                 remix_cb=None, star_cb=None, transform_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None,
+                 remix_as_pipeline_cb=None):
         super().__init__()
         self._record = record
         self._select_cb = select_cb
         self._delete_cb = delete_cb
-        self._remix_cb = remix_cb           # callable(record) or None — opens RemixPopover
+        self._remix_cb = remix_cb           # unused (Task 8: popover affordance removed); kept for signature compat
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb  # callable(record) or None — the single remix affordance, opens scoped Muse
         self._star_cb = star_cb             # callable(record, starred: bool) or None
         self._transform_cb = transform_cb   # callable(record, key: str) or None — forge transforms
         self._ctx_pop: "Gtk.Popover | None" = None   # only one right-click popover at a time
         self.add_css_class("card")
-        # Minimum card width; FlowBox packs cards at this natural width
-        # and expands them to fill the row, so actual width adapts to the pane size.
-        self.set_size_request(_THUMB_W + 20, -1)
+        # FIXED card tile size — BOTH dimensions, shared with the artgen
+        # gallery via gallery_layout.tile_size() — so every media-entry box
+        # is identical across every Discover tab and never resizes to match
+        # thumbnail content (see gallery_layout.py + _build's media zone,
+        # which pins the thumbnail area's measured size the same way).
+        #
+        # Resolved from the LIVE density setting at construction time (not
+        # the hardcoded comfortable constants) so a freshly-built card
+        # honors "compact" immediately if that's already the active density
+        # — previously every new GenerationCard was born at comfortable size
+        # regardless of the saved preference, only fixed up for
+        # ALREADY-BUILT cards (and even that was broken — see
+        # gallery_layout.set_pinned_size's docstring).
+        density = _gallery_density()
+        self._tile_w, self._tile_h = gallery_layout.tile_size(density)
+        self._thumb_w, self._thumb_h = gallery_layout.thumb_size(density)
+        self.set_size_request(self._tile_w, self._tile_h)
         self.set_hexpand(True)
+        # Hard boundary: nothing a card paints (a hover-swapped video, the
+        # revealed action bar, an oversized thumbnail) may escape the card's own
+        # bounds and overlap neighbouring cells. The pinned media/card zones clip
+        # their own content (gallery_layout.pin_fixed_zone), and this clips the
+        # card as a whole -- respecting the rounded border, so the clip follows
+        # the card's shape.
+        self.set_overflow(Gtk.Overflow.HIDDEN)
         self._build()
 
-        # Clicking anywhere on the card selects it in the detail panel.
+        # Clicking anywhere on the card selects it in the detail panel; a
+        # double click ALSO opens the record full-screen (see _on_pressed).
         gesture = Gtk.GestureClick()
-        gesture.connect("pressed", lambda *_: self._select_cb(self))
+        gesture.connect("pressed", self._on_pressed)
         self.add_controller(gesture)
 
         # Right-click: forge transform menu (remove background, describe, show depth…)
@@ -1678,6 +2064,37 @@ class GenerationCard(Gtk.Frame):
         motion.connect("leave", self._on_hover_leave)
         self.add_controller(motion)
 
+    def _on_pressed(self, _gesture, n_press: int, _x: float, _y: float) -> None:
+        """Primary-button press handler for the card's main GestureClick.
+
+        Single click (n_press == 1): select the card into the DetailPanel --
+        unchanged from the previous plain `lambda *_: self._select_cb(self)`.
+
+        Double click (n_press == 2): ALSO open the record full-screen in its
+        own window, mirroring DetailPanel's "⛶ View Full"/"⛶ Fullscreen"
+        buttons (`_open_fullscreen` / `_open_image_fullscreen`) but reachable
+        directly from the gallery card -- no round-trip through the right
+        pane required. `_select_cb` still fires on every press (including
+        both presses of a double-click); that's harmless since the first
+        press already populates the pane with this same record.
+
+        Guards mirror the DetailPanel methods exactly: images need
+        `image_exists`, everything else (video/animate/animatediff) needs
+        `video_exists`. `VideoPlayerWindow`/`ImageViewerWindow` are the same
+        module-level classes DetailPanel uses.
+        """
+        self._select_cb(self)
+        if n_press != 2:
+            return
+        record = self._record
+        if record.media_type == "image":
+            if record.image_exists:
+                win = ImageViewerWindow(record, self.get_root())
+                win.present()
+        elif record.video_exists:
+            win = VideoPlayerWindow(record, self.get_root())
+            win.present()
+
     def _on_right_click(self, gesture, n_press: int, x: float, y: float) -> None:
         """Build and show a forge-transform popover anchored to the click position."""
         if not self._transform_cb:
@@ -1685,9 +2102,10 @@ class GenerationCard(Gtk.Frame):
 
         # All available transforms: (plugin_key, intent → result label)
         all_transforms = [
-            ("rmbg",  "Remove background  →  transparent PNG"),
-            ("blip",  "Describe this  →  text caption"),
-            ("depth", "Show depth  →  depth map"),
+            ("rmbg",       "Remove background  →  transparent PNG"),
+            ("blip",       "Describe this  →  text caption"),
+            ("depth",      "Show depth  →  depth map"),
+            ("ansi-image", "Convert to ANSI art  →  .ans"),
         ]
         available = [(k, lbl) for k, lbl in all_transforms if _transform_available(k)]
         if not available:
@@ -1755,14 +2173,26 @@ class GenerationCard(Gtk.Frame):
         # Wrap the card content in a Gtk.Overlay so the selection checkbox
         # can float in the top-left corner without affecting the card layout.
         overlay = Gtk.Overlay()
-        self.set_child(overlay)
+        self.append(overlay)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
         box.set_margin_start(8)
         box.set_margin_end(8)
-        overlay.set_child(box)
+        # Pin the WHOLE card content's measured size to exactly
+        # (self._tile_w, self._tile_h), the same trick _media_zone below
+        # uses for the thumbnail -- otherwise the outer widget's
+        # set_size_request() above is only a MINIMUM floor, and the prompt/
+        # meta/button rows' own natural sizes (which don't shrink with
+        # density) can exceed a smaller "compact" floor, leaving the card
+        # visibly larger than tile_size("compact") despite the floor being
+        # set correctly. Stored as self._card_zone so _apply_gallery_density
+        # can resize an ALREADY-BUILT card in place via
+        # gallery_layout.set_pinned_size() (see its docstring for why
+        # set_size_request() alone can't do this).
+        self._card_zone = gallery_layout.pin_fixed_zone(box, self._tile_w, self._tile_h)
+        overlay.set_child(self._card_zone)
 
         # Checkbox overlay: hidden until selection mode is activated.
         # Positioned top-left; pointer events are swallowed by the checkbox so
@@ -1790,14 +2220,20 @@ class GenerationCard(Gtk.Frame):
         action_bar.add_css_class("hover-action-bar")
         action_bar.set_hexpand(True)
 
-        # Remix button — always present so any card can be remixed into a new generation.
-        remix_btn = Gtk.Button(label="🔀 Remix")
-        remix_btn.add_css_class("hover-action-btn")
-        remix_btn.add_css_class("hover-action-btn-remix")
-        remix_btn.set_can_focus(False)
-        remix_btn.set_tooltip_text("Remix this into a new generation")
-        remix_btn.connect("clicked", self._on_remix_clicked)
-        action_bar.append(remix_btn)
+        # Remix button — always present so any card can seed a Pipeline Studio
+        # remix. This used to be a parallel "Pipeline" button next to a
+        # separate 🔀 Remix popover button; the popover path is gone (Task 8:
+        # remix now means exactly one thing) so this is the single surviving
+        # affordance, relabeled to the canonical "🔀 Remix" name.
+        self._remix_as_pipeline_btn = Gtk.Button(label="🔀 Remix")
+        self._remix_as_pipeline_btn.add_css_class("hover-action-btn")
+        self._remix_as_pipeline_btn.add_css_class("hover-action-btn-remix")
+        self._remix_as_pipeline_btn.set_can_focus(False)
+        self._remix_as_pipeline_btn.set_tooltip_text(
+            "Remix this into a pipeline"
+        )
+        self._remix_as_pipeline_btn.connect("clicked", self._on_remix_as_pipeline_clicked)
+        action_bar.append(self._remix_as_pipeline_btn)
 
         # Star toggle — always present so every card type can be starred.
         self._star_btn = Gtk.Button(label="★" if self._record.starred else "☆")
@@ -1810,6 +2246,10 @@ class GenerationCard(Gtk.Frame):
 
         self._action_revealer.set_child(action_bar)
         overlay.add_overlay(self._action_revealer)
+        # Clip the hover action bar to the card bounds so a too-wide bar can
+        # never paint past the tile into the neighbouring card (clip_overlay
+        # defaults to False — that was the "hover goes wider than the box").
+        overlay.set_clip_overlay(self._action_revealer, True)
 
         # Media area: thumbnail normally; hover swaps in a silent looping video preview.
         # The stack expands horizontally so the thumbnail fills the FlowBox cell width.
@@ -1818,22 +2258,17 @@ class GenerationCard(Gtk.Frame):
         self._media_stack.set_transition_duration(120)
         self._media_stack.set_hexpand(True)
 
-        # Use _make_scalable_thumb so the thumbnail grows with the card width
-        # instead of being clamped to the fixed _THUMB_W pixel value.
         placeholder = "🖼" if self._record.media_type == "image" else "🎬"
         thumb = _make_scalable_thumb(
             self._record.thumbnail_path if self._record.thumbnail_exists else "",
-            _THUMB_W, _THUMB_H, placeholder,
+            self._thumb_w, self._thumb_h, placeholder,
         )
         self._media_stack.add_named(thumb, "thumb")
 
         # GIFs (AnimateDiff) use GdkPixbufAnimationIter instead of GStreamer —
         # GStreamer's gifparse plugin does not support reliable seeking so the
         # notify::ended → seek(0) loop that works for MP4s fails silently for GIFs.
-        _is_gif = (
-            self._record.media_type == "animatediff"
-            or self._record.video_path.endswith(".gif")
-        )
+        _is_gif = self._record.video_path.endswith(".gif")
         self._gif_pic: "Gtk.Picture | None" = None
         self._gif_iter: "GdkPixbuf.PixbufAnimationIter | None" = None
         self._gif_timer_id: "int | None" = None
@@ -1843,7 +2278,7 @@ class GenerationCard(Gtk.Frame):
             # correctly without any GStreamer pipeline.
             self._gif_pic = Gtk.Picture()
             self._gif_pic.set_hexpand(True)
-            self._gif_pic.set_size_request(_THUMB_W, _THUMB_H)
+            self._gif_pic.set_size_request(self._thumb_w, self._thumb_h)
             self._gif_pic.set_content_fit(Gtk.ContentFit.COVER)
             self._media_stack.add_named(self._gif_pic, "video")
             self._hover_video = None
@@ -1858,7 +2293,7 @@ class GenerationCard(Gtk.Frame):
             self._hover_video.set_autoplay(False)
             self._hover_video.set_loop(True)
             self._hover_video.set_hexpand(True)
-            self._hover_video.set_size_request(_THUMB_W, _THUMB_H)
+            self._hover_video.set_size_request(self._thumb_w, self._thumb_h)
             self._media_stack.add_named(self._hover_video, "video")
             self._hover_gst = None   # macOS-only; always None on Linux
         elif self._record.video_exists:
@@ -1867,7 +2302,7 @@ class GenerationCard(Gtk.Frame):
             # without needing to recompile GTK4.
             self._hover_gst = GstPlayer(muted=True)
             self._hover_gst.widget.set_hexpand(True)
-            self._hover_gst.widget.set_size_request(_THUMB_W, _THUMB_H)
+            self._hover_gst.widget.set_size_request(self._thumb_w, self._thumb_h)
             self._media_stack.add_named(self._hover_gst.widget, "video")
             self._hover_video = None
         else:
@@ -1885,7 +2320,20 @@ class GenerationCard(Gtk.Frame):
         # instead of set_file / set_filename directly.
         self._hover_pipeline_open: bool = False
 
-        box.append(self._media_stack)
+        # Pin the media zone's MEASURED size to a fixed self._thumb_w x
+        # self._thumb_h, regardless of the thumbnail's / hover-video's own
+        # aspect ratio — this is the fix for cards growing/shrinking to
+        # match content (a square image otherwise requests height == width,
+        # taller than the 16:9 floor, and Gtk.FlowBox honors that larger
+        # natural request). See gallery_layout.pin_fixed_zone for the
+        # mechanism. Stored as self._media_zone so tests can assert its
+        # measured size directly, and so _apply_gallery_density can resize
+        # it in place via gallery_layout.set_pinned_size() when density
+        # changes after this card is already built.
+        self._media_zone = gallery_layout.pin_fixed_zone(
+            self._media_stack, self._thumb_w, self._thumb_h
+        )
+        box.append(self._media_zone)
 
         # Prompt (2-line max, tooltip shows full text)
         prompt_lbl = Gtk.Label(label=self._record.prompt)
@@ -1932,9 +2380,7 @@ class GenerationCard(Gtk.Frame):
         # Buttons: Save, Iterate, and Trash (play/fullscreen are in the detail panel).
         # Trash is right-aligned to keep it visually separated from the safe actions.
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        is_gif = self._record.media_type == "animatediff" or (
-            self._record.video_path.endswith(".gif")
-        )
+        is_gif = self._record.video_path.endswith(".gif")
         export_label = "💾 Save GIF" if is_gif else (
             "💾 Save" if self._record.media_type == "image" else "💾 Save"
         )
@@ -2223,10 +2669,10 @@ class GenerationCard(Gtk.Frame):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _on_remix_clicked(self, _btn) -> None:
-        """Open the RemixPopover for this card when the 🔀 Remix button is clicked."""
-        if self._remix_cb:
-            self._remix_cb(self._record)
+    def _on_remix_as_pipeline_clicked(self, _btn) -> None:
+        """Open Pipeline Studio's Muse for this card when "🔀 Remix" is clicked."""
+        if self._remix_as_pipeline_cb:
+            self._remix_as_pipeline_cb(self._record)
 
     def _on_trash_clicked(self, btn) -> None:
         """Propagate the delete request upward; prevent the click from selecting the card."""
@@ -2245,6 +2691,20 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
+def _short_title(text: "str | None", limit: int = 40) -> str:
+    """Derive a short breadcrumb-leaf title from a record's prompt.
+
+    Guards against a missing/empty prompt (artgen records in particular may
+    carry no prose prompt at all) rather than assuming callers always have
+    one, and truncates to keep the breadcrumb bar from overflowing on a long
+    generation prompt.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "Untitled"
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 # ── Detail panel ───────────────────────────────────────────────────────────────
 
 class DetailPanel(Gtk.ScrolledWindow):
@@ -2261,6 +2721,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         self.set_size_request(420, -1)
         self._record: Optional[GenerationRecord] = None
         self._remix_cb = None
+        self._remix_as_pipeline_cb = None
         self._video_widget: Optional[Gtk.Video] = None
         # macOS inline player via gtk4paintablesink; always None on Linux
         self._gst_player = None
@@ -2324,10 +2785,11 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_gif_pic = None
         self._show_empty()
 
-    def show_record(self, record: GenerationRecord, remix_cb) -> None:
+    def show_record(self, record: GenerationRecord, remix_cb, remix_as_pipeline_cb=None) -> None:
         """Populate the panel with a completed generation record."""
         self._record = record
         self._remix_cb = remix_cb
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb
 
         # Unload the previous video pipeline before replacing it.  Calling
         # set_file(None) starts GStreamer teardown immediately; without it the
@@ -2410,10 +2872,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             img_ctrl.append(open_full_btn)
             content.append(img_ctrl)
         elif record.video_exists:
-            _is_gif = (
-                record.media_type == "animatediff"
-                or record.video_path.endswith(".gif")
-            )
+            _is_gif = record.video_path.endswith(".gif")
             if _is_gif:
                 # GIF: drive via GdkPixbufAnimationIter (GStreamer seek unreliable)
                 self._detail_gif_pic = Gtk.Picture()
@@ -2543,7 +3002,14 @@ class DetailPanel(Gtk.ScrolledWindow):
             else:
                 # Linux (or macOS with GStreamer backend): inline Gtk.Video player
                 self._video_widget = Gtk.Video.new_for_filename(record.video_path)
-                self._video_widget.set_autoplay(False)
+                # Autoplay on selection (parity with the macOS GstPlayer path +
+                # the hover preview): clicking a video card in the library plays
+                # it in the detail pane immediately, no ▶ Play click needed. With
+                # autoplay True GTK drives playback, so set_loop(True) actually
+                # loops (the loop-restart caveat in CLAUDE.md is only for
+                # manually driving get_media_stream().play()). The play button
+                # below therefore starts as "⏸ Pause".
+                self._video_widget.set_autoplay(True)
                 self._video_widget.set_loop(True)
                 self._video_widget.set_size_request(_DETAIL_VIDEO_W, _DETAIL_VIDEO_H)
                 self._video_widget.set_hexpand(False)
@@ -2582,7 +3048,8 @@ class DetailPanel(Gtk.ScrolledWindow):
                 GLib.timeout_add(200, _connect_stream_error)
 
                 ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-                self._play_btn = Gtk.Button(label="▶ Play")
+                # Starts as Pause because the video autoplays on selection (above).
+                self._play_btn = Gtk.Button(label="⏸ Pause")
                 self._play_btn.connect("clicked", self._toggle_play)
                 ctrl_row.append(self._play_btn)
                 full_btn = Gtk.Button(label="⛶ Fullscreen")
@@ -2748,9 +3215,7 @@ class DetailPanel(Gtk.ScrolledWindow):
         content.append(sep)
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        is_gif_detail = record.media_type == "animatediff" or (
-            record.video_path.endswith(".gif")
-        )
+        is_gif_detail = record.video_path.endswith(".gif")
         export_label = "💾 Export GIF" if is_gif_detail else (
             "💾 Export" if record.media_type == "image" else "💾 Export"
         )
@@ -2787,11 +3252,16 @@ class DetailPanel(Gtk.ScrolledWindow):
         self._detail_star_btn.connect("clicked", self._on_detail_star_clicked)
         action_row.append(self._detail_star_btn)
 
-        remix_btn = Gtk.Button(label="🔀 Remix")
-        remix_btn.add_css_class("action-btn")
-        remix_btn.set_tooltip_text("Remix this into a new generation")
-        remix_btn.connect("clicked", self._on_remix_clicked)
-        action_row.append(remix_btn)
+        # Single remix affordance (Task 8): opens Pipeline Studio's Muse
+        # scoped to this record. The former parallel 🔀 Remix popover button
+        # is gone; this is relabeled to the canonical name.
+        self._remix_as_pipeline_btn = Gtk.Button(label="🔀 Remix")
+        self._remix_as_pipeline_btn.add_css_class("action-btn")
+        self._remix_as_pipeline_btn.set_tooltip_text(
+            "Remix this into a pipeline"
+        )
+        self._remix_as_pipeline_btn.connect("clicked", self._on_remix_as_pipeline_clicked)
+        action_row.append(self._remix_as_pipeline_btn)
         content.append(action_row)
 
         self.set_child(content)
@@ -2815,7 +3285,7 @@ class DetailPanel(Gtk.ScrolledWindow):
             return
         self._nav_idx = (self._nav_idx + delta) % len(self._nav_records)
         rec = self._nav_records[self._nav_idx]
-        self.show_record(rec, self._remix_cb)
+        self.show_record(rec, self._remix_cb, self._remix_as_pipeline_cb)
 
     def _on_detail_star_clicked(self, _btn) -> None:
         """Toggle the starred state for the currently displayed record."""
@@ -3085,13 +3555,10 @@ class DetailPanel(Gtk.ScrolledWindow):
         if dest:
             shutil.move(tmp_path, dest)
 
-    def _on_remix_clicked(self, btn) -> None:
-        """Open a RemixPopover anchored to the Remix button in the detail panel."""
-        if self._record and self._remix_cb:
-            from remix_popover import RemixPopover
-            pop = RemixPopover(self._record, on_remix=self._remix_cb)
-            pop.set_parent(btn)
-            pop.popup()
+    def _on_remix_as_pipeline_clicked(self, _btn) -> None:
+        """Open Pipeline Studio's Muse scoped to the displayed record."""
+        if self._record and self._remix_as_pipeline_cb:
+            self._remix_as_pipeline_cb(self._record)
 
 
 # ── Full-size video player window ─────────────────────────────────────────────
@@ -3103,7 +3570,17 @@ class VideoPlayerWindow(Gtk.Window):
     Opens maximized by default. Supports:
       - Escape / clicking the close button → closes window, pauses video
       - F key or the ⛶ button → toggle fullscreen
-      - Space → play / pause
+      - Space → play / pause (GIF branch below pauses/resumes the frame timer
+        via `AnimatedGifWidget.toggle_playing()` -- see `_toggle_play`)
+
+    GIF branch: AnimateDiff `.gif` records (any video_path literally ending
+    in ".gif") are NOT played via Gtk.Video --
+    the app avoids Gtk.Video for gifs everywhere else (DetailPanel drives them
+    frame-by-frame via GdkPixbufAnimationIter instead, since GStreamer seeking
+    on a gif is unreliable) -- so the fullscreen window uses the same
+    self-driving `artgen_render.AnimatedGifWidget` the Discover galleries use.
+    Everything else (maximize/F/Escape/title/layout/control strip) is
+    identical between the two branches.
     """
 
     def __init__(self, record: "GenerationRecord", parent_window: Gtk.Window):
@@ -3120,10 +3597,17 @@ class VideoPlayerWindow(Gtk.Window):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_child(outer)
 
-        # ── Video player ──────────────────────────────────────────────────────
-        self._video = Gtk.Video.new_for_filename(record.video_path)
-        self._video.set_autoplay(True)
-        self._video.set_loop(True)
+        # ── Video / GIF player ───────────────────────────────────────────────
+        is_gif = record.video_path.endswith(".gif")
+        if is_gif:
+            # Self-driving animated Gtk.Picture -- same widget the Discover
+            # galleries use for gif thumbnails/hover-preview. It manages its
+            # own GLib timer and cancels it on unrealize (i.e. window close).
+            self._video = AnimatedGifWidget(record.video_path)
+        else:
+            self._video = Gtk.Video.new_for_filename(record.video_path)
+            self._video.set_autoplay(True)
+            self._video.set_loop(True)
         self._video.set_vexpand(True)
         self._video.set_hexpand(True)
         outer.append(self._video)
@@ -3161,6 +3645,17 @@ class VideoPlayerWindow(Gtk.Window):
         self.maximize()
 
     def _toggle_play(self, _btn) -> None:
+        # AnimatedGifWidget (the GIF branch) is a plain Gtk.Picture -- it has
+        # no media stream, so it can't be driven through Gtk.MediaStream's
+        # play()/pause(). gif-hygiene fix 2: route Pause/Space through its
+        # own toggle_playing() API instead of no-opping, so the button/key
+        # genuinely pause/resume the gif's frame-advance timer.
+        if isinstance(self._video, AnimatedGifWidget):
+            playing = self._video.toggle_playing()
+            self._play_pause_btn.set_label("⏸ Pause" if playing else "▶ Play")
+            return
+        if not hasattr(self._video, "get_media_stream"):
+            return
         stream = self._video.get_media_stream()
         if stream is None:
             return
@@ -3277,27 +3772,51 @@ class ImageViewerWindow(Gtk.Window):
 
 # ── Pending card ───────────────────────────────────────────────────────────────
 
-class PendingCard(Gtk.Frame):
-    """Animated placeholder card shown while a generation is running."""
+class PendingCard(Gtk.Box):
+    """
+    Animated placeholder card shown while a generation is running.
+
+    Base class is `Gtk.Box`, not `Gtk.Frame` — same reasoning as
+    `GenerationCard` (see its class docstring): Frame's own intrinsic
+    themed border adds a couple of untracked pixels on top of whatever
+    `self._card_zone` pins the content to, which breaks an EXACT match to
+    `gallery_layout.tile_size(density)`.
+    """
 
     def __init__(self, prompt: str = "", model_source: str = "video"):
         super().__init__()
         self.add_css_class("card")
-        # Width matches GenerationCard; height is unconstrained but anchored by
-        # the fixed-size visual placeholder below so FlowBox cells stay uniform.
-        self.set_size_request(_THUMB_W + 20, -1)
+        # FIXED tile size, matching GenerationCard exactly (see
+        # gallery_layout.py) so a pending job's placeholder is never a
+        # different size than the finished card that will replace it.
+        # Resolved from the LIVE density setting at construction time (see
+        # GenerationCard.__init__ for why this matters — a freshly-spawned
+        # PendingCard used to always be comfortable-sized regardless of the
+        # active density).
+        density = _gallery_density()
+        self._tile_w, self._tile_h = gallery_layout.tile_size(density)
+        thumb_w, thumb_h = gallery_layout.thumb_size(density)
+        self.set_size_request(self._tile_w, self._tile_h)
         self.set_hexpand(True)
         self._start = time.monotonic()
         self._timer_id: Optional[int] = None
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.set_child(outer)
+        # Pin the WHOLE card's measured size to exactly (self._tile_w,
+        # self._tile_h) -- same trick as GenerationCard._card_zone (see its
+        # comment) and required for the same reason: the outer
+        # set_size_request() above is only a floor, and the footer/prompt
+        # rows below don't shrink with density on their own. Stored as
+        # self._card_zone so _apply_gallery_density can resize an
+        # ALREADY-BUILT pending card in place.
+        self._card_zone = gallery_layout.pin_fixed_zone(outer, self._tile_w, self._tile_h)
+        self.append(self._card_zone)
 
         # Fixed-size thumbnail area matching GenerationCard's media zone.
         # Anchors the FlowBox cell height so the gallery stays uniform while a
         # job is in progress — the pending card won't be taller than a completed card.
         thumb_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        thumb_area.set_size_request(_THUMB_W, _THUMB_H)
+        thumb_area.set_size_request(thumb_w, thumb_h)
         thumb_area.set_hexpand(False)   # children must not push this box wider
         thumb_area.set_valign(Gtk.Align.CENTER)
         thumb_area.add_css_class("pending-thumb-area")
@@ -3403,13 +3922,15 @@ class GalleryWidget(Gtk.Box):
     _PAGE_SIZE = 48  # cards per page — ~4 rows of 4 at comfortable density
 
     def __init__(self, select_cb, delete_cb, media_type: str = "video",
-                 remix_cb=None, star_cb=None, transform_cb=None):
+                 remix_cb=None, star_cb=None, transform_cb=None,
+                 remix_as_pipeline_cb=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_vexpand(True)
         self.set_hexpand(True)
         self._select_cb = select_cb        # select_cb(record: GenerationRecord) called on click
         self._delete_cb = delete_cb        # delete_cb(record: GenerationRecord) called on trash
-        self._remix_cb = remix_cb          # callable(record) or None — opens RemixPopover
+        self._remix_cb = remix_cb          # unused (Task 8: popover affordance removed); kept for signature compat
+        self._remix_as_pipeline_cb = remix_as_pipeline_cb  # callable(record) or None — the single remix affordance, opens scoped Muse
         self._star_cb = star_cb            # callable(record, starred: bool) or None
         self._transform_cb = transform_cb  # callable(record, key) or None — forge transforms
         self._media_type = media_type
@@ -3447,17 +3968,20 @@ class GalleryWidget(Gtk.Box):
         self._scroll.set_hexpand(True)
         self._scroll.set_vexpand(True)
 
+        # FlowBox grid settings -- IDENTICAL to the artgen gallery
+        # (ArtgenGallery._flow in artgen_gallery.py), sourced from
+        # gallery_layout.py so switching Discover tabs never changes the grid.
         self._flow = Gtk.FlowBox()
-        self._flow.set_column_spacing(12)
-        self._flow.set_row_spacing(12)
+        self._flow.set_column_spacing(gallery_layout.FLOW_COLUMN_SPACING)
+        self._flow.set_row_spacing(gallery_layout.FLOW_ROW_SPACING)
         self._flow.set_margin_top(4)
         self._flow.set_margin_bottom(12)
         self._flow.set_margin_start(12)
         self._flow.set_margin_end(12)
         self._flow.set_homogeneous(False)   # cards pack at natural width; extra space adds columns
         self._flow.set_selection_mode(Gtk.SelectionMode.NONE)  # selection handled manually
-        self._flow.set_min_children_per_line(2)
-        self._flow.set_max_children_per_line(8)
+        self._flow.set_min_children_per_line(gallery_layout.FLOW_MIN_CHILDREN_PER_LINE)
+        self._flow.set_max_children_per_line(gallery_layout.FLOW_MAX_CHILDREN_PER_LINE)
         self._flow.set_halign(Gtk.Align.FILL)
         self._flow.set_valign(Gtk.Align.START)
         self._scroll.set_child(self._flow)
@@ -3588,6 +4112,7 @@ class GalleryWidget(Gtk.Box):
             remix_cb=self._remix_cb,
             star_cb=self._star_cb,
             transform_cb=self._transform_cb,
+            remix_as_pipeline_cb=self._remix_as_pipeline_cb,
         )
 
     def delete_card(self, record_id: str) -> None:
@@ -3724,63 +4249,14 @@ class GalleryWidget(Gtk.Box):
             self._pager_next.set_sensitive(self._page < n_pages - 1)
 
 
-# ── Control panel ──────────────────────────────────────────────────────────────
+# ── Model/source key-space helpers (ControlPanel deleted, SP-3d-5) ─────────────
+# These two maps are the survivors of the old ControlPanel-era model/source
+# vocabulary. Everything else that used to live here — _MODEL_TO_SOURCE,
+# _MODEL_TO_VIDEO_KEY, _MODEL_DISPLAY_SERVER, _MODEL_TO_SERVER_KEY,
+# _MODEL_TO_CAP, _MODEL_TO_IMAGE_KEY — was read only by ControlPanel's own
+# internals (health-poller re-apply, SHOT panel, etc.) and was deleted
+# alongside the class in SP-3d-5; nothing surviving ever read them.
 
-# Maps server model ID → UI source tab key.
-# Used by both ControlPanel.set_server_state() and MainWindow._on_health_result().
-_MODEL_TO_SOURCE: dict = {
-    "wan2.2-t2v":            "video",
-    "mochi-1-preview":       "video",
-    "skyreels-v2-i2v-14b-540p": "video",
-    # Full model names as reported by the inference server's /v1/models endpoint
-    "SkyReels-V2-I2V-14B-540P": "video",
-    "Skywork/SkyReels-V2-I2V-14B-540P": "video",
-    "wan2.2-animate-14b":    "animate",
-    "flux.1-schnell":        "image",
-    "z-image-turbo":         "image",
-    "Z-Image-Turbo":         "image",
-    "motif-image-6b-preview": "image",
-    "Motif-Image-6B-Preview": "image",
-}
-# Maps server model ID → internal video-model key used by ControlPanel
-_MODEL_TO_VIDEO_KEY: dict = {
-    "wan2.2-t2v":            "wan2",
-    "mochi-1-preview":       "mochi",
-    "skyreels-v2-i2v-14b-540p": "skyreels",
-    # Full model names as reported by the inference server's /v1/models endpoint
-    "SkyReels-V2-I2V-14B-540P": "skyreels",
-    "Skywork/SkyReels-V2-I2V-14B-540P": "skyreels",
-}
-_MODEL_DISPLAY_SERVER: dict = {
-    "wan2.2-t2v":            "Wan2.2 online",
-    "mochi-1-preview":       "Mochi-1 online",
-    "skyreels-v2-i2v-14b-540p": "SkyReels I2V online",
-    # Full model names as reported by the inference server's /v1/models endpoint
-    "SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
-    "Skywork/SkyReels-V2-I2V-14B-540P": "SkyReels I2V online",
-    "wan2.2-animate-14b":    "Animate-14B online",
-    "flux.1-schnell":        "FLUX online",
-    "z-image-turbo":         "Z-Image-Turbo online",
-    "Z-Image-Turbo":         "Z-Image-Turbo online",
-    "motif-image-6b-preview": "Motif online",
-    "Motif-Image-6B-Preview": "Motif online",
-}
-# Maps server model ID (from /tt-liveness) → server_manager key ("wan2.2", "flux", …)
-_MODEL_TO_SERVER_KEY: dict = {
-    "wan2.2-t2v":                        "wan2.2",
-    "mochi-1-preview":                   "mochi",
-    "skyreels-v2-i2v-14b-540p":          "skyreels",
-    "SkyReels-V2-I2V-14B-540P":          "skyreels",
-    "Skywork/SkyReels-V2-I2V-14B-540P":  "skyreels",
-    "wan2.2-animate-14b":                "animate",
-    "flux.1-schnell":                    "flux",
-    "tt-sdxl-trace":                     "sdxl",
-    "stable-diffusion-xl-base-1.0":      "sdxl",
-    "z-image-turbo":                     "z-image-turbo",
-    "Z-Image-Turbo":                     "z-image-turbo",
-    "motif-image-6b-preview":            "motif",
-    "Motif-Image-6B-Preview":            "motif",
-}
 # Maps server key → (source_tab, image_model_key or video_model_key) for startup pre-selection
 _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "wan2.2":         ("video",   "wan2"),
@@ -3792,28 +4268,6 @@ _SERVER_KEY_TO_SOURCE_MODEL: dict = {
     "motif":          ("image",   "motif"),
     "animate":        ("animate", ""),
 }
-# Maps server model ID → capability key (for capability-centric status labels)
-_MODEL_TO_CAP: dict = {
-    "wan2.2-t2v":                       "video",
-    "mochi-1-preview":                  "video",
-    "skyreels-v2-i2v-14b-540p":         "video",
-    "SkyReels-V2-I2V-14B-540P":         "video",
-    "Skywork/SkyReels-V2-I2V-14B-540P": "video",
-    "wan2.2-animate-14b":               "animate",
-    "flux.1-schnell":                   "image",
-    "z-image-turbo":                    "image",
-    "Z-Image-Turbo":                    "image",
-    "motif-image-6b-preview":           "image",
-    "Motif-Image-6B-Preview":           "image",
-}
-# Maps server model ID → internal image-model key used by ControlPanel
-_MODEL_TO_IMAGE_KEY: dict = {
-    "flux.1-schnell":         "flux",
-    "z-image-turbo":          "z-image-turbo",
-    "Z-Image-Turbo":          "z-image-turbo",
-    "motif-image-6b-preview": "motif",
-    "Motif-Image-6B-Preview": "motif",
-}
 # Maps source tab key → capability key
 _SOURCE_TO_CAP: dict = {
     "video":   "video",
@@ -3821,2599 +4275,6 @@ _SOURCE_TO_CAP: dict = {
     "image":   "image",
     "artgen":  "artgen",
 }
-
-class ControlPanel(Gtk.Box):
-    """
-    Left panel: prompt fields, parameters, seed image, server status,
-    generate/cancel/recover buttons, and the prompt queue.
-    """
-
-    def __init__(
-        self,
-        on_generate,       # (prompt, neg, steps, seed, seed_image_path, model_source, guidance_scale, ref_video_path="", ref_char_path="", animate_mode, model_id) -> None
-        on_enqueue,        # same signature
-        on_cancel,         # () -> None
-        on_start_server,   # (model_source: str) -> None
-        on_stop_server,    # () -> None
-        on_source_change,  # (model_source: str) -> None — called after the mode toggle switches
-        on_start_prompt_gen = None,  # () -> None — launch start_prompt_gen.sh --gui
-        on_inspire = None,           # (source: str, seed_text: str) -> None — start generation thread
-        on_theme_queue = None,       # (source: str) -> None — generate & popover a 5-shot theme set
-        on_open_playlist = None,       # (playlist_id: str | None) -> None — open TT-TV for a playlist
-        on_open_model_playlist = None, # (model_id: str) -> None — open TT-TV filtered by model
-        on_enter_selection_mode = None,  # (playlist_id: str) -> None — enter grid selection mode
-        on_open_attractor = None,      # () -> None — launch TT-TV (used by animatediff endless btn)
-    ):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self._on_generate = on_generate
-        self._on_enqueue = on_enqueue
-        self._on_cancel = on_cancel
-        self._on_start_server = on_start_server
-        self._on_stop_server = on_stop_server
-        self._on_source_change = on_source_change
-        self._on_start_prompt_gen = on_start_prompt_gen or (lambda: None)
-        self._on_inspire = on_inspire or (lambda s, t: None)
-        self._on_theme_queue = on_theme_queue or (lambda s: None)
-        self._on_open_playlist = on_open_playlist or (lambda pid: None)
-        self._on_open_model_playlist = on_open_model_playlist or (lambda mid: None)
-        self._on_enter_selection_mode = on_enter_selection_mode or (lambda pid: None)
-        self._on_open_attractor = on_open_attractor or (lambda: None)
-        self._theme_generating: bool = False  # True while theme generation is in progress
-        # ── Prompt gen server state ───────────────────────────────────────────
-        self._prompt_gen_ready: bool = False      # True when port 8001 health check passes
-        self._prompt_gen_starting: bool = False   # True while start_prompt_gen.sh is running
-        self._prompt_gen_generating: bool = False # True while waiting for generate_prompt()
-        self._confirm_box_visible: bool = False   # True while inline confirm box is shown
-        # ── SHOT panel server state ───────────────────────────────────────────
-        # Tracks which video model server is detected as running so the SHOT
-        # panel badge can display accurate status without querying the server
-        # again on every render.
-        self._shot_server_ready: bool = False
-        self._shot_alt_model_key: "str | None" = None
-        # Source + seed captured at click time for auto-generate after server starts
-        self._inspire_pending_source: "str | None" = None
-        self._inspire_pending_seed: str = ""
-        self._seed_image_path = ""
-        # ── Generation state (source of truth for _on_action_clicked) ─────────
-        # These replace direct spin-widget reads so the Advanced dialog and the
-        # new named buttons can both drive the same values.
-        self._steps: int = int(_settings.get("quality_steps") or 20)
-        self._seed: int = -1          # -1 = random
-        self._neg: str = ""
-        self._guidance: float = 3.5
-        self._animate_mode = "animation"
-        self._server_ready = False
-        self._running_model: "str | None" = None  # model ID from /v1/models, or None
-        self._adv_dialog: "AdvancedSettingsDialog | None" = None  # opened from context menu → Advanced Settings…
-        self._server_launching = False   # True while start/stop script is running
-        self._busy = False
-        self._model_source = "video"   # "video", "image", or "animate"
-        self._video_model: str = "animatediff"   # default; overridden by last_successful_deployment or server health check
-        self._image_model: str = "flux"   # "flux" | "sdxl" | "z-image-turbo" | "motif"
-        self.set_margin_top(12)
-        self.set_margin_bottom(12)
-        self.set_margin_start(12)
-        self.set_margin_end(12)
-        self.set_size_request(310, -1)
-        self._build()
-
-    def _section(self, text: str) -> Gtk.Label:
-        lbl = Gtk.Label(label=text.upper())
-        lbl.set_xalign(0)
-        lbl.add_css_class("section-label")
-        return lbl
-
-    def _build(self) -> None:
-        # ── Toolbar (lives outside the panel scroll area, pinned at the top of the
-        #    window by MainWindow._build_ui).  Contains the logo/title, source toggle,
-        #    and model selector so the scrollable control panel can focus entirely on
-        #    prompt composition.
-        self._toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._toolbar_box.add_css_class("tt-toolbar")
-
-        # Logo + title
-        _logo_path = str(Path(__file__).parent / "assets" / "tenstorrent.png")
-        _logo_img = Gtk.Image.new_from_file(_logo_path)
-        _logo_img.set_pixel_size(22)
-        self._toolbar_box.append(_logo_img)
-        self._title_lbl = Gtk.Label(label="TT Local Generator")
-        self._title_lbl.add_css_class("tt-toolbar-title")
-        attrs = Pango.AttrList()
-        attrs.insert(Pango.AttrFontDesc.new(
-            Pango.FontDescription.from_string("sans bold 13")))
-        self._title_lbl.set_attributes(attrs)
-        self._toolbar_box.append(self._title_lbl)
-
-        # Divider
-        _tb_sep1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        _tb_sep1.set_margin_start(6)
-        _tb_sep1.set_margin_end(6)
-        _tb_sep1.set_margin_top(6)
-        _tb_sep1.set_margin_bottom(6)
-        self._toolbar_box.append(_tb_sep1)
-
-        # ── Source toggle (Video / Animate / Image) ───────────────────────────
-        src_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._src_video_btn = Gtk.ToggleButton(label="🎥 Video")
-        self._src_video_btn.add_css_class("source-btn")
-        self._src_video_btn.add_css_class("source-btn-left")
-        self._src_video_btn.set_tooltip_text(
-            "Wan2.2-T2V-A14B  ·  Async job-based  ·  5-second 720p MP4\n"
-            "Supports seed images for motion reference"
-        )
-        self._src_animate_btn = Gtk.ToggleButton(label="💃 Animate")
-        self._src_animate_btn.add_css_class("source-btn")
-        self._src_animate_btn.add_css_class("source-btn-mid")
-        self._src_animate_btn.set_tooltip_text(
-            "Wan2.2-Animate-14B  ·  Character animation  ·  Video-to-video\n"
-            "Requires a motion video + character image"
-        )
-        self._src_image_btn = Gtk.ToggleButton(label="🖼️ Image")
-        self._src_image_btn.add_css_class("source-btn")
-        self._src_image_btn.add_css_class("source-btn-mid")
-        self._src_image_btn.set_tooltip_text(
-            "FLUX.1-schnell (~3s) or SDXL/cpp_server (~2s)  ·  1024×1024 JPEG\n"
-            "Blocks until image is ready (~15–90 s)"
-        )
-        self._src_art_btn = Gtk.ToggleButton(label="🎨 Generative Art")
-        self._src_art_btn.add_css_class("source-btn")
-        self._src_art_btn.add_css_class("source-btn-mid")
-        self._src_art_btn.set_tooltip_text(
-            "Generative art via LLM  ·  SVG / ANSI / verse / palette\n"
-            "Requires a chat model on port 8002 (not the diffusion server)"
-        )
-        self._src_animate_btn.set_group(self._src_video_btn)
-        self._src_image_btn.set_group(self._src_video_btn)
-        self._src_art_btn.set_group(self._src_video_btn)
-        self._src_video_btn.connect("toggled", lambda b: b.get_active() and self._set_source("video"))
-        self._src_animate_btn.connect("toggled", lambda b: b.get_active() and self._set_source("animate"))
-        self._src_image_btn.connect("toggled", lambda b: b.get_active() and self._set_source("image"))
-        self._src_art_btn.connect("toggled", lambda b: b.get_active() and self._set_source("artgen"))
-        self._src_video_btn.set_active(True)
-        src_row.append(self._src_video_btn)
-        src_row.append(self._src_animate_btn)
-        self._src_animate_btn.set_visible(True)
-        src_row.append(self._src_image_btn)
-        src_row.append(self._src_art_btn)
-        self._toolbar_box.append(src_row)
-
-        # Spacer (MainWindow appends attractor + other buttons after this)
-        _tb_spacer = Gtk.Box()
-        _tb_spacer.set_hexpand(True)
-        self._toolbar_box.append(_tb_spacer)
-
-        # ── Servers menu button ───────────────────────────────────────────────
-        self._servers_btn = Gtk.MenuButton(label="Servers")
-        self._servers_btn.add_css_class("servers-menu-btn")
-        self._servers_btn.set_hexpand(False)
-        self._servers_btn.set_tooltip_text(
-            "Start, stop, or restart managed services\n"
-            "(Wan2.2, Mochi, SkyReels, FLUX, Animate, Prompt Generator)"
-        )
-        self._servers_popover = self._build_servers_popover()
-        self._servers_btn.set_popover(self._servers_popover)
-        # Refresh status dots each time the popover opens.
-        self._servers_popover.connect("show", self._on_servers_popover_show)
-        self._toolbar_box.append(self._servers_btn)
-
-        # _source_desc_lbl is kept for internal _update_source_desc() calls
-        # but no longer shown in the panel — the status bar shows model info.
-        self._source_desc_lbl = Gtk.Label(label="")
-        self._source_desc_lbl.set_visible(False)
-
-        # ── Prompt ────────────────────────────────────────────────────────────
-        self.append(self._section("Prompt"))
-
-        # VIDEO MODEL row sits just above the prompt text so the user knows which
-        # model they are writing for before composing.  Hidden for non-video sources.
-        self._video_model_row_widget = self._build_video_model_row()
-        self.append(self._video_model_row_widget)
-
-        # IMAGE MODEL row — same position, shown only when image tab is active.
-        self._image_model_row_widget = self._build_image_model_row()
-        self._image_model_row_widget.set_visible(False)
-        self.append(self._image_model_row_widget)
-
-        scroll1 = Gtk.ScrolledWindow()
-        self._prompt_scroll = scroll1   # kept for inline-validation error styling
-        scroll1.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll1.set_size_request(-1, 110)
-        self._prompt_view = Gtk.TextView()
-        self._prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self._prompt_view.get_buffer().set_text("")
-        # Placeholder text — updated when source changes
-        self._prompt_ph_text_video = (
-            "Describe the video…\n\n"
-            "e.g. a cinematic shot of a red sports car\n"
-            "driving through a rainy city at night"
-        )
-        self._prompt_ph_text_image = (
-            "Describe the image…\n\n"
-            "e.g. a lone lighthouse on a rocky cliff\n"
-            "at sunset, oil painting, dramatic sky"
-        )
-        ph = Gtk.Label(label=self._prompt_ph_text_video)
-        ph.set_xalign(0)
-        ph.set_yalign(0)
-        ph.add_css_class("muted")
-        ph.set_can_focus(False)
-        ph.set_can_target(False)   # pass pointer/keyboard events through to the TextView
-        overlay1 = Gtk.Overlay()
-        overlay1.set_child(self._prompt_view)
-        overlay1.add_overlay(ph)
-        self._prompt_placeholder = ph
-        self._prompt_buf = self._prompt_view.get_buffer()
-        self._prompt_buf.connect(
-            "changed", lambda b: ph.set_visible(b.get_char_count() == 0)
-        )
-        # Clear validation error state as soon as the user types anything
-        self._prompt_buf.connect("changed", self._on_prompt_changed)
-        scroll1.set_child(overlay1)
-        self.append(scroll1)
-
-        # Inline validation error label — hidden until Generate is clicked with empty prompt
-        self._prompt_error_lbl = Gtk.Label(label="Prompt cannot be empty.")
-        self._prompt_error_lbl.add_css_class("prompt-error")
-        self._prompt_error_lbl.set_halign(Gtk.Align.START)
-        self._prompt_error_lbl.set_visible(False)
-        self.append(self._prompt_error_lbl)
-
-        # ── Inspire row ───────────────────────────────────────────────────────
-        # "✨ Inspire me" button + status dot for the prompt gen server (port 8001).
-        # The seed thumbnail well sits at the left edge of this row so the user
-        # can quickly load/clear a seed image without opening Advanced Settings.
-        inspire_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-
-        # ── Seed image well (inline) ──────────────────────────────────────────
-        # 40×40 thumbnail drop target placed BEFORE the Inspire me button.
-        # Left-click opens a file picker; right-click clears the current seed.
-        self._seed_thumb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._seed_thumb_box.set_size_request(40, 40)
-        self._seed_thumb_box.set_tooltip_text(
-            "Seed image — click to browse, right-click to clear\n"
-            "Drop a gallery frame here to use as seed image"
-        )
-        self._seed_thumb_box.add_css_class("seed-thumb-well")
-
-        # Placeholder icon shown when no seed image is loaded
-        self._seed_thumb_placeholder = Gtk.Label(label="\U0001f5bc")
-        self._seed_thumb_placeholder.set_vexpand(True)
-        self._seed_thumb_placeholder.set_valign(Gtk.Align.CENTER)
-        self._seed_thumb_box.append(self._seed_thumb_placeholder)
-
-        # Left-click: open the image/gallery browser (PickerPopover, char mode).
-        # The seed well doubles as the animate character-image entry point so
-        # the full Gallery + Disk tabs are always available.
-        thumb_click = Gtk.GestureClick()
-        thumb_click.set_button(1)  # primary mouse button
-        thumb_click.connect("released", lambda g, n, x, y: self._open_seed_picker())
-        self._seed_thumb_box.add_controller(thumb_click)
-
-        # Right-click: clear the seed image
-        thumb_rclick = Gtk.GestureClick()
-        thumb_rclick.set_button(3)  # secondary mouse button
-        thumb_rclick.connect("released", lambda g, n, x, y: self._clear_seed_image())
-        self._seed_thumb_box.add_controller(thumb_rclick)
-
-        inspire_row.append(self._seed_thumb_box)
-
-        self._inspire_btn = Gtk.Button(label="✨ Inspire me")
-        self._inspire_btn.add_css_class("inspire-btn")
-        self._inspire_btn.set_tooltip_text(
-            "Generate a cinematic prompt using the local Qwen3-0.6B model.\n"
-            "If the prompt box already has text, it is used as a creative seed.\n"
-            "Requires: ./start_prompt_gen.sh  (CPU-only, ~1.2 GB one-time download)"
-        )
-        self._inspire_btn.connect("clicked", self._on_inspire_clicked)
-        inspire_row.append(self._inspire_btn)
-
-        # Theme Set button — generates a coherent 5-shot narrative via Qwen.
-        self._theme_btn = Gtk.Button(label="🎬 Theme Set")
-        self._theme_btn.add_css_class("theme-btn")
-        self._theme_btn.set_tooltip_text(
-            "Generate a cohesive 5-shot narrative using the local Qwen3-0.6B model.\n"
-            "Qwen acts as a director with a meta-goal (e.g. Hitchcock, Tarkovsky) and\n"
-            "produces 5 prompts that form an arc: establish → develop → climax → resolve.\n"
-            "A preview popover lets you review and queue all 5 shots at once."
-        )
-        self._theme_btn.connect("clicked", self._on_theme_clicked)
-        inspire_row.append(self._theme_btn)
-
-        _inspire_spacer = Gtk.Box()
-        _inspire_spacer.set_hexpand(True)
-        inspire_row.append(_inspire_spacer)
-
-        self._inspire_dot_lbl = Gtk.Label(label="⬤ algo only")
-        self._inspire_dot_lbl.add_css_class("inspire-dot")
-        inspire_row.append(self._inspire_dot_lbl)
-        self.append(inspire_row)
-
-        # Confirm box — hidden; slides in when Inspire is clicked while server is offline
-        self._inspire_confirm_revealer = Gtk.Revealer()
-        self._inspire_confirm_revealer.set_transition_type(
-            Gtk.RevealerTransitionType.SLIDE_DOWN
-        )
-        self._inspire_confirm_revealer.set_transition_duration(150)
-        self._inspire_confirm_revealer.set_reveal_child(False)
-        _confirm_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        _confirm_box.add_css_class("inspire-confirm-box")
-        _confirm_msg = Gtk.Label(
-            label="Prompt generator isn't running. Start it now? (~20s warm-up)"
-        )
-        _confirm_msg.set_xalign(0)
-        _confirm_msg.set_wrap(True)
-        _confirm_box.append(_confirm_msg)
-        _confirm_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self._inspire_start_btn = Gtk.Button(label="▶ Start")
-        self._inspire_start_btn.add_css_class("inspire-confirm-btn")
-        self._inspire_start_btn.connect("clicked", self._on_inspire_confirm_start)
-        _confirm_btns.append(self._inspire_start_btn)
-        _inspire_cancel_btn = Gtk.Button(label="Not now")
-        _inspire_cancel_btn.connect("clicked", self._on_inspire_confirm_cancel)
-        _confirm_btns.append(_inspire_cancel_btn)
-        _confirm_box.append(_confirm_btns)
-        self._inspire_confirm_revealer.set_child(_confirm_box)
-        self.append(self._inspire_confirm_revealer)
-
-        # ── Prompt component chips ────────────────────────────────────────────
-        # Clicking a chip appends its modifier text to the prompt.
-        # The chip list changes when source changes (video ↔ image).
-        chips_hdr = Gtk.Label(label="Style modifiers — click to append:")
-        chips_hdr.set_xalign(0)
-        chips_hdr.add_css_class("hint")
-        self.append(chips_hdr)
-        self._chips_scroll = Gtk.ScrolledWindow()
-        # No scrolling here — the outer ctrl_scroll handles it.
-        # Propagate natural height so all chip rows are fully visible.
-        self._chips_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
-        self._chips_scroll.set_propagate_natural_height(True)
-        self._chips_scroll.set_propagate_natural_width(True)
-        self._chips_scroll.set_child(self._make_chips_box("video"))
-        self.append(self._chips_scroll)
-
-        # ── Divider separating prompt zone from generation controls ───────────
-        _create_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        _create_sep.set_margin_top(6)
-        _create_sep.set_margin_bottom(2)
-        self.append(_create_sep)
-
-        # ── CLIP LENGTH row ───────────────────────────────────────────────────
-        # Placed after the prompt-zone separator, before QUALITY, so the layout
-        # order is: chips → [divider] → CLIP LENGTH → QUALITY → Advanced accordion.
-        self._clip_length_row_widget = self._build_clip_length_row()
-        self.append(self._clip_length_row_widget)
-
-        # ── QUALITY row ───────────────────────────────────────────────────────
-        self._quality_row_widget = self._build_quality_row()
-        self.append(self._quality_row_widget)
-
-        # ── SHOT panel ────────────────────────────────────────────────────────
-        # Shows active model badge, optional switcher hint, and seed variation.
-        # Placed after QUALITY so the create zone order is:
-        #   chips → CLIP LENGTH → QUALITY → SHOT → Advanced accordion
-        self._shot_panel_widget = self._build_shot_panel()
-        self.append(self._shot_panel_widget)
-
-        # ── Animate inputs ────────────────────────────────────────────────────
-        # Visible only when "animate" source is active.
-        self._animate_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self._animate_box.add_css_class("animate-inputs-box")
-        self._animate_box.set_visible(False)
-
-        # Animate inputs — visible only in animate mode, positioned below chips.
-        # Motion video and character inputs have been removed; the seed image
-        # well (above the prompt) is now the sole character image entry point.
-        # Appended here (after construction) so self._animate_box is ready.
-        self.append(self._animate_box)
-
-        # ── AnimateDiff v0.9 config — visible only when animatediff is selected ─
-        self._animatediff_box = self._build_animatediff_box()
-        self._animatediff_box.set_visible(False)
-        self.append(self._animatediff_box)
-
-        # ── Pinned footer — always visible, NOT inside the scroll ─────────────
-        # MainWindow places self._footer_box below ctrl_scroll so these widgets
-        # remain visible regardless of how short the window is.
-        # Advanced settings are accessed via the context menu → Advanced Settings…
-        self._footer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-
-        # ── Server status row ─────────────────────────────────────────────────
-        # Two-line status box: dot + model name + sub-label + action buttons.
-        self._server_status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._server_status_box.add_css_class("server-row-offline")
-
-        # Left side: indicator dot
-        self._server_dot_lbl = Gtk.Label(label="⬤")
-        self._server_dot_lbl.add_css_class("server-model-offline")
-        self._server_status_box.append(self._server_dot_lbl)
-
-        # Center: two-line text column (model name + sub-label)
-        text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        text_col.set_hexpand(True)
-        self._server_model_lbl = Gtk.Label(label="No server")
-        self._server_model_lbl.add_css_class("server-model-lbl")
-        self._server_model_lbl.add_css_class("server-model-offline")
-        self._server_model_lbl.set_xalign(0)
-        self._server_model_lbl.set_max_width_chars(1)
-        self._server_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        self._server_sub_lbl = Gtk.Label(label="localhost:8000 unreachable")
-        self._server_sub_lbl.add_css_class("server-sub-lbl")
-        self._server_sub_lbl.set_xalign(0)
-        self._server_sub_lbl.set_max_width_chars(1)
-        self._server_sub_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        text_col.append(self._server_model_lbl)
-        text_col.append(self._server_sub_lbl)
-        self._server_status_box.append(text_col)
-
-        # Right side: action buttons (Start, Stop, Switch tab)
-        btn_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self._server_start_btn = Gtk.Button(label="▶ Start")
-        self._server_start_btn.add_css_class("server-start-btn")
-        self._server_start_btn.set_tooltip_text(
-            "Start the inference server using the local launch script.\n"
-            "Video → start_wan_qb2.sh  ·  Animate → start_animate.sh  ·  Image → start_flux.sh"
-        )
-        self._server_start_btn.set_sensitive(False)
-        self._server_start_btn.connect("clicked", self._on_start_server_clicked)
-        btn_col.append(self._server_start_btn)
-
-        self._server_stop_btn = Gtk.Button(label="■ Stop")
-        self._server_stop_btn.add_css_class("server-stop-btn")
-        self._server_stop_btn.set_tooltip_text(
-            "Stop the running inference server Docker container.\n"
-            "Stops any container using the tt-media-inference-server image."
-        )
-        self._server_stop_btn.set_sensitive(False)
-        self._server_stop_btn.connect("clicked", self._on_stop_server_clicked)
-        btn_col.append(self._server_stop_btn)
-
-        self._server_switch_btn = Gtk.Button(label="Switch tab")
-        self._server_switch_btn.add_css_class("server-switch-btn")
-        self._server_switch_btn.set_visible(False)
-        self._server_switch_btn.set_tooltip_text(
-            "Switch to the source tab that matches the running server model"
-        )
-        self._server_switch_btn.connect("clicked", self._on_switch_to_running_model_tab)
-        btn_col.append(self._server_switch_btn)
-
-        self._server_status_box.append(btn_col)
-        # Server status row is hidden — state dot, model label, and Start/Stop
-        # now live in the _StatusBar popover at the bottom of the window.
-        # The widgets still exist so set_server_state() can update them internally
-        # (for sensitivity logic, switch-tab button, etc.) without needing rewiring.
-        self._server_status_box.set_visible(False)
-        self._footer_box.append(self._server_status_box)
-
-        # Collapsible launch panel — shown while a start/stop operation is in progress.
-        # Contains a pulsing progress bar + phase label, with an optional raw log detail
-        # view that the user can expand via the "▸ Log" toggle button.
-        self._srv_log_revealer = Gtk.Revealer()
-        self._srv_log_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self._srv_log_revealer.set_transition_duration(150)
-        self._srv_pulse_timer: int = 0   # GLib source id; 0 when not running
-        self._srv_log_detail_open: bool = False
-
-        srv_launch_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        srv_launch_box.add_css_class("server-launch-box")
-
-        # Row 1: pulsing progress bar + "▸ Log" toggle button
-        prog_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._srv_progress_bar = Gtk.ProgressBar()
-        self._srv_progress_bar.set_hexpand(True)
-        self._srv_progress_bar.set_pulse_step(0.07)
-        self._srv_progress_bar.add_css_class("server-progress")
-        prog_row.append(self._srv_progress_bar)
-        self._srv_log_toggle = Gtk.Button(label="▸ Log")
-        self._srv_log_toggle.add_css_class("server-log-toggle")
-        self._srv_log_toggle.connect("clicked", self._on_srv_log_toggle)
-        prog_row.append(self._srv_log_toggle)
-        srv_launch_box.append(prog_row)
-
-        # Row 2: phase label ("Docker starting…", "Loading model weights…", etc.)
-        self._srv_phase_lbl = Gtk.Label(label="Starting…")
-        self._srv_phase_lbl.set_xalign(0)
-        self._srv_phase_lbl.add_css_class("server-phase-lbl")
-        self._srv_phase_lbl.set_max_width_chars(1)
-        self._srv_phase_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        srv_launch_box.append(self._srv_phase_lbl)
-
-        # Row 3: raw log text — hidden by default, toggled by the button above
-        self._srv_log_detail_revealer = Gtk.Revealer()
-        self._srv_log_detail_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self._srv_log_detail_revealer.set_transition_duration(150)
-        self._srv_log_detail_revealer.set_reveal_child(False)
-        self._srv_log_buf = Gtk.TextBuffer()
-        srv_log_view = Gtk.TextView.new_with_buffer(self._srv_log_buf)
-        srv_log_view.set_editable(False)
-        srv_log_view.set_cursor_visible(False)
-        srv_log_view.set_wrap_mode(Gtk.WrapMode.CHAR)
-        srv_log_view.set_hexpand(False)
-        srv_log_view.add_css_class("server-log")
-        srv_log_scroll = Gtk.ScrolledWindow()
-        srv_log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        srv_log_scroll.set_size_request(-1, 80)
-        # Prevent long log lines from propagating their natural width upward
-        # and expanding the controls pane beyond the window's declared size.
-        srv_log_scroll.set_propagate_natural_width(False)
-        srv_log_scroll.set_child(srv_log_view)
-        self._srv_log_scroll = srv_log_scroll
-        self._srv_log_detail_revealer.set_child(srv_log_scroll)
-        srv_launch_box.append(self._srv_log_detail_revealer)
-
-        self._srv_log_revealer.set_child(srv_launch_box)
-        self._footer_box.append(self._srv_log_revealer)
-
-        # ── Buttons ────────────────────────────────────────────────────────────
-        # Single action button: "Generate" when idle, "+ Add to Queue" when busy.
-        self._gen_btn = Gtk.Button(label="Generate")
-        self._gen_btn.add_css_class("generate-btn")
-        self._gen_btn.set_margin_top(6)
-        self._gen_btn.set_sensitive(False)
-        self._gen_btn.connect("clicked", self._on_action_clicked)
-        self._footer_box.append(self._gen_btn)
-
-        self._cancel_btn = Gtk.Button(label="✕ Cancel")
-        self._cancel_btn.add_css_class("cancel-btn")
-        self._cancel_btn.set_visible(False)
-        self._cancel_btn.connect("clicked", lambda _: self._on_cancel())
-        self._footer_box.append(self._cancel_btn)
-
-        # Endless mode button: visible only when AnimateDiff is the active model.
-        # Launches TT-TV with model_source="animatediff" for serverless endless generation.
-        self._endless_btn = Gtk.Button(label="📺 Start Endless")
-        self._endless_btn.add_css_class("attractor-launch-btn")
-        self._endless_btn.set_visible(False)
-        self._endless_btn.set_tooltip_text(
-            "Launch TT-TV in endless AnimateDiff mode.\n"
-            "Continuously generates GIFs without a server."
-        )
-        self._endless_btn.connect("clicked", lambda _: self._on_open_attractor())
-        self._footer_box.append(self._endless_btn)
-
-        # Recover Jobs moved to File menu — no button here.
-
-    @property
-    def footer_box(self) -> Gtk.Box:
-        """Pinned footer — MainWindow places this below ctrl_scroll."""
-        return self._footer_box
-
-    @property
-    def toolbar_box(self) -> Gtk.Box:
-        """Toolbar strip (logo, source toggle, model selector) built in _build().
-        MainWindow pins this at the top of the window above the paned layout."""
-        return self._toolbar_box
-
-    # ── QUALITY named button row ───────────────────────────────────────────────
-
-    # All available video model entries (key, display_label).
-    # Index 0 is always the placeholder; hidden models are filtered out at
-    # build time based on the "hidden_video_models" setting.
-    _ALL_VIDEO_MODEL_ENTRIES = [
-        ("",            "— not running —"),
-        ("wan2",        "Wan2.2  —  720p video"),
-        ("mochi",       "Mochi-1  —  480×848 video"),
-        ("skyreels",    "SkyReels I2V  —  960×544 Blackhole"),
-        ("animatediff", "AnimateDiff  —  GIF, local Blackhole"),
-    ]
-
-    _ALL_IMAGE_MODEL_ENTRIES = [
-        ("",              "— not running —"),
-        ("flux",          "FLUX.1-schnell  —  1024×1024"),
-        ("sdxl",          "SDXL  —  cpp_server"),
-        ("z-image-turbo", "Z-Image-Turbo  —  P150X4  (functional)"),
-        ("motif",         "Motif-6B-Preview  —  P300X2"),
-    ]
-
-    def _build_video_model_row(self) -> Gtk.Box:
-        """VIDEO MODEL row: compact dropdown for Wan2.2 / Mochi-1 / SkyReels / AnimateDiff.
-
-        Starts at index 0 ("— not running —").  update_shot_panel() / _sync_video_model_dd()
-        auto-selects the matching entry when a server comes online, and reverts to
-        the placeholder when the server goes offline (unless animatediff is selected,
-        which runs locally and is always available when Blackhole hardware is present).
-        """
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        row.set_margin_top(4)
-        row.set_margin_bottom(2)
-
-        lbl = Gtk.Label(label="MODEL")
-        lbl.add_css_class("create-zone-label")
-        lbl.set_xalign(0)
-        lbl.set_valign(Gtk.Align.CENTER)
-        row.append(lbl)
-
-        hidden = set(_settings.get("hidden_plugins") or [])
-        self._VIDEO_MODEL_ENTRIES = [
-            (k, d) for k, d in self._ALL_VIDEO_MODEL_ENTRIES
-            if k == "" or k not in hidden  # always keep the placeholder
-        ]
-
-        string_list = Gtk.StringList()
-        for _, display in self._VIDEO_MODEL_ENTRIES:
-            string_list.append(display)
-
-        self._video_model_dd = Gtk.DropDown(model=string_list)
-        self._video_model_dd.set_hexpand(True)
-        self._video_model_dd.set_selected(0)  # placeholder until health check fires
-        self._video_model_dd_syncing = False
-        self._video_model_dd.connect("notify::selected", self._on_video_model_dd_changed)
-        row.append(self._video_model_dd)
-        return row
-
-    def _sync_video_model_dd(self, key: "str | None") -> None:
-        """Programmatically update the MODEL dropdown without triggering the handler.
-
-        Pass a model key ("wan2", "mochi", "skyreels", "animatediff") to select
-        the matching entry.  Pass None to select the placeholder (index 0).
-        """
-        if not hasattr(self, "_video_model_dd"):
-            return
-        if key is None:
-            idx = 0
-        else:
-            idx = next(
-                (i for i, (k, _) in enumerate(self._VIDEO_MODEL_ENTRIES) if k == key),
-                0,
-            )
-        self._video_model_dd_syncing = True
-        self._video_model_dd.set_selected(idx)
-        self._video_model_dd_syncing = False
-
-    def _on_video_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
-        """Handle user-initiated VIDEO MODEL dropdown change."""
-        if getattr(self, "_video_model_dd_syncing", False):
-            return
-        idx = dd.get_selected()
-        if 0 <= idx < len(self._VIDEO_MODEL_ENTRIES):
-            key = self._VIDEO_MODEL_ENTRIES[idx][0]
-            if not key:
-                # Placeholder selected — keep existing _video_model, nothing to do.
-                return
-            self._set_model(key)
-            _settings.set("preferred_video_model", key)
-            self.update_shot_panel()
-
-    def _build_image_model_row(self) -> Gtk.Box:
-        """IMAGE MODEL row: dropdown for FLUX / SDXL / Z-Image-Turbo / Motif.
-
-        Starts at index 0 ("— not running —").  _sync_image_model_dd() auto-selects
-        the matching entry when a server comes online.  Hidden when not on the image tab.
-        """
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        row.set_margin_top(4)
-        row.set_margin_bottom(2)
-
-        lbl = Gtk.Label(label="MODEL")
-        lbl.add_css_class("create-zone-label")
-        lbl.set_xalign(0)
-        lbl.set_valign(Gtk.Align.CENTER)
-        row.append(lbl)
-
-        string_list = Gtk.StringList()
-        for _, display in self._ALL_IMAGE_MODEL_ENTRIES:
-            string_list.append(display)
-
-        self._image_model_dd = Gtk.DropDown(model=string_list)
-        self._image_model_dd.set_hexpand(True)
-        self._image_model_dd.set_selected(0)
-        self._image_model_dd_syncing = False
-        self._image_model_dd.connect("notify::selected", self._on_image_model_dd_changed)
-        row.append(self._image_model_dd)
-        return row
-
-    def _sync_image_model_dd(self, key: "str | None") -> None:
-        """Programmatically update the IMAGE MODEL dropdown without triggering the handler."""
-        if not hasattr(self, "_image_model_dd"):
-            return
-        if key is None:
-            idx = 0
-        else:
-            idx = next(
-                (i for i, (k, _) in enumerate(self._ALL_IMAGE_MODEL_ENTRIES) if k == key),
-                0,
-            )
-        self._image_model_dd_syncing = True
-        self._image_model_dd.set_selected(idx)
-        self._image_model_dd_syncing = False
-
-    def _on_image_model_dd_changed(self, dd: "Gtk.DropDown", _pspec) -> None:
-        """Handle user-initiated IMAGE MODEL dropdown change."""
-        if getattr(self, "_image_model_dd_syncing", False):
-            return
-        idx = dd.get_selected()
-        if 0 <= idx < len(self._ALL_IMAGE_MODEL_ENTRIES):
-            key = self._ALL_IMAGE_MODEL_ENTRIES[idx][0]
-            if not key:
-                return
-            self._set_model(key)
-            _settings.set("preferred_image_model", key)
-
-    def _build_quality_row(self) -> Gtk.Box:
-        """QUALITY row: Fast / Standard / Cinematic named toggle buttons.
-
-        Renders three linked ToggleButtons. The active one sets self._steps
-        and persists the quality_steps setting. Stays in sync with the
-        Advanced Settings dialog via sync_quality_btn_to_steps().
-        """
-        from generation_config import QUALITY_PRESETS, slot_for_steps
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-
-        lbl = Gtk.Label(label="QUALITY  \u2014  render detail & time")
-        lbl.add_css_class("create-zone-label")
-        lbl.set_xalign(0)
-        outer.append(lbl)
-
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        row.add_css_class("named-ctrl-row")
-
-        self._quality_btns: list = []
-        first_btn = None
-        current_steps = self._steps
-
-        # Static render time estimates per quality slot (minutes). Hardcoded because
-        # the formula steps//10*3 gives wrong values (3/9/12) for steps 10/30/40;
-        # the spec requires 3/6/9 min.
-        _RENDER_MINS = {"fast": 3, "standard": 6, "cinematic": 9}
-
-        for slot, steps, display in QUALITY_PRESETS:
-            btn = Gtk.ToggleButton()
-            # Store preset metadata as plain Python attributes (GTK set_data is blocked).
-            btn.steps_value = steps
-            btn.slot_value = slot
-            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            inner.set_halign(Gtk.Align.CENTER)
-            name_lbl = Gtk.Label(label=display)
-            # Render time estimate: static per-slot approximation (not formula-derived).
-            est_mins = _RENDER_MINS.get(slot, 6)
-            sub_lbl = Gtk.Label(label=f"~{est_mins} min to render")
-            sub_lbl.add_css_class("named-ctrl-sub")
-            inner.append(name_lbl)
-            inner.append(sub_lbl)
-            btn.set_child(inner)
-            btn.add_css_class("named-ctrl-btn")
-            btn.set_hexpand(True)
-            if first_btn is None:
-                first_btn = btn
-            else:
-                # GTK radio group: only one button in the group can be active at a time.
-                btn.set_group(first_btn)
-            # Activate the button whose step count matches the stored setting.
-            # If the stored count doesn't match any preset (e.g. set via Advanced dialog),
-            # fall back to activating the "standard" slot so something is selected.
-            if steps == current_steps or (slot_for_steps(current_steps) is None and slot == "standard"):
-                btn.set_active(True)
-            btn.connect("toggled", self._on_quality_btn_toggled)
-            row.append(btn)
-            self._quality_btns.append(btn)
-
-        outer.append(row)
-        return outer
-
-    def _on_quality_btn_toggled(self, btn: Gtk.ToggleButton) -> None:
-        """Handle QUALITY button toggle: update self._steps and persist setting."""
-        if not btn.get_active():
-            # Ignore the deactivation signal from the previously selected button;
-            # we only act on the newly activated one.
-            return
-        self._steps = btn.steps_value
-        _settings.set("quality_steps", self._steps)
-        # Keep Advanced dialog in sync if it happens to be open (Task 9 adds the dialog).
-        if hasattr(self, "_adv_dialog") and self._adv_dialog is not None:
-            self._adv_dialog.sync_from_panel()
-
-    def sync_quality_btn_to_steps(self, steps: int) -> None:
-        """Update QUALITY button state when steps change via Advanced dialog.
-
-        If steps matches a known preset, activates that button.
-        If no match, deactivates all buttons (panel shows no selection —
-        the Advanced dialog shows the raw value instead).
-        """
-        self._steps = steps
-        if not hasattr(self, "_quality_btns"):
-            return
-        matched = False
-        for btn in self._quality_btns:
-            if btn.steps_value == steps:
-                btn.set_active(True)
-                matched = True
-                break
-        if not matched:
-            # No preset matches — leave buttons in whatever state they're in.
-            # GTK radio group: deselecting all isn't straightforward, so we
-            # leave the last active one highlighted. The Advanced dialog shows
-            # the exact raw value for clarity.
-            pass
-
-    # ── CLIP LENGTH named button row ───────────────────────────────────────────
-
-    def _build_clip_length_row(self) -> Gtk.Box:
-        """CLIP LENGTH row — output video duration, model-specific frame counts.
-
-        Shows Short/Standard/Long/Extended slot buttons for wan2 and skyreels.
-        For mochi (fixed frames), shows a single disabled locked button labelled
-        "7.0 s · 168 f  (fixed)".
-        Hidden entirely when the source is "image".
-        """
-        from generation_config import CLIP_SLOTS, clip_label, MODELS_WITH_FIXED_FRAMES
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-
-        lbl = Gtk.Label(label="CLIP LENGTH  \u2014  output video is")
-        lbl.add_css_class("create-zone-label")
-        lbl.set_xalign(0)
-        outer.append(lbl)
-
-        self._clip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._clip_row.add_css_class("named-ctrl-row")
-
-        # ── Mochi locked button ───────────────────────────────────────────────
-        # Shown only when mochi is the active model; disabled because mochi
-        # hard-codes 168 frames and ignores num_frames in the request.
-        self._clip_mochi_btn = Gtk.ToggleButton()
-        self._clip_mochi_btn.set_active(True)
-        self._clip_mochi_btn.set_sensitive(False)
-        _mochi_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        _mochi_inner.set_halign(Gtk.Align.CENTER)
-        _mochi_inner.append(Gtk.Label(label="7.0 s \u00b7 168 f  (fixed)"))
-        self._clip_mochi_btn.set_child(_mochi_inner)
-        self._clip_mochi_btn.add_css_class("named-ctrl-btn")
-        self._clip_mochi_btn.set_hexpand(True)
-        self._clip_mochi_btn.set_visible(False)  # revealed only for fixed-frame models
-        self._clip_row.append(self._clip_mochi_btn)
-
-        # ── Normal slot buttons (wan2 / skyreels) ─────────────────────────────
-        # Four ToggleButtons in a radio group: Short / Standard / Long / Extended.
-        # Labels are rebuilt by _refresh_clip_labels() whenever the video model changes.
-        self._clip_btns: list = []
-        first_btn = None
-        current_slot = str(_settings.get("clip_length_slot") or "standard")
-
-        for slot in CLIP_SLOTS:
-            btn = Gtk.ToggleButton()
-            # Store the slot identifier as a plain Python attribute (GTK set_data is blocked).
-            btn.slot_value = slot
-            btn.add_css_class("named-ctrl-btn")
-            btn.set_hexpand(True)
-            if first_btn is None:
-                first_btn = btn
-            else:
-                # GTK radio group: set_group links buttons so only one is active.
-                btn.set_group(first_btn)
-            if slot == current_slot:
-                btn.set_active(True)
-            btn.connect("toggled", self._on_clip_btn_toggled)
-            self._clip_row.append(btn)
-            self._clip_btns.append(btn)
-
-        outer.append(self._clip_row)
-
-        # Populate button labels based on the current video model.
-        self._refresh_clip_labels()
-        return outer
-
-    def _on_clip_btn_toggled(self, btn: Gtk.ToggleButton) -> None:
-        """Persist the selected clip length slot when a button is toggled active."""
-        if not btn.get_active():
-            # Ignore the deactivation signal from the previously selected button;
-            # only act on the newly activated one.
-            return
-        _settings.set("clip_length_slot", btn.slot_value)
-
-    def _refresh_clip_labels(self) -> None:
-        """Update CLIP LENGTH button sublabels for the current video model.
-
-        Called at build time and whenever the active video model changes via
-        _set_model(). Shows the mochi locked button for fixed-frame models and
-        shows the normal slot buttons (with model-specific duration labels) for
-        all others.
-        """
-        from generation_config import CLIP_SLOTS, clip_label, MODELS_WITH_FIXED_FRAMES
-
-        if not hasattr(self, "_clip_btns"):
-            # Called before _build_clip_length_row() has run — skip safely.
-            return
-
-        model_key = self._video_model  # "wan2" | "mochi" | "skyreels"
-        is_fixed = model_key in MODELS_WITH_FIXED_FRAMES
-
-        # Toggle mochi locked button vs normal slot buttons.
-        self._clip_mochi_btn.set_visible(is_fixed)
-        for btn in self._clip_btns:
-            btn.set_visible(not is_fixed)
-
-        if not is_fixed:
-            # Rebuild each slot button's inner label box with the correct
-            # model-specific duration string (e.g. "3.4 s · 81 f" for wan2 standard).
-            for btn, slot in zip(self._clip_btns, CLIP_SLOTS):
-                slot_display = slot.capitalize()
-                sublabel = clip_label(model_key, slot)
-                inner_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-                inner_box.set_halign(Gtk.Align.CENTER)
-                inner_box.append(Gtk.Label(label=slot_display))
-                sub = Gtk.Label(label=sublabel)
-                sub.add_css_class("named-ctrl-sub")
-                inner_box.append(sub)
-                btn.set_child(inner_box)
-
-    # ── SHOT panel ─────────────────────────────────────────────────────────────
-
-    def _build_shot_panel(self) -> Gtk.Box:
-        """SHOT panel: model badge + optional switcher + seed variation row.
-
-        Model badge shows the auto-detected active video server with a status
-        dot (green when ready, grey when offline).  When a second compatible
-        video server is detected the switcher hint button appears so the user
-        can hop to it with one click.
-
-        The seed variation buttons replace the raw integer seed field from
-        Advanced settings:
-          • 🎲 New idea   — seed=-1 (full randomness each run)
-          • 🔁 Repeat last — re-use the seed from the most recent completed job
-          • 📌 Keep this  — pin the current seed across all runs
-        """
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-
-        lbl = Gtk.Label(label="SHOT")
-        lbl.add_css_class("create-zone-label")
-        lbl.set_xalign(0)
-        outer.append(lbl)
-
-        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        panel.add_css_class("shot-panel")
-
-        # ── Model row ──────────────────────────────────────────────────────────
-        model_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-
-        self._shot_model_lbl = Gtk.Label()
-        self._shot_model_lbl.add_css_class("model-badge-label")
-        self._shot_model_lbl.set_xalign(0)
-        self._shot_model_lbl.set_max_width_chars(1)
-        self._shot_model_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        model_row.append(self._shot_model_lbl)
-
-        self._shot_model_sub = Gtk.Label()
-        self._shot_model_sub.add_css_class("model-badge-sub")
-        self._shot_model_sub.set_xalign(0)
-        self._shot_model_sub.set_max_width_chars(1)
-        self._shot_model_sub.set_ellipsize(Pango.EllipsizeMode.END)
-        model_row.append(self._shot_model_sub)
-
-        _spacer = Gtk.Box()
-        _spacer.set_hexpand(True)
-        model_row.append(_spacer)
-
-        # Switcher hint — shown only when an alternate video model server is ready.
-        # In the current single-endpoint architecture this will be hidden unless
-        # future multi-server polling is wired in.
-        self._shot_switcher_btn = Gtk.Button()
-        self._shot_switcher_btn.add_css_class("shot-switcher-btn")
-        self._shot_switcher_btn.set_visible(False)
-        self._shot_switcher_btn.connect("clicked", self._on_shot_switcher_clicked)
-        model_row.append(self._shot_switcher_btn)
-
-        panel.append(model_row)
-
-        # ── Seed variation row ─────────────────────────────────────────────────
-        seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-
-        self._seed_random_btn = Gtk.ToggleButton(label="\U0001f3b2 New idea")
-        self._seed_random_btn.add_css_class("seed-btn")
-        self._seed_random_btn.set_hexpand(True)
-        self._seed_random_btn.set_tooltip_text("Use a different random seed every time")
-
-        self._seed_repeat_btn = Gtk.ToggleButton(label="\U0001f501 Repeat last")
-        self._seed_repeat_btn.add_css_class("seed-btn")
-        self._seed_repeat_btn.set_hexpand(True)
-        self._seed_repeat_btn.set_tooltip_text("Re-use the seed from the most recent generation")
-        self._seed_repeat_btn.set_group(self._seed_random_btn)
-
-        self._seed_keep_btn = Gtk.ToggleButton(label="\U0001f4cc Keep this")
-        self._seed_keep_btn.add_css_class("seed-btn")
-        self._seed_keep_btn.set_hexpand(True)
-        self._seed_keep_btn.set_tooltip_text("Pin the current seed value across all generations")
-        self._seed_keep_btn.set_group(self._seed_random_btn)
-
-        # Use _m=mode default-arg pattern to capture the loop variable correctly
-        self._seed_random_btn.connect(
-            "toggled", lambda b, _m="random": b.get_active() and self._on_seed_mode(_m)
-        )
-        self._seed_repeat_btn.connect(
-            "toggled", lambda b, _m="repeat": b.get_active() and self._on_seed_mode(_m)
-        )
-        self._seed_keep_btn.connect(
-            "toggled", lambda b, _m="keep": b.get_active() and self._on_seed_mode(_m)
-        )
-
-        seed_row.append(self._seed_random_btn)
-        seed_row.append(self._seed_repeat_btn)
-        seed_row.append(self._seed_keep_btn)
-        panel.append(seed_row)
-
-        outer.append(panel)
-
-        # Initialise button state from saved settings immediately after the
-        # widgets exist (store may not be wired yet; _get_history_records guards).
-        self._apply_seed_mode_from_settings()
-        return outer
-
-    def _apply_seed_mode_from_settings(self) -> None:
-        """Set seed variation button state and self._seed from saved settings.
-
-        Falls back to random if "repeat" is requested but history is empty,
-        since there is no last seed to repeat.
-        """
-        if not hasattr(self, "_seed_random_btn"):
-            return
-        mode = str(_settings.get("seed_mode") or "random")
-        recs = self._get_history_records()
-
-        if mode == "repeat" and recs:
-            last_seed = getattr(
-                sorted(recs, key=lambda r: getattr(r, "created_at", ""))[-1],
-                "seed", -1,
-            )
-            self._seed = int(last_seed) if last_seed is not None else -1
-            self._seed_repeat_btn.set_active(True)
-        elif mode == "keep":
-            self._seed = int(_settings.get("pinned_seed") or -1)
-            self._seed_keep_btn.set_active(True)
-            if self._seed != -1:
-                self._seed_keep_btn.set_label(f"\U0001f4cc {self._seed}")
-        else:
-            # Default: random (also the fallback when repeat has no history)
-            self._seed = -1
-            self._seed_random_btn.set_active(True)
-
-        # "Repeat last" is only meaningful when there is at least one completed job
-        self._seed_repeat_btn.set_sensitive(bool(recs))
-
-    def _get_history_records(self) -> list:
-        """Return all history records, or empty list if store not yet initialised.
-
-        Called at build time (before MainWindow wires self._store) so the guard
-        is essential — returning [] causes _apply_seed_mode_from_settings to
-        fall back to random, which is the safe default.
-        """
-        try:
-            store = getattr(self, "_store", None)
-            if store is not None:
-                return store.all_records()
-        except Exception:
-            pass
-        return []
-
-    def _on_seed_mode(self, mode: str) -> None:
-        """Handle seed variation toggle selection.
-
-        Updates self._seed (the integer forwarded to the inference server) and
-        persists the chosen mode to settings so it survives restarts.
-        """
-        _settings.set("seed_mode", mode)
-        if mode == "random":
-            self._seed = -1
-        elif mode == "repeat":
-            recs = self._get_history_records()
-            if recs:
-                last = sorted(recs, key=lambda r: getattr(r, "created_at", ""))[-1]
-                self._seed = int(getattr(last, "seed", -1) or -1)
-            else:
-                # No history yet — fall back to random silently
-                self._seed = -1
-        elif mode == "keep":
-            pinned = int(_settings.get("pinned_seed") or -1)
-            if pinned == -1:
-                # No pinned seed yet — pin whatever seed is currently active
-                pinned = self._seed if self._seed != -1 else -1
-            self._seed = pinned
-            _settings.set("pinned_seed", self._seed)
-            if hasattr(self, "_seed_keep_btn"):
-                self._seed_keep_btn.set_label(
-                    f"\U0001f4cc {self._seed}" if self._seed != -1 else "\U0001f4cc Keep this"
-                )
-
-    def _on_shot_switcher_clicked(self, _btn: Gtk.Button) -> None:
-        """Switch to the alternate ready video model without restarting anything."""
-        alt = getattr(self, "_shot_alt_model_key", None)
-        if alt:
-            self._set_model(alt)
-            _settings.set("preferred_video_model", alt)
-            self.update_shot_panel()
-
-    def _build_animatediff_box(self) -> Gtk.Box:
-        """Build the AnimateDiff v0.9 config panel shown when animatediff is selected."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.set_margin_top(6)
-
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        sep.set_margin_bottom(4)
-        box.append(sep)
-        box.append(self._section("AnimateDiff Options"))
-
-        def _lbl(text):
-            l = Gtk.Label(label=text)
-            l.set_xalign(0)
-            l.add_css_class("hint")
-            return l
-
-        def _row(lbl_text, widget):
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            lbl = Gtk.Label(label=lbl_text)
-            lbl.set_xalign(0)
-            lbl.set_hexpand(True)
-            lbl.add_css_class("hint")
-            row.append(lbl)
-            row.append(widget)
-            return row
-
-        def _dd(items, default):
-            sl = Gtk.StringList()
-            for item in items:
-                sl.append(item)
-            dd = Gtk.DropDown(model=sl)
-            try:
-                dd.set_selected(items.index(default))
-            except ValueError:
-                pass
-            return dd
-
-        def _dd_val(dd):
-            idx = dd.get_selected()
-            m = dd.get_model()
-            if m and idx < m.get_n_items():
-                return m.get_string(idx)
-            return ""
-
-        def _spin(lo, hi, step, val):
-            adj = Gtk.Adjustment(value=val, lower=lo, upper=hi, step_increment=step)
-            sb = Gtk.SpinButton(adjustment=adj)
-            sb.set_digits(2 if step < 1 else 0)
-            sb.set_size_request(70, -1)
-            return sb
-
-        # Mode
-        self._ad_mode = _dd(["blackhole", "cpu", "sim"], "blackhole")
-        box.append(_row("Mode", self._ad_mode))
-
-        # Negative prompt
-        self._ad_neg_prompt = Gtk.Entry()
-        self._ad_neg_prompt.set_placeholder_text("blurry, low quality")
-        self._ad_neg_prompt.set_hexpand(True)
-        neg_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        neg_lbl = Gtk.Label(label="Negative prompt")
-        neg_lbl.set_xalign(0)
-        neg_lbl.add_css_class("hint")
-        neg_row.append(neg_lbl)
-        neg_row.append(self._ad_neg_prompt)
-        box.append(neg_row)
-
-        # Temporal alpha
-        self._ad_temporal_alpha = _spin(0.0, 1.0, 0.05, 0.35)
-        box.append(_row("Temporal α", self._ad_temporal_alpha))
-
-        # ── Performance (collapsible) ──────────────────────────────────────
-        perf_exp = Gtk.Expander(label="Performance")
-        perf_exp.add_css_class("hint")
-        perf_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        perf_box.set_margin_start(8)
-        perf_box.set_margin_top(4)
-
-        self._ad_lightning = Gtk.CheckButton(label="Lightning mode (Euler scheduler)")
-        self._ad_lightning.add_css_class("hint")
-        perf_box.append(self._ad_lightning)
-
-        self._ad_lightning_steps = _dd(["2", "4", "8"], "4")
-        self._ad_lightning_steps_row = _row("Distill steps", self._ad_lightning_steps)
-        self._ad_lightning_steps_row.set_visible(False)
-        perf_box.append(self._ad_lightning_steps_row)
-
-        def _on_ad_lightning_toggled(_cb):
-            on = self._ad_lightning.get_active()
-            cpu = _dd_val(self._ad_mode) == "cpu"
-            self._ad_lightning_steps_row.set_visible(on and cpu)
-        self._ad_lightning.connect("toggled", _on_ad_lightning_toggled)
-        self._ad_mode.connect("notify::selected", lambda *_: _on_ad_lightning_toggled(None))
-
-        self._ad_multi_chip = Gtk.CheckButton(label="Use all chips in parallel")
-        self._ad_multi_chip.set_active(True)
-        self._ad_multi_chip.add_css_class("hint")
-        self._ad_multi_chip.set_tooltip_text(
-            "Spawn one process per Blackhole chip, each rendering a consecutive frame slice.\n"
-            "Frame count must be divisible by the chip count (e.g. 4, 8, 12 for 4 chips).\n"
-            "Ignored when Device ID is pinned to a specific chip."
-        )
-        perf_box.append(self._ad_multi_chip)
-
-        self._ad_device_id = _spin(-1, 7, 1, -1)
-        self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
-        perf_box.append(_row("Device ID", self._ad_device_id))
-
-        perf_exp.set_child(perf_box)
-        box.append(perf_exp)
-
-        # ── Chain continuity (collapsible) ─────────────────────────────────
-        chain_exp = Gtk.Expander(label="Chain continuity")
-        chain_exp.add_css_class("hint")
-        chain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        chain_box.set_margin_start(8)
-        chain_box.set_margin_top(4)
-
-        self._ad_chain_from = Gtk.Entry()
-        self._ad_chain_from.set_placeholder_text("path/to/latents.chain.pt")
-        self._ad_chain_from.set_hexpand(True)
-        pick_btn = Gtk.Button(label="…")
-        pick_btn.add_css_class("hint")
-        pick_btn.connect("clicked", self._on_ad_chain_from_pick)
-        chain_from_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        chain_from_row.append(self._ad_chain_from)
-        chain_from_row.append(pick_btn)
-        chain_box.append(_lbl("Chain from (.pt):"))
-        chain_box.append(chain_from_row)
-
-        self._ad_chain_save = Gtk.CheckButton(label="Save latents for chaining")
-        self._ad_chain_save.add_css_class("hint")
-        chain_box.append(self._ad_chain_save)
-
-        self._ad_chain_alpha = _spin(0.0, 1.0, 0.05, 0.6)
-        chain_box.append(_row("Chain α", self._ad_chain_alpha))
-
-        chain_exp.set_child(chain_box)
-        box.append(chain_exp)
-
-        # ── MotionAdapter (collapsible) ────────────────────────────────────
-        motion_exp = Gtk.Expander(label="MotionAdapter (Blackhole only)")
-        motion_exp.add_css_class("hint")
-        motion_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        motion_box.set_margin_start(8)
-        motion_box.set_margin_top(4)
-
-        self._ad_motion_adapter = Gtk.CheckButton(label="Enable MotionAdapter")
-        self._ad_motion_adapter.add_css_class("hint")
-        motion_box.append(self._ad_motion_adapter)
-
-        self._ad_motion_skip = _dd(
-            ["None (full quality)", "Fast (skip up1 up2)", "Balanced (skip up2)"],
-            "None (full quality)"
-        )
-        motion_box.append(_row("Skip preset", self._ad_motion_skip))
-
-        self._ad_injection_alpha = _spin(0.0, 1.0, 0.05, 1.0)
-        motion_box.append(_row("Injection α", self._ad_injection_alpha))
-
-        motion_exp.set_child(motion_box)
-        box.append(motion_exp)
-
-        return box
-
-    def _on_ad_chain_from_pick(self, _btn) -> None:
-        """Open a file-chooser to pick a .chain.pt latents file."""
-        dlg = Gtk.FileDialog()
-        dlg.set_title("Select chain latents (.pt)")
-        dlg.open(self.get_root(), None, self._on_ad_chain_from_finish)
-
-    def _on_ad_chain_from_finish(self, dlg, result) -> None:
-        try:
-            gfile = dlg.open_finish(result)
-        except Exception:
-            return
-        if gfile:
-            self._ad_chain_from.set_text(gfile.get_path())
-
-    def get_animatediff_args(self) -> dict:
-        """Collect current AnimateDiff v0.9 config values (main thread only)."""
-
-        def _dd_val(dd):
-            idx = dd.get_selected()
-            m = dd.get_model()
-            if m and idx < m.get_n_items():
-                return m.get_string(idx)
-            return ""
-
-        skip_preset = _dd_val(self._ad_motion_skip)
-        if skip_preset == "Fast (skip up1 up2)":
-            motion_skip = ["up1", "up2"]
-        elif skip_preset == "Balanced (skip up2)":
-            motion_skip = ["up2"]
-        else:
-            motion_skip = None
-
-        raw_device_id = int(self._ad_device_id.get_value())
-
-        return dict(
-            mode=_dd_val(self._ad_mode) or "blackhole",
-            negative_prompt=self._ad_neg_prompt.get_text() or "blurry, low quality",
-            temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
-            lightning=self._ad_lightning.get_active(),
-            lightning_steps=int(_dd_val(self._ad_lightning_steps) or "4"),
-            multi_chip=self._ad_multi_chip.get_active(),
-            device_id=raw_device_id if raw_device_id >= 0 else None,
-            chain_from=self._ad_chain_from.get_text().strip() or None,
-            chain_save=self._ad_chain_save.get_active(),
-            chain_alpha=round(self._ad_chain_alpha.get_value(), 2),
-            motion_adapter="" if self._ad_motion_adapter.get_active() else None,
-            motion_adapter_alpha=round(self._ad_injection_alpha.get_value(), 2),
-            motion_adapter_skip=motion_skip,
-        )
-
-    def update_shot_panel(self) -> None:
-        """Refresh the model badge label and switcher hint button.
-
-        Called from the main thread — safe to touch widgets directly.
-        Reads self._shot_server_ready and self._shot_alt_model_key which are
-        written by MainWindow._on_health_result before this is invoked.
-        """
-        if not hasattr(self, "_shot_model_lbl"):
-            return
-
-        # Human-readable display info keyed by internal video model key
-        _DISPLAY = {
-            "wan2":     ("\u25cf Wan2.2",   "720p"),
-            "mochi":    ("\u25cf Mochi-1",  "480\u00d7848"),
-            "skyreels": ("\u25cf SkyReels I2V", "960\u00d7544"),
-        }
-        _OFFLINE = "\u25cb No server \u00b7 Start one \u203a"
-
-        if not self._shot_server_ready:
-            self._shot_model_lbl.set_label(_OFFLINE)
-            self._shot_model_sub.set_label("")
-            self._shot_switcher_btn.set_visible(False)
-            # No server running — fall back to AnimateDiff so the user always
-            # has a ready generation path without needing to start a server.
-            # When a server comes online, _on_health_result restores the model.
-            if self._video_model != "animatediff":
-                self._set_model("animatediff")
-            else:
-                self._sync_video_model_dd("animatediff")
-            return
-
-        model_key = self._video_model
-        name, res = _DISPLAY.get(model_key, (f"\u25cf {model_key}", ""))
-        self._shot_model_lbl.set_label(name)
-        self._shot_model_sub.set_label(res)
-        # Keep dropdown in sync with the confirmed-running model.
-        self._sync_video_model_dd(model_key)
-
-        alt_key = self._shot_alt_model_key
-        if alt_key:
-            alt_name = _DISPLAY.get(alt_key, (alt_key,))[0].lstrip("\u25cf").strip()
-            self._shot_switcher_btn.set_label(f"{alt_name} also ready \u203a")
-            self._shot_switcher_btn.set_visible(True)
-        else:
-            self._shot_switcher_btn.set_visible(False)
-
-    # ── Servers popover ────────────────────────────────────────────────────────
-
-    def _build_servers_popover(self) -> Gtk.Popover:
-        """Build the Servers ▾ popover grouped by capability."""
-        popover = Gtk.Popover()
-        popover.set_has_arrow(False)
-        # Keep the popover open after button clicks so the ◌ busy state and
-        # green dot updates are visible while the server starts.  The user
-        # dismisses it by clicking outside or pressing Escape.
-        popover.set_autohide(False)
-
-        # autohide=False keeps this popover non-modal, so the streaming
-        # server-start log stays interactive while a service boots.  The
-        # downside is that a non-autohide popover surface is not tied to window
-        # focus — on its own it lingers on top of *other* applications' windows
-        # when you switch away from the app.  Dismiss it whenever the main
-        # window loses activation (Alt-Tab / clicking another app).  Clicking
-        # the popover's own buttons keeps the toplevel active, so it stays open.
-        # The handler is attached on show and removed on hide so it never
-        # double-connects across open/close cycles and never leaks.
-        def _watch_activation(_pop):
-            win = self.get_root()
-            if win is None:
-                return
-            handler_id = win.connect(
-                "notify::is-active",
-                lambda w, _param: self._servers_popover_on_active(w, popover),
-            )
-            popover._activation_watch = (win, handler_id)
-
-        def _unwatch_activation(_pop):
-            watch = getattr(popover, "_activation_watch", None)
-            if watch is not None:
-                win, handler_id = watch
-                win.disconnect(handler_id)
-                popover._activation_watch = None
-
-        popover.connect("show", _watch_activation)
-        popover.connect("hide", _unwatch_activation)
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_margin_top(8)
-        outer.set_margin_bottom(8)
-        outer.set_margin_start(10)
-        outer.set_margin_end(10)
-
-        # Header row with "Servers" label and a "↻ Refresh" button.
-        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        hdr_lbl = Gtk.Label(label="Managed Services")
-        hdr_lbl.add_css_class("servers-popover-key")
-        hdr_lbl.set_hexpand(True)
-        hdr_lbl.set_xalign(0)
-        hdr.append(hdr_lbl)
-        refresh_btn = Gtk.Button(label="↻")
-        refresh_btn.add_css_class("servers-popover-btn")
-        refresh_btn.set_tooltip_text("Refresh server status")
-        refresh_btn.connect("clicked", lambda _: self._refresh_servers_popover())
-        hdr.append(refresh_btn)
-        outer.append(hdr)
-
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        sep.set_margin_top(4)
-        sep.set_margin_bottom(4)
-        outer.append(sep)
-
-        # Store widget refs so refresh and action feedback can update them.
-        self._servers_popover_dots: dict[str, Gtk.Label]  = {}
-        self._servers_popover_states: dict[str, Gtk.Label] = {}
-        self._servers_popover_start_btns: dict[str, Gtk.Button] = {}
-        self._servers_popover_stop_btns: dict[str, Gtk.Button] = {}
-        self._servers_popover_restart_btns: dict[str, Gtk.Button] = {}
-
-        # Group servers by capability; preserve CAPABILITY_LABELS order.
-        by_cap: dict[str, list] = {cap: [] for cap in _sm.CAPABILITY_LABELS}
-        last_dep = _settings.get("last_successful_deployment") or ""
-
-        for key, sdef in _sm.SERVERS.items():
-            for cap in (sdef.capabilities or ()):
-                if cap in by_cap:
-                    by_cap[cap].append((key, sdef))
-
-        def _add_server_row(key: str, sdef) -> None:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            row.add_css_class("servers-popover-row")
-
-            dot = Gtk.Label(label="○")
-            dot.add_css_class("servers-popover-dot")
-            dot.add_css_class("servers-popover-dot-off")
-            self._servers_popover_dots[key] = dot
-            row.append(dot)
-
-            text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            text_col.set_hexpand(True)
-            name_lbl = Gtk.Label(label=sdef.label)
-            name_lbl.add_css_class("servers-popover-key")
-            name_lbl.set_xalign(0)
-            name_lbl.set_max_width_chars(1)
-            name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            text_col.append(name_lbl)
-            row.append(text_col)
-
-            start_btn = Gtk.Button(label="▶ Start")
-            start_btn.add_css_class("servers-popover-btn")
-            start_btn.set_tooltip_text(f"Start {sdef.label}")
-            start_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "start"))
-            self._servers_popover_start_btns[key] = start_btn
-            row.append(start_btn)
-
-            stop_btn = Gtk.Button(label="■ Stop")
-            stop_btn.add_css_class("servers-popover-btn")
-            stop_btn.add_css_class("servers-popover-btn-stop")
-            stop_btn.set_tooltip_text(f"Stop {sdef.label}")
-            stop_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "stop"))
-            self._servers_popover_stop_btns[key] = stop_btn
-            row.append(stop_btn)
-
-            restart_btn = Gtk.Button(label="↺")
-            restart_btn.add_css_class("servers-popover-btn")
-            restart_btn.set_tooltip_text(f"Restart {sdef.label}")
-            restart_btn.connect("clicked", lambda _b, k=key: self._on_servers_action(k, "restart"))
-            self._servers_popover_restart_btns[key] = restart_btn
-            row.append(restart_btn)
-
-            if key == last_dep:
-                star = Gtk.Label(label="★")
-                star.add_css_class("servers-popover-last-star")
-                star.set_tooltip_text("Most recently started server")
-                row.append(star)
-
-            outer.append(row)
-
-        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
-            servers_in_cap = by_cap.get(cap, [])
-            if not servers_in_cap:
-                continue  # skip AnimateDiff (hardware-only, no server entry)
-            cap_hdr = Gtk.Label(label=cap_label)
-            cap_hdr.add_css_class("servers-cap-header")
-            cap_hdr.set_xalign(0)
-            outer.append(cap_hdr)
-            for key, sdef in servers_in_cap:
-                _add_server_row(key, sdef)
-
-        popover.set_child(outer)
-        return popover
-
-    def _servers_popover_on_active(self, win, popover) -> None:
-        """Dismiss the non-autohide Servers popover when the toplevel loses
-        activation (e.g. the user switched to another application).
-
-        Because the popover uses ``set_autohide(False)`` it does not close on
-        focus loss by itself and would otherwise linger on top of other apps'
-        windows.  Clicking the popover's own buttons keeps the toplevel active,
-        so this only fires on a genuine app switch.
-        """
-        if not win.get_property("is-active") and popover.get_visible():
-            popover.popdown()
-
-    def _on_servers_popover_show(self, _popover) -> None:
-        """Kick off an async status refresh when the popover opens."""
-        threading.Thread(target=self._refresh_servers_popover, daemon=True).start()
-
-    def _refresh_servers_popover(self) -> None:
-        """Fetch health for all servers in a background thread, update dots on main thread."""
-        statuses = _sm.status_all(timeout=2.0)
-        # Every artgen row shares the fixed health port (8002), so status_all()
-        # lights all of them whenever anything is on 8002 and lights none when a
-        # model is started on another port (e.g. a vLLM Llama on 8003).
-        # Reconcile the artgen rows against the router's discovery so the row for
-        # the model that is actually loaded lights up, wherever it lives.
-        try:
-            import artgen
-            base, model_id = artgen.detect_artgen_endpoint()
-        except Exception:
-            base, model_id = None, None
-        self._reconcile_artgen_statuses(statuses, base, model_id)
-        GLib.idle_add(self._apply_servers_status, statuses)
-
-    @staticmethod
-    def _reconcile_artgen_statuses(statuses: dict, base, model_id) -> dict:
-        """Override each artgen row's status from endpoint discovery.
-
-        Only the row whose model matches the discovered/loaded model reads "on",
-        regardless of which port it is served from.  Matching is case-insensitive
-        against both the row's display label and its ``--model`` argument (the
-        discovered id's ``org/`` prefix is dropped first).  Mutates and returns
-        *statuses*.
-        """
-        loaded = (model_id or "").split("/")[-1].lower()
-        for key, sdef in _sm.SERVERS.items():
-            if "artgen" not in (sdef.capabilities or ()):
-                continue
-            names = set()
-            if sdef.label:
-                names.add(sdef.label.lower())
-            ea = sdef.extra_args or ()
-            for i, arg in enumerate(ea):
-                if arg == "--model" and i + 1 < len(ea):
-                    names.add(ea[i + 1].lower())
-            statuses[key] = bool(base) and loaded in names
-        return statuses
-
-    def _apply_servers_status(self, statuses: dict[str, bool]) -> bool:
-        for key, dot in self._servers_popover_dots.items():
-            alive = statuses.get(key, False)
-            dot.set_label("●" if alive else "○")
-            dot.remove_css_class("servers-popover-dot-on")
-            dot.remove_css_class("servers-popover-dot-off")
-            dot.add_css_class("servers-popover-dot-on" if alive else "servers-popover-dot-off")
-        return GLib.SOURCE_REMOVE
-
-    def _set_server_row_busy(self, key: str, busy: bool) -> bool:
-        """Disable/re-enable all buttons for a server row.  Must run on main thread."""
-        for btn_dict in (
-            self._servers_popover_start_btns,
-            self._servers_popover_stop_btns,
-            self._servers_popover_restart_btns,
-        ):
-            if key in btn_dict:
-                btn_dict[key].set_sensitive(not busy)
-        return GLib.SOURCE_REMOVE
-
-    def _on_servers_action(self, key: str, action: str) -> None:
-        """Run start/stop/restart in a background thread to avoid blocking the UI.
-
-        On start/restart, buttons are disabled immediately and a poll loop waits
-        up to 90 s for the server to become healthy before re-enabling them.
-        On stop the dot is refreshed once after the script exits.
-        """
-        # Already on the main thread — call directly for immediate visual feedback
-        # before the worker thread is even spawned.  Using idle_add here would
-        # defer the update until the next idle cycle, by which time the user may
-        # have already closed the popover and seen no reaction.
-        self._set_server_row_busy(key, True)
-        dot = self._servers_popover_dots.get(key)
-        if dot:
-            dot.set_label("◌")
-
-        def _worker():
-            try:
-                if action == "start":
-                    _sm.start(key, gui=True)
-                elif action == "stop":
-                    _sm.stop(key)
-                elif action == "restart":
-                    _sm.restart(key, gui=True)
-            except Exception:
-                pass
-
-            if action in ("start", "restart"):
-                # Poll until healthy (up to 90 s) so the dot turns green when ready.
-                import time as _time
-                deadline = _time.monotonic() + 90
-                while _time.monotonic() < deadline:
-                    if _sm.is_healthy(key, timeout=2.0):
-                        break
-                    _time.sleep(3)
-
-            # Final refresh: update all dots and re-enable buttons.
-            statuses = _sm.status_all(timeout=2.0)
-            GLib.idle_add(self._apply_servers_status, statuses)
-            GLib.idle_add(self._set_server_row_busy, key, False)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    # ── State ──────────────────────────────────────────────────────────────────
-
-    # ── Advanced settings dialog ───────────────────────────────────────────────
-
-    def open_advanced_dialog(self) -> None:
-        """Open or present the Advanced Generation Settings dialog.
-
-        Called from the context menu → Advanced Settings… item.
-        Creates a new AdvancedSettingsDialog on first call (or after it was
-        closed); presents the existing one if already open.
-        """
-        if self._adv_dialog is None or not self._adv_dialog.get_visible():
-            self._adv_dialog = AdvancedSettingsDialog(self)
-        self._adv_dialog.present()
-
-    # ── Source toggle ──────────────────────────────────────────────────────────
-
-    def _set_source(self, source: str) -> None:
-        """Switch between 'video' (Wan2.2), 'animate' (Animate-14B), 'image' (FLUX), 'artgen' (LLM art)."""
-        if source == self._model_source:
-            return
-        self._model_source = source
-        is_image = source == "image"
-        is_animate = source == "animate"
-        is_video = source == "video"
-        is_artgen = source == "artgen"
-
-        # Active state is handled automatically by the ToggleButton group (:checked CSS).
-        if is_artgen:
-            self._title_lbl.set_label("TT Local Generator")
-            self._source_desc_lbl.set_label(
-                "generative art via LLM  ·  SVG / ANSI / verse / palette  ·  port 8002"
-            )
-            self._on_source_change(source)
-            return
-        elif is_image:
-            self._title_lbl.set_label("TT Local Generator")
-            _img_descs = {
-                "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
-                "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
-                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
-                "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
-            }
-            self._source_desc_lbl.set_label(
-                _img_descs.get(self._image_model, "synchronous  ·  image generation  ·  P300X2")
-            )
-        elif is_animate:
-            self._title_lbl.set_label("TT Local Generator")
-            self._source_desc_lbl.set_label(
-                "async job  ·  Animate-14B  ·  motion video + character  ·  requires starting image"
-            )
-        else:
-            self._title_lbl.set_label("TT Local Generator")
-            if self._video_model == "mochi":
-                self._source_desc_lbl.set_label(
-                    "async job  ·  Mochi-1  ·  ~5–15 min  ·  480×848 168-frame"
-                )
-            else:
-                self._source_desc_lbl.set_label(
-                    "async job  ·  Wan2.2-T2V  ·  ~3–10 min  ·  720p MP4"
-                )
-
-        # Update prompt placeholder — prompt is optional/style-only for animate
-        if is_image:
-            self._prompt_placeholder.set_label(self._prompt_ph_text_image)
-        elif is_animate:
-            self._prompt_placeholder.set_label(
-                "Optional style guidance…\n\n"
-                "e.g. photorealistic, anime style, cinematic lighting\n"
-                "(leave blank to let the model decide)"
-            )
-        else:
-            self._prompt_placeholder.set_label(self._prompt_ph_text_video)
-
-        # Swap chips: each source tab has its own curated chip vocabulary
-        if is_image:
-            chip_source = "image"
-        elif is_animate:
-            chip_source = "animate"
-        else:
-            chip_source = "video"
-        self._chips_scroll.set_child(self._make_chips_box(chip_source))
-
-        # Animate inputs: visible only in animate mode
-        self._animate_box.set_visible(is_animate)
-
-        # AnimateDiff config: visible only when video tab + animatediff selected
-        if hasattr(self, "_animatediff_box"):
-            self._animatediff_box.set_visible(
-                is_video and self._video_model == "animatediff"
-            )
-
-        # VIDEO MODEL row: only shown in video source.
-        if hasattr(self, "_video_model_row_widget"):
-            self._video_model_row_widget.set_visible(is_video)
-
-        # IMAGE MODEL row: only shown in image source.
-        if hasattr(self, "_image_model_row_widget"):
-            self._image_model_row_widget.set_visible(is_image)
-
-        # CLIP LENGTH row: hidden for image source and animatediff (which has no
-        # frame-count picker). Shown for video (wan2/mochi/skyreels) and animate.
-        is_animatediff = is_video and self._video_model == "animatediff"
-        if hasattr(self, "_clip_length_row_widget"):
-            self._clip_length_row_widget.set_visible(
-                (is_video or is_animate) and not is_animatediff
-            )
-
-        # QUALITY row: only shown for video/animate sources where step count is meaningful.
-        # Image (FLUX) uses its own separate step range and the row would be misleading.
-        if hasattr(self, "_quality_row_widget"):
-            self._quality_row_widget.set_visible(is_video or is_animate)
-
-        # Re-evaluate match/mismatch for the newly selected tab.
-        if self._running_model is not None or self._server_ready:
-            self.set_server_state(self._server_ready, self._running_model)
-
-        # Notify the main window so it can switch the gallery stack to show
-        # only the cards that match the newly selected generation mode.
-        self._on_source_change(source)
-        self._update_seed_well_state()
-
-    def _set_model(self, model: str) -> None:
-        """
-        Switch the active model within the current source category.
-        Updates button visual state, description label, and Start button tooltip.
-        Guard against being called before _build() has finished constructing all widgets.
-        """
-        # _source_desc_lbl and _server_start_btn are constructed after the model
-        # selector buttons; set_active(True) on those buttons fires this callback
-        # mid-_build() before those widgets exist. Skip silently in that case.
-        # MainWindow calls _set_model(pref) after _build() completes so the full
-        # update runs once all widgets are ready.
-        if not hasattr(self, "_source_desc_lbl") or not hasattr(self, "_server_start_btn"):
-            return
-        if self._model_source == "video":
-            self._video_model = model
-            # Active state handled by ToggleButton group (:checked CSS); no manual CSS needed.
-            if model == "mochi":
-                self._source_desc_lbl.set_label(
-                    "async job  ·  Mochi-1  ·  ~5–15 min  ·  480×848 168-frame"
-                )
-                self._server_start_btn.set_tooltip_text(
-                    "Start the Mochi-1 inference server.\n"
-                    "Video (Mochi-1) → start_mochi.sh"
-                )
-                self._server_start_btn.set_sensitive(True)
-                self._server_stop_btn.set_sensitive(True)
-            elif model == "skyreels":
-                self._source_desc_lbl.set_label(
-                    "async job  ·  SkyReels-V2-I2V-14B  ·  ~10–30 min  ·  960×544 97-frame  ·  Blackhole  ·  image-to-video"
-                )
-                self._server_start_btn.set_tooltip_text(
-                    "Start the SkyReels-V2-I2V-14B inference server.\n"
-                    "Video (SkyReels I2V) → start_skyreels_i2v.sh  (P300X2 Blackhole)"
-                )
-                self._server_start_btn.set_sensitive(True)
-                self._server_stop_btn.set_sensitive(True)
-            elif model == "animatediff":
-                self._source_desc_lbl.set_label(
-                    "local TTNN  ·  AnimateDiff  ·  ~15–20s (4-chip Lightning)  ·  animated GIF  ·  no server needed"
-                )
-                # AnimateDiff runs locally on Blackhole — no server to start/stop.
-                self._server_start_btn.set_sensitive(False)
-                self._server_stop_btn.set_sensitive(False)
-            else:
-                self._source_desc_lbl.set_label(
-                    "async job  ·  Wan2.2-T2V  ·  ~3–10 min  ·  720p MP4"
-                )
-                self._server_start_btn.set_tooltip_text(
-                    "Start the inference server using the local launch script.\n"
-                    "Video (Wan2.2) → start_wan_qb2.sh  ·  Image → start_flux.sh"
-                )
-                self._server_start_btn.set_sensitive(True)
-                self._server_stop_btn.set_sensitive(True)
-            # Hide CLIP LENGTH row for animatediff (no frame count picker).
-            if hasattr(self, "_clip_length_row_widget"):
-                self._clip_length_row_widget.set_visible(model != "animatediff")
-            # Show Endless button and v0.9 config only for animatediff.
-            if hasattr(self, "_endless_btn"):
-                self._endless_btn.set_visible(model == "animatediff")
-            if hasattr(self, "_animatediff_box"):
-                self._animatediff_box.set_visible(model == "animatediff")
-        elif self._model_source == "image":
-            self._image_model = model
-            _img_descs = {
-                "flux":           "synchronous  ·  FLUX.1-schnell  ·  ~15–90 s  ·  1024×1024 JPEG",
-                "sdxl":           "synchronous  ·  SDXL cpp_server  ·  1024×1024 JPEG",
-                "z-image-turbo":  "synchronous  ·  Z-Image-Turbo  ·  9 steps  ·  P150X4  (functional)",
-                "motif":          "synchronous  ·  Motif-6B-Preview  ·  P300X2",
-            }
-            if hasattr(self, "_source_desc_lbl"):
-                self._source_desc_lbl.set_label(
-                    _img_descs.get(model, "synchronous  ·  image generation  ·  P300X2")
-                )
-
-        # Refresh CLIP LENGTH button labels whenever the active model changes so
-        # durations shown reflect the newly selected model (wan2 vs skyreels fps/frames).
-        if hasattr(self, "_clip_btns"):
-            self._refresh_clip_labels()
-        self._update_seed_well_state()
-        # Re-evaluate Generate button — animatediff is always ready (no server needed).
-        self._update_btns()
-
-    def get_model_source(self) -> str:
-        return self._model_source
-
-    def get_video_model(self) -> str:
-        """Return the currently selected video model key ('wan2', 'mochi', or 'skyreels').
-        'skyreels' maps to SkyReels-V2-I2V-14B-540P (image-to-video)."""
-        return self._video_model
-
-    def get_image_model(self) -> str:
-        """Return the currently selected image model key ('flux', 'sdxl', 'z-image-turbo', or 'motif')."""
-        return self._image_model
-
-    def set_server_state(self, ready: bool, running_model: "str | None") -> None:
-        """
-        Update all server-related UI from a health check result.
-
-        ready         — True if /tt-liveness returned 200
-        running_model — model ID string from /v1/models, or None if unknown/offline
-        """
-        self._running_model = running_model
-        self._server_ready = False  # recalculated below
-
-        if self._server_launching and not ready:
-            # Still launching and health check is returning 500 — don't flash
-            # the indicator to "offline" while the start script is in progress.
-            return
-
-        # Derive a capability label for this tab so status strings are user-centric.
-        cap = _SOURCE_TO_CAP.get(self._model_source, "video")
-        cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
-
-        if not ready:
-            # Offline
-            self._apply_server_row_style("offline")
-            self._server_model_lbl.set_label(f"{cap_label} not ready")
-            self._server_sub_lbl.set_label("Start a server to generate")
-            self._server_start_btn.set_sensitive(True)
-            self._server_stop_btn.set_sensitive(False)
-            self._server_switch_btn.set_visible(False)
-        else:
-            # Server is up — determine match/mismatch
-            source_for_model = (
-                _MODEL_TO_SOURCE.get(running_model) if running_model else None
-            )
-            current_source = self._model_source
-            mismatch = (
-                source_for_model is not None
-                and source_for_model != current_source
-            )
-            display = (
-                _MODEL_DISPLAY_SERVER.get(running_model, f"{cap_label} ready")
-                if running_model
-                else f"{cap_label} ready"
-            )
-
-            if mismatch:
-                self._apply_server_row_style("mismatch")
-                self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label("Wrong model running — switch tabs")
-                self._server_ready = False
-                self._server_switch_btn.set_visible(True)
-                self._server_start_btn.set_sensitive(False)
-                self._server_stop_btn.set_sensitive(True)
-            else:
-                self._apply_server_row_style("match")
-                self._server_model_lbl.set_label(display)
-                self._server_sub_lbl.set_label("")
-                self._server_ready = True
-                self._server_switch_btn.set_visible(False)
-                self._server_start_btn.set_sensitive(False)
-                self._server_stop_btn.set_sensitive(True)
-                # Collapse startup log once server confirmed ready
-                if self._server_launching:
-                    self.set_server_launching(False)
-                # Sync internal model state to match what's actually running.
-                video_key = _MODEL_TO_VIDEO_KEY.get(running_model) if running_model else None
-                if video_key and self._video_model != video_key:
-                    self._set_model(video_key)
-                    self._sync_video_model_dd(video_key)
-                image_key = _MODEL_TO_IMAGE_KEY.get(running_model) if running_model else None
-                if image_key and self._image_model != image_key:
-                    self._set_model(image_key)
-                    self._sync_image_model_dd(image_key)
-
-        self._update_btns()
-
-    # ── Server control helpers ─────────────────────────────────────────────────
-
-    def set_server_launching(self, launching: bool, clear_log: bool = False) -> None:
-        """Show or hide the startup progress panel and lock Start/Stop during the operation."""
-        self._server_launching = launching
-        self._srv_log_revealer.set_reveal_child(launching)
-        if clear_log:
-            self._srv_log_buf.set_text("")
-            self._srv_phase_lbl.set_label("Starting…")
-            self._srv_progress_bar.set_fraction(0.0)
-        # While an operation is in progress, disable both buttons to prevent overlap.
-        self._server_start_btn.set_sensitive(not launching)
-        self._server_stop_btn.set_sensitive(not launching)
-        # Manage the pulse animation timer.
-        if launching and not self._srv_pulse_timer:
-            self._srv_pulse_timer = GLib.timeout_add(200, self._srv_pulse_tick)
-        elif not launching and self._srv_pulse_timer:
-            GLib.source_remove(self._srv_pulse_timer)
-            self._srv_pulse_timer = 0
-
-    def _srv_pulse_tick(self) -> bool:
-        """GLib timer callback: advance the indeterminate progress bar animation."""
-        if not self._server_launching:
-            self._srv_pulse_timer = 0
-            return GLib.SOURCE_REMOVE
-        self._srv_progress_bar.pulse()
-        return GLib.SOURCE_CONTINUE
-
-    def _on_srv_log_toggle(self, _btn) -> None:
-        """Toggle raw log detail panel open/closed."""
-        self._srv_log_detail_open = not self._srv_log_detail_open
-        self._srv_log_detail_revealer.set_reveal_child(self._srv_log_detail_open)
-        self._srv_log_toggle.set_label("▾ Log" if self._srv_log_detail_open else "▸ Log")
-
-    def _apply_server_row_style(self, state: str) -> None:
-        """
-        Switch server row and dot/model labels to the given state style.
-        state is one of: 'offline', 'match', 'mismatch', 'starting'.
-        Removes all server-row-* and server-model-* classes before adding the new one.
-        """
-        for cls in ("server-row-offline", "server-row-match",
-                    "server-row-mismatch", "server-row-starting"):
-            self._server_status_box.remove_css_class(cls)
-        self._server_status_box.add_css_class(f"server-row-{state}")
-
-        for cls in ("server-model-offline", "server-model-match",
-                    "server-model-mismatch", "server-model-starting"):
-            self._server_dot_lbl.remove_css_class(cls)
-            self._server_model_lbl.remove_css_class(cls)
-        self._server_dot_lbl.add_css_class(f"server-model-{state}")
-        self._server_model_lbl.add_css_class(f"server-model-{state}")
-
-    def append_server_log(self, line: str) -> None:
-        """Append one line to the server startup log. Must be called on the main thread.
-
-        Also scans for known milestone strings to update the phase label above the
-        progress bar, giving the user a human-readable summary of where the startup is.
-        """
-        end = self._srv_log_buf.get_end_iter()
-        self._srv_log_buf.insert(end, line + "\n")
-        # Auto-scroll the log to the bottom so the latest output is always visible.
-        adj = self._srv_log_scroll.get_vadjustment()
-        adj.set_value(adj.get_upper() - adj.get_page_size())
-        # Update the phase label when we hit known startup milestones.
-        # NOTE: "Application startup complete" means uvicorn is up but the model
-        # workers haven't started yet — /tt-liveness still returns 500 for several
-        # more minutes. The real readiness signal is "All devices are warmed up".
-        if "Workflow PID" in line:
-            self._srv_phase_lbl.set_label("Docker container starting…")
-        elif "Log file:" in line or "Server started in Docker" in line:
-            self._srv_phase_lbl.set_label("Container up · loading model…")
-        elif "─── tailing" in line:
-            self._srv_phase_lbl.set_label("Loading model weights…")
-        elif "Application startup complete" in line:
-            self._srv_phase_lbl.set_label("Starting model workers…")
-        elif "All devices are warmed up" in line:
-            self._srv_phase_lbl.set_label("Server ready!")
-
-    def _on_start_server_clicked(self, _btn) -> None:
-        self._on_start_server(self._model_source)
-
-    def _on_stop_server_clicked(self, _btn) -> None:
-        self._on_stop_server()
-
-    def _on_switch_to_running_model_tab(self, _btn) -> None:
-        """Switch the source selector to the tab that matches the running model."""
-        source = _MODEL_TO_SOURCE.get(self._running_model) if self._running_model else None
-        if source:
-            self.switch_to_source(source)
-
-    def switch_to_source(self, source: str) -> None:
-        """
-        Programmatically activate a source tab.
-        Fires _set_source() via the existing toggled signal handler.
-        """
-        if source == "video":
-            self._src_video_btn.set_active(True)
-        elif source == "animate":
-            self._src_animate_btn.set_active(True)
-        elif source == "image":
-            self._src_image_btn.set_active(True)
-
-    def set_busy(self, busy: bool) -> None:
-        self._busy = busy
-        # Fields stay editable while busy so the user can write the next prompt to queue.
-        # Only the Generate button is gated; queue button remains available.
-        self._cancel_btn.set_visible(busy)
-        self._update_btns()
-
-    def clear_prompt(self) -> None:
-        """Clear the prompt field so the user can type the next one.
-        The negative prompt lives in self._neg (updated by AdvancedSettingsDialog)
-        and is intentionally preserved between generations.
-        """
-        self._prompt_view.get_buffer().set_text("")
-
-    def _update_btns(self) -> None:
-        # When idle: "Generate" (disabled until server ready).
-        # When busy: "+ Add to Queue" (always enabled so user can queue the next prompt).
-        # AnimateDiff runs locally — no server needed — so it is always "ready".
-        local_only = (
-            self._model_source == "video"
-            and getattr(self, "_video_model", "") == "animatediff"
-        )
-        can_generate = self._server_ready or local_only
-        if self._busy:
-            self._gen_btn.set_label("+ Add to Queue")
-            self._gen_btn.set_sensitive(can_generate)
-            self._gen_btn.set_tooltip_text("Queue this prompt — runs automatically after current generation")
-        else:
-            self._gen_btn.set_label("Generate")
-            self._gen_btn.set_sensitive(can_generate)
-            self._gen_btn.set_tooltip_text("")
-        pass  # recover button removed — sensitivity managed via win.recover-jobs action
-
-    # ── Seed image ─────────────────────────────────────────────────────────────
-
-    def _set_seed_image(self, path: str) -> None:
-        """Set the seed image path and update the inline thumbnail well (Inspire row).
-
-        Pass an empty string to clear the seed image.
-        Directories are silently rejected (path must be a regular file).
-        The accordion seed display was removed in Task 9 — the inline thumbnail
-        well (_seed_thumb_box) is now the sole visual indicator.
-        """
-        # Guard: directories pass Path.exists() but not Path.is_file().
-        # read_bytes() on a directory raises Errno 21 at generation time.
-        if path and not Path(path).is_file():
-            path = ""
-        self._seed_image_path = path
-
-        # ── Update the inline thumbnail well (Task 8) ─────────────────────────
-        # Replace every child of _seed_thumb_box with either a thumbnail
-        # Picture widget or the placeholder icon label.
-        if hasattr(self, "_seed_thumb_box"):
-            # Remove all current children from the well
-            child = self._seed_thumb_box.get_first_child()
-            while child:
-                self._seed_thumb_box.remove(child)
-                child = self._seed_thumb_box.get_first_child()
-
-            if path:
-                # Load a pixbuf scaled to fit the 36×36 interior of the well
-                pb = _load_pixbuf(path, 36, 36)
-                if pb:
-                    img = Gtk.Picture.new_for_pixbuf(pb)
-                    img.set_size_request(36, 36)
-                    img.set_can_shrink(False)
-                    img.set_vexpand(True)
-                    self._seed_thumb_box.append(img)
-                else:
-                    # Pixbuf load failed — show a question-mark placeholder
-                    lbl = Gtk.Label(label="?")
-                    lbl.set_vexpand(True)
-                    lbl.set_valign(Gtk.Align.CENTER)
-                    self._seed_thumb_box.append(lbl)
-            else:
-                # No seed — restore the picture-frame placeholder icon
-                lbl = Gtk.Label(label="\U0001f5bc")
-                lbl.set_vexpand(True)
-                lbl.set_valign(Gtk.Align.CENTER)
-                self._seed_thumb_box.append(lbl)
-            self._update_seed_well_state()
-        # If a seed image was just added and the prompt-error banner is showing
-        # the seed-required message, clear it now.
-        if path and hasattr(self, "_prompt_scroll"):
-            if self._prompt_scroll.has_css_class("prompt-error"):
-                self._prompt_scroll.remove_css_class("prompt-error")
-                self._prompt_error_lbl.set_visible(False)
-                self._prompt_error_lbl.set_label("Prompt cannot be empty.")
-
-    def _clear_seed_image(self) -> None:
-        """Clear the seed image and reset the inline thumbnail well."""
-        self._set_seed_image("")
-
-    def _seed_image_required(self) -> bool:
-        """Return True when the active source/model requires a conditioning image."""
-        if self._model_source == "animate":
-            return True
-        if self._model_source == "video" and self._video_model == "skyreels":
-            return True
-        return False
-
-    def _update_seed_well_state(self) -> None:
-        """Sync the seed well's required/has-seed CSS classes and tooltip."""
-        if not hasattr(self, "_seed_thumb_box"):
-            return
-        required = self._seed_image_required()
-        has_seed = bool(self._seed_image_path)
-
-        if required and not has_seed:
-            self._seed_thumb_box.add_css_class("required")
-        else:
-            self._seed_thumb_box.remove_css_class("required")
-
-        if has_seed:
-            self._seed_thumb_box.add_css_class("has-seed")
-        else:
-            self._seed_thumb_box.remove_css_class("has-seed")
-
-        if required:
-            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
-            if has_seed:
-                self._seed_thumb_box.set_tooltip_text(
-                    f"Starting image for {tip_model} — right-click to clear"
-                )
-            else:
-                self._seed_thumb_box.set_tooltip_text(
-                    f"Required: {tip_model} needs a starting image\n"
-                    "Click to browse · drop an image or gallery frame here"
-                )
-        else:
-            self._seed_thumb_box.set_tooltip_text(
-                "Optional seed image — click to browse, right-click to clear\n"
-                "Drop a gallery frame here to use as seed image"
-            )
-
-    def _open_seed_picker(self) -> None:
-        """Open the PickerPopover (Gallery + Disk tabs) anchored to the seed image well.
-
-        Used for both the Video/Image seed image and the Animate character image:
-        the seed well is the unified entry point for all image selection.
-        PickerPopover is created fresh on each click so Gallery records are current.
-        """
-        clips_dir = str(Path(__file__).parent / "assets" / "motion_clips")
-        picker = PickerPopover(
-            widget_type="char",
-            clips_dir=clips_dir,
-            history_records=self._store.all_records() if hasattr(self, "_store") else [],
-            settings=_settings,
-            on_select=self._set_seed_image,
-        )
-        picker.set_parent(self._seed_thumb_box)
-        picker.popup()
-
-    def set_char_input(self, path: str) -> None:
-        """Set the character image path (animate mode).
-
-        Called when remixing a card as an animate character.  Routes to
-        _set_seed_image so the inline thumbnail well updates.
-        """
-        self._set_seed_image(path)
-
-    # ── Chips helper ───────────────────────────────────────────────────────────
-
-    def _make_chips_box(self, source: str) -> Gtk.Box:
-        """Build a vertically grouped chip box for *source* ('video'/'image'/'animate')."""
-        categories = {
-            "video":   _VIDEO_CHIPS,
-            "image":   _IMAGE_CHIPS,
-            "animate": _ANIMATE_CHIPS,
-        }.get(source, [])
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        outer.set_margin_start(2)
-        outer.set_margin_end(2)
-        outer.set_margin_top(2)
-        outer.set_margin_bottom(2)
-
-        for cat in categories:
-            lbl = Gtk.Label(label=cat.name)
-            lbl.set_xalign(0)
-            lbl.add_css_class("chips-category-lbl")
-            outer.append(lbl)
-
-            flow = Gtk.FlowBox()
-            flow.set_selection_mode(Gtk.SelectionMode.NONE)
-            flow.set_row_spacing(3)
-            flow.set_column_spacing(4)
-            for chip in cat.chips:
-                btn = Gtk.Button(label=chip.label)
-                btn.set_tooltip_text(chip.tip)
-                btn.add_css_class("chip-btn")
-                btn.connect("clicked", lambda _b, t=chip.text: self._append_to_prompt(t))
-                flow.append(btn)
-            outer.append(flow)
-
-        return outer
-
-    # ── Form helpers ───────────────────────────────────────────────────────────
-
-    def _append_to_prompt(self, text: str) -> None:
-        """Append a chip's text to the prompt, inserting a comma separator if needed."""
-        buf = self._prompt_view.get_buffer()
-        current = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).rstrip()
-        if current and not current.endswith(","):
-            new_text = current + ", " + text
-        elif current:
-            new_text = current + " " + text
-        else:
-            new_text = text
-        buf.set_text(new_text)
-        # Move cursor to end
-        buf.place_cursor(buf.get_end_iter())
-        self._prompt_view.grab_focus()
-
-    def _get_prompt(self) -> str:
-        buf = self._prompt_view.get_buffer()
-        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
-
-    def _get_neg(self) -> str:
-        """Return the current negative prompt. Source of truth is self._neg,
-        updated in real-time by AdvancedSettingsDialog._on_neg_changed."""
-        return self._neg.strip()
-
-    def _sync_neg_from_widget(self) -> None:
-        """Sync self._neg from the Advanced dialog if it is open.
-
-        Called by _on_action_clicked before building the args tuple.
-        If the dialog is not open, self._neg is already current because
-        AdvancedSettingsDialog._on_neg_changed writes directly to self._neg.
-        """
-        if (
-            hasattr(self, "_adv_dialog")
-            and self._adv_dialog is not None
-            and self._adv_dialog.get_visible()
-        ):
-            buf = self._adv_dialog._neg_tv.get_buffer()
-            self._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
-
-    def populate_prompts(self, prompt: str, neg: str, seed_image_path: str = "") -> None:
-        self._prompt_view.get_buffer().set_text(prompt)
-        # Negative prompt lives in self._neg; sync to dialog if open.
-        self._neg = neg
-        if self._adv_dialog is not None and self._adv_dialog.get_visible():
-            self._adv_dialog._neg_tv.get_buffer().set_text(neg)
-        if seed_image_path and Path(seed_image_path).exists():
-            self._set_seed_image(seed_image_path)
-        else:
-            self._clear_seed_image()
-
-    # ── Prompt validation ──────────────────────────────────────────────────────
-
-    def _on_prompt_changed(self, buf: Gtk.TextBuffer) -> None:
-        """Clear the empty-prompt error state as soon as the user types anything."""
-        if self._prompt_scroll.has_css_class("prompt-error"):
-            self._prompt_scroll.remove_css_class("prompt-error")
-            self._prompt_error_lbl.set_visible(False)
-            self._prompt_error_lbl.set_label("Prompt cannot be empty.")
-
-    def set_prompt_gen_state(self, ready: bool) -> None:
-        """
-        Update the inspire row dot and button sensitivity from the health poll result.
-
-        Called from the main thread via GLib.idle_add.  Handles the auto-generate
-        flow: if the server just became ready after the user clicked "▶ Start" in
-        the confirm box, fires the pending generation automatically.
-        """
-        was_starting = self._prompt_gen_starting
-        self._prompt_gen_ready = ready
-
-        if ready:
-            self._prompt_gen_starting = False
-            # Update dot to green "ready"
-            self._inspire_dot_lbl.set_label("⬤ ready")
-            for cls in ("inspire-dot", "inspire-dot-starting"):
-                self._inspire_dot_lbl.remove_css_class(cls)
-            self._inspire_dot_lbl.add_css_class("inspire-dot-ready")
-            # Restore button if not mid-generation and confirm box is not open
-            if not self._prompt_gen_generating and not self._confirm_box_visible:
-                self._inspire_btn.set_label("✨ Inspire me")
-                self._inspire_btn.remove_css_class("inspire-btn-loading")
-                self._inspire_btn.add_css_class("inspire-btn")
-                self._inspire_btn.set_sensitive(True)
-            # Auto-generate if pending from the confirm-start flow
-            if was_starting and self._inspire_pending_source is not None:
-                source = self._inspire_pending_source
-                seed = self._inspire_pending_seed
-                self._inspire_pending_source = None
-                self._inspire_pending_seed = ""
-                self._trigger_inspire(source, seed)
-        elif not self._prompt_gen_starting:
-            # Server is offline and not actively starting — algo-only mode
-            self._inspire_dot_lbl.set_label("⬤ algo only")
-            for cls in ("inspire-dot-ready", "inspire-dot-starting"):
-                self._inspire_dot_lbl.remove_css_class(cls)
-            self._inspire_dot_lbl.add_css_class("inspire-dot")
-            if not self._prompt_gen_generating and not self._confirm_box_visible:
-                self._inspire_btn.set_label("✨ Inspire me")
-                self._inspire_btn.remove_css_class("inspire-btn-loading")
-                self._inspire_btn.add_css_class("inspire-btn")
-                self._inspire_btn.set_sensitive(True)
-
-    def set_prompt_gen_starting(self, starting: bool) -> None:
-        """Show/hide the starting… state on the inspire row button and dot."""
-        self._prompt_gen_starting = starting
-        if starting:
-            self._inspire_dot_lbl.set_label("⬤ starting…")
-            for cls in ("inspire-dot", "inspire-dot-ready"):
-                self._inspire_dot_lbl.remove_css_class(cls)
-            self._inspire_dot_lbl.add_css_class("inspire-dot-starting")
-            self._inspire_btn.set_label("⏳ Starting…")
-            self._inspire_btn.remove_css_class("inspire-btn")
-            self._inspire_btn.add_css_class("inspire-btn-loading")
-            self._inspire_btn.set_sensitive(False)
-
-    def _on_inspire_clicked(self, _btn) -> None:
-        """Handle Inspire button click.
-
-        Always generates — algo/markov works without Qwen.  The confirm box
-        (▶ Start / Not now) is only shown when the user explicitly wants to
-        start the Qwen server before generating.
-        """
-        source = self._model_source
-        seed_text = self._prompt_buf.get_text(
-            self._prompt_buf.get_start_iter(),
-            self._prompt_buf.get_end_iter(),
-            False,
-        ).strip()
-        self._trigger_inspire(source, seed_text)
-
-    def _on_inspire_confirm_start(self, _btn) -> None:
-        """User clicked ▶ Start in the confirm box — launch server and set auto-generate."""
-        self._inspire_start_btn.set_sensitive(False)
-        self._inspire_confirm_revealer.set_reveal_child(False)
-        self._confirm_box_visible = False
-        # Capture source + seed at click time so auto-generate uses the right values
-        self._inspire_pending_source = self._model_source
-        self._inspire_pending_seed = self._prompt_buf.get_text(
-            self._prompt_buf.get_start_iter(),
-            self._prompt_buf.get_end_iter(),
-            False,
-        ).strip()
-        self.set_prompt_gen_starting(True)
-        self._on_start_prompt_gen()
-
-    def _on_inspire_confirm_cancel(self, _btn) -> None:
-        """User clicked Not now — dismiss confirm box, restore button."""
-        self._inspire_confirm_revealer.set_reveal_child(False)
-        self._confirm_box_visible = False
-        self._inspire_btn.set_sensitive(True)
-
-    def _trigger_inspire(self, source: str, seed_text: str) -> None:
-        """Set loading state and call on_inspire(source, seed_text) to fire the thread."""
-        self._prompt_gen_generating = True
-        self._inspire_btn.set_label("⏳ Generating…")
-        self._inspire_btn.remove_css_class("inspire-btn")
-        self._inspire_btn.add_css_class("inspire-btn-loading")
-        self._inspire_btn.set_sensitive(False)
-        self._on_inspire(source, seed_text)
-
-    def set_inspire_result(self, text: str) -> None:
-        """Called on main thread when generation succeeds — replace textarea content."""
-        self._prompt_gen_generating = False
-        self._prompt_buf.set_text(text)
-        self._inspire_btn.set_label("✨ Inspire me")
-        self._inspire_btn.remove_css_class("inspire-btn-loading")
-        self._inspire_btn.add_css_class("inspire-btn")
-        self._inspire_btn.set_sensitive(True)
-
-    def set_inspire_error(self, msg: str) -> None:
-        """Called on main thread when generation fails — restore button state."""
-        self._prompt_gen_generating = False
-        self._inspire_btn.set_label("✨ Inspire me")
-        self._inspire_btn.remove_css_class("inspire-btn-loading")
-        self._inspire_btn.add_css_class("inspire-btn")
-        self._inspire_btn.set_sensitive(True)
-
-    # ── Theme Set handlers ─────────────────────────────────────────────────────
-
-    def _on_theme_clicked(self, _btn) -> None:
-        """Handle Theme Set button click — start background theme generation."""
-        if self._theme_generating:
-            return
-        self._theme_generating = True
-        self._theme_btn.set_label("⏳ Thinking…")
-        self._theme_btn.remove_css_class("theme-btn")
-        self._theme_btn.add_css_class("theme-btn-loading")
-        self._theme_btn.set_sensitive(False)
-        self._on_theme_queue(self._model_source)
-
-    def set_theme_result(self, result: dict, on_queue_shots) -> None:
-        """Called on main thread when theme generation succeeds.
-
-        Opens a popover anchored to the Theme Set button that shows the 5 shots
-        with their role labels and polished prompts, plus a "Queue All 5" button.
-
-        Args:
-            result:        dict from generate_theme.generate_theme()
-            on_queue_shots: callable(shots: list[dict]) — called when user confirms
-        """
-        self._theme_generating = False
-        self._theme_btn.set_label("🎬 Theme Set")
-        self._theme_btn.remove_css_class("theme-btn-loading")
-        self._theme_btn.add_css_class("theme-btn")
-        self._theme_btn.set_sensitive(True)
-
-        shots = result.get("shots", [])
-        theme_label = result.get("theme", "Theme Set")
-        source_tag = result.get("source", "")
-
-        # Build popover content
-        popover = Gtk.Popover()
-        popover.set_parent(self._theme_btn)
-        popover.add_css_class("theme-popover")
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        outer.set_size_request(480, -1)
-
-        # Header: theme name + source
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        header_lbl = Gtk.Label(label=f"<b>{theme_label}</b>")
-        header_lbl.set_use_markup(True)
-        header_lbl.set_halign(Gtk.Align.START)
-        header_lbl.set_hexpand(True)
-        src_lbl = Gtk.Label(label=source_tag)
-        src_lbl.add_css_class("inspire-dot")
-        header.append(header_lbl)
-        header.append(src_lbl)
-        outer.append(header)
-
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        outer.append(sep)
-
-        # Shot rows
-        role_labels = {
-            "establish": "1 · Establish",
-            "develop":   "2/3 · Develop",
-            "climax":    "4 · Climax",
-            "resolve":   "5 · Resolve",
-        }
-        for shot in shots:
-            shot_num = shot.get("shot", "?")
-            role = shot.get("role", "")
-            prompt_text = shot.get("prompt", shot.get("slug", ""))
-
-            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            row.add_css_class("theme-shot-row")
-
-            role_str = f"Shot {shot_num} · {role.capitalize()}"
-            role_lbl = Gtk.Label(label=role_str)
-            role_lbl.add_css_class("theme-shot-label")
-            role_lbl.set_halign(Gtk.Align.START)
-            row.append(role_lbl)
-
-            prompt_lbl = Gtk.Label(label=prompt_text)
-            prompt_lbl.add_css_class("theme-shot-text")
-            prompt_lbl.set_wrap(True)
-            prompt_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-            prompt_lbl.set_halign(Gtk.Align.START)
-            prompt_lbl.set_xalign(0.0)
-            row.append(prompt_lbl)
-
-            outer.append(row)
-
-        sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        outer.append(sep2)
-
-        # Footer: Queue All 5 + Dismiss
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        footer.set_halign(Gtk.Align.END)
-
-        dismiss_btn = Gtk.Button(label="Dismiss")
-        dismiss_btn.add_css_class("inspire-confirm-btn")
-        dismiss_btn.connect("clicked", lambda _b: popover.popdown())
-        footer.append(dismiss_btn)
-
-        queue_btn = Gtk.Button(label="▶ Queue All 5")
-        queue_btn.add_css_class("theme-queue-btn")
-
-        def _queue_all(_b):
-            popover.popdown()
-            on_queue_shots(shots)
-
-        queue_btn.connect("clicked", _queue_all)
-        footer.append(queue_btn)
-
-        outer.append(footer)
-
-        popover.set_child(outer)
-        popover.popup()
-
-    def set_theme_error(self, msg: str) -> None:
-        """Called on main thread when theme generation fails — restore button."""
-        self._theme_generating = False
-        self._theme_btn.set_label("🎬 Theme Set")
-        self._theme_btn.remove_css_class("theme-btn-loading")
-        self._theme_btn.add_css_class("theme-btn")
-        self._theme_btn.set_sensitive(True)
-
-    def get_generation_defaults(self) -> dict:
-        """Return current panel settings as a dict, minus the prompt text.
-
-        Used by MainWindow._on_theme_queue_shots() to build enqueue args for
-        each of the 5 theme shots without disturbing the prompt buffer.
-        """
-        if self._model_source == "video":
-            current_model_id = self._video_model
-        elif self._model_source == "image":
-            current_model_id = self._image_model
-        else:
-            current_model_id = ""
-        return {
-            "neg":            self._neg,
-            "steps":          self._steps,
-            "seed":           self._seed,
-            "seed_image_path": self._seed_image_path,
-            "model_source":   self._model_source,
-            "guidance_scale": self._guidance,
-            "ref_video_path": "",   # motion video removed from UI
-            "ref_char_path":  "",   # character image uses seed_image_path
-            "animate_mode":   self._animate_mode,
-            "model_id":       current_model_id,
-        }
-
-    # ── Button handlers ────────────────────────────────────────────────────────
-
-    def _on_action_clicked(self, _btn) -> None:
-        """Single button: Generate when idle, Add to Queue when busy."""
-        prompt = self._get_prompt()
-        if self._model_source != "animate":
-            # Animate prompt is optional (style guidance only); all other modes require one.
-            if not prompt:
-                self._prompt_scroll.add_css_class("prompt-error")
-                self._prompt_error_lbl.set_visible(True)
-                return
-        if self._seed_image_required() and not self._seed_image_path:
-            tip_model = "Animate" if self._model_source == "animate" else "SkyReels I2V"
-            self._prompt_scroll.add_css_class("prompt-error")
-            self._prompt_error_lbl.set_label(
-                f"{tip_model} requires a starting image — drop one in the image well above."
-            )
-            self._prompt_error_lbl.set_visible(True)
-            return
-        # Determine the specific model within the active category
-        if self._model_source == "video":
-            current_model_id = self._video_model
-        elif self._model_source == "image":
-            current_model_id = self._image_model
-        else:
-            current_model_id = ""
-
-        # Sync neg prompt from dialog if it happens to be open
-        self._sync_neg_from_widget()
-
-        args = (
-            prompt,
-            self._neg,
-            self._steps,
-            self._seed,
-            self._seed_image_path,
-            self._model_source,
-            self._guidance,
-            "",   # ref_video_path — motion video removed from UI
-            "",   # ref_char_path — character image uses seed_image_path
-            self._animate_mode,
-            current_model_id,
-        )
-        # Clear the prompt fields so the user can type the next one immediately.
-        # This happens only on explicit user click, never on auto-queue or attractor paths.
-        self.clear_prompt()
-        if self._busy:
-            self._on_enqueue(*args)
-        else:
-            self._on_generate(*args)
-
-    # ── Queue display ──────────────────────────────────────────────────────────
-
-
 
 # ── Recovery dialog ────────────────────────────────────────────────────────────
 
@@ -7045,145 +4906,6 @@ class _StatusBar(Gtk.Box):
         self._stop.set()
 
 
-# ── Advanced Settings Dialog ───────────────────────────────────────────────────
-
-class AdvancedSettingsDialog(Gtk.Window):
-    """Non-modal dialog exposing raw generation parameters for advanced users.
-
-    Reads initial values from the ControlPanel plain state attributes and
-    writes back to them on every change, keeping the named buttons in sync.
-    Opened from context menu → Advanced Settings…
-    """
-
-    def __init__(self, panel: "ControlPanel") -> None:
-        super().__init__()
-        self._panel = panel
-        self.set_title("Advanced Generation Settings")
-        self.set_default_size(340, 320)
-        self.set_resizable(False)
-        root = panel.get_root()
-        if root:
-            self.set_transient_for(root)
-            app = root.get_application() if hasattr(root, "get_application") else None
-            if app:
-                self.set_application(app)
-        self._build()
-
-    def _build(self) -> None:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.set_margin_top(16)
-        box.set_margin_bottom(16)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
-        self.set_child(box)
-
-        # ── Inference steps ───────────────────────────────────────────────────
-        steps_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        steps_lbl = Gtk.Label(label="Inference steps (10\u201350):")
-        steps_lbl.set_xalign(0)
-        steps_lbl.set_hexpand(True)
-        steps_row.append(steps_lbl)
-        self._steps_spin = Gtk.SpinButton()
-        self._steps_spin.set_adjustment(Gtk.Adjustment(
-            value=self._panel._steps,
-            lower=10, upper=50,
-            step_increment=1, page_increment=10,
-            page_size=0,
-        ))
-        self._steps_spin.connect("value-changed", self._on_steps_changed)
-        steps_row.append(self._steps_spin)
-        box.append(steps_row)
-
-        # ── Seed ──────────────────────────────────────────────────────────────
-        seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        seed_lbl = Gtk.Label(label="Seed (\u22121 = random):")
-        seed_lbl.set_xalign(0)
-        seed_lbl.set_hexpand(True)
-        seed_row.append(seed_lbl)
-        self._seed_spin = Gtk.SpinButton()
-        self._seed_spin.set_adjustment(Gtk.Adjustment(
-            value=self._panel._seed,
-            lower=-1, upper=2**31 - 1,
-            step_increment=1, page_increment=1000,
-            page_size=0,
-        ))
-        self._seed_spin.connect("value-changed", self._on_seed_changed)
-        seed_row.append(self._seed_spin)
-        box.append(seed_row)
-
-        # ── Guidance scale ────────────────────────────────────────────────────
-        guidance_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        guidance_lbl = Gtk.Label(label="Guidance scale (1\u201320):")
-        guidance_lbl.set_xalign(0)
-        guidance_lbl.set_hexpand(True)
-        guidance_row.append(guidance_lbl)
-        self._guidance_spin = Gtk.SpinButton()
-        self._guidance_spin.set_adjustment(Gtk.Adjustment(
-            value=self._panel._guidance,
-            lower=1.0, upper=20.0,
-            step_increment=0.5, page_increment=1.0,
-            page_size=0,
-        ))
-        self._guidance_spin.set_digits(1)
-        self._guidance_spin.connect("value-changed", self._on_guidance_changed)
-        guidance_row.append(self._guidance_spin)
-        box.append(guidance_row)
-
-        # ── Negative prompt ───────────────────────────────────────────────────
-        neg_lbl = Gtk.Label(label="Negative prompt:")
-        neg_lbl.set_xalign(0)
-        box.append(neg_lbl)
-        self._neg_tv = Gtk.TextView()
-        self._neg_tv.set_wrap_mode(Gtk.WrapMode.WORD)
-        self._neg_tv.set_size_request(-1, 60)
-        self._neg_tv.get_buffer().set_text(self._panel._neg)
-        self._neg_tv.get_buffer().connect("changed", self._on_neg_changed)
-        neg_scroll = Gtk.ScrolledWindow()
-        neg_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        neg_scroll.set_child(self._neg_tv)
-        neg_scroll.set_size_request(-1, 68)
-        box.append(neg_scroll)
-
-    def _on_steps_changed(self, spin: Gtk.SpinButton) -> None:
-        """Sync steps change back to panel and update QUALITY buttons."""
-        steps = int(spin.get_value())
-        # sync_quality_btn_to_steps also sets self._panel._steps
-        if hasattr(self._panel, "sync_quality_btn_to_steps"):
-            self._panel.sync_quality_btn_to_steps(steps)
-        else:
-            self._panel._steps = steps
-
-    def _on_seed_changed(self, spin: Gtk.SpinButton) -> None:
-        """Sync seed change back to panel and activate 'Keep this' seed mode."""
-        self._panel._seed = int(spin.get_value())
-        _settings.set("pinned_seed", self._panel._seed)
-        if hasattr(self._panel, "_seed_keep_btn"):
-            self._panel._seed_keep_btn.set_active(True)
-            label = (
-                f"\U0001f4cc {self._panel._seed}"
-                if self._panel._seed != -1
-                else "\U0001f4cc Keep this"
-            )
-            self._panel._seed_keep_btn.set_label(label)
-
-    def _on_guidance_changed(self, spin: Gtk.SpinButton) -> None:
-        """Sync guidance scale change back to panel."""
-        self._panel._guidance = float(spin.get_value())
-
-    def _on_neg_changed(self, buf: Gtk.TextBuffer) -> None:
-        """Sync negative prompt change back to panel directly."""
-        self._panel._neg = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
-
-    def sync_from_panel(self) -> None:
-        """Refresh dialog widgets from panel state. Called when Quality buttons change."""
-        if hasattr(self, "_steps_spin"):
-            self._steps_spin.set_value(self._panel._steps)
-        if hasattr(self, "_seed_spin"):
-            self._seed_spin.set_value(self._panel._seed)
-        if hasattr(self, "_guidance_spin"):
-            self._guidance_spin.set_value(self._panel._guidance)
-
-
 # ── Preferences Dialog ─────────────────────────────────────────────────────────
 
 class PreferencesDialog(Gtk.Window):
@@ -7642,25 +5364,11 @@ def _build_context_menu_for_source(source: str) -> "Gio.Menu":
             pin_section.append_item(item)
         menu.append_section("Pinned Director", pin_section)
 
-    # Art: auto-generate controls
-    if source == "artgen":
-        auto_section = Gio.Menu()
-        auto_item = Gio.MenuItem.new("Enabled", "win.art-autogen")
-        auto_section.append_item(auto_item)
-        menu.append_section("Auto-generate", auto_section)
-
-        delay_section = Gio.Menu()
-        for label, val in [("3 seconds", "3"), ("10 seconds", "10"), ("30 seconds", "30")]:
-            item = Gio.MenuItem.new(label, "win.art-autogen-delay")
-            item.set_attribute_value("target", GLib.Variant("s", val))
-            delay_section.append_item(item)
-        menu.append_section("Auto Delay", delay_section)
-
-    # Advanced Settings (video / animate / image)
-    if source in ("video", "animate", "image"):
-        adv_section = Gio.Menu()
-        adv_section.append("Advanced Settings…", "win.advanced-settings")
-        menu.append_section(None, adv_section)
+    # Art auto-generate (removed SP-3d-5 — was ArtgenPanel-sidebar-only, an
+    # ACCEPTED FLAGGED loss; see CLAUDE.md and .superpowers/sdd/task-5-report.md).
+    # Advanced Settings (removed SP-3d-5 — was ControlPanel-only;
+    # superseded by the per-medium collapsed "Controls (N)" Gtk.Expander
+    # in Create/Remix, see CLAUDE.md's "Create surface" section).
 
     return menu
 
@@ -7674,7 +5382,15 @@ class MainWindow(Gtk.ApplicationWindow):
                  prompt_server_url: str = "http://127.0.0.1:8001",
                  inventory_url: str = ""):
         super().__init__(application=app, title="TT Local Generator")
+        # Default size is the un-maximized fallback (used if the user restores
+        # the window down). The app should open maximized every launch — but
+        # calling maximize() before the surface is realized/mapped is racy on
+        # Wayland (GTK4 only queues the request and may drop it), which is why
+        # it was inconsistent. Defer to a one-shot "map" handler so the request
+        # is issued once the toplevel actually exists.
         self.set_default_size(1280, 800)
+        self._did_initial_maximize = False
+        self.connect("map", self._maximize_on_first_map)
 
         self._alive: bool = True   # set False in do_close_request; guards idle_add callbacks
         self._flash_restore_id: int = 0   # GLib timer id for pending _flash_status restore
@@ -7692,8 +5408,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # Track which gallery owns the current pending card (set in _on_generate,
         # used in _on_finished/_on_error to update the right gallery).
         self._gen_gallery = None
-        self._auto_tab_switched = False  # True after first model detection auto-switch
-        self._pg_stop: "threading.Event | None" = None  # set when prompt gen poll starts
+        # True while a generation launched from the Create surface is in
+        # flight — set in _on_create_generate, cleared in _on_finished/
+        # _on_error. When True, _on_generate skips the gallery's own pending
+        # card (CreateResultPanel owns that UI instead) and the worker
+        # callbacks (_on_progress/_on_finished/_on_error) also forward to
+        # `self._create_view._result_panel`.
+        self._create_job_active = False
         self._log_tail_stop: "threading.Event | None" = None  # set to stop server log tail
         self._attractor_win: "attractor.AttractorWindow | None" = None
         self._prompt_gen_system_prompt: str = self._load_prompt_gen_system()
@@ -7706,35 +5427,105 @@ class MainWindow(Gtk.ApplicationWindow):
         # Remote inventory records fetched from the inventory server (if running).
         # These are shown alongside local records; keyed by record ID to avoid duplicates.
         self._remote_records: dict = {}  # {record.id: GenerationRecord}
+        # Pipeline Studio (SP-C): constructed lazily on first activation of the
+        # "Pipelines" toolbar toggle (see _show_pipelines) since it scans run
+        # history on construction — no need to pay that cost at startup.
+        self._pipeline_studio = None  # type: "PipelineStudio | None"
+        # Guards _on_pipelines_toggled against recursing back into
+        # _hide_pipelines when _uncheck_pipelines_toggle_if_active programmatically
+        # unchecks the Pipelines toggle (see _sync_gallery_to_source / _on_pipelines_toggled).
+        self._pipelines_toggle_syncing = False
+
+        # ModelStatusService (SP-2 Task 1): the single "is a model on" poller,
+        # unifying server_manager health, artgen endpoint detection, and port
+        # probing behind one status map. Constructed and started here, BEFORE
+        # `_build_ui()` (which constructs CreateView below), so the service
+        # instance exists in time to be injected into CreateView. Stopped in
+        # `do_close_request` alongside the other background pollers.
+        self._status_service = ModelStatusService()
+        self._status_service.start()
+
+        # NavState (RN-2 Task 1/2): the single "you are here" model backing
+        # the breadcrumb bar + live-context tray. Constructed BEFORE
+        # `_build_ui()` (same rationale as `_status_service` above) so the
+        # widgets built inside `_build_ui()` can subscribe to a real instance
+        # from the start. `_set_crumbs` no-ops when this attribute is absent,
+        # which keeps existing test harnesses that construct a bare/partial
+        # MainWindow (no `_nav_state`) working unchanged.
+        self._nav_state = NavState()
 
         self._build_ui()
+        # Now that _build_ui() has constructed everything the loop nav's
+        # "toggled" handlers touch (_gallery_stack, _detail_wrap,
+        # _pipelines_btn), it's safe to activate Create — the loop's default
+        # landing movement. Fires _on_loop_nav_create(), which is a no-op-safe
+        # re-application of the state _build_ui already left things in.
+        self._loop_nav_create_btn.set_active(True)
         self._load_history()
         self._rebuild_playlists_menu()   # populate Playlists menu after history is loaded
         self._restore_queue()
-        self._start_health_worker()
-        self._start_prompt_gen_health_worker()
-        self._start_artgen_health_worker()
+        # SP-3d-6: `_hw_statusbar` is now driven ENTIRELY by ModelStatusService.
+        # The three legacy pollers that used to feed it (`_health_loop`/
+        # `_artgen_health_loop`/`_prompt_gen_health_loop`, each with its own
+        # background thread hitting a different port) are retired -- one
+        # status dot, one source of truth. Subscribe LAST (mirrors
+        # ServersControl.__init__'s own ordering) so a synchronous notify
+        # from within subscribe() can never hit a half-built widget, then
+        # paint the already-known snapshot immediately since subscribe()
+        # only pushes on the *next* change.
+        self._status_agg_prev = Status.OFF
+        self._status_unsubscribe = self._status_service.subscribe(
+            lambda snap: GLib.idle_add(self._on_status_snapshot, snap)
+        )
+        self._on_status_snapshot(self._status_service.snapshot())
+        # "animatediff" is a hardware capability with no server_manager.SERVERS
+        # entry (see CAPABILITY_LABELS's comment), so ModelStatusService never
+        # resolves a status for it -- check it once, standalone, same as the
+        # old `_start_artgen_health_worker`'s nested one-shot thread did.
+        self._check_animatediff_hardware()
+        # Bring up the CPU prompt-gen server (port 8001, powers ✨ Inspire) if it
+        # isn't already running — CPU-only, coexists with any TT workload.
+        self._autostart_prompt_server()
         # Pre-warm transform availability cache off the main thread so the first
         # right-click doesn't block while importing plugin modules (torch etc.).
         threading.Thread(
-            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth")],
+            target=lambda: [_transform_available(k) for k in ("rmbg", "blip", "depth", "ansi-image")],
             daemon=True,
         ).start()
         if self._inventory_url:
             self._start_inventory_fetch()
+        # SP-3d-5: the ControlPanel-only startup steps that used to live here
+        # (sync_quality_btn_to_steps / switch_to_source / _set_model, driven
+        # by `quality_steps` and `last_successful_deployment` settings) are
+        # gone with the class — Create reads those settings directly, and
+        # `_current_medium_source()` derives "what am I making" from
+        # CreateView's own active-medium state instead of a startup pre-select.
 
-        # Apply persisted quality preference — drives self._steps and QUALITY buttons.
-        saved_steps = int(_settings.get("quality_steps"))
-        self._controls.sync_quality_btn_to_steps(saved_steps)
+    def _set_crumbs(self, crumbs) -> None:
+        """Push a new breadcrumb trail onto `NavState`, if one exists.
 
-        # Pre-select the source tab and model from the last successful deployment.
-        last = _settings.get("last_successful_deployment")
-        if last:
-            src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(last, (None, None))
-            if src:
-                self._controls.switch_to_source(src)
-                if mdl:
-                    self._controls._set_model(mdl)
+        Guarded rather than assumed: test harnesses that construct a bare/
+        partial `MainWindow` (skipping `__init__`'s `NavState()` line) don't
+        have `_nav_state` at all, and this must stay a safe no-op for them
+        instead of raising `AttributeError` deep inside a loop-nav handler.
+        """
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.set_crumbs(crumbs)
+
+    def _nav_open_context(self, ctx) -> None:
+        """Register (or update) a resumable live-context tray chip, if a
+        `NavState` exists. Guarded the same way `_set_crumbs` is — bare test
+        harnesses that skip `NavState()` construction stay a safe no-op."""
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.open_context(ctx)
+
+    def _nav_close_context(self, ctx_id: str) -> None:
+        """Remove a live-context tray chip, if a `NavState` exists."""
+        ns = getattr(self, "_nav_state", None)
+        if ns is not None:
+            ns.close_context(ctx_id)
 
     def _build_ui(self) -> None:
         # Apply CSS to the display now that we have a window
@@ -7750,44 +5541,91 @@ class MainWindow(Gtk.ApplicationWindow):
         root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root_box)
 
-        self._controls = ControlPanel(
-            on_generate=self._on_generate,
-            on_enqueue=self._on_enqueue,
-            on_cancel=self._on_cancel,
-            on_start_server=self._on_start_server,
-            on_stop_server=self._on_stop_server,
-            on_source_change=self._on_source_change,
-            on_start_prompt_gen=self._on_start_prompt_gen,
-            on_inspire=self._on_inspire,
-            on_theme_queue=self._on_theme,
-            on_open_playlist=self._on_open_attractor_for_playlist,
-            on_open_model_playlist=self._on_open_attractor_for_model,
-            on_enter_selection_mode=self._on_enter_selection_mode,
-            on_open_attractor=self._on_open_attractor,
+        # ── Standalone Servers control (SP-3b Task 2) ─────────────────────────
+        # ControlPanel (its own "Servers ▾" popover, server-status box, and
+        # server-log revealer) is deleted (SP-3d-5) — this MainWindow-owned
+        # widget, driven by ModelStatusService (3-state dots via subscribe(),
+        # not a standalone poll), is now the ONLY servers control in the window.
+        self._servers_control = ServersControl(
+            self._status_service,
+            on_start=self._on_servers_control_start,
+            on_stop=self._on_servers_control_stop,
+            on_restart=self._on_servers_control_restart,
         )
-        # Wire the history store so the SHOT panel seed buttons can read history.
-        # (ControlPanel._get_history_records uses self._store via this attribute.)
-        self._controls._store = self._store
 
-        # ── Main toolbar ──────────────────────────────────────────────────────
-        # The toolbar strip is built inside ControlPanel (logo, source toggle,
-        # model selectors).  We append it at the top of root_box and add the
-        # Watch TT-TV button on the right side (after the internal spacer).
+        # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
+        # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
+        # 2026-07-13-create-surface-design.md). Appended FIRST so it sits above
+        # everything else. Its default-active button isn't set yet — that
+        # happens at the end of
+        # __init__, once _gallery_stack / _detail_wrap /
+        # _pipelines_btn (built further below) exist for the "toggled" handler
+        # to touch safely.
+        #
+        # SP-3d-4: this row is now the window's ONLY top bar. It used to sit
+        # above a second row — ControlPanel's own `toolbar_box` (logo/title +
+        # the medium-tab source toggle) — onto which MainWindow appended these
+        # same three buttons (Watch TT-TV / Pipelines / Servers ▾). That toggle
+        # is superseded by CreateView's medium doors/chips (see CLAUDE.md's
+        # "Create surface" section), so `toolbar_box` is no longer read or
+        # mounted at all — these MainWindow-owned buttons fold directly into
+        # the loop-nav row instead, which becomes the surviving top bar.
+        loop_nav_row = self._build_loop_nav()
+        root_box.append(loop_nav_row)
+
         # Build and register menu actions before creating the bar
         self._build_menu_actions()
 
-        main_toolbar = self._controls.toolbar_box
-        self._attractor_btn = Gtk.Button(label="📺 Watch TT-TV")
-        self._attractor_btn.add_css_class("attractor-launch-btn")
-        self._attractor_btn.set_tooltip_text(
-            "Watch TT-TV — plays all media in a kiosk loop\n"
-            "and continuously generates new content."
-        )
-        self._attractor_btn.set_sensitive(False)
-        self._attractor_btn.connect("clicked", self._on_open_attractor)
-        main_toolbar.append(self._attractor_btn)
+        # ── Pipelines: set apart from the four-verb loop as the advanced tool ──
+        # Gated behind app_settings.PIPELINE_MODE_ENABLED (default off, see
+        # task-5-brief.md — "remix without pipeline mode"): when the flag is
+        # off, neither the divider nor the toggle is built/appended at all,
+        # and `self._pipelines_btn` stays `None`. Every other reference to
+        # `_pipelines_btn` in this file already guards with
+        # `getattr(self, "_pipelines_btn", None)`, so a `None` toggle is a
+        # safe no-op everywhere else.
+        self._pipelines_btn = None
+        if app_settings.PIPELINE_MODE_ENABLED:
+            _loop_div = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            _loop_div.add_css_class("loop-nav-divider")
+            loop_nav_row.append(_loop_div)
 
-        root_box.append(main_toolbar)
+            # ── Pipelines nav entry ──────────────────────────────────────────
+            # Deliberately NOT part of ControlPanel's video/animate/image/artgen
+            # radio group: those buttons drive _set_source's generation-mode
+            # state (_model_source, prompt placeholder, chip vocab, model rows,
+            # ...) which has nothing to do with browsing already-finished runs.
+            # Keeping this button independent means _set_source and the source
+            # toggle group are completely untouched by this feature — see
+            # task-5-brief.md.
+            self._pipelines_btn = Gtk.ToggleButton(label="🧩 Pipelines")
+            self._pipelines_btn.add_css_class("attractor-launch-btn")
+            self._pipelines_btn.set_tooltip_text(
+                "Pipeline Studio — browse finished multi-step runs and open one\n"
+                "to see every step (Discover + Open)."
+            )
+            self._pipelines_btn.connect("toggled", self._on_pipelines_toggled)
+            loop_nav_row.append(self._pipelines_btn)
+
+        # Standalone Servers control's "Servers ▾" button (SP-3b Task 2) —
+        # mounted here instead of ControlPanel's own (now-hidden) one.
+        # Pinned to the RIGHT edge of the window: an expanding spacer between
+        # the loop-nav verbs (left) and Servers (right) pushes it hard-right,
+        # separating the primary navigation from the machine-control popover
+        # (a distinct concern) — the conventional header-bar placement for a
+        # secondary/utility control.
+        _nav_spacer = Gtk.Box()
+        _nav_spacer.set_hexpand(True)
+        loop_nav_row.append(_nav_spacer)
+        # Live-context tray (RN-2 Task 2): sits between the spacer and Servers
+        # so it reads as part of the utility cluster on the right edge, not
+        # the primary loop-nav verbs on the left. Empty/hidden until Task 3
+        # registers pipeline/remix/watch contexts via `self._nav_state`.
+        self._context_tray = ContextTray(
+            self._nav_state, on_resume=self._on_context_resume, on_dismiss=self._on_context_dismiss
+        )
+        loop_nav_row.append(self._context_tray)
+        loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
         self._menu_bar = self._build_menu_bar()
@@ -7795,84 +5633,151 @@ class MainWindow(Gtk.ApplicationWindow):
         self._rebuild_context_menu("video")
         root_box.append(self._menu_bar)
 
-        # ── Three-pane layout: controls | gallery | detail ────────────────────
-        outer_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        outer_paned.set_vexpand(True)
-        root_box.append(outer_paned)
+        # ── Breadcrumb bar (RN-2 Task 2): "you are here", one slim row under
+        # the menu bar. Renders `self._nav_state`'s crumb trail; clicking an
+        # upstream (non-leaf) crumb routes through `_on_crumb_navigate`.
+        self._breadcrumb = Breadcrumb(self._nav_state, on_navigate=self._on_crumb_navigate)
+        self._breadcrumb_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self._breadcrumb_bar.add_css_class("nav-breadcrumb-bar")
+        self._breadcrumb_bar.append(self._breadcrumb)
+        root_box.append(self._breadcrumb_bar)
 
-        # Left pane: scrollable content area on top, pinned footer below.
-        # The footer (Advanced settings + Server status + action buttons) stays
-        # visible at all times; prompt/chips/inspire scroll when the window is short.
-        ctrl_scroll = Gtk.ScrolledWindow()
-        ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        ctrl_scroll.set_vexpand(True)
-        ctrl_scroll.set_child(self._controls)
-        # Keep a reference so _on_source_change can swap it out for pipeline mode
-        self._ctrl_scroll_inner = ctrl_scroll
-
-        self._ctrl_wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self._ctrl_wrapper.append(ctrl_scroll)
-        self._ctrl_wrapper.append(self._controls.footer_box)
-
-        outer_paned.set_start_child(self._ctrl_wrapper)
-        outer_paned.set_shrink_start_child(False)
-        outer_paned.set_resize_start_child(False)
-        outer_paned.set_position(310)   # pin controls to their declared minimum width
-
-        # Inner paned splits gallery (left) from detail panel (right)
+        # ── Two-pane layout: gallery | detail (SP-3d-4) ───────────────────────
+        # A horizontal Gtk.Paned split (gallery | detail) — the window's only
+        # paned. ControlPanel (and the 3-pane controls|gallery|detail split it
+        # used to anchor) is gone entirely as of SP-3d-5.
         inner_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        inner_paned.set_vexpand(True)
         inner_paned.set_position(480)   # default gallery width before detail panel
-        self._inner_paned = inner_paned  # stored so _on_source_change can adjust split
+        self._inner_paned = inner_paned  # stored so _sync_gallery_to_source can adjust split
+        root_box.append(inner_paned)
 
         gallery_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-        # Two separate galleries — one for video cards, one for image cards.
-        # A Gtk.Stack switches between them when the generation source toggle changes.
+        # Native-medium galleries + the artgen gallery, switched via Gtk.Stack.
         self._gallery_stack = Gtk.Stack()
         self._gallery_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         self._gallery_stack.set_transition_duration(150)
         self._gallery_stack.set_hexpand(True)
         self._gallery_stack.set_vexpand(True)
-        # Report only the visible child's minimum width, not the max of all children.
-        # Without this, the stack includes ArtgenPanel's 606px minimum even in video
-        # mode, inflating the window minimum from 1222px to 1352px and forcing it to
-        # open larger than set_default_size(1280, 800).
+        # Report only the visible child's minimum width, not the max of all children,
+        # so the window doesn't inflate past set_default_size(1280, 800).
         self._gallery_stack.set_hhomogeneous(False)
 
         shared_cbs = dict(
             select_cb=self._on_card_selected,
             delete_cb=self._on_delete_card,
-            remix_cb=self._on_remix_card,
             star_cb=self._on_star,
             transform_cb=self._on_transform_card,
+            remix_as_pipeline_cb=self._remix_as_pipeline,
         )
         self._video_gallery   = GalleryWidget(**shared_cbs, media_type="video")
         self._animate_gallery = GalleryWidget(**shared_cbs, media_type="animate")
         self._image_gallery   = GalleryWidget(**shared_cbs, media_type="image")
-        self._artgen_panel    = ArtgenPanel()
-        self._artgen_panel.on_remix = self._on_remix_card
+        # SP-3d-5: ArtgenPanel (its generation sidebar + `_check_health_bg`
+        # poller) is deleted — Discover keeps browsing artgen media through
+        # the standalone ArtgenGallery it always wrapped, wired the same way
+        # the three native GalleryWidgets are above.
+        self._artgen_gallery = ArtgenGallery()
+        self._artgen_gallery.on_remix_as_pipeline = self._remix_as_pipeline
+        # Unify-gallery-interaction-pattern Task 3: card selection routes into
+        # the shared right-pane `ArtgenDetail` (self._artgen_detail, built
+        # below) via self._right_stack -- see _on_artgen_card_selected /
+        # _on_artgen_card_deleted. This replaces the in-page overlay preview
+        # ArtgenGallery used to own itself (a crash workaround; see CLAUDE.md
+        # and the removed Overlay comment this superseded).
+        self._artgen_gallery.on_card_activated = self._on_artgen_card_selected
+        self._artgen_gallery.on_card_deleted = self._on_artgen_card_deleted
         self._gallery_stack.add_named(self._video_gallery, "video")
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
-        self._gallery_stack.add_named(self._artgen_panel, "artgen")
+        self._gallery_stack.add_named(self._artgen_gallery, "artgen")
+        # Defer the initial artgen gallery load (ArtgenPanel used to do the
+        # same in its own _build()) so it runs after the window paints —
+        # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously.
+        GLib.idle_add(self._artgen_gallery.refresh)
+
+        # ── Discover media-type switcher (SP-3d-6 regression fix) ───────────
+        # SP-3d-5 deleted the legacy medium-tab source toggle -- the ONLY UI
+        # that used to let you pick which gallery `_gallery_stack` showed.
+        # That left Discover pinned to whatever `_current_medium_source()`
+        # (CreateView's active medium) happened to be, with no way to ask for
+        # a different one -- the animate and artgen galleries became
+        # completely unreachable. This row is Discover's OWN switcher (built
+        # once here, like `_build_loop_nav`); it is shown/hidden by
+        # `_on_loop_nav_discover`/`_on_loop_nav_create`/`_on_loop_nav_remix`
+        # below and reuses `_sync_gallery_to_source` unchanged for the actual
+        # stack-switch, so star/playlist/detail/context-menu wiring for
+        # whichever gallery is showing is completely untouched.
+        self._discover_type_row = self._build_discover_type_row()
+        self._discover_type_row.set_visible(False)
+        gallery_wrap.append(self._discover_type_row)
+
+        # Create-surface (docs/superpowers/specs/2026-07-13-create-surface-
+        # design.md): CreateView is built and mounted here ALONGSIDE the
+        # existing medium-tab UI above, as the `_gallery_stack` "create"
+        # child. As of the Task 8 switchover it IS the reachable Create
+        # surface — the loop-nav ✨ Create verb switches `_gallery_stack` to
+        # "create" (see `_on_loop_nav_create`). The legacy medium-tab UI
+        # ("video"/"animate"/"image"/"artgen") is intentionally left mounted
+        # as a still-reachable fallback; deleting it is a later task. Real
+        # generation (GenerationWorker/api_client/ControlPanel) is untouched —
+        # CreateView's `on_create` seam is wired to `_on_create_generate`
+        # (below), which only translates a chosen medium + params into the
+        # SAME generation calls the old UI already makes.
+        #
+        # Task 7: the inspiration door DOES get wired to something real —
+        # `_on_loop_nav_remix` already does exactly the unseeded `show_muse()`
+        # activation dance (toggle/activate Pipelines, then
+        # `self._pipeline_studio.show_muse(seed_artifact=None)`), so it's
+        # reused verbatim as CreateView's zero-arg `on_inspiration` callable
+        # rather than reimplementing the Muse hand-off here.
+        #
+        # Task 8 (migration-safe switchover subset — see
+        # .superpowers/sdd/task-8-report.md): the Create CTA now routes to
+        # REAL generation via `_on_create_generate`, which translates the
+        # chosen medium + collected params into the exact same `_on_generate`
+        # call (native mediums) or the exact same `tt-ctl artgen ...`
+        # subprocess pattern `pipeline_engine._h_artgen_generate` already
+        # uses (artgen mediums) — no new generation code, no reimplemented
+        # worker launching.
+        self._create_view = CreateView(
+            on_inspiration=self._on_loop_nav_remix if app_settings.PIPELINE_MODE_ENABLED else None,
+            on_create=self._on_create_generate,
+            status_service=self._status_service,
+            inspire_fn=self._create_inspire_fn,
+            # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
+            # below) — reuses `generate_theme.generate_theme()`, the SAME
+            # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
+            # button drove, only the launch UI has moved.
+            on_theme_set=self._on_create_theme_set,
+        )
+        # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
+        # `self._create_view` existed) may already have repopulated
+        # `self._queue` from a crash/restart — `_refresh_create_queue_display`
+        # no-op'd at that point (`getattr(self, "_create_view", None)` was
+        # None). Sync the Create surface's pending-queue display now that the
+        # view exists, so a restored queue shows up there too, not just in
+        # the legacy queue box.
+        self._refresh_create_queue_display()
+        # CreateView is mounted DIRECTLY (no outer ScrolledWindow): it now owns
+        # its own internal scroll for the form and PINS the ✨ Create CTA below
+        # it, so the primary action is always visible (a CTA must never sit
+        # below the fold). Wrapping it in an outer scroller here would put the
+        # pinned CTA inside that scroll and defeat the point.
+        self._gallery_stack.add_named(self._create_view, "create")
 
         self._gallery_stack.set_visible_child_name("video")
 
         # Apply saved gallery density preference on startup.  The default
         # "comfortable" requires no work (it is the widget's natural size);
         # only call _apply_gallery_density when a non-default value was saved.
-        _density = _settings.get("gallery_density") or "comfortable"
+        _density = _gallery_density()
         if _density != "comfortable":
             self._apply_gallery_density(_density)
 
-        # Sync the art-autogen menu action state to match the panel's initial
-        # _auto_gen flag.  _build_menu_actions() registers the action before
-        # _build_ui() runs, so lookup_action() is guaranteed to find it here.
-        art_autogen_act = self.lookup_action("art-autogen")
-        if art_autogen_act:
-            art_autogen_act.set_state(
-                GLib.Variant("b", bool(self._artgen_panel._auto_gen))
-            )
+        # art-autogen menu-action sync removed alongside the action itself
+        # (SP-3d-5 — ArtgenPanel deleted; see CLAUDE.md's flagged loss note).
 
         gallery_wrap.append(self._gallery_stack)
 
@@ -7925,13 +5830,44 @@ class MainWindow(Gtk.ApplicationWindow):
         self._status_lbl.add_controller(_status_click)
 
         inner_paned.set_start_child(gallery_wrap)
-        inner_paned.set_shrink_start_child(False)
+        # Shrinkable so the divider is driven by an explicit, deterministic
+        # position (see `_reset_detail_split`), NOT by each gallery's varying
+        # content min-width — that content-driven forcing was the source of the
+        # Library "left column jitters narrower/wider depending on click order".
+        inner_paned.set_shrink_start_child(True)
 
         self._detail = DetailPanel(
             download_cb=lambda rec_id, dest: self._client.download(rec_id, Path(dest)),
             on_localized_cb=self._on_remote_record_localized,
             star_cb=self._on_star,
         )
+
+        # Unify-gallery-interaction-pattern Task 2: the right-hand detail pane
+        # is a dual-renderer container -- a Gtk.Stack holding both
+        # `DetailPanel` (native video/image/animate records, unchanged above)
+        # and `ArtgenDetail` (artgen records).
+        #
+        # Task 3 finishes the wiring Task 2 deferred (it needed
+        # self._artgen_gallery, constructed earlier in __init__, above): the
+        # artgen gallery's own in-page detail overlay -- a crash workaround,
+        # see CLAUDE.md's "unify gallery interaction pattern" notes -- is
+        # gone; card selection/deletion now route through this shared
+        # ArtgenDetail via _on_artgen_card_selected/_on_artgen_card_deleted/
+        # _on_artgen_detail_deleted/_on_artgen_detail_starred below. This is
+        # safe because self._right_stack is a SIBLING subtree of the gallery
+        # grid (both live under inner_paned, not one inside the other) --
+        # switching it never unmaps the FlowBox/grid, so it cannot reproduce
+        # the segfault the removed Overlay was a workaround for.
+        self._artgen_detail = ArtgenDetail()
+        self._artgen_detail.on_remix_as_pipeline = self._remix_as_pipeline
+        self._artgen_detail.on_back = lambda: self._set_detail_pane_visible(False)
+        self._artgen_detail.on_deleted = self._on_artgen_detail_deleted
+        self._artgen_detail.on_starred = self._on_artgen_detail_starred
+
+        self._right_stack = Gtk.Stack()
+        self._right_stack.add_named(self._detail, "native")
+        self._right_stack.add_named(self._artgen_detail, "artgen")
+        self._right_stack.set_visible_child_name("native")
 
         # Queue display lives below the detail/preview panel on the right side.
         self._queue_section_lbl = Gtk.Label(label="QUEUED PROMPTS")
@@ -7959,31 +5895,49 @@ class MainWindow(Gtk.ApplicationWindow):
         _detail_close_btn = Gtk.Button(label="✕")
         _detail_close_btn.add_css_class("flat")
         _detail_close_btn.set_tooltip_text("Close detail pane")
-        _detail_close_btn.connect("clicked", lambda _: (
-            self._detail_wrap.set_visible(False),
-            setattr(self, "_detail_visible", False),
-            self._inner_paned.set_position(
-                self._inner_paned.get_allocation().width
-            ) if hasattr(self, "_inner_paned") else None,
-        ))
+        _detail_close_btn.connect(
+            "clicked", lambda _: self._set_detail_pane_visible(False)
+        )
         _detail_close_bar.append(_detail_close_btn)
         self._detail_wrap.append(_detail_close_bar)
 
-        self._detail_wrap.append(self._detail)
+        self._detail_wrap.append(self._right_stack)
         self._detail_wrap.append(self._queue_section_lbl)
         self._detail_wrap.append(self._queue_box)
 
         inner_paned.set_end_child(self._detail_wrap)
         inner_paned.set_shrink_end_child(False)
 
-        outer_paned.set_end_child(inner_paned)
-        outer_paned.set_shrink_end_child(False)
+        # Standalone Servers control's server-log revealer (SP-3b Task 2,
+        # fixed after review) — mounted directly into `root_box`, a
+        # persistent container independent of the gallery/detail paned above.
+        # Deliberately mounts ONLY `log_widget`, not
+        # `status_bar` — see servers_control.py's module docstring and
+        # task-2-report.md's "Issue 2": this window already has an aggregate
+        # server dot below (`_hw_statusbar`, fed by the older per-tab health
+        # loop), and showing ServersControl's OWN aggregate dot too would
+        # put two disagreeing "is a server on" answers on screen at once.
+        # Collapsed (invisible) by default — a `Gtk.Revealer` with
+        # reveal_child=False — so it costs no vertical space until a
+        # start/stop/restart actually streams output into it.
+        root_box.append(self._servers_control.log_widget)
 
         # ── Hardware / infra status bar (pinned to window bottom) ─────────────
         # Clicking the server segment opens a popover with Start / Stop controls.
-        # start_cb captures self._controls so it always reads the current source.
+        # start_cb resolves via `_current_medium_source()` (CreateView's active
+        # medium) so it always reflects the current medium, not ControlPanel.
+        # SP-3d-6 (DONE): the per-active-tab boolean health pollers that used to
+        # feed this bar's dot (`_health_loop`/`_artgen_health_loop`/
+        # `_prompt_gen_health_loop`, via `update_server`/`update_capability`)
+        # are retired. `_render_status_snapshot` (subscribed to
+        # `self._status_service` right after `_build_ui()` returns, in
+        # `__init__`) now drives this same dot from the identical
+        # `ModelStatusService` snapshot `ServersControl` already reads --
+        # the single remaining aggregate server dot in the whole window is
+        # driven by the single remaining source of truth. `_StatusBar` itself
+        # (this class) is unchanged; only its data source changed.
         self._hw_statusbar = _StatusBar(
-            start_cb=lambda: self._on_start_server(self._controls.get_model_source()),
+            start_cb=lambda: self._on_start_server(self._current_medium_source()),
             stop_cb=self._on_stop_server,
         )
         root_box.append(self._hw_statusbar)
@@ -8052,10 +6006,8 @@ class MainWindow(Gtk.ApplicationWindow):
         refresh_inv.connect("activate", lambda *_: self._on_refresh_remote_library())
         self.add_action(refresh_inv)
 
-        # ── Generation: advanced settings dialog ──────────────────────────────
-        adv_action = Gio.SimpleAction.new("advanced-settings", None)
-        adv_action.connect("activate", lambda a, p: self._controls.open_advanced_dialog())
-        self.add_action(adv_action)
+        # Advanced-settings action removed SP-3d-5 (ControlPanel-only; see
+        # AdvancedSettingsDialog deletion note above).
 
         # ── Generation: quality preset (radio via stateful string action) ─────
         quality_action = Gio.SimpleAction.new_stateful(
@@ -8126,7 +6078,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add_action(pl_delete)
 
         # ── View: gallery density (radio) ─────────────────────────────────────
-        density_val = _settings.get("gallery_density") or "comfortable"
+        density_val = _gallery_density()
         gallery_density_action = Gio.SimpleAction.new_stateful(
             "gallery-density",
             GLib.VariantType.new("s"),
@@ -8135,23 +6087,10 @@ class MainWindow(Gtk.ApplicationWindow):
         gallery_density_action.connect("activate", self._on_gallery_density_action)
         self.add_action(gallery_density_action)
 
-        # ── Art: auto-generate toggle ──────────────────────────────────────────
-        art_autogen_action = Gio.SimpleAction.new_stateful(
-            "art-autogen",
-            None,
-            GLib.Variant("b", False),
-        )
-        art_autogen_action.connect("activate", self._on_art_autogen_action)
-        self.add_action(art_autogen_action)
-
-        # ── Art: auto-generate delay radio ────────────────────────────────────
-        art_delay_action = Gio.SimpleAction.new_stateful(
-            "art-autogen-delay",
-            GLib.VariantType.new("s"),
-            GLib.Variant("s", "3"),
-        )
-        art_delay_action.connect("activate", self._on_art_autogen_delay_action)
-        self.add_action(art_delay_action)
+        # Art auto-generate actions ("art-autogen"/"art-autogen-delay") removed
+        # SP-3d-5 — ArtgenPanel-sidebar-only feature, an ACCEPTED FLAGGED loss
+        # (overlaps the surviving TT-TV attractor). See CLAUDE.md and
+        # .superpowers/sdd/task-5-report.md.
 
         # -- Debug: log viewer ------------------------------------------------
         open_log_viewer_action = Gio.SimpleAction.new("open-log-viewer", None)
@@ -8431,9 +6370,9 @@ class MainWindow(Gtk.ApplicationWindow):
         action.set_state(GLib.Variant("s", val))
         steps = int(val)
         _settings.set("quality_steps", steps)
-        # Update panel state and QUALITY row buttons; sync Advanced dialog if open.
-        self._controls.sync_quality_btn_to_steps(steps)
-        # (PreferencesDialog quality radio removed — QUALITY row in panel is sole control)
+        # SP-3d-5: the ControlPanel widget-sync call that used to live here
+        # (sync_quality_btn_to_steps) is gone with the class — this setting
+        # write is the persistence Create's own Controls zone reads directly.
 
     def _on_sleep_after_action(self, action: Gio.SimpleAction,
                                param: GLib.Variant) -> None:
@@ -8465,12 +6404,85 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._prefs_dialog._director_drop.set_selected(i)
                     break
 
+    _DETAIL_PANE_WIDTH = 440  # DetailPanel's 420px min + a little handle slack
+
+    def _reset_detail_split(self) -> None:
+        """Snap `inner_paned`'s divider to a deterministic split: the detail
+        pane gets a fixed ~440px on the right, the gallery gets everything else.
+
+        This is the fix for the Library jitter — with the start child now
+        shrinkable, the divider is driven purely by this explicit position, so
+        the gallery no longer flips narrower/wider depending on the order you
+        switch sections (that was each gallery's varying content min-width
+        fighting a stale divider position). No-op without `_inner_paned` (test
+        harnesses); retries once after allocation if the window isn't sized yet."""
+        ip = getattr(self, "_inner_paned", None)
+        if ip is None:
+            return
+        try:
+            width = ip.get_allocation().width
+        except Exception:
+            return
+        if width and width > 100:
+            ip.set_position(max(360, width - self._DETAIL_PANE_WIDTH))
+        else:
+            # not allocated yet — set once after the next layout pass
+            GLib.idle_add(self._reset_detail_split_once)
+
+    def _reset_detail_split_once(self) -> bool:
+        ip = getattr(self, "_inner_paned", None)
+        if ip is not None:
+            width = ip.get_allocation().width
+            if width and width > 100:
+                ip.set_position(max(360, width - self._DETAIL_PANE_WIDTH))
+        return False  # GLib.idle_add: run once
+
+    def _set_detail_pane_visible(self, visible: bool) -> None:
+        """Show/hide the detail pane and keep `self._detail_visible` in sync.
+
+        Unify-gallery-interaction-pattern Task 1: single source of truth for
+        detail-pane visibility, replacing two call sites (the ✕ dismiss-bar
+        button and `win.toggle-detail`) that each used to reach for the
+        widget themselves — one via `self._detail_wrap` directly (the ✕
+        button's inline lambda), the other via `self._detail.get_parent()`
+        (`_on_toggle_detail`, below). The `get_parent()` route is an
+        assumption that breaks once a later task inserts a `Gtk.Stack`
+        between `_detail_wrap` and `self._detail` to host a second renderer
+        — at that point `self._detail.get_parent()` returns the new Stack,
+        not `_detail_wrap`, so hiding "the detail pane" would actually hide
+        just the Stack (a fixed-size child) while `_detail_wrap` — and the
+        space it occupies in `inner_paned` — stayed put. Targeting
+        `_detail_wrap` directly here removes that assumption for both
+        callers up front.
+
+        Hiding also snaps `inner_paned`'s divider to the window's full
+        allocated width — the same repositioning the ✕ button always did —
+        so the gallery reclaims the space immediately instead of leaving a
+        collapsed-but-still-reserved sliver. Showing does not reposition the
+        paned (this mirrors prior behavior: `_on_toggle_detail` never
+        repositioned it either, only the ✕ button's hide path did).
+        """
+        self._detail_visible = visible
+        self._detail_wrap.set_visible(visible)
+        if not visible and hasattr(self, "_inner_paned"):
+            self._inner_paned.set_position(
+                self._inner_paned.get_allocation().width
+            )
+        if not visible:
+            # gif-hygiene fix 1: collapsing the whole pane must also pause
+            # any GIF timer running inside the shared `_artgen_detail`
+            # renderer. A Gtk.Stack keeps its hidden child realized, so
+            # without this the timer keeps firing indefinitely on a fully
+            # hidden pane (CPU-idle waste; harmless but wasteful). Showing
+            # the pane again doesn't need an explicit "resume" -- the next
+            # `show_record`/`_render` call restarts the timer itself.
+            artgen_detail = getattr(self, "_artgen_detail", None)
+            if artgen_detail is not None:
+                artgen_detail.pause_animation()
+
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
-        self._detail_visible = not self._detail_visible
+        self._set_detail_pane_visible(not self._detail_visible)
         action.set_state(GLib.Variant("b", self._detail_visible))
-        # self._detail's parent is detail_wrap (the Box containing detail + queue).
-        # Hiding it collapses the entire right panel of the inner paned.
-        self._detail.get_parent().set_visible(self._detail_visible)
 
     def _on_gallery_density_action(self, action: Gio.SimpleAction,
                                     param: GLib.Variant) -> None:
@@ -8481,25 +6493,48 @@ class MainWindow(Gtk.ApplicationWindow):
         self._apply_gallery_density(val)
 
     def _apply_gallery_density(self, density: str) -> None:
-        """Set card min-width on all video/image/animate GalleryWidget instances and relayout."""
-        card_w = (_THUMB_W + 20) if density == "comfortable" else 160
+        """
+        Resize cards on EVERY gallery (video/image/animate GalleryWidget
+        instances, plus the artgen ArtgenGallery) to the SAME density-scaled
+        tile size, sourced from gallery_layout.tile_size() -- the single
+        source of truth also used to build cards in the first place.  Both
+        dimensions are set (not just width, per the historical bug: `-1`
+        height meant the fix that made cards a FIXED size at "comfortable"
+        density silently reverted to natural/ragged height as soon as the
+        user switched to "compact").
+
+        Resizing an ALREADY-BUILT card is NOT just `card.set_size_request()`
+        on the outer widget -- that only raises the widget's minimum-size
+        FLOOR, and `Gtk.Widget.set_size_request()` can never shrink a widget
+        below what its content already needs (the pinned zone built at the
+        OLD density still dominates the measured size). The real fix is to
+        resize each card's PINNED zone anchor(s) in place via
+        `gallery_layout.set_pinned_size()` -- see its docstring. Every
+        GenerationCard/PendingCard exposes `._card_zone` (the whole-card
+        pin) and GenerationCard additionally exposes `._media_zone` (the
+        thumbnail sub-zone); `set_size_request()` is still called too, kept
+        in sync purely so `card.get_size_request()` (used by other tests/
+        callers) reports the current density's floor as well.
+        """
+        card_w, card_h = gallery_layout.tile_size(density)
+        thumb_w, thumb_h = gallery_layout.thumb_size(density)
         for gallery in (self._video_gallery, self._image_gallery, self._animate_gallery):
             for card in gallery._cards:
-                card.set_size_request(card_w, -1)
+                card_zone = getattr(card, "_card_zone", None)
+                if card_zone is not None:
+                    gallery_layout.set_pinned_size(card_zone, card_w, card_h)
+                media_zone = getattr(card, "_media_zone", None)
+                if media_zone is not None:
+                    gallery_layout.set_pinned_size(media_zone, thumb_w, thumb_h)
+                card.set_size_request(card_w, card_h)
             gallery._relayout()
+        artgen_gallery = getattr(self, "_artgen_gallery", None)
+        if artgen_gallery is not None:
+            artgen_gallery.set_tile_size(card_w, card_h)
 
-    def _on_art_autogen_action(self, action: Gio.SimpleAction,
-                                _param: GLib.Variant) -> None:
-        """Menu: toggle artgen auto-generate on/off."""
-        new_state = self._artgen_panel.toggle_auto_gen()
-        action.set_state(GLib.Variant("b", new_state))
-
-    def _on_art_autogen_delay_action(self, action: Gio.SimpleAction,
-                                      param: GLib.Variant) -> None:
-        """Menu: set artgen auto-generate delay in seconds."""
-        val = param.get_string()
-        action.set_state(GLib.Variant("s", val))
-        self._artgen_panel.set_auto_gen_delay(int(val))
+    # _on_art_autogen_action / _on_art_autogen_delay_action removed SP-3d-5
+    # alongside ArtgenPanel (the only thing that implemented toggle_auto_gen/
+    # set_auto_gen_delay) — an ACCEPTED FLAGGED loss, see CLAUDE.md.
 
     # ── Screensaver inhibit ────────────────────────────────────────────────────
 
@@ -8547,82 +6582,1123 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as exc:
             print(f"[tt-gen] screensaver uninhibit failed: {exc}", file=sys.stderr)
 
+    # ── Medium/source resolution (SP-3d-3) ──────────────────────────────────────
+    #
+    # Every surviving caller that used to ask ControlPanel "what am I
+    # currently making" (`get_model_source()`/`get_video_model()`/
+    # `get_image_model()`) now asks CreateView instead, via
+    # `CreateView._active_medium` — the same "what medium is active" state
+    # Create's own scoped dropdown/model door already track. This is NOT a
+    # literal drop-in: `Medium.id` is the legacy "video"/"image"/"animate"
+    # vocabulary for native mediums, but is the artgen GENERATOR NAME
+    # ("verse", "ansi", "animatediff", …) for artgen mediums — every one of
+    # those folds to the single legacy string "artgen" here, per the audit's
+    # explicit direction (`.superpowers/sdd/sp3d-audit.md` §1). Callers that
+    # need the finer-grained "is the AnimateDiff generator specifically
+    # active" distinction (TT-TV's local/no-server special case) use
+    # `_active_medium_is_animatediff()` below instead of/alongside this.
+    #
+    # `CreateView._active_medium` persists even when Create isn't the visible
+    # surface (Discover/Pipelines showing) — it's only ever reassigned by a
+    # medium pick, never cleared on navigation — so this remains meaningful
+    # from any surface. A missing `_create_view` (unit-test harnesses that
+    # don't build one) or no medium picked yet both fall back to "video",
+    # matching ControlPanel's own original default.
+
+    def _current_medium_source(self) -> str:
+        """Legacy "video"/"image"/"animate"/"artgen" vocabulary, derived from
+        CreateView's active medium instead of `self._controls.get_model_source()`
+        (SP-3d-3 — ControlPanel is being deleted; nothing surviving may read it)."""
+        create_view = getattr(self, "_create_view", None)
+        medium = getattr(create_view, "_active_medium", None) if create_view is not None else None
+        if medium is None:
+            return "video"  # matches ControlPanel's original default
+        return "artgen" if medium.source == "artgen" else medium.id
+
+    def _active_medium_is_animatediff(self) -> bool:
+        """True when CreateView's active medium is specifically the
+        AnimateDiff artgen generator (source="artgen", id="animatediff").
+
+        AnimateDiff moved from a video-tab sub-model (the old
+        `get_model_source()=="video" and get_video_model()=="animatediff"`
+        combination) to its own Create medium chip — this is the equivalent
+        check for callers (TT-TV launch/status, the attractor button) that
+        need the distinction `_current_medium_source()` above deliberately
+        collapses away (it folds every artgen medium, including this one, to
+        the single string "artgen")."""
+        create_view = getattr(self, "_create_view", None)
+        medium = getattr(create_view, "_active_medium", None) if create_view is not None else None
+        return medium is not None and medium.source == "artgen" and medium.id == "animatediff"
+
+    def _current_medium_model_key(self, model_source: str) -> str:
+        """Short video/image model key ("wan2"/"mochi"/"skyreels" or
+        "flux"/"sdxl"/"z-image-turbo"/"motif") for the CURRENT medium,
+        sourced from CreateView's scoped model dropdown instead of
+        `self._controls.get_video_model()`/`get_image_model()` (SP-3d-3).
+
+        `CreateView._selected_model_key()` returns a `server_manager` key
+        (e.g. "wan2.2") — `_SERVER_KEY_TO_SOURCE_MODEL` (the same map
+        `MainWindow.__init__`'s startup pre-select and
+        `_resolve_attractor_model` already use — see that method's
+        docstring) converts it into the (source, short_key) pair
+        `_SERVER_SCRIPTS` is keyed by. Falls back to each medium's
+        documented default key (mirrors `_on_generate`'s own fallback) when
+        CreateView has no selection yet, the selected key isn't recognized,
+        or it resolves to a different source than `model_source` (e.g. the
+        active medium is "image" but a caller asks for "video" — shouldn't
+        happen in practice, but must never silently hand back the wrong
+        model's key). Returns "" for any other `model_source` (mirrors the
+        pre-existing `_on_start_server`/`_on_stop_server` else-branch)."""
+        create_view = getattr(self, "_create_view", None)
+        try:
+            server_key = create_view._selected_model_key() if create_view is not None else None
+        except Exception:
+            server_key = None
+        src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(server_key, (None, None))
+        if model_source == "video":
+            return mdl if src == "video" and mdl else _DEFAULT_VIDEO_KEY
+        if model_source == "image":
+            return mdl if src == "image" and mdl else _DEFAULT_IMAGE_KEY
+        return ""
+
+    def _running_generation_server(self, capability: str) -> "tuple[bool, Optional[str]]":
+        """(is a server currently READY for `capability`, its server_manager
+        key), from `ModelStatusService` (SP-3d-3) — replaces ControlPanel's
+        own `_server_ready`/`_running_model` attributes (fed by the now-legacy
+        `_health_loop`) for the two surviving readers: `_on_open_attractor`'s
+        TT-TV status line, and `_on_generate`'s AnimateDiff-blackhole
+        chip-busy guard. Prefers READY over STARTING (`ready_keys`, not
+        `running_or_starting`) — a server still loading hasn't actually
+        claimed the chip yet, so the guard/status line should only fire once
+        a server has actually finished coming up.
+
+        CAPABILITY-AWARE (SP-3d-3 review fix): video/image/animate/skyreels
+        `ServerDef`s all share ONE port (8000) and are mutually exclusive —
+        only one model is ever loaded at a time. An earlier version of this
+        helper checked every capability unconditionally and returned "ready"
+        as long as ANY of them was up, even when the loaded model belonged to
+        an UNRELATED capability (e.g. FLUX/image loaded while the caller's
+        context is "video") — a real regression versus the old
+        `ControlPanel._server_ready`, which went False on exactly this
+        mismatch (see `ControlPanel.set_server_state`'s
+        `mismatch = source_for_model != current_source` check). Scoping the
+        `ready_keys()` lookup to the SINGLE capability the caller cares about
+        restores that mismatch-aware behavior for free: a mismatched loaded
+        model simply isn't in `ready_keys(capability)`, so this correctly
+        returns `(False, None)`.
+        """
+        ready = self._status_service.ready_keys(capability)
+        if ready:
+            return True, ready[0]
+        return False, None
+
+    def _display_label_for_server_key(self, server_key: "Optional[str]") -> "Optional[str]":
+        """Human label (`server_manager.ServerDef.label`) for a server key, or
+        `None` if `server_key` is falsy — mirrors the previous
+        `_MODEL_DISPLAY_SERVER.get(self._controls._running_model or "", self._controls._running_model)`
+        behavior (also `None`) for "nothing currently running"."""
+        if not server_key:
+            return None
+        import server_manager
+        sdef = server_manager.SERVERS.get(server_key)
+        return sdef.label if sdef is not None else server_key
+
+    def _attractor_capability(self) -> str:
+        """The `ModelStatusService` capability TT-TV's server-status line
+        (`_on_open_attractor`'s `get_server_status` closure, extracted to
+        `_attractor_server_status`) should check RIGHT NOW (SP-3d-3 review
+        fix — see `_running_generation_server`'s docstring for why this must
+        be capability-scoped, not "any of video/image").
+
+        Mirrors `_on_open_attractor`'s own AnimateDiff override: when the
+        AnimateDiff generator medium is active, the effective source is
+        "animatediff", which has no `_SOURCE_TO_CAP` entry — falling back to
+        "video" exactly matches ControlPanel's old behavior (its own
+        `_model_source` stayed "video" for the AnimateDiff sub-model; it
+        never became "animatediff" itself).
+
+        "artgen" is deliberately special-cased to "video" too, rather than
+        reusing `_SOURCE_TO_CAP["artgen"]` ("artgen" — the CAPABILITY
+        DASHBOARD's row for the chat-LLM backends on port 8002): this method
+        answers a different question — "is the port-8000 generation server
+        (video/image/animate) currently occupying the chip" — which an
+        artgen medium has no real answer for. Naively reusing "artgen" here
+        would check `ready_keys("artgen")` (the LLM backend, near-always up)
+        instead, wrongly reporting "ready" for a question that doesn't apply.
+        Mirrors the identical `_source != "artgen"` special-case the
+        (now-retired, SP-3d-6) `_on_health_result` used for the same reason.
+        Read fresh on
+        every call (not captured once) so it stays correct if the active
+        medium changes while TT-TV is open, matching the pre-fix closure's
+        own live reads.
+        """
+        source = "animatediff" if self._active_medium_is_animatediff() else self._current_medium_source()
+        if source == "artgen":
+            return "video"
+        return _SOURCE_TO_CAP.get(source, "video")
+
+    def _attractor_server_status(self) -> "tuple[bool, Optional[str]]":
+        """`get_server_status` callback handed to `attractor.AttractorWindow`
+        (`_on_open_attractor`) — extracted to a real method (rather than an
+        inline lambda) so it's independently testable without constructing
+        a real `AttractorWindow`.
+
+        SP-3d-3 review fix: capability-scoped via `_attractor_capability()`
+        (not "any of video/image" — see `_running_generation_server`'s
+        docstring) so a MISMATCHED loaded model (e.g. FLUX/image up while
+        this medium is "video") correctly reports NOT ready, restoring
+        ControlPanel's old mismatch-aware `_server_ready` behavior. AnimateDiff
+        runs locally — no server needed — so it's always treated as ready
+        regardless of what `_running_generation_server` reports.
+        """
+        ready, server_key = self._running_generation_server(self._attractor_capability())
+        is_animatediff = self._active_medium_is_animatediff()
+        return (
+            ready or is_animatediff,
+            "AnimateDiff (local)" if is_animatediff
+            else self._display_label_for_server_key(server_key),
+        )
+
     # ── Gallery helpers ────────────────────────────────────────────────────────
 
     def _active_gallery(self) -> "GalleryWidget":
         """Return the gallery that matches the currently selected generation source."""
-        return self._gallery_for_type(self._controls.get_model_source())
+        return self._gallery_for_type(self._current_medium_source())
 
     def _gallery_for_type(self, media_type: str) -> "GalleryWidget":
-        """Return the gallery for the given media_type string."""
+        """Return the gallery for the given media_type string.
+
+        Unify-gallery-interaction-pattern Task 1: "artgen" is deliberately
+        NOT one of the branches below. `ArtgenGallery` (`self._artgen_gallery`)
+        does not implement `GalleryWidget`'s API (`all_cards()`/
+        `delete_card()`/`replace_pending_with()`/...) — before this guard, an
+        "artgen" media_type silently fell through to `_video_gallery`, a
+        latent misroute that would only surface as an AttributeError deep
+        inside whatever caller then tried to use the returned object as a
+        `GalleryWidget`. Raising here makes the misroute loud at the call
+        site instead. Callers that want the artgen gallery must reach for
+        `self._artgen_gallery` directly (it isn't reachable through this
+        helper at all).
+        """
         if media_type == "image":
             return self._image_gallery
         if media_type == "animate":
             return self._animate_gallery
+        if media_type == "artgen":
+            raise ValueError(
+                "ArtgenGallery does not implement GalleryWidget's API; "
+                "use self._artgen_gallery directly"
+            )
         return self._video_gallery
 
-    def _on_source_change(self, source: str) -> None:
-        """Switch the gallery stack; in artgen mode collapse side panels for full-width view."""
-        self._gallery_stack.set_visible_child_name(source)
-        is_artgen = source == "artgen"
+    def _uncheck_pipelines_toggle_if_active(self) -> None:
+        """Uncheck the 🧩 Pipelines toggle without recursing into `_hide_pipelines`.
 
-        # Hide the left ControlPanel and right DetailPanel in artgen mode so
-        # the ArtgenPanel can use the full window width for its own layout.
-        self._ctrl_wrapper.set_visible(not is_artgen)
-        if not is_artgen:
-            self._detail_wrap.set_visible(True)
+        Shared by every navigation seam that moves the gallery stack off of
+        "pipelines" (Create, Discover, and — via `_sync_gallery_to_source` —
+        leaving Pipelines to land on a medium page): whichever one fires
+        first should visually uncheck the toggle so it never lags behind
+        reality. Guarded by `_pipelines_toggle_syncing` because
+        `set_active(False)` fires the button's own "toggled" signal, which
+        would otherwise call `_hide_pipelines` again on top of whatever the
+        caller is already doing.
+        """
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and pipelines_btn.get_active():
+            self._pipelines_toggle_syncing = True
+            try:
+                pipelines_btn.set_active(False)
+            finally:
+                self._pipelines_toggle_syncing = False
+
+    def _sync_gallery_to_source(self, source: str) -> None:
+        """Switch `_gallery_stack` to *source* and rebuild the context-menu slot.
+
+        Replaces the old ControlPanel-era `_on_source_change` (deleted
+        SP-3d-5, along with the medium-tab toggle that used to call it).
+        The two surviving callers are `_on_loop_nav_discover` (browsing the
+        current medium's gallery) and `_hide_pipelines` (returning to
+        whatever medium was active before Pipelines opened) — both reached
+        via `_current_medium_source()`, never a literal tab click anymore.
+
+        Also drops the old ControlPanel-era "artgen mode collapses the left/
+        right panes for full width" special case: the "artgen" gallery page
+        is now a plain `ArtgenGallery` (grid + filter chips), laid out like
+        any other medium gallery, so it no longer needs extra width.
+        """
+        self._uncheck_pipelines_toggle_if_active()
+        self._gallery_stack.set_visible_child_name(source)
         self._rebuild_context_menu(source)
-        # Grey out Detail Panel toggle / gallery density on Art tab (no detail panel there)
-        toggle_act = self.lookup_action("toggle-detail")
-        if toggle_act:
-            toggle_act.set_enabled(source != "artgen")
-        density_act = self.lookup_action("gallery-density")
-        if density_act:
-            density_act.set_enabled(source != "artgen")
+        # Re-establish a deterministic gallery|detail split on every switch so
+        # the left column doesn't jitter narrower/wider by click order.
+        self._reset_detail_split()
+
+    # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────────
+    #
+    # SP-C Task 1 (docs/superpowers/specs/2026-07-13-create-surface-design.md):
+    # the new top-level nav that reframes the app by *activity* rather than by
+    # medium.
+
+    def _build_loop_nav(self) -> Gtk.Box:
+        """Build the top nav row: two places (Create, Library) sharing one
+        radio group, plus a ▶ Play companion button (not in the group).
+
+        Returns the row widget; the caller appends it to `root_box` *first*
+        so it sits above everything else.
+
+        Does NOT set any button active — `MainWindow.__init__` does that once
+        `_build_ui()` has finished constructing everything the handlers below
+        touch (`_gallery_stack`, `_detail_wrap`, `_pipelines_btn`), so firing
+        the "toggled" signal here can never touch an attribute that doesn't
+        exist yet.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row.add_css_class("loop-nav-row")
+
+        create_btn = Gtk.ToggleButton(label="✨ Create")
+        create_btn.add_css_class("loop-nav-btn")
+        create_btn.set_tooltip_text(
+            "Create — start something new: pick a medium or type an idea."
+        )
+
+        # Library absorbs Discover + Curate: browse and collect everything
+        # you've made — star it, build playlists, thread it together.
+        discover_btn = Gtk.ToggleButton(label="\U0001f5c2 Library")
+        discover_btn.add_css_class("loop-nav-btn")
+        discover_btn.set_tooltip_text(
+            "Library — browse and collect everything you've made: star it, "
+            "add it to playlists, thread it together."
+        )
+
+        # Watch is a ▶ Play LENS on the Library (opens the TT-TV kiosk for now;
+        # an in-app embedded stream comes later). Not a top-level place, not in
+        # the radio group — a plain action button sitting beside Library. Same
+        # attribute/handler/initial-state as before (relabelled only).
+        self._attractor_btn = Gtk.Button(label="▶ Play")
+        self._attractor_btn.add_css_class("loop-nav-btn")
+        self._attractor_btn.add_css_class("loop-nav-action")
+        self._attractor_btn.set_tooltip_text(
+            "▶ Play — play your Library as TT-TV (full-screen kiosk); it also\n"
+            "keeps generating new content. Remix anything you see."
+        )
+        self._attractor_btn.set_sensitive(False)
+        self._attractor_btn.connect("clicked", self._on_open_attractor)
+
+        discover_btn.set_group(create_btn)
+
+        create_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_create())
+        discover_btn.connect("toggled", lambda b: b.get_active() and self._on_loop_nav_discover())
+
+        row.append(create_btn)
+        row.append(discover_btn)
+        row.append(self._attractor_btn)
+
+        # Keyed lookup for tests and for __init__'s default-active line.
+        # Remix is no longer a nav place (it's a per-item action); the
+        # `_on_loop_nav_remix` METHOD is retained — CreateView's "Start with
+        # inspiration" door still calls it via on_inspiration.
+        self._loop_nav = {
+            "create": create_btn,
+            "discover": discover_btn,
+        }
+        self._loop_nav_create_btn = create_btn
+        return row
+
+    def _build_discover_type_row(self) -> Gtk.Box:
+        """Build the Discover media-type switcher: one toggle per gallery
+        (Video / Image / Animate / Artgen), sharing a single radio group.
+
+        SP-3d-5 deleted the legacy medium-tab source toggle -- the ONLY UI
+        that used to let you choose which gallery `_gallery_stack` showed.
+        Without it, Discover was pinned to whatever `_current_medium_source()`
+        (CreateView's active medium) happened to be, so the animate and
+        artgen galleries became unreachable: there was simply no control left
+        that could ask for them. This row is Discover's OWN switcher -- it
+        does not resurrect ControlPanel or its deleted toggle. Each button's
+        "toggled" handler calls `_sync_gallery_to_source` (unchanged), so the
+        existing star/playlist/detail/context-menu wiring for whichever
+        gallery ends up visible needs no changes.
+
+        Mirrors `_build_loop_nav`'s left/mid/mid/right button-group pattern,
+        reusing the `.source-btn` CSS classes (left over from the deleted
+        medium-tab toggle, otherwise unused since SP-3d-5) rather than
+        inventing new ones.
+        """
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("discover-type-row")
+
+        # (source key used by _sync_gallery_to_source, button label, edge CSS class)
+        specs = [
+            ("video", "Video", "source-btn-left"),
+            ("image", "Image", "source-btn-mid"),
+            ("animate", "Animate", "source-btn-mid"),
+            ("artgen", "Artgen", "source-btn-right"),
+        ]
+
+        buttons: "dict[str, Gtk.ToggleButton]" = {}
+        group_btn = None
+        for source, label, edge_cls in specs:
+            btn = Gtk.ToggleButton(label=label)
+            btn.add_css_class("source-btn")
+            btn.add_css_class(edge_cls)
+            if group_btn is None:
+                group_btn = btn
+            else:
+                btn.set_group(group_btn)
+            # `src=source` binds each closure to its OWN loop iteration's
+            # value -- without the default arg every button's callback would
+            # close over the same `source` variable and all fire "artgen"
+            # (the loop's final value).
+            btn.connect(
+                "toggled",
+                lambda b, src=source: b.get_active() and self._sync_gallery_to_source(src),
+            )
+            row.append(btn)
+            buttons[source] = btn
+
+        self._discover_type_buttons = buttons
+        return row
+
+    def _on_loop_nav_create(self) -> None:
+        """Create: the unified Create surface (CreateView).
+
+        Keeps the pipelines-toggle uncheck dance `_sync_gallery_to_source`
+        also provides for Discover: Pipeline Studio shares this same
+        `_gallery_stack`, so leaving `_pipelines_btn` checked while "create"
+        shows underneath would leave a stale-checked toggle.
+        """
+        self._uncheck_pipelines_toggle_if_active()
+        self._gallery_stack.set_visible_child_name("create")
+        self._set_crumbs([Crumb("✨ Create")])
+
+        # Rebuild the "Start Something" wall so a star made elsewhere
+        # (Discover/Library) since the last visit shows up here without an
+        # app restart. Guarded: some tests build a bare MainWindow via
+        # __new__ without `_create_view`.
+        cv = getattr(self, "_create_view", None)
+        if cv is not None:
+            cv.refresh_possibilities()
+
+        # Create is full-width: CreateView carries its OWN result area
+        # (CreateResultPanel), so the Discover detail pane has no role here.
+        # Leaving it visible showed a dead "← Click a card to preview"
+        # placeholder that the Create surface's possibility tiles never feed
+        # (they seed the composer) — a false-promise pane. Hide it so Create
+        # gets the whole width. `_on_loop_nav_discover` re-shows it (it's the
+        # surface that actually has cards to preview).
+        self._detail_wrap.set_visible(False)
+
+        # SP-3d-6: the Discover-only media-type switcher must not linger
+        # underneath Create.
+        self._hide_discover_type_row()
+
+    def _on_loop_nav_discover(self) -> None:
+        """Discover (absorbs Curate): browse AND collect what you've made — the
+        gallery, full-width, with the star/playlist/detail actions you use to
+        thread things together as you find them. Reuses `_sync_gallery_to_source`
+        for the gallery switch + pipelines-toggle sync. Whole-project /
+        pipeline discovery (Pipeline Studio's Discover) stays reachable via the
+        🧩 Pipelines toggle; a later slice unifies artifact- and project-browse
+        under this one Discover.
+
+        SP-3d-6 regression fix: also shows `_discover_type_row` (the
+        Video/Image/Animate/Artgen switcher SP-3d-5 left with no replacement)
+        and syncs its active button to `_current_medium_source()` so Discover
+        opens on a sensible gallery rather than always defaulting blind. The
+        row's own button clicks drive the gallery from here on — this method
+        only sets the STARTING point each time Discover is (re-)entered.
+        """
+        source = self._current_medium_source()
+        self._sync_gallery_to_source(source)
+        self._set_crumbs([Crumb("🗂 Library")])
+
+        # Discover is the surface that actually has cards to preview, so its
+        # detail pane must be visible here (Create now hides it for full width).
+        self._detail_wrap.set_visible(True)
+
+        row = getattr(self, "_discover_type_row", None)
+        if row is not None:
+            row.set_visible(True)
+        btn = getattr(self, "_discover_type_buttons", {}).get(source)
+        if btn is not None and not btn.get_active():
+            # Triggers "toggled" -> _sync_gallery_to_source(source) again;
+            # harmless repeat of the call two lines above, but also correctly
+            # unchecks whichever OTHER type button was left active from a
+            # previous Discover visit (same `set_group` radio behavior the
+            # loop nav buttons rely on).
+            btn.set_active(True)
+
+    def _hide_discover_type_row(self) -> None:
+        """Hide the Discover media-type switcher (see `_build_discover_type_row`).
+        Shared by `_on_loop_nav_create`/`_on_loop_nav_remix` — the switcher is
+        Discover-only and must not overlap either surface. No-op if the row
+        hasn't been built (e.g. minimal test harnesses)."""
+        row = getattr(self, "_discover_type_row", None)
+        if row is not None:
+            row.set_visible(False)
+
+    def _on_loop_nav_remix(self) -> None:
+        """Remix: Pipeline Studio's Muse, unseeded — reuses the exact
+        activation bridge `_remix_as_pipeline` uses (enter Pipelines the same
+        way the toolbar toggle does, then hand off to `show_muse()`), just
+        without a seed artifact.
+        """
+        pipelines_btn = getattr(self, "_pipelines_btn", None)
+        if pipelines_btn is not None and not pipelines_btn.get_active():
+            pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+        else:
+            self._show_pipelines()
+
+        self._pipeline_studio.show_muse(seed_artifact=None)
+
+        # SP-3d-6: the Discover-only media-type switcher must not linger
+        # underneath Remix.
+        self._hide_discover_type_row()
+
+    # ── Pipeline Studio (Discover + Open) ───────────────────────────────────────
+
+    def _on_pipelines_toggled(self, btn: Gtk.ToggleButton) -> None:
+        """Toolbar toggle handler: show Pipeline Studio while active, restore on untoggle."""
+        if getattr(self, "_pipelines_toggle_syncing", False):
+            # _uncheck_pipelines_toggle_if_active is cosmetically unchecking
+            # this button because Create/Discover/hide-pipelines already
+            # switched the gallery/panel state — don't re-run _hide_pipelines
+            # on top of it.
+            return
+        if btn.get_active():
+            self._show_pipelines()
+        else:
+            self._hide_pipelines()
+
+    def _ensure_pipeline_studio(self) -> None:
+        """Lazily construct Pipeline Studio and mount it on `_gallery_stack`.
+
+        Split out of `_show_pipelines` (task-5-brief.md) so `_remix_as_pipeline`
+        can reach a constructed `_pipeline_studio` without also running
+        `_show_pipelines`' Discover-landing/crumb/context-tray side effects —
+        needed for the PIPELINE_MODE_ENABLED-off path, which must enter the
+        studio scoped straight to the Muse and never touch Discover.
+
+        `PipelineStudio` scans run history off-thread as soon as it is built
+        (see pipeline_studio.py), so it is deliberately NOT constructed at
+        startup — only here, the first time it's needed. Subsequent calls
+        reuse the same instance.
+        """
+        if self._pipeline_studio is None:
+            from pipeline_studio import PipelineStudio
+            # ✨ Inspire (regression fix 2/2): reuse the exact same seam
+            # CreateView's idea-door/ArtgenParamPanel wiring drives
+            # (`_create_inspire_fn`, backed by `prompt_client.generate_prompt`)
+            # so a pipeline step's text field gets the identical two-mode
+            # fresh/remix behavior, not a forked pipeline-only prompt-gen path.
+            self._pipeline_studio = PipelineStudio(inspire_fn=self._create_inspire_fn,
+                status_service=self._status_service,
+                on_run_complete=self._register_pipeline_final,
+                # task-5-brief.md (remix-without-pipeline-mode): the studio
+                # needs to know whether pipeline mode is showing so it can
+                # hide its own Discover-only chrome when entered scoped
+                # straight to the Muse, and `on_leave` is its own "Back"
+                # seam for that flag-off path — routes back to the app
+                # Library rather than the studio's Discover.
+                pipeline_mode_enabled=app_settings.PIPELINE_MODE_ENABLED,
+                on_leave=self._on_pipeline_leave if not app_settings.PIPELINE_MODE_ENABLED else None,
+            )
+            self._gallery_stack.add_named(self._pipeline_studio, "pipelines")
+
+    def _show_pipelines(self) -> None:
+        """Mount Pipeline Studio full-width, constructing it lazily on first use.
+
+        Built on `_ensure_pipeline_studio` (above); this half additionally
+        lands on the studio's Discover page every time — Pipeline Studio's
+        front door — and drives the crumb/context-tray/detail-pane state
+        that Discover-first entry needs. `_remix_as_pipeline`'s flag-off path
+        skips this in favor of entering scoped straight to the Muse.
+        """
+        self._ensure_pipeline_studio()
+
+        # Always land on Discover, never a stale Open page from a previous
+        # visit — Discover is Pipeline Studio's front door every time.
+        self._pipeline_studio.show_discover()
+        self._gallery_stack.set_visible_child_name("pipelines")
+        # Pipelines is a peer PLACE, but its toggle sits OUTSIDE the Create/
+        # Library radio group. If a loop-nav button stayed "active" while
+        # Pipelines is shown, clicking that SAME button again would be a silent
+        # no-op — a grouped toggle can't re-activate itself, so no "toggled"
+        # fires and the view never switches (the "Pipelines then Create does
+        # nothing" bug). Clear the group so a later click on Create/Library
+        # always changes state (inactive -> active) and fires its handler.
+        for _b in getattr(self, "_loop_nav", {}).values():
+            if _b.get_active():
+                _b.set_active(False)   # fires toggled(False); handler is a no-op
+        self._set_crumbs([Crumb("🧩 Pipelines")])
+        # Register (or refresh) the resumable tray chip so leaving Pipelines
+        # for the Library doesn't lose track of the session — clicking the
+        # chip calls `_show_pipelines` again, which is idempotent.
+        self._nav_open_context(Context("pipeline", "🧩 Pipeline", kind="pipeline"))
+        # Full-width: Pipeline Studio has its own layout and needs neither
+        # the (now-deleted) prompt-composition panel nor the detail pane.
+        self._detail_wrap.set_visible(False)
+
+    def _hide_pipelines(self) -> None:
+        """Restore whatever CreateView's active medium was (SP-3d-3: no
+        longer ControlPanel's `_model_source` — see `_current_medium_source`),
+        and re-show the detail pane `_show_pipelines` collapsed.
+
+        Reuses `_sync_gallery_to_source` (the gallery/context-menu-slot half
+        of the old `_on_source_change`) rather than duplicating its logic, so
+        leaving Pipelines always lands back in a state it already knows how
+        to produce for the current medium.
+        """
+        self._sync_gallery_to_source(self._current_medium_source())
+        self._detail_wrap.set_visible(True)
+
+    def _on_pipeline_leave(self) -> None:
+        """Studio Back (flag OFF) -> return to the app Library. The run keeps
+        running in the background; its result is already registered to the
+        Library on run-done."""
+        self._hide_pipelines()
+
+    # Extensions a pipeline final's artifact can carry, and which Library
+    # record shape each maps to. Any extension outside both sets (shouldn't
+    # happen given today's known node output kinds — see
+    # pipeline_view_model._OUTPUT_KIND — but a future/unknown generator could
+    # emit one) registers nothing rather than guessing; see
+    # _register_pipeline_final's docstring.
+    #
+    # No ".webp" here: pipeline_view_model._IMAGE_EXTS (what _resolve_artifact
+    # actually filters NATIVE "image"-kind candidates to — TTLGTextToImage's
+    # image_path, TTLGComposite's image_path, etc.) never includes it, so a
+    # NATIVE artifact_path can never end in .webp — unreachable for THIS set.
+    # (Whole-branch review Finding 6: this does NOT extend to
+    # _PIPELINE_FINAL_ARTGEN_EXTS below — see its own comment.)
+    _PIPELINE_FINAL_RASTER_EXTS = (".png", ".jpg", ".jpeg")
+    _PIPELINE_FINAL_VIDEO_EXTS = (".mp4",)
+    # ".txt" covers verse/freeform/lore's plain-text artgen output (the same
+    # generic TTLGArtgenGenerate "artifact_path" the visual kinds share) —
+    # a real .txt final should still register as a MediaRecord rather than
+    # silently falling through the "unrecognized extension" no-op below.
+    # ".webp" IS reachable here (unlike the native raster set above):
+    # TTLGArtgenGenerate's generic "any"-kind artifact_path can be any
+    # extension, and pipeline_view_model._ARTGEN_VISUAL_EXTS already lists
+    # ".webp" as hero-eligible — omitting it here meant a hypothetical .webp
+    # artgen final would show a hero (Discover/Open) but register nothing
+    # into the Library, a hero/registration mismatch (Finding 6).
+    _PIPELINE_FINAL_ARTGEN_EXTS = (".gif", ".svg", ".ans", ".json", ".py", ".md", ".txt", ".webp")
+
+    def _register_pipeline_final(self, run_view) -> None:
+        """Register a completed pipeline run's final deliverable into the Library.
+
+        Wired as `PipelineStudio`'s `on_run_complete` callback (see
+        `_show_pipelines`), invoked once per run the instant `LiveRunView`
+        emits "run-done" (`PipelineStudio._on_run_done`).
+
+        Resolves the "hero" step via `pipeline_view_model.final_index_for`
+        and classifies its artifact by extension into ONE of the two record
+        shapes every other Library-writing path in this file already
+        produces — never a new one:
+
+        - raster (.png/.jpg/.jpeg) or .mp4 → a native
+          `history_store.GenerationRecord`, persisted to `self._store` (the
+          same append `GenerationWorker` does before calling back) and routed
+          through the existing gallery add path
+          (`_gallery_for_type(...).replace_pending_with(record)` — the exact
+          call `_on_finished` makes; it degrades gracefully to a plain insert
+          when there's no pending card to swap, which is always the case
+          here since a pipeline final was never shown as a pending card).
+        - artgen kinds (.gif/.svg/.ans/.json/.py/.md) → a
+          `media_store.MediaRecord` with `generator_type="pipeline"` and
+          provenance (`_pipeline_run_id`, `recipe`) in `params`, mirroring
+          `_create_generate_artgen`/the `ansi-image` branch of
+          `_run_transform`: `rec.media_file_path` alias set, `_ms.add()` +
+          `_ms.ensure_auto_playlists()`, then `self._artgen_gallery.refresh()`
+          (mirrors `_on_create_artgen_done`).
+
+        Fail-soft end to end: no resolvable final step, a final artifact
+        missing on disk, an unrecognized extension, or any error raised while
+        building/writing the record all degrade to "register nothing" — this
+        must never surface to (or break) the run-done view the user is
+        looking at.
+
+        Whole-branch review Finding 4: `LiveRunView.on_finished` emits
+        "run-done" on BOTH success and failure (a failed run still resolves
+        its in-flight step to "failed" and fires the signal so the Open page
+        rebuilds and shows what went wrong) — `PipelineStudio._on_run_done`
+        calls `on_run_complete` either way, with no success/failure
+        distinction of its own. Without an explicit gate here, a failed or
+        partial run whose hero-eligible step nonetheless left a stale/partial
+        artifact on disk (e.g. a retried node's earlier attempt) would get
+        registered into the Library as if it were a real finished deliverable.
+        Guarded below: only a final step whose OWN status is "done" (not
+        "failed"/"running"/"pending") is ever registered.
+
+        `self._registered_pipeline_runs` (a set of run ids, lazily created)
+        guards registering the same run more than once — defense in depth
+        against `on_run_complete` somehow firing twice for one run_id.
+        """
+        registered = getattr(self, "_registered_pipeline_runs", None)
+        if registered is None:
+            registered = set()
+            self._registered_pipeline_runs = registered
+        run_id = getattr(run_view, "run_id", None)
+        if run_id in registered:
+            return
+        registered.add(run_id)
+
+        try:
+            from pipeline_view_model import final_index_for
+
+            index = final_index_for(run_view)
+            if index is None:
+                return
+            step = run_view.steps[index]
+            if step.status != "done":
+                # Finding 4: never register a failed/partial run's final
+                # step — a stale artifact from an earlier retry (or one
+                # still mid-write) is not a genuine finished deliverable.
+                return
+            artifact_path = step.artifact_path
+            if not artifact_path or not Path(artifact_path).is_file():
+                return
+
+            ext = Path(artifact_path).suffix.lower()
+            if ext in self._PIPELINE_FINAL_RASTER_EXTS or ext in self._PIPELINE_FINAL_VIDEO_EXTS:
+                self._register_pipeline_final_native(run_view, artifact_path, ext)
+            elif ext in self._PIPELINE_FINAL_ARTGEN_EXTS:
+                self._register_pipeline_final_artgen(run_view, artifact_path)
+            # else: unrecognized extension — register nothing (see docstring).
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to register pipeline final deliverable for run %s",
+                run_id, exc_info=True,
+            )
+
+    def _register_pipeline_final_native(self, run_view, artifact_path: str, ext: str) -> None:
+        """Raster/mp4 pipeline final → history_store.GenerationRecord + gallery.
+
+        Thumbnail extraction mirrors `worker.py`'s two ffmpeg incantations
+        (`_extract_thumbnail` for video: `-vframes 1`; `_make_thumbnail`/
+        `_make_thumbnail_for` for a static image: no `-vframes`, just the
+        scale+pad) — `-update 1` avoids the image2-muxer "already exists"
+        warning either way.
+
+        Whole-branch review Finding 2: this method is reached from
+        `_register_pipeline_final`, which `PipelineStudio`'s `on_run_complete`
+        callback invokes via `GLib.idle_add` — i.e. on the GTK main thread.
+        The ffmpeg thumbnail extraction below is a real subprocess with a
+        `timeout=30`, so building it inline here could freeze the whole UI for
+        up to 30 seconds. Per CLAUDE.md's GTK threading rule, the heavy work
+        (ffmpeg + record construction + `self._store.append`, all pure I/O —
+        no GTK objects touched) now runs on a daemon thread, mirroring
+        `_create_generate_artgen`'s worker pattern; only the final gallery
+        touch (`gallery.replace_pending_with`, a real widget call) is posted
+        back via `GLib.idle_add`.
+        """
+        import uuid
+        from datetime import datetime, timezone
+        from history_store import GenerationRecord, THUMBNAILS_DIR
+
+        is_video = ext in self._PIPELINE_FINAL_VIDEO_EXTS
+        media_type = "video" if is_video else "image"
+
+        def run() -> None:
+            try:
+                ts = datetime.now(timezone.utc)
+                ts_str = ts.strftime("%Y%m%d_%H%M%S")
+                job_id = str(uuid.uuid4())
+
+                THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+                thumb_path = THUMBNAILS_DIR / f"{ts_str}_{job_id[:8]}.jpg"
+                ffmpeg_args = ["ffmpeg", "-y", "-i", artifact_path]
+                if is_video:
+                    ffmpeg_args += ["-vframes", "1"]
+                ffmpeg_args += [
+                    "-vf", "scale=200:112:force_original_aspect_ratio=decrease,"
+                           "pad=200:112:(ow-iw)/2:(oh-ih)/2",
+                    "-q:v", "3", "-update", "1", str(thumb_path),
+                ]
+                try:
+                    subprocess.run(ffmpeg_args, stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=30)
+                except Exception:
+                    try:
+                        shutil.copy2(artifact_path, str(thumb_path))
+                    except Exception:
+                        pass
+
+                record = GenerationRecord(
+                    id=job_id,
+                    prompt=f"Pipeline: {run_view.title}"[:500],
+                    negative_prompt="",
+                    num_inference_steps=0,
+                    seed=-1,
+                    video_path=artifact_path if is_video else "",
+                    thumbnail_path=str(thumb_path) if thumb_path.exists() else "",
+                    created_at=ts.isoformat(),
+                    media_type=media_type,
+                    image_path="" if is_video else artifact_path,
+                    model="",
+                    extra_meta={
+                        "_pipeline_run_id": run_view.run_id,
+                        "recipe": run_view.recipe,
+                    },
+                )
+                self._store.append(record)
+                GLib.idle_add(self._finish_register_pipeline_final_native, media_type, record)
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "failed to build native pipeline final record for run %s",
+                    getattr(run_view, "run_id", None), exc_info=True,
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_register_pipeline_final_native(self, media_type: str, record) -> bool:
+        """Main-thread tail of `_register_pipeline_final_native`: the one real
+        widget touch (gallery insert), posted back via `GLib.idle_add` since
+        everything upstream of this ran on a background thread. Wrapped in
+        its own try/except — same fail-soft discipline as every other
+        registration path in this file — so a gallery-refresh error can never
+        surface after the record has already been durably persisted."""
+        try:
+            gallery = self._gallery_for_type(media_type)
+            gallery.replace_pending_with(record)
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to refresh gallery for native pipeline final (media_type=%s)",
+                media_type, exc_info=True,
+            )
+        return GLib.SOURCE_REMOVE
+
+    def _register_pipeline_final_artgen(self, run_view, artifact_path: str) -> None:
+        """Artgen-kind pipeline final → media_store.MediaRecord + artgen gallery refresh.
+
+        Mirrors `_register_pipeline_final_native` (review M2): this method is
+        reached on the GTK main thread (via `GLib.idle_add` from
+        `PipelineStudio`'s `on_run_complete`), and `make_thumbnail` can
+        rasterize a large `.ans`/`.json` grid — so the thumbnail + record build
+        + `media_store` write (pure I/O, no GTK objects) run on a daemon thread;
+        only the final `artgen_gallery.refresh()` widget touch is posted back
+        via `GLib.idle_add`."""
+        import uuid
+        from datetime import datetime, timezone
+
+        from artgen_thumb import make_thumbnail
+        from media_store import MediaRecord
+        from media_store import media_store as _ms
+
+        def run() -> None:
+            try:
+                out_path = Path(artifact_path)
+                thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+                try:
+                    thumb_path = make_thumbnail(out_path, thumb_path)
+                except Exception:
+                    thumb_path = Path("")
+
+                rec = MediaRecord(
+                    id=str(uuid.uuid4()),
+                    media_type="artgen",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    file_path=str(out_path),
+                    thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                    prompt=f"Pipeline: {run_view.title}"[:500],
+                    model_id="pipeline",
+                    generator_type="pipeline",
+                    params=json.dumps({
+                        "_pipeline_run_id": run_view.run_id,
+                        "recipe": run_view.recipe,
+                    }),
+                    starred=0,
+                )
+                # Duck-typed alias — see `_create_generate_artgen`'s identical
+                # comment: `CreateResultPanel`/gallery code reads
+                # `media_file_path`, which plain `MediaRecord` doesn't declare.
+                rec.media_file_path = str(out_path)
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
+                GLib.idle_add(self._finish_register_pipeline_final_artgen)
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "failed to build artgen pipeline final record for run %s",
+                    getattr(run_view, "run_id", None), exc_info=True,
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_register_pipeline_final_artgen(self) -> bool:
+        """Main-thread tail of `_register_pipeline_final_artgen`: the one real
+        widget touch (artgen gallery refresh), fail-soft like every other
+        registration path here."""
+        try:
+            artgen_gallery = getattr(self, "_artgen_gallery", None)
+            if artgen_gallery is not None:
+                artgen_gallery.refresh()
+        except Exception:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "failed to refresh artgen gallery for pipeline final", exc_info=True,
+            )
+        return GLib.SOURCE_REMOVE
+
+    # ── Breadcrumb / live-context routing (RN-2 Task 2) ─────────────────────────
+
+    def _on_crumb_navigate(self, target: str) -> None:
+        """`Breadcrumb`'s `on_navigate` callback: an upstream (non-leaf) crumb
+        was clicked. Maps the crumb's opaque `target` id back onto the same
+        loop-nav places `_build_loop_nav`'s buttons drive, so navigating via a
+        crumb is indistinguishable from clicking the loop-nav button directly
+        (each place's own handler re-sets the crumb trail to match)."""
+        if target == "library" and self._loop_nav.get("discover"):
+            self._loop_nav["discover"].set_active(True)
+        elif target == "create" and self._loop_nav.get("create"):
+            self._loop_nav["create"].set_active(True)
+        elif target == "pipeline":
+            self._navigate_to_pipelines()
+
+    def _navigate_to_pipelines(self) -> None:
+        """Enter Pipelines the way the toolbar button does — by ACTIVATING the
+        toggle — so the button correctly lights up as "you are in Pipelines".
+        Calling `_show_pipelines()` directly (as crumb/tray-chip navigation used
+        to) left the toggle inactive, so the button state lied about where you
+        were. No-op-safe without the button (test harnesses)."""
+        btn = getattr(self, "_pipelines_btn", None)
+        if btn is None:
+            self._show_pipelines()
+        elif btn.get_active():
+            self._show_pipelines()   # already active -> just (re-)assert the surface
+        else:
+            btn.set_active(True)     # -> _on_pipelines_toggled -> _show_pipelines
+
+    def _on_context_resume(self, ctx_id: str) -> None:
+        """Tray chip clicked: jump back into the live activity it represents."""
+        if ctx_id == "pipeline":
+            self._navigate_to_pipelines()
+        elif ctx_id == "watch":
+            self._on_open_attractor()   # presents the existing kiosk window
+
+    def _on_context_dismiss(self, ctx_id: str) -> None:
+        """Tray chip's ✕ clicked: actually end the activity, not just hide
+        the chip — a dismissed pipeline session returns to the Library, and
+        a dismissed watch session closes the kiosk window (which hides the
+        persistent window and removes the context via `_on_attractor_hidden`)."""
+        if ctx_id == "watch":
+            win = getattr(self, "_attractor_win", None)
+            if win is not None:
+                win.close()  # -> _on_close_requested -> hide + _on_hide -> _nav_close_context("watch")
+                return
+        if ctx_id == "pipeline":
+            # Leaving the pipeline session entirely -> back to Library.
+            gs = getattr(self, "_gallery_stack", None)
+            if gs is not None and gs.get_visible_child_name() == "pipelines":
+                self._loop_nav["discover"].set_active(True)
+        self._nav_close_context(ctx_id)
+
+    # Maps GenerationRecord.media_type -> the "kind" vocabulary Pipeline Studio's
+    # Muse expects for a seed_artifact. Anything absent from this table (e.g.
+    # "artgen") has no resolvable kind, so _remix_as_pipeline falls back to a
+    # blank muse rather than guessing.
+    _REMIX_KIND_BY_MEDIA_TYPE = {
+        "image": "image",
+        "video": "video",
+        "animate": "video",
+        "animatediff": "gif",
+    }
+
+    def _remix_as_pipeline(self, record) -> None:
+        """Open Pipeline Studio's Muse scoped to this record's primary artifact.
+
+        Wired as `remix_as_pipeline_cb` to every GenerationCard/DetailPanel's
+        "🔀 Remix" button ("Make this image into…") AND as
+        `ArtgenGallery`/`ArtgenDetail`'s `on_remix_as_pipeline` for the
+        Generative Art gallery's own "🔀 Remix" affordance. This is now the
+        SINGLE remix affordance on every surface (Task 8,
+        remix-pipeline-unification): the former parallel "🔀 Remix" popover
+        button (RemixPopover -> _dispatch_remix, which just opened this same
+        Muse with fewer steps) and `ArtgenPanel` (deleted in SP-3d-5) are
+        both gone. Accepts either record type and dispatches on it:
+
+        - `history_store.GenerationRecord` (video/image galleries): resolves
+          (path, kind, thumb_path) via `_REMIX_KIND_BY_MEDIA_TYPE`, as before.
+        - `media_store.MediaRecord` (artgen gallery): resolves via
+          `_resolve_artgen_media_seed`, which classifies the artifact's file
+          extension through `artgen_kind.artgen_seed_kind` — a "text" artifact
+          (e.g. a lore .txt) seeds its own file content as the muse's opaque
+          seed value ("Make this text into…"), an "image"/"gif" artifact seeds
+          its path like the GenerationRecord branch, and anything unresolved
+          (json/unknown, missing/unreadable/empty) falls back to a blank muse.
+
+        Either way this activates the Pipelines area exactly the way the
+        "🧩 Pipelines" toolbar toggle does, then hands the seed artifact to
+        PipelineStudio.show_muse().
+
+        Never fails: a missing/unreadable file, an unresolved kind, or an
+        unrecognized media_type all fall back to a blank muse
+        (`show_muse(seed_artifact=None)`) instead of raising or seeding
+        garbage.
+        """
+        if isinstance(record, MediaRecord):
+            seed_artifact = self._resolve_artgen_media_seed(record)
+        else:
+            kind = self._REMIX_KIND_BY_MEDIA_TYPE.get(record.media_type)
+            seed_artifact = None
+            if record.media_exists and kind is not None:
+                seed_artifact = (record.media_file_path, kind, record.thumbnail_path)
+
+        if app_settings.PIPELINE_MODE_ENABLED:
+            # Activate the Pipelines area the same way the toolbar toggle does.
+            pipelines_btn = getattr(self, "_pipelines_btn", None)
+            if pipelines_btn is not None and not pipelines_btn.get_active():
+                pipelines_btn.set_active(True)  # triggers _on_pipelines_toggled -> _show_pipelines
+            else:
+                self._show_pipelines()
+        else:
+            # Pipeline mode hidden (task-5-brief.md): enter the studio scoped
+            # straight to the Muse goal chooser — never the studio's Discover.
+            # `_pipelines_btn` doesn't exist in this configuration at all, so
+            # this skips the toggle dance entirely rather than guard it.
+            self._ensure_pipeline_studio()
+            self._gallery_stack.set_visible_child_name("pipelines")
+            for _b in getattr(self, "_loop_nav", {}).values():
+                if _b.get_active():
+                    _b.set_active(False)
+            # Full-width, same as _show_pipelines: the studio has its own
+            # layout and a visible detail pane just squeezes the Muse.
+            self._detail_wrap.set_visible(False)
+
+        self._pipeline_studio.show_muse(seed_artifact=seed_artifact)
+
+    @staticmethod
+    def _resolve_artgen_media_seed(record: "MediaRecord"):
+        """Resolve an artgen `MediaRecord` into a Muse seed_artifact tuple.
+
+        `artgen_kind.artgen_seed_kind` classifies the artifact by file
+        extension:
+
+        - `"text"` (.txt/.md/.py — e.g. a lore artifact): read the file as
+          utf-8, best-effort. Non-empty (post-strip) content seeds
+          `(content, "text", None)` — the thumbnail is deliberately `None`
+          because the Muse shows the "Make this text into…" heading with no
+          image thumb for a text seed, never the file's own thumbnail_path.
+        - `"image"`/`"gif"` (.png/.jpg/.svg/.ans/.webp/.gif): seeds
+          `(file_path, kind, thumbnail_path)` if the file exists on disk.
+        - `None` (json/unknown extension, or any failure above): `None` —
+          the caller opens a blank muse.
+
+        Never raises — any exception here is treated the same as "not
+        seedable" (blank muse), matching the GenerationRecord branch's
+        never-fails contract.
+        """
+        try:
+            kind = artgen_kind.artgen_seed_kind(record.file_path, record.generator_type)
+            if kind is None:
+                return None
+            if kind == "text":
+                try:
+                    content = Path(record.file_path).read_text(encoding="utf-8")
+                except Exception:
+                    return None
+                if not content.strip():
+                    return None
+                return (content, "text", None)
+            # "image" / "gif"
+            if record.file_path and Path(record.file_path).exists():
+                return (record.file_path, kind, record.thumbnail_path)
+            return None
+        except Exception:
+            return None
 
     # ── Card selection ─────────────────────────────────────────────────────────
 
     def _on_card_selected(self, record: GenerationRecord) -> None:
         """Called when the user clicks a gallery card. Populates the detail panel."""
+        # Unify-gallery-interaction-pattern Task 3: a native card click always
+        # means the shared right pane should show `DetailPanel`, even if it
+        # was last left on the "artgen" page (e.g. the user clicked an
+        # artgen card, then clicked a video/image/animate card without
+        # closing the pane in between). Pause any GIF timer left running on
+        # the now-hidden ArtgenDetail first -- a Gtk.Stack keeps its hidden
+        # child realized, so an un-paused timer would otherwise keep firing
+        # forever (see ArtgenDetail.pause_animation's docstring).
+        self._artgen_detail.pause_animation()
+        self._right_stack.set_visible_child_name("native")
         gallery = self._gallery_for_type(record.media_type)
         # Use all_cards() so prev/next navigation crosses page boundaries.
         all_cards = gallery.all_cards()
         idx = next((i for i, c in enumerate(all_cards) if c._record.id == record.id), 0)
         self._detail.set_context([c._record for c in all_cards], idx)
-        self._detail.show_record(record, self._dispatch_remix)
+        self._detail.show_record(record, None,
+                                  remix_as_pipeline_cb=self._remix_as_pipeline)
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb(_short_title(getattr(record, "prompt", "")))])
+
+    # ── Artgen card selection (shared right pane) ───────────────────────────────
+    # Unify-gallery-interaction-pattern Task 3: routes ArtgenGallery's card
+    # activation/deletion signals into self._right_stack + self._artgen_detail,
+    # the same shared-pane pattern `_on_card_selected` above uses for the
+    # three native galleries. Replaces ArtgenGallery's own in-page detail
+    # overlay (a crash workaround; see CLAUDE.md and artgen_gallery.py).
+
+    def _on_artgen_card_selected(self, media_id: str) -> None:
+        """Called when the user clicks an artgen gallery card."""
+        # Never force the pane open if the user collapsed it -- matches
+        # _on_card_selected above, which also never calls
+        # _set_detail_pane_visible(True).
+        self._right_stack.set_visible_child_name("artgen")
+        records = self._artgen_gallery._filtered_records()
+        self._artgen_detail.show_record(media_id, records)
+        rec = next((r for r in records if getattr(r, "id", None) == media_id), None)
+        title = _short_title(getattr(rec, "prompt", "") if rec is not None else "")
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb(title)])
+
+    def _on_artgen_card_deleted(self, media_id: str) -> None:
+        """Called after ArtgenGallery's own hover-🗑 already removed the card
+        from its grid+in-memory records. Only clear the shared pane if it is
+        currently showing the record that was just deleted."""
+        if self._right_stack.get_visible_child_name() != "artgen":
+            return
+        records = self._artgen_detail._records
+        idx = self._artgen_detail._idx
+        current = records[idx] if records and 0 <= idx < len(records) else None
+        if current is not None and current.id == media_id:
+            self._set_detail_pane_visible(False)
+
+    def _on_artgen_detail_deleted(self, media_id: str) -> None:
+        """Called after the shared ArtgenDetail's OWN 🗑 deletes a record --
+        unlike the grid's hover-delete, ArtgenGallery doesn't know about this
+        deletion yet, so sync its grid+chips here. ArtgenDetail already
+        stepped to the next record (or called on_back if the list emptied)
+        inside its own `_delete_confirmed` -- nothing further to manage on
+        the detail side."""
+        self._artgen_gallery.remove_record(media_id)
+
+    def _on_artgen_detail_starred(self, media_id: str, starred: bool) -> None:
+        """Mirror _on_star's native counterpart: persist the starred state
+        and keep ArtgenGallery's in-memory records/chips (the ⭐ Starred
+        filter chip) in sync with a star toggle made from inside the shared
+        detail pane."""
+        from media_store import media_store as _ms
+        _ms.star(media_id, starred)
+        for r in self._artgen_gallery._records:
+            if r.id == media_id:
+                r.starred = int(starred)
+                break
+        self._artgen_gallery._rebuild_chips()
 
     # ── Remix routing ──────────────────────────────────────────────────────────
-
-    def _on_remix_card(self, record) -> None:
-        """Open RemixPopover anchored to the gallery card's 🔀 Remix button.
-
-        Called by GalleryWidget cards via the remix_cb hook.  The popover is
-        anchored to the MainWindow (self) as a fallback parent since the exact
-        button widget is not passed through the callback chain — the popover
-        will still appear in a reasonable position near the window centre.
-        Resolves remix ingredients in a background thread (see RemixPopover),
-        then calls _dispatch_remix on the GTK main thread.
-        """
-        from remix_popover import RemixPopover
-        pop = RemixPopover(record, on_remix=self._dispatch_remix)
-        pop.set_parent(self)
-        pop.popup()
-
-    def _dispatch_remix(self, ctx) -> None:
-        """Route a fully-resolved RemixContext to the appropriate tab and controls.
-
-        Called on the GTK main thread by RemixPopover after ingredient resolution
-        completes (via GLib.idle_add inside the popover's background thread).
-        Delegates to remix_dispatch.dispatch_remix which is pure Python and
-        fully unit-tested independently of GTK.
-        """
-        from remix_dispatch import dispatch_remix
-        dispatch_remix(
-            ctx,
-            controls=self._controls,
-            artgen_panel=self._artgen_panel,
-            flash_fn=self._flash_status,
-        )
+    #
+    # Task 8 (remix-pipeline-unification): remix now means exactly one thing
+    # -- seed a pipeline from an artifact. The former parallel "🔀 Remix"
+    # popover path (`_on_remix_card` -> `RemixPopover` -> `_dispatch_remix`
+    # -> Pipeline Studio's Muse) duplicated `_remix_as_pipeline` below in
+    # everything but presentation (it even opened the SAME Muse, per the
+    # DISCOVERED GAP note this replaced -- see git history / task-5-report.md
+    # for the removed implementation). It is deleted outright; every surface
+    # now wires its single remix button straight to `_remix_as_pipeline`.
+    # `remix_popover.py`/`remix_dispatch.py` stay in-tree (still unit-tested)
+    # but are no longer referenced from here.
 
     # ── Forge transform pipeline ───────────────────────────────────────────────
 
@@ -8644,8 +7720,20 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _run_transform(self, record: GenerationRecord, key: str) -> GenerationRecord:
-        """Run a forge plugin transform and return a new GenerationRecord for the result."""
+    def _run_transform(self, record: GenerationRecord, key: str):
+        """Run a forge plugin transform and return the resulting record.
+
+        rmbg/blip/depth produce a native image `GenerationRecord` for the
+        Image gallery (the original behavior). "ansi-image" is a SPECIAL
+        CASE (Effort B Task 2): it produces a NEW ARTGEN
+        `media_store.MediaRecord` (a `.ans` ANSI-art file) instead, mirroring
+        `_create_generate_artgen`'s artgen record-construction pattern rather
+        than the `_META`-driven `(fn_name, ext, label)` dispatch used below
+        for the image-output transforms — `image_to_ansi(src)` takes no
+        `dest` and returns text, not a file it writes itself.
+        `_on_transform_finished` branches on the returned record's
+        `media_type` to route it to the right gallery.
+        """
         import importlib.util as _ilu
         import uuid
         from datetime import datetime, timezone
@@ -8679,6 +7767,59 @@ class MainWindow(Gtk.ApplicationWindow):
         _writelog(f"source:    {src}")
         _writelog(f"plugin:    {plugins_dir / key / 'plugin.py'}")
         _writelog(f"record_id: {record.id}")
+
+        if key == "ansi-image":
+            # Produces a media_store MediaRecord (artgen), not a
+            # history_store GenerationRecord — see the docstring above and
+            # `_create_generate_artgen` for the pattern being mirrored.
+            from artgen_thumb import make_thumbnail, make_artgen_path
+            from media_store import MediaRecord
+            from media_store import media_store as _ms
+
+            try:
+                ansi_text = mod.image_to_ansi(src)
+                out_path = make_artgen_path(job_id[:8], ".ans")
+                # make_artgen_path() normally creates its own parent dir
+                # (base_dir.mkdir(...)), but tests stub the function out
+                # with a bare Path, so create it here too — cheap and
+                # idempotent either way.
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(ansi_text, encoding="utf-8")
+                _writelog(f"output:    {out_path}")
+            except Exception as e:
+                _writelog(f"ERROR:     {e}")
+                raise
+
+            elapsed = (datetime.now(timezone.utc) - t_start).total_seconds()
+            _writelog(f"elapsed:   {elapsed:.1f}s")
+            _writelog("status:    ok")
+
+            thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+            try:
+                thumb_path = make_thumbnail(out_path, thumb_path)
+            except Exception:
+                thumb_path = Path("")
+
+            source_label = (record.prompt or Path(src).stem)[:100]
+            rec = MediaRecord(
+                id=job_id,
+                media_type="artgen",
+                created_at=ts.isoformat(),
+                file_path=str(out_path),
+                thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                prompt=f"ANSI art from {source_label}",
+                model_id="artgen",
+                generator_type="ansi-image",
+                params=json.dumps({"_source_id": record.id, "_transform": "ansi-image"}),
+                starred=0,
+            )
+            # Duck-typed alias — see `_create_generate_artgen`'s identical
+            # comment: `CreateResultPanel`/gallery code reads
+            # `media_file_path`, which plain `MediaRecord` doesn't declare.
+            rec.media_file_path = str(out_path)
+            _ms.add(rec)
+            _ms.ensure_auto_playlists()
+            return rec
 
         # (fn_name, output_ext_or_None, display_label)
         _META = {
@@ -8734,8 +7875,30 @@ class MainWindow(Gtk.ApplicationWindow):
             },
         )
 
-    def _on_transform_finished(self, record: GenerationRecord) -> bool:
-        """Add the transform result to the store and refresh the image gallery."""
+    def _on_transform_finished(self, record) -> bool:
+        """Route a finished transform's record to the right gallery.
+
+        rmbg/blip/depth return a native image `GenerationRecord` — append to
+        `self._store` and refresh the Image gallery (unchanged behavior).
+
+        "ansi-image" (Effort B Task 2) returns a `media_store.MediaRecord`
+        (`media_type == "artgen"`) instead — it was already written to
+        `media_store` by `_run_transform` itself (mirroring
+        `_create_generate_artgen`), so here we only need to refresh the
+        artgen gallery, same as `_on_create_artgen_done` does. This record
+        must NEVER be appended to `self._store` (a `history_store`-only
+        list) or handed to `self._image_gallery` — wrong type, wrong gallery.
+        """
+        if getattr(record, "media_type", None) == "artgen":
+            artgen_gallery = getattr(self, "_artgen_gallery", None)
+            if artgen_gallery is not None:
+                try:
+                    artgen_gallery.refresh()
+                except Exception:
+                    pass  # a refresh failure must never crash the transform flow
+            self._flash_status("New ANSI art in the Generative Art gallery")
+            return False
+
         self._store.append(record)
         self._image_gallery.load_history(
             [r for r in self._store.all_records() if r.media_type == "image"]
@@ -8798,9 +7961,15 @@ class MainWindow(Gtk.ApplicationWindow):
         # Route each record to the gallery that matches its media type.
         # GalleryWidget.load_history() replaces existing cards rather than
         # appending, so calling this method more than once is safe.
-        # animatediff GIFs live in the video gallery (same as _gallery_for_type routing).
-        video_recs   = [r for r in records if r.media_type in ("video", "animatediff")]
-        animate_recs = [r for r in records if r.media_type == "animate"]
+        # Wan2.2-Animate records are media_type=="video" post-migration (the
+        # animatediff-is-video migration folded them in), so they live in the
+        # video gallery like any other video record — but they ALSO still
+        # populate the Animate Discover tab, identified by the provenance
+        # stamp generator_type=="animate" (media_type=="animate" can never
+        # match a real record anymore; see history_store.new_animate). Animate
+        # is now a filtered view of Video, not a disjoint media type.
+        video_recs   = [r for r in records if r.media_type == "video"]
+        animate_recs = [r for r in records if r.generator_type == "animate"]
         image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
             self._video_gallery.load_history(video_recs)
@@ -8818,133 +7987,186 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_status(f"Loaded {n_local} previous generation(s)")
         self._update_attractor_btn()
 
-    # ── Health worker ──────────────────────────────────────────────────────────
+    # ── ModelStatusService-driven status bar (SP-3d-6) ──────────────────────────
+    #
+    # The three legacy pollers that used to live in this section
+    # (`_start_health_worker`/`_health_loop`/`_on_health_result` for port 8000,
+    # `_start_prompt_gen_health_worker`/`_prompt_gen_health_loop`/
+    # `_on_prompt_gen_health` for port 8001, and
+    # `_start_artgen_health_worker`/`_artgen_health_loop`/
+    # `_on_artgen_health_result` for port 8002) are retired. Each ran its own
+    # background thread pinging a different port on its own timer and fed
+    # `_hw_statusbar` directly; `ModelStatusService` already reconciles all
+    # three into one polled, subscribable status map (see model_status.py's
+    # module docstring), so those threads were pure duplication of work the
+    # service was already doing. `_on_status_snapshot`/`_render_status_snapshot`
+    # below are the single subscribe() callback that replaces all three.
 
-    def _start_health_worker(self) -> None:
-        self._health_stop = threading.Event()
-        self._health_thread = threading.Thread(
-            target=self._health_loop, daemon=True
-        )
-        self._health_thread.start()
-
-    def _health_loop(self) -> None:
-        """Runs on background thread. Posts UI updates via GLib.idle_add.
-
-        Requires two consecutive failed pings before reporting offline so that
-        a single slow response (e.g. TT chip saturated during active inference)
-        doesn't flip the UI dot to red.  A successful ping resets the counter
-        immediately.
-
-        Posts to the main thread on every poll (not just state changes) so that
-        transient exceptions in the idle callback never leave the UI stuck in a
-        stale state indefinitely.
+    def _on_status_snapshot(self, snap: "dict[str, Status]") -> bool:
+        """`ModelStatusService.subscribe()` callback, wrapped in `GLib.idle_add`
+        (see `__init__`) so it always runs on the main thread — fires on every
+        poll tick whose resolved status map actually changed (change-only
+        gating, per model_status.py), plus once at startup via the explicit
+        call right after subscribing (subscribe() only pushes on the *next*
+        change).
         """
-        consecutive_failures = 0
+        if not self._alive:
+            return False
+        self._render_status_snapshot(snap)
+        return False  # one-shot idle callback (re-registered on the next change)
 
-        while not self._health_stop.is_set():
-            ready = self._client.health_check()
-            running_model: "str | None" = None
+    def _render_status_snapshot(self, snap: "dict[str, Status]") -> None:
+        """Re-render `_hw_statusbar` from a fresh `ModelStatusService` snapshot.
 
-            if ready:
-                consecutive_failures = 0
-                running_model = self._client.detect_running_model()
+        Per-capability rows: group `server_manager.SERVERS` by capability via
+        `_sm.servers_for_capability` (same grouping `ServersControl` and the
+        retired `_on_health_result` both used) — READY if any server for that
+        capability is READY (showing its label), else "starting…" if any is
+        STARTING, else offline. "animatediff" is a hardware capability with no
+        `SERVERS` entry (see `_sm.CAPABILITY_LABELS`'s comment) so it's skipped
+        here — `_check_animatediff_hardware` owns that row instead.
+
+        Aggregate dot: READY > STARTING > ERROR > OFF across EVERY key,
+        mirroring `ServersControl._refresh_bar_dot`'s aggregation policy (the
+        `TODO(SP-3d)` this replaces asked for exactly this). STARTING only
+        calls `update_starting()` on the actual transition into that state —
+        `update_starting()` resets the elapsed timer to 0:00 on every call, so
+        calling it on every snapshot while already STARTING would freeze the
+        counter instead of letting it tick.
+
+        Unregistered running chat model (bugfix): `snap`'s per-key statuses
+        alone under-report "artgen" when the running chat-LLM backend
+        doesn't match any registered `server_manager.SERVERS` entry
+        (`ModelStatusService.running_artgen_model().matched_key is None`) --
+        every artgen/prompt key legitimately resolves OFF in that case (see
+        `model_status.py`'s `_tick()` docstring), even though a chat endpoint
+        genuinely answers requests and CreateView already surfaces it as a
+        selectable "(detected)" entry. `running_artgen_model() is not None`
+        is the single source of truth for "a chat model is running, matched
+        or not" -- both the "artgen" capability row below AND the overall
+        aggregate dot fold it in, so the two rows painted from the same
+        snapshot never disagree with each other.
+        """
+        artgen_model = self._status_service.running_artgen_model()
+
+        for cap, cap_label in _sm.CAPABILITY_LABELS.items():
+            if cap == "animatediff":
+                continue
+            sdefs = _sm.servers_for_capability(cap)
+            statuses = [snap.get(s.key, Status.OFF) for s in sdefs]
+            ready_sdef = next((s for s in sdefs if snap.get(s.key) == Status.READY), None)
+            if ready_sdef is not None:
+                self._hw_statusbar.update_capability(cap, True, ready_sdef.label)
+            elif cap == "artgen" and artgen_model is not None:
+                self._hw_statusbar.update_capability(
+                    cap, True, f"{artgen_model.model_id} (detected)"
+                )
+            elif Status.STARTING in statuses:
+                self._hw_statusbar.update_capability(cap, False, "starting…")
             else:
-                consecutive_failures += 1
-                if consecutive_failures < 2:
-                    # First miss — don't flip UI yet; wait for the next poll.
-                    self._health_stop.wait(10.0)
-                    continue
+                self._hw_statusbar.update_capability(cap, False, "")
 
-            # Always post so the UI can't get stuck in a stale state.
-            GLib.idle_add(self._on_health_result, ready, running_model)
-            self._health_stop.wait(10.0)
+        values = list(snap.values())
+        if Status.READY in values:
+            agg = Status.READY
+        elif Status.STARTING in values:
+            agg = Status.STARTING
+        elif Status.ERROR in values:
+            agg = Status.ERROR
+        else:
+            agg = Status.OFF
 
-    def _on_health_result(self, ready: bool, running_model: "str | None") -> bool:
-        """Runs on main thread (called by GLib.idle_add)."""
-        try:
-            if not self._alive:
-                return False
-            # Auto-switch source tab on first model detection — once only.
-            if running_model and not self._auto_tab_switched:
-                source = _MODEL_TO_SOURCE.get(running_model)
-                if source and source != self._controls.get_model_source():
-                    self._controls.switch_to_source(source)
-                self._auto_tab_switched = True
+        if agg != Status.READY and artgen_model is not None:
+            agg = Status.READY
 
-            self._controls.set_server_state(ready, running_model)
+        if agg == Status.READY:
+            self._hw_statusbar.update_server(True, "ready")
+            # A launch script may have handed off to a Docker log tail (see
+            # _start_log_tail) — stop it now that a real health check has
+            # confirmed readiness. Same trigger point the retired
+            # _on_health_result used to own.
+            if self._log_tail_stop:
+                self._log_tail_stop.set()
+                self._log_tail_stop = None
+            if not (self._worker_gen and self._worker_gen._running()):
+                self._set_status("Server ready — enter a prompt and click Generate")
+        elif agg == Status.STARTING:
+            if self._status_agg_prev != Status.STARTING:
+                self._hw_statusbar.update_starting()
+        elif agg == Status.ERROR:
+            self._hw_statusbar.update_error()
+        else:
+            self._hw_statusbar.update_server(False, "offline")
+        self._status_agg_prev = agg
 
-            # Enable Recover Jobs (File menu) whenever the server is reachable,
-            # regardless of which model tab is active or whether a job is running.
-            server_reachable = ready or (running_model is not None)
-            recover_action = self.lookup_action("recover-jobs")
-            if recover_action:
-                recover_action.set_enabled(server_reachable and not self._controls._server_launching)
+        # Recover Jobs (File menu): enabled iff a media server (video/image/
+        # animate — NOT artgen/prompt, which _on_recover has nothing to do
+        # with) is actually READY. While a launch is in flight the service
+        # itself reports STARTING (via note_starting()), so this naturally
+        # stays disabled until a real health check succeeds — no separate
+        # "is launching" flag needed (the retired _on_health_result read
+        # ControlPanel's own `_server_launching` for this; that dependency is
+        # gone).
+        media_ready = any(
+            snap.get(s.key) == Status.READY
+            for cap in ("video", "image", "animate")
+            for s in _sm.servers_for_capability(cap)
+        )
+        if a := self.lookup_action("recover-jobs"):
+            a.set_enabled(media_ready)
 
-            # Mirror server health in the hardware status bar.
-            # Skip while a launch/stop script is in flight — the status bar
-            # stays in its "starting…" state (timer ticking) until the
-            # operation finishes, then health results flow through normally.
-            # Also skip when artgen is the active source: the artgen health
-            # loop owns the status bar in that mode (it polls port 8002).
-            _source = self._controls.get_model_source()
-            cap = _MODEL_TO_CAP.get(running_model or "") \
-                  or (_SOURCE_TO_CAP.get(_source, "video") if _source != "artgen" else "video")
-            cap_label = _sm.CAPABILITY_LABELS.get(cap, "Server")
-            dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
-            display_model = _MODEL_DISPLAY.get(running_model or "", running_model or "")
-            if not self._controls._server_launching and self._controls.get_model_source() != "artgen":
-                self._hw_statusbar.update_server(ready, dot_text)
-            # Update the capability dashboard row, but never let port-8000 results
-            # overwrite the artgen row — that row is owned by _on_artgen_health_result.
-            if cap != "artgen":
-                self._hw_statusbar.update_capability(cap, ready, display_model or "")
+    def _check_animatediff_hardware(self) -> None:
+        """One-shot AnimateDiff (Blackhole) hardware capability check.
 
-            if ready:
-                # Stop tailing the Docker log — server is confirmed up
-                if self._log_tail_stop:
-                    self._log_tail_stop.set()
-                    self._log_tail_stop = None
-                if not (self._worker_gen and self._worker_gen._running()):
-                    self._set_status("Server ready — enter a prompt and click Generate")
-                # Persist the server key so the next session can pre-select it.
-                if running_model:
-                    skey = _MODEL_TO_SERVER_KEY.get(running_model)
-                    if skey:
-                        _settings.set("last_successful_deployment", skey)
+        "animatediff" has no `server_manager.SERVERS` entry — it's a local
+        hardware capability, not a managed service (see
+        `_sm.CAPABILITY_LABELS`'s comment) — so `ModelStatusService` never
+        resolves a status for it and `_render_status_snapshot` deliberately
+        skips it. This preserves the one-time hardware probe that used to run
+        as a nested thread inside the now-retired `_start_artgen_health_worker`,
+        as its own small background thread; the result is posted back via
+        `GLib.idle_add` per the GTK threading rule.
 
-            # ── Update SHOT panel model badge ─────────────────────────────────
-            # Derive the internal video model key from the server-reported model
-            # ID so the badge always shows what is actually running.
-            if hasattr(self._controls, "update_shot_panel"):
-                video_key = _MODEL_TO_VIDEO_KEY.get(running_model or "") if running_model else None
-                # Fallback: some inference servers (e.g. tt-media-inference-server) don't
-                # implement /v1/models, so running_model is None even when the server is
-                # healthy.  If the server is ready but we can't identify the model, use
-                # the user's preferred_video_model setting (defaulting to "wan2") so the
-                # SHOT panel shows as online rather than "No server · Start one".
-                if ready and video_key is None:
-                    pref = str(_settings.get("preferred_video_model") or "wan2")
-                    video_key = pref if pref in ("wan2", "mochi", "skyreels") else "wan2"
-                    # animatediff doesn't use a server — server-ready path always
-                    # means a network model is running, so wan2 is a safe fallback here.
-                self._controls._shot_server_ready = bool(ready and video_key)
-                if video_key and ready:
-                    # Honour the user's preferred model setting; auto-switch to
-                    # the running model if it differs from what is selected.
-                    pref = str(_settings.get("preferred_video_model") or "")
-                    if pref and pref == video_key:
-                        self._controls._set_model(pref)
-                    elif video_key != self._controls._video_model:
-                        self._controls._set_model(video_key)
-                # No multi-server support in the current architecture, so the
-                # switcher hint is never populated (alt model stays None).
-                self._controls._shot_alt_model_key = None
-                self._controls.update_shot_panel()
-        except Exception as exc:
-            import traceback
-            print(f"[health] _on_health_result error: {exc}", flush=True)
-            traceback.print_exc()
-        return False  # one-shot idle callback
+        NOTE (bug fix while porting): `check_hardware()` returns a 3-tuple
+        `(ok, message, num_chips)` — every other caller in this codebase
+        (`artgen_panel.py`, `worker.py`, `artgen/cli.py`) unpacks all three.
+        The original nested closure this replaces unpacked only `ok, msg =
+        check_hardware()`, which always raised `ValueError` (caught by the
+        blanket `except Exception` right below it) — so the "animatediff"
+        capability row has always shown "unavailable" regardless of real
+        hardware state. Fixed here to unpack the actual 3-tuple.
+        """
+        def _check():
+            try:
+                from artgen.generators.animatediff import check_hardware
+                ok, msg, _num_chips = check_hardware()
+            except Exception:
+                ok, msg = False, "unavailable"
+            GLib.idle_add(
+                self._hw_statusbar.update_capability,
+                "animatediff", ok, msg if ok else "hardware not detected",
+            )
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _autostart_prompt_server(self) -> None:
+        """Bring up the CPU prompt-gen server (port 8001, powers ✨ Inspire) at
+        launch if it isn't already running. It's CPU-only and coexists with any
+        TT workload, so starting it on open is safe and makes Inspire work out
+        of the box. Soft-fail: if it can't start, Inspire falls back to the
+        algorithmic generator. Runs off the main thread — never blocks startup
+        or crashes the app; skips the start entirely if it's already healthy."""
+        def run() -> None:
+            try:
+                if _sm.is_healthy("prompt-server"):
+                    return
+                _sm.start("prompt-server", gui=True)
+                try:
+                    self._status_service.note_starting("prompt-server")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def _load_prompt_gen_system(self) -> str:
         """
@@ -8959,110 +8181,6 @@ class MainWindow(Gtk.ApplicationWindow):
             return path.read_text(encoding="utf-8")
         except OSError:
             return ""
-
-    def _start_prompt_gen_health_worker(self) -> None:
-        """Start the background thread that polls the prompt gen server on port 8001."""
-        self._pg_stop = threading.Event()
-        threading.Thread(
-            target=self._prompt_gen_health_loop, daemon=True
-        ).start()
-
-    def _prompt_gen_health_loop(self) -> None:
-        """
-        Runs on background thread.  Polls the prompt gen server every 5 seconds
-        and posts the result to the main thread via GLib.idle_add.
-
-        The health URL is read from server_config at each poll (not cached) so
-        that the Preferences dialog host/port changes and --server at startup
-        are always reflected without a restart.
-        """
-        while not self._pg_stop.wait(5.0):
-            # Read from server_config dynamically — consistent with how the
-            # Servers popover checks health (server_manager._check_sdef).
-            from server_config import server_config as _sc  # noqa: PLC0415
-            url = _sc.base_url("prompt-server")
-            ready = prompt_client.check_health(url)
-            # Also keep the generate_prompt module globals in sync so LLM
-            # polish calls always hit the same host as the health check.
-            if url != self._prompt_server_url:
-                self._prompt_server_url = url
-                prompt_client.configure_llm_url(url)
-            # THREADING: must not touch GTK widgets here — post to main thread
-            GLib.idle_add(self._on_prompt_gen_health, ready)
-
-    def _on_prompt_gen_health(self, ready: bool) -> bool:
-        """Runs on main thread (called by GLib.idle_add)."""
-        if not self._alive:
-            return False
-        self._controls.set_prompt_gen_state(ready)
-        self._hw_statusbar.update_capability(
-            "prompt", ready, "Qwen3-0.6B" if ready else "")
-        return False  # one-shot idle callback
-
-    # ── Artgen server health worker (port 8002) ────────────────────────────────
-
-    def _start_artgen_health_worker(self) -> None:
-        """Start background polling for the artgen LLM server on port 8002."""
-        self._artgen_health_stop = threading.Event()
-        threading.Thread(target=self._artgen_health_loop, daemon=True).start()
-        # AnimateDiff capability is hardware-based (no server).  Check once at startup.
-        def _check_animatediff():
-            try:
-                from artgen.generators.animatediff import check_hardware
-                ok, msg = check_hardware()
-            except Exception:
-                ok, msg = False, "unavailable"
-            GLib.idle_add(self._hw_statusbar.update_capability,
-                          "animatediff", ok, msg if ok else "hardware not detected")
-        threading.Thread(target=_check_animatediff, daemon=True).start()
-
-    def _artgen_health_loop(self) -> None:
-        """Polls port 8002 every 10 s; posts result to main thread via idle_add.
-
-        All artgen-* server definitions share the same health URL
-        (http://localhost:8002/v1/models), so checking any one of them is
-        sufficient.  We also call detect_model() when healthy to show the
-        loaded model name in the status bar.
-        """
-        import artgen as _artgen
-        import server_manager as _sm
-        from server_config import server_config as _sc
-        consecutive_failures = 0
-
-        while not self._artgen_health_stop.is_set():
-            try:
-                ready = _sm.is_healthy("artgen-qwen3-8b", timeout=2.0)
-            except Exception:
-                ready = False
-
-            if ready:
-                consecutive_failures = 0
-                try:
-                    base_url = _sc.base_url("artgen")
-                    model_name = _artgen.detect_model(base_url) or "artgen"
-                except Exception:
-                    model_name = "artgen"
-            else:
-                consecutive_failures += 1
-                model_name = None
-                if consecutive_failures < 2:
-                    self._artgen_health_stop.wait(10.0)
-                    continue
-
-            GLib.idle_add(self._on_artgen_health_result, ready, model_name)
-            self._artgen_health_stop.wait(10.0)
-
-    def _on_artgen_health_result(self, ready: bool, model: "str | None") -> bool:
-        """Runs on main thread. Updates the toolbar status bar when artgen is active."""
-        if not self._alive:
-            return False
-        cap_label = _sm.CAPABILITY_LABELS.get("artgen", "Generative art")
-        dot_text = f"{cap_label} ready" if ready else f"{cap_label} offline"
-        if self._controls.get_model_source() == "artgen":
-            if not self._controls._server_launching:
-                self._hw_statusbar.update_server(ready, dot_text)
-        self._hw_statusbar.update_capability("artgen", ready, model or "")
-        return False
 
     # ── Remote record localization ──────────────────────────────────────────────
 
@@ -9230,125 +8348,161 @@ class MainWindow(Gtk.ApplicationWindow):
         GLib.idle_add(_apply)
 
     # ── Prompt gen launcher ─────────────────────────────────────────────────────
+    #
+    # SP-3d-5: `_on_start_prompt_gen`/`_on_inspire`/`_on_inspire_result`/
+    # `_on_inspire_error` (ControlPanel's own Inspire-button callbacks, wired
+    # only via the now-deleted `ControlPanel(...)` constructor call) and
+    # `_on_theme`/`_on_theme_result`/`_on_theme_error`/`_on_theme_queue_shots`
+    # (ControlPanel's own Theme Set path, same story) are removed — they had
+    # no other caller once ControlPanel was gone. Their functionality already
+    # lives on in the Create surface's own seams below: `_create_inspire_fn`
+    # (Inspire me, SP-3c-3) and `_on_create_theme_set`/`_on_create_theme_result`
+    # (Theme Set, SP-3d-1) — both were built to reuse the identical backends
+    # (`prompt_client.generate_prompt` / `generate_theme.generate_theme`)
+    # rather than fork them, so nothing about prompt generation or theme
+    # batches is lost — only the ControlPanel-only launch UI is gone.
 
-    def _on_start_prompt_gen(self) -> None:
-        """
-        Launch start_prompt_gen.sh --gui in the background.
+    def _create_inspire_fn(self, prompt_type, seed_text, on_result, on_error) -> None:
+        # (prompt_type: str, seed_text: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
+        """CreateView's "Inspire me" seam (SP-3c-3) — drives the same
+        prompt-gen backend (`prompt_client.generate_prompt`, the
+        `generate_prompt.py` three-tier algo/markov/LLM-polish generator) the
+        old ControlPanel Inspire button used, with generic on_result/on_error
+        callbacks rather than reimplementing the generator itself.
 
-        Runs silently — no log streaming.  The health poll on port 8001 will
-        detect when the server is ready.  Users can watch /tmp/tt_prompt_gen.log
-        for details.
-        """
-        script = Path(__file__).parent.parent / "bin" / "start_prompt_gen.sh"
-        subprocess.Popen(
-            [str(script), "--gui"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-        )
+        Runs `generate_prompt()` in a background thread (it can block on a
+        network call to the prompt server) and posts the outcome back via
+        `GLib.idle_add`, per the GTK threading rule in CLAUDE.md.
 
-    def _on_inspire(self, source: str, seed_text: str) -> None:
-        """
-        Start a prompt generation job in a background thread.
-
-        Called by ControlPanel._trigger_inspire() via the on_inspire callback.
-        Posts the result back to ControlPanel on the main thread.
+        **Two-mode (regression fix 1/2):** `seed_text` is threaded straight
+        through to `generate_prompt(prompt_type, seed_text, system_prompt)`
+        unchanged — empty seed_text -> fresh three-tier generation from
+        scratch; non-empty seed_text -> the backend polishes/remixes those
+        exact words (see `prompt_client.generate_prompt`'s own docstring).
+        This mirrors the deleted ControlPanel/ArtgenPanel Inspire buttons'
+        behavior (SP-3d-5 lost only the caller wiring, hardcoding `""` here,
+        not the backend, which was two-mode the whole time). The caller
+        (`CreateView._on_inspire_clicked`, or `create_param_panels.
+        attach_inspire_button` for any other prompt entry) is responsible for
+        reading the field's current text and deciding what to pass as
+        seed_text — this seam just forwards it.
         """
         system_prompt = self._prompt_gen_system_prompt
 
-        # Refine generic "video" source to model-specific type when the active
-        # video model has its own prompt vocabulary (SkyReels, AnimateDiff, etc.).
-        if source == "video":
-            active_video_model = self._controls.get_video_model()
-            if active_video_model == "skyreels":
-                source = "skyreels"
-            elif active_video_model == "animatediff":
-                source = "animatediff"
-
         def run():
             try:
-                text = prompt_client.generate_prompt(source, seed_text, system_prompt)
-                GLib.idle_add(self._on_inspire_result, text)
-            except Exception as e:  # noqa: BLE001
-                GLib.idle_add(self._on_inspire_error, str(e))
+                text = prompt_client.generate_prompt(prompt_type, seed_text, system_prompt)
+                GLib.idle_add(on_result, text)
+            except Exception as e:  # noqa: BLE001 - fail-soft
+                GLib.idle_add(on_error, str(e))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _on_inspire_result(self, text: str) -> bool:
-        """Runs on main thread — forward generated prompt text to ControlPanel."""
-        self._controls.set_inspire_result(text)
-        return False
+    # ── Theme Set — migrated into Create (SP-3d-1) ──────────────────────────────
+    #
+    # ControlPanel's ORIGINAL theme path (`_on_theme`/`_on_theme_result`/
+    # `_on_theme_error`/`_on_theme_queue_shots`) is deleted alongside the class
+    # (SP-3d-5) — the methods below are CreateView's OWN launch of the exact
+    # same backend (`generate_theme.generate_theme`, imported the identical
+    # way the old path did — never forked/reimplemented), wired via
+    # CreateView's `on_theme_set` seam. The one real difference from the old
+    # path is WHERE the per-shot generation settings come from: ControlPanel's
+    # path read its own steps/seed/guidance/model state; this path reads
+    # CreateView's own collected params via `_native_generate_args` — the same
+    # translation `_create_enqueue_native` already uses for the Create CTA's
+    # busy-path enqueue. Both paths bottom out in the identical
+    # `_on_enqueue` → `_start_next_queued` machinery.
 
-    def _on_inspire_error(self, msg: str) -> bool:
-        """Runs on main thread — log error and restore ControlPanel inspire button."""
-        print(f"[tt-gen] Prompt generation error: {msg}", file=sys.stderr)
-        self._controls.set_inspire_error(msg)
-        return False
+    def _on_create_theme_set(self, medium, params: dict) -> None:
+        """CreateView's `on_theme_set` seam — start a background thematic
+        batch generation for *medium*, using *params* (CreateView's own
+        `_collect_params()` output, the same dict the Create CTA would have
+        sent to `_on_create_generate`) as the per-shot generation settings.
 
-    # ── Theme Set ──────────────────────────────────────────────────────────────
+        Only native mediums (image/video/animate) are supported — the same
+        restriction ControlPanel's Theme Set effectively had (its
+        `get_generation_defaults()` only ever populated video/image/animate
+        settings; artgen was never wired to Theme Set either). Fails soft
+        with a status message for anything else.
 
-    def _on_theme(self, source: str) -> None:
-        """Start a thematic 5-shot generation job in a background thread.
-
-        Called by ControlPanel._on_theme_clicked() via the on_theme_queue callback.
-        Posts the result back to the main thread via idle_add.
+        `params.get("prompt", "")` (Create's typed brief, plus any applied
+        Direction-zone modifier text) is passed through `_theme_key_from_text`
+        to pick a `generate_theme.THEME_LIBRARY` key when the brief happens
+        to name one (e.g. typing "hitchcock") — otherwise `generate_theme`
+        picks randomly, exactly like ControlPanel's button always did.
         """
+        if medium.source != "native":
+            self._set_status(
+                f"Theme Set isn't available for {medium.label} yet — try an "
+                "image, video, or animate medium instead."
+            )
+            return
+
+        theme_key = _theme_key_from_text(params.get("prompt", ""))
+
         def run():
             try:
                 import generate_theme
-                result = generate_theme.generate_theme(enhance=True)
-                GLib.idle_add(self._on_theme_result, result)
-            except Exception as e:  # noqa: BLE001
+                result = generate_theme.generate_theme(theme_key=theme_key, enhance=True)
+                GLib.idle_add(self._on_create_theme_result, medium, params, result)
+            except Exception as e:  # noqa: BLE001 - fail-soft, mirrors _on_theme
                 import traceback
                 traceback.print_exc()
-                GLib.idle_add(self._on_theme_error, str(e))
+                GLib.idle_add(self._on_create_theme_error, str(e))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _on_theme_result(self, result: dict) -> bool:
-        """Runs on main thread — open the theme preview popover."""
-        self._controls.set_theme_result(result, self._on_theme_queue_shots)
-        return False
+    def _on_create_theme_result(self, medium, params: dict, result: dict) -> bool:
+        """Runs on the main thread — enqueue every shot `generate_theme`
+        produced, exactly the way `_on_theme_queue_shots` enqueues
+        ControlPanel's shots (same `_on_enqueue`/`_start_next_queued`
+        machinery), swapping in each shot's polished prompt over *params* and
+        translating via `_native_generate_args` (see this method group's
+        docstring for why that differs from `get_generation_defaults()`).
 
-    def _on_theme_error(self, msg: str) -> bool:
-        """Runs on main thread — log error and restore the theme button."""
-        print(f"[tt-gen] Theme generation error: {msg}", file=sys.stderr)
-        self._controls.set_theme_error(msg)
-        return False
-
-    def _on_theme_queue_shots(self, shots: list) -> None:
-        """Called on main thread when user clicks 'Queue All 5' in the theme popover.
-
-        Enqueues all 5 shots using the current ControlPanel settings (steps,
-        guidance, model source, etc.) but swapping in each shot's polished prompt.
-        If nothing is currently generating, starts the queue immediately.
+        A `_NativeGenerateGuardError` (e.g. SkyReels-I2V with no seed image)
+        stops the batch at that shot and surfaces the message — the same
+        guard `_create_enqueue_native` already enforces for a single Create
+        CTA click applies per-shot here too; whatever queued before the
+        failing shot is left queued, not rolled back.
         """
-        if not shots:
-            return
-
-        defaults = self._controls.get_generation_defaults()
-
+        shots = result.get("shots", [])
+        queued = 0
         for shot in shots:
             prompt = shot.get("prompt", shot.get("slug", ""))
             if not prompt:
                 continue
-            self._on_enqueue(
-                prompt,
-                defaults["neg"],
-                defaults["steps"],
-                defaults["seed"],
-                defaults["seed_image_path"],
-                defaults["model_source"],
-                defaults["guidance_scale"],
-                defaults["ref_video_path"],
-                defaults["ref_char_path"],
-                defaults["animate_mode"],
-                defaults["model_id"],
-            )
+            shot_params = {**params, "prompt": prompt}
+            try:
+                args, kwargs = self._native_generate_args(medium, shot_params)
+            except _NativeGenerateGuardError as exc:
+                self._set_status(str(exc))
+                break
+            self._on_enqueue(*args, **kwargs)
+            queued += 1
 
-        # Start the queue if nothing is currently generating
-        if not (self._worker and self._worker.is_alive()):
-            self._start_next_queued()
+        theme_label = result.get("theme", "Theme Set")
+        if queued:
+            self._set_status(
+                f"\U0001f3ac {theme_label}: queued {queued} shot(s) for {medium.label}."
+            )
+            # Start the queue if nothing is currently generating — same
+            # not-busy check `_on_theme_queue_shots` already makes.
+            if not (self._worker and self._worker.is_alive()):
+                self._start_next_queued()
+        else:
+            self._set_status(f"\U0001f3ac {theme_label}: nothing to queue.")
+
+        self._create_view.set_theme_queued(queued, theme_label)
+        return False
+
+    def _on_create_theme_error(self, msg: str) -> bool:
+        """Runs on the main thread — log and surface the failure in Create's
+        own result panel (`CreateView.set_theme_error`), mirroring
+        `_on_theme_error`'s fail-soft contract for the legacy button."""
+        print(f"[tt-gen] Create Theme Set error: {msg}", file=sys.stderr)
+        self._create_view.set_theme_error(msg)
+        return False
 
     # ── Playlist selection mode ────────────────────────────────────────────────
 
@@ -9433,16 +8587,32 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_open_attractor_for_playlist(self, playlist_id: "str | None") -> None:
         """Open TT-TV filtered to the given playlist (or all videos if None)."""
         if self._attractor_win is not None:
-            self._attractor_win.destroy()
-            self._attractor_win = None
+            # Persistent window: refilter IN PLACE via `_switch_channel` instead
+            # of destroy+recreate — recreating the kiosk strands GStreamer's GL
+            # context and yields an unclosable video surface (v0.66.0). Same
+            # in-place refilter the in-window channel dropdown already uses.
+            self._reveal_persistent_attractor()
+            self._attractor_win._switch_channel(playlist_id)
+            return
         self._on_open_attractor(playlist_id=playlist_id)
 
     def _on_open_attractor_for_model(self, model_id: str) -> None:
         """Open TT-TV showing only videos generated by the given model."""
         if self._attractor_win is not None:
-            self._attractor_win.destroy()
-            self._attractor_win = None
+            self._reveal_persistent_attractor()
+            self._attractor_win._switch_channel(attractor._MODEL_CHANNEL_PREFIX + model_id)
+            return
         self._on_open_attractor(model_filter=model_id)
+
+    def _reveal_persistent_attractor(self) -> None:
+        """Un-hide + raise + (re)start the persistent kiosk and re-open its Watch
+        context — the shared prologue for a channel-switch menu entry that reuses
+        the existing window (see `_on_open_attractor`'s own reuse branch)."""
+        self._attractor_win.set_visible(True)
+        self._attractor_win.present()
+        self._attractor_win.start()   # no-op if already running
+        self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
 
     # ── Attractor Mode ─────────────────────────────────────────────────────────
 
@@ -9477,8 +8647,11 @@ class MainWindow(Gtk.ApplicationWindow):
         all_records = self._store.all_records()
 
         # Priority 1: last frame of most recent animate record
+        # ("animatediff is video" migration folded Wan2.2-Animate records into
+        # media_type=="video" — generator_type=="animate" is the provenance
+        # stamp that still identifies them; see history_store.new_animate.)
         for r in all_records:
-            if r.media_type != "animate":
+            if r.generator_type != "animate":
                 continue
             lfp = r.extra_meta.get("last_frame_path", "")
             if lfp and Path(lfp).exists():
@@ -9502,7 +8675,16 @@ class MainWindow(Gtk.ApplicationWindow):
     ) -> None:
         """Open (or raise) the Attractor Mode kiosk window."""
         if self._attractor_win is not None:
+            # Persistent kiosk: REUSE the same window (its GdkGLContext stays
+            # valid across reopens — a fresh window would strand GStreamer's
+            # cached GL context and produce an unclosable video surface; see
+            # AttractorWindow._on_close_requested). Un-hide, raise, and RESTART
+            # playback/generation (the last close's `stop()` halted them).
+            self._attractor_win.set_visible(True)
             self._attractor_win.present()
+            self._attractor_win.start()   # no-op if already running
+            self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))
+            self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
             return
 
         # Stop any gallery videos that are currently playing so their GStreamer
@@ -9530,11 +8712,15 @@ class MainWindow(Gtk.ApplicationWindow):
             records = all_records
             auto_generate = True
 
-        current_source = self._controls.get_model_source()
-        # AnimateDiff is a video-tab model but needs its own model_source so the
-        # generation loop uses the "animatediff" prompt vocabulary and the server
-        # health check is bypassed (AnimateDiff runs locally, no server needed).
-        if current_source == "video" and self._controls.get_video_model() == "animatediff":
+        current_source = self._current_medium_source()
+        # AnimateDiff moved from a video-tab sub-model to its own Create
+        # medium chip (an artgen generator, source="artgen" id="animatediff")
+        # — override the generic artgen folding above (SP-3d-3:
+        # `_current_medium_source` always folds artgen mediums to "artgen")
+        # so the generation loop still uses the dedicated "animatediff"
+        # prompt vocabulary and the server-health gate stays bypassed
+        # (AnimateDiff runs locally, no server needed), exactly as before.
+        if self._active_medium_is_animatediff():
             current_source = "animatediff"
 
         try:
@@ -9552,18 +8738,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     else None
                 ),
                 get_is_generating=lambda: bool(self._worker and self._worker.is_alive()),
-                get_server_status=lambda: (
-                    # AnimateDiff runs locally — no server needed — treat as ready.
-                    self._controls._server_ready
-                    or self._controls.get_video_model() == "animatediff",
-                    # Display name shown in the TT-TV status bar.
-                    "AnimateDiff (local)"
-                    if self._controls.get_video_model() == "animatediff"
-                    else _MODEL_DISPLAY_SERVER.get(
-                        self._controls._running_model or "",
-                        self._controls._running_model,
-                    ),
-                ),
+                get_server_status=self._attractor_server_status,
                 playlist_id=playlist_id,
                 auto_generate=auto_generate,
                 get_playlists=lambda: (
@@ -9573,6 +8748,19 @@ class MainWindow(Gtk.ApplicationWindow):
                 get_animate_inputs=(
                     self._get_animate_inputs if current_source == "animate" else None
                 ),
+                # Associate with the Gtk.Application at CONSTRUCTION, before the
+                # window realizes — so Wayland fixes the correct app_id (KDE
+                # taskbar icon) on the xdg-toplevel and every launch is
+                # identical. Setting it post-construction let a warm/second
+                # launch realize first, yielding the generic GTK fallback icon
+                # AND a window the app doesn't fully own (which then wouldn't
+                # close). See AttractorWindow.__init__.
+                application=self.get_application(),
+                # Persistent kiosk: closing HIDES the window (keeps its GL
+                # context alive); this callback does the close-time bookkeeping
+                # the old destroy handler did (purge TT-TV queue, close the
+                # Watch context) WITHOUT dropping the window reference.
+                on_hide=self._on_attractor_hidden,
             )
         except Exception:
             import traceback
@@ -9583,27 +8771,25 @@ class MainWindow(Gtk.ApplicationWindow):
             _logging.getLogger("attractor").exception("AttractorWindow() raised")
             self._set_status("Attractor Mode failed to open — see terminal or attractor.log")
             return
-        # Associate with the Gtk.Application so Wayland sets the correct app_id
-        # (used by KDE and other compositors to look up the window icon).
-        # Without this, plain Gtk.Window instances have no app_id and show a
-        # generic icon in the taskbar / title bar.
-        app = self.get_application()
-        if app is not None:
-            win.set_application(app)
         win.set_transient_for(self)
         win.connect("destroy", self._on_attractor_closed)
         self._attractor_win = win
+        # Register the resumable tray chip HERE — the window-creation branch
+        # only. The early `present()`-and-return resume branch above does NOT
+        # re-open the context; it already exists (opening it twice would just
+        # be a no-op replace in NavState, but the intent is "created once").
+        self._nav_open_context(Context("watch", "📺 Watch", kind="watch", running=True))
         win.present()
+        self._set_crumbs([Crumb("🗂 Library", "library"), Crumb("📺 Watch")])
         GLib.idle_add(win.start)
 
-    def _on_attractor_closed(self, _win) -> None:
-        """Called when the attractor window is destroyed.
-
-        Purges any auto-generated TT-TV jobs still waiting in the queue so
-        they don't continue running after the user has closed TT-TV.
-        User-typed prompts (from_attractor=False) are preserved.
-        """
-        self._attractor_win = None
+    def _on_attractor_hidden(self) -> None:
+        """Called when the PERSISTENT kiosk is closed (hidden, not destroyed —
+        see AttractorWindow._on_close_requested). Does the same close-time
+        bookkeeping as `_on_attractor_closed` — close the Watch context, purge
+        auto-generated TT-TV jobs — but KEEPS `self._attractor_win` so the next
+        open reuses the same window (whose GL context stays valid)."""
+        self._nav_close_context("watch")
         before = len(self._queue)
         self._queue = [item for item in self._queue if not item.from_attractor]
         purged = before - len(self._queue)
@@ -9611,6 +8797,87 @@ class MainWindow(Gtk.ApplicationWindow):
             self._persist_queue()
             self._update_queue_display()
             self._set_status(f"TT-TV closed — {purged} queued auto-gen job{'s' if purged != 1 else ''} cancelled")
+
+    def _on_attractor_closed(self, _win) -> None:
+        """Called when the attractor window is actually DESTROYED (app shutdown;
+        the persistent kiosk hides rather than destroys on a normal close).
+
+        Purges any auto-generated TT-TV jobs still waiting in the queue so
+        they don't continue running after the user has closed TT-TV.
+        User-typed prompts (from_attractor=False) are preserved.
+        """
+        # Identity guard: only the CURRENT window's destroy should clear the
+        # reference and close the context. A late "destroy" from a previous
+        # window instance must never wipe a freshly-reopened one.
+        if self._attractor_win is not None and _win is not self._attractor_win:
+            return
+        self._attractor_win = None
+        self._nav_close_context("watch")
+        before = len(self._queue)
+        self._queue = [item for item in self._queue if not item.from_attractor]
+        purged = before - len(self._queue)
+        if purged:
+            self._persist_queue()
+            self._update_queue_display()
+            self._set_status(f"TT-TV closed — {purged} queued auto-gen job{'s' if purged != 1 else ''} cancelled")
+
+    def _resolve_attractor_model(self, model_source: str):
+        """SP-3c-5: resolve which model attractor/TT-TV auto-gen should use
+        for `model_source`, WITHOUT reading ControlPanel (which SP-3d
+        deletes).
+
+        Attractor jobs carry no model selection of their own — `attractor.py`
+        always passes `model_id=""` — so before this task the only source of
+        truth was ControlPanel's live `get_video_model()`/`get_image_model()`/
+        `get_animatediff_args()`. That's replaced here with the SAME "is a
+        model on" authority CLAUDE.md documents for this repo:
+        `ModelStatusService.running_or_starting(capability)` — the identical
+        call CreateView's auto-select and the health dot already use — so the
+        attractor auto-generates with whatever model is currently RUNNING
+        (READY, or else STARTING) for the capability, consistent with SP-2's
+        auto-select philosophy.
+
+        `running_or_starting` returns a `server_manager` key (e.g. "wan2.2",
+        "flux", "animate") or `None` if nothing is running/starting for that
+        capability. `_SERVER_KEY_TO_SOURCE_MODEL` — the same map
+        `MainWindow.__init__` already uses to pre-select the source tab/model
+        from `last_successful_deployment` — converts that key into the
+        (model_source, model_key) pair used everywhere else in this file.
+        `model_source == "animate"` has no video/image model key of its own
+        (`_on_generate`'s animate branch never reads either), so the "animate"
+        entry's empty model key is harmless — both return values stay at
+        their medium defaults.
+
+        No server running/starting for the capability (or an unrecognized
+        key) falls back to each medium's documented default —
+        `_DEFAULT_VIDEO_KEY`/`_DEFAULT_IMAGE_KEY`, the exact same fallback
+        `_on_generate` itself uses when a caller passes no model at all
+        (mirrors ControlPanel's fresh-session default of "animatediff").
+
+        Returns `(video_model_key, image_model_key, animatediff_args)` — the
+        three values `_on_attractor_generate`/`_on_attractor_priority_enqueue`
+        thread straight through to `_on_generate`/`_QueueItem` unchanged.
+        """
+        capability = {"video": "video", "image": "image", "animate": "animate"}.get(
+            model_source, "video"
+        )
+        server_key = self._status_service.running_or_starting(capability)
+        src, mdl = _SERVER_KEY_TO_SOURCE_MODEL.get(server_key, (None, None))
+
+        video_model_key = _DEFAULT_VIDEO_KEY
+        image_model_key = _DEFAULT_IMAGE_KEY
+        if src == "video" and mdl:
+            video_model_key = mdl
+        elif src == "image" and mdl:
+            image_model_key = mdl
+        # src == "animate" (or nothing running): video_model_key/
+        # image_model_key stay at their defaults — irrelevant for the
+        # "animate" model_source, which never reads either.
+
+        animatediff_args = (
+            dict(_ANIMATEDIFF_DEFAULTS) if video_model_key == "animatediff" else None
+        )
+        return video_model_key, image_model_key, animatediff_args
 
     def _on_attractor_priority_enqueue(self, prompt, neg="", steps=30, seed=-1,
                                         seed_image_path="", model_source="video",
@@ -9624,17 +8891,33 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
+        # SP-3c-5: attractor/TT-TV jobs have no per-item model selection of
+        # their own (attractor.py always passes model_id="") — resolved via
+        # `_resolve_attractor_model` (the shared ModelStatusService, not
+        # ControlPanel — see that method's docstring for the full reasoning)
+        # once here, at the same call-time `_on_generate` would have read it
+        # before SP-3a, and threaded through explicitly whether the job runs
+        # immediately or is queued.
+        video_model_key, image_model_key, animatediff_args = (
+            self._resolve_attractor_model(model_source)
+        )
         if self._worker and self._worker.is_alive():
             self._queue.insert(0, _QueueItem(prompt, neg, steps, seed, seed_image_path,
                                               model_source, guidance_scale,
                                               ref_video_path, ref_char_path,
-                                              animate_mode, model_id))
+                                              animate_mode, model_id,
+                                              video_model_key=video_model_key,
+                                              image_model_key=image_model_key,
+                                              animatediff_args=animatediff_args))
             self._persist_queue()
             self._update_queue_display()
         else:
             self._on_generate(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale, ref_video_path,
-                              ref_char_path, animate_mode, model_id)
+                              ref_char_path, animate_mode, model_id,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
 
     def _on_attractor_generate(self, prompt, neg, steps, seed, seed_image_path="",
                                 model_source="video", guidance_scale=3.5,
@@ -9649,31 +8932,43 @@ class MainWindow(Gtk.ApplicationWindow):
         """
         if not self._check_disk_space():
             return
+        # SP-3c-5: same reasoning as `_on_attractor_priority_enqueue` above —
+        # resolve via `_resolve_attractor_model` (ModelStatusService, not
+        # ControlPanel) once, here, and pass it through explicitly rather
+        # than letting `_on_generate` read it.
+        video_model_key, image_model_key, animatediff_args = (
+            self._resolve_attractor_model(model_source)
+        )
         if self._worker and self._worker.is_alive():
             item = _QueueItem(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale,
                               ref_video_path, ref_char_path, animate_mode,
-                              model_id, from_attractor=True)
+                              model_id, from_attractor=True,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
             self._queue.append(item)
             self._persist_queue()
             self._update_queue_display()
         else:
             self._on_generate(prompt, neg, steps, seed, seed_image_path,
                               model_source, guidance_scale, ref_video_path,
-                              ref_char_path, animate_mode, model_id)
+                              ref_char_path, animate_mode, model_id,
+                              video_model_key=video_model_key,
+                              image_model_key=image_model_key,
+                              animatediff_args=animatediff_args)
 
     def _update_attractor_btn(self) -> None:
         """Enable/disable the Attractor button based on whether any media exists.
 
         AnimateDiff generates locally without a server and can seed TT-TV from
         scratch, so we enable the button even when no prior records exist.
+        SP-3d-3: "is AnimateDiff active" is now `_active_medium_is_animatediff()`
+        (CreateView's active medium), not ControlPanel's
+        `get_model_source()=="video" and get_video_model()=="animatediff"`.
         """
         has_media = len(self._store.all_records()) > 0
-        is_animatediff = (
-            self._controls.get_model_source() == "video"
-            and self._controls.get_video_model() == "animatediff"
-        )
-        self._attractor_btn.set_sensitive(has_media or is_animatediff)
+        self._attractor_btn.set_sensitive(has_media or self._active_medium_is_animatediff())
 
     # ── Generation ─────────────────────────────────────────────────────────────
 
@@ -9699,13 +8994,64 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         return True
 
+    def _fail_create_job(self, reason: str) -> None:
+        """Clear Create-job state and surface *reason* in the inline result
+        panel when `_on_generate` bails out via an early return before doing
+        any actual work.
+
+        Without this, a Create-launched job that hits one of `_on_generate`'s
+        early-return guards (worker-already-running, disk space, AnimateDiff
+        chip-busy) would leave `_create_job_active` stuck True forever — the
+        panel would sit on "Generating…" with no way to clear, and because
+        the flag is window-global, the very NEXT unrelated job (attractor/
+        TT-TV/queue) would then wrongly skip its own gallery pending card and
+        have its progress/finished/error misrouted into this stale Create
+        panel until some later job happened to complete normally and clear
+        the flag. Called at every early return in `_on_generate` that can
+        fire for a Create-originated job, mirroring `_begin_create_job`'s
+        try/except discipline (a panel error must never break anything else).
+        A no-op when no Create job is active, so non-Create early returns are
+        unaffected.
+        """
+        if not self._create_job_active:
+            return
+        try:
+            self._create_view._result_panel.show_error(reason)
+        except Exception:
+            pass
+        self._create_job_active = False
+
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
                      ref_video_path="", ref_char_path="",
-                     animate_mode="animation", model_id="") -> None:
+                     animate_mode="animation", model_id="",
+                     video_model_key: "str | None" = None,
+                     image_model_key: "str | None" = None,
+                     animatediff_args: "dict | None" = None) -> None:
+        """
+        SP-3a (decouple from ControlPanel): model SELECTION is entirely
+        explicit-param driven — `video_model_key`/`image_model_key`/
+        `animatediff_args` — this method never reads
+        `self._controls.get_video_model()`/`get_image_model()`/
+        `get_animatediff_args()`. Every caller (the legacy ControlPanel
+        generate/enqueue button, Create's `_create_generate_native`, the
+        queue's `_start_next_queued`, and attractor/TT-TV) resolves and
+        passes these itself — see each caller for where its value comes
+        from. SP-3d-3: the `set_busy` calls ControlPanel used to receive here
+        are gone (audit-confirmed dead weight — it only ever drove
+        ControlPanel's own Generate/Cancel buttons; nothing surviving reads
+        `_controls._busy`), and the
+        AnimateDiff-blackhole chip-busy guard below now reads
+        `ModelStatusService` via `_running_generation_server()` instead of
+        ControlPanel's own server-ready/running-model polling attributes.
+        """
         if self._worker and self._worker.is_alive():
+            self._fail_create_job("A generation is already running.")
             return
         if not self._check_disk_space():
+            self._fail_create_job(
+                "Disk space critically low — generation paused. Free up space to continue."
+            )
             return
 
         # Inhibit screensaver if the user has that preference enabled.
@@ -9717,14 +9063,20 @@ class MainWindow(Gtk.ApplicationWindow):
         # Add the pending card to the gallery that matches the generation type,
         # and remember that gallery so _on_finished/_on_error update the right one.
         self._gen_gallery = self._gallery_for_type(model_source)
-        pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
-        self._controls.set_busy(True)
+        # Create-originated jobs already show their own pending state in the
+        # inline CreateResultPanel (_begin_create_job) — skip the redundant
+        # gallery pending card for them. `_gen_gallery` is still set above so
+        # the finished record lands in the correct gallery/store either way.
+        if self._create_job_active:
+            pending = None
+        else:
+            pending = self._gen_gallery.add_pending_card(prompt=prompt, model_source=model_source)
         # Do NOT call clear_prompt() here — the user may have typed a prompt they
         # haven't submitted yet, and auto-queue/attractor calls should not wipe it.
         # Prompt clearing is handled by ControlPanel._on_action_clicked (user-click only).
 
         if model_source == "image":
-            img_model_key = model_id or self._controls.get_image_model()
+            img_model_key = model_id or image_model_key or _DEFAULT_IMAGE_KEY
             model_name = _IMAGE_MODEL_IDS.get(img_model_key, "flux.1-schnell")
             self._set_status(f"Generating image with {model_name}…")
             # SDXL (cpp_server) uses a different default guidance scale and
@@ -9762,22 +9114,56 @@ class MainWindow(Gtk.ApplicationWindow):
                 model="wan2.2-animate-14b",
             )
         else:
-            video_model_key = self._controls.get_video_model()  # "wan2" | "mochi" | "skyreels" | "animatediff"
+            # SP-3a: resolve the effective video key from the explicit param
+            # first, then a canonical-id `model_id` (kept for callers that
+            # only have the canonical id in hand — `_VIDEO_MODEL_ID_TO_KEY`
+            # inverts CANONICAL id -> short key, so this only fires when
+            # `model_id` happens to be canonical; the SHORT-key `model_id`
+            # convention used everywhere else in this file falls through to
+            # the medium default here, same as `self._controls.get_video_model()`
+            # would have on a fresh/unrecognized session), then the medium
+            # default — never `self._controls`. Reassigning the parameter
+            # itself (rather than introducing a new local name) keeps every
+            # other reference to `video_model_key` below unchanged.
+            video_model_key = (
+                video_model_key
+                or _VIDEO_MODEL_ID_TO_KEY.get(model_id)
+                or _DEFAULT_VIDEO_KEY
+            )  # "wan2" | "mochi" | "skyreels" | "animatediff"
 
             if video_model_key == "animatediff":
-                ad = self._controls.get_animatediff_args()
+                # Review fix: merge under the defaults rather than `animatediff_args
+                # or {}` — a None/partial dict (e.g. a PRE-SP-3a `queue.json`
+                # AnimateDiff item, restored with no "animatediff_args" key at
+                # all) must not KeyError on the `ad["..."]` indexing below. A
+                # full dict passes through unchanged (its values win).
+                ad = {**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
-                # exclusive Blackhole access and should not be blocked by a running server.
-                if ad["mode"] == "blackhole" and self._controls._server_ready and self._count_blackhole_chips() == 1:
-                    model_lbl = self._running_model or "a model"
-                    self._gen_gallery.remove_pending()
-                    self._gen_gallery = None
-                    self._controls.set_busy(False)
-                    self._set_status(
-                        f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
-                        "your Blackhole chip is busy. Stop the server first, then try again."
-                    )
-                    return
+                # exclusive Blackhole access and should not be blocked by a running
+                # server — the `ad["mode"] == "blackhole"` check below is deliberately
+                # first so `_running_generation_server()` (and therefore
+                # `self._status_service`) is never consulted for cpu/sim, matching
+                # the reachability of ControlPanel's server-ready attribute this
+                # guard used to read directly (SP-3d-3: rehomed onto `ModelStatusService`).
+                # Capability is "video" (SP-3d-3 review fix, not "any of
+                # video/image") — AnimateDiff is a video-capability model, and
+                # this branch only runs for `model_source == "video"` anyway
+                # (the only caller of `_on_generate`'s video branch), matching
+                # ControlPanel's old `_server_ready`, which was scoped to
+                # whatever the CURRENT source was, never any unrelated one.
+                if ad["mode"] == "blackhole":
+                    server_ready, server_key = self._running_generation_server("video")
+                    if server_ready and self._count_blackhole_chips() == 1:
+                        model_lbl = self._display_label_for_server_key(server_key) or "a model"
+                        busy_msg = (
+                            f"Can't run AnimateDiff (blackhole) while {model_lbl} is loaded — "
+                            "your Blackhole chip is busy. Stop the server first, then try again."
+                        )
+                        self._gen_gallery.remove_pending()
+                        self._gen_gallery = None
+                        self._set_status(busy_msg)
+                        self._fail_create_job(busy_msg)
+                        return
                 self._set_status(f"Starting AnimateDiff generation ({ad['mode']})…")
                 # Auto-derive chain_save path from a session temp file when requested.
                 chain_save_path = None
@@ -9821,10 +9207,10 @@ class MainWindow(Gtk.ApplicationWindow):
                 if video_model_key not in MODELS_WITH_FIXED_FRAMES:
                     num_frames_arg = clip_frames(video_model_key, slot)
 
-                # For I2V models (skyreels), base64-encode the seed image and send
-                # it to the server as the conditioning frame.
+                # For I2V models (skyreels, wan2.2-i2v), base64-encode the seed
+                # image and send it to the server as the conditioning frame.
                 image_b64: "str | None" = None
-                if video_model_key == "skyreels" and seed_image_path and Path(seed_image_path).is_file():
+                if video_model_key in ("skyreels", "wan2.2-i2v") and seed_image_path and Path(seed_image_path).is_file():
                     with open(seed_image_path, "rb") as _f:
                         _raw = _f.read()
                     _ext = Path(seed_image_path).suffix.lower().lstrip(".")
@@ -9864,24 +9250,717 @@ class MainWindow(Gtk.ApplicationWindow):
             self._worker_gen.cancel()
         self._set_status("Cancelling…")
 
+    # ── Create surface: real generation (Task 8 switchover subset) ─────────────
+    #
+    # CreateView (create_view.py) is a self-contained widget with zero
+    # knowledge of workers, the API client, or artgen's subprocess plumbing —
+    # by design (see its module docstring). This is the seam that gives its
+    # `on_create(medium, params)` callback real teeth: dispatch by
+    # `medium.source`, then hand off to the ONE existing generation path for
+    # that source. Nothing here constructs a worker or an artgen subprocess
+    # call directly except the artgen branch's `tt-ctl` shell-out, which
+    # mirrors `pipeline_engine._h_artgen_generate` verbatim (same helpers) —
+    # the same pattern a pipeline node already uses today.
+
+    def _on_create_generate(self, medium, params: dict) -> None:
+        """CreateView's `on_create` seam — dispatch a chosen medium + its
+        collected panel params to real generation.
+
+        - native mediums (image/video/animate) translate straight into the
+          exact `_on_generate(...)` call the OLD ControlPanel/source-toggle
+          UI already makes for that medium — same worker classes, same
+          queue/callback plumbing. `_on_generate` is reused verbatim; this
+          method never constructs a worker itself.
+        - artgen mediums (verse/ansi/landscape/…) shell out to
+          `tt-ctl artgen <generator> ...`, exactly the way
+          `pipeline_engine._h_artgen_generate` already does for pipeline
+          nodes (same `_flag_from_key`/`_append_flag_value`/`_run_tt_ctl`
+          helpers, reused not reimplemented), then record the artifact into
+          the media store the same way `ArtgenPanel._run_generation` does
+          (`media_type="artgen"`, `generator_type=<generator>`) so it shows
+          up in the existing Artgen gallery immediately.
+
+        Fails soft everywhere: a bad/missing medium mapping, a failed
+        subprocess, or any other exception surfaces as a status-bar message
+        — a Create-surface click must never be able to crash the app.
+
+        Re-entrancy: if a Create job is already in flight
+        (`_create_job_active`), a second click (the Create CTA isn't
+        disabled while generating) must NOT be allowed to re-enter
+        `_begin_create_job` — that would overwrite the first job's pending
+        display in the panel, and if the second call's dispatch then hit
+        `_on_generate`'s worker-busy guard, `_fail_create_job` would clear
+        the flag out from under the FIRST job, which is still running (its
+        `_on_finished` would then see the flag already False and never
+        update the panel). So this never touches `_begin_create_job`/
+        `_create_job_active` while a job is already active.
+
+        SP-3c-4: a second click for a NATIVE medium no longer no-ops — it
+        ENQUEUES via `_create_enqueue_native` (the same `_QueueItem`/
+        `_on_enqueue`/`_persist_queue` machinery the legacy ControlPanel's
+        own Generate-when-busy button already uses), so `_start_next_queued`
+        replays it once the running job finishes. Artgen mediums have no
+        equivalent queue item type (their generation path shells out to
+        `tt-ctl` directly, never through `_on_generate`/`self._queue`), so a
+        second artgen click while busy still shows a status message rather
+        than silently dropping the request or (worse) re-entering
+        `_begin_create_job` and clobbering the running job's panel state.
+
+        Review fix (whole-slice review, post-4938dfc): `_create_enqueue_native`
+        only catches its own `_NativeGenerateGuardError` — any OTHER
+        exception (e.g. a malformed `params` value failing `int()`/`float()`
+        inside `_native_generate_args`) used to propagate straight out of
+        this method, violating the "never crash the app" invariant the
+        not-busy branch's own `try/except` below already upholds. Wrapped
+        here too, but deliberately NOT via `_fail_create_job` — that would
+        touch `_create_job_active`/show an error in the panel, both of which
+        belong to the FIRST job, which is still running and uninvolved in
+        this (failed) enqueue attempt. A friendly status message is enough.
+        """
+        if self._create_job_active:
+            if medium.source == "native":
+                try:
+                    self._create_enqueue_native(medium, params)
+                except Exception as exc:
+                    self._set_status(f"Couldn't queue generation: {exc}")
+            else:
+                self._set_status(
+                    "A generation is already running — "
+                    f"{medium.label} can't be queued yet; try again once it finishes."
+                )
+            return
+        # RN-S: make sure the server this job needs is ready first. If it is
+        # (or there's nothing to start), launch now; otherwise a confirm dialog
+        # starts it (stopping + resetting a conflicting server) and launches
+        # when ready. Confirm-before-switch — churn is risky on this hardware.
+        try:
+            self._ensure_server_ready_then(medium, params)
+        except Exception as exc:
+            self._set_status(f"Couldn't start generation: {exc}")
+
+    def _launch_create_job(self, medium, params: dict) -> None:
+        """The begin+dispatch half of a Create job (extracted from
+        `_on_create_generate` for RN-S so the server-readiness gate can defer
+        it). Body is the former dispatch verbatim — same soft-fail semantics."""
+        try:
+            if medium.source == "native":
+                self._begin_create_job(medium, params)
+                self._create_generate_native(medium, params)
+            elif medium.source == "artgen":
+                self._begin_create_job(medium, params)
+                self._create_generate_artgen(medium, params)
+            else:
+                self._set_status(f"Don't know how to generate a {medium.label} yet.")
+        except Exception as exc:
+            # A synchronous exception anywhere in dispatch (a worker
+            # constructor raising, `_gallery_for_type` raising, a bad
+            # int()/float() param parse in `_create_generate_native`, ...)
+            # happens AFTER `_begin_create_job` already set the flag + shown
+            # "pending" — without clearing it here, the panel would stay
+            # stuck on "Generating…" forever and the flag would bleed into
+            # whatever job runs next. `_fail_create_job` is a no-op if no
+            # Create job was actually started (e.g. the `else` branch above
+            # never calls `_begin_create_job`), so it's safe to call
+            # unconditionally.
+            self._fail_create_job(str(exc))
+            self._set_status(f"Couldn't start generation: {exc}")
+
+    def _ensure_server_ready_then(self, medium, params: dict) -> None:
+        """RN-S gate: launch now if the required server is ready / nothing to
+        start; else show the confirm-and-start dialog and defer the launch."""
+        import ready_to_run
+        from model_status import Status
+        svc = getattr(self, "_status_service", None)
+        if svc is None:
+            self._launch_create_job(medium, params)
+            return
+        try:
+            selected = self._create_view._selected_model_key()
+        except Exception:
+            selected = None
+        plan = ready_to_run.plan_switch(selected, lambda k: svc.status(k))
+        if plan.target is None or svc.status(plan.target) == Status.READY:
+            self._launch_create_job(medium, params)
+            return
+        self._confirm_start_server(
+            plan, medium, lambda: self._launch_create_job(medium, params)
+        )
+
+    def _confirm_start_server(self, plan, medium, proceed) -> None:
+        """Confirm dialog for starting `plan.target` (stopping + tt-smi -r a
+        conflicting server first). On accept -> `_perform_switch_then`; on
+        cancel -> nothing (the job never began — no pending state to clear)."""
+        target_label = _sm.SERVERS[plan.target].label
+        text = f"Start the {target_label} server for {medium.label}?"
+        if plan.conflict:
+            conflict_label = _sm.SERVERS[plan.conflict].label
+            secondary = (
+                f"{conflict_label} is running on the shared Blackhole chips. It "
+                f"will be stopped and the boards reset (tt-smi -r) before "
+                f"{target_label} starts — this can take a few minutes."
+            )
+        else:
+            secondary = (
+                f"{target_label} isn't running yet. Start it? "
+                f"This can take a few minutes to warm up."
+            )
+        dialog = Gtk.MessageDialog(
+            modal=True, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE, text=text, secondary_text=secondary,
+        )
+        dialog.set_transient_for(self)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        start_btn = dialog.add_button(f"Start {target_label}", Gtk.ResponseType.ACCEPT)
+        start_btn.add_css_class("suggested-action")
+
+        def _on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.ACCEPT:
+                self._perform_switch_then(plan, proceed)
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
+    def _perform_switch_then(self, plan, proceed) -> None:
+        """Stop any conflicting server (+ tt-smi -r), start `plan.target`, and
+        run `proceed` once it's healthy. Reuses server_manager + pipeline_engine's
+        reset + ServersControl's log. All widget updates via GLib.idle_add."""
+        import pipeline_engine
+        target = plan.target
+        self._servers_control.set_server_launching(target, True)
+        self._servers_control.append_server_log(
+            f"Preparing {target}…"
+            + (f" (stopping {plan.conflict} + reset)" if plan.conflict else "")
+        )
+
+        def run() -> None:
+            try:
+                if plan.conflict:
+                    _sm.stop(plan.conflict)
+                    try:
+                        self._status_service.note_stopping(plan.conflict)
+                    except Exception:
+                        pass
+                    if plan.needs_reset:
+                        GLib.idle_add(self._servers_control.append_server_log,
+                                      "Resetting boards (tt-smi -r)…")
+                        pipeline_engine._tt_smi_reset()
+                GLib.idle_add(self._servers_control.append_server_log, f"Starting {target}…")
+                _sm.start(target, gui=True)
+                try:
+                    self._status_service.note_starting(target)
+                except Exception:
+                    pass
+                waited, deadline = 0, 1800   # first-run compiles can be long
+                while waited < deadline:
+                    if _sm.is_healthy(target):
+                        GLib.idle_add(self._servers_control.append_server_log, f"{target} ready.")
+                        GLib.idle_add(self._servers_control.set_server_launching, target, False)
+                        GLib.idle_add(proceed)
+                        return
+                    time.sleep(15)
+                    waited += 15
+                GLib.idle_add(self._servers_control.append_server_log,
+                              f"{target} didn't become ready in time — try again from Create.")
+                GLib.idle_add(self._servers_control.set_server_launching, target, False)
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error starting {target}: {e}")
+                GLib.idle_add(self._servers_control.set_server_launching, target, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _begin_create_job(self, medium, params: dict) -> None:
+        """Mark a Create-originated generation as active and put the inline
+        result panel (`self._create_view._result_panel`) into its "pending"
+        state before dispatching to the real generation path.
+
+        Shared by both the native and artgen branches of `_on_create_generate`
+        (artgen's own finished/error forwarding is Task 4 — showing pending
+        here for artgen too is harmless and desired now). Wrapped in its own
+        try/except: a panel/widget error must never block generation itself.
+        """
+        self._create_job_active = True
+        try:
+            self._create_view._result_panel.show_pending(params.get("prompt", ""), medium)
+        except Exception:
+            pass
+
+    def _native_generate_args(self, medium, params: dict):
+        """Translate a native medium's `CreateParamPanel.collect()` dict into
+        the exact positional args + kwargs `_on_generate`/`_on_enqueue` share
+        (identical signatures) for that medium — the same call the old
+        ControlPanel/source-toggle UI already makes.
+
+        `params["model"]` (from `ImageParamPanel`/`VideoParamPanel`) is
+        already the CANONICAL server-side model id (e.g. "flux.1-schnell") —
+        `_on_generate`'s `model_id=` parameter instead expects the SHORT key
+        it uses to look itself up in its own `_IMAGE_MODEL_IDS`/
+        `_VIDEO_MODEL_IDS` dicts, so the inverse maps above convert back
+        before the call. An unrecognized canonical id (e.g. an injected fake
+        in a test) falls back to each medium's documented default key rather
+        than raising.
+
+        Returns `(args, kwargs)`. Raises `_NativeGenerateGuardError(message)`
+        when a hard pre-flight guard blocks generation entirely (currently
+        only SkyReels-I2V with no seed image) — this method never touches
+        `self._set_status`/`_fail_create_job`/`_create_job_active` itself so
+        it's equally reusable by `_create_generate_native` (the not-busy
+        path, which owns the active job and clears its flag on a guard
+        failure) and `_create_enqueue_native` (SP-3c-4's busy-path enqueue,
+        which must NOT touch the already-running job's flag).
+        """
+        prompt = params.get("prompt", "")
+
+        if medium.id == "image":
+            model_key = _IMAGE_MODEL_ID_TO_KEY.get(params.get("model", ""), "flux")
+            args = (
+                prompt,
+                params.get("negative_prompt", ""),
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+            )
+            kwargs = dict(
+                # SP-3c-1: ImageParamPanel's SeedImageWell — "" (the default
+                # when no image is chosen) preserves today's exact
+                # text-to-image behavior; a non-empty path drives i2i.
+                seed_image_path=params.get("seed_image_path", ""),
+                model_source="image",
+                guidance_scale=float(params.get("guidance_scale", 3.5)),
+                model_id=model_key,
+                # SP-3a: passed explicitly now that _on_generate no longer
+                # reads self._controls.get_image_model() itself.
+                image_model_key=model_key,
+            )
+            return args, kwargs
+
+        if medium.id == "animate":
+            # AnimateGenerationWorker (via _on_generate's animate branch)
+            # takes no negative_prompt at all — pass "" for the positional
+            # `neg` slot, matching what the old ControlPanel's Animate tab
+            # already sends.
+            args = (
+                prompt,
+                "",
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+            )
+            kwargs = dict(
+                # `_on_generate`'s own default is also "" — set explicitly
+                # (rather than omitted, as the pre-Task-4 code did) only
+                # because `_on_enqueue` has NO default for this parameter
+                # (unlike `_on_generate`), so a caller sharing this dict with
+                # both must always supply it. Same value either way — no
+                # behavior change for the not-busy path.
+                seed_image_path="",
+                model_source="animate",
+                ref_video_path=params.get("reference_video_path", ""),
+                ref_char_path=params.get("reference_image_path", ""),
+                animate_mode=params.get("animate_mode", "animation"),
+            )
+            return args, kwargs
+
+        # "video"
+        model_key = _VIDEO_MODEL_ID_TO_KEY.get(params.get("model", ""), "wan2")
+        if model_key == "animate":
+            # 'Video is Video': the Animate model reuses _on_generate's animate
+            # branch (AnimateGenerationWorker). Its two inputs come from the
+            # Video form's reveal-on-demand section (see create_view
+            # _AnimateExtras), folded into params by _collect_params.
+            args = (
+                prompt, "",
+                int(params.get("num_inference_steps", 20)),
+                int(params.get("seed", -1)),
+            )
+            kwargs = dict(
+                seed_image_path="",
+                model_source="animate",
+                ref_video_path=params.get("reference_video_path", ""),
+                ref_char_path=params.get("reference_image_path", ""),
+                animate_mode=params.get("animate_mode", "animation"),
+            )
+            return args, kwargs
+        # SP-3c-1 review fix (Important): SkyReels-I2V requires a
+        # conditioning image — the exact reason it was pulled from the
+        # Video door in v0.27.1 (see `_VIDEO_MODEL_IDS`'s module comment in
+        # create_param_panels.py). Re-enabling it in the model list without
+        # also gating generation here would let a user submit an I2V request
+        # with `seed_image_path=""`, which can only fail server-side with no
+        # explanation — mirrors ControlPanel's own guard
+        # (`_seed_image_required()` + `_on_action_clicked`'s check, ~line
+        # 6579) so both surfaces enforce the same rule. Blocked BEFORE
+        # calling `_on_generate`/`_on_enqueue` at all — no worker is started
+        # and nothing is queued.
+        # Wan2.2-I2V is the same kind of image-to-video model as SkyReels
+        # (Task 5, ttinference-0.19 model expansion) — it needs the same
+        # gate, so the guard covers both keys rather than growing a second
+        # near-identical block.
+        if model_key in ("skyreels", "wan2.2-i2v") and not params.get("seed_image_path"):
+            raise _NativeGenerateGuardError(
+                "This image-to-video model requires a starting image — add one "
+                "to the seed image well before generating."
+            )
+        # SP-3a (decouple `_on_generate` from ControlPanel): `_on_generate`
+        # used to pick the video worker from `self._controls.get_video_model()`
+        # regardless of `model_id` — which DEFAULTS to "animatediff" on a
+        # fresh session until a health check finds a running video server —
+        # so choosing Wan2.2/Mochi here would silently run AnimateDiff unless
+        # CreateView first synced `self._controls._video_model` (the v0.27.1
+        # "FIX 1" hack, previously here). `_on_generate` now takes
+        # `video_model_key` as an explicit param and no longer reads
+        # `self._controls` for it at all, so that sync is unnecessary —
+        # passing the medium's own resolved key directly is sufficient and
+        # cannot clobber the legacy Image tab's `_image_model` the way the
+        # old `_set_model()` route could.
+        #
+        # SP-3c-2 (native AnimateDiff in Create): only build/forward
+        # `animatediff_args` when AnimateDiff is actually the selected video
+        # model — every other model keeps the pre-existing
+        # `animatediff_args=None` default, byte-identical to before this task
+        # (parity). `VideoParamPanel.collect()`'s own "animatediff_args" is
+        # already complete (every widget has a real default — see that
+        # method's docstring), but the merge over `_ANIMATEDIFF_DEFAULTS`
+        # here is a defensive belt-and-suspenders: any caller that reaches
+        # this branch with a partial/missing dict (e.g. a hand-built
+        # `params` in a test, or a future caller that doesn't go through
+        # VideoParamPanel at all) still gets a dict `_on_generate`'s
+        # `ad["..."]` indexing can never KeyError on.
+        animatediff_args = None
+        if model_key == "animatediff":
+            animatediff_args = {
+                **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
+            }
+        args = (
+            prompt,
+            params.get("negative_prompt", ""),
+            int(params.get("num_inference_steps", 20)),
+            int(params.get("seed", -1)),
+        )
+        kwargs = dict(
+            # SP-3c-1: VideoParamPanel's SeedImageWell — "" preserves today's
+            # exact text-to-video behavior for wan2/mochi; SkyReels-I2V
+            # (re-enabled this same task) needs it non-empty. `_on_generate`'s
+            # video branch already knows how to send this to the server for
+            # `video_model_key == "skyreels"` — see the base64-encode block
+            # further down that method.
+            seed_image_path=params.get("seed_image_path", ""),
+            model_source="video",
+            model_id=model_key,
+            video_model_key=model_key,
+            animatediff_args=animatediff_args,
+        )
+        # NOTE (remaining concern, see task-8-report.md):
+        # VideoParamPanel.collect()'s "num_frames" has no destination in
+        # `_on_generate` — that method derives num_frames internally from
+        # generation_config.clip_frames + the Preferences "clip length slot"
+        # setting, not from a parameter. Reusing `_on_generate` verbatim
+        # (required — never reimplement worker launching) means CreateView's
+        # frame-count spinner is currently cosmetic for the video medium.
+        # Out of scope to fix here (would require changing the one function
+        # every rule says must stay untouched).
+        return args, kwargs
+
+    def _create_generate_native(self, medium, params: dict) -> None:
+        """Not-busy path: build this native medium's `_on_generate(...)` call
+        via `_native_generate_args` and dispatch it immediately — this IS the
+        active Create job (`_begin_create_job` already ran), so a guard
+        failure clears its flag via `_fail_create_job`."""
+        try:
+            args, kwargs = self._native_generate_args(medium, params)
+        except _NativeGenerateGuardError as exc:
+            msg = str(exc)
+            self._set_status(msg)
+            # `_begin_create_job` already set _create_job_active + showed
+            # "pending" in the result panel before this method was called
+            # (see `_on_create_generate`) — `_fail_create_job` clears that
+            # flag and surfaces the error in the same panel, mirroring
+            # `_create_generate_artgen`'s "no generator mapped" early-return
+            # pattern.
+            self._fail_create_job(msg)
+            return
+        self._on_generate(*args, **kwargs)
+
+    def _create_enqueue_native(self, medium, params: dict) -> None:
+        """SP-3c-4: busy path for a native medium — a Create job is already
+        running (`_create_job_active`), so instead of generating now this
+        ENQUEUES via the exact same machinery the legacy ControlPanel's own
+        Generate-when-busy button uses (`_on_enqueue` -> `_QueueItem` ->
+        `_persist_queue`/`_update_queue_display`). `_start_next_queued` later
+        drains the item straight into `_on_generate` with these SAME args/
+        kwargs (model/seed-image/animatediff_args all captured on the
+        `_QueueItem`), so the queued job replays faithfully — identical to
+        what would have happened had it been allowed to generate immediately.
+
+        Unlike `_create_generate_native`, a guard failure here must NOT touch
+        `_create_job_active` or the result panel — that state belongs to the
+        job that's still running, not to this (rejected) enqueue attempt.
+        """
+        try:
+            args, kwargs = self._native_generate_args(medium, params)
+        except _NativeGenerateGuardError as exc:
+            self._set_status(str(exc))
+            return
+        self._on_enqueue(*args, **kwargs)
+
+    def _create_generate_artgen(self, medium, params: dict) -> None:
+        """Artgen mediums generate the SAME way `pipeline_engine`'s
+        `TTLGArtgenGenerate` pipeline node does: shell out to
+        ``tt-ctl artgen <generator> --output <path> [--flag value...]``
+        (`pipeline_engine._flag_from_key`/`_append_flag_value`/`_run_tt_ctl`
+        reused verbatim), then record the artifact into the media store the
+        same way `ArtgenPanel._run_generation` does — `media_type="artgen"`,
+        `generator_type=<generator>` — so the new artifact shows up in the
+        existing Artgen gallery immediately, without a separate re-scan.
+
+        Runs entirely off the GTK main thread (subprocess + disk + sqlite
+        I/O); only the final status message + gallery refresh are posted
+        back via `GLib.idle_add`, per CLAUDE.md's GTK threading rule.
+
+        The idea-door's `params["prompt"]` is, by default, NOT forwarded as
+        a CLI flag — most artgen generators have no common `--prompt` flag
+        (each has its own bespoke vocabulary: `--theme`, `--form`,
+        `--palette`, …), so passing it through would make every artgen
+        generation fail with an "unrecognized argument" error from argparse.
+
+        FIX 4 (Create's AnimateDiff medium always rendered its default "a
+        candle flame flickering" instead of the user's prompt): the
+        blanket skip above was wrong for the artgen "animatediff" plugin,
+        whose `add_args` DOES declare `--prompt` (`plugins/animatediff/
+        plugin.py`). `_artgen_accepts_prompt(generator)` introspects the
+        generator's own argparse (mirroring `artgen_bool_flags`'s approach)
+        to tell the two cases apart: forward `params["prompt"]` as
+        `--prompt <value>` only when the generator declares it AND the
+        value is non-empty (an empty/whitespace prompt lets the generator's
+        own default apply, same as a bare CLI invocation would).
+        """
+        generator = medium.generator
+        if not generator:
+            msg = f"No artgen generator mapped for {medium.label}."
+            self._set_status(msg)
+            # _begin_create_job already set _create_job_active + shown
+            # "pending" before this method was called — this terminal path
+            # must clear it too (unreachable today since discover_mediums
+            # always sets a generator, but every terminal path should leave
+            # the flag consistent, not just the common ones).
+            self._fail_create_job(msg)
+            return
+
+        prompt = params.get("prompt", "")
+        self._set_status(f"Generating {medium.label}…")
+
+        def run():
+            try:
+                import uuid as _uuid
+                from datetime import datetime, timezone
+
+                import artgen as _artgen
+                from artgen_thumb import make_thumbnail, make_artgen_path
+                from media_store import MediaRecord
+                from media_store import media_store as _ms
+                from pipeline_engine import _append_flag_value, _flag_from_key, _run_tt_ctl
+                from create_param_panels import artgen_bool_flags
+
+                try:
+                    ext = _artgen.get(generator).output_ext
+                except Exception:
+                    ext = ".txt"
+
+                short_id = str(_uuid.uuid4())[:8]
+                out_path = make_artgen_path(short_id, ext)
+
+                argv = ["artgen", generator, "--output", str(out_path)]
+                # FIX 3 (whole-branch review — default-True bool switches can't
+                # emit their "off" spelling): a store_true default=True flag
+                # paired with a store_false (e.g. landscape's --mountains /
+                # --no-mountains, both dest "mountains") renders as ONE switch.
+                # Turning it OFF collects `mountains=False`, but
+                # `_append_flag_value` only knows the positive flag and OMITS a
+                # False value — so neither --mountains nor --no-mountains ever
+                # reaches the generator and it silently falls back to its
+                # default (mountains ON). `artgen_bool_flags` gives each bool
+                # dest its (positive, negative) CLI spelling straight from the
+                # generator's own argparse, so we emit the EXPLICIT flag that
+                # matches the switch: --mountains when ON, --no-mountains when
+                # OFF (or nothing OFF when there is no negative spelling, e.g. a
+                # bare --glitch — the previous, correct behavior for those).
+                # Done here, not in the shared `_append_flag_value` (which the
+                # pipeline engine also uses and must stay generator-agnostic).
+                bool_flags = artgen_bool_flags(generator)
+                # FIX 4 (see this method's docstring): forward the resolved
+                # prompt ONLY for a generator that actually declares
+                # `--prompt` (currently just "animatediff"), and only when
+                # there is a real value to forward — an empty/whitespace
+                # prompt is skipped so the generator's own default (e.g.
+                # animatediff's "a candle flame flickering") still applies,
+                # matching what a bare `tt-ctl artgen <generator>` invocation
+                # would do. This runs once here, OUTSIDE the per-key loop
+                # below (which still unconditionally skips the "prompt" key
+                # itself, so this is the ONLY place "--prompt" can be added —
+                # never duplicated).
+                if isinstance(prompt, str) and prompt.strip() and _artgen_accepts_prompt(generator):
+                    _append_flag_value(argv, "--prompt", prompt)
+                for key, value in params.items():
+                    if key == "prompt" or value is None:
+                        continue
+                    if isinstance(value, bool):
+                        pos_flag, neg_flag = bool_flags.get(key, (None, None))
+                        if value:
+                            argv.append(pos_flag or _flag_from_key(key))
+                        elif neg_flag:
+                            argv.append(neg_flag)
+                        # False + no negative spelling: omit entirely (a bare
+                        # store_true with no --no-x — the generator's default
+                        # already means "off").
+                        continue
+                    # FIX 2 (task-8 review — artgen "animatediff" medium failed
+                    # 100% via Create): argparse `action="append"` flags (e.g.
+                    # animatediff's `--per-chip-prompt`/`--prompt-schedule`,
+                    # default None) are rendered by ArtgenParamPanel as plain
+                    # entries that collect "" — not None — so the None-skip
+                    # above misses them, and forwarding `--prompt-schedule ""`
+                    # makes `tt-ctl artgen animatediff` raise every time. Only
+                    # forward values that carry a real choice: skip an empty/
+                    # whitespace-only string and an empty list/tuple. A blank
+                    # scalar entry (e.g. an untouched `--theme`) is likewise
+                    # skipped so the generator's own default applies, which is
+                    # the same thing a bare CLI invocation would do.
+                    if isinstance(value, str) and not value.strip():
+                        continue
+                    if isinstance(value, (list, tuple)) and not value:
+                        continue
+                    _append_flag_value(argv, _flag_from_key(key), value)
+                _run_tt_ctl(argv)
+
+                thumb_path = out_path.parent / "thumbnails" / (out_path.stem + ".png")
+                try:
+                    thumb_path = make_thumbnail(out_path, thumb_path)
+                except Exception:
+                    thumb_path = Path("")
+
+                safe_params = {
+                    k: v for k, v in params.items()
+                    if isinstance(v, (str, int, float, bool, type(None)))
+                }
+                rec = MediaRecord(
+                    id=str(_uuid.uuid4()),
+                    media_type="artgen",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    file_path=str(out_path),
+                    thumbnail_path=str(thumb_path) if Path(thumb_path).exists() else "",
+                    prompt=(prompt or medium.label)[:500],
+                    model_id="artgen",
+                    generator_type=generator,
+                    params=json.dumps(safe_params),
+                    starred=0,
+                )
+                # `CreateResultPanel._build_artifact_widget` (create_view.py)
+                # reads `record.media_file_path` — the attribute name
+                # `history_store.GenerationRecord` exposes as a computed
+                # property for the native path. `media_store.MediaRecord`
+                # only has `file_path`, so without this the panel's "finished"
+                # render would always fall through to its "Result file not
+                # found." placeholder even though the artifact exists. Set
+                # the same duck-typed attribute the panel already documents
+                # accepting ("a duck-typed stand-in works too"). Safe:
+                # `MediaRecord` is a plain (non-frozen, non-slotted) dataclass
+                # and `MediaStore.add`/`_upsert` only read its declared
+                # fields, so this extra instance attribute is never persisted.
+                rec.media_file_path = str(out_path)
+                _ms.add(rec)
+                _ms.ensure_auto_playlists()
+
+                GLib.idle_add(self._on_create_artgen_done, medium)
+                # Task 4: forward the just-written record to the inline
+                # Create result panel and clear the Create-job flag — see
+                # `_on_create_artgen_finished` below.
+                GLib.idle_add(self._on_create_artgen_finished, rec)
+            except Exception as exc:
+                GLib.idle_add(self._on_create_artgen_error, medium, str(exc))
+                # Task 4: reuse `_fail_create_job` (Task 3) so a failed artgen
+                # Create job surfaces in the panel and clears the flag exactly
+                # like a failed native job does — no terminal path of this
+                # worker may leave `_create_job_active` stuck True.
+                GLib.idle_add(self._fail_create_job, str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_create_artgen_done(self, medium) -> bool:
+        """Main-thread completion callback for `_create_generate_artgen`."""
+        self._set_status(f"{medium.label} ready.")
+        # SP-3d-5: reaches the standalone ArtgenGallery directly now (used to
+        # reach past ArtgenPanel to its wrapped `_gallery` — see the audit,
+        # .superpowers/sdd/sp3d-audit.md §3) so Discover's artgen page shows
+        # the freshly-written record.
+        artgen_gallery = getattr(self, "_artgen_gallery", None)
+        if artgen_gallery is not None:
+            try:
+                artgen_gallery.refresh()
+            except Exception:
+                pass  # a refresh failure must never crash the Create surface
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_artgen_error(self, medium, msg: str) -> bool:
+        """Main-thread error callback for `_create_generate_artgen`."""
+        self._set_status(f"Couldn't generate {medium.label}: {msg}")
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_artgen_finished(self, record) -> bool:
+        """Main-thread success callback that forwards an artgen Create job's
+        freshly-written media-store `record` to the inline `CreateResultPanel`
+        and clears `_create_job_active` (Task 4).
+
+        Mirrors `_on_finished`'s Create-forwarding block for the native path:
+        a no-op when no Create job is active (so a non-Create artgen call —
+        none exist today, but the guard is free and consistent — is
+        unaffected), and the panel call is try/except-wrapped so a
+        panel/widget error can never leave the flag stuck True. Without this,
+        `_begin_create_job`'s "pending" state (shown before the subprocess
+        runs) would never resolve for the artgen path — the panel would sit
+        on "Generating…" forever and the window-global flag would stay True,
+        wrongly affecting the next unrelated job (see `_fail_create_job`'s
+        docstring for the exact failure mode this class of bug causes).
+        """
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:
+                pass
+            self._create_job_active = False
+        return GLib.SOURCE_REMOVE
+
     # ── Server start / stop ────────────────────────────────────────────────────
 
     def _on_start_server(self, model_source: str) -> None:
-        """Launch the server script matching the current source + model selection."""
-        if model_source == "video":
-            model_key = self._controls.get_video_model()
-        elif model_source == "image":
-            model_key = self._controls.get_image_model()
-        else:
-            model_key = ""
+        """Launch the server script matching the current source + model selection.
+
+        SP-3d-3: `model_key` is resolved via `_current_medium_model_key`
+        (CreateView's scoped model dropdown, translated through
+        `_SERVER_KEY_TO_SOURCE_MODEL`) instead of
+        `self._controls.get_video_model()`/`get_image_model()`.
+        """
+        model_key = self._current_medium_model_key(model_source)
 
         script_name, label = _SERVER_SCRIPTS.get(
             (model_source, model_key), ("start_wan.sh", "Wan2.2 video")
         )
         script_path = str(Path(__file__).parent.parent / "bin" / script_name)
 
-        self._controls.set_server_launching(True, clear_log=True)
-        self._controls.append_server_log(f"Starting {label} server ({script_name} --gui)…")
+        server_key = None
+        try:
+            server_key = _server_key_for_script(script_name)
+            if server_key:
+                self._status_service.note_starting(server_key)
+        except Exception:
+            pass
+
+        # `append_server_log`/`set_server_launching` route to the standalone
+        # ServersControl widget (SP-3b Task 2) rather than ControlPanel's now-
+        # unmounted equivalents. ServersControl tracks "launching" per key, so
+        # fall back to the script name when a server_manager key can't be
+        # resolved — the log still streams and the panel still reveals/
+        # settles correctly either way (see ServersControl.set_server_launching).
+        launch_key = server_key or script_name
+        self._servers_control.set_server_launching(launch_key, True)
+        self._servers_control.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
         self._hw_statusbar.update_starting()
         if a := self.lookup_action("recover-jobs"):
@@ -9901,30 +9980,32 @@ class MainWindow(Gtk.ApplicationWindow):
                 _detected_log_file: "str | None" = None
                 for line in proc.stdout:
                     stripped = line.rstrip()
-                    GLib.idle_add(self._controls.append_server_log, stripped)
+                    GLib.idle_add(self._servers_control.append_server_log, stripped)
                     # The start script prints "Log file: /path/to/workflow.log" just
                     # before it exits in --gui mode.  Capture it so we can tail it.
                     if stripped.startswith("Log file: "):
                         _detected_log_file = stripped[len("Log file: "):]
                 proc.wait()
                 if proc.returncode != 0:
-                    GLib.idle_add(self._controls.append_server_log,
+                    GLib.idle_add(self._servers_control.append_server_log,
                                   f"Script exited with code {proc.returncode}")
                     GLib.idle_add(self._set_status, "Server start script failed — check log")
-                    GLib.idle_add(self._controls.set_server_launching, False)
+                    GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
                     GLib.idle_add(self._hw_statusbar.update_error, "start failed — click for log")
                 else:
                     GLib.idle_add(self._set_status,
                                   f"{label} server started — waiting for health check…")
-                    # Leave the log panel open; set_server_state(True, ...) will collapse it.
-                    # If the script handed off to a Docker log file, tail it so the user
-                    # can see server startup progress without leaving the app.
+                    # Leave the log panel open; ServersControl auto-collapses it once
+                    # ModelStatusService reports `launch_key` READY in a snapshot (see
+                    # ServersControl._refresh_launching). If the script handed off to
+                    # a Docker log file, tail it so the user can see server startup
+                    # progress without leaving the app.
                     if _detected_log_file:
                         GLib.idle_add(self._start_log_tail, _detected_log_file)
             except Exception as e:
-                GLib.idle_add(self._controls.append_server_log, f"Error: {e}")
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
                 GLib.idle_add(self._set_status, f"Server start error: {e}")
-                GLib.idle_add(self._controls.set_server_launching, False)
+                GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
             finally:
                 self._server_proc = None
 
@@ -9937,7 +10018,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
         Called after the start script exits and hands off to the Docker log file.
         The tail stops when the health check confirms the server is ready (via
-        _on_health_result setting self._log_tail_stop), or when the server is stopped.
+        `_render_status_snapshot` clearing `self._log_tail_stop` on the
+        ModelStatusService snapshot that first reports READY -- see SP-3d-6),
+        or when the server is stopped.
         """
         # Cancel any previous tail still running (e.g., restart after stop)
         if self._log_tail_stop:
@@ -9948,7 +10031,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # Show a visual separator in the log panel so the user knows we switched sources
         GLib.idle_add(
-            self._controls.append_server_log,
+            self._servers_control.append_server_log,
             f"─── tailing {log_path.split('/')[-1]} ───",
         )
 
@@ -9962,7 +10045,7 @@ class MainWindow(Gtk.ApplicationWindow):
                         if line:
                             stripped = line.rstrip()
                             GLib.idle_add(
-                                self._controls.append_server_log, stripped
+                                self._servers_control.append_server_log, stripped
                             )
                             # Update the phase label in the status bar when we
                             # recognise a known milestone in the server log.
@@ -9971,7 +10054,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                 GLib.idle_add(self._hw_statusbar.set_phase, phase)
             except OSError as e:
                 GLib.idle_add(
-                    self._controls.append_server_log, f"[log tail error: {e}]"
+                    self._servers_control.append_server_log, f"[log tail error: {e}]"
                 )
 
         threading.Thread(target=tail, daemon=True).start()
@@ -9985,8 +10068,31 @@ class MainWindow(Gtk.ApplicationWindow):
         # Both video and image use the same Docker image, so either script can stop it.
         script_path = str(Path(__file__).parent.parent / "bin" / "start_wan_qb2.sh")
 
-        self._controls.set_server_launching(True, clear_log=True)
-        self._controls.append_server_log("Stopping inference server…")
+        # There's no model_source argument here (unlike _on_start_server) since
+        # any script stops the one shared port-8000 container. Resolve "which
+        # server_manager key is presumably running" the same way
+        # _on_start_server would resolve what to *start* for the current
+        # medium's source/model selection (SP-3d-3: CreateView, not
+        # ControlPanel), so note_stopping targets the right key rather than
+        # guessing.
+        server_key = None
+        try:
+            _stop_source = self._current_medium_source()
+            _stop_model_key = self._current_medium_model_key(_stop_source)
+            _stop_script_name, _ = _SERVER_SCRIPTS.get(
+                (_stop_source, _stop_model_key), ("start_wan.sh", "Wan2.2 video")
+            )
+            server_key = _server_key_for_script(_stop_script_name)
+            if server_key:
+                self._status_service.note_stopping(server_key)
+        except Exception:
+            pass
+
+        # See _on_start_server's comment: routes to ServersControl (SP-3b Task
+        # 2) instead of ControlPanel's now-unmounted log/launching widgets.
+        launch_key = server_key or "stop"
+        self._servers_control.set_server_launching(launch_key, True)
+        self._servers_control.append_server_log("Stopping inference server…")
         self._set_status("Stopping inference server…")
         self._hw_statusbar.update_starting()
         if a := self.lookup_action("recover-jobs"):
@@ -10004,14 +10110,90 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._server_proc = proc
                 output = proc.communicate()[0]
                 for line in output.splitlines():
-                    GLib.idle_add(self._controls.append_server_log, line)
+                    GLib.idle_add(self._servers_control.append_server_log, line)
                 GLib.idle_add(self._set_status, "Server stopped.")
             except Exception as e:
-                GLib.idle_add(self._controls.append_server_log, f"Error: {e}")
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
                 GLib.idle_add(self._set_status, f"Server stop error: {e}")
             finally:
                 self._server_proc = None
-                GLib.idle_add(self._controls.set_server_launching, False)
+                GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ── Standalone ServersControl callbacks (SP-3b Task 2) ─────────────────────
+    #
+    # Wired as ServersControl(on_start=, on_stop=, on_restart=) in _build_ui().
+    # Each callback receives a `server_manager.SERVERS` key directly (the
+    # popover row already knows exactly which service it is — no model_source
+    # -> script -> key resolution needed here, unlike _on_start_server/
+    # _on_stop_server above). They otherwise mirror ControlPanel.
+    # _on_servers_action's worker (same _sm.start/stop/restart(key) calls,
+    # same note_starting/note_stopping hooks, noted only AFTER the real
+    # server_manager call succeeds — same ordering _on_servers_action uses,
+    # so a synchronous `_sm.*` failure never tells the status service a
+    # launch is in progress that never actually started), but:
+    #   - route log/launching feedback to ServersControl instead of
+    #     ControlPanel's now-unmounted popover dots + busy-lock buttons.
+    #   - do NOT run their own "poll until healthy" loop — ServersControl's
+    #     row dots and log-auto-collapse already come from subscribing to
+    #     `self._status_service`, whose own poll thread is what will surface
+    #     READY (see task-1-report.md's "Design decisions" section).
+
+    def _on_servers_control_start(self, key: str) -> None:
+        """Start one managed service by its server_manager key."""
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Starting {key}…")
+
+        def run() -> None:
+            try:
+                _sm.start(key, gui=True)
+                try:
+                    self._status_service.note_starting(key)
+                except Exception:
+                    pass
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_servers_control_stop(self, key: str) -> None:
+        """Stop one managed service by its server_manager key."""
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Stopping {key}…")
+
+        def run() -> None:
+            try:
+                _sm.stop(key)
+                try:
+                    self._status_service.note_stopping(key)
+                except Exception:
+                    pass
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_servers_control_restart(self, key: str) -> None:
+        """Restart one managed service by its server_manager key."""
+        self._servers_control.set_server_launching(key, True)
+        self._servers_control.append_server_log(f"Restarting {key}…")
+
+        def run() -> None:
+            try:
+                _sm.restart(key, gui=True)
+                try:
+                    self._status_service.note_starting(key)
+                except Exception:
+                    pass
+            except Exception as e:
+                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
+            finally:
+                GLib.idle_add(self._servers_control.set_server_launching, key, False)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -10038,6 +10220,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 "animate_mode": item.animate_mode,
                 "model_id": item.model_id,
                 "job_id_override": item.job_id_override,
+                # SP-3a: persisted so a restored queue (after a crash/restart)
+                # still replays without _start_next_queued reading
+                # self._controls (all the AD arg values are plain
+                # str/float/bool/None — JSON-safe).
+                "video_model_key": item.video_model_key,
+                "image_model_key": item.image_model_key,
+                "animatediff_args": item.animatediff_args,
             }
             for item in self._queue
             if not item.from_attractor
@@ -10069,6 +10258,9 @@ class MainWindow(Gtk.ApplicationWindow):
                     ref_char_path=d.get("ref_char_path", ""),
                     animate_mode=d.get("animate_mode", "animation"),
                     model_id=d.get("model_id", ""),
+                    video_model_key=d.get("video_model_key"),
+                    image_model_key=d.get("image_model_key"),
+                    animatediff_args=d.get("animatediff_args"),
                     job_id_override=override,
                 ))
             except Exception:
@@ -10115,17 +10307,64 @@ class MainWindow(Gtk.ApplicationWindow):
         self._queue_box.set_visible(has)
         # Keep the hardware status bar queue counter in sync.
         self._hw_statusbar.update_queue(len(self._queue))
+        # SP-3c-4: keep Create's own pending-queue display (in the inline
+        # result pane, near the recents strip) in sync too — every call site
+        # that mutates `self._queue` already routes through this method
+        # (enqueue, cancel, drain, restore), so one call here covers all of
+        # them without touching each call site individually.
+        self._refresh_create_queue_display()
+
+    def _refresh_create_queue_display(self) -> None:
+        """Push the current `self._queue` into CreateView's pending-queue
+        display (`CreateResultPanel.set_queue`, near the recents strip).
+
+        Wrapped in `GLib.idle_add`: `_update_queue_display` (this method's
+        only caller) is itself only ever called from the main thread today,
+        but a couple of its own callers are reached via worker-thread
+        callbacks that already forward through `GLib.idle_add` themselves
+        (see `_start_next_queued`'s callers) — scheduling here too costs
+        nothing when already on the main thread and removes any doubt for a
+        future caller that isn't. The whole body is try/except'd, matching
+        `_begin_create_job`/`_fail_create_job`'s discipline: a panel/widget
+        error must never break the underlying queue mutation that triggered
+        the refresh. A no-op before `self._create_view` exists (e.g. very
+        early startup) or if CreateView doesn't expose `refresh_queue` (a
+        minimal test double).
+        """
+        create_view = getattr(self, "_create_view", None)
+        if create_view is None:
+            return
+        pending = list(self._queue)
+
+        def _do() -> bool:
+            try:
+                create_view.refresh_queue(pending, self._on_queue_remove)
+            except Exception:
+                pass
+            return False
+
+        GLib.idle_add(_do)
 
     def _on_enqueue(self, prompt, neg, steps, seed, seed_image_path,
                     model_source="video", guidance_scale=3.5,
                     ref_video_path="", ref_char_path="",
-                    animate_mode="animation", model_id="") -> None:
+                    animate_mode="animation", model_id="",
+                    video_model_key: "str | None" = None,
+                    image_model_key: "str | None" = None,
+                    animatediff_args: "dict | None" = None) -> None:
         if not self._check_disk_space():
             return
+        # SP-3a: the three model-selection kwargs are captured by the CALLER
+        # (ControlPanel's own button, or _on_theme_queue_shots forwarding
+        # ControlPanel's get_generation_defaults()) — this method just stores
+        # them on the item so _start_next_queued can replay faithfully
+        # without itself reading self._controls.
         self._queue.append(_QueueItem(prompt, neg, steps, seed, seed_image_path,
                                       model_source, guidance_scale,
                                       ref_video_path, ref_char_path, animate_mode,
-                                      model_id))
+                                      model_id, video_model_key=video_model_key,
+                                      image_model_key=image_model_key,
+                                      animatediff_args=animatediff_args))
         self._persist_queue()
         self._update_queue_display()
         # Do NOT call clear_prompt() here — clearing is handled by
@@ -10140,6 +10379,25 @@ class MainWindow(Gtk.ApplicationWindow):
             self._update_queue_display()
             short = removed.prompt[:40] + ("…" if len(removed.prompt) > 40 else "")
             self._set_status(f'Removed from queue: "{short}"')
+
+    def _medium_for_queue_item(self, item) -> "object | None":
+        """Best-effort resolve the Create `Medium` a queued item belongs to, so
+        the result panel's pending header + activity-viz mode are right while the
+        queue drains. `_QueueItem` only carries a `model_source`/`model_id`, not
+        the Medium object. None -> a generic "Generating…" header (harmless)."""
+        src = getattr(item, "model_source", "") or ""
+        if src in ("video", "animate"):
+            medium_id = "video"          # animate folded into the Video medium
+        elif src == "image":
+            medium_id = "image"
+        elif src == "artgen":
+            medium_id = getattr(item, "model_id", "") or ""  # artgen id == medium id
+        else:
+            medium_id = src
+        try:
+            return self._create_view.medium_by_id(medium_id)
+        except Exception:
+            return None
 
     def _start_next_queued(self) -> bool:
         # Guard against a race where the recovery dialog starts a worker between
@@ -10175,11 +10433,31 @@ class MainWindow(Gtk.ApplicationWindow):
         remaining = len(self._queue)
         suffix = f" — {remaining} more queued" if remaining else ""
         self._set_status(f"Auto-starting next queued prompt{suffix}…")
+        # Keep the Create result-panel progress going through the WHOLE queue,
+        # not just its first job. `_on_finished` cleared `_create_job_active`
+        # before draining, so without this each subsequent queued job would run
+        # with the flag False and `_on_progress`/`_on_finished` would skip the
+        # panel (status bar only) — the reported regression. Re-engage the panel
+        # exactly like `_begin_create_job` does (mark the job Create-owned + show
+        # its pending view). Excluded: TT-TV/attractor auto-gen items
+        # (`from_attractor`), which must not hijack the Create preview.
+        if not item.from_attractor:
+            self._create_job_active = True
+            try:
+                medium = self._medium_for_queue_item(item)
+                self._create_view._result_panel.show_pending(item.prompt, medium)
+            except Exception:
+                pass
+        # SP-3a: replay the model selection captured on the item at enqueue
+        # time — this method never reads self._controls.
         self._on_generate(item.prompt, item.negative_prompt,
                           item.steps, item.seed, item.seed_image_path,
                           item.model_source, item.guidance_scale,
                           item.ref_video_path, item.ref_char_path, item.animate_mode,
-                          item.model_id)
+                          item.model_id,
+                          video_model_key=item.video_model_key,
+                          image_model_key=item.image_model_key,
+                          animatediff_args=item.animatediff_args)
         return True
 
     # ── Recovery ───────────────────────────────────────────────────────────────
@@ -10299,7 +10577,7 @@ class MainWindow(Gtk.ApplicationWindow):
         remote_pending = [
             r for r in self._remote_records.values()
             if r.id not in local_ids
-            and r.media_type in ("video", "animate")
+            and r.media_type == "video"
             and (rec_meta := r.extra_meta or {}).get("_inventory_video_url", "")
             # Only queue records that have an inventory URL to download from.
         ]
@@ -10307,7 +10585,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Local history records missing their video file on disk.
         local_missing = [
             r for r in self._store.all_records()
-            if r.media_type in ("video", "animate") and not r.video_exists and r.id
+            if r.media_type == "video" and not r.video_exists and r.id
         ]
 
         total = len(remote_pending) + len(local_missing)
@@ -10447,7 +10725,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gen_gallery = self._video_gallery
         pending = self._video_gallery.add_pending_card()
         pending.update_status(f"Recovering {job_id[:8]}… ({status})")
-        self._controls.set_busy(True)
 
         gen = GenerationWorker(
             client=self._client,
@@ -10474,19 +10751,41 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # ── Worker callbacks (all called on main thread via GLib.idle_add) ─────────
 
-    def _on_progress(self, message: str, pending: PendingCard) -> bool:
+    def _on_progress(self, message: str, pending: "PendingCard | None") -> bool:
+        if not self._alive:
+            return False
         self._set_status(message)
-        pending.update_status(message)
+        if pending is not None:
+            pending.update_status(message)
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_progress(message)
+            except Exception:
+                pass
         return False
 
     def _on_finished(self, record: GenerationRecord) -> bool:
+        if not self._alive:
+            return False
         gallery = self._gen_gallery or self._gallery_for_type(record.media_type)
+        # `replace_pending_with` degrades gracefully when there's no pending
+        # card to replace (the Create-job case, where _on_generate skipped
+        # add_pending_card): it falls through to inserting the record as a
+        # normal card instead, so persistence/gallery display is identical
+        # either way.
         gallery.replace_pending_with(record)
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:
+                pass
+            self._create_job_active = False
         self._gen_gallery = None
-        self._controls.set_busy(False)
         self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
-        # Refresh "Repeat last" availability now that history has at least one record.
-        self._controls._apply_seed_mode_from_settings()
+        # SP-3d-5: ControlPanel's own "Repeat last" availability sync (which
+        # used to live here) is gone with the class — Create's seed-mode
+        # control (SP-3d-2) reads history fresh at collect() time instead of
+        # needing a cached "is repeat-last available" flag refreshed here.
         media_path = record.media_file_path
         self._set_status(f"Done — {media_path}  ({record.duration_s:.0f}s)")
         self._screensaver_uninhibit()
@@ -10508,27 +10807,70 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_error(self, message: str) -> bool:
+        if not self._alive:
+            return False
         from log_viewer import detect_log_path, shorten_error
-        gallery = self._gen_gallery or self._active_gallery()
+        # _on_error is shared by native generation AND the Forge transform path
+        # (_on_transform_card). When a transform fails while an artgen Create
+        # medium is active, `_active_gallery()` -> `_gallery_for_type("artgen")`
+        # RAISES (ArtgenGallery isn't a GalleryWidget) — which used to abort the
+        # rest of this handler, swallowing the error with no status shown
+        # (review I2). Tolerate it here (the one shared error choke point): fall
+        # back to a real GalleryWidget whose remove_pending() harmlessly no-ops,
+        # so the status message / job-clearing / queue-drain below still run.
+        gallery = self._gen_gallery
+        if gallery is None:
+            try:
+                gallery = self._active_gallery()
+            except ValueError:
+                gallery = self._video_gallery
         gallery.remove_pending()
         self._gen_gallery = None
-        self._controls.set_busy(False)
         self._screensaver_uninhibit()
         self._last_error_log_path = detect_log_path(message)
         short = shorten_error(message)
         suffix = " — click for log" if self._last_error_log_path else ""
         self._set_status(f"Error: {short}{suffix}")
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_error(message)
+            except Exception:
+                pass
+            self._create_job_active = False
         self._start_next_queued()
         return False
 
+
+    def _maximize_on_first_map(self, _win) -> None:
+        """Maximize the window the first time it's mapped (reliable on Wayland).
+
+        Guarded so later maps (e.g. un-minimize) don't re-force maximize and
+        override a user who deliberately restored the window down.
+        """
+        if self._did_initial_maximize:
+            return
+        self._did_initial_maximize = True
+        self.maximize()
 
     def do_close_request(self) -> bool:
         self._alive = False   # stop any pending GLib.idle_add callbacks from touching widgets
         if self._flash_restore_id:
             GLib.source_remove(self._flash_restore_id)
-        self._health_stop.set()
-        if self._pg_stop:
-            self._pg_stop.set()
+        self._status_service.stop()
+        # SP-3d-6: the three legacy poller threads (_health_loop/
+        # _artgen_health_loop/_prompt_gen_health_loop) that used to need their
+        # own stop-event teardown here are retired; `_status_unsubscribe()`
+        # tears down `_render_status_snapshot`'s subscription to the service
+        # stopped just above (mirrors `_servers_control.close()` below, which
+        # does the same for its own subscription).
+        self._status_unsubscribe()
+        # ServersControl's own `unrealize`-triggered cleanup (see
+        # servers_control.py's __init__) only fires if it's ever mounted
+        # itself; since only its `servers_button`/`log_widget` sub-widgets
+        # are mounted (not `self`), that signal may never fire — close()
+        # explicitly here so its status_service subscription is always torn
+        # down alongside the service it subscribes to.
+        self._servers_control.close()
         self._hw_statusbar.stop()
         if self._log_tail_stop:
             self._log_tail_stop.set()

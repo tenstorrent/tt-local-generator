@@ -1,0 +1,6 @@
+{
+  "_spec_version": "comfyui-api-v1",
+  "1": {"class_type": "TTLGTextToImage", "inputs": {"model": "FLUX.1-schnell", "prompt": "a test", "width": 512, "height": 512}},
+  "2": {"class_type": "TTLGPromptCompose", "inputs": {"template": "{caption}, cinematic", "caption": ["1", "image_path"]}},
+  "3": {"class_type": "TTLGGenerateText", "inputs": {"prompt": "poem", "caption": ["2", "prompt"]}}
+}

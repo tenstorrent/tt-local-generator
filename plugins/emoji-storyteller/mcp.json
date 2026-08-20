@@ -1,0 +1,47 @@
+{
+  "x-ttlg": {
+    "output_ext": ".txt",
+    "media_type": "text",
+    "accepts_remix_from": ["verse"],
+    "can_remix_to": ["image", "video"],
+    "tab": "generative-art",
+    "hardware": null
+  },
+  "tools": [
+    {
+      "name": "emoji-storyteller",
+      "description": "Tells a story almost entirely in emoji and symbols",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "theme": {
+            "type": "string",
+            "default": "a hero's journey",
+            "description": "Story seed"
+          },
+          "scenes": {
+            "type": "integer",
+            "default": 6,
+            "description": "Number of story beats, one per line"
+          },
+          "words": {
+            "type": "integer",
+            "default": 0,
+            "description": "Max real words allowed; 0 = pure emoji/symbols"
+          }
+        },
+        "required": []
+      },
+      "examples": [
+        {"theme": "a cat who wants to fly", "scenes": 5},
+        {"theme": "the birth and death of a star", "scenes": 7},
+        {"theme": "a compiler learns to dream", "scenes": 6, "words": 2},
+        {"theme": "first contact", "scenes": 8}
+      ],
+      "x-ttlg": {
+        "streaming": null,
+        "artifact_tool": true
+      }
+    }
+  ]
+}

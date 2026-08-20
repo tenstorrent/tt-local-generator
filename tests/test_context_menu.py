@@ -1,75 +1,18 @@
-"""Tests for context-aware menu bar: new actions and ArtgenPanel public methods."""
+"""Tests for context-aware menu bar actions and `_build_context_menu_for_source`.
+
+SP-3d-5: the "ArtgenPanel public method tests" section this file used to carry
+(toggle_auto_gen/get_auto_gen_delay/set_auto_gen_delay, plus the
+win.art-autogen-delay action test) is removed along with `ArtgenPanel` and
+the `art-autogen`/`art-autogen-delay` menu actions -- an ACCEPTED, FLAGGED
+loss (see CLAUDE.md and .superpowers/sdd/task-5-report.md). The
+`_build_context_menu_for_source` tests below are updated to match: the
+"artgen" source no longer gets an Auto-generate/Auto Delay section, and no
+source gets an Advanced Settings section (ControlPanel-only, also deleted).
+"""
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
-
-
-# ── ArtgenPanel public method tests ───────────────────────────────────────────
-
-class _FakeArtgenPanel:
-    """Minimal stub matching the fields toggle_auto_gen / get_auto_gen_delay / set_auto_gen_delay need."""
-    def __init__(self, auto_gen=False, delay=3):
-        self._auto_gen = auto_gen
-        self._auto_switch = MagicMock()
-        self._auto_switch_handler = 1
-        self._auto_stopped_reason = None
-        self._scheduled = False
-
-    def _auto_stop(self, reason=""):
-        self._auto_gen = False
-        self._auto_stopped_reason = reason
-
-    def _auto_maybe_schedule(self):
-        self._scheduled = True
-
-
-def test_toggle_auto_gen_off_to_on():
-    """toggle_auto_gen() when _auto_gen is False sets True, schedules, returns True."""
-    from artgen_panel import ArtgenPanel
-    panel = _FakeArtgenPanel(auto_gen=False)
-    panel.toggle_auto_gen = ArtgenPanel.toggle_auto_gen.__get__(panel, type(panel))
-    result = panel.toggle_auto_gen()
-    assert result is True
-    assert panel._auto_gen is True
-    assert panel._scheduled is True
-    panel._auto_switch.handler_block.assert_called()
-
-
-def test_toggle_auto_gen_on_to_off():
-    """toggle_auto_gen() when _auto_gen is True stops and returns False."""
-    from artgen_panel import ArtgenPanel
-    panel = _FakeArtgenPanel(auto_gen=True)
-    panel.toggle_auto_gen = ArtgenPanel.toggle_auto_gen.__get__(panel, type(panel))
-    result = panel.toggle_auto_gen()
-    assert result is False
-    assert panel._auto_gen is False
-    assert panel._auto_stopped_reason == "menu toggle"
-
-
-def test_get_auto_gen_delay_reads_server_config():
-    """get_auto_gen_delay() returns integer from server_config."""
-    from artgen_panel import ArtgenPanel
-    panel = _FakeArtgenPanel()
-    panel.get_auto_gen_delay = ArtgenPanel.get_auto_gen_delay.__get__(panel, type(panel))
-    mock_sc = MagicMock()
-    mock_sc.get.return_value = "10"
-    with patch("artgen_panel.server_config", mock_sc):
-        result = panel.get_auto_gen_delay()
-    assert result == 10
-    mock_sc.get.assert_called_once_with("artgen_auto", "delay")
-
-
-def test_set_auto_gen_delay_writes_server_config():
-    """set_auto_gen_delay(30) calls server_config.set with correct args."""
-    from artgen_panel import ArtgenPanel
-    panel = _FakeArtgenPanel()
-    panel.set_auto_gen_delay = ArtgenPanel.set_auto_gen_delay.__get__(panel, type(panel))
-    mock_sc = MagicMock()
-    with patch("artgen_panel.server_config", mock_sc):
-        panel.set_auto_gen_delay(30)
-    mock_sc.set.assert_called_once_with("artgen_auto", "delay", 30)
 
 
 # ── Action handler unit tests ─────────────────────────────────────────────────
@@ -95,29 +38,6 @@ def test_gallery_density_action_saves_setting():
     action.connect("activate", _handler)
     action.activate(GLib.Variant("s", "compact"))
     assert _s.get("gallery_density") == "compact"
-
-
-def test_art_autogen_delay_action_calls_set_delay():
-    """win.art-autogen-delay action with '30' calls set_auto_gen_delay(30)."""
-    from unittest.mock import MagicMock
-    import gi
-    gi.require_version("GLib", "2.0")
-    from gi.repository import GLib, Gio
-    panel = MagicMock()
-    action = Gio.SimpleAction.new_stateful(
-        "art-autogen-delay",
-        GLib.VariantType.new("s"),
-        GLib.Variant("s", "3"),
-    )
-
-    def _handler(a, p):
-        val = p.get_string()
-        a.set_state(GLib.Variant("s", val))
-        panel.set_auto_gen_delay(int(val))
-
-    action.connect("activate", _handler)
-    action.activate(GLib.Variant("s", "30"))
-    panel.set_auto_gen_delay.assert_called_once_with(30)
 
 
 # ── _build_context_menu_for_source tests ─────────────────────────────────────
@@ -162,6 +82,14 @@ def test_video_context_has_pinned_director():
     assert any("Random" in l for l in labels)
 
 
+def test_video_context_has_no_advanced_settings():
+    """SP-3d-5: AdvancedSettingsDialog + its menu section are deleted
+    alongside ControlPanel."""
+    from main_window import _build_context_menu_for_source
+    labels = _collect_menu_labels(_build_context_menu_for_source("video"))
+    assert not any("Advanced Settings" in l for l in labels)
+
+
 def test_animate_context_has_no_director_style():
     from main_window import _build_context_menu_for_source
     labels = _collect_menu_labels(_build_context_menu_for_source("animate"))
@@ -175,17 +103,14 @@ def test_animate_context_has_quality():
     assert any("Fast" in l for l in labels)
 
 
-def test_artgen_context_has_auto_generate():
+def test_artgen_context_has_no_auto_generate():
+    """SP-3d-5: the Auto-generate/Auto Delay sections were ArtgenPanel-
+    sidebar-only and are removed as an accepted, flagged loss."""
     from main_window import _build_context_menu_for_source
     labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
-    assert any("Enabled" in l for l in labels)
-
-
-def test_artgen_context_has_auto_delay():
-    from main_window import _build_context_menu_for_source
-    labels = _collect_menu_labels(_build_context_menu_for_source("artgen"))
-    assert any("3 seconds" in l for l in labels)
-    assert any("10 seconds" in l for l in labels)
+    assert not any("Enabled" in l for l in labels)
+    assert not any("3 seconds" in l for l in labels)
+    assert not any("10 seconds" in l for l in labels)
 
 
 def test_artgen_context_has_sleep_after():

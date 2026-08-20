@@ -59,6 +59,14 @@ class ServerDef:
                    group servers in the UI and label status indicators in
                    capability terms ("Video generation") rather than server terms
                    ("localhost:8000").
+    model_id     — optional: the exact id this server's `/v1/models` endpoint is
+                   expected to report (e.g. "Qwen/Qwen3-8B"). Only meaningful for
+                   the shared-port-8002 artgen chat servers and prompt-server —
+                   `model_status.match_model_id` uses this (falling back to
+                   `label` when unset) to tell which *specific* chat model is
+                   actually running, since all artgen entries share one port and
+                   one detector. Defaults to None so existing ServerDef
+                   construction elsewhere (tests, other call sites) is unaffected.
     """
     key: str          # short CLI name: "wan2.2", "prompt-server"
     label: str        # human-readable display label
@@ -68,6 +76,8 @@ class ServerDef:
     runner_key: Optional[str] = None  # expected runner_in_use value (port-8000 only)
     extra_args: tuple = field(default_factory=tuple)  # model-specific args for start/stop
     capabilities: tuple = field(default_factory=tuple)  # e.g. ("video",), ("artgen",)
+    model_id: Optional[str] = None  # served /v1/models id, e.g. "Qwen/Qwen3-8B"
+    benefit: str = ""  # picker-only "what is this good for" tagline; "" = none
 
 
 # Human-readable labels for each capability key.
@@ -81,6 +91,43 @@ CAPABILITY_LABELS: dict = {
     "prompt":      "Prompt AI",
     "animatediff": "AnimateDiff  (Blackhole)",
 }
+
+
+# Picker-only friendly names + benefit taglines for keys that have no
+# ServerDef (the synthetic "animatediff" video model), and friendly display
+# overrides for keys whose raw ServerDef.label is an implementation string.
+# These are read ONLY by the Create model picker (create_view) — logs, the
+# Servers control, and ModelStatusService all key off the raw label/key.
+MODEL_BENEFITS: dict = {
+    "animatediff": "Runs locally on Blackhole — no server to start. Quick looping animation.",
+}
+MODEL_DISPLAY_NAMES: dict = {
+    "animatediff": "AnimateDiff",
+    "wan2.2": "Wan 2.2",
+    "mochi": "Mochi",
+    "skyreels": "SkyReels",
+    "wan2.2-i2v": "Wan2.2 I2V",
+    "animate": "Animate",
+    "flux-dev": "FLUX.1-dev",
+}
+
+
+def benefit_for(key: str) -> str:
+    """Human 'what is this good for' tagline for a model/server key.
+    ServerDef.benefit wins; falls back to MODEL_BENEFITS; '' if unknown."""
+    sdef = SERVERS.get(key)
+    if sdef is not None and sdef.benefit:
+        return sdef.benefit
+    return MODEL_BENEFITS.get(key, "")
+
+
+def display_name_for(key: str) -> str:
+    """Friendly picker name for a model/server key. MODEL_DISPLAY_NAMES wins;
+    falls back to the raw ServerDef.label, then the bare key."""
+    if key in MODEL_DISPLAY_NAMES:
+        return MODEL_DISPLAY_NAMES[key]
+    sdef = SERVERS.get(key)
+    return sdef.label if sdef is not None else str(key)
 
 
 # Ordered: "all" starts these in sequence (QB2 / P300X2 recommended set).
@@ -101,6 +148,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2",
             capabilities=("video",),
+            benefit="Highest-quality 720p text-to-video. Needs its server running.",
         ),
         ServerDef(
             key="mochi",
@@ -109,6 +157,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-mochi-1",
             capabilities=("video",),
+            benefit="Cinematic text-to-video. Needs its server running.",
         ),
         ServerDef(
             key="flux",
@@ -117,6 +166,15 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-flux.1-schnell",
             capabilities=("image",),
+        ),
+        ServerDef(
+            key="flux-dev",
+            label="FLUX.1-dev",
+            script="start_flux_dev.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-flux.1-dev",
+            capabilities=("image",),
+            benefit="Higher-fidelity image (more steps than schnell). Blackhole P300X2.",
         ),
         ServerDef(
             key="sdxl",
@@ -149,6 +207,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-wan2.2-animate",
             capabilities=("animate",),
+            benefit="Bring a character image to life with a motion video.",
         ),
         ServerDef(
             key="skyreels",
@@ -157,6 +216,16 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8000/tt-liveness",
             runner_key="tt-skyreels-v2-i2v",
             capabilities=("video",),
+            benefit="Fast video from a seed image (image-to-video). Blackhole.",
+        ),
+        ServerDef(
+            key="wan2.2-i2v",
+            label="Wan2.2-I2V-A14B  (Blackhole)",
+            script="start_wan_i2v.sh",
+            health_url="http://localhost:8000/tt-liveness",
+            runner_key="tt-wan2.2-i2v",
+            capabilities=("video",),
+            benefit="Animate a still image into video (image-to-video). Blackhole P300X2.",
         ),
         ServerDef(
             key="prompt-server",
@@ -164,6 +233,7 @@ SERVERS: dict[str, ServerDef] = {
             script="start_prompt_gen.sh",
             health_url="http://localhost:8001/health",
             capabilities=("prompt",),
+            model_id="Qwen/Qwen3-0.6B",
         ),
         # Artgen chat/text LLMs — all share port 8002.  Only one runs at a time.
         # Health checked via the OpenAI-compatible /v1/models endpoint (any 2xx = up).
@@ -175,6 +245,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen3-8B"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen3-8B",
         ),
         ServerDef(
             key="artgen-llama-3.1-8b",
@@ -183,6 +254,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.1-8B-Instruct"),
             capabilities=("artgen",),
+            model_id="meta-llama/Llama-3.1-8B-Instruct",
         ),
         ServerDef(
             key="artgen-qwen2.5-7b",
@@ -191,6 +263,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen2.5-7B-Instruct"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen2.5-7B-Instruct",
         ),
         ServerDef(
             key="artgen-llama-3.3-70b",
@@ -199,6 +272,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Llama-3.3-70B-Instruct"),
             capabilities=("artgen",),
+            model_id="meta-llama/Llama-3.3-70B-Instruct",
         ),
         ServerDef(
             key="artgen-qwen3-32b",
@@ -207,6 +281,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "Qwen3-32B"),
             capabilities=("artgen",),
+            model_id="Qwen/Qwen3-32B",
         ),
         ServerDef(
             key="artgen-deepseek-r1-70b",
@@ -215,6 +290,7 @@ SERVERS: dict[str, ServerDef] = {
             health_url="http://localhost:8002/v1/models",
             extra_args=("--model", "DeepSeek-R1-Distill-Llama-70B"),
             capabilities=("artgen",),
+            model_id="deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
         ),
     ]
 }
@@ -296,6 +372,16 @@ def restart(
     return start(key, gui=gui, timeout=start_timeout)
 
 
+def _norm_model_id(model_id: str) -> str:
+    """Normalize a model id for shared-port /v1/models matching: last path
+    segment, lowercased, non-alphanumerics stripped — so 'Qwen/Qwen3-8B', the
+    served '--model Qwen3-8B', and 'qwen3-8b' all compare equal. Mirrors
+    model_status.match_model_id's normalization (kept local to avoid a
+    server_manager -> model_status import cycle)."""
+    seg = (model_id or "").rstrip("/").split("/")[-1].lower()
+    return "".join(ch for ch in seg if ch.isalnum())
+
+
 def _check_sdef(sdef: ServerDef, timeout: float) -> bool:
     """Return True if sdef's service is up and (when runner_key is set) the
     correct model is loaded.
@@ -312,11 +398,23 @@ def _check_sdef(sdef: ServerDef, timeout: float) -> bool:
     url = _sc.health_url(sdef.key, sdef.health_url)
     try:
         resp = urllib.request.urlopen(url, timeout=timeout)
-        if sdef.runner_key is None:
-            return True
         body = resp.read().decode("utf-8", errors="replace")
-        data = json.loads(body)
-        return data.get("runner_in_use") == sdef.runner_key
+        if sdef.runner_key is not None:
+            data = json.loads(body)
+            return data.get("runner_in_use") == sdef.runner_key
+        if sdef.model_id and url.rstrip("/").endswith("/v1/models"):
+            # Shared-port LLM family: all six artgen-* ServerDefs share
+            # :8002/v1/models with no runner_key, so a bare 2xx would mark
+            # EVERY artgen key healthy the moment ANY one model answers (review
+            # C3). The OpenAI /v1/models body names the loaded model — confirm
+            # it matches THIS ServerDef's model_id so health is per-model at the
+            # source (every status_all consumer benefits, not just ModelStatus).
+            data = json.loads(body)
+            served = [m.get("id", "") for m in data.get("data", [])
+                      if isinstance(m, dict)]
+            want = _norm_model_id(sdef.model_id)
+            return any(_norm_model_id(s) == want for s in served)
+        return True
     except Exception:
         return False
 

@@ -114,10 +114,18 @@ cd ~/code/tt-local-generator
 
 # 4. Apply patches to the vendored server (required before first start_*.sh)
 ./bin/apply_patches.sh   # HF_HOME mount, SkyReels model specs, device config
+#   Since v0.77.0 this verifies every patch premise first and ABORTS loudly if a
+#   patch's anchor/catalog moved upstream — fix the patch (or app/patch_manifest.py)
+#   before re-running. Check status any time: python3 app/patch_verify.py --vendor vendor/tt-inference-server
 
 # 5. Launch
 ./tt-gen
 ```
+
+> **Building the `.deb` yourself:** the shipped package's vendor tree is patched
+> and verified at build time (CI runs `apply_patches.sh` after `snapshot_vendor.sh`).
+> A local `dpkg-buildpackage` must run `./bin/apply_patches.sh vendor/tt-inference-server`
+> after snapshotting, or `debian/rules`' verify-before-ship gate fails the build.
 
 Model weights are not downloaded automatically in clone mode. Pre-download with:
 ```bash

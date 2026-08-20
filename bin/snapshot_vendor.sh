@@ -23,21 +23,27 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VENDOR_DIR="$REPO_ROOT/vendor/tt-inference-server"
 VENDOR_SHA_FILE="$REPO_ROOT/vendor/VENDOR_SHA"
+VENDOR_VERSION_FILE="$REPO_ROOT/vendor/VENDOR_VERSION"
 
-# SHA pinned to the same image as DOCKER_IMAGE in start_wan_qb2.sh:
-#   ghcr.io/tenstorrent/tt-media-inference-server:0.11.1-bac8b34
+# SHA pinned to tt-inference-server v0.19.0 (LLM-only point release).
+# Media image is unchanged from 0.18.0: tt-media-inference-server:0.18.0-c49bb76
+# Artgen vLLM image: vllm-tt-metal-src-release …:0.19.0-b204341-9bd099c
 # Update this when bumping the inference server version.
-DEFAULT_SHA="bac8b3471c8b1234567890abcdef1234567890ab"   # placeholder — set real SHA
+DEFAULT_SHA="399ce0b5c98067fd41cc3ba978d2742b15e8ac4e"
+DEFAULT_VENDOR_VERSION="0.19.0"   # tt-inference-server release the pinned SHA is from
 UPSTREAM_REPO="https://github.com/tenstorrent/tt-inference-server.git"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 USE_LOCAL_SRC=""
 OVERRIDE_SHA=""
+OVERRIDE_VERSION=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --sha)
             OVERRIDE_SHA="$2"; shift 2 ;;
+        --version)
+            OVERRIDE_VERSION="$2"; shift 2 ;;
         --src)
             USE_LOCAL_SRC="$2"; shift 2 ;;
         --help|-h)
@@ -49,6 +55,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 TARGET_SHA="${OVERRIDE_SHA:-$DEFAULT_SHA}"
+TARGET_VENDOR_VERSION="${OVERRIDE_VERSION:-$DEFAULT_VENDOR_VERSION}"
 
 # ── Files / directories to include from tt-inference-server ───────────────────
 # Only the Python launcher and workflow modules are needed at runtime.
@@ -94,6 +101,11 @@ _snapshot_from_local() {
     echo "$ACTUAL_SHA" > "$VENDOR_SHA_FILE"
     echo "Snapshot complete. SHA: $ACTUAL_SHA"
     echo "Saved to: $VENDOR_SHA_FILE"
+
+    # Stamp the tt-inference-server release this snapshot corresponds to, so
+    # patch_verify.py's absorbed-patch warning knows what "current" means.
+    echo "$TARGET_VENDOR_VERSION" > "$(dirname "$VENDOR_DIR")/VENDOR_VERSION"
+    echo "  stamped VENDOR_VERSION=$TARGET_VENDOR_VERSION"
 }
 
 # ── Snapshot via shallow clone from GitHub ────────────────────────────────────

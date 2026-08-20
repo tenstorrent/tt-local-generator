@@ -1,0 +1,28 @@
+{
+  "_comment": "Fixture for spec_remix structural-edit tests (add_step/remove_step) — a clean linear image->image->image chain so rewiring assertions are exact and unambiguous.",
+  "_spec_version": "comfyui-api-v1",
+  "1": {
+    "class_type": "TTLGTextToImage",
+    "_comment": "source node — 'prompt' is a literal, not a wire, so removing this node has no upstream to reconnect through",
+    "inputs": {
+      "prompt": "a photo"
+    },
+    "outputs": ["image_path"]
+  },
+  "2": {
+    "class_type": "TTLGRemoveBackground",
+    "_comment": "middle node — src wires to node 1; this is the wire remove_step should splice consumers onto",
+    "inputs": {
+      "src": ["1", "image_path"]
+    },
+    "outputs": ["fg_path"]
+  },
+  "3": {
+    "class_type": "TTLGEstimateDepth",
+    "_comment": "consumer of node 2's output — remove_step(spec, \"2\") must rewire this src to node 2's own upstream",
+    "inputs": {
+      "src": ["2", "fg_path"]
+    },
+    "outputs": ["depth_path"]
+  }
+}

@@ -38,14 +38,15 @@ echo "  tt-local-gen-download-model --repo $MODEL_REPO"
 echo ""
 
 _download() {
-    local _extra=()
-    [[ -n "$TOKEN" ]] && _extra=(--token "$TOKEN")
+    # SECURITY: pass the token via the HF_TOKEN env var (preserved across
+    # runuser with -w), never on argv — /proc/<pid>/cmdline is world-readable.
+    [[ -n "$TOKEN" ]] && export HF_TOKEN="$TOKEN"
     if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
-        runuser -u "$REAL_USER" -- \
-            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists "${_extra[@]}" \
+        runuser -w HF_TOKEN -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || { echo ""; echo "ERROR: download failed. Retry:"; echo "  tt-local-gen-download-model --repo $MODEL_REPO"; exit 0; }
     else
-        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists "${_extra[@]}" \
+        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || { echo ""; echo "ERROR: download failed. Retry:"; echo "  tt-local-gen-download-model --repo $MODEL_REPO"; exit 0; }
     fi
 }

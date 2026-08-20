@@ -57,6 +57,7 @@ class PipelineRunner:
         self._log_file: Optional[str] = None
         self._on_node_update: Optional[Callable] = None
         self._on_run_finished: Optional[Callable] = None
+        self._on_log: Optional[Callable] = None
         self._active_jobs: dict[str, dict] = {}
         self._cancelled = False
         # _retry_mode: set True by retry_node() so _watch_stdout does not call
@@ -123,10 +124,33 @@ class PipelineRunner:
         param_overrides: dict,
         on_node_update: Callable,
         on_run_finished: Callable,
+        on_log: Optional[Callable] = None,
+        run_id: Optional[str] = None,
     ) -> None:
-        """Launch run_workflow.sh for the given jobs and spec."""
+        """Launch run_workflow.sh for the given jobs and spec.
+
+        on_log, if given, is called with every raw stdout line the subprocess
+        emits (verbatim, including the trailing newline) — e.g. so a live-run
+        view can tail the log alongside the parsed NODE:/LOG: signals. It is
+        optional and defaults to None so existing callers (and every test that
+        predates this parameter) are unaffected.
+
+        run_id, if given, is an ALREADY-CREATED PipelineStore run id (e.g. a
+        provisional record PipelineStudio._on_run_remix created up front so
+        LiveRunView.begin() has a RunView to paint immediately). When
+        provided, start() adopts it — self._run_id = run_id and the store's
+        pid=0 placeholder is patched via update_pid() — instead of minting a
+        brand-new record via create_run(). This is what makes the adopted
+        record the SINGLE record that receives node/output/finish updates;
+        previously start() unconditionally called create_run() itself,
+        producing a second, divergent record the caller's provisional one
+        never shared (the SP-C Remix→Run dual-run-record bug). When run_id is
+        None (every pre-existing caller), behavior is unchanged: a new record
+        is minted here as before.
+        """
         self._on_node_update = on_node_update
         self._on_run_finished = on_run_finished
+        self._on_log = on_log
         self._cancelled = False
 
         # Non-blocking health check — emits synthetic signal if degraded
@@ -139,6 +163,14 @@ class PipelineRunner:
         log_dir.mkdir(parents=True, exist_ok=True)
 
         env = {**os.environ}
+        if run_id is not None:
+            # Adopt the caller's existing record BEFORE Popen runs (not
+            # after) so that if Popen raises, the except block below still
+            # sees self._run_id set and can mark that record failed instead
+            # of orphaning it in "running" state forever. The PID isn't
+            # known yet at this point — update_pid() is called after a
+            # successful Popen, below.
+            self._run_id = run_id
         try:
             # Launch the subprocess first so we have the real PID before
             # writing the run record — eliminates the window where reattach()
@@ -150,14 +182,18 @@ class PipelineRunner:
                 text=True,
                 env=env,
             )
-            self._run_id = self._store.create_run(
-                spec_path=spec_path,
-                spec_name=Path(spec_path).stem,
-                jobs=jobs,
-                param_overrides=param_overrides,
-                pid=self._proc.pid,   # real PID — no pid=0 patch needed
-                log_file="",
-            )
+            if run_id is not None:
+                # Patch in the real PID now that we have it.
+                self._store.update_pid(run_id, self._proc.pid)
+            else:
+                self._run_id = self._store.create_run(
+                    spec_path=spec_path,
+                    spec_name=Path(spec_path).stem,
+                    jobs=jobs,
+                    param_overrides=param_overrides,
+                    pid=self._proc.pid,   # real PID — no pid=0 patch needed
+                    log_file="",
+                )
 
             threading.Thread(
                 target=self._watch_stdout,
@@ -384,6 +420,7 @@ class PipelineRunner:
             for line in self._proc.stdout:
                 if self._cancelled:
                     break
+                self._dispatch(self._on_log, line)
                 self._parse_line(line, current_job)
         finally:
             exit_code = self._proc.wait()

@@ -43,8 +43,8 @@ echo ""
 
 if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     if [[ -n "$TOKEN" ]]; then
-        runuser -u "$REAL_USER" -- \
-            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" \
+        HF_TOKEN="$TOKEN" runuser -w HF_TOKEN -u "$REAL_USER" -- \
+            "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists \
         || {
             echo ""
             echo "ERROR: model download failed."
@@ -63,7 +63,7 @@ if [[ -n "$REAL_USER" ]] && [[ "$REAL_USER" != "root" ]]; then
     fi
 else
     if [[ -n "$TOKEN" ]]; then
-        "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists --token "$TOKEN" || {
+        HF_TOKEN="$TOKEN" "$DOWNLOAD_HELPER" --repo "$MODEL_REPO" --skip-if-exists || {
             echo ""
             echo "ERROR: model download failed."
             echo "Retry manually: tt-local-gen-download-model --repo $MODEL_REPO"

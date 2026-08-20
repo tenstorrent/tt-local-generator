@@ -38,14 +38,16 @@ HF_CACHE="$HOME/.cache/huggingface"
 SERVICE_PORT=8002
 LOG_DIR="$REPO_DIR/workflow_logs/docker_server"
 _GHCR="ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64"
-# Prefer the newest 0.11+ image compatible with v0.15.0 run.py.
-# Fall back to the locally-available qb2_launch image if 0.11+ is not yet pulled.
-if docker image inspect "$_GHCR:0.14.0-80180b9-7678b70" &>/dev/null 2>&1; then
+# Prefer the newest v0.19.0 image (Llama-3.1-8B P300 uplift, newer tt-metal base).
+# Fall back to older pulled images if 0.19.0 is not yet present.
+if docker image inspect "$_GHCR:0.19.0-b204341-9bd099c" &>/dev/null 2>&1; then
+    _QB2_IMAGE="$_GHCR:0.19.0-b204341-9bd099c"
+elif docker image inspect "$_GHCR:0.14.0-80180b9-7678b70" &>/dev/null 2>&1; then
     _QB2_IMAGE="$_GHCR:0.14.0-80180b9-7678b70"
 elif docker image inspect "$_GHCR:0.11.1-bac8b34-7c6685a" &>/dev/null 2>&1; then
     _QB2_IMAGE="$_GHCR:0.11.1-bac8b34-7c6685a"
 else
-    # qb2_launch is v0.10.0 — run.py will reject it with the v0.15.0 vendor.
+    # qb2_launch is v0.10.0 — run.py will reject it with a modern vendor.
     # If this is hit, pull one of the images above first.
     _QB2_IMAGE="$_GHCR:qb2_launch-555f240-22be241"
 fi
