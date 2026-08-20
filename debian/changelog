@@ -1,3 +1,17 @@
+tt-local-generator (0.89.3) noble; urgency=medium
+
+  * fix(pipeline): TTLGMontage concat list is apostrophe-safe. `_write_concat_list`
+    now escapes single quotes in image paths (`_concat_quote`: a literal `'`
+    becomes `'\''` inside the single-quoted `file` line), so a slideshow whose
+    frames live under a path like `/home/O'Brien/…` no longer corrupts the
+    ffmpeg concat demuxer input. `app/pipeline_engine.py` + regression tests.
+  * fix(pipeline): bound the Stage's transient thumbnail cache. `/tmp/
+    ttlg-stage-thumbs` accumulated one PNG per distinct previewed artifact
+    forever; `_prune_thumb_cache` now trims it to the newest 256 files
+    (oldest-by-mtime first), fail-soft. `app/pipeline_studio.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 10:30:00 +0000
+
 tt-local-generator (0.89.2) noble; urgency=medium
 
   * fix(convert-library): `--backup` no longer leaves a phantom 0-byte `.bak`

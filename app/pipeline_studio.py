@@ -460,7 +460,32 @@ def _stage_preview_thumb_path(src: str) -> Path:
     digest = hashlib.sha1(src.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     cache_dir = Path(tempfile.gettempdir()) / "ttlg-stage-thumbs"
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _prune_thumb_cache(cache_dir)
     return cache_dir / f"{digest}.png"
+
+
+# Keep the transient stage-thumb cache bounded. It's keyed by source-path hash,
+# so re-rendering the SAME artifact reuses one file — but distinct artifacts
+# across many runs would otherwise accumulate one PNG each forever in /tmp.
+_STAGE_THUMB_CACHE_CAP = 256
+
+
+def _prune_thumb_cache(cache_dir: Path, cap: int = _STAGE_THUMB_CACHE_CAP) -> None:
+    """Trim `cache_dir` to at most `cap` files, deleting the oldest by mtime.
+    Fail-soft: a decorative-thumbnail cache must never break tile rendering, and
+    the common path (under the cap) does one cheap `iterdir` with no sort."""
+    try:
+        entries = [p for p in cache_dir.iterdir() if p.is_file()]
+        if len(entries) <= cap:
+            return
+        entries.sort(key=lambda p: p.stat().st_mtime)
+        for old in entries[:len(entries) - cap]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 # Comfortable reading/gallery column width (fix #5, user feedback: Discover/
