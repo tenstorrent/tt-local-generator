@@ -268,13 +268,15 @@ def test_video_panel_multichip_selector_maps_mode_and_bool():
     panel = VideoParamPanel()
     panel.build()
 
-    # Default is now Coherent (one continuous video across chips).
-    args = panel.collect()["animatediff_args"]
-    assert (args["multichip_mode"], args["multi_chip"]) == ("coherent", True)
-
-    panel._ad_multichip_mode.set_selected(0)  # "Remix — varied clips across chips"
+    # Default is Remix — the proven-reliable multi-chip path. (Coherent's
+    # multi-board mesh teardown hit this QB2's fragile ethernet fabric, so it's
+    # opt-in, not the default; see v0.91.1.)
     args = panel.collect()["animatediff_args"]
     assert (args["multichip_mode"], args["multi_chip"]) == ("remix", True)
+
+    panel._ad_multichip_mode.set_selected(1)  # "Coherent — one longer video"
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("coherent", True)
 
     panel._ad_multichip_mode.set_selected(2)  # "Off — single chip"
     args = panel.collect()["animatediff_args"]

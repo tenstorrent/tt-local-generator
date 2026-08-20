@@ -1,3 +1,21 @@
+tt-local-generator (0.91.1) noble; urgency=medium
+
+  * revert(create): default AnimateDiff multi-chip back to Remix (was briefly
+    Coherent in v0.91.0). On-hardware a 4-chip Coherent run computed segment 0
+    fine (~39s, 293W) but aborted (SIGABRT) during multi-board MESH TEARDOWN —
+    `RiscFirmwareInitializer::teardown` timed out waiting for an ethernet core
+    ("Device 0: Timed out ... active ethernet core 29-25 ... Try resetting the
+    board"), the QB2's known-fragile cross-board fabric. Coherent chains
+    segments by opening/closing the 4-chip mesh, so it exercises that fabric;
+    Remix (independent 1x1 mesh per chip) does not. A default generation mode
+    must not crash on the target hardware, so Remix is the default again;
+    Coherent remains one dropdown-pick away (works when the board is healthy).
+    Follow-up: make the coherent teardown resilient to the ethernet timeout
+    (reset-and-retry) before promoting it to default. No wiring change — the
+    v0.90.0 selector is unaffected.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:55:00 +0000
+
 tt-local-generator (0.91.0) noble; urgency=medium
 
   * fix(create): the "Monitor HW" toggle used the 👁 eye emoji (U+1F441), whose
