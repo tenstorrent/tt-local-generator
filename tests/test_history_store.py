@@ -219,3 +219,24 @@ def test_append_persists_generator_type(monkeypatch, tmp_path):
     got = _ms.get("j3")
     assert got.media_type == "video"
     assert got.generator_type == "animatediff"
+
+
+def test_to_gen_round_trips_generator_type(monkeypatch, tmp_path):
+    """HistoryStore._to_gen() must carry generator_type from the underlying
+    MediaRecord back onto the reconstructed GenerationRecord.
+
+    This is the real READ path used by all_records()/delete() — previously
+    _to_gen() built GenerationRecord(...) without passing generator_type=,
+    so it silently defaulted to None for every record, permanently breaking
+    any caller that filters all_records() by generator_type (the Animate
+    Discover tab, the attractor's animate-input chaining)."""
+    _patch_store(monkeypatch, tmp_path)
+
+    store = HistoryStore()
+    rec = GenerationRecord.new_animate(job_id="j4", prompt="p", negative_prompt="",
+                                       num_inference_steps=20, seed=1)
+    store.append(rec)
+
+    reloaded = store.all_records()
+    assert len(reloaded) == 1
+    assert reloaded[0].generator_type == "animate"

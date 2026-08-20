@@ -358,6 +358,7 @@ class HistoryStore:
             model=r.model_id,
             extra_meta=p.get("extra_meta", {}),
             starred=r.starred,
+            generator_type=r.generator_type,
         )
 
 

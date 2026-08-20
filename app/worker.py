@@ -29,7 +29,7 @@ Four worker classes, all with identical run_with_callbacks() interfaces:
     1. check_hardware() — fail fast if no Blackhole device
     2. run_subprocess() — generate_blackhole_v2.py via tt-metal Python env
     3. make_gif_thumbnail() — extract first frame as JPEG
-    4. Persist to history as media_type="animatediff"
+    4. Persist to history as media_type="video" (generator_type="animatediff")
 
 Communication back to the UI is via plain callbacks. The caller (GTK main window)
 wraps each callback in GLib.idle_add() so UI updates always happen on the main
@@ -738,7 +738,8 @@ class AnimateDiffGenerationWorker:
 
     Produces an animated GIF in VIDEOS_DIR, then creates a thumbnail from the
     first frame. The result is stored as a GenerationRecord with media_type
-    "animatediff" and surfaces in the video gallery alongside MP4s.
+    "video" (generator_type="animatediff") and surfaces in the video gallery
+    alongside MP4s.
 
     Usage (GTK):
         gen = AnimateDiffGenerationWorker(store, prompt, ...)
