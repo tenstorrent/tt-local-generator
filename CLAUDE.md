@@ -40,6 +40,14 @@ Two small Create-surface polish fixes:
   cellW*cols)/2))`), centering the grid. Edited in the SISTER repo
   `~/code/tensix-viz`, `node build.js` + 86 tests green, re-bundled into
   `app/assets/tensix-viz/tensix-viz.js` (never hand-edit the generated bundle).
+  **Bundle scope note:** the re-bundle also carried the two OTHER fixes already
+  on that tensix-viz branch (`fix/idle-flicker-and-frame-rate`, tensix-viz
+  PR #5) — a heatmap auto-scale floor/decay and frame-rate-independent idle
+  decay — since the bundle reflects the branch's full source state, not just the
+  centering commit. Both are intended upstream fixes, not drift; flagged here
+  because this bundle has no automated drift check (unlike the vendored
+  inference-server's `patch_verify.py`). Re-verify the bundle after any future
+  tensix-viz merge.
 
 ## Library converter — `tt-ctl convert-library` (v0.88.0)
 

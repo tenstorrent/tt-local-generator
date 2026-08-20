@@ -1,3 +1,18 @@
+tt-local-generator (0.89.2) noble; urgency=medium
+
+  * fix(convert-library): `--backup` no longer leaves a phantom 0-byte `.bak`
+    file when the online backup fails mid-copy. `sqlite3.connect()` materializes
+    the destination file before the copy runs, so a failure (disk full, I/O
+    error) previously left a misleading empty file that looked like a real
+    backup; `_backup_db` now removes the partial file and re-raises so the run
+    aborts loudly. `app/library_convert.py` + regression test.
+  * refactor(create): `possibilities._resolve_tile_art` tier-1 (starred art)
+    now shares `_starred_record_for` with `_example_for`, so a tile's art and
+    its tie-to-shown caption can never disagree about which starred piece is
+    shown. No behavior change.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 09:40:00 +0000
+
 tt-local-generator (0.89.1) noble; urgency=medium
 
   * fix(create): "Start something" — a starred ARTGEN piece no longer dumps its

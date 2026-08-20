@@ -129,11 +129,24 @@ def _backup_db(src_path: Path, backup_path: Path) -> None:
     concurrently holding the WAL open)."""
     src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
     try:
-        dst = sqlite3.connect(str(backup_path))
         try:
-            src.backup(dst)
-        finally:
-            dst.close()
+            dst = sqlite3.connect(str(backup_path))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        except Exception:
+            # sqlite3.connect() materialized `backup_path` on disk before the
+            # copy ran, so a failure partway (disk full, I/O error, interrupt)
+            # would leave a 0-byte/partial file that LOOKS like a real backup —
+            # the worst possible lie for a disaster-recovery feature. Remove the
+            # debris and re-raise so the caller aborts loudly (nothing downstream
+            # mutates the DB unless the backup genuinely succeeded).
+            try:
+                backup_path.unlink()
+            except OSError:
+                pass
+            raise
     finally:
         src.close()
 

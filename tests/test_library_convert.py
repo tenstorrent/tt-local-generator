@@ -318,6 +318,40 @@ def test_apply_backup_is_complete_for_wal_mode_db(tmp_path):
         bak.close()
 
 
+def test_apply_backup_failure_leaves_no_phantom_file(seeded, monkeypatch):
+    """If the online backup fails mid-copy, no misleading 0-byte .bak-* file is
+    left behind, and the failure propagates (nothing mutates the DB unless the
+    safety-net backup genuinely succeeded)."""
+    import library_convert
+    from library_convert import apply
+    db_path, _ = seeded
+
+    # sqlite3.Connection is immutable, so force the failure via a Connection
+    # subclass whose backup() raises — applied only to the read-only SOURCE
+    # connection; the DESTINATION connect stays real, so the .bak file is truly
+    # materialized on disk (proving _backup_db actually cleans it up).
+    real_connect = sqlite3.connect
+
+    class _BoomConn(sqlite3.Connection):
+        def backup(self, *a, **k):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    def fake_connect(target, *a, **k):
+        if "mode=ro" in str(target):
+            return real_connect(target, *a, factory=_BoomConn, **k)
+        return real_connect(target, *a, **k)
+    monkeypatch.setattr(library_convert.sqlite3, "connect", fake_connect)
+
+    with pytest.raises(sqlite3.OperationalError):
+        apply(db_path, regen_thumbnails=False, backup=True)
+
+    leftovers = list(db_path.parent.glob(db_path.name + ".bak-*"))
+    assert leftovers == [], f"phantom backup file left behind: {leftovers}"
+    # The DB itself is untouched (fold never ran).
+    con = sqlite3.connect(db_path)
+    assert con.execute("SELECT media_type FROM media WHERE id='ad_native'").fetchone() == ("animatediff",)
+
+
 def test_apply_without_backup_has_no_backup_path(seeded):
     from library_convert import apply
     db_path, _ = seeded

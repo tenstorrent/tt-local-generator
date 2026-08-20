@@ -395,15 +395,12 @@ class PossibilitiesWall(Gtk.Box):
         #    STARRED piece of this medium. Starring IS curation (unlike an
         #    arbitrary recent generation, which we deliberately don't surface),
         #    so it overrides even the bundled default: "star an image and it
-        #    becomes this tile."
-        try:
-            for r in (self._store.query(media_type=mt, generator_type=gt,
-                                        starred=True, limit=1) or []):
-                t = getattr(r, "thumbnail_path", None)
-                if t and os.path.exists(t):
-                    return ("thumb", t)
-        except Exception:
-            pass
+        #    becomes this tile." Shares `_starred_record_for` with `_example_for`
+        #    so the tile's art and its tie-to-shown caption can never disagree
+        #    about which starred piece is being shown.
+        starred = self._starred_record_for(medium)
+        if starred is not None:
+            return ("thumb", starred.thumbnail_path)
         # 2. A hand-picked BUNDLED example (ships with the app) — the default
         #    when you haven't starred your own piece of this medium (e.g. the
         #    Image tile's World's Fair Montreal '67 image).
