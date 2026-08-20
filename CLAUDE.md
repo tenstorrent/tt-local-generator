@@ -17,15 +17,21 @@ Two small Create-surface polish fixes:
   tiles echo each other. `example_idea_for(medium)` stays a stable single line
   (pool[0]) for external callers/tests; `_resolve_tile_art`'s 2-tuple contract
   is untouched (many tests depend on it).
-  - **Tie-to-shown:** `_example_for(medium)` prefers a STARRED piece's own
-    `prompt` when that piece is exactly what the tile displays — resolved by
-    `_starred_record_for`, which mirrors `_resolve_tile_art`'s tier-1 condition
-    (starred + thumbnail exists on disk) so the copy can only ever describe the
-    art actually on the tile. The line is computed ONCE in `_make_card` and
-    captured in the click closure, so caption and what-tapping-seeds always
-    match. Deliberately scoped to the starred tier only — NOT arbitrary recents
-    or artgen's templated internal prompts (the same reason those are curated-
-    only for tile *art*). Fail-soft → pool line on any error.
+  - **Tie-to-shown (NATIVE mediums only, v0.89.1):** `_example_for(medium)`
+    prefers a STARRED piece's own `prompt` when that piece is exactly what the
+    tile displays — resolved by `_starred_record_for`, which mirrors
+    `_resolve_tile_art`'s tier-1 condition (starred + thumbnail exists on disk)
+    so the copy can only ever describe the art actually on the tile. The line is
+    computed ONCE in `_make_card` and captured in the click closure, so caption
+    and what-tapping-seeds always match. **Gated to `medium.source ==
+    "native"`** (image/video), whose stored `prompt` IS the user's creative
+    brief. Artgen is deliberately EXCLUDED: an artgen record's `prompt` is the
+    full COMPOSED PROMPT TEMPLATE (system framing + filled placeholders), not
+    the options the user configured — surfacing it dumped template text into the
+    caption and the composer (v0.89.0 bug, reported + fixed v0.89.1). Artgen
+    tiles always use their curated theme pool (the same reason artgen *art* is
+    curated-only). Fail-soft → pool line on any error. Regression:
+    `test_artgen_tile_never_shows_full_prompt_template`.
 - **Centered chip grid in the 👁 Watch viz (tensix-viz `src/chip.js`).**
   `_computeLayout` floored `_cellW`/`_cellH` and drew from a fixed top-left pad,
   so `cols*_cellW < w-2*pad` piled ALL the slack on the right/bottom — the grid

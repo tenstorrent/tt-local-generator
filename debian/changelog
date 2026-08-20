@@ -1,3 +1,15 @@
+tt-local-generator (0.89.1) noble; urgency=medium
+
+  * fix(create): "Start something" — a starred ARTGEN piece no longer dumps its
+    full composed prompt TEMPLATE into the tile caption/composer. The v0.89.0
+    tie-to-shown behavior surfaced a starred piece's stored `prompt`, but an
+    artgen record's prompt is the whole filled-in template (system framing +
+    placeholders), not the options the user configured. Tie-to-shown is now
+    scoped to NATIVE mediums (image/video), whose stored prompt IS the user's
+    brief; artgen tiles always use their curated theme pool. `possibilities.py`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 09:10:00 +0000
+
 tt-local-generator (0.89.0) noble; urgency=medium
 
   * fix(create): "Start something" tiles no longer repeat the same sample

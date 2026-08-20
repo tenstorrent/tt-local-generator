@@ -251,6 +251,25 @@ def test_example_ties_to_shown_starred_prompt(tmp_path):
     assert wall._example_for(meds[0]) == "a heron mid-stride on wet slate"
 
 
+def test_artgen_tile_never_shows_full_prompt_template(tmp_path):
+    """Regression: an artgen record's stored `prompt` is the full COMPOSED
+    prompt TEMPLATE, not the options that configured it. A starred artgen piece
+    must NOT dump that template into the tile caption / composer — artgen tiles
+    stay on their curated theme pool even when a starred piece exists."""
+    from possibilities import PossibilitiesWall, _pool_for
+    meds = [_medium("palette", kind="image", source="artgen", generator="palette")]
+    thumb = tmp_path / "s.png"; thumb.write_bytes(b"\x89PNG\r\n")
+    r = _rec("artgen", "palette", str(thumb), starred=1)
+    r.prompt = ("You are a palette generator. Given mood={mood} and theme={theme}, "
+                "emit JSON with 6 hex colors and a one-sentence lore. Do not include...")
+    store = _FakeStore(latest={("artgen", "palette"): [r]})
+    wall = PossibilitiesWall(mediums_fn=lambda: meds, on_pick=lambda m, i: None, store=store)
+    line = wall._example_for(meds[0])
+    assert line in _pool_for(meds[0])          # a curated pool line...
+    assert line != r.prompt                     # ...never the stored template
+    assert "generator" not in line.lower()
+
+
 def test_no_starred_still_uses_existing_tiers(tmp_path):
     """With nothing starred, resolution is unchanged: bundled tier still wins
     for the Image tile (regression guard alongside

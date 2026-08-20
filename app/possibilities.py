@@ -38,9 +38,10 @@ from gi.repository import Gtk, GdkPixbuf  # noqa: E402
 # surface (native image/video + every artgen generator) has an entry here, so
 # nothing falls back to a generic per-kind line and duplicates a neighbor.
 #
-# These are the DEFAULT suggestions. When a tile actually shows an explicitly
-# STARRED piece of the medium (tier 1 of `_resolve_tile_art`), the tile's real
-# prompt is used instead — the copy then describes exactly what's on the tile
+# These are the DEFAULT suggestions. For a NATIVE medium (image/video) whose
+# tile shows an explicitly STARRED piece, the tile's real prompt is used instead
+# — the copy then describes exactly what's on the tile. Artgen mediums always
+# use the pool: their stored prompt is a full composed TEMPLATE, not a brief
 # (see `_example_for`).
 _EXAMPLE_POOLS_BY_ID = {
     # native
@@ -349,16 +350,27 @@ class PossibilitiesWall(Gtk.Box):
         return None
 
     def _example_for(self, medium) -> str:
-        """The example line for a tile. When the tile shows an explicitly
-        STARRED piece, use that piece's own prompt — the copy then describes
-        exactly what's on the tile ("make one like THIS"). Otherwise rotate
-        through the medium's curated pool. Falls back safely on any error."""
+        """The example line for a tile.
+
+        For a NATIVE medium (image/video) whose tile shows an explicitly
+        STARRED piece, use that piece's own prompt — a native record's prompt
+        IS the user's creative brief, so the copy then describes exactly what's
+        on the tile ("make one like THIS") AND seeds a usable prompt on tap.
+
+        For ARTGEN mediums this is deliberately skipped: an artgen record's
+        stored `prompt` is the full COMPOSED PROMPT TEMPLATE (system framing +
+        the filled-in placeholders), not the handful of options the user
+        actually configured — surfacing it would dump template text into both
+        the caption and the composer. Artgen tiles stay on their curated,
+        theme-style pool (the same reason artgen art is curated-only). Falls
+        back safely to the pool on any error."""
         try:
-            rec = self._starred_record_for(medium)
-            if rec is not None:
-                prompt = (getattr(rec, "prompt", "") or "").strip()
-                if prompt:
-                    return prompt
+            if getattr(medium, "source", None) == "native":
+                rec = self._starred_record_for(medium)
+                if rec is not None:
+                    prompt = (getattr(rec, "prompt", "") or "").strip()
+                    if prompt:
+                        return prompt
         except Exception:
             pass
         return self._pick_from_pool(medium)
