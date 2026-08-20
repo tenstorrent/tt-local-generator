@@ -41,6 +41,18 @@ wired as `tt-ctl convert-library` (`--apply` / `--db PATH` /
 - `analyze()` is strictly read-only (opens the DB via a `file:...?mode=ro`
   sqlite URI) and reports `fold_pending`/`thumbs_pending` counts for the
   dry-run report `cmd_convert_library` prints by default.
+- **`--backup` is WAL-safe** (`library_convert._backup_db`). A real
+  `media.db` runs in WAL mode (`MediaStore` sets `PRAGMA journal_mode=WAL`,
+  a persistent file-level setting), so recently-written rows can still live
+  in the `<db>-wal` sidecar until a checkpoint. A plain `shutil.copy2` of
+  only the main `.db` would silently yield an empty shell (`no such table:
+  media`) — worst case exactly when the safety net matters (a live GUI holds
+  the WAL open). The backup therefore uses SQLite's online backup API
+  (`src.backup(dst)`), which reads through a live connection and writes a
+  fully-checkpointed standalone copy. Regression-pinned by
+  `tests/test_library_convert.py::test_apply_backup_is_complete_for_wal_mode_db`,
+  which seeds through a real `MediaStore` (the earlier bare-`sqlite3`
+  fixture never engaged WAL — which is why the bug shipped).
 
 ## AnimateDiff is Video (v0.87.0)
 

@@ -261,7 +261,6 @@ def test_apply_skips_thumbnails_when_disabled(seeded):
 def test_apply_backup_copies_db_before_mutating(seeded, tmp_path):
     from library_convert import apply
     db_path, _ = seeded
-    original_bytes = db_path.read_bytes()
 
     report = apply(db_path, regen_thumbnails=False, backup=True)
 
@@ -269,7 +268,54 @@ def test_apply_backup_copies_db_before_mutating(seeded, tmp_path):
     assert backup_path.exists()
     assert backup_path.parent == db_path.parent
     assert backup_path.name.startswith(db_path.name)
-    assert backup_path.read_bytes() == original_bytes
+    # The backup must be a COMPLETE, usable database captured BEFORE the fold
+    # ran -- so it still shows the pre-fold row states. (We verify usability by
+    # querying it, not by byte-equality: the online backup API rebuilds the
+    # file so it is never byte-identical to the source.)
+    bak = sqlite3.connect(backup_path)
+    try:
+        assert bak.execute(
+            "SELECT media_type FROM media WHERE id='ad_native'"
+        ).fetchone() == ("animatediff",)
+        assert bak.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 10
+    finally:
+        bak.close()
+
+
+def test_apply_backup_is_complete_for_wal_mode_db(tmp_path):
+    """Regression for the WAL-mode backup bug: a real media.db runs in WAL
+    mode (MediaStore sets PRAGMA journal_mode=WAL), so recently-written rows
+    can live in the -wal sidecar. A plain shutil.copy2 of only the main .db
+    file would silently produce an empty shell. Seed via a REAL MediaStore
+    (which engages WAL) and assert the backup is a complete, queryable copy."""
+    from media_store import MediaStore, MediaRecord
+    from library_convert import apply
+
+    db_path = tmp_path / "media.db"
+    ms = MediaStore(db_path=db_path)
+    # Confirm the seeding path really is WAL mode (the whole point of this test).
+    assert ms._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    ms.add(MediaRecord(
+        id="ad", media_type="animatediff", created_at="2026-01-01T00:00:00",
+        file_path="/nonexistent/ad.gif", thumbnail_path="", prompt="",
+        model_id="animatediff-blackhole", generator_type=None, params="{}", starred=0,
+    ))
+    # Leave the store's connection OPEN so the WAL is actively held -- exactly
+    # the worst case (GUI still running) the file-copy backup silently corrupts.
+
+    report = apply(db_path, regen_thumbnails=False, backup=True)
+
+    backup_path = Path(report["backup_path"])
+    bak = sqlite3.connect(backup_path)
+    try:
+        # The backup must contain the schema AND the row that only ever lived
+        # in the WAL -- proving the sidecar data was captured, not lost.
+        assert bak.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 1
+        assert bak.execute(
+            "SELECT media_type FROM media WHERE id='ad'"
+        ).fetchone() == ("animatediff",)
+    finally:
+        bak.close()
 
 
 def test_apply_without_backup_has_no_backup_path(seeded):

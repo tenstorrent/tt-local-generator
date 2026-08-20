@@ -35,7 +35,6 @@ returns a report dict; pass `backup=True` to copy the DB file aside first.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import sqlite3
 import time
@@ -113,6 +112,30 @@ def analyze(db_path: Optional[Path | str] = None) -> dict:
         return {"fold_pending": fold_pending, "thumbs_pending": thumbs_pending}
     finally:
         conn.close()
+
+
+def _backup_db(src_path: Path, backup_path: Path) -> None:
+    """Make a consistent, self-contained copy of the SQLite DB -- WAL-safe.
+
+    A real media.db runs in WAL mode (MediaStore sets PRAGMA journal_mode=WAL,
+    a persistent file-level setting), so recently-written rows can live in the
+    `<db>-wal` sidecar until a checkpoint folds them back into the main file. A
+    plain `shutil.copy2` of only the main file would therefore silently produce
+    an EMPTY-looking shell (missing the schema/data still parked in the WAL) --
+    a catastrophic failure for the one feature whose whole job is a safety net
+    before a destructive `--apply`. SQLite's online backup API reads through a
+    live connection and writes a fully-checkpointed, standalone copy, so the
+    backup is complete regardless of WAL state (and safe even if the app GUI is
+    concurrently holding the WAL open)."""
+    src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(str(backup_path))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
 
 def _looks_like_a_real_image(path: Path) -> bool:
@@ -198,7 +221,7 @@ def apply(
     if backup:
         ts = time.strftime("%Y%m%d-%H%M%S")
         backup_path = path.with_name(f"{path.name}.bak-{ts}")
-        shutil.copy2(path, backup_path)
+        _backup_db(path, backup_path)
 
     conn = sqlite3.connect(str(path))
     try:
@@ -216,14 +239,9 @@ def apply(
             # just got folded is correctly no longer 'artgen' and won't
             # appear in this query (already committed above).
             for _id, file_path, thumbnail_path in _thumb_candidate_rows(conn):
-                if not thumbnail_path or not file_path:
-                    thumbs_skipped += 1
-                    continue
-                ext = Path(file_path).suffix.lower()
-                if ext in _THUMB_REGEN_EXCLUDE_EXTS:
-                    thumbs_skipped += 1
-                    continue
-                if not Path(file_path).exists():
+                # Same predicate analyze() counts with, so "would regenerate N"
+                # and "actually regenerated N" can never drift apart.
+                if not _is_thumb_regen_candidate(file_path, thumbnail_path):
                     thumbs_skipped += 1
                     continue
                 try:
