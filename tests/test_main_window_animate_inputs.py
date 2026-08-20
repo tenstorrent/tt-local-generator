@@ -19,9 +19,11 @@ if _SYSTEM_DIST not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 
-def _make_record(media_type="animate", thumb="", image_path="", extra_meta=None):
+def _make_record(media_type="animate", thumb="", image_path="", extra_meta=None,
+                  generator_type=None):
     r = MagicMock()
     r.media_type = media_type
+    r.generator_type = generator_type
     r.thumbnail_path = thumb
     r.image_path = image_path
     r.extra_meta = extra_meta if extra_meta is not None else {}
@@ -56,8 +58,12 @@ def test_returns_last_frame_path_when_available(tmp_path):
     last_frame = tmp_path / "frame_last.jpg"
     last_frame.write_bytes(b"jpeg")
 
+    # Post-"animatediff is video" migration shape: media_type is "video" and
+    # generator_type=="animate" is the provenance stamp that identifies it as
+    # a Wan2.2-Animate record (see history_store.GenerationRecord.new_animate).
     rec = _make_record(
-        media_type="animate",
+        media_type="video",
+        generator_type="animate",
         thumb=str(tmp_path / "frame.jpg"),
         extra_meta={"last_frame_path": str(last_frame)},
     )
@@ -82,7 +88,8 @@ def test_falls_back_to_thumbnail_when_last_frame_missing(tmp_path):
     thumb.write_bytes(b"jpeg")
 
     rec = _make_record(
-        media_type="animate",
+        media_type="video",
+        generator_type="animate",
         thumb=str(thumb),
         extra_meta={"last_frame_path": "/nonexistent/frame_last.jpg"},
     )
@@ -98,6 +105,32 @@ def test_falls_back_to_thumbnail_when_last_frame_missing(tmp_path):
         ref_video, ref_char = fn()
 
     assert ref_char == str(thumb)
+
+
+def test_media_type_animate_without_generator_type_falls_through_to_flux(tmp_path):
+    """Regression pin: a record with media_type=='animate' but no
+    generator_type=='animate' stamp (the pre-migration shape this branch used
+    to match on) must NOT be treated as an animate record anymore — it should
+    fall through to the FLUX-image fallback, exactly the bug this fix
+    resolves (identification must be generator_type-based, not media_type)."""
+    img = tmp_path / "flux.jpg"
+    img.write_bytes(b"jpeg")
+
+    stale_rec = _make_record(media_type="animate", thumb="/some/thumb.jpg",
+                              extra_meta={"last_frame_path": "/some/last.jpg"})
+    flux_rec = _make_record(media_type="image", image_path=str(img))
+    obj = _make_mw_with_store([stale_rec, flux_rec])
+    fn = _bind(obj)
+
+    clips_data = {"locomotion": [{"mp4": "/clips/walk.mp4", "name": "walk", "thumb": ""}]}
+
+    with patch("animate_picker.BundledClipScanner") as MockScanner, \
+         patch("main_window._settings") as mock_settings:
+        mock_settings.get.return_value = "/clips"
+        MockScanner.return_value.scan.return_value = clips_data
+        ref_video, ref_char = fn()
+
+    assert ref_char == str(img)
 
 
 def test_falls_back_to_flux_image_when_no_animate_records(tmp_path):

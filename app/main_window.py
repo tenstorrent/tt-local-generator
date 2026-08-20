@@ -7961,12 +7961,15 @@ class MainWindow(Gtk.ApplicationWindow):
         # Route each record to the gallery that matches its media type.
         # GalleryWidget.load_history() replaces existing cards rather than
         # appending, so calling this method more than once is safe.
-        # AnimateDiff/Wan2.2-Animate GIFs are media_type=="video" (the
+        # Wan2.2-Animate records are media_type=="video" post-migration (the
         # animatediff-is-video migration folded them in), so they live in the
-        # video gallery like any other video record (same as _gallery_for_type
-        # routing) — no separate media_type check needed here anymore.
+        # video gallery like any other video record — but they ALSO still
+        # populate the Animate Discover tab, identified by the provenance
+        # stamp generator_type=="animate" (media_type=="animate" can never
+        # match a real record anymore; see history_store.new_animate). Animate
+        # is now a filtered view of Video, not a disjoint media type.
         video_recs   = [r for r in records if r.media_type == "video"]
-        animate_recs = [r for r in records if r.media_type == "animate"]
+        animate_recs = [r for r in records if r.generator_type == "animate"]
         image_recs   = [r for r in records if r.media_type == "image"]
         if video_recs:
             self._video_gallery.load_history(video_recs)
@@ -8644,8 +8647,11 @@ class MainWindow(Gtk.ApplicationWindow):
         all_records = self._store.all_records()
 
         # Priority 1: last frame of most recent animate record
+        # ("animatediff is video" migration folded Wan2.2-Animate records into
+        # media_type=="video" — generator_type=="animate" is the provenance
+        # stamp that still identifies them; see history_store.new_animate.)
         for r in all_records:
-            if r.media_type != "animate":
+            if r.generator_type != "animate":
                 continue
             lfp = r.extra_meta.get("last_frame_path", "")
             if lfp and Path(lfp).exists():
