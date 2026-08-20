@@ -1,3 +1,17 @@
+tt-local-generator (0.90.1) noble; urgency=medium
+
+  * fix(create): the Create CTA row buttons are now one consistent family.
+    "Surprise me" had no CSS at all (rendered as a bare default button), and
+    Theme Set vs Watch used different backgrounds/paddings, so the row looked
+    ragged and the labels didn't sit on a common baseline. All four now share a
+    single box model (same border, radius, padding, font-size) — Create stays
+    the solid-teal primary (with a fill-matching border so its height equals the
+    outlined siblings), the rest are one shared outlined look. Renamed the
+    "👁 Watch" toggle to "👁 Monitor HW" (clearer: it monitors the Tenstorrent
+    hardware live). `app/create_view.py`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:05:00 +0000
+
 tt-local-generator (0.90.0) noble; urgency=medium
 
   * feat(create): AnimateDiff multi-chip mode is now selectable in the GUI —

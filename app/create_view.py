@@ -571,49 +571,55 @@ _CSS = b"""
     background-color: #0c222c;
     padding: 8px 12px;
 }
-.create-cta-btn {
-    background-color: #4FD1C5;
-    color: #0F2A35;
-    font-weight: bold;
-    border-radius: 8px;
-    padding: 8px 20px;
-    font-size: 13px;
-}
-.create-cta-btn:hover {
-    background-color: #81E6D9;
-}
-
-/* -- Theme Set button (SP-3d-1) -- migrated from ControlPanel's own "Theme
-   Set" button; outlined companion next to the CTA, same family as the
-   Inspire-me button above but its own class so either can restyle
-   independently. ------------------------------------------------------- */
-.create-theme-set-btn {
-    background-color: #1A3C47;
-    color: #4FD1C5;
+/* CTA-bar buttons are ONE family: primary + Surprise me / Theme Set / Monitor
+   HW. They share a single box model (same border width, radius, padding, and
+   font-size) so their heights match and their labels sit on a common baseline
+   across the row. Only the FILL differs: Create is the solid-teal primary, the
+   rest are outlined companions, and the Monitor HW toggle fills teal when
+   active (:checked). Previously each had its own bespoke rule (and Surprise me
+   had NONE, so it rendered as a bare default button) with mismatched
+   backgrounds/paddings -- hence the ragged, misaligned row. */
+.create-cta-btn,
+.create-surprise-btn,
+.create-theme-set-btn,
+.create-watch-btn {
     border: 1px solid #2D5566;
     border-radius: 8px;
     padding: 8px 16px;
     font-size: 13px;
 }
-.create-theme-set-btn:hover {
+/* Primary: solid teal. Its border matches the fill so it stays invisible while
+   still contributing the same 2px of box height as the outlined siblings --
+   without this a border-less primary sits 2px shorter than the rest. */
+.create-cta-btn {
+    background-color: #4FD1C5;
+    color: #0F2A35;
+    font-weight: bold;
     border-color: #4FD1C5;
-    color: #81E6D9;
 }
-.create-theme-set-btn:disabled {
-    color: #607D8B;
+.create-cta-btn:hover {
+    background-color: #81E6D9;
+    border-color: #81E6D9;
 }
+/* Secondary companions: one shared outlined look (Surprise me / Theme Set /
+   Monitor HW). */
+.create-surprise-btn,
+.create-theme-set-btn,
 .create-watch-btn {
-    background-color: #142E38;
+    background-color: #1A3C47;
     color: #4FD1C5;
-    border: 1px solid #2D5566;
-    border-radius: 8px;
-    padding: 8px 14px;
-    font-size: 13px;
 }
+.create-surprise-btn:hover,
+.create-theme-set-btn:hover,
 .create-watch-btn:hover {
     border-color: #4FD1C5;
     color: #81E6D9;
 }
+.create-surprise-btn:disabled,
+.create-theme-set-btn:disabled {
+    color: #607D8B;
+}
+/* Monitor HW toggle: fills teal when active. */
 .create-watch-btn:checked {
     background-color: #4FD1C5;
     color: #0F2A35;
@@ -1319,7 +1325,7 @@ class CreateView(Gtk.Box):
 
         # The result pane is wrapped in a Gtk.Overlay so the optional "watch the
         # hardware" viz can be pinned to its top-right corner. The viz itself is
-        # NOT built now (WebKit is heavy) — the CTA row's "👁 Watch" toggle
+        # NOT built now (WebKit is heavy) — the CTA row's "👁 Monitor HW" toggle
         # lazily builds + adds it into this overlay on first use
         # (`_ensure_activity_viz`).
         result_overlay = Gtk.Overlay()
@@ -2752,10 +2758,11 @@ class CreateView(Gtk.Box):
         # Reveals a small live tensix-viz chip animation in the result pane's
         # corner that pulses with real AICLK while generating. Fail-soft: if the
         # result panel couldn't build the viz, the toggle still flips harmlessly.
-        watch_btn = Gtk.ToggleButton(label="\U0001f441 Watch")
+        watch_btn = Gtk.ToggleButton(label="\U0001f441 Monitor HW")
         watch_btn.add_css_class("create-watch-btn")
         watch_btn.set_tooltip_text(
-            "Show a live view of the Tenstorrent chip working while you generate."
+            "Monitor the Tenstorrent hardware live while you generate — a chip "
+            "animation that pulses with real activity."
         )
         watch_btn.connect("toggled", self._on_watch_toggled)
         self._watch_btn = watch_btn
@@ -3230,7 +3237,7 @@ class CreateResultPanel(Gtk.Box):
         # constructed here: it embeds a WebKit.WebView (heavyweight — a JS engine
         # + web process), and this panel is built on every Create open whether or
         # not the feature is ever used. CreateView LAZILY builds it the first
-        # time the "👁 Watch" toggle is switched on, then injects it via
+        # time the "👁 Monitor HW" toggle is switched on, then injects it via
         # `set_activity_viz` and pins it into the result pane's corner. This
         # panel only DRIVES its mode from generation state (`set_active`/
         # `set_idle`) so the animation always matches what's cooking.
