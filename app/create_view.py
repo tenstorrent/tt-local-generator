@@ -1325,7 +1325,7 @@ class CreateView(Gtk.Box):
 
         # The result pane is wrapped in a Gtk.Overlay so the optional "watch the
         # hardware" viz can be pinned to its top-right corner. The viz itself is
-        # NOT built now (WebKit is heavy) — the CTA row's "👁 Monitor HW" toggle
+        # NOT built now (WebKit is heavy) — the CTA row's "📊 Monitor HW" toggle
         # lazily builds + adds it into this overlay on first use
         # (`_ensure_activity_viz`).
         result_overlay = Gtk.Overlay()
@@ -2758,7 +2758,7 @@ class CreateView(Gtk.Box):
         # Reveals a small live tensix-viz chip animation in the result pane's
         # corner that pulses with real AICLK while generating. Fail-soft: if the
         # result panel couldn't build the viz, the toggle still flips harmlessly.
-        watch_btn = Gtk.ToggleButton(label="\U0001f441 Monitor HW")
+        watch_btn = Gtk.ToggleButton(label="\U0001f4ca Monitor HW")
         watch_btn.add_css_class("create-watch-btn")
         watch_btn.set_tooltip_text(
             "Monitor the Tenstorrent hardware live while you generate — a chip "
@@ -3237,7 +3237,7 @@ class CreateResultPanel(Gtk.Box):
         # constructed here: it embeds a WebKit.WebView (heavyweight — a JS engine
         # + web process), and this panel is built on every Create open whether or
         # not the feature is ever used. CreateView LAZILY builds it the first
-        # time the "👁 Monitor HW" toggle is switched on, then injects it via
+        # time the "📊 Monitor HW" toggle is switched on, then injects it via
         # `set_activity_viz` and pins it into the result pane's corner. This
         # panel only DRIVES its mode from generation state (`set_active`/
         # `set_idle`) so the animation always matches what's cooking.

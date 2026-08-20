@@ -855,7 +855,7 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     lightning=False,
     lightning_steps=4,
     multi_chip=True,
-    multichip_mode="remix",
+    multichip_mode="coherent",
     device_id=None,
     chain_from=None,
     chain_save=False,
@@ -880,7 +880,7 @@ _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE = {
     "Coherent — one longer video": "coherent",
     "Off — single chip": "off",
 }
-_ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL = "Remix — varied clips across chips"
+_ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL = "Coherent — one longer video"
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
 

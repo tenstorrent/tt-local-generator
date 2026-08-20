@@ -12,17 +12,18 @@ to end:
 
 - **`create_param_panels.py`** — the checkbox `_ad_multi_chip` is replaced by a
   `Gtk.DropDown` `_ad_multichip_mode` (`_ANIMATEDIFF_MULTICHIP_CHOICES`, default
-  "Remix …"). `_collect_animatediff_args` maps the label →
+  "Coherent …" as of v0.91.0 — the more intuitive "use all my chips" result;
+  was "Remix …" in v0.90.0). `_collect_animatediff_args` maps the label →
   `multichip_mode` via `_ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE` and derives the
   legacy `multi_chip` bool as `mode != "off"` — so BOTH keys are present and
-  consistent. `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode="remix"`.
+  consistent. `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode` (v0.91.0: "coherent").
 - **`worker.py`** — `AnimateDiffGenerationWorker` gained `multichip_mode: str |
   None = None`; line ~877 now uses `mode_sel = self._multichip_mode if not None
   else "remix"`, gated on `multi_chip and effective_chips > 1` (a single
   effective chip is always "off"). **Back-compat is exact:** a None/legacy mode
   → "remix", byte-identical to the old boolean behaviour (older worker tests
   pass unchanged).
-- **`main_window.py`** — `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode="remix"`;
+- **`main_window.py`** — `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode` (v0.91.0: "coherent");
   the worker construction passes `multichip_mode=ad["multichip_mode"]`.
 - **Invariant:** `multi_chip` is kept everywhere (defaults, worker param,
   `_make_mw` decouple tests) so nothing downstream that still reads it breaks;

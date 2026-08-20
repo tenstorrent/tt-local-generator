@@ -1,3 +1,20 @@
+tt-local-generator (0.91.0) noble; urgency=medium
+
+  * fix(create): the "Monitor HW" toggle used the 👁 eye emoji (U+1F441), whose
+    emoji-vs-text presentation is ambiguous on many Linux/GTK font stacks so it
+    rendered as an odd mis-sized/misaligned glyph. Swapped to 📊 (U+1F4CA,
+    emoji-presentation-default) so it matches the ✨/🎬 glyphs on the other CTA
+    buttons.
+  * feat(create): AnimateDiff multi-chip now defaults to **Coherent** (one
+    continuous video across chips) instead of Remix — the more intuitive
+    "use all my chips" result. `_ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL` +
+    `_ANIMATEDIFF_DEFAULTS["multichip_mode"]` in both create_param_panels.py and
+    main_window.py. Remix/Off remain one dropdown-pick away. (The worker's
+    None/legacy fallback stays "remix" for back-compat with programmatic
+    callers; the GUI always passes an explicit mode now.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:35:00 +0000
+
 tt-local-generator (0.90.1) noble; urgency=medium
 
   * fix(create): the Create CTA row buttons are now one consistent family.
