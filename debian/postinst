@@ -372,6 +372,15 @@ if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]] && id "$REAL_USER" &>/dev/nul
             fi
         "
     fi
+
+    # -- Seed the bundled demo collection into the user's library ----------
+    #   So a fresh install opens with real art (a "Demo" playlist), not an
+    #   empty gallery. Idempotent + fail-soft: a seed failure must never abort
+    #   package configuration.
+    _section "Seeding the demo collection"
+    runuser -u "$REAL_USER" -- bash -c "
+        /usr/bin/python3 /usr/lib/tt-local-generator/tt-ctl seed-demo 2>&1 | sed 's/^/  /'
+    " || echo "  ! demo seeding skipped (non-fatal) — run 'tt-ctl seed-demo' later to retry."
 fi
 
 # =============================================================================

@@ -1,3 +1,20 @@
+tt-local-generator (0.92.0) noble; urgency=medium
+
+  * feat: bundle a curated demo collection (27 items, ~10 MiB) so a fresh
+    install opens with real art instead of an empty gallery. `demo-collection/`
+    (manifest + media + thumbnails, media byte-for-byte as generated) ships in
+    the repo and the .deb; `app/demo_seed.py` (`tt-ctl seed-demo`) loads it into
+    media.db as a "Demo" playlist — idempotent, GTK-free, fail-soft. The .deb
+    postinst seeds it for the invoking user (a seed failure never aborts
+    configuration). Captions were recomposed for the artgen/World's-Fair/"lore"
+    items whose stored prompt was a template or a truncated line; each item's
+    ORIGINAL generation prompt is preserved in the manifest for provenance
+    (`caption` = display text, `prompt` = as-generated). +tests
+    (`tests/test_demo_seed.py`), incl. an end-to-end seed of the real shipped
+    collection.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 13:40:00 +0000
+
 tt-local-generator (0.91.1) noble; urgency=medium
 
   * revert(create): default AnimateDiff multi-chip back to Remix (was briefly

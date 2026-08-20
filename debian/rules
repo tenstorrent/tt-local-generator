@@ -27,7 +27,7 @@ override_dh_install:
 	# Copy the application source tree (app/, bin/, patches/, plugins/)
 	# plugins/ must be installed alongside app/ so plugin_loader can find
 	# the built-in generators at /usr/lib/tt-local-generator/plugins/.
-	cp -r app bin patches plugins \
+	cp -r app bin patches plugins demo-collection \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
 
 	# Copy the vendored tt-inference-server snapshot (if already materialised;

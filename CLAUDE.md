@@ -1,5 +1,39 @@
 # tt-local-generator — developer notes
 
+## Bundled demo collection (v0.92.0)
+
+A curated 27-item set ships **with** the app so a fresh install opens with real
+art (a "Demo" playlist), not an empty gallery. Option A from the size analysis
+(in-repo + rides into the .deb; ~10 MiB — negligible vs the repo's ~137 MiB
+packed history, and the separate-repo/fetch approach was rejected as
+over-engineering + a network dependency at 10 MiB).
+
+- **`demo-collection/`** (tracked in git — `.gitignore` has a `!demo-collection/**`
+  negation so global patterns like `*.ans` don't drop its media): `manifest.json`
+  + `media/` (files **byte-for-byte as generated**, no re-encoding) + `thumbnails/`
+  + a README. Each manifest item keeps the ORIGINAL generation `prompt` for
+  provenance AND a cleaned `caption` (the gallery displays `caption`). Captions
+  were recomposed for the artgen (template-text prompts), World's-Fair poem
+  images (truncated poem lines → image-accurate captions), and the "lore" set
+  (a "Tetris through the ages" stick study — Taylor's own framing).
+- **`app/demo_seed.py`** (`seed_demo`, GTK-free): copies media+thumbnails into
+  `<storage>/demo-collection/` and inserts records into `media.db` grouped in a
+  **"Demo"** playlist. Idempotent (keyed by id; `MediaStore.add` is INSERT-OR-
+  IGNORE; playlist membership guarded against dups) and fail-soft. `resolve_
+  collection_dir` finds it via `_REPO_DIR = <parent-of-app>/demo-collection`,
+  which is correct BOTH in-repo AND installed (the .deb `cp -r`s `demo-collection`
+  next to `app/` under `/usr/lib/tt-local-generator/`). The "Demo" name is a
+  curated tile source for the "Start something" wall (`possibilities.
+  _default_curated_matcher` matches "demo").
+- **Wiring:** `tt-ctl seed-demo` (`--db`/`--collection-dir`/`--force`); `debian/
+  rules` adds `demo-collection` to the app `cp -r`; `debian/postinst` runs
+  `tt-ctl seed-demo` for `$SUDO_USER` (fail-soft — never aborts install).
+  Tests: `tests/test_demo_seed.py` (caption→prompt, files copied, playlist
+  membership, idempotency, + an end-to-end seed of the REAL shipped collection).
+- **Curation tool:** the collection was picked with a visual "Demo Curator"
+  Artifact (a size-budget-aware grid; export → paste-back JSON) — not committed,
+  it's a claude.ai artifact. Re-curate from there or edit `manifest.json` by hand.
+
 ## AnimateDiff multi-chip mode in the GUI (v0.90.0)
 
 The Create surface's AnimateDiff options had only a boolean "Use all chips in
