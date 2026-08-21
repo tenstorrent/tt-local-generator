@@ -1,3 +1,20 @@
+tt-local-generator (0.94.2) noble; urgency=medium
+
+  * fix(demo-seed): apply Copilot PR#24 review.
+    - `--force` now actually replaces a record (delete-then-insert; `MediaStore.
+      add` is INSERT-OR-IGNORE, so it was a silent no-op before).
+    - A manifest item whose media file is missing on disk is skipped (counted as
+      `missing` in the report), never inserted as a dangling record.
+    - Renamed the seeded playlist "Demo" → "Welcome to tt-local-generator" (a
+      friendlier welcome collection); `possibilities._default_curated_matcher`
+      now also matches "welcome" so the "Start something" wall still surfaces it.
+    - Shipped art seeds `starred=0` (documented) — it's the default, not the
+      user's pick; a manifest `starred` is deliberately not carried in.
+    - Fixed a stale "pinned into the corner" comment in create_view.py (the viz
+      docks now). +tests (force replace, missing-media guard, un-favorited).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 21 Aug 2026 09:30:00 +0000
+
 tt-local-generator (0.94.1) noble; urgency=medium
 
   * feat: audit part 3 — the missing-setting adds. New persisted

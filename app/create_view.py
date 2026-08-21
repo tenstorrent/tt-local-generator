@@ -3247,9 +3247,10 @@ class CreateResultPanel(Gtk.Box):
         # + web process), and this panel is built on every Create open whether or
         # not the feature is ever used. CreateView LAZILY builds it the first
         # time the "📊 Monitor HW" toggle is switched on, then injects it via
-        # `set_activity_viz` and pins it into the result pane's corner. This
-        # panel only DRIVES its mode from generation state (`set_active`/
-        # `set_idle`) so the animation always matches what's cooking.
+        # `set_activity_viz`; it docks at the bottom of the result column
+        # (`CreateView._viz_dock`), no longer floating in a corner. This panel
+        # only DRIVES its mode from generation state (`set_active`/`set_idle`)
+        # so the animation always matches what's cooking.
         self._activity_visible: bool = False
         self._activity_viz = None
 

@@ -64,7 +64,7 @@ def test_seed_inserts_records_with_caption_as_prompt(tmp_path):
     assert "demo-collection" in recs["vid-1"].file_path
 
 
-def test_seed_creates_demo_playlist_with_members(tmp_path):
+def test_seed_creates_welcome_playlist_with_members(tmp_path):
     import demo_seed, media_store
     coll = _make_collection(tmp_path / "demo-collection")
     storage = tmp_path / "storage"; storage.mkdir()
@@ -72,8 +72,8 @@ def test_seed_creates_demo_playlist_with_members(tmp_path):
 
     store = media_store.MediaStore(db_path=storage / "media.db")
     pls = {p["name"]: p["id"] for p in store.list_playlists()}
-    assert "Demo" in pls
-    members = {r.id for r in store.playlist_records(pls["Demo"])}
+    assert "Welcome to tt-local-generator" in pls
+    members = {r.id for r in store.playlist_records(pls["Welcome to tt-local-generator"])}
     assert members == {"vid-1", "art-1"}
     assert rep["playlist_added"] == 2
 
@@ -92,7 +92,58 @@ def test_seed_is_idempotent(tmp_path):
     store = media_store.MediaStore(db_path=storage / "media.db")
     assert len(store.query(limit=100)) == 2
     pls = {p["name"]: p["id"] for p in store.list_playlists()}
-    assert len(store.playlist_records(pls["Demo"])) == 2
+    assert len(store.playlist_records(pls["Welcome to tt-local-generator"])) == 2
+
+
+def test_seed_does_not_favorite_shipped_art(tmp_path):
+    """Shipped art is the DEFAULT, not the user's pick — even a manifest item
+    marked starred=1 seeds as starred=0 (grouped by the Welcome playlist)."""
+    import demo_seed, media_store
+    coll = _make_collection(tmp_path / "demo-collection")  # vid-1 has starred=1
+    storage = tmp_path / "storage"; storage.mkdir()
+    demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+    store = media_store.MediaStore(db_path=storage / "media.db")
+    recs = {r.id: r for r in store.query(limit=100)}
+    assert recs["vid-1"].starred == 0
+
+
+def test_force_replaces_existing_record(tmp_path):
+    """--force actually replaces a record (MediaStore.add is INSERT-OR-IGNORE,
+    so a delete-then-insert is required for the new value to take)."""
+    import demo_seed, media_store
+    coll = _make_collection(tmp_path / "demo-collection")
+    storage = tmp_path / "storage"; storage.mkdir()
+    demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+
+    # Change vid-1's caption in the manifest, then re-seed WITHOUT force → no-op.
+    man = json.loads((coll / "manifest.json").read_text())
+    man["items"][0]["caption"] = "UPDATED caption"
+    (coll / "manifest.json").write_text(json.dumps(man))
+    demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+    store = media_store.MediaStore(db_path=storage / "media.db")
+    assert {r.id: r for r in store.query(limit=100)}["vid-1"].prompt == "A clean display caption."
+
+    # Now WITH force → the record is replaced and the new caption takes effect.
+    rep = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage, force=True)
+    assert rep["seeded"] == 2
+    store2 = media_store.MediaStore(db_path=storage / "media.db")
+    recs = {r.id: r for r in store2.query(limit=100)}
+    assert recs["vid-1"].prompt == "UPDATED caption"
+    assert len(recs) == 2  # no duplicate rows
+
+
+def test_missing_media_is_skipped_not_inserted(tmp_path):
+    """A manifest item whose media file is missing on disk is skipped (counted
+    in `missing`), never inserted as a record pointing at a nonexistent file."""
+    import demo_seed, media_store
+    coll = _make_collection(tmp_path / "demo-collection")
+    (coll / "media" / "art.svg").unlink()  # art-1's media now missing
+    storage = tmp_path / "storage"; storage.mkdir()
+    rep = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+    assert rep["seeded"] == 1 and rep["missing"] == 1
+    store = media_store.MediaStore(db_path=storage / "media.db")
+    ids = {r.id for r in store.query(limit=100)}
+    assert ids == {"vid-1"}  # art-1 not inserted
 
 
 def test_resolve_collection_dir_prefers_explicit(tmp_path, monkeypatch):
@@ -108,7 +159,7 @@ def test_resolve_collection_dir_prefers_explicit(tmp_path, monkeypatch):
 
 def test_real_shipped_collection_seeds_end_to_end(tmp_path):
     """The ACTUAL demo-collection/ in the repo loads cleanly: all 27 items,
-    every media + thumbnail file present and copied, all in the Demo playlist."""
+    every media + thumbnail file present and copied, all in the Welcome playlist."""
     import demo_seed, media_store
     repo_coll = Path(__file__).parent.parent / "demo-collection"
     if not (repo_coll / "manifest.json").exists():
@@ -127,4 +178,4 @@ def test_real_shipped_collection_seeds_end_to_end(tmp_path):
         if r.thumbnail_path:
             assert Path(r.thumbnail_path).exists()
     pls = {p["name"]: p["id"] for p in store.list_playlists()}
-    assert len(store.playlist_records(pls["Demo"])) == n
+    assert len(store.playlist_records(pls["Welcome to tt-local-generator"])) == n

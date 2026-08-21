@@ -46,7 +46,9 @@ dead/misleading UI and dead settings; fixed in three chunks:
 ## Bundled demo collection (v0.92.0)
 
 A curated 27-item set ships **with** the app so a fresh install opens with real
-art (a "Demo" playlist), not an empty gallery. Option A from the size analysis
+art (a **"Welcome to tt-local-generator"** playlist — renamed from "Demo" in
+v0.94.2 per Copilot review; the shipped art is the default, **not** favorited),
+not an empty gallery. Option A from the size analysis
 (in-repo + rides into the .deb; ~10 MiB — negligible vs the repo's ~137 MiB
 packed history, and the separate-repo/fetch approach was rejected as
 over-engineering + a network dependency at 10 MiB).
@@ -61,13 +63,18 @@ over-engineering + a network dependency at 10 MiB).
   (a "Tetris through the ages" stick study — Taylor's own framing).
 - **`app/demo_seed.py`** (`seed_demo`, GTK-free): copies media+thumbnails into
   `<storage>/demo-collection/` and inserts records into `media.db` grouped in a
-  **"Demo"** playlist. Idempotent (keyed by id; `MediaStore.add` is INSERT-OR-
-  IGNORE; playlist membership guarded against dups) and fail-soft. `resolve_
-  collection_dir` finds it via `_REPO_DIR = <parent-of-app>/demo-collection`,
-  which is correct BOTH in-repo AND installed (the .deb `cp -r`s `demo-collection`
-  next to `app/` under `/usr/lib/tt-local-generator/`). The "Demo" name is a
-  curated tile source for the "Start something" wall (`possibilities.
-  _default_curated_matcher` matches "demo").
+  **"Welcome to tt-local-generator"** playlist. Idempotent (keyed by id;
+  `MediaStore.add` is INSERT-OR-IGNORE, so `--force` does a delete-then-insert
+  to actually replace; playlist membership guarded against dups) and fail-soft;
+  a manifest item whose media file is missing on disk is skipped (counted as
+  `missing`), never inserted as a dangling record. Records seed `starred=0` —
+  shipped art is the default, not favorited. `resolve_collection_dir` finds it
+  via `_REPO_DIR = <parent-of-app>/demo-collection`, correct BOTH in-repo AND
+  installed (the .deb `cp -r`s `demo-collection` next to `app/` under
+  `/usr/lib/tt-local-generator/`). The "Welcome …" name is a curated tile source
+  for the "Start something" wall (`possibilities._default_curated_matcher`
+  matches "welcome"). (v0.94.2 applied Copilot PR#24 review: --force fix,
+  missing-media guard, playlist rename, un-favorited default, stale comment.)
 - **Wiring:** `tt-ctl seed-demo` (`--db`/`--collection-dir`/`--force`); `debian/
   rules` adds `demo-collection` to the app `cp -r`; `debian/postinst` runs
   `tt-ctl seed-demo` for `$SUDO_USER` (fail-soft — never aborts install).

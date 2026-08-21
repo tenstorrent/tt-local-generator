@@ -15,17 +15,19 @@ so a fresh install opens with real art to look at instead of an empty gallery.
 
 `app/demo_seed.py` (`tt-ctl seed-demo`) copies the media + thumbnails into the
 library's storage (`<storage>/demo-collection/`) and registers each item in
-`media.db`, grouped in a **"Demo"** playlist. It is **idempotent** (records are
-keyed by id; re-running seeds nothing new) and GTK-free.
+`media.db`, grouped in a **"Welcome to tt-local-generator"** playlist. It is
+**idempotent** (records are keyed by id; re-running seeds nothing new; `--force`
+replaces existing records) and GTK-free. The shipped art is seeded as the
+DEFAULT — never auto-favorited — so a user's own stars stay meaningful.
 
 - On install, the `.deb` postinst runs `tt-ctl seed-demo` for the invoking user
   (fail-soft — a seed failure never aborts package configuration).
 - Manually / for dev: `tt-ctl seed-demo` (`--db PATH`, `--collection-dir PATH`,
   `--force`).
 
-The "Demo" playlist name is also recognized by the Create surface's
-"Start something" wall as a curated tile source
-(`possibilities._default_curated_matcher`).
+The "Welcome to tt-local-generator" playlist name is also recognized by the
+Create surface's "Start something" wall as a curated tile source
+(`possibilities._default_curated_matcher` matches "welcome").
 
 ## Re-curating
 

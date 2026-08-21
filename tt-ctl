@@ -1007,7 +1007,9 @@ def cmd_seed_demo(args):
 
     print(bold(f"Demo collection: {report['collection_dir']}"))
     print(green(f"  Seeded {report['seeded']} new record(s); {report['skipped']} already present."))
-    print(f"  Added {report['playlist_added']} to the 'Demo' playlist.")
+    if report.get("missing"):
+        print(yellow(f"  {report['missing']} manifest item(s) skipped — media file missing on disk."))
+    print(f"  Added {report['playlist_added']} to the 'Welcome to tt-local-generator' playlist.")
     print(dim(f"  Media copied under: {report['target_dir']}"))
 
 
