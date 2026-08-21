@@ -1,3 +1,16 @@
+tt-local-generator (0.94.1) noble; urgency=medium
+
+  * feat: audit part 3 — the missing-setting adds. New persisted
+    `animatediff_multichip_default` setting ("off"|"remix"|"coherent", default
+    "remix") with a Preferences → Generation "AnimateDiff multi-chip default"
+    dropdown; the Create panel's Multi-chip selector now preselects it, so the
+    default can be pinned without a code edit (it had been hand-changed twice).
+    Added a File → "About TT Local Generator" item (Gtk.AboutDialog showing the
+    shipped VERSION, Apache-2.0). Stale Preferences/docstring text corrected.
+    `app_settings.py`, `create_param_panels.py`, `main_window.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 16:45:00 +0000
+
 tt-local-generator (0.94.0) noble; urgency=medium
 
   * feat(create): re-home the "📊 Monitor HW" hardware visualizer (audit part 2).

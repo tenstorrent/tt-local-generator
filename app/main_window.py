@@ -4914,7 +4914,7 @@ class PreferencesDialog(Gtk.Window):
     Application preferences dialog.
 
     Sections:
-      • Generation — default steps quality preset, sleep-after-N counter
+      • Generation — AnimateDiff frames, multi-chip default mode, sleep-after-N
       • System     — screensaver inhibit during generation
       • Disk       — minimum free space (stop-generating threshold)
       • TT-TV      — image dwell time, video fallback timer
@@ -4994,6 +4994,40 @@ class PreferencesDialog(Gtk.Window):
             "Number of frames to generate per AnimateDiff GIF. "
             "More frames = longer GIF, ~5 min/frame on Blackhole. "
             "Default: 8 (~40 min total)."
+        ))
+
+        # AnimateDiff multi-chip default mode — sets what the Create panel's
+        # Multi-chip selector defaults to, without a code edit.
+        from create_param_panels import (
+            _ANIMATEDIFF_MULTICHIP_CHOICES as _MC_CHOICES,
+            _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE as _MC_LABEL_TO_MODE,
+            _ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL as _MC_MODE_TO_LABEL,
+        )
+        mc_sl = Gtk.StringList()
+        for _lbl in _MC_CHOICES:
+            mc_sl.append(_lbl)
+        mc_dd = Gtk.DropDown(model=mc_sl)
+        _cur_label = _MC_MODE_TO_LABEL.get(
+            str(_settings.get("animatediff_multichip_default") or "remix"),
+            _MC_CHOICES[0])
+        try:
+            mc_dd.set_selected(_MC_CHOICES.index(_cur_label))
+        except ValueError:
+            pass
+
+        def _on_mc_default_changed(dd, _pspec):
+            m = dd.get_model()
+            idx = dd.get_selected()
+            if m is not None and idx < m.get_n_items():
+                _settings.set("animatediff_multichip_default",
+                              _MC_LABEL_TO_MODE.get(m.get_string(idx), "remix"))
+        mc_dd.connect("notify::selected", _on_mc_default_changed)
+        box.append(self._row(
+            "AnimateDiff multi-chip default:", mc_dd,
+            "Default mode when AnimateDiff spans multiple chips: Remix (varied "
+            "clips, stitched), Coherent (one longer latent-chained video), or "
+            "Off (single chip). Coherent can stress the board's multi-chip "
+            "fabric — Remix is the safe default."
         ))
 
         # Sleep after N completions
@@ -5953,6 +5987,10 @@ class MainWindow(Gtk.ApplicationWindow):
         prefs_tttv.connect("activate", lambda *_: self._open_preferences(scroll_tttv=True))
         self.add_action(prefs_tttv)
 
+        about = Gio.SimpleAction.new("about", None)
+        about.connect("activate", lambda *_: self._on_about())
+        self.add_action(about)
+
         recover = Gio.SimpleAction.new("recover-jobs", None)
         recover.connect("activate", lambda *_: self._on_recover())
         recover.set_enabled(False)   # enabled once the server is reachable
@@ -6086,6 +6124,8 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
         file_menu.append("TT-TV Preferences…", "win.preferences-tttv")
+        file_menu.append_section(None, Gio.Menu())
+        file_menu.append("About TT Local Generator", "win.about")
         file_menu.append("Quit", "app.quit")
         self._menumodel.append_submenu("File", file_menu)
 
@@ -6321,6 +6361,30 @@ class MainWindow(Gtk.ApplicationWindow):
             Gio.AppInfo.launch_default_for_uri(logs_uri, None)
         except Exception as e:
             self._set_status(f"Could not open logs folder: {e}")
+
+    def _app_version(self) -> str:
+        """Read the shipped VERSION file (sits beside app/ both in-repo and
+        installed under /usr/lib/tt-local-generator/). 'unknown' on any error."""
+        try:
+            return (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+        except Exception:
+            return "unknown"
+
+    def _on_about(self) -> None:
+        """File → About: a standard Gtk.AboutDialog with the app version."""
+        try:
+            dlg = Gtk.AboutDialog()
+            dlg.set_transient_for(self)
+            dlg.set_modal(True)
+            dlg.set_program_name("TT Local Generator")
+            dlg.set_version(self._app_version())
+            dlg.set_comments("Local generative media for Tenstorrent hardware.")
+            dlg.set_license_type(Gtk.License.APACHE_2_0)
+            dlg.set_website("https://github.com/tenstorrent/tt-local-generator")
+            dlg.set_website_label("tenstorrent/tt-local-generator")
+            dlg.present()
+        except Exception as e:
+            self._set_status(f"Could not open About: {e}")
 
     def _open_log_viewer(self, path: "str | None" = None) -> None:
         """Open (or present) the singleton LogViewerWindow, optionally jumping to *path*."""

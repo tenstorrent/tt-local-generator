@@ -62,6 +62,11 @@ DEFAULTS: dict = {
     # Create zone — named control state
     "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
     "seed_mode":             "random",    # "random"|"repeat"
+    # AnimateDiff multi-chip default mode for the Create panel — "off" (single
+    # chip) | "remix" (varied clips) | "coherent" (one longer video). Set from
+    # Preferences so the default survives without a code edit; Remix is the safe
+    # default (Coherent can stress the board's multi-chip fabric).
+    "animatediff_multichip_default": "remix",
     # Hardware monitor (📊 Monitor HW) — remembered across sessions; restored on
     # launch. Toggled from the View menu + the header toggle next to Servers.
     "hw_monitor_default_on": False,

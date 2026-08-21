@@ -881,6 +881,19 @@ _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE = {
     "Off — single chip": "off",
 }
 _ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL = "Remix — varied clips across chips"
+# Reverse map (mode -> label) so a persisted `animatediff_multichip_default`
+# setting can drive the panel's initial dropdown selection.
+_ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL = {
+    v: k for k, v in _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE.items()
+}
+
+
+def _animatediff_multichip_default_label() -> str:
+    """The dropdown label to preselect, from the persisted
+    `animatediff_multichip_default` setting (falls back to Remix)."""
+    mode = str(_settings.get("animatediff_multichip_default") or "remix")
+    return _ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL.get(
+        mode, _ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL)
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
 
@@ -1378,7 +1391,7 @@ class VideoParamPanel(CreateParamPanel):
         # chips in parallel" checkbox (which could only ever mean remix). See
         # `_ANIMATEDIFF_MULTICHIP_CHOICES`.
         self._ad_multichip_mode = self._ad_dd(
-            _ANIMATEDIFF_MULTICHIP_CHOICES, _ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL
+            _ANIMATEDIFF_MULTICHIP_CHOICES, _animatediff_multichip_default_label()
         )
         content.append(_sub_row("Multi-chip", self._ad_multichip_mode))
 

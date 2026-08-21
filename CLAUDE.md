@@ -31,6 +31,15 @@ dead/misleading UI and dead settings; fixed in three chunks:
   `hw_monitor_default_on` setting persists the choice (restored on launch via
   `_apply_hw_monitor_startup`). Tests: `test_main_window_hw_monitor.py` +
   `test_create_view.py` (dock structure, close seam).
+- **v0.94.1 — missing-setting adds.** New persisted
+  `animatediff_multichip_default` (app_settings; "off"|"remix"|"coherent",
+  default "remix") + a Preferences → Generation dropdown; the Create panel's
+  Multi-chip selector preselects it via
+  `create_param_panels._animatediff_multichip_default_label()` (so the default
+  is pinnable without a code edit — it had been hand-changed twice). Added
+  File → "About TT Local Generator" (`win.about` → `Gtk.AboutDialog`,
+  `_app_version()` reads the shipped VERSION file that sits beside `app/` both
+  in-repo and installed).
 - **Deferred (own pass):** a real control for `clip_length_slot` (used but
   unreachable) and wiring `seed_mode "keep"`.
 
