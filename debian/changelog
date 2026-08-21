@@ -1,3 +1,20 @@
+tt-local-generator (0.94.3) noble; urgency=medium
+
+  * fix(packaging): strip runtime/build junk from the vendored tree at package
+    time so the .deb is clean regardless of the build box's state — exclude
+    `.workflow_venvs/` (uv-created venvs with compiled .so/uv/libc, ~133 MB
+    uncompressed, that leak into vendor/ once the media server has run),
+    embedded `.git/` (~14 MB), `.gitignore`/`.gitmodules`, `*.pyc`, `*.bak`,
+    `__pycache__`, and `app/.pytest_cache`. Cuts the .deb 327 MB → 279 MB and
+    lintian errors ~15 → 2 (the 2 remaining are the intentional vendor `.env`
+    conffile-in-/usr, kept to preserve user edits on upgrade). Verified: a clean
+    `apt-get install` in the tt-developer-image container succeeds (exit 0),
+    the postinst runs to completion, and the demo-seed step populates a
+    "Welcome to tt-local-generator" playlist (27 items, un-favorited, idempotent).
+    `debian/rules`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 10:15:00 +0000
+
 tt-local-generator (0.94.2) noble; urgency=medium
 
   * fix(demo-seed): apply Copilot PR#24 review.
@@ -13,7 +30,7 @@ tt-local-generator (0.94.2) noble; urgency=medium
     - Fixed a stale "pinned into the corner" comment in create_view.py (the viz
       docks now). +tests (force replace, missing-media guard, un-favorited).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 21 Aug 2026 09:30:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 09:30:00 +0000
 
 tt-local-generator (0.94.1) noble; urgency=medium
 

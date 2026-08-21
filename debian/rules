@@ -29,12 +29,28 @@ override_dh_install:
 	# the built-in generators at /usr/lib/tt-local-generator/plugins/.
 	cp -r app bin patches plugins demo-collection \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
+	# Strip test/build artifacts cp -r drags in from a dev checkout (pytest
+	# cache, bytecode) — they bloat the package and trip lintian.
+	find debian/tt-local-generator/usr/lib/tt-local-generator/app \
+	    \( -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + \)
+	find debian/tt-local-generator/usr/lib/tt-local-generator/app -name '*.pyc' -delete
 
 	# Copy the vendored tt-inference-server snapshot (if already materialised;
 	# otherwise snapshot_vendor.sh must be run before dpkg-buildpackage).
 	if [ -d vendor/tt-inference-server ]; then \
 	    cp -r vendor \
 	        debian/tt-local-generator/usr/lib/tt-local-generator/; \
+	    : "Strip runtime/build junk that can leak into vendor/ when the media" ; \
+	    : "server has been run on the build box — uv-created .workflow_venvs" ; \
+	    : "(compiled .so, bundled uv/libc, ~133MB) plus caches and patch .baks." ; \
+	    : "These are recreated at runtime; shipping them bloats the .deb and" ; \
+	    : "trips lintian (embedded-library/unstripped/missing-libc). Excluding" ; \
+	    : "here keeps the package clean regardless of the build box's state." ; \
+	    rm -rf debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.workflow_venvs; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor \
+	        \( -type d \( -name __pycache__ -o -name .git \) -prune -exec rm -rf {} + \) ; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor \
+	        \( -name '*.pyc' -o -name '*.bak' -o -name '.gitignore' -o -name '.gitmodules' \) -delete; \
 	else \
 	    echo "WARNING: vendor/tt-inference-server not found." \
 	         "Run bin/snapshot_vendor.sh first." >&2; \
