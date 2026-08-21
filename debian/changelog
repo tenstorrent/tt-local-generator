@@ -1,3 +1,21 @@
+tt-local-generator (0.93.0) noble; urgency=medium
+
+  * chore(audit): pre-release toolbar + settings audit — part 1 (dead removals
+    + menu fixes). Removed 6 settings keys nothing consumed (quality_steps,
+    hidden_plugins, skyreels_num_frames, preferred_video_model, pinned_seed,
+    last_successful_deployment) and their inert UI: the menu-bar "Quality"
+    preset radios (the per-panel Steps spinner is the real control) and the
+    Preferences "Plugins" hide-from-UI section (no picker ever filtered on it).
+    Fixed misleading/orphaned menu items: dropped "Director Style" from the
+    Image context menu (it only affects video prompts), surfaced the orphaned
+    "TT-TV Preferences…" entry (working handler, was in no menu), and pointed
+    Debug → Open Logs Folder at the real user log dir (~/.local/share/
+    tt-local-generator/logs) instead of the repo-root logs/. Regression tests
+    lock the removals. (Monitor HW re-home + the missing-setting additions land
+    next.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 15:10:00 +0000
+
 tt-local-generator (0.92.1) noble; urgency=medium
 
   * demo-collection: give the two color-palette swatch items real captions

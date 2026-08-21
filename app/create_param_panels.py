@@ -895,8 +895,9 @@ class VideoParamPanel(CreateParamPanel):
 
     Every widget here is a FRESH construction — no widget instances are
     shared with `ControlPanel`. Defaults:
-      - steps=20, seed=-1 (mirrors `ImageParamPanel` / `ControlPanel`'s
-        `_settings.get("quality_steps") or 20` and `_seed = -1`)
+      - steps=20, seed=-1 (a hardcoded default; the old `quality_steps`
+        setting that used to seed this was removed in the v0.93.0 audit —
+        nothing read it back)
       - steps range 12-50 (NOT 4-50 like images) — mirrors the server-side
         clamp in `api_client.APIClient.submit`/`submit_animate`
         (`max(12, min(50, num_inference_steps))`), which differs from

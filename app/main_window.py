@@ -4969,65 +4969,9 @@ class PreferencesDialog(Gtk.Window):
         scroll.set_child(box)
         self.set_child(scroll)
 
-        # ── Plugins ───────────────────────────────────────────────────────────
-        box.append(self._section("Plugins"))
-        plugins_note = Gtk.Label(
-            label="Uncheck a plugin or model to hide it from the UI. "
-                  "Nothing is removed — you can re-enable at any time."
-        )
-        plugins_note.set_xalign(0)
-        plugins_note.set_wrap(True)
-        plugins_note.add_css_class("muted")
-        plugins_note.set_margin_bottom(4)
-        box.append(plugins_note)
-
-        hidden = set(_settings.get("hidden_plugins") or [])
-
-        # Video models
-        video_entries = [
-            ("wan2",        "Wan2.2-T2V  —  720p video"),
-            ("mochi",       "Mochi-1  —  480×848 video"),
-            ("skyreels",    "SkyReels I2V  —  960×544"),
-            ("animatediff", "AnimateDiff  —  local Blackhole GIF"),
-        ]
-        for key, label in video_entries:
-            cb = Gtk.CheckButton(label=label)
-            cb.set_active(key not in hidden)
-            cb.set_tooltip_text(f"Video model key: {key!r}")
-            def _on_plugin_toggle(widget, k=key):
-                h = set(_settings.get("hidden_plugins") or [])
-                if widget.get_active():
-                    h.discard(k)
-                else:
-                    h.add(k)
-                _settings.set("hidden_plugins", sorted(h))
-            cb.connect("toggled", _on_plugin_toggle)
-            box.append(cb)
-
-        # Artgen generators (from plugin loader)
-        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        try:
-            import plugin_loader as _pl
-            _pl.load_plugins()
-            artgen_names = sorted(
-                n for n in _pl.all_names()
-                if _pl.get(n).runnable
-            )
-        except Exception:
-            artgen_names = []
-        for name in artgen_names:
-            cb = Gtk.CheckButton(label=f"Artgen: {name}")
-            cb.set_active(name not in hidden)
-            cb.set_tooltip_text(f"Artgen plugin key: {name!r}")
-            def _on_artgen_toggle(widget, k=name):
-                h = set(_settings.get("hidden_plugins") or [])
-                if widget.get_active():
-                    h.discard(k)
-                else:
-                    h.add(k)
-                _settings.set("hidden_plugins", sorted(h))
-            cb.connect("toggled", _on_artgen_toggle)
-            box.append(cb)
+        # (The "Plugins" hide-from-UI section was removed in the v0.93.0 audit:
+        # its checkboxes persisted `hidden_plugins`, but no picker ever filtered
+        # on it, so it silently did nothing. Removed rather than wired.)
 
         # ── Generation ────────────────────────────────────────────────────────
         box.append(self._section("Generation"))
@@ -5326,16 +5270,9 @@ def _build_context_menu_for_source(source: str) -> "Gio.Menu":
     """
     menu = Gio.Menu()
 
-    # Quality (video / animate / image)
-    if source in ("video", "animate", "image"):
-        quality_section = Gio.Menu()
-        for label, steps in [("Fast (10 steps)", "10"),
-                              ("Standard (30 steps)", "30"),
-                              ("High Quality (40 steps)", "40")]:
-            item = Gio.MenuItem.new(label, "win.quality")
-            item.set_attribute_value("target", GLib.Variant("s", steps))
-            quality_section.append_item(item)
-        menu.append_section("Quality", quality_section)
+    # (Quality preset menu removed in the v0.93.0 audit — it wrote a dead
+    # `quality_steps` setting nothing read; the per-panel Steps spinner is the
+    # real control.)
 
     # Sleep After (all sources)
     sleep_section = Gio.Menu()
@@ -5346,8 +5283,9 @@ def _build_context_menu_for_source(source: str) -> "Gio.Menu":
         sleep_section.append_item(item)
     menu.append_section("Sleep After", sleep_section)
 
-    # Director Style (video / image only)
-    if source in ("video", "image"):
+    # Director Style (video only — the setting only affects video prompts;
+    # v0.93.0 audit dropped it from the Image context where it had no effect).
+    if source == "video":
         dir_prob_section = Gio.Menu()
         for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
                            ("Often (66%)", "66"), ("Always", "100")]:
@@ -5496,11 +5434,11 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._inventory_url:
             self._start_inventory_fetch()
         # SP-3d-5: the ControlPanel-only startup steps that used to live here
-        # (sync_quality_btn_to_steps / switch_to_source / _set_model, driven
-        # by `quality_steps` and `last_successful_deployment` settings) are
-        # gone with the class — Create reads those settings directly, and
-        # `_current_medium_source()` derives "what am I making" from
-        # CreateView's own active-medium state instead of a startup pre-select.
+        # (sync_quality_btn_to_steps / switch_to_source / _set_model, driven by
+        # the `quality_steps` and `last_successful_deployment` settings) are
+        # gone with the class. Both settings were then removed entirely in the
+        # v0.93.0 audit (nothing consumed them); `_current_medium_source()`
+        # derives "what am I making" from CreateView's own active-medium state.
 
     def _set_crumbs(self, crumbs) -> None:
         """Push a new breadcrumb trail onto `NavState`, if one exists.
@@ -6010,14 +5948,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Advanced-settings action removed SP-3d-5 (ControlPanel-only; see
         # AdvancedSettingsDialog deletion note above).
 
-        # ── Generation: quality preset (radio via stateful string action) ─────
-        quality_action = Gio.SimpleAction.new_stateful(
-            "quality",
-            GLib.VariantType.new("s"),
-            GLib.Variant("s", str(int(_settings.get("quality_steps")))),
-        )
-        quality_action.connect("activate", self._on_quality_action)
-        self.add_action(quality_action)
+        # (win.quality removed in v0.93.0 audit — wrote a dead setting.)
 
         # ── Generation: sleep after N (radio via stateful string action) ──────
         sleep_action = Gio.SimpleAction.new_stateful(
@@ -6120,6 +6051,7 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append("Download Remote Library…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
+        file_menu.append("TT-TV Preferences…", "win.preferences-tttv")
         file_menu.append("Quit", "app.quit")
         self._menumodel.append_submenu("File", file_menu)
 
@@ -6339,9 +6271,17 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_status(f"Could not open folder: {exc}")
 
     def _on_open_logs_folder(self, _action, _param) -> None:
-        """Open the logs/ directory in the system file manager."""
-        from log_viewer import _LOGS_DIR
-        logs_uri = f"file://{_LOGS_DIR}"
+        """Open the logs directory in the system file manager.
+
+        Opens the USER log dir (~/.local/share/tt-local-generator/logs), where
+        the per-service logs (animatediff, transforms) actually land — not the
+        repo-root `logs/` the old code pointed at (v0.93.0 audit fix)."""
+        from log_viewer import _USER_LOGS_DIR
+        try:
+            _USER_LOGS_DIR.mkdir(parents=True, exist_ok=True)  # may not exist yet
+        except Exception:
+            pass
+        logs_uri = f"file://{_USER_LOGS_DIR}"
         try:
             Gio.AppInfo.launch_default_for_uri(logs_uri, None)
         except Exception as e:
@@ -6363,17 +6303,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._prefs_dialog.present()
         if scroll_tttv:
             self._prefs_dialog.scroll_to_tttv()
-
-    def _on_quality_action(self, action: Gio.SimpleAction,
-                           param: GLib.Variant) -> None:
-        """Menu: change default quality / steps preset."""
-        val = param.get_string()
-        action.set_state(GLib.Variant("s", val))
-        steps = int(val)
-        _settings.set("quality_steps", steps)
-        # SP-3d-5: the ControlPanel widget-sync call that used to live here
-        # (sync_quality_btn_to_steps) is gone with the class — this setting
-        # write is the persistence Create's own Controls zone reads directly.
 
     def _on_sleep_after_action(self, action: Gio.SimpleAction,
                                param: GLib.Variant) -> None:
@@ -8840,10 +8769,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
         `running_or_starting` returns a `server_manager` key (e.g. "wan2.2",
         "flux", "animate") or `None` if nothing is running/starting for that
-        capability. `_SERVER_KEY_TO_SOURCE_MODEL` — the same map
-        `MainWindow.__init__` already uses to pre-select the source tab/model
-        from `last_successful_deployment` — converts that key into the
+        capability. `_SERVER_KEY_TO_SOURCE_MODEL` converts that key into the
         (model_source, model_key) pair used everywhere else in this file.
+        (It once also backed a `last_successful_deployment` startup pre-select;
+        that setting was removed in the v0.93.0 audit as nothing read it.)
         `model_source == "animate"` has no video/image model key of its own
         (`_on_generate`'s animate branch never reads either), so the "animate"
         entry's empty model key is harmless — both return values stay at
