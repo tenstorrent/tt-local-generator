@@ -1,5 +1,39 @@
 # tt-local-generator — developer notes
 
+## Pre-release toolbar/settings audit (v0.93.0–v0.94.0)
+
+An audit (two parallel subagents: menu-bar+actions, settings+preferences) found
+dead/misleading UI and dead settings; fixed in three chunks:
+
+- **v0.93.0 — dead removals + menu fixes.** Removed 6 settings keys nothing
+  consumed (`quality_steps`, `hidden_plugins`, `skyreels_num_frames`,
+  `preferred_video_model`, `pinned_seed`, `last_successful_deployment`) and
+  their inert UI: the menu-bar **Quality** preset radios (the per-panel Steps
+  spinner is the real control — `quality_steps` round-tripped to itself) and the
+  Preferences **Plugins** hide-from-UI section (`hidden_plugins` — the checkboxes
+  persisted a value **no picker ever filtered on**; removed, not wired). Menu
+  fixes: dropped **Director Style** from the Image context menu (the setting only
+  affects *video* prompts); surfaced the orphaned **"TT-TV Preferences…"** File
+  entry (working `win.preferences-tttv` handler that was in no menu); pointed
+  Debug → **Open Logs Folder** at the real user log dir
+  (`~/.local/share/tt-local-generator/logs`) instead of repo-root `logs/`.
+  `tests/test_app_settings.py` locks the removed keys out of DEFAULTS;
+  `tests/test_context_menu.py` locks no-Quality-anywhere + no-Director-on-Image.
+- **v0.94.0 — Monitor HW re-home.** The **📊 Monitor HW** toggle moved OUT of the
+  Create CTA action row (it was a view-toggle among actions, and its viz floated
+  over the queue/recents). Now: a header toggle next to **Servers ▾** +
+  a **View → "Hardware Monitor"** checkbox, both driven by ONE stateful
+  `win.toggle-hw-monitor` action (mirrors the `toggle-detail` pattern), synced
+  via `_sync_hw_monitor_button`/`_syncing_hw_monitor` guard; the viz **docks** at
+  the bottom of the result column (`CreateView._viz_dock`, replacing the retired
+  `_result_overlay` float) via `set_hw_monitor(active)`; the viz's ✕ routes
+  through `CreateView(on_hw_monitor_close=…)` → the action off. New
+  `hw_monitor_default_on` setting persists the choice (restored on launch via
+  `_apply_hw_monitor_startup`). Tests: `test_main_window_hw_monitor.py` +
+  `test_create_view.py` (dock structure, close seam).
+- **Deferred (own pass):** a real control for `clip_length_slot` (used but
+  unreachable) and wiring `seed_mode "keep"`.
+
 ## Bundled demo collection (v0.92.0)
 
 A curated 27-item set ships **with** the app so a fresh install opens with real

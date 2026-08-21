@@ -5564,6 +5564,22 @@ class MainWindow(Gtk.ApplicationWindow):
             self._nav_state, on_resume=self._on_context_resume, on_dismiss=self._on_context_dismiss
         )
         loop_nav_row.append(self._context_tray)
+
+        # Monitor HW toggle — sits next to "Servers ▾" (hardware-adjacent: it
+        # watches the chips, right where the chip STATUS lives). Reuses the
+        # `.create-watch-btn` look from CreateView. Drives the shared
+        # win.toggle-hw-monitor action; kept in sync when the action changes
+        # from the View menu or the viz's ✕ (via `_sync_hw_monitor_button`,
+        # guarded by `_syncing_hw_monitor`).
+        self._hw_monitor_btn = Gtk.ToggleButton(label="\U0001f4ca Monitor HW")
+        self._hw_monitor_btn.add_css_class("create-watch-btn")
+        self._hw_monitor_btn.set_tooltip_text(
+            "Monitor the Tenstorrent hardware live while you generate — a chip "
+            "animation that pulses with real activity."
+        )
+        self._hw_monitor_btn.connect("toggled", self._on_hw_monitor_button_toggled)
+        loop_nav_row.append(self._hw_monitor_btn)
+
         loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
@@ -5690,7 +5706,12 @@ class MainWindow(Gtk.ApplicationWindow):
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
             # button drove, only the launch UI has moved.
             on_theme_set=self._on_create_theme_set,
+            # The Monitor HW viz's ✕ dismiss routes here so the shared
+            # win.toggle-hw-monitor action (View menu + header toggle) flips off.
+            on_hw_monitor_close=self._on_hw_monitor_closed_from_viz,
         )
+        # Apply the persisted Monitor-HW preference now that CreateView exists.
+        self._apply_hw_monitor_startup()
         # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
         # `self._create_view` existed) may already have repopulated
         # `self._queue` from a crash/restart — `_refresh_create_queue_display`
@@ -5988,6 +6009,19 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add_action(toggle_detail)
         self._detail_visible: bool = True
 
+        # Monitor HW — one stateful boolean action drives BOTH the View-menu
+        # item and the header toggle next to "Servers ▾", and the viz's own ✕
+        # dismiss. Initial state = persisted preference (restored on launch).
+        hw_on = bool(_settings.get("hw_monitor_default_on"))
+        toggle_hw = Gio.SimpleAction.new_stateful(
+            "toggle-hw-monitor",
+            None,
+            GLib.Variant("b", hw_on),
+        )
+        toggle_hw.connect("activate", self._on_toggle_hw_monitor)
+        self.add_action(toggle_hw)
+        self._syncing_hw_monitor = False
+
         # ── Playlists ─────────────────────────────────────────────────────────
         pl_all = Gio.SimpleAction.new("playlist-all", None)
         pl_all.connect("activate", lambda *_: self._on_open_attractor_for_playlist(None))
@@ -6073,6 +6107,7 @@ class MainWindow(Gtk.ApplicationWindow):
         view_menu = Gio.Menu()
         toggle_section = Gio.Menu()
         toggle_section.append("Detail Panel", "win.toggle-detail")
+        toggle_section.append("Hardware Monitor", "win.toggle-hw-monitor")
         view_menu.append_section(None, toggle_section)
 
         density_section = Gio.Menu()
@@ -6413,6 +6448,62 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
         self._set_detail_pane_visible(not self._detail_visible)
         action.set_state(GLib.Variant("b", self._detail_visible))
+
+    # ── Monitor HW toggle (View menu + header button, one synced action) ──────
+    def _on_toggle_hw_monitor(self, action: Gio.SimpleAction, _param) -> None:
+        """Flip the shared Monitor-HW state: persist it, drive the CreateView
+        viz, and keep the header toggle in sync. Reached from the View-menu
+        item, the header ToggleButton, and the viz's ✕ dismiss (all route here
+        via the win.toggle-hw-monitor action)."""
+        new = not bool(action.get_state().get_boolean())
+        action.set_state(GLib.Variant("b", new))
+        _settings.set("hw_monitor_default_on", new)
+        cv = getattr(self, "_create_view", None)
+        if cv is not None:
+            cv.set_hw_monitor(new)
+        self._sync_hw_monitor_button(new)
+
+    def _sync_hw_monitor_button(self, active: bool) -> None:
+        """Reflect the action state onto the header ToggleButton without
+        re-entering `_on_hw_monitor_button_toggled` (guarded)."""
+        btn = getattr(self, "_hw_monitor_btn", None)
+        if btn is None or btn.get_active() == active:
+            return
+        self._syncing_hw_monitor = True
+        try:
+            btn.set_active(active)
+        finally:
+            self._syncing_hw_monitor = False
+
+    def _on_hw_monitor_button_toggled(self, btn: "Gtk.ToggleButton") -> None:
+        """Header toggle → drive the action (unless we're mid-sync from it)."""
+        if getattr(self, "_syncing_hw_monitor", False):
+            return
+        action = self.lookup_action("toggle-hw-monitor")
+        if action is None:
+            return
+        # Only activate when the button's new state differs from the action's,
+        # so a programmatic set_active during sync can't double-fire.
+        want = btn.get_active()
+        cur = bool(action.get_state().get_boolean())
+        if want != cur:
+            action.activate(None)
+
+    def _on_hw_monitor_closed_from_viz(self) -> None:
+        """The viz's ✕ dismiss → turn the shared toggle OFF (if currently on)."""
+        action = self.lookup_action("toggle-hw-monitor")
+        if action is not None and bool(action.get_state().get_boolean()):
+            action.activate(None)
+
+    def _apply_hw_monitor_startup(self) -> None:
+        """Apply the persisted Monitor-HW preference once the CreateView exists:
+        sync the header button + show the viz to match `hw_monitor_default_on`.
+        (The action's initial state was already seeded from the setting.)"""
+        on = bool(_settings.get("hw_monitor_default_on"))
+        self._sync_hw_monitor_button(on)
+        cv = getattr(self, "_create_view", None)
+        if cv is not None and on:
+            cv.set_hw_monitor(True)
 
     def _on_gallery_density_action(self, action: Gio.SimpleAction,
                                     param: GLib.Variant) -> None:

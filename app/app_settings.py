@@ -62,6 +62,9 @@ DEFAULTS: dict = {
     # Create zone — named control state
     "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
     "seed_mode":             "random",    # "random"|"repeat"
+    # Hardware monitor (📊 Monitor HW) — remembered across sessions; restored on
+    # launch. Toggled from the View menu + the header toggle next to Servers.
+    "hw_monitor_default_on": False,
     # Recovery
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
     # Animate picker — user-chosen disk folder

@@ -625,6 +625,12 @@ _CSS = b"""
     color: #0F2A35;
     border-color: #4FD1C5;
 }
+/* Dock at the bottom of the result column that holds the Monitor HW viz when
+   active (was a free-floating overlay over the queue/recents). */
+.create-viz-dock {
+    border-top: 1px solid #1d4655;
+    padding: 6px;
+}
 .activity-viz {
     border: 1px solid #2D5566;
     border-radius: 10px;
@@ -1097,6 +1103,7 @@ class CreateView(Gtk.Box):
         status_service: "Optional[object]" = None,
         inspire_fn: "Optional[Callable[[str, str, Callable[[str], None], Callable[[str], None]], None]]" = None,
         on_theme_set: Optional[Callable[[Medium, dict], None]] = None,
+        on_hw_monitor_close: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
@@ -1135,6 +1142,10 @@ class CreateView(Gtk.Box):
         # forked per surface.
         self._inspire_fn = inspire_fn
         self._inspire_generating = False
+        # The viz's ✕ dismiss calls this so the owner (MainWindow) can flip the
+        # shared win.toggle-hw-monitor action off (which re-syncs the View-menu
+        # item + the header toggle). Default no-op keeps CreateView standalone.
+        self._on_hw_monitor_close = on_hw_monitor_close or (lambda: None)
         # SP-3d-1 "Theme Set" — migrated from ControlPanel's own "🎬 Theme
         # Set" button (never dropped, per CLAUDE.md's "user: never drop"
         # note; see the audit `.superpowers/sdd/sp3d-audit.md` §1). Fired
@@ -1323,15 +1334,22 @@ class CreateView(Gtk.Box):
         result_scroll.add_css_class("create-result-pane")
         result_scroll.set_child(self._result_panel)
 
-        # The result pane is wrapped in a Gtk.Overlay so the optional "watch the
-        # hardware" viz can be pinned to its top-right corner. The viz itself is
-        # NOT built now (WebKit is heavy) — the CTA row's "📊 Monitor HW" toggle
-        # lazily builds + adds it into this overlay on first use
-        # (`_ensure_activity_viz`).
-        result_overlay = Gtk.Overlay()
-        result_overlay.set_child(result_scroll)
-        self._result_overlay = result_overlay
-        result_end = result_overlay
+        # The result column is a vertical box: the scrolling result/queue/recents
+        # on top, and a DOCK at the bottom for the optional "Monitor HW" viz. The
+        # viz docks here (fixed-height, non-overlapping) instead of floating over
+        # the queue/recents — it's hidden until the toggle turns it on. The viz
+        # itself is NOT built now (WebKit is heavy) — `_ensure_activity_viz`
+        # builds it lazily on first activate and appends it to `_viz_dock`.
+        self._viz_dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._viz_dock.add_css_class("create-viz-dock")
+        self._viz_dock.set_vexpand(False)
+        self._viz_dock.set_visible(False)
+        self._result_overlay = None  # retired — viz no longer floats
+
+        result_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        result_col.append(result_scroll)   # vexpand=True (set above)
+        result_col.append(self._viz_dock)
+        result_end = result_col
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.set_vexpand(True)
@@ -2754,59 +2772,50 @@ class CreateView(Gtk.Box):
         else:
             self._theme_set_btn = None
 
-        # Optional "watch the hardware" toggle (experiment) — OFF by default.
-        # Reveals a small live tensix-viz chip animation in the result pane's
-        # corner that pulses with real AICLK while generating. Fail-soft: if the
-        # result panel couldn't build the viz, the toggle still flips harmlessly.
-        watch_btn = Gtk.ToggleButton(label="\U0001f4ca Monitor HW")
-        watch_btn.add_css_class("create-watch-btn")
-        watch_btn.set_tooltip_text(
-            "Monitor the Tenstorrent hardware live while you generate — a chip "
-            "animation that pulses with real activity."
-        )
-        watch_btn.connect("toggled", self._on_watch_toggled)
-        self._watch_btn = watch_btn
-        row.append(watch_btn)
+        # The "Monitor HW" toggle no longer lives here (v0.93.x audit): it was a
+        # view-toggle sitting among action buttons, and its viz floated over the
+        # queue/recents. It now lives in the top bar next to "Servers ▾" and in
+        # the View menu (one synced win.toggle-hw-monitor action), driving
+        # `set_hw_monitor()` below; the viz docks at the bottom of the result
+        # column (`_viz_dock`) instead of floating.
 
         return row
 
-    def _on_watch_toggled(self, btn) -> None:
-        """Reveal/hide the optional hardware-activity viz in the result pane,
-        building it lazily on first reveal (WebKit is heavy — don't pay for it
-        unless the user opts in)."""
-        active = btn.get_active()
+    def set_hw_monitor(self, active: bool) -> None:
+        """Show/hide the hardware-activity viz, docked at the bottom of the
+        result column. Driven by the single `win.toggle-hw-monitor` action
+        (View menu + the header toggle next to Servers). Builds the viz lazily
+        on first activate (WebKit is heavy — don't pay unless opted in).
+        Fail-soft: no WebKit / no dock just leaves it a harmless no-op."""
         if active:
             self._ensure_activity_viz()
+        dock = getattr(self, "_viz_dock", None)
+        if dock is not None:
+            dock.set_visible(active)
         self._result_panel.set_activity_visible(active)
 
     def _ensure_activity_viz(self) -> None:
-        """Build the ActivityVizWidget once, pin it into the result pane's top-
-        right corner, and hand it to the result panel to drive. Fail-soft: any
-        problem (e.g. no WebKit / no overlay) leaves the toggle a harmless no-op
-        instead of breaking Create."""
+        """Build the ActivityVizWidget once, DOCK it at the bottom of the result
+        column (`_viz_dock`), and hand it to the result panel to drive.
+        Fail-soft: any problem (e.g. no WebKit / no dock) leaves the toggle a
+        harmless no-op instead of breaking Create."""
         if getattr(self._result_panel, "_activity_viz", None) is not None:
             return
-        overlay = getattr(self, "_result_overlay", None)
-        if overlay is None:
+        dock = getattr(self, "_viz_dock", None)
+        if dock is None:
             return
         try:
             from activity_viz import ActivityVizWidget
             viz = ActivityVizWidget()
         except Exception:
             return
-        # Pin to the result pane's BOTTOM-right corner, locked into the frame.
-        # End margin (18px) clears the result scroller's overlay scrollbar so it
-        # can't cover the viz's ✕ dismiss.
-        viz.set_halign(Gtk.Align.END)
-        viz.set_valign(Gtk.Align.END)
-        viz.set_margin_bottom(8)
-        viz.set_margin_end(18)
-        # The viz's own ✕ dismiss just flips the Watch toggle off (which routes
-        # back through _on_watch_toggled -> set_activity_visible(False)).
-        watch_btn = getattr(self, "_watch_btn", None)
-        if watch_btn is not None:
-            viz.on_close = lambda b=watch_btn: b.set_active(False)
-        overlay.add_overlay(viz)
+        # Docked (not floating): sits at the bottom of the result column at its
+        # own natural size, so it never covers the queue/recents.
+        # The viz's ✕ dismiss routes through the shared close seam, which
+        # flips the win.toggle-hw-monitor action off (updating menu + header
+        # toggle + calling set_hw_monitor(False)).
+        viz.on_close = lambda: self._on_hw_monitor_close()
+        dock.append(viz)
         self._result_panel.set_activity_viz(viz)
 
     def _on_cta_clicked(self, _btn: Gtk.Button) -> None:

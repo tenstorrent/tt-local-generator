@@ -1,3 +1,17 @@
+tt-local-generator (0.94.0) noble; urgency=medium
+
+  * feat(create): re-home the "📊 Monitor HW" hardware visualizer (audit part 2).
+    The toggle left the Create CTA action row (where it was a view-toggle among
+    action buttons) and now lives in TWO synced places: a header toggle next to
+    "Servers ▾" (hardware-adjacent) and a View → "Hardware Monitor" checkbox,
+    both driven by one stateful `win.toggle-hw-monitor` action. The viz no
+    longer free-floats over the queue/recents — it DOCKS at the bottom of the
+    result column (`_viz_dock`) when active. New `hw_monitor_default_on` setting
+    persists the choice across sessions (restored on launch). `create_view.py`,
+    `main_window.py`, `app_settings.py` + tests (`test_main_window_hw_monitor.py`).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 16:05:00 +0000
+
 tt-local-generator (0.93.0) noble; urgency=medium
 
   * chore(audit): pre-release toolbar + settings audit — part 1 (dead removals
