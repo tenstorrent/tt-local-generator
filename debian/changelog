@@ -1,3 +1,19 @@
+tt-local-generator (0.94.4) noble; urgency=medium
+
+  * fix(packaging): ship the demo/seed media to /usr/share/tt-local-generator/
+    (FHS: arch-independent read-only data belongs in /usr/share, not the
+    arch-dependent /usr/lib where the app code rides). `debian/rules` now
+    installs `demo-collection` there separately from the `/usr/lib` app copy.
+  * feat(demo-seed): discover the collection via $XDG_DATA_DIRS instead of a
+    single hardcoded path — `resolve_collection_dir` walks explicit → each
+    $XDG_DATA_DIRS entry (default /usr/local/share:/usr/share) → in-repo. This
+    makes /usr/local/share/tt-local-generator/ a free admin-override location
+    (earlier in XDG order) with the package never touching /usr/local. +tests
+    (XDG discovery + precedence). Re-verified in the tt-developer-image
+    container: media still lands in the app's library from the new location.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 11:00:00 +0000
+
 tt-local-generator (0.94.3) noble; urgency=medium
 
   * fix(packaging): strip runtime/build junk from the vendored tree at package

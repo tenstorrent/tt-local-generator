@@ -31,6 +31,7 @@ Design:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -39,25 +40,44 @@ import media_store
 from media_store import MediaRecord
 
 _DEMO_PLAYLIST_NAME = "Welcome to tt-local-generator"
-# Where an installed .deb drops the collection; falls back to the in-repo copy
-# for dev runs (running straight from a checkout).
-_INSTALLED_DIR = Path("/usr/share/tt-local-generator/demo-collection")
+# The .deb ships the collection under a system data dir (FHS: arch-independent
+# read-only data lives in /usr/share, not /usr/lib). We DISCOVER it via the
+# standard XDG search path rather than hardcoding one location, which gives the
+# fallback chain for free: an admin can drop replacement/extra seed media in
+# /usr/local/share/tt-local-generator/ (it takes precedence, per XDG order)
+# without the package ever writing outside /usr/share.
+_XDG_SUBPATH = Path("tt-local-generator") / "demo-collection"
+# Dev-checkout / run-straight-from-source fallback (repo-root/demo-collection).
 _REPO_DIR = Path(__file__).resolve().parent.parent / "demo-collection"
 
 
+def _xdg_data_dirs() -> "list[Path]":
+    """The XDG system data dirs, in precedence order (default per spec:
+    /usr/local/share:/usr/share)."""
+    raw = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    return [Path(d) for d in raw.split(":") if d.strip()]
+
+
+def _candidate_dirs(explicit: Optional[Path | str]) -> "list[Path]":
+    cands: list[Path] = []
+    if explicit is not None:
+        cands.append(Path(explicit))
+    cands.extend(d / _XDG_SUBPATH for d in _xdg_data_dirs())
+    cands.append(_REPO_DIR)
+    return cands
+
+
 def resolve_collection_dir(explicit: Optional[Path | str] = None) -> Path:
-    """Locate the demo-collection directory: an explicit path wins, then the
-    installed system copy, then the in-repo copy. Raises if none has a
-    manifest."""
-    for cand in (explicit, _INSTALLED_DIR, _REPO_DIR):
-        if cand is None:
-            continue
-        p = Path(cand)
+    """Locate the demo-collection directory: an explicit path wins, then each
+    $XDG_DATA_DIRS entry (e.g. /usr/local/share then /usr/share), then the
+    in-repo copy. Raises if none has a manifest."""
+    cands = _candidate_dirs(explicit)
+    for p in cands:
         if (p / "manifest.json").exists():
             return p
     raise FileNotFoundError(
-        "No demo-collection/manifest.json found (looked at explicit path, "
-        f"{_INSTALLED_DIR}, {_REPO_DIR})"
+        "No demo-collection/manifest.json found — searched: "
+        + ", ".join(str(c) for c in cands)
     )
 
 

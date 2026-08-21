@@ -68,18 +68,26 @@ over-engineering + a network dependency at 10 MiB).
   to actually replace; playlist membership guarded against dups) and fail-soft;
   a manifest item whose media file is missing on disk is skipped (counted as
   `missing`), never inserted as a dangling record. Records seed `starred=0` —
-  shipped art is the default, not favorited. `resolve_collection_dir` finds it
-  via `_REPO_DIR = <parent-of-app>/demo-collection`, correct BOTH in-repo AND
-  installed (the .deb `cp -r`s `demo-collection` next to `app/` under
-  `/usr/lib/tt-local-generator/`). The "Welcome …" name is a curated tile source
-  for the "Start something" wall (`possibilities._default_curated_matcher`
-  matches "welcome"). (v0.94.2 applied Copilot PR#24 review: --force fix,
-  missing-media guard, playlist rename, un-favorited default, stale comment.)
+  shipped art is the default, not favorited. **Discovery (v0.94.4):**
+  `resolve_collection_dir` walks explicit → each `$XDG_DATA_DIRS` entry
+  (default `/usr/local/share:/usr/share`) for `tt-local-generator/demo-collection`
+  → the in-repo `_REPO_DIR = <parent-of-app>/demo-collection` (dev fallback). The
+  .deb ships the media to **`/usr/share/tt-local-generator/demo-collection/`**
+  (FHS: arch-independent read-only data belongs in /usr/share, not the arch-
+  dependent /usr/lib where the app code lives) — found via the /usr/share XDG
+  entry; an admin can override with a copy in `/usr/local/share/tt-local-generator/`
+  (earlier in XDG order) without the package touching /usr/local. The "Welcome …"
+  name is a curated tile source for the "Start something" wall
+  (`possibilities._default_curated_matcher` matches "welcome"). (v0.94.2 applied
+  Copilot PR#24 review: --force fix, missing-media guard, playlist rename,
+  un-favorited default, stale comment.)
 - **Wiring:** `tt-ctl seed-demo` (`--db`/`--collection-dir`/`--force`); `debian/
-  rules` adds `demo-collection` to the app `cp -r`; `debian/postinst` runs
-  `tt-ctl seed-demo` for `$SUDO_USER` (fail-soft — never aborts install).
-  Tests: `tests/test_demo_seed.py` (caption→prompt, files copied, playlist
-  membership, idempotency, + an end-to-end seed of the REAL shipped collection).
+  rules` installs `demo-collection` to `/usr/share/tt-local-generator/` (separate
+  from the `/usr/lib` app `cp -r`); `debian/postinst` runs `tt-ctl seed-demo` for
+  `$SUDO_USER` (fail-soft — never aborts install; skipped for a root-only install
+  with no `SUDO_USER`). Tests: `tests/test_demo_seed.py` (caption→prompt, files
+  copied, playlist membership, idempotency, XDG discovery + precedence, + an
+  end-to-end seed of the REAL shipped collection).
 - **Curation tool:** the collection was picked with a visual "Demo Curator"
   Artifact (a size-budget-aware grid; export → paste-back JSON) — not committed,
   it's a claude.ai artifact. Re-curate from there or edit `manifest.json` by hand.

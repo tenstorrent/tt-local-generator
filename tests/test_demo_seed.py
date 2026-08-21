@@ -150,11 +150,29 @@ def test_resolve_collection_dir_prefers_explicit(tmp_path, monkeypatch):
     import demo_seed
     coll = _make_collection(tmp_path / "demo-collection")
     assert demo_seed.resolve_collection_dir(coll) == coll
-    # With both fallbacks absent, a bogus explicit path raises.
-    monkeypatch.setattr(demo_seed, "_INSTALLED_DIR", tmp_path / "no-installed")
+    # With XDG dirs pointing nowhere and the repo fallback absent, a bogus
+    # explicit path raises.
+    monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "no-share"))
     monkeypatch.setattr(demo_seed, "_REPO_DIR", tmp_path / "no-repo")
     with pytest.raises(FileNotFoundError):
         demo_seed.resolve_collection_dir(tmp_path / "nonexistent")
+
+
+def test_resolve_collection_dir_found_via_xdg_data_dirs(tmp_path, monkeypatch):
+    """The .deb ships to /usr/share/tt-local-generator/; discovery walks
+    $XDG_DATA_DIRS. A data dir holding tt-local-generator/demo-collection is
+    found, and an earlier dir (like /usr/local/share) wins over a later one."""
+    import demo_seed
+    local_share = tmp_path / "local_share"          # stands in for /usr/local/share
+    usr_share = tmp_path / "usr_share"              # stands in for /usr/share
+    _make_collection(usr_share / "tt-local-generator" / "demo-collection")
+    monkeypatch.setenv("XDG_DATA_DIRS", f"{local_share}:{usr_share}")
+    monkeypatch.setattr(demo_seed, "_REPO_DIR", tmp_path / "no-repo")
+    # Only usr_share has it → found there.
+    assert demo_seed.resolve_collection_dir() == usr_share / "tt-local-generator" / "demo-collection"
+    # Now put one in the earlier (local_share) dir → it takes precedence.
+    _make_collection(local_share / "tt-local-generator" / "demo-collection")
+    assert demo_seed.resolve_collection_dir() == local_share / "tt-local-generator" / "demo-collection"
 
 
 def test_real_shipped_collection_seeds_end_to_end(tmp_path):

@@ -27,13 +27,22 @@ override_dh_install:
 	# Copy the application source tree (app/, bin/, patches/, plugins/)
 	# plugins/ must be installed alongside app/ so plugin_loader can find
 	# the built-in generators at /usr/lib/tt-local-generator/plugins/.
-	cp -r app bin patches plugins demo-collection \
+	cp -r app bin patches plugins \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
 	# Strip test/build artifacts cp -r drags in from a dev checkout (pytest
 	# cache, bytecode) — they bloat the package and trip lintian.
 	find debian/tt-local-generator/usr/lib/tt-local-generator/app \
 	    \( -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + \)
 	find debian/tt-local-generator/usr/lib/tt-local-generator/app -name '*.pyc' -delete
+
+	# The bundled demo/seed media is arch-independent read-only DATA → its FHS
+	# home is /usr/share, NOT /usr/lib. demo_seed.resolve_collection_dir finds
+	# it via $XDG_DATA_DIRS (/usr/local/share:/usr/share), so an admin can also
+	# drop overrides in /usr/local/share/tt-local-generator/ without the package
+	# touching /usr/local.
+	install -d debian/tt-local-generator/usr/share/tt-local-generator
+	cp -r demo-collection \
+	    debian/tt-local-generator/usr/share/tt-local-generator/
 
 	# Copy the vendored tt-inference-server snapshot (if already materialised;
 	# otherwise snapshot_vendor.sh must be run before dpkg-buildpackage).
