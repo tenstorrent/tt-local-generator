@@ -28,7 +28,7 @@ Usage:
                                     Example: tt-ctl convert-library --apply --backup
                                     Flags: --apply  --db PATH  --no-thumbnails  --backup
     tt-ctl seed-demo                Load the bundled demo collection into the library
-                                    (idempotent) as a "Demo" playlist.
+                                    (idempotent) as a "Welcome to tt-local-generator" playlist.
                                     Flags: --db PATH  --collection-dir PATH  --force
     tt-ctl run "prompt"             Run one generation right now (blocking)
                                     Flags: --steps N  --model wan2|mochi|flux
@@ -991,7 +991,8 @@ def cmd_seed_demo(args):
     """Load the bundled demo collection into the media library (idempotent).
 
     Copies the curated demo media/thumbnails into the library's storage and
-    registers them as a "Demo" playlist so a fresh install opens with real art.
+    registers them as a "Welcome to tt-local-generator" playlist so a fresh
+    install opens with real art.
     """
     import demo_seed  # lazy: media_store/sqlite only paid when this runs
 

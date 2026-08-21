@@ -1,3 +1,11 @@
+tt-local-generator (0.94.5) noble; urgency=medium
+
+  * fix(tt-ctl): seed-demo help/usage text said "Demo" playlist; corrected to
+    "Welcome to tt-local-generator" to match the actual seeded playlist name
+    (Copilot PR#24 re-review). No behavior change.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 12:00:00 +0000
+
 tt-local-generator (0.94.4) noble; urgency=medium
 
   * fix(packaging): ship the demo/seed media to /usr/share/tt-local-generator/
