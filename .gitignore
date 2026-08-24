@@ -27,15 +27,14 @@ debian/files
 debian/*.debhelper.log
 debian/*.substvars
 debian/*.postrm.debhelper
+debian/*.debhelper
 debian/tt-local-generator/
-debian/tt-model-wan2-t2v/
-debian/tt-model-flux/
-debian/tt-model-mochi/
-debian/tt-model-qwen3/
-debian/tt-model-animate/
-debian/tt-model-skyreels-t2v/
-debian/tt-model-skyreels-i2v/
 debian/tt-local-generator-models-all/
+# All tt-model-* package staging dirs — one glob covers current + future
+# models (flux-dev, wan2-i2v, z-image, motif, animatediff, …). The trailing
+# slash matches only the build DIRECTORIES, never the tracked source
+# debian/tt-model-*.{postinst,config,templates} maintainer scripts.
+debian/tt-model-*/
 
 # Local scratch files
 *.ans
@@ -56,6 +55,8 @@ vendor/tt-animatediff/.claude/
 experiments/
 generated/
 docs/docs/
+# Scratch README preview rendered locally (pandoc) to eyeball the docs in a browser.
+/README-preview.html
 
 # Compiled bytecode inside patches/ (never track)
 patches/**/__pycache__/
