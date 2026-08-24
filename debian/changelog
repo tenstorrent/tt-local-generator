@@ -1,3 +1,28 @@
+tt-local-generator (0.96.0) noble; urgency=medium
+
+  * fix(packaging): AnimateDiff — the default video model — now actually ships
+    on a clean install. Its runner (vendor/tt-animatediff submodule,
+    examples/generate.py) previously shipped EMPTY because CI never inited
+    submodules:
+    - release-deb.yml: actions/checkout uses `submodules: recursive`.
+    - debian/rules: strip tt-animatediff's non-runtime trees (docs/generated/
+      demo/tests/output — 277 MB of demo galleries → 656 KB of runner code)
+      and FAIL the build if examples/generate.py is missing from the staged
+      tree (fail-loud, like the tt_dit inject guard).
+    - postinst: STEP 6b flags the tt-metal python_env prereq a package can't
+      provide.
+  * feat(packaging): new tt-model-animatediff weight package downloads the two
+    public repos the runner needs (CompVis/stable-diffusion-v1-4 base +
+    guoyww/animatediff-motion-adapter-v1-5-2). No debconf/token (both public).
+    tt-local-generator now Recommends it (and tt-installer), so a default
+    `apt install` gives working AnimateDiff out of the box; also added to
+    tt-local-generator-models-all.
+  * docs: refreshed README + docs-site with new primary screenshots
+    (library-browse, create-animatediff) and an AnimateDiff delivery GIF
+    (four chips finishing + the result landing).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 24 Aug 2026 18:00:00 +0000
+
 tt-local-generator (0.95.0) noble; urgency=medium
 
   * fix(demo-seed): apply jzhengTT PR#24 review (8 items):

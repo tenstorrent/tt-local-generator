@@ -332,6 +332,39 @@ else
 fi
 
 # =============================================================================
+# STEP 6b — AnimateDiff prerequisites (no Docker, no weight package)
+#   AnimateDiff is the app's no-server default video model, but it runs its
+#   TTNN runner under the tt-metal python_env — NOT the tt-inference-server
+#   Docker path — and has no tt-model-* weight package. Flag both so a fresh
+#   install knows what's still needed for AnimateDiff to actually generate.
+#   (The runner itself, vendor/tt-animatediff/examples/generate.py, ships in
+#   this package; debian/rules fails the build if it is missing.)
+# =============================================================================
+_section "Checking AnimateDiff prerequisites"
+
+TTMETAL_PY=""
+if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    _AD_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+    [[ -n "$_AD_HOME" ]] && TTMETAL_PY="$_AD_HOME/tt-metal/python_env/bin/python"
+fi
+
+if [[ -n "$TTMETAL_PY" && -x "$TTMETAL_PY" ]]; then
+    echo "Found tt-metal python_env — AnimateDiff can run on Blackhole."
+else
+    echo ""
+    echo "NOTE: tt-metal python_env not found (~/tt-metal/python_env/bin/python)."
+    echo "AnimateDiff (the default Blackhole video model) runs its TTNN runner"
+    echo "under tt-metal, not the Docker inference server. Build/install tt-metal"
+    echo "(via tt-installer) to enable it:"
+    echo "  https://github.com/tenstorrent/tt-installer"
+fi
+echo ""
+echo "AnimateDiff has no weight package — on first generation it downloads its"
+echo "base model + motion adapter (guoyww/animatediff-motion-adapter-v1-5-2,"
+echo "public) from HuggingFace into ~/.cache/huggingface/. Network is required"
+echo "for that first run only."
+
+# =============================================================================
 # STEP 7 — Optional: nvidia-container-toolkit
 # =============================================================================
 if _have nvidia-smi; then

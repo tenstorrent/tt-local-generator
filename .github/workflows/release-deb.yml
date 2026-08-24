@@ -13,6 +13,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fetch the tt-animatediff submodule (vendor/tt-animatediff, pinned
+          # v0.9.0) so the packaged vendor tree actually contains
+          # examples/generate.py — the AnimateDiff runner the app execs. Without
+          # this, checkout leaves vendor/tt-animatediff empty and the shipped
+          # .deb cannot generate AnimateDiff at all. debian/rules strips the
+          # submodule's heavy non-runtime dirs (docs/generated/demo) so only the
+          # ~1 MB of runner code rides into the package.
+          submodules: recursive
 
       - name: Install build dependencies
         run: |

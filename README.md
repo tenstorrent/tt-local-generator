@@ -29,7 +29,23 @@ All video/image inference runs via a local [tt-inference-server](https://github.
 
 **[Documentation](https://docs.tenstorrent.com/tt-local-generator)** · **[GitHub](https://github.com/tenstorrent/tt-local-generator)**
 
-![tt-local-generator — video gallery with detail panel](assets/tt-local-generator-main.png)
+![tt-local-generator — browse your whole library with the detail panel](assets/library-browse.png)
+
+*Everything you make lands in one library — video, image, animate, and generative art — with an inline player and full generation metadata.*
+
+---
+
+## Create — and watch it happen
+
+Pick a medium, shape the prompt in plain language, and generate. Below, **AnimateDiff
+runs across all four Blackhole chips in parallel**, with the built-in **Monitor HW**
+visualizer pulsing as each chip decodes its frames.
+
+![Create surface — AnimateDiff options, live per-chip progress, and the Monitor HW visualizer](assets/create-animatediff.png)
+
+Watch your hardware work through generating you something amazing:
+
+![AnimateDiff finishing across four Blackhole chips and delivering the result, with the live hardware monitor](assets/animatediff-generating.gif)
 
 ---
 

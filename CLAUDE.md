@@ -1,5 +1,88 @@
 # tt-local-generator — developer notes
 
+## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.0)
+
+- **v0.95.0 — jzhengTT's 8 PR#24 review items.** #1 (blocker): `demo_seed`
+  strips build-machine `video_path`/`image_path` from each seeded record's
+  `params` so `history_store._to_gen` (which PREFERS params paths over
+  `file_path`) falls back to the copied `file_path` — otherwise 20/27 demo
+  items were dead links on a fresh install (library rendered fine from
+  thumbnails, but open/play failed; my earlier container check measured the
+  wrong field — `file_path` existed, but the app resolves via params). #2
+  (blocker): the missing-media guard moved ABOVE the `--force` delete so an
+  absent manifest item can't delete-then-lose an existing row. #3: `postinst`
+  seeds under `set -o pipefail` so a tt-ctl failure in the piped `bash -c` is
+  actually reported (was masked by sed's exit). #4: `debian/rules` junk-strip
+  targets the install parent dir (patches/plugins `__pycache__`, not just
+  app/). #5: a `.demo_seed_version` marker + `_already_seeded()` seeds ONCE per
+  collection `version`, so `apt upgrade` never resurrects demo art the user
+  deleted (a newer `version` re-seeds intentionally); `tt-ctl` reports the
+  short-circuit. #6: attractor / TT-TV auto-gen AnimateDiff now honors the
+  persisted `animatediff_multichip_default` via a new module-level
+  `main_window._effective_animatediff_defaults()` (used at all three
+  non-panel `_ANIMATEDIFF_DEFAULTS` sites — `_resolve_attractor_model`, the
+  `_on_generate` merge base, `_native_generate_args`), keeping `multi_chip`
+  consistent with the mode ("off" ⇒ False); the Create panel already honored
+  it via `create_param_panels._animatediff_multichip_default_label`. #7:
+  restored the "keep" value in the `seed_mode` comment. #8:
+  `pipeline_studio._stage_preview_thumb_path` is a pure path accessor again —
+  `_prune_thumb_cache` moved to the thumbnail WRITE path (was a hidden
+  side-effect in a path accessor). Tests: `test_demo_seed.py` (idempotency
+  updated for the marker + `_to_gen` resolution regression + deleted-art-not-
+  reseeded), `test_main_window_attractor_model_source.py`
+  (`_effective_animatediff_defaults` flow-through + bad-setting fallback;
+  the old `== _ANIMATEDIFF_DEFAULTS` assertion was reading machine state —
+  now pins the setting deterministically). Full suite 2377 passed.
+
+- **v0.96.0 — AnimateDiff actually ships on a clean install.** A clean install
+  gave the app's DEFAULT video model (AnimateDiff) the *least* provisioning:
+  its runner (`vendor/tt-animatediff/examples/generate.py`, a git submodule
+  pinned v0.9.0, exec'd under the tt-metal `python_env`) shipped EMPTY in the
+  `.deb` because CI's `actions/checkout@v4` never inited submodules, and
+  `snapshot_vendor.sh` only snapshots tt-inference-server. Fixes: (1)
+  `release-deb.yml` checkout gains `submodules: recursive`; (2) `debian/rules`
+  now strips tt-animatediff's heavy non-runtime trees
+  (`docs`/`generated`/`demo`/`tests`/`output` — 277 MB of demo galleries →
+  656 KB of runner code) AND FAILS THE BUILD if `examples/generate.py` is
+  missing from the staged tree (fail-loud, mirroring the `tt_dit_patches_dir`
+  guard — a submodule-less build can't silently ship a broken AnimateDiff);
+  (3) `postinst` STEP 6b flags the two remaining external prereqs a package
+  can't provide — the tt-metal `python_env` (checked at
+  `~/tt-metal/python_env/bin/python`) and the first-run HF download of the
+  base model + `guoyww/animatediff-motion-adapter-v1-5-2` (public). (4) NEW
+  **`tt-model-animatediff` weight `.deb`** (`debian/control` +
+  `debian/tt-model-animatediff.postinst`): downloads the TWO public repos the
+  runner needs — `CompVis/stable-diffusion-v1-4` (~4.0 GB base SD, confirmed in
+  `animatediff_ttnn/generation_helpers.py`/`pipeline.py`, NOT SD-1.5) +
+  `guoyww/animatediff-motion-adapter-v1-5-2` (~1.7 GB adapter). Both PUBLIC, so
+  the postinst skips debconf entirely (no token dance, unlike the gated
+  tt-model-* packages) — calls `download_model.sh` once per repo as
+  `$SUDO_USER`, fail-soft, exit 0 on any download failure. The main package now
+  **`Recommends: tt-model-animatediff`** (alongside the already-recommended
+  `tt-installer` that provides the tt-metal runtime), so a default
+  `apt install tt-local-generator` pulls both AnimateDiff prereqs; also added to
+  the `tt-local-generator-models-all` meta-package. Net after (1)-(4): a default
+  install gives working AnimateDiff — runner ships, weights download, tt-metal
+  recommended. Note: `app/animatediff/animatediff_ttnn/` and
+  `app/animatediff/scripts/` in-repo are EMPTY dirs — the real runner is the
+  vendored submodule; see [[project_animatediff_vendoring]].
+
+- **v0.96.0 — refreshed README + docs-site media.** New primary non-motion
+  images from Taylor's screenshots: `library-browse.png` (the browse/library
+  hero — replaces `tt-local-generator-main.png` as the README hero + docs
+  `og:image` + docs hero) and `create-animatediff.png` (the Create surface:
+  AnimateDiff options + live 4-chip progress + Monitor HW viz). Plus
+  `animatediff-generating.gif` — an 11 s clip cut from Taylor's screencast
+  (`Screencast_20260823_151403.mp4`, t≈230–241 via two-pass ffmpeg palettegen)
+  showing the four Blackhole chips finishing decode (tensix grids at 1350 MHz)
+  and the **result popping into the panel** at t≈236 (grids settle to 800 MHz)
+  — "moments leading up to and the moment the image is delivered". A new docs
+  "Create" showcase section holds the create still + the GIF. Images live in
+  BOTH `assets/` (README resolves against repo root) and `docs/assets/` (the
+  site). Site `<img>`s carry `height:auto` (a fixed `height=` attribute without
+  it squished the create still). No gifsicle on the box; the ffmpeg palette
+  output (~1.7 MB) ships as-is.
+
 ## Pre-release toolbar/settings audit (v0.93.0–v0.94.0)
 
 An audit (two parallel subagents: menu-bar+actions, settings+preferences) found
