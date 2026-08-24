@@ -1,3 +1,32 @@
+tt-local-generator (0.95.0) noble; urgency=medium
+
+  * fix(demo-seed): apply jzhengTT PR#24 review (8 items):
+    - #1 (blocker): strip build-machine video_path/image_path from seeded
+      records' params so history_store._to_gen falls back to the copied
+      file_path — otherwise 20/27 demo items resolved to dead links on a
+      fresh install (the library rendered fine from thumbnails, but opening
+      or playing failed). Regression-pinned via _to_gen resolution.
+    - #2 (blocker): move the missing-media guard ABOVE the --force delete so a
+      manifest item whose media is absent can never delete-then-lose an
+      existing row.
+    - #3: debian/postinst seeds under `set -o pipefail` so a tt-ctl failure
+      inside the piped bash -c is actually reported, not masked by sed's exit.
+    - #4: debian/rules junk-strip targets the install parent dir so patches/
+      and plugins/ __pycache__ are cleaned, not just app/.
+    - #5: a `.demo_seed_version` marker seeds ONCE per collection version, so
+      an `apt upgrade` never resurrects demo art the user deleted (a newer
+      collection `version` re-seeds intentionally). tt-ctl reports the
+      short-circuit.
+    - #6: attractor / TT-TV auto-generated AnimateDiff jobs now honor the
+      persisted `animatediff_multichip_default` setting (new
+      _effective_animatediff_defaults()), not just the Create panel — the
+      "pin the default without a code edit" promise now holds on every path.
+    - #7: restore the "keep" value in the seed_mode setting comment.
+    - #8: pipeline_studio._stage_preview_thumb_path is a pure path accessor
+      again; cache pruning moved to the thumbnail WRITE path.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 24 Aug 2026 12:00:00 +0000
+
 tt-local-generator (0.94.5) noble; urgency=medium
 
   * fix(tt-ctl): seed-demo help/usage text said "Demo" playlist; corrected to

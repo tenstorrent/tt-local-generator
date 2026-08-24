@@ -67,6 +67,16 @@ def _candidate_dirs(explicit: Optional[Path | str]) -> "list[Path]":
     return cands
 
 
+def _already_seeded(marker: Path, version: int) -> bool:
+    """True if the `.demo_seed_version` stamp records this collection version
+    (or newer) as already seeded — so we don't re-insert user-deleted demo art
+    on an upgrade. Fail-open (treat unreadable/absent as not-seeded)."""
+    try:
+        return marker.exists() and int(marker.read_text().strip() or 0) >= version
+    except Exception:
+        return False
+
+
 def resolve_collection_dir(explicit: Optional[Path | str] = None) -> Path:
     """Locate the demo-collection directory: an explicit path wins, then each
     $XDG_DATA_DIRS entry (e.g. /usr/local/share then /usr/share), then the
@@ -90,17 +100,35 @@ def seed_demo(
 ) -> dict:
     """Load the demo collection into ``db_path`` (default: the app's media.db).
 
+    Seeds ONCE per collection version (tracked by a `.demo_seed_version` stamp
+    in the storage dir): `postinst` runs this on every install AND upgrade, and
+    without the stamp a user who deleted demo art through the app would get it
+    re-inserted on the next `apt upgrade`. The stamp makes idempotence match
+    user intent, not just current DB state. `force=True` bypasses the stamp
+    (and re-stamps). A newer collection `version` also re-seeds.
+
     Returns a report dict:
-      {"seeded": int, "skipped": int, "missing": int, "playlist_added": int, "playlist_id": str,
-       "collection_dir": str, "target_dir": str}
+      {"seeded": int, "skipped": int, "missing": int, "playlist_added": int,
+       "playlist_id": str|None, "collection_dir": str, "target_dir": str,
+       "already_seeded": bool}
     """
     src = resolve_collection_dir(collection_dir)
     manifest = json.loads((src / "manifest.json").read_text())
     items = manifest.get("items", [])
+    version = int(manifest.get("version", 1) or 1)
 
     storage = Path(storage_dir) if storage_dir is not None else media_store.STORAGE_DIR
     db = Path(db_path) if db_path is not None else (storage / media_store._DB_FILENAME)
     target = storage / "demo-collection"
+    marker = storage / ".demo_seed_version"
+
+    # Seeded-once guard: skip entirely if this (or a newer) collection version
+    # was already seeded, so upgrades never resurrect user-deleted demo art.
+    if not force and _already_seeded(marker, version):
+        return {"seeded": 0, "skipped": 0, "missing": 0, "playlist_added": 0,
+                "playlist_id": None, "collection_dir": str(src),
+                "target_dir": str(target), "already_seeded": True}
+
     (target / "media").mkdir(parents=True, exist_ok=True)
     (target / "thumbnails").mkdir(parents=True, exist_ok=True)
 
@@ -111,6 +139,16 @@ def seed_demo(
     seeded_ids: list[str] = []
     for it in items:
         mid = it["id"]
+        media_rel = it["media"]
+        media_src = src / media_rel
+        # Guard FIRST — before any delete/mutate. A manifest entry whose media
+        # file is missing on disk is skipped (counted), never inserted as a
+        # dangling record. Doing this ahead of the --force delete also means a
+        # missing item can't cause an existing row to be deleted-then-lost.
+        if not media_src.exists():
+            missing += 1
+            continue
+
         if mid in existing:
             if not force:
                 skipped += 1
@@ -119,18 +157,8 @@ def seed_demo(
                 continue
             # --force: MediaStore.add is INSERT-OR-IGNORE, so an existing row
             # would never be replaced — delete it first so the re-insert takes.
+            # Safe now: we've already confirmed the replacement media exists.
             store.delete(mid)
-
-        media_rel = it["media"]
-        media_src = src / media_rel
-        # Guard: a manifest entry whose media file is missing on disk would
-        # otherwise insert a record pointing at a file that never gets copied —
-        # a broken library entry. Skip it (counted) instead of shipping a dangling
-        # row. (Shouldn't happen for the shipped collection; matters for a
-        # hand-edited or partially-copied manifest.)
-        if not media_src.exists():
-            missing += 1
-            continue
 
         # Copy media + thumbnail into the stable target dir.
         media_dst = target / media_rel
@@ -145,6 +173,23 @@ def seed_demo(
                 shutil.copy2(t_src, t_dst)
                 thumb_abs = str(t_dst)
 
+        # The manifest's params blob carries the GENERATING machine's absolute
+        # paths (video_path/image_path, e.g. /home/<builder>/.local/share/...).
+        # history_store._to_gen PREFERS those over file_path, so left as-is they
+        # resolve to dead links on every other machine (the library looks fine —
+        # thumbnails come from thumbnail_path — but opening/playing fails). Strip
+        # them: file_path (set below to the copied media) is authoritative, and
+        # _to_gen falls back to it.
+        params_out = it.get("params") or "{}"
+        try:
+            _pj = json.loads(params_out)
+            if isinstance(_pj, dict) and ("video_path" in _pj or "image_path" in _pj):
+                _pj.pop("video_path", None)
+                _pj.pop("image_path", None)
+                params_out = json.dumps(_pj)
+        except Exception:
+            pass
+
         rec = MediaRecord(
             id=mid,
             media_type=it["media_type"],
@@ -155,7 +200,7 @@ def seed_demo(
             prompt=(it.get("caption") or it.get("prompt") or "").strip(),
             model_id=it.get("model_id") or "",
             generator_type=it.get("generator_type"),
-            params=it.get("params") or "{}",
+            params=params_out,
             # Shipped art is the DEFAULT, never auto-favorited — the user's own
             # stars stay meaningful. The collection is grouped by the
             # "Welcome to tt-local-generator" playlist instead (the manifest's
@@ -184,6 +229,13 @@ def seed_demo(
             store.add_to_playlist(pid, mid)
             playlist_added += 1
 
+    # Stamp this collection version as seeded so future upgrades short-circuit
+    # (respecting any art the user later deletes). Fail-soft.
+    try:
+        marker.write_text(str(version))
+    except Exception:
+        pass
+
     return {
         "seeded": seeded,
         "skipped": skipped,
@@ -192,4 +244,5 @@ def seed_demo(
         "playlist_id": pid,
         "collection_dir": str(src),
         "target_dir": str(target),
+        "already_seeded": False,
     }

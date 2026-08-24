@@ -61,7 +61,7 @@ DEFAULTS: dict = {
     "animatediff_frames": 8,
     # Create zone — named control state
     "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
-    "seed_mode":             "random",    # "random"|"repeat"
+    "seed_mode":             "random",    # "random"|"repeat"|"keep" (SeedModeControl offers all three)
     # AnimateDiff multi-chip default mode for the Create panel — "off" (single
     # chip) | "remix" (varied clips) | "coherent" (one longer video). Set from
     # Preferences so the default survives without a code edit; Remix is the safe

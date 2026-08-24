@@ -456,11 +456,15 @@ def _stage_preview_thumb_path(src: str) -> Path:
     *src*. Keyed by a hash of the source path so re-rendering the same
     artifact reuses (overwrites) one file instead of littering; lives under a
     dedicated temp subdir, never the user's Library. Transient by design — the
-    tile is rebuilt on every run."""
+    tile is rebuilt on every run.
+
+    Pure path accessor: it ensures the scratch dir exists but does NOT scan or
+    delete (Josh PR#24 review — cache pruning was a hidden side effect in a
+    function that reads like "just give me a path"). The caller prunes at the
+    point it actually WRITES a new thumbnail — see `_prune_thumb_cache`."""
     digest = hashlib.sha1(src.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     cache_dir = Path(tempfile.gettempdir()) / "ttlg-stage-thumbs"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    _prune_thumb_cache(cache_dir)
     return cache_dir / f"{digest}.png"
 
 
@@ -4210,7 +4214,12 @@ class LiveRunView(Gtk.Box):
             # honest-placeholder path it can't preview), and _build_thumb_frame
             # degrades to its own placeholder if the PNG won't load — so this
             # never raises and never touches WebKit.
-            thumb = artgen_thumb.make_thumbnail(Path(path), _stage_preview_thumb_path(path))
+            target = _stage_preview_thumb_path(path)
+            # Prune here, at the WRITE path — the only place the cache actually
+            # grows — not in the path accessor (Josh PR#24 review). Fail-soft, and
+            # a no-op cheap `iterdir` when already under the cap.
+            _prune_thumb_cache(target.parent)
+            thumb = artgen_thumb.make_thumbnail(Path(path), target)
             return _build_thumb_frame(
                 str(thumb), self._PREVIEW_THUMB_W, self._PREVIEW_THUMB_H,
                 "ps-tile-preview-thumb",

@@ -30,10 +30,12 @@ override_dh_install:
 	cp -r app bin patches plugins \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
 	# Strip test/build artifacts cp -r drags in from a dev checkout (pytest
-	# cache, bytecode) — they bloat the package and trip lintian.
-	find debian/tt-local-generator/usr/lib/tt-local-generator/app \
+	# cache, bytecode) — they bloat the package and trip lintian. Target the
+	# whole install dir so patches/ and plugins/ __pycache__ are covered too,
+	# not just app/ (vendor/ is copied + cleaned separately below).
+	find debian/tt-local-generator/usr/lib/tt-local-generator \
 	    \( -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + \)
-	find debian/tt-local-generator/usr/lib/tt-local-generator/app -name '*.pyc' -delete
+	find debian/tt-local-generator/usr/lib/tt-local-generator -name '*.pyc' -delete
 
 	# The bundled demo/seed media is arch-independent read-only DATA → its FHS
 	# home is /usr/share, NOT /usr/lib. demo_seed.resolve_collection_dir finds

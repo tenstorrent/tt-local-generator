@@ -1723,6 +1723,29 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
 )
 
 
+def _effective_animatediff_defaults() -> dict:
+    """`_ANIMATEDIFF_DEFAULTS` with the multi-chip mode taken from the persisted
+    `animatediff_multichip_default` setting, so the "pin the default without a
+    code edit" promise holds on the NON-panel AnimateDiff paths too — attractor /
+    TT-TV auto-gen and legacy/partial queue restores. (The Create panel already
+    honors the setting via `create_param_panels._animatediff_multichip_default_label`;
+    this is the parallel source of truth for every path that builds args straight
+    from the module defaults instead of from a panel collect.)
+
+    `multi_chip` is kept consistent with the mode (False only for "off") so the
+    legacy boolean and the explicit engine mode never disagree — the same
+    invariant the panel's `_collect_animatediff_args` maintains. An unrecognized
+    setting value falls back to the safe "remix" default.
+    """
+    d = dict(_ANIMATEDIFF_DEFAULTS)
+    mode = str(_settings.get("animatediff_multichip_default") or "remix")
+    if mode not in ("off", "remix", "coherent"):
+        mode = "remix"
+    d["multichip_mode"] = mode
+    d["multi_chip"] = mode != "off"
+    return d
+
+
 def _theme_key_from_text(text: str) -> str:
     """Map free text (Create's brief) to a `generate_theme.THEME_LIBRARY`
     key by a loose, case-insensitive containment match against each key and
@@ -8959,8 +8982,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # image_model_key stay at their defaults — irrelevant for the
         # "animate" model_source, which never reads either.
 
+        # Attractor/TT-TV auto-gen carries no per-job AnimateDiff config, so it
+        # builds straight from the module defaults — use the SETTING-aware defaults
+        # so a user who pinned "Off"/"Coherent" in Preferences gets that on
+        # auto-generated jobs too (Josh PR#24 review — the pinned default must
+        # reach this path, not just the Create panel).
         animatediff_args = (
-            dict(_ANIMATEDIFF_DEFAULTS) if video_model_key == "animatediff" else None
+            _effective_animatediff_defaults() if video_model_key == "animatediff" else None
         )
         return video_model_key, image_model_key, animatediff_args
 
@@ -9222,7 +9250,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 # AnimateDiff item, restored with no "animatediff_args" key at
                 # all) must not KeyError on the `ad["..."]` indexing below. A
                 # full dict passes through unchanged (its values win).
-                ad = {**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}
+                ad = {**_effective_animatediff_defaults(), **(animatediff_args or {})}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
                 # exclusive Blackhole access and should not be blocked by a running
                 # server — the `ad["mode"] == "blackhole"` check below is deliberately
@@ -9713,7 +9741,7 @@ class MainWindow(Gtk.ApplicationWindow):
         animatediff_args = None
         if model_key == "animatediff":
             animatediff_args = {
-                **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
+                **_effective_animatediff_defaults(), **(params.get("animatediff_args") or {})
             }
         args = (
             prompt,

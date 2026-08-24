@@ -238,22 +238,65 @@ def test_unrecognized_server_key_falls_back_to_defaults(monkeypatch):
     assert image_key == mw._DEFAULT_IMAGE_KEY
 
 
+def _pin_multichip(monkeypatch, mw, value):
+    """Deterministically pin the persisted `animatediff_multichip_default`
+    setting for the duration of a test (without writing settings.json)."""
+    orig_get = mw._settings.get
+    monkeypatch.setattr(
+        mw._settings, "get",
+        lambda k: value if k == "animatediff_multichip_default" else orig_get(k),
+    )
+
+
 def test_animatediff_default_produces_complete_args_dict(monkeypatch):
     """Whenever the resolved video_model_key is "animatediff" (default OR an
     explicit resolution), the returned `animatediff_args` must be a COMPLETE
     dict — every key `_on_generate`'s `ad["..."]` indexing touches — sourced
-    from `_ANIMATEDIFF_DEFAULTS`, never `self._controls.get_animatediff_args()`
+    from the module defaults, never `self._controls.get_animatediff_args()`
     (which raises in this harness if called)."""
     import main_window as mw
     obj = _make_mw(monkeypatch)
+    _pin_multichip(monkeypatch, mw, "remix")  # deterministic; don't read machine state
     obj._status_service.running_or_starting.return_value = None  # -> default "animatediff"
 
     _video_key, _image_key, ad_args = obj._resolve_attractor_model("video")
 
+    # With the default pinned to "remix", the effective defaults equal the
+    # module defaults (remix + multi_chip True).
+    assert ad_args == mw._effective_animatediff_defaults()
     assert ad_args == mw._ANIMATEDIFF_DEFAULTS
     # It's a fresh copy — mutating it must never corrupt the module-level default.
     ad_args["mode"] = "mutated"
     assert mw._ANIMATEDIFF_DEFAULTS["mode"] != "mutated"
+
+
+def test_attractor_honors_pinned_multichip_default(monkeypatch):
+    """Josh PR#24 #6: a user who pins "Coherent" (or "Off") in Preferences must
+    get that on ATTRACTOR / auto-generated AnimateDiff jobs too, not just the
+    Create panel — the "pin the default without a code edit" promise. The
+    resolver builds args straight from the module defaults, so it must consult
+    the setting."""
+    import main_window as mw
+    obj = _make_mw(monkeypatch)
+    obj._status_service.running_or_starting.return_value = None  # -> default "animatediff"
+
+    _pin_multichip(monkeypatch, mw, "coherent")
+    _v, _i, ad = obj._resolve_attractor_model("video")
+    assert ad["multichip_mode"] == "coherent" and ad["multi_chip"] is True
+
+    _pin_multichip(monkeypatch, mw, "off")
+    _v, _i, ad = obj._resolve_attractor_model("video")
+    # "off" also drops the legacy multi_chip bool, keeping the two consistent.
+    assert ad["multichip_mode"] == "off" and ad["multi_chip"] is False
+
+
+def test_effective_defaults_falls_back_on_bad_setting(monkeypatch):
+    """An unrecognized persisted value degrades to the safe "remix" default
+    rather than passing a bogus mode to the engine."""
+    import main_window as mw
+    _pin_multichip(monkeypatch, mw, "nonsense-value")
+    d = mw._effective_animatediff_defaults()
+    assert d["multichip_mode"] == "remix" and d["multi_chip"] is True
 
 
 # ── Zero `self._controls.get_*` reads anywhere in the attractor path ───────

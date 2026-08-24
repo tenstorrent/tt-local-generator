@@ -85,14 +85,93 @@ def test_seed_is_idempotent(tmp_path):
 
     first = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
     second = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
-    assert first["seeded"] == 2
-    assert second["seeded"] == 0 and second["skipped"] == 2
-    assert second["playlist_added"] == 0  # no duplicate playlist rows
+    assert first["seeded"] == 2 and first["already_seeded"] is False
+    # Re-run of the SAME collection version short-circuits on the
+    # `.demo_seed_version` marker before touching the store (Josh PR#24 #5).
+    assert second["already_seeded"] is True
+    assert second["seeded"] == 0 and second["playlist_added"] == 0
 
     store = media_store.MediaStore(db_path=storage / "media.db")
     assert len(store.query(limit=100)) == 2
     pls = {p["name"]: p["id"] for p in store.list_playlists()}
     assert len(store.playlist_records(pls["Welcome to tt-local-generator"])) == 2
+
+
+def test_seed_strips_build_machine_paths_so_to_gen_resolves(tmp_path):
+    """Josh PR#24 #1 (blocker): the manifest's params carry the GENERATING
+    machine's absolute video_path/image_path. history_store._to_gen PREFERS
+    those over file_path, so if left in they resolve to dead links on every
+    other machine. Seeding must strip them so _to_gen falls back to the copied
+    file_path — the media that actually exists on the install."""
+    import demo_seed, media_store, history_store
+    coll = tmp_path / "demo-collection"
+    (coll / "media").mkdir(parents=True)
+    (coll / "thumbnails").mkdir(parents=True)
+    (coll / "media" / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42fake")
+    (coll / "media" / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (coll / "thumbnails" / "clip.jpg").write_bytes(b"\xff\xd8\xff\xe0fake")
+    manifest = {"collection": "demo", "version": 1, "items": [
+        {"id": "vid-1", "media_type": "video", "generator_type": None, "model_id": "wan",
+         "created_at": "2026-01-01T00:00:00",
+         "media": "media/clip.mp4", "thumbnail": "thumbnails/clip.jpg",
+         # params carry a build-machine absolute path that does NOT exist here
+         "params": json.dumps({"steps": 20,
+                               "video_path": "/home/builder/.local/share/tt-video-gen/videos/DEAD.mp4"}),
+         "caption": "A clip."},
+        {"id": "img-1", "media_type": "image", "generator_type": None, "model_id": "flux",
+         "created_at": "2026-01-02T00:00:00",
+         "media": "media/pic.png", "thumbnail": "",
+         "params": json.dumps({"image_path": "/home/builder/.local/share/tt-video-gen/images/DEAD.png"}),
+         "caption": "A pic."},
+    ]}
+    (coll / "manifest.json").write_text(json.dumps(manifest))
+    storage = tmp_path / "storage"; storage.mkdir()
+    demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+
+    store = media_store.MediaStore(db_path=storage / "media.db")
+    recs = {r.id: r for r in store.query(limit=100)}
+    # The dead build-machine paths are stripped from the stored params …
+    assert "video_path" not in recs["vid-1"].params_dict
+    assert "image_path" not in recs["img-1"].params_dict
+    # … so _to_gen (the app's actual resolution path) falls back to file_path,
+    # which points at the copied media that really exists on this machine.
+    gen_vid = history_store.HistoryStore._to_gen(recs["vid-1"])
+    gen_img = history_store.HistoryStore._to_gen(recs["img-1"])
+    assert gen_vid.video_path == recs["vid-1"].file_path
+    assert Path(gen_vid.video_path).exists()
+    assert gen_img.image_path == recs["img-1"].file_path
+    assert Path(gen_img.image_path).exists()
+
+
+def test_deleted_demo_art_not_reseeded_until_newer_version(tmp_path):
+    """Josh PR#24 #5: postinst re-runs seed_demo on every upgrade. The
+    `.demo_seed_version` marker must stop a user-deleted demo item from being
+    resurrected on the next run — UNLESS the collection ships a newer version."""
+    import demo_seed, media_store
+    coll = _make_collection(tmp_path / "demo-collection")
+    storage = tmp_path / "storage"; storage.mkdir()
+    demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+
+    # User deletes one demo item through the app.
+    store = media_store.MediaStore(db_path=storage / "media.db")
+    store.delete("art-1")
+    assert {r.id for r in store.query(limit=100)} == {"vid-1"}
+
+    # Re-run (same version) — short-circuits, does NOT resurrect art-1.
+    rep = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+    assert rep["already_seeded"] is True
+    store2 = media_store.MediaStore(db_path=storage / "media.db")
+    assert {r.id for r in store2.query(limit=100)} == {"vid-1"}
+
+    # Ship a NEWER collection version → the marker no longer matches, so it
+    # re-seeds (bringing the deleted item back is intended for a real update).
+    man = json.loads((coll / "manifest.json").read_text())
+    man["version"] = 2
+    (coll / "manifest.json").write_text(json.dumps(man))
+    rep2 = demo_seed.seed_demo(collection_dir=coll, storage_dir=storage)
+    assert rep2["already_seeded"] is False and rep2["seeded"] == 1
+    store3 = media_store.MediaStore(db_path=storage / "media.db")
+    assert {r.id for r in store3.query(limit=100)} == {"vid-1", "art-1"}
 
 
 def test_seed_does_not_favorite_shipped_art(tmp_path):
