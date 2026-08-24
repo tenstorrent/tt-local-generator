@@ -332,13 +332,13 @@ else
 fi
 
 # =============================================================================
-# STEP 6b — AnimateDiff prerequisites (no Docker, no weight package)
+# STEP 6b — AnimateDiff prerequisites (tt-metal runtime + weights)
 #   AnimateDiff is the app's no-server default video model, but it runs its
 #   TTNN runner under the tt-metal python_env — NOT the tt-inference-server
-#   Docker path — and has no tt-model-* weight package. Flag both so a fresh
-#   install knows what's still needed for AnimateDiff to actually generate.
-#   (The runner itself, vendor/tt-animatediff/examples/generate.py, ships in
-#   this package; debian/rules fails the build if it is missing.)
+#   Docker path. The runner itself (vendor/tt-animatediff/examples/generate.py)
+#   ships in this package (debian/rules fails the build if it is missing), and
+#   the weights come from the Recommended tt-model-animatediff package. Flag the
+#   tt-metal runtime + the weight status so a fresh install knows what's left.
 # =============================================================================
 _section "Checking AnimateDiff prerequisites"
 
@@ -359,10 +359,16 @@ else
     echo "  https://github.com/tenstorrent/tt-installer"
 fi
 echo ""
-echo "AnimateDiff has no weight package — on first generation it downloads its"
-echo "base model + motion adapter (guoyww/animatediff-motion-adapter-v1-5-2,"
-echo "public) from HuggingFace into ~/.cache/huggingface/. Network is required"
-echo "for that first run only."
+if dpkg-query -W -f='${Status}' tt-model-animatediff 2>/dev/null | grep -q "install ok installed"; then
+    echo "AnimateDiff weights: provided by the installed tt-model-animatediff"
+    echo "package (base model + motion adapter, both public)."
+else
+    echo "AnimateDiff weights: install the tt-model-animatediff package (~5.7 GB,"
+    echo "both repos public, no token) for offline-ready weights —"
+    echo "  sudo apt install tt-model-animatediff"
+    echo "Otherwise AnimateDiff downloads them from HuggingFace on first generation"
+    echo "(network required for that first run only)."
+fi
 
 # =============================================================================
 # STEP 7 — Optional: nvidia-container-toolkit

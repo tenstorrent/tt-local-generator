@@ -225,6 +225,26 @@ def test_missing_media_is_skipped_not_inserted(tmp_path):
     assert ids == {"vid-1"}  # art-1 not inserted
 
 
+def test_db_path_without_storage_colocates_media_and_marker(tmp_path):
+    """Copilot review: `--db /custom/media.db` with no explicit storage_dir must
+    copy media + write the .demo_seed_version marker next to THAT db, not into
+    the default library (and the marker must not leak across db locations)."""
+    import demo_seed, media_store
+    coll = _make_collection(tmp_path / "demo-collection")
+    dbdir = tmp_path / "custom-lib"; dbdir.mkdir()
+    db = dbdir / "media.db"
+    rep = demo_seed.seed_demo(db_path=db, collection_dir=coll)  # NO storage_dir
+    assert rep["seeded"] == 2
+    # media + marker co-located with the db, not in media_store.STORAGE_DIR
+    assert (dbdir / "demo-collection" / "media" / "clip.mp4").exists()
+    assert (dbdir / ".demo_seed_version").exists()
+    assert str(dbdir) in rep["target_dir"]
+    # records in THAT db point at the co-located copies
+    store = media_store.MediaStore(db_path=db)
+    recs = {r.id: r for r in store.query(limit=100)}
+    assert str(dbdir) in recs["vid-1"].file_path and Path(recs["vid-1"].file_path).exists()
+
+
 def test_resolve_collection_dir_prefers_explicit(tmp_path, monkeypatch):
     import demo_seed
     coll = _make_collection(tmp_path / "demo-collection")

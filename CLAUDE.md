@@ -1,6 +1,26 @@
 # tt-local-generator — developer notes
 
-## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.0)
+## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.1)
+
+- **v0.96.1 — Copilot PR#24 re-review.** (a) `demo_seed`: when `--db` is passed
+  without an explicit storage dir, `storage` is now derived from
+  `db_path.parent` (not `media_store.STORAGE_DIR`), so the copied
+  `demo-collection/` + the `.demo_seed_version` marker co-locate with the DB
+  being mutated — a custom-db seed no longer scatters media into the default
+  library or leaks the seeded-once marker across DB locations
+  (`test_db_path_without_storage_colocates_media_and_marker`). (b) New
+  `MediaStore.all_ids()` (`SELECT id`) replaces the
+  `{r.id for r in query(limit=10_000_000)}` full-row materialisation in the
+  idempotency check. (c) `postinst` STEP 6b now points at the new
+  `tt-model-animatediff` package as the offline-ready weights path instead of
+  "AnimateDiff has no weight package" (which its own v0.96.0 change made false).
+  Stale/by-design items were replied-not-changed: `--force` delete-then-insert
+  (already v0.94.2), missing-media skip+count (fail-soft by design, not raise),
+  create_view "corner" comment (already docked in v0.94.0), tt-ctl "Demo"→
+  "Welcome" (v0.94.5), `starred=0` (deliberate — Copilot itself requested it in
+  v0.94.2), VERSION-vs-PR-description (PR description updated, not code).
+
+
 
 - **v0.95.0 — jzhengTT's 8 PR#24 review items.** #1 (blocker): `demo_seed`
   strips build-machine `video_path`/`image_path` from each seeded record's

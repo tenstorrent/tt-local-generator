@@ -117,7 +117,18 @@ def seed_demo(
     items = manifest.get("items", [])
     version = int(manifest.get("version", 1) or 1)
 
-    storage = Path(storage_dir) if storage_dir is not None else media_store.STORAGE_DIR
+    # Where the copied media + the seeded-once marker live. Co-locate them with
+    # the DB being mutated: an explicit storage_dir wins; else, if a db_path was
+    # given, use ITS parent (so `--db /custom/media.db` keeps its demo-collection/
+    # and .demo_seed_version next to that DB, not in the default library, and the
+    # marker can't leak across DB locations — Copilot review); else the default
+    # library dir.
+    if storage_dir is not None:
+        storage = Path(storage_dir)
+    elif db_path is not None:
+        storage = Path(db_path).parent
+    else:
+        storage = media_store.STORAGE_DIR
     db = Path(db_path) if db_path is not None else (storage / media_store._DB_FILENAME)
     target = storage / "demo-collection"
     marker = storage / ".demo_seed_version"
@@ -133,7 +144,7 @@ def seed_demo(
     (target / "thumbnails").mkdir(parents=True, exist_ok=True)
 
     store = media_store.MediaStore(db_path=db)
-    existing = {r.id for r in store.query(limit=10_000_000)}
+    existing = store.all_ids()  # lightweight SELECT id (not full-row materialisation)
 
     seeded = skipped = missing = 0
     seeded_ids: list[str] = []

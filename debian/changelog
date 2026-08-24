@@ -1,3 +1,18 @@
+tt-local-generator (0.96.1) noble; urgency=medium
+
+  * fix(demo-seed): apply Copilot PR#24 re-review:
+    - When --db is given without an explicit storage dir, co-locate the copied
+      media and the .demo_seed_version marker with THAT db (its parent), so a
+      custom-db seed no longer scatters files into the default library or leaks
+      the seeded-once marker across db locations.
+    - Use a new lightweight MediaStore.all_ids() (SELECT id) for the idempotency
+      check instead of materializing every full row.
+  * fix(packaging): postinst STEP 6b now points at the tt-model-animatediff
+    weight package (added in 0.96.0) as the offline-ready path, instead of
+    saying AnimateDiff has no weight package.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 20:00:00 +0000
+
 tt-local-generator (0.96.0) noble; urgency=medium
 
   * fix(packaging): AnimateDiff — the default video model — now actually ships
