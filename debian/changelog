@@ -12,6 +12,10 @@ tt-local-generator (0.96.3) noble; urgency=medium
     provides "Qwen3 prompt-server GPU support" — the Qwen3-0.6B prompt-server
     runs on CPU; tt-installer provides the tt-metal runtime and the
     torch/transformers the prompt tier uses, not GPU support.
+  * docs(README): add "Install from the Tenstorrent PPA (recommended)" — apt
+    key + source, `apt install tt-local-generator`, the tt-model-* weight
+    packages, and the tt-installer / Docker prerequisites; relabel the
+    git-clone flow as "From source (development)".
 
  -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 23:30:00 +0000
 
