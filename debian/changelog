@@ -1,3 +1,20 @@
+tt-local-generator (0.96.3) noble; urgency=medium
+
+  * fix(postinst): `sudo apt install tt-local-generator` from the PPA no longer
+    fails to configure on a box without Docker. STEP 3 ran `usermod -aG docker
+    $USER` unconditionally; when Docker is not installed the `docker` group does
+    not exist, so usermod exited 6 and — under `set -e` — aborted the whole
+    postinst (package left half-configured, dependent tt-model-* packages
+    blocked). Now it only adds the user when the group exists, defers with clear
+    guidance otherwise, and is fail-soft regardless. Container-verified: main +
+    tt-model-animatediff now configure cleanly with no docker group present.
+  * fix(postinst): correct the misleading checklist note that said tt-installer
+    provides "Qwen3 prompt-server GPU support" — the Qwen3-0.6B prompt-server
+    runs on CPU; tt-installer provides the tt-metal runtime and the
+    torch/transformers the prompt tier uses, not GPU support.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 23:30:00 +0000
+
 tt-local-generator (0.96.2) noble; urgency=medium
 
   * fix(models): weight downloads now work on a fresh system without a
