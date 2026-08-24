@@ -1,3 +1,19 @@
+tt-local-generator (0.96.2) noble; urgency=medium
+
+  * fix(models): weight downloads now work on a fresh system without a
+    pre-existing HuggingFace CLI. bin/download_model.sh:
+    - Search the Python user-site bin (~/.local/bin) for `hf` — a non-root pip
+      install (the postinst path via runuser) lands the entrypoint there, and
+      it is NOT on PATH in a fresh postinst, so downloads previously failed with
+      "HuggingFace CLI still not found after pip install" on any box lacking
+      tt-installer's venv or a system `hf` (container-verified; the fix
+      downloads real AnimateDiff weights end to end).
+    - Drop the `huggingface_hub[cli]` extra (removed in huggingface-hub >= 1.0,
+      which warns "does not provide the extra 'cli'") — the `hf` command ships
+      in the base package.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 22:00:00 +0000
+
 tt-local-generator (0.96.1) noble; urgency=medium
 
   * fix(demo-seed): apply Copilot PR#24 re-review:
