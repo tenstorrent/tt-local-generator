@@ -21,7 +21,7 @@ tt-local-generator (0.96.0) noble; urgency=medium
     (library-browse, create-animatediff) and an AnimateDiff delivery GIF
     (four chips finishing + the result landing).
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 24 Aug 2026 18:00:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 18:00:00 +0000
 
 tt-local-generator (0.95.0) noble; urgency=medium
 
@@ -50,7 +50,7 @@ tt-local-generator (0.95.0) noble; urgency=medium
     - #8: pipeline_studio._stage_preview_thumb_path is a pure path accessor
       again; cache pruning moved to the thumbnail WRITE path.
 
- -- Taylor Singletary <tsingletary@tenstorrent.com>  Sun, 24 Aug 2026 12:00:00 +0000
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 12:00:00 +0000
 
 tt-local-generator (0.94.5) noble; urgency=medium
 
