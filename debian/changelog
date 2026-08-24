@@ -1,3 +1,18 @@
+tt-local-generator (0.96.4) noble; urgency=medium
+
+  * fix(postinst): weight downloads no longer fail with permission errors on a
+    box without Docker. STEP 2 created /opt/tenstorrent/models/hub as root:root
+    when the 'docker' group is absent, but the tt-model-* postinsts download as
+    $SUDO_USER (a non-root user) and download_model.sh prefers that path when it
+    exists — so on a fresh install the download failed to write there, silently
+    (the download is fail-soft). Now the shared storage falls back to the
+    installing user's primary group (not root) when Docker isn't present, so the
+    setgid+group-writable dir is actually writable by that user. Container-
+    verified: real weights land in /opt/tenstorrent/models/hub as the non-root
+    user. (Copilot PR#25 review.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 00:30:00 +0000
+
 tt-local-generator (0.96.3) noble; urgency=medium
 
   * fix(postinst): `sudo apt install tt-local-generator` from the PPA no longer

@@ -103,10 +103,19 @@ _section "Creating shared model storage"
 
 OPT_MODELS="/opt/tenstorrent/models"
 
-# Resolve the docker group — fall back to root if docker isn't configured yet.
+# Resolve the group that owns the shared model storage. Prefer 'docker' (so any
+# docker-group member can add models without sudo). If Docker isn't installed
+# (no docker group), fall back to the INSTALLING user's primary group — NOT
+# root: the tt-model-* postinsts run bin/download_model.sh as $SUDO_USER, and
+# download_model.sh prefers /opt/tenstorrent/models/hub when it exists, so a
+# root:root dir would make every weight download fail with a permission error on
+# a fresh install (silently, since the download is fail-soft). Group + mode 2775
+# (setgid, group-writable) then lets that user write. (Copilot PR#25 review.)
 _MODEL_GROUP="root"
 if getent group docker &>/dev/null; then
     _MODEL_GROUP="docker"
+elif [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    _MODEL_GROUP="$(id -gn "$REAL_USER" 2>/dev/null || echo root)"
 fi
 
 for _dir in "$OPT_MODELS" "$OPT_MODELS/tt-weights"; do
