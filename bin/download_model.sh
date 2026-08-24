@@ -30,8 +30,10 @@
 # HuggingFace CLI discovery order:
 #   1. ~/.tenstorrent-venv/bin/hf  (tt-installer venv)
 #   2. system `hf` or `huggingface-cli` on $PATH
-#   3. /usr/local/bin/hf  (pip install target, may not be on PATH in postinst)
-#   4. pip-install huggingface_hub into system Python3 and retry
+#   3. /usr/local/bin/hf  (root pip install target, may not be on PATH)
+#   4. Python user-site bin (~/.local/bin) — where a NON-root pip install lands
+#      `hf`; not on PATH in a fresh postinst, so we look here explicitly
+#   5. pip-install huggingface_hub, then re-run discovery (1-4)
 
 set -euo pipefail
 
@@ -150,13 +152,25 @@ _find_hf_cli() {
         echo "$(command -v huggingface-cli)"; return 0
     fi
 
-    # 3. /usr/local/bin — pip installs here, may not be on PATH in postinst
+    # 3. /usr/local/bin — a ROOT pip install lands here, may not be on PATH.
     if [[ -x "/usr/local/bin/hf" ]]; then
         echo "/usr/local/bin/hf"; return 0
     fi
     if [[ -x "/usr/local/bin/huggingface-cli" ]]; then
         echo "/usr/local/bin/huggingface-cli"; return 0
     fi
+
+    # 4. Python user-site bin — a NON-root `pip install` (the postinst path via
+    #    `runuser -u $SUDO_USER`) auto-falls back to --user and lands the `hf`
+    #    entrypoint here, which is NOT on PATH in a fresh postinst environment.
+    #    Missing this was why weight downloads failed on any box without
+    #    tt-installer's venv or a system `hf` (container-verified).
+    local _user_bin _dir
+    _user_bin="$(/usr/bin/python3 -m site --user-base 2>/dev/null)/bin"
+    for _dir in "$_user_bin" "${HOME:-/root}/.local/bin"; do
+        [[ -n "$_dir" && -x "$_dir/hf" ]] && { echo "$_dir/hf"; return 0; }
+        [[ -n "$_dir" && -x "$_dir/huggingface-cli" ]] && { echo "$_dir/huggingface-cli"; return 0; }
+    done
 
     return 1
 }
@@ -166,14 +180,19 @@ if HF_CLI="$(_find_hf_cli)"; then
     echo "Found HuggingFace CLI: $HF_CLI"
 else
     echo "HuggingFace CLI not found. Installing huggingface_hub via pip…"
+    # NOTE: plain `huggingface_hub`, NOT `huggingface_hub[cli]` — the `cli`
+    # extra was removed in huggingface-hub >= 1.0 (which warns "does not provide
+    # the extra 'cli'"); the `hf` / `huggingface-cli` entrypoint ships in the
+    # base package, so the extra is both unnecessary and now nonexistent.
     /usr/bin/python3 -m pip install --quiet --break-system-packages \
-        "huggingface_hub[cli]>=0.24"
-    # Retry discovery after install.
+        "huggingface_hub>=0.24"
+    # Retry discovery after install (now also searches the user-site bin, where
+    # a non-root pip install puts `hf`).
     if HF_CLI="$(_find_hf_cli)"; then
         echo "Found HuggingFace CLI after install: $HF_CLI"
     else
         echo "ERROR: HuggingFace CLI still not found after pip install." >&2
-        echo "Install manually: pip install 'huggingface_hub[cli]'" >&2
+        echo "Install manually: pip install 'huggingface_hub' (provides 'hf')" >&2
         exit 1
     fi
 fi

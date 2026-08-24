@@ -1,3 +1,55 @@
+tt-local-generator (0.96.4) noble; urgency=medium
+
+  * fix(postinst): weight downloads no longer fail with permission errors on a
+    box without Docker. STEP 2 created /opt/tenstorrent/models/hub as root:root
+    when the 'docker' group is absent, but the tt-model-* postinsts download as
+    $SUDO_USER (a non-root user) and download_model.sh prefers that path when it
+    exists — so on a fresh install the download failed to write there, silently
+    (the download is fail-soft). Now the shared storage falls back to the
+    installing user's primary group (not root) when Docker isn't present, so the
+    setgid+group-writable dir is actually writable by that user. Container-
+    verified: real weights land in /opt/tenstorrent/models/hub as the non-root
+    user. (Copilot PR#25 review.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 00:30:00 +0000
+
+tt-local-generator (0.96.3) noble; urgency=medium
+
+  * fix(postinst): `sudo apt install tt-local-generator` from the PPA no longer
+    fails to configure on a box without Docker. STEP 3 ran `usermod -aG docker
+    $USER` unconditionally; when Docker is not installed the `docker` group does
+    not exist, so usermod exited 6 and — under `set -e` — aborted the whole
+    postinst (package left half-configured, dependent tt-model-* packages
+    blocked). Now it only adds the user when the group exists, defers with clear
+    guidance otherwise, and is fail-soft regardless. Container-verified: main +
+    tt-model-animatediff now configure cleanly with no docker group present.
+  * fix(postinst): correct the misleading checklist note that said tt-installer
+    provides "Qwen3 prompt-server GPU support" — the Qwen3-0.6B prompt-server
+    runs on CPU; tt-installer provides the tt-metal runtime and the
+    torch/transformers the prompt tier uses, not GPU support.
+  * docs(README): add "Install from the Tenstorrent PPA (recommended)" — apt
+    key + source, `apt install tt-local-generator`, the tt-model-* weight
+    packages, and the tt-installer / Docker prerequisites; relabel the
+    git-clone flow as "From source (development)".
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 23:30:00 +0000
+
+tt-local-generator (0.96.2) noble; urgency=medium
+
+  * fix(models): weight downloads now work on a fresh system without a
+    pre-existing HuggingFace CLI. bin/download_model.sh:
+    - Search the Python user-site bin (~/.local/bin) for `hf` — a non-root pip
+      install (the postinst path via runuser) lands the entrypoint there, and
+      it is NOT on PATH in a fresh postinst, so downloads previously failed with
+      "HuggingFace CLI still not found after pip install" on any box lacking
+      tt-installer's venv or a system `hf` (container-verified; the fix
+      downloads real AnimateDiff weights end to end).
+    - Drop the `huggingface_hub[cli]` extra (removed in huggingface-hub >= 1.0,
+      which warns "does not provide the extra 'cli'") — the `hf` command ships
+      in the base package.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 22:00:00 +0000
+
 tt-local-generator (0.96.1) noble; urgency=medium
 
   * fix(demo-seed): apply Copilot PR#24 re-review:

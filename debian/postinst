@@ -103,10 +103,19 @@ _section "Creating shared model storage"
 
 OPT_MODELS="/opt/tenstorrent/models"
 
-# Resolve the docker group — fall back to root if docker isn't configured yet.
+# Resolve the group that owns the shared model storage. Prefer 'docker' (so any
+# docker-group member can add models without sudo). If Docker isn't installed
+# (no docker group), fall back to the INSTALLING user's primary group — NOT
+# root: the tt-model-* postinsts run bin/download_model.sh as $SUDO_USER, and
+# download_model.sh prefers /opt/tenstorrent/models/hub when it exists, so a
+# root:root dir would make every weight download fail with a permission error on
+# a fresh install (silently, since the download is fail-soft). Group + mode 2775
+# (setgid, group-writable) then lets that user write. (Copilot PR#25 review.)
 _MODEL_GROUP="root"
 if getent group docker &>/dev/null; then
     _MODEL_GROUP="docker"
+elif [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    _MODEL_GROUP="$(id -gn "$REAL_USER" 2>/dev/null || echo root)"
 fi
 
 for _dir in "$OPT_MODELS" "$OPT_MODELS/tt-weights"; do
@@ -165,9 +174,27 @@ chmod -R a+w "$INSTALL_DIR/vendor/tt-inference-server/workflow_logs" 2>/dev/null
 # =============================================================================
 if [[ -n "$REAL_USER" ]] && id "$REAL_USER" &>/dev/null; then
     if ! id -nG "$REAL_USER" | grep -qw docker; then
-        _section "Adding $REAL_USER to docker group"
-        usermod -aG docker "$REAL_USER"
-        echo "Done. The change takes effect on next login (or run: newgrp docker)."
+        if getent group docker &>/dev/null; then
+            _section "Adding $REAL_USER to docker group"
+            # Fail-soft: a usermod hiccup must NEVER abort the package install.
+            if usermod -aG docker "$REAL_USER"; then
+                echo "Done. The change takes effect on next login (or run: newgrp docker)."
+            else
+                echo "WARNING: could not add $REAL_USER to the docker group. Add it later with:"
+                echo "  sudo usermod -aG docker $REAL_USER"
+            fi
+        else
+            # The 'docker' group only exists once docker-ce/docker.io is installed.
+            # This postinst deliberately does NOT nested-apt-install docker (the
+            # parent apt-get holds the dpkg lock), so on a box without docker yet
+            # the group is ABSENT — and `usermod -aG docker` would exit 6 and,
+            # under `set -e`, abort the ENTIRE package install (breaking a plain
+            # `sudo apt install tt-local-generator` from the PPA). Defer instead.
+            _section "Deferring docker group membership for $REAL_USER"
+            echo "The 'docker' group does not exist yet (Docker not installed)."
+            echo "After installing Docker, add yourself with:"
+            echo "  sudo usermod -aG docker $REAL_USER"
+        fi
     fi
 fi
 
@@ -465,7 +492,10 @@ cat <<'EOF'
 
  Optional:
  ─────────
- [ ] 3. Install tt-installer for Qwen3 prompt-server GPU support:
+ [ ] 3. Install tt-installer for the tt-metal runtime (AnimateDiff + on-device
+        inference) and the torch/transformers the prompt-server uses. Note: the
+        Qwen3-0.6B prompt-server runs on CPU — tt-installer is not a GPU/prompt
+        requirement, just the supported way to get its Python deps + tt-metal:
            https://github.com/tenstorrent/tt-installer
 
  [ ] 4. Launch the app:

@@ -170,7 +170,41 @@ tt-local-generator/
 
 ## Quick start
 
-### Single-command setup (recommended)
+### Debian / Ubuntu — apt (Tenstorrent PPA, recommended)
+
+`tt-local-generator` is published in the **Tenstorrent apt repository** at `ppa.tenstorrent.com` — the easiest way to get the latest version and keep it current with `apt upgrade`. Add the repository once, then install:
+
+```bash
+# Add Tenstorrent's package-signing key and apt repository
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo wget -qO /etc/apt/keyrings/tt-pkg-key.asc https://ppa.tenstorrent.com/tt-pkg-key.asc
+echo "deb [signed-by=/etc/apt/keyrings/tt-pkg-key.asc] https://ppa.tenstorrent.com/ubuntu/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+  | sudo tee /etc/apt/sources.list.d/tenstorrent.list
+sudo apt update
+
+# Install the app (a default install pulls its Recommends — Docker,
+# tt-installer, and the AnimateDiff weight package — so AnimateDiff works
+# out of the box)
+sudo apt install tt-local-generator
+
+# Launch
+tt-local-gen
+```
+
+**Model weights** are separate `tt-model-*` packages that download their weights **at install time** (into `/opt/tenstorrent/models/hub`, shared system-wide via `/etc/profile.d/tt-local-generator.sh`). AnimateDiff (`tt-model-animatediff`, ~5.7 GB, public) is pulled by default; add others as needed:
+
+```bash
+sudo apt install tt-model-wan2-t2v               # Wan2.2 text-to-video (~118 GB)
+sudo apt install tt-model-flux                   # FLUX.1-schnell image (public)
+sudo apt install tt-model-qwen3                  # Qwen3-0.6B prompt-gen LLM (~1.2 GB)
+sudo apt install tt-local-generator-models-all   # everything (~360 GB)
+```
+
+Gated models (e.g. `tt-model-flux-dev`) prompt once for a HuggingFace token via debconf; the public ones need no token.
+
+The same repository hosts the whole Tenstorrent stack. Two large prerequisites the app packages can't ship are declared as `Recommends`, so `apt install tt-local-generator` pulls them by default: [`tt-installer`](https://github.com/tenstorrent/tt-installer) (the tt-metal runtime AnimateDiff and on-device inference need, plus the torch/transformers the CPU prompt-server uses) and Docker CE (runs the tt-inference-server containers for the video/image models — AnimateDiff itself needs no Docker, it runs directly on Blackhole via tt-metal).
+
+### From source (development)
 
 ```bash
 git clone https://github.com/tenstorrent/tt-local-generator.git ~/code/tt-local-generator
