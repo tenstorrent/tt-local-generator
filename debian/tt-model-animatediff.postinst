@@ -1,0 +1,68 @@
+#!/bin/bash
+# debian/tt-model-animatediff.postinst — post-install for tt-model-animatediff
+#
+# Downloads the two HuggingFace repos the AnimateDiff (TTNN) generator needs:
+#   - CompVis/stable-diffusion-v1-4               (~4.0 GB, base SD model)
+#   - guoyww/animatediff-motion-adapter-v1-5-2    (~1.7 GB, motion adapter)
+# Both are fully public — NO HuggingFace token or license acceptance is
+# required, so (unlike the gated tt-model-* packages) this postinst does not
+# touch debconf at all.
+#
+# Weights land in the real (non-root) user's HuggingFace cache, where the
+# AnimateDiff runner (vendor/tt-animatediff/examples/generate.py) looks for
+# them at generation time.
+#
+# Fail-soft: if a download fails, print retry instructions and exit 0 — the
+# package stays installed and the app still runs (AnimateDiff just won't
+# generate until the weights are present).
+
+set -euo pipefail
+
+DOWNLOAD_HELPER="/usr/lib/tt-local-generator/bin/download_model.sh"
+REPOS=(
+    "CompVis/stable-diffusion-v1-4"
+    "guoyww/animatediff-motion-adapter-v1-5-2"
+)
+
+# ── Action guard ───────────────────────────────────────────────────────────────
+case "${1:-}" in
+    configure) : ;;
+    abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+    *) exit 0 ;;
+esac
+
+# ── Determine the real (non-root) user ────────────────────────────────────────
+REAL_USER="${SUDO_USER:-${USER:-}}"
+
+echo ""
+echo "====== Downloading AnimateDiff weights (~5.7 GB total) ======"
+echo "Two public HuggingFace repos — no token required. The package is already"
+echo "installed; you can safely Ctrl-C and re-run any repo later with:"
+for r in "${REPOS[@]}"; do
+    echo "  tt-local-gen-download-model --repo $r"
+done
+echo ""
+
+if [[ -z "$REAL_USER" ]] || [[ "$REAL_USER" == "root" ]]; then
+    echo "WARNING: cannot determine a non-root user — skipping the automatic"
+    echo "         download (weights would land in /root/.cache, not your user)."
+    echo "         Re-run as your regular user:"
+    for r in "${REPOS[@]}"; do
+        echo "           tt-local-gen-download-model --repo $r"
+    done
+    exit 0
+fi
+
+# ── Download each repo as the real user (fail-soft, never abort the install) ──
+for r in "${REPOS[@]}"; do
+    echo "--- $r ---"
+    runuser -u "$REAL_USER" -- \
+        "$DOWNLOAD_HELPER" --repo "$r" --skip-if-exists \
+    || {
+        echo ""
+        echo "ERROR: download of $r failed. Retry manually (no token required):"
+        echo "  tt-local-gen-download-model --repo $r"
+    }
+done
+
+exit 0

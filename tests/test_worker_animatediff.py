@@ -146,6 +146,48 @@ class TestHappyPath:
         assert call_kwargs.kwargs.get("temporal_alpha") == 0.25
 
 
+class TestMultichipMode:
+    def _run_capture_mode(self, *, chips, worker_kwargs):
+        """Run a worker with `chips` reported by check_hardware and return the
+        multichip_mode kwarg run_subprocess was called with."""
+        worker = _make_worker(**worker_kwargs)
+        run_sub = MagicMock(return_value=(True, None))
+        with (
+            patch("artgen.generators.animatediff.check_hardware",
+                  return_value=(True, "Blackhole P300c", chips)),
+            patch("artgen.generators.animatediff.run_subprocess", run_sub),
+            patch("artgen.generators.animatediff.make_gif_thumbnail"),
+            patch("worker.VIDEOS_DIR", new=Path("/tmp/tt-gen-test/videos")),
+            patch("worker.THUMBNAILS_DIR", new=Path("/tmp/tt-gen-test/thumbnails")),
+            patch("worker.Path.mkdir", MagicMock()),
+            patch("worker.GenerationRecord.new_animatediff", return_value=MagicMock()),
+            patch.object(worker, "_write_prompt_sidecar"),
+        ):
+            _run(worker)
+        run_sub.assert_called_once()
+        return run_sub.call_args.kwargs.get("multichip_mode")
+
+    def test_coherent_mode_flows_to_run_subprocess(self):
+        """A worker built with multichip_mode='coherent' + >1 chip must pass
+        multichip_mode='coherent' to run_subprocess (was hardwired 'remix')."""
+        mode = self._run_capture_mode(
+            chips=4, worker_kwargs=dict(multi_chip=True, multichip_mode="coherent"))
+        assert mode == "coherent"
+
+    def test_legacy_none_defaults_to_remix(self):
+        """Back-compat: multichip_mode unset (None) + >1 chip preserves the old
+        boolean behaviour -> 'remix'."""
+        mode = self._run_capture_mode(
+            chips=4, worker_kwargs=dict(multi_chip=True))
+        assert mode == "remix"
+
+    def test_single_chip_is_always_off(self):
+        """Even with mode='coherent', a single effective chip is 'off'."""
+        mode = self._run_capture_mode(
+            chips=1, worker_kwargs=dict(multi_chip=True, multichip_mode="coherent"))
+        assert mode == "off"
+
+
 class TestCancellation:
     def test_cancel_before_subprocess_skips_run(self):
         """cancel() set before subprocess should call on_error and not invoke run_subprocess."""

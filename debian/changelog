@@ -1,3 +1,282 @@
+tt-local-generator (0.96.1) noble; urgency=medium
+
+  * fix(demo-seed): apply Copilot PR#24 re-review:
+    - When --db is given without an explicit storage dir, co-locate the copied
+      media and the .demo_seed_version marker with THAT db (its parent), so a
+      custom-db seed no longer scatters files into the default library or leaks
+      the seeded-once marker across db locations.
+    - Use a new lightweight MediaStore.all_ids() (SELECT id) for the idempotency
+      check instead of materializing every full row.
+  * fix(packaging): postinst STEP 6b now points at the tt-model-animatediff
+    weight package (added in 0.96.0) as the offline-ready path, instead of
+    saying AnimateDiff has no weight package.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 20:00:00 +0000
+
+tt-local-generator (0.96.0) noble; urgency=medium
+
+  * fix(packaging): AnimateDiff — the default video model — now actually ships
+    on a clean install. Its runner (vendor/tt-animatediff submodule,
+    examples/generate.py) previously shipped EMPTY because CI never inited
+    submodules:
+    - release-deb.yml: actions/checkout uses `submodules: recursive`.
+    - debian/rules: strip tt-animatediff's non-runtime trees (docs/generated/
+      demo/tests/output — 277 MB of demo galleries → 656 KB of runner code)
+      and FAIL the build if examples/generate.py is missing from the staged
+      tree (fail-loud, like the tt_dit inject guard).
+    - postinst: STEP 6b flags the tt-metal python_env prereq a package can't
+      provide.
+  * feat(packaging): new tt-model-animatediff weight package downloads the two
+    public repos the runner needs (CompVis/stable-diffusion-v1-4 base +
+    guoyww/animatediff-motion-adapter-v1-5-2). No debconf/token (both public).
+    tt-local-generator now Recommends it (and tt-installer), so a default
+    `apt install` gives working AnimateDiff out of the box; also added to
+    tt-local-generator-models-all.
+  * docs: refreshed README + docs-site with new primary screenshots
+    (library-browse, create-animatediff) and an AnimateDiff delivery GIF
+    (four chips finishing + the result landing).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 18:00:00 +0000
+
+tt-local-generator (0.95.0) noble; urgency=medium
+
+  * fix(demo-seed): apply jzhengTT PR#24 review (8 items):
+    - #1 (blocker): strip build-machine video_path/image_path from seeded
+      records' params so history_store._to_gen falls back to the copied
+      file_path — otherwise 20/27 demo items resolved to dead links on a
+      fresh install (the library rendered fine from thumbnails, but opening
+      or playing failed). Regression-pinned via _to_gen resolution.
+    - #2 (blocker): move the missing-media guard ABOVE the --force delete so a
+      manifest item whose media is absent can never delete-then-lose an
+      existing row.
+    - #3: debian/postinst seeds under `set -o pipefail` so a tt-ctl failure
+      inside the piped bash -c is actually reported, not masked by sed's exit.
+    - #4: debian/rules junk-strip targets the install parent dir so patches/
+      and plugins/ __pycache__ are cleaned, not just app/.
+    - #5: a `.demo_seed_version` marker seeds ONCE per collection version, so
+      an `apt upgrade` never resurrects demo art the user deleted (a newer
+      collection `version` re-seeds intentionally). tt-ctl reports the
+      short-circuit.
+    - #6: attractor / TT-TV auto-generated AnimateDiff jobs now honor the
+      persisted `animatediff_multichip_default` setting (new
+      _effective_animatediff_defaults()), not just the Create panel — the
+      "pin the default without a code edit" promise now holds on every path.
+    - #7: restore the "keep" value in the seed_mode setting comment.
+    - #8: pipeline_studio._stage_preview_thumb_path is a pure path accessor
+      again; cache pruning moved to the thumbnail WRITE path.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 12:00:00 +0000
+
+tt-local-generator (0.94.5) noble; urgency=medium
+
+  * fix(tt-ctl): seed-demo help/usage text said "Demo" playlist; corrected to
+    "Welcome to tt-local-generator" to match the actual seeded playlist name
+    (Copilot PR#24 re-review). No behavior change.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 12:00:00 +0000
+
+tt-local-generator (0.94.4) noble; urgency=medium
+
+  * fix(packaging): ship the demo/seed media to /usr/share/tt-local-generator/
+    (FHS: arch-independent read-only data belongs in /usr/share, not the
+    arch-dependent /usr/lib where the app code rides). `debian/rules` now
+    installs `demo-collection` there separately from the `/usr/lib` app copy.
+  * feat(demo-seed): discover the collection via $XDG_DATA_DIRS instead of a
+    single hardcoded path — `resolve_collection_dir` walks explicit → each
+    $XDG_DATA_DIRS entry (default /usr/local/share:/usr/share) → in-repo. This
+    makes /usr/local/share/tt-local-generator/ a free admin-override location
+    (earlier in XDG order) with the package never touching /usr/local. +tests
+    (XDG discovery + precedence). Re-verified in the tt-developer-image
+    container: media still lands in the app's library from the new location.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 11:00:00 +0000
+
+tt-local-generator (0.94.3) noble; urgency=medium
+
+  * fix(packaging): strip runtime/build junk from the vendored tree at package
+    time so the .deb is clean regardless of the build box's state — exclude
+    `.workflow_venvs/` (uv-created venvs with compiled .so/uv/libc, ~133 MB
+    uncompressed, that leak into vendor/ once the media server has run),
+    embedded `.git/` (~14 MB), `.gitignore`/`.gitmodules`, `*.pyc`, `*.bak`,
+    `__pycache__`, and `app/.pytest_cache`. Cuts the .deb 327 MB → 279 MB and
+    lintian errors ~15 → 2 (the 2 remaining are the intentional vendor `.env`
+    conffile-in-/usr, kept to preserve user edits on upgrade). Verified: a clean
+    `apt-get install` in the tt-developer-image container succeeds (exit 0),
+    the postinst runs to completion, and the demo-seed step populates a
+    "Welcome to tt-local-generator" playlist (27 items, un-favorited, idempotent).
+    `debian/rules`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 10:15:00 +0000
+
+tt-local-generator (0.94.2) noble; urgency=medium
+
+  * fix(demo-seed): apply Copilot PR#24 review.
+    - `--force` now actually replaces a record (delete-then-insert; `MediaStore.
+      add` is INSERT-OR-IGNORE, so it was a silent no-op before).
+    - A manifest item whose media file is missing on disk is skipped (counted as
+      `missing` in the report), never inserted as a dangling record.
+    - Renamed the seeded playlist "Demo" → "Welcome to tt-local-generator" (a
+      friendlier welcome collection); `possibilities._default_curated_matcher`
+      now also matches "welcome" so the "Start something" wall still surfaces it.
+    - Shipped art seeds `starred=0` (documented) — it's the default, not the
+      user's pick; a manifest `starred` is deliberately not carried in.
+    - Fixed a stale "pinned into the corner" comment in create_view.py (the viz
+      docks now). +tests (force replace, missing-media guard, un-favorited).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Fri, 21 Aug 2026 09:30:00 +0000
+
+tt-local-generator (0.94.1) noble; urgency=medium
+
+  * feat: audit part 3 — the missing-setting adds. New persisted
+    `animatediff_multichip_default` setting ("off"|"remix"|"coherent", default
+    "remix") with a Preferences → Generation "AnimateDiff multi-chip default"
+    dropdown; the Create panel's Multi-chip selector now preselects it, so the
+    default can be pinned without a code edit (it had been hand-changed twice).
+    Added a File → "About TT Local Generator" item (Gtk.AboutDialog showing the
+    shipped VERSION, Apache-2.0). Stale Preferences/docstring text corrected.
+    `app_settings.py`, `create_param_panels.py`, `main_window.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 16:45:00 +0000
+
+tt-local-generator (0.94.0) noble; urgency=medium
+
+  * feat(create): re-home the "📊 Monitor HW" hardware visualizer (audit part 2).
+    The toggle left the Create CTA action row (where it was a view-toggle among
+    action buttons) and now lives in TWO synced places: a header toggle next to
+    "Servers ▾" (hardware-adjacent) and a View → "Hardware Monitor" checkbox,
+    both driven by one stateful `win.toggle-hw-monitor` action. The viz no
+    longer free-floats over the queue/recents — it DOCKS at the bottom of the
+    result column (`_viz_dock`) when active. New `hw_monitor_default_on` setting
+    persists the choice across sessions (restored on launch). `create_view.py`,
+    `main_window.py`, `app_settings.py` + tests (`test_main_window_hw_monitor.py`).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 16:05:00 +0000
+
+tt-local-generator (0.93.0) noble; urgency=medium
+
+  * chore(audit): pre-release toolbar + settings audit — part 1 (dead removals
+    + menu fixes). Removed 6 settings keys nothing consumed (quality_steps,
+    hidden_plugins, skyreels_num_frames, preferred_video_model, pinned_seed,
+    last_successful_deployment) and their inert UI: the menu-bar "Quality"
+    preset radios (the per-panel Steps spinner is the real control) and the
+    Preferences "Plugins" hide-from-UI section (no picker ever filtered on it).
+    Fixed misleading/orphaned menu items: dropped "Director Style" from the
+    Image context menu (it only affects video prompts), surfaced the orphaned
+    "TT-TV Preferences…" entry (working handler, was in no menu), and pointed
+    Debug → Open Logs Folder at the real user log dir (~/.local/share/
+    tt-local-generator/logs) instead of the repo-root logs/. Regression tests
+    lock the removals. (Monitor HW re-home + the missing-setting additions land
+    next.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 15:10:00 +0000
+
+tt-local-generator (0.92.1) noble; urgency=medium
+
+  * demo-collection: give the two color-palette swatch items real captions
+    (were "Color palette 3/4" stubs) — "World's Fair 1964 — palette study in …",
+    tying them to the 1964 workflow they came from.
+  * docs(docker): `docker/README.md` corrected — the directory ships nothing by
+    default (bundles are git-ignored, not in the .deb; the app pulls images from
+    GHCR at runtime). The stale 7.9 GB 0.11.1 bundle + its orphaned Git LFS
+    object were removed to reclaim ~15 GB (.git 8.0 GB → 573 MB).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 14:10:00 +0000
+
+tt-local-generator (0.92.0) noble; urgency=medium
+
+  * feat: bundle a curated demo collection (27 items, ~10 MiB) so a fresh
+    install opens with real art instead of an empty gallery. `demo-collection/`
+    (manifest + media + thumbnails, media byte-for-byte as generated) ships in
+    the repo and the .deb; `app/demo_seed.py` (`tt-ctl seed-demo`) loads it into
+    media.db as a "Demo" playlist — idempotent, GTK-free, fail-soft. The .deb
+    postinst seeds it for the invoking user (a seed failure never aborts
+    configuration). Captions were recomposed for the artgen/World's-Fair/"lore"
+    items whose stored prompt was a template or a truncated line; each item's
+    ORIGINAL generation prompt is preserved in the manifest for provenance
+    (`caption` = display text, `prompt` = as-generated). +tests
+    (`tests/test_demo_seed.py`), incl. an end-to-end seed of the real shipped
+    collection.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 13:40:00 +0000
+
+tt-local-generator (0.91.1) noble; urgency=medium
+
+  * revert(create): default AnimateDiff multi-chip back to Remix (was briefly
+    Coherent in v0.91.0). On-hardware a 4-chip Coherent run computed segment 0
+    fine (~39s, 293W) but aborted (SIGABRT) during multi-board MESH TEARDOWN —
+    `RiscFirmwareInitializer::teardown` timed out waiting for an ethernet core
+    ("Device 0: Timed out ... active ethernet core 29-25 ... Try resetting the
+    board"), the QB2's known-fragile cross-board fabric. Coherent chains
+    segments by opening/closing the 4-chip mesh, so it exercises that fabric;
+    Remix (independent 1x1 mesh per chip) does not. A default generation mode
+    must not crash on the target hardware, so Remix is the default again;
+    Coherent remains one dropdown-pick away (works when the board is healthy).
+    Follow-up: make the coherent teardown resilient to the ethernet timeout
+    (reset-and-retry) before promoting it to default. No wiring change — the
+    v0.90.0 selector is unaffected.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:55:00 +0000
+
+tt-local-generator (0.91.0) noble; urgency=medium
+
+  * fix(create): the "Monitor HW" toggle used the 👁 eye emoji (U+1F441), whose
+    emoji-vs-text presentation is ambiguous on many Linux/GTK font stacks so it
+    rendered as an odd mis-sized/misaligned glyph. Swapped to 📊 (U+1F4CA,
+    emoji-presentation-default) so it matches the ✨/🎬 glyphs on the other CTA
+    buttons.
+  * feat(create): AnimateDiff multi-chip now defaults to **Coherent** (one
+    continuous video across chips) instead of Remix — the more intuitive
+    "use all my chips" result. `_ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL` +
+    `_ANIMATEDIFF_DEFAULTS["multichip_mode"]` in both create_param_panels.py and
+    main_window.py. Remix/Off remain one dropdown-pick away. (The worker's
+    None/legacy fallback stays "remix" for back-compat with programmatic
+    callers; the GUI always passes an explicit mode now.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:35:00 +0000
+
+tt-local-generator (0.90.1) noble; urgency=medium
+
+  * fix(create): the Create CTA row buttons are now one consistent family.
+    "Surprise me" had no CSS at all (rendered as a bare default button), and
+    Theme Set vs Watch used different backgrounds/paddings, so the row looked
+    ragged and the labels didn't sit on a common baseline. All four now share a
+    single box model (same border, radius, padding, font-size) — Create stays
+    the solid-teal primary (with a fill-matching border so its height equals the
+    outlined siblings), the rest are one shared outlined look. Renamed the
+    "👁 Watch" toggle to "👁 Monitor HW" (clearer: it monitors the Tenstorrent
+    hardware live). `app/create_view.py`.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 12:05:00 +0000
+
+tt-local-generator (0.90.0) noble; urgency=medium
+
+  * feat(create): AnimateDiff multi-chip mode is now selectable in the GUI —
+    Remix (varied clips across chips) / Coherent (one longer latent-chained
+    video) / Off (single chip). Previously the Create surface only had a "use
+    all chips in parallel" checkbox and `worker.py` hardwired `multichip_mode =
+    "remix"`, so Coherent was reachable only from the CLI. A new `multichip_mode`
+    string now threads panel -> `_ANIMATEDIFF_DEFAULTS` -> `AnimateDiffGeneration
+    Worker` -> `run_subprocess(--multichip-mode)`; the `multi_chip` bool is kept
+    (derived: mode != "off") for back-compat, and a None/legacy mode still maps
+    to "remix" (byte-identical to the old behaviour). `app/create_param_panels.py`,
+    `app/worker.py`, `app/main_window.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 11:15:00 +0000
+
+tt-local-generator (0.89.3) noble; urgency=medium
+
+  * fix(pipeline): TTLGMontage concat list is apostrophe-safe. `_write_concat_list`
+    now escapes single quotes in image paths (`_concat_quote`: a literal `'`
+    becomes `'\''` inside the single-quoted `file` line), so a slideshow whose
+    frames live under a path like `/home/O'Brien/…` no longer corrupts the
+    ffmpeg concat demuxer input. `app/pipeline_engine.py` + regression tests.
+  * fix(pipeline): bound the Stage's transient thumbnail cache. `/tmp/
+    ttlg-stage-thumbs` accumulated one PNG per distinct previewed artifact
+    forever; `_prune_thumb_cache` now trims it to the newest 256 files
+    (oldest-by-mtime first), fail-soft. `app/pipeline_studio.py` + tests.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 20 Aug 2026 10:30:00 +0000
+
 tt-local-generator (0.89.2) noble; urgency=medium
 
   * fix(convert-library): `--backup` no longer leaves a phantom 0-byte `.bak`

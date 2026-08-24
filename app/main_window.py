@@ -1712,6 +1712,7 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     lightning=False,
     lightning_steps=4,
     multi_chip=True,
+    multichip_mode="remix",
     device_id=None,
     chain_from=None,
     chain_save=False,
@@ -1720,6 +1721,29 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter_alpha=1.0,
     motion_adapter_skip=None,
 )
+
+
+def _effective_animatediff_defaults() -> dict:
+    """`_ANIMATEDIFF_DEFAULTS` with the multi-chip mode taken from the persisted
+    `animatediff_multichip_default` setting, so the "pin the default without a
+    code edit" promise holds on the NON-panel AnimateDiff paths too — attractor /
+    TT-TV auto-gen and legacy/partial queue restores. (The Create panel already
+    honors the setting via `create_param_panels._animatediff_multichip_default_label`;
+    this is the parallel source of truth for every path that builds args straight
+    from the module defaults instead of from a panel collect.)
+
+    `multi_chip` is kept consistent with the mode (False only for "off") so the
+    legacy boolean and the explicit engine mode never disagree — the same
+    invariant the panel's `_collect_animatediff_args` maintains. An unrecognized
+    setting value falls back to the safe "remix" default.
+    """
+    d = dict(_ANIMATEDIFF_DEFAULTS)
+    mode = str(_settings.get("animatediff_multichip_default") or "remix")
+    if mode not in ("off", "remix", "coherent"):
+        mode = "remix"
+    d["multichip_mode"] = mode
+    d["multi_chip"] = mode != "off"
+    return d
 
 
 def _theme_key_from_text(text: str) -> str:
@@ -4913,7 +4937,7 @@ class PreferencesDialog(Gtk.Window):
     Application preferences dialog.
 
     Sections:
-      • Generation — default steps quality preset, sleep-after-N counter
+      • Generation — AnimateDiff frames, multi-chip default mode, sleep-after-N
       • System     — screensaver inhibit during generation
       • Disk       — minimum free space (stop-generating threshold)
       • TT-TV      — image dwell time, video fallback timer
@@ -4968,65 +4992,9 @@ class PreferencesDialog(Gtk.Window):
         scroll.set_child(box)
         self.set_child(scroll)
 
-        # ── Plugins ───────────────────────────────────────────────────────────
-        box.append(self._section("Plugins"))
-        plugins_note = Gtk.Label(
-            label="Uncheck a plugin or model to hide it from the UI. "
-                  "Nothing is removed — you can re-enable at any time."
-        )
-        plugins_note.set_xalign(0)
-        plugins_note.set_wrap(True)
-        plugins_note.add_css_class("muted")
-        plugins_note.set_margin_bottom(4)
-        box.append(plugins_note)
-
-        hidden = set(_settings.get("hidden_plugins") or [])
-
-        # Video models
-        video_entries = [
-            ("wan2",        "Wan2.2-T2V  —  720p video"),
-            ("mochi",       "Mochi-1  —  480×848 video"),
-            ("skyreels",    "SkyReels I2V  —  960×544"),
-            ("animatediff", "AnimateDiff  —  local Blackhole GIF"),
-        ]
-        for key, label in video_entries:
-            cb = Gtk.CheckButton(label=label)
-            cb.set_active(key not in hidden)
-            cb.set_tooltip_text(f"Video model key: {key!r}")
-            def _on_plugin_toggle(widget, k=key):
-                h = set(_settings.get("hidden_plugins") or [])
-                if widget.get_active():
-                    h.discard(k)
-                else:
-                    h.add(k)
-                _settings.set("hidden_plugins", sorted(h))
-            cb.connect("toggled", _on_plugin_toggle)
-            box.append(cb)
-
-        # Artgen generators (from plugin loader)
-        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        try:
-            import plugin_loader as _pl
-            _pl.load_plugins()
-            artgen_names = sorted(
-                n for n in _pl.all_names()
-                if _pl.get(n).runnable
-            )
-        except Exception:
-            artgen_names = []
-        for name in artgen_names:
-            cb = Gtk.CheckButton(label=f"Artgen: {name}")
-            cb.set_active(name not in hidden)
-            cb.set_tooltip_text(f"Artgen plugin key: {name!r}")
-            def _on_artgen_toggle(widget, k=name):
-                h = set(_settings.get("hidden_plugins") or [])
-                if widget.get_active():
-                    h.discard(k)
-                else:
-                    h.add(k)
-                _settings.set("hidden_plugins", sorted(h))
-            cb.connect("toggled", _on_artgen_toggle)
-            box.append(cb)
+        # (The "Plugins" hide-from-UI section was removed in the v0.93.0 audit:
+        # its checkboxes persisted `hidden_plugins`, but no picker ever filtered
+        # on it, so it silently did nothing. Removed rather than wired.)
 
         # ── Generation ────────────────────────────────────────────────────────
         box.append(self._section("Generation"))
@@ -5049,6 +5017,40 @@ class PreferencesDialog(Gtk.Window):
             "Number of frames to generate per AnimateDiff GIF. "
             "More frames = longer GIF, ~5 min/frame on Blackhole. "
             "Default: 8 (~40 min total)."
+        ))
+
+        # AnimateDiff multi-chip default mode — sets what the Create panel's
+        # Multi-chip selector defaults to, without a code edit.
+        from create_param_panels import (
+            _ANIMATEDIFF_MULTICHIP_CHOICES as _MC_CHOICES,
+            _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE as _MC_LABEL_TO_MODE,
+            _ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL as _MC_MODE_TO_LABEL,
+        )
+        mc_sl = Gtk.StringList()
+        for _lbl in _MC_CHOICES:
+            mc_sl.append(_lbl)
+        mc_dd = Gtk.DropDown(model=mc_sl)
+        _cur_label = _MC_MODE_TO_LABEL.get(
+            str(_settings.get("animatediff_multichip_default") or "remix"),
+            _MC_CHOICES[0])
+        try:
+            mc_dd.set_selected(_MC_CHOICES.index(_cur_label))
+        except ValueError:
+            pass
+
+        def _on_mc_default_changed(dd, _pspec):
+            m = dd.get_model()
+            idx = dd.get_selected()
+            if m is not None and idx < m.get_n_items():
+                _settings.set("animatediff_multichip_default",
+                              _MC_LABEL_TO_MODE.get(m.get_string(idx), "remix"))
+        mc_dd.connect("notify::selected", _on_mc_default_changed)
+        box.append(self._row(
+            "AnimateDiff multi-chip default:", mc_dd,
+            "Default mode when AnimateDiff spans multiple chips: Remix (varied "
+            "clips, stitched), Coherent (one longer latent-chained video), or "
+            "Off (single chip). Coherent can stress the board's multi-chip "
+            "fabric — Remix is the safe default."
         ))
 
         # Sleep after N completions
@@ -5325,16 +5327,9 @@ def _build_context_menu_for_source(source: str) -> "Gio.Menu":
     """
     menu = Gio.Menu()
 
-    # Quality (video / animate / image)
-    if source in ("video", "animate", "image"):
-        quality_section = Gio.Menu()
-        for label, steps in [("Fast (10 steps)", "10"),
-                              ("Standard (30 steps)", "30"),
-                              ("High Quality (40 steps)", "40")]:
-            item = Gio.MenuItem.new(label, "win.quality")
-            item.set_attribute_value("target", GLib.Variant("s", steps))
-            quality_section.append_item(item)
-        menu.append_section("Quality", quality_section)
+    # (Quality preset menu removed in the v0.93.0 audit — it wrote a dead
+    # `quality_steps` setting nothing read; the per-panel Steps spinner is the
+    # real control.)
 
     # Sleep After (all sources)
     sleep_section = Gio.Menu()
@@ -5345,8 +5340,9 @@ def _build_context_menu_for_source(source: str) -> "Gio.Menu":
         sleep_section.append_item(item)
     menu.append_section("Sleep After", sleep_section)
 
-    # Director Style (video / image only)
-    if source in ("video", "image"):
+    # Director Style (video only — the setting only affects video prompts;
+    # v0.93.0 audit dropped it from the Image context where it had no effect).
+    if source == "video":
         dir_prob_section = Gio.Menu()
         for label, pct in [("Never", "0"), ("Sometimes (33%)", "33"),
                            ("Often (66%)", "66"), ("Always", "100")]:
@@ -5495,11 +5491,11 @@ class MainWindow(Gtk.ApplicationWindow):
         if self._inventory_url:
             self._start_inventory_fetch()
         # SP-3d-5: the ControlPanel-only startup steps that used to live here
-        # (sync_quality_btn_to_steps / switch_to_source / _set_model, driven
-        # by `quality_steps` and `last_successful_deployment` settings) are
-        # gone with the class — Create reads those settings directly, and
-        # `_current_medium_source()` derives "what am I making" from
-        # CreateView's own active-medium state instead of a startup pre-select.
+        # (sync_quality_btn_to_steps / switch_to_source / _set_model, driven by
+        # the `quality_steps` and `last_successful_deployment` settings) are
+        # gone with the class. Both settings were then removed entirely in the
+        # v0.93.0 audit (nothing consumed them); `_current_medium_source()`
+        # derives "what am I making" from CreateView's own active-medium state.
 
     def _set_crumbs(self, crumbs) -> None:
         """Push a new breadcrumb trail onto `NavState`, if one exists.
@@ -5625,6 +5621,22 @@ class MainWindow(Gtk.ApplicationWindow):
             self._nav_state, on_resume=self._on_context_resume, on_dismiss=self._on_context_dismiss
         )
         loop_nav_row.append(self._context_tray)
+
+        # Monitor HW toggle — sits next to "Servers ▾" (hardware-adjacent: it
+        # watches the chips, right where the chip STATUS lives). Reuses the
+        # `.create-watch-btn` look from CreateView. Drives the shared
+        # win.toggle-hw-monitor action; kept in sync when the action changes
+        # from the View menu or the viz's ✕ (via `_sync_hw_monitor_button`,
+        # guarded by `_syncing_hw_monitor`).
+        self._hw_monitor_btn = Gtk.ToggleButton(label="\U0001f4ca Monitor HW")
+        self._hw_monitor_btn.add_css_class("create-watch-btn")
+        self._hw_monitor_btn.set_tooltip_text(
+            "Monitor the Tenstorrent hardware live while you generate — a chip "
+            "animation that pulses with real activity."
+        )
+        self._hw_monitor_btn.connect("toggled", self._on_hw_monitor_button_toggled)
+        loop_nav_row.append(self._hw_monitor_btn)
+
         loop_nav_row.append(self._servers_control.servers_button)
 
         # ── App menu bar ──────────────────────────────────────────────────────
@@ -5751,7 +5763,12 @@ class MainWindow(Gtk.ApplicationWindow):
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
             # button drove, only the launch UI has moved.
             on_theme_set=self._on_create_theme_set,
+            # The Monitor HW viz's ✕ dismiss routes here so the shared
+            # win.toggle-hw-monitor action (View menu + header toggle) flips off.
+            on_hw_monitor_close=self._on_hw_monitor_closed_from_viz,
         )
+        # Apply the persisted Monitor-HW preference now that CreateView exists.
+        self._apply_hw_monitor_startup()
         # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
         # `self._create_view` existed) may already have repopulated
         # `self._queue` from a crash/restart — `_refresh_create_queue_display`
@@ -5993,6 +6010,10 @@ class MainWindow(Gtk.ApplicationWindow):
         prefs_tttv.connect("activate", lambda *_: self._open_preferences(scroll_tttv=True))
         self.add_action(prefs_tttv)
 
+        about = Gio.SimpleAction.new("about", None)
+        about.connect("activate", lambda *_: self._on_about())
+        self.add_action(about)
+
         recover = Gio.SimpleAction.new("recover-jobs", None)
         recover.connect("activate", lambda *_: self._on_recover())
         recover.set_enabled(False)   # enabled once the server is reachable
@@ -6009,14 +6030,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Advanced-settings action removed SP-3d-5 (ControlPanel-only; see
         # AdvancedSettingsDialog deletion note above).
 
-        # ── Generation: quality preset (radio via stateful string action) ─────
-        quality_action = Gio.SimpleAction.new_stateful(
-            "quality",
-            GLib.VariantType.new("s"),
-            GLib.Variant("s", str(int(_settings.get("quality_steps")))),
-        )
-        quality_action.connect("activate", self._on_quality_action)
-        self.add_action(quality_action)
+        # (win.quality removed in v0.93.0 audit — wrote a dead setting.)
 
         # ── Generation: sleep after N (radio via stateful string action) ──────
         sleep_action = Gio.SimpleAction.new_stateful(
@@ -6055,6 +6069,19 @@ class MainWindow(Gtk.ApplicationWindow):
         toggle_detail.connect("activate", self._on_toggle_detail)
         self.add_action(toggle_detail)
         self._detail_visible: bool = True
+
+        # Monitor HW — one stateful boolean action drives BOTH the View-menu
+        # item and the header toggle next to "Servers ▾", and the viz's own ✕
+        # dismiss. Initial state = persisted preference (restored on launch).
+        hw_on = bool(_settings.get("hw_monitor_default_on"))
+        toggle_hw = Gio.SimpleAction.new_stateful(
+            "toggle-hw-monitor",
+            None,
+            GLib.Variant("b", hw_on),
+        )
+        toggle_hw.connect("activate", self._on_toggle_hw_monitor)
+        self.add_action(toggle_hw)
+        self._syncing_hw_monitor = False
 
         # ── Playlists ─────────────────────────────────────────────────────────
         pl_all = Gio.SimpleAction.new("playlist-all", None)
@@ -6119,6 +6146,9 @@ class MainWindow(Gtk.ApplicationWindow):
         file_menu.append("Download Remote Library…", "win.sync-from-server")
         file_menu.append_section(None, Gio.Menu())
         file_menu.append("Preferences…", "win.preferences")
+        file_menu.append("TT-TV Preferences…", "win.preferences-tttv")
+        file_menu.append_section(None, Gio.Menu())
+        file_menu.append("About TT Local Generator", "win.about")
         file_menu.append("Quit", "app.quit")
         self._menumodel.append_submenu("File", file_menu)
 
@@ -6140,6 +6170,7 @@ class MainWindow(Gtk.ApplicationWindow):
         view_menu = Gio.Menu()
         toggle_section = Gio.Menu()
         toggle_section.append("Detail Panel", "win.toggle-detail")
+        toggle_section.append("Hardware Monitor", "win.toggle-hw-monitor")
         view_menu.append_section(None, toggle_section)
 
         density_section = Gio.Menu()
@@ -6338,13 +6369,45 @@ class MainWindow(Gtk.ApplicationWindow):
             self._set_status(f"Could not open folder: {exc}")
 
     def _on_open_logs_folder(self, _action, _param) -> None:
-        """Open the logs/ directory in the system file manager."""
-        from log_viewer import _LOGS_DIR
-        logs_uri = f"file://{_LOGS_DIR}"
+        """Open the logs directory in the system file manager.
+
+        Opens the USER log dir (~/.local/share/tt-local-generator/logs), where
+        the per-service logs (animatediff, transforms) actually land — not the
+        repo-root `logs/` the old code pointed at (v0.93.0 audit fix)."""
+        from log_viewer import _USER_LOGS_DIR
+        try:
+            _USER_LOGS_DIR.mkdir(parents=True, exist_ok=True)  # may not exist yet
+        except Exception:
+            pass
+        logs_uri = f"file://{_USER_LOGS_DIR}"
         try:
             Gio.AppInfo.launch_default_for_uri(logs_uri, None)
         except Exception as e:
             self._set_status(f"Could not open logs folder: {e}")
+
+    def _app_version(self) -> str:
+        """Read the shipped VERSION file (sits beside app/ both in-repo and
+        installed under /usr/lib/tt-local-generator/). 'unknown' on any error."""
+        try:
+            return (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+        except Exception:
+            return "unknown"
+
+    def _on_about(self) -> None:
+        """File → About: a standard Gtk.AboutDialog with the app version."""
+        try:
+            dlg = Gtk.AboutDialog()
+            dlg.set_transient_for(self)
+            dlg.set_modal(True)
+            dlg.set_program_name("TT Local Generator")
+            dlg.set_version(self._app_version())
+            dlg.set_comments("Local generative media for Tenstorrent hardware.")
+            dlg.set_license_type(Gtk.License.APACHE_2_0)
+            dlg.set_website("https://github.com/tenstorrent/tt-local-generator")
+            dlg.set_website_label("tenstorrent/tt-local-generator")
+            dlg.present()
+        except Exception as e:
+            self._set_status(f"Could not open About: {e}")
 
     def _open_log_viewer(self, path: "str | None" = None) -> None:
         """Open (or present) the singleton LogViewerWindow, optionally jumping to *path*."""
@@ -6362,17 +6425,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._prefs_dialog.present()
         if scroll_tttv:
             self._prefs_dialog.scroll_to_tttv()
-
-    def _on_quality_action(self, action: Gio.SimpleAction,
-                           param: GLib.Variant) -> None:
-        """Menu: change default quality / steps preset."""
-        val = param.get_string()
-        action.set_state(GLib.Variant("s", val))
-        steps = int(val)
-        _settings.set("quality_steps", steps)
-        # SP-3d-5: the ControlPanel widget-sync call that used to live here
-        # (sync_quality_btn_to_steps) is gone with the class — this setting
-        # write is the persistence Create's own Controls zone reads directly.
 
     def _on_sleep_after_action(self, action: Gio.SimpleAction,
                                param: GLib.Variant) -> None:
@@ -6483,6 +6535,62 @@ class MainWindow(Gtk.ApplicationWindow):
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
         self._set_detail_pane_visible(not self._detail_visible)
         action.set_state(GLib.Variant("b", self._detail_visible))
+
+    # ── Monitor HW toggle (View menu + header button, one synced action) ──────
+    def _on_toggle_hw_monitor(self, action: Gio.SimpleAction, _param) -> None:
+        """Flip the shared Monitor-HW state: persist it, drive the CreateView
+        viz, and keep the header toggle in sync. Reached from the View-menu
+        item, the header ToggleButton, and the viz's ✕ dismiss (all route here
+        via the win.toggle-hw-monitor action)."""
+        new = not bool(action.get_state().get_boolean())
+        action.set_state(GLib.Variant("b", new))
+        _settings.set("hw_monitor_default_on", new)
+        cv = getattr(self, "_create_view", None)
+        if cv is not None:
+            cv.set_hw_monitor(new)
+        self._sync_hw_monitor_button(new)
+
+    def _sync_hw_monitor_button(self, active: bool) -> None:
+        """Reflect the action state onto the header ToggleButton without
+        re-entering `_on_hw_monitor_button_toggled` (guarded)."""
+        btn = getattr(self, "_hw_monitor_btn", None)
+        if btn is None or btn.get_active() == active:
+            return
+        self._syncing_hw_monitor = True
+        try:
+            btn.set_active(active)
+        finally:
+            self._syncing_hw_monitor = False
+
+    def _on_hw_monitor_button_toggled(self, btn: "Gtk.ToggleButton") -> None:
+        """Header toggle → drive the action (unless we're mid-sync from it)."""
+        if getattr(self, "_syncing_hw_monitor", False):
+            return
+        action = self.lookup_action("toggle-hw-monitor")
+        if action is None:
+            return
+        # Only activate when the button's new state differs from the action's,
+        # so a programmatic set_active during sync can't double-fire.
+        want = btn.get_active()
+        cur = bool(action.get_state().get_boolean())
+        if want != cur:
+            action.activate(None)
+
+    def _on_hw_monitor_closed_from_viz(self) -> None:
+        """The viz's ✕ dismiss → turn the shared toggle OFF (if currently on)."""
+        action = self.lookup_action("toggle-hw-monitor")
+        if action is not None and bool(action.get_state().get_boolean()):
+            action.activate(None)
+
+    def _apply_hw_monitor_startup(self) -> None:
+        """Apply the persisted Monitor-HW preference once the CreateView exists:
+        sync the header button + show the viz to match `hw_monitor_default_on`.
+        (The action's initial state was already seeded from the setting.)"""
+        on = bool(_settings.get("hw_monitor_default_on"))
+        self._sync_hw_monitor_button(on)
+        cv = getattr(self, "_create_view", None)
+        if cv is not None and on:
+            cv.set_hw_monitor(True)
 
     def _on_gallery_density_action(self, action: Gio.SimpleAction,
                                     param: GLib.Variant) -> None:
@@ -8839,10 +8947,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
         `running_or_starting` returns a `server_manager` key (e.g. "wan2.2",
         "flux", "animate") or `None` if nothing is running/starting for that
-        capability. `_SERVER_KEY_TO_SOURCE_MODEL` — the same map
-        `MainWindow.__init__` already uses to pre-select the source tab/model
-        from `last_successful_deployment` — converts that key into the
+        capability. `_SERVER_KEY_TO_SOURCE_MODEL` converts that key into the
         (model_source, model_key) pair used everywhere else in this file.
+        (It once also backed a `last_successful_deployment` startup pre-select;
+        that setting was removed in the v0.93.0 audit as nothing read it.)
         `model_source == "animate"` has no video/image model key of its own
         (`_on_generate`'s animate branch never reads either), so the "animate"
         entry's empty model key is harmless — both return values stay at
@@ -8874,8 +8982,13 @@ class MainWindow(Gtk.ApplicationWindow):
         # image_model_key stay at their defaults — irrelevant for the
         # "animate" model_source, which never reads either.
 
+        # Attractor/TT-TV auto-gen carries no per-job AnimateDiff config, so it
+        # builds straight from the module defaults — use the SETTING-aware defaults
+        # so a user who pinned "Off"/"Coherent" in Preferences gets that on
+        # auto-generated jobs too (Josh PR#24 review — the pinned default must
+        # reach this path, not just the Create panel).
         animatediff_args = (
-            dict(_ANIMATEDIFF_DEFAULTS) if video_model_key == "animatediff" else None
+            _effective_animatediff_defaults() if video_model_key == "animatediff" else None
         )
         return video_model_key, image_model_key, animatediff_args
 
@@ -9137,7 +9250,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 # AnimateDiff item, restored with no "animatediff_args" key at
                 # all) must not KeyError on the `ad["..."]` indexing below. A
                 # full dict passes through unchanged (its values win).
-                ad = {**_ANIMATEDIFF_DEFAULTS, **(animatediff_args or {})}
+                ad = {**_effective_animatediff_defaults(), **(animatediff_args or {})}
                 # Chip-busy guard only applies to blackhole mode; cpu/sim don't need
                 # exclusive Blackhole access and should not be blocked by a running
                 # server — the `ad["mode"] == "blackhole"` check below is deliberately
@@ -9185,6 +9298,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     lightning=ad["lightning"],
                     lightning_steps=ad["lightning_steps"],
                     multi_chip=ad["multi_chip"],
+                    multichip_mode=ad["multichip_mode"],
                     device_id=ad["device_id"],
                     chain_from=ad["chain_from"],
                     chain_save=chain_save_path,
@@ -9627,7 +9741,7 @@ class MainWindow(Gtk.ApplicationWindow):
         animatediff_args = None
         if model_key == "animatediff":
             animatediff_args = {
-                **_ANIMATEDIFF_DEFAULTS, **(params.get("animatediff_args") or {})
+                **_effective_animatediff_defaults(), **(params.get("animatediff_args") or {})
             }
         args = (
             prompt,

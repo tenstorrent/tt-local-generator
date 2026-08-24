@@ -248,16 +248,58 @@ def test_video_panel_animatediff_args_reflect_widget_values():
     panel._ad_temporal_alpha.set_value(0.7)
     panel._ad_neg_prompt.set_text("oversaturated")
     panel._ad_chain_save.set_active(True)
-    panel._ad_multi_chip.set_active(False)
+    panel._ad_multichip_mode.set_selected(2)  # "Off — single chip"
 
     args = panel.collect()["animatediff_args"]
     assert args["temporal_alpha"] == 0.7
     assert args["negative_prompt"] == "oversaturated"
     assert args["chain_save"] is True
+    # "Off" -> single chip: the derived boolean is False and the mode is "off".
     assert args["multi_chip"] is False
+    assert args["multichip_mode"] == "off"
     # Untouched fields keep their defaults.
     assert args["mode"] == "blackhole"
     assert args["lightning"] is False
+
+
+def _force_multichip_default(monkeypatch, mode):
+    """Pin the `animatediff_multichip_default` setting read to `mode` (leaving
+    every other settings read intact), so these tests don't depend on the
+    machine's real settings.json."""
+    import create_param_panels as cpp
+    orig = cpp._settings.get
+    monkeypatch.setattr(cpp._settings, "get",
+                        lambda k: mode if k == "animatediff_multichip_default" else orig(k))
+
+
+def test_video_panel_multichip_selector_maps_mode_and_bool(monkeypatch):
+    """The 3-way Multi-chip selector drives BOTH the engine `multichip_mode`
+    string and the legacy `multi_chip` bool (True unless "Off")."""
+    _force_multichip_default(monkeypatch, "remix")
+    panel = VideoParamPanel()
+    panel.build()
+
+    # Default follows the setting (pinned to Remix above — the proven-reliable
+    # multi-chip path; Coherent is opt-in, see v0.91.1).
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("remix", True)
+
+    panel._ad_multichip_mode.set_selected(1)  # "Coherent — one longer video"
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("coherent", True)
+
+    panel._ad_multichip_mode.set_selected(2)  # "Off — single chip"
+    args = panel.collect()["animatediff_args"]
+    assert (args["multichip_mode"], args["multi_chip"]) == ("off", False)
+
+
+def test_video_panel_multichip_default_follows_setting(monkeypatch):
+    """The panel preselects the persisted `animatediff_multichip_default` — so a
+    user can pin Coherent (or Off) without a code edit."""
+    _force_multichip_default(monkeypatch, "coherent")
+    panel = VideoParamPanel()
+    panel.build()
+    assert panel.collect()["animatediff_args"]["multichip_mode"] == "coherent"
 
 
 def test_video_panel_lightning_steps_row_hidden_until_lightning_and_cpu():

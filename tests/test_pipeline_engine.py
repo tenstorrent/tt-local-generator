@@ -1633,6 +1633,37 @@ def test_montage_builds_slideshow_from_all_images(monkeypatch, tmp_path):
     assert list_text.count(f"file '{images[-1]}'") == 2
 
 
+def test_concat_quote_escapes_single_quotes():
+    """A path containing an apostrophe must not break the concat list — the
+    demuxer wants a literal ' written as '\\'' inside the single-quoted path."""
+    assert eng._concat_quote("/tmp/a.png") == "'/tmp/a.png'"
+    assert eng._concat_quote("/home/O'Brien/f.png") == "'/home/O'\\''Brien/f.png'"
+
+
+def test_montage_list_survives_apostrophe_in_path(monkeypatch, tmp_path):
+    """Regression: an image path with an apostrophe used to terminate the
+    quoted `file` string early and corrupt the concat list. The written list
+    must contain each path in escaped form and never a raw `file '<...>'.png'`."""
+    d = tmp_path / "O'Brien"
+    d.mkdir()
+    images = [str(d / "a.png"), str(d / "b.png")]
+    for p in images:
+        Path(p).touch()
+    captured = {}
+    def fake_run_ffmpeg(argv):
+        captured["list"] = Path(argv[argv.index("-i") + 1]).read_text()
+        Path(argv[-1]).touch()
+        return True
+    monkeypatch.setattr(eng, "_run_ffmpeg", fake_run_ffmpeg)
+    out = eng.HANDLERS["TTLGMontage"]("10", {"images": images}, _ctx(tmp=str(tmp_path)))
+    assert out["video_path"] == str(tmp_path / "node10_montage.mp4")
+    text = captured["list"]
+    for img in images:
+        assert f"file {eng._concat_quote(img)}" in text          # escaped form present
+        assert f"file '{img}'" not in text                        # raw (broken) form absent
+    assert "'\\''" in text                                         # the escape actually happened
+
+
 def test_montage_passes_captions_via_drawtext(monkeypatch, tmp_path):
     calls = []
     def fake_run_ffmpeg(argv):

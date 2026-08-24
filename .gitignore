@@ -60,3 +60,7 @@ docs/docs/
 # Compiled bytecode inside patches/ (never track)
 patches/**/__pycache__/
 patches/**/*.pyc
+
+# The shipped demo collection is intentionally tracked in full, even where a
+# global pattern above (e.g. *.ans) would otherwise exclude its media.
+!demo-collection/**

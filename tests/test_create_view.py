@@ -2789,24 +2789,72 @@ def test_prompt_clear_icon_appears_with_text_and_clears(make_create_view):
 
 def test_paned_holds_scrolling_form_and_docked_result_detail_pane(make_create_view):
     """The split's start child is the scrolling form; its end child is a
-    Gtk.Overlay wrapping the result scroller (the docked detail pane). The
-    overlay exists so the optional "👁 Watch" activity viz can be pinned to
-    the pane's top-right corner. The result pane holds its width when the
-    window resizes (shrink_end False), but the divider is still draggable."""
+    VERTICAL Box holding the result scroller on top and the Monitor-HW viz dock
+    below (v0.93.x: the viz docks at the bottom of the result column instead of
+    floating over the queue/recents — the old Gtk.Overlay is gone). The result
+    pane holds its width when the window resizes (shrink_end False), but the
+    divider is still draggable."""
     cv = make_create_view()
     paned = cv._create_paned
     assert isinstance(paned, Gtk.Paned)
     start = paned.get_start_child()
     end = paned.get_end_child()
     assert isinstance(start, Gtk.ScrolledWindow)   # the form scroller
-    assert isinstance(end, Gtk.Overlay)            # detail pane wrapped for the viz
-    scroller = end.get_child()
-    assert isinstance(scroller, Gtk.ScrolledWindow)  # the detail-pane scroller
+    assert isinstance(end, Gtk.Box)                # result column (scroll + viz dock)
+    assert not isinstance(end, Gtk.Overlay)        # the floating overlay is retired
+    children = []
+    ch = end.get_first_child()
+    while ch is not None:
+        children.append(ch)
+        ch = ch.get_next_sibling()
+    assert len(children) == 2                       # [result scroller, viz dock]
+    scroller, dock = children
+    assert isinstance(scroller, Gtk.ScrolledWindow)  # the result-pane scroller
+    assert dock is cv._viz_dock                       # the docked-viz slot
+    assert dock.get_visible() is False                # hidden until Monitor HW is on
     # A ScrolledWindow wraps a non-scrollable child in a GtkViewport.
     end_child = scroller.get_child()
     inner = end_child.get_child() if isinstance(end_child, Gtk.Viewport) else end_child
     assert inner is cv._result_panel               # result panel is IN the detail pane
     assert paned.get_shrink_end_child() is False
+
+
+def test_set_hw_monitor_docks_viz_and_toggles_dock_visibility(make_create_view, monkeypatch):
+    """set_hw_monitor(True) builds the viz into the dock (never a floating
+    overlay) and shows the dock; (False) hides it. WebKit is forced off in
+    conftest, so the viz is an inert stub — we assert placement, not WebKit.
+    The live-telemetry tap is stubbed (this file patches threading.Thread with
+    a synchronous stub; the real tap polls tt-smi, irrelevant to placement)."""
+    import activity_viz
+    monkeypatch.setattr(activity_viz.ActivityVizWidget, "_start_telemetry", lambda self: None)
+    monkeypatch.setattr(activity_viz.ActivityVizWidget, "_stop_telemetry", lambda self: None)
+    cv = make_create_view()
+    assert cv._viz_dock.get_visible() is False
+    assert cv._viz_dock.get_first_child() is None
+
+    cv.set_hw_monitor(True)
+    assert cv._viz_dock.get_visible() is True
+    viz = cv._viz_dock.get_first_child()
+    assert viz is not None                          # docked, not floating
+    assert getattr(cv._result_panel, "_activity_viz", None) is viz
+
+    cv.set_hw_monitor(False)
+    assert cv._viz_dock.get_visible() is False       # dock hidden when off
+
+
+def test_viz_close_seam_invokes_callback(make_create_view, monkeypatch):
+    """The viz's ✕ dismiss routes through on_hw_monitor_close (so the owner can
+    flip the shared action off) rather than a local button."""
+    import activity_viz
+    monkeypatch.setattr(activity_viz.ActivityVizWidget, "_start_telemetry", lambda self: None)
+    monkeypatch.setattr(activity_viz.ActivityVizWidget, "_stop_telemetry", lambda self: None)
+    fired = []
+    cv = make_create_view(on_hw_monitor_close=lambda: fired.append(True))
+    cv.set_hw_monitor(True)
+    viz = cv._viz_dock.get_first_child()
+    assert callable(viz.on_close)
+    viz.on_close()
+    assert fired == [True]
 
 
 def test_existing_form_widgets_still_reachable_in_split_layout(make_create_view):

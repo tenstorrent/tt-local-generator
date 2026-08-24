@@ -1,5 +1,236 @@
 # tt-local-generator — developer notes
 
+## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.1)
+
+- **v0.96.1 — Copilot PR#24 re-review.** (a) `demo_seed`: when `--db` is passed
+  without an explicit storage dir, `storage` is now derived from
+  `db_path.parent` (not `media_store.STORAGE_DIR`), so the copied
+  `demo-collection/` + the `.demo_seed_version` marker co-locate with the DB
+  being mutated — a custom-db seed no longer scatters media into the default
+  library or leaks the seeded-once marker across DB locations
+  (`test_db_path_without_storage_colocates_media_and_marker`). (b) New
+  `MediaStore.all_ids()` (`SELECT id`) replaces the
+  `{r.id for r in query(limit=10_000_000)}` full-row materialisation in the
+  idempotency check. (c) `postinst` STEP 6b now points at the new
+  `tt-model-animatediff` package as the offline-ready weights path instead of
+  "AnimateDiff has no weight package" (which its own v0.96.0 change made false).
+  Stale/by-design items were replied-not-changed: `--force` delete-then-insert
+  (already v0.94.2), missing-media skip+count (fail-soft by design, not raise),
+  create_view "corner" comment (already docked in v0.94.0), tt-ctl "Demo"→
+  "Welcome" (v0.94.5), `starred=0` (deliberate — Copilot itself requested it in
+  v0.94.2), VERSION-vs-PR-description (PR description updated, not code).
+
+
+
+- **v0.95.0 — jzhengTT's 8 PR#24 review items.** #1 (blocker): `demo_seed`
+  strips build-machine `video_path`/`image_path` from each seeded record's
+  `params` so `history_store._to_gen` (which PREFERS params paths over
+  `file_path`) falls back to the copied `file_path` — otherwise 20/27 demo
+  items were dead links on a fresh install (library rendered fine from
+  thumbnails, but open/play failed; my earlier container check measured the
+  wrong field — `file_path` existed, but the app resolves via params). #2
+  (blocker): the missing-media guard moved ABOVE the `--force` delete so an
+  absent manifest item can't delete-then-lose an existing row. #3: `postinst`
+  seeds under `set -o pipefail` so a tt-ctl failure in the piped `bash -c` is
+  actually reported (was masked by sed's exit). #4: `debian/rules` junk-strip
+  targets the install parent dir (patches/plugins `__pycache__`, not just
+  app/). #5: a `.demo_seed_version` marker + `_already_seeded()` seeds ONCE per
+  collection `version`, so `apt upgrade` never resurrects demo art the user
+  deleted (a newer `version` re-seeds intentionally); `tt-ctl` reports the
+  short-circuit. #6: attractor / TT-TV auto-gen AnimateDiff now honors the
+  persisted `animatediff_multichip_default` via a new module-level
+  `main_window._effective_animatediff_defaults()` (used at all three
+  non-panel `_ANIMATEDIFF_DEFAULTS` sites — `_resolve_attractor_model`, the
+  `_on_generate` merge base, `_native_generate_args`), keeping `multi_chip`
+  consistent with the mode ("off" ⇒ False); the Create panel already honored
+  it via `create_param_panels._animatediff_multichip_default_label`. #7:
+  restored the "keep" value in the `seed_mode` comment. #8:
+  `pipeline_studio._stage_preview_thumb_path` is a pure path accessor again —
+  `_prune_thumb_cache` moved to the thumbnail WRITE path (was a hidden
+  side-effect in a path accessor). Tests: `test_demo_seed.py` (idempotency
+  updated for the marker + `_to_gen` resolution regression + deleted-art-not-
+  reseeded), `test_main_window_attractor_model_source.py`
+  (`_effective_animatediff_defaults` flow-through + bad-setting fallback;
+  the old `== _ANIMATEDIFF_DEFAULTS` assertion was reading machine state —
+  now pins the setting deterministically). Full suite 2377 passed.
+
+- **v0.96.0 — AnimateDiff actually ships on a clean install.** A clean install
+  gave the app's DEFAULT video model (AnimateDiff) the *least* provisioning:
+  its runner (`vendor/tt-animatediff/examples/generate.py`, a git submodule
+  pinned v0.9.0, exec'd under the tt-metal `python_env`) shipped EMPTY in the
+  `.deb` because CI's `actions/checkout@v4` never inited submodules, and
+  `snapshot_vendor.sh` only snapshots tt-inference-server. Fixes: (1)
+  `release-deb.yml` checkout gains `submodules: recursive`; (2) `debian/rules`
+  now strips tt-animatediff's heavy non-runtime trees
+  (`docs`/`generated`/`demo`/`tests`/`output` — 277 MB of demo galleries →
+  656 KB of runner code) AND FAILS THE BUILD if `examples/generate.py` is
+  missing from the staged tree (fail-loud, mirroring the `tt_dit_patches_dir`
+  guard — a submodule-less build can't silently ship a broken AnimateDiff);
+  (3) `postinst` STEP 6b flags the two remaining external prereqs a package
+  can't provide — the tt-metal `python_env` (checked at
+  `~/tt-metal/python_env/bin/python`) and the first-run HF download of the
+  base model + `guoyww/animatediff-motion-adapter-v1-5-2` (public). (4) NEW
+  **`tt-model-animatediff` weight `.deb`** (`debian/control` +
+  `debian/tt-model-animatediff.postinst`): downloads the TWO public repos the
+  runner needs — `CompVis/stable-diffusion-v1-4` (~4.0 GB base SD, confirmed in
+  `animatediff_ttnn/generation_helpers.py`/`pipeline.py`, NOT SD-1.5) +
+  `guoyww/animatediff-motion-adapter-v1-5-2` (~1.7 GB adapter). Both PUBLIC, so
+  the postinst skips debconf entirely (no token dance, unlike the gated
+  tt-model-* packages) — calls `download_model.sh` once per repo as
+  `$SUDO_USER`, fail-soft, exit 0 on any download failure. The main package now
+  **`Recommends: tt-model-animatediff`** (alongside the already-recommended
+  `tt-installer` that provides the tt-metal runtime), so a default
+  `apt install tt-local-generator` pulls both AnimateDiff prereqs; also added to
+  the `tt-local-generator-models-all` meta-package. Net after (1)-(4): a default
+  install gives working AnimateDiff — runner ships, weights download, tt-metal
+  recommended. Note: `app/animatediff/animatediff_ttnn/` and
+  `app/animatediff/scripts/` in-repo are EMPTY dirs — the real runner is the
+  vendored submodule; see [[project_animatediff_vendoring]].
+
+- **v0.96.0 — refreshed README + docs-site media.** New primary non-motion
+  images from Taylor's screenshots: `library-browse.png` (the browse/library
+  hero — replaces `tt-local-generator-main.png` as the README hero + docs
+  `og:image` + docs hero) and `create-animatediff.png` (the Create surface:
+  AnimateDiff options + live 4-chip progress + Monitor HW viz). Plus
+  `animatediff-generating.gif` — an 11 s clip cut from Taylor's screencast
+  (`Screencast_20260823_151403.mp4`, t≈230–241 via two-pass ffmpeg palettegen)
+  showing the four Blackhole chips finishing decode (tensix grids at 1350 MHz)
+  and the **result popping into the panel** at t≈236 (grids settle to 800 MHz)
+  — "moments leading up to and the moment the image is delivered". A new docs
+  "Create" showcase section holds the create still + the GIF. Images live in
+  BOTH `assets/` (README resolves against repo root) and `docs/assets/` (the
+  site). Site `<img>`s carry `height:auto` (a fixed `height=` attribute without
+  it squished the create still). No gifsicle on the box; the ffmpeg palette
+  output (~1.7 MB) ships as-is.
+
+## Pre-release toolbar/settings audit (v0.93.0–v0.94.0)
+
+An audit (two parallel subagents: menu-bar+actions, settings+preferences) found
+dead/misleading UI and dead settings; fixed in three chunks:
+
+- **v0.93.0 — dead removals + menu fixes.** Removed 6 settings keys nothing
+  consumed (`quality_steps`, `hidden_plugins`, `skyreels_num_frames`,
+  `preferred_video_model`, `pinned_seed`, `last_successful_deployment`) and
+  their inert UI: the menu-bar **Quality** preset radios (the per-panel Steps
+  spinner is the real control — `quality_steps` round-tripped to itself) and the
+  Preferences **Plugins** hide-from-UI section (`hidden_plugins` — the checkboxes
+  persisted a value **no picker ever filtered on**; removed, not wired). Menu
+  fixes: dropped **Director Style** from the Image context menu (the setting only
+  affects *video* prompts); surfaced the orphaned **"TT-TV Preferences…"** File
+  entry (working `win.preferences-tttv` handler that was in no menu); pointed
+  Debug → **Open Logs Folder** at the real user log dir
+  (`~/.local/share/tt-local-generator/logs`) instead of repo-root `logs/`.
+  `tests/test_app_settings.py` locks the removed keys out of DEFAULTS;
+  `tests/test_context_menu.py` locks no-Quality-anywhere + no-Director-on-Image.
+- **v0.94.0 — Monitor HW re-home.** The **📊 Monitor HW** toggle moved OUT of the
+  Create CTA action row (it was a view-toggle among actions, and its viz floated
+  over the queue/recents). Now: a header toggle next to **Servers ▾** +
+  a **View → "Hardware Monitor"** checkbox, both driven by ONE stateful
+  `win.toggle-hw-monitor` action (mirrors the `toggle-detail` pattern), synced
+  via `_sync_hw_monitor_button`/`_syncing_hw_monitor` guard; the viz **docks** at
+  the bottom of the result column (`CreateView._viz_dock`, replacing the retired
+  `_result_overlay` float) via `set_hw_monitor(active)`; the viz's ✕ routes
+  through `CreateView(on_hw_monitor_close=…)` → the action off. New
+  `hw_monitor_default_on` setting persists the choice (restored on launch via
+  `_apply_hw_monitor_startup`). Tests: `test_main_window_hw_monitor.py` +
+  `test_create_view.py` (dock structure, close seam).
+- **v0.94.1 — missing-setting adds.** New persisted
+  `animatediff_multichip_default` (app_settings; "off"|"remix"|"coherent",
+  default "remix") + a Preferences → Generation dropdown; the Create panel's
+  Multi-chip selector preselects it via
+  `create_param_panels._animatediff_multichip_default_label()` (so the default
+  is pinnable without a code edit — it had been hand-changed twice). Added
+  File → "About TT Local Generator" (`win.about` → `Gtk.AboutDialog`,
+  `_app_version()` reads the shipped VERSION file that sits beside `app/` both
+  in-repo and installed).
+- **Deferred (own pass):** a real control for `clip_length_slot` (used but
+  unreachable) and wiring `seed_mode "keep"`.
+
+## Bundled demo collection (v0.92.0)
+
+A curated 27-item set ships **with** the app so a fresh install opens with real
+art (a **"Welcome to tt-local-generator"** playlist — renamed from "Demo" in
+v0.94.2 per Copilot review; the shipped art is the default, **not** favorited),
+not an empty gallery. Option A from the size analysis
+(in-repo + rides into the .deb; ~10 MiB — negligible vs the repo's ~137 MiB
+packed history, and the separate-repo/fetch approach was rejected as
+over-engineering + a network dependency at 10 MiB).
+
+- **`demo-collection/`** (tracked in git — `.gitignore` has a `!demo-collection/**`
+  negation so global patterns like `*.ans` don't drop its media): `manifest.json`
+  + `media/` (files **byte-for-byte as generated**, no re-encoding) + `thumbnails/`
+  + a README. Each manifest item keeps the ORIGINAL generation `prompt` for
+  provenance AND a cleaned `caption` (the gallery displays `caption`). Captions
+  were recomposed for the artgen (template-text prompts), World's-Fair poem
+  images (truncated poem lines → image-accurate captions), and the "lore" set
+  (a "Tetris through the ages" stick study — Taylor's own framing).
+- **`app/demo_seed.py`** (`seed_demo`, GTK-free): copies media+thumbnails into
+  `<storage>/demo-collection/` and inserts records into `media.db` grouped in a
+  **"Welcome to tt-local-generator"** playlist. Idempotent (keyed by id;
+  `MediaStore.add` is INSERT-OR-IGNORE, so `--force` does a delete-then-insert
+  to actually replace; playlist membership guarded against dups) and fail-soft;
+  a manifest item whose media file is missing on disk is skipped (counted as
+  `missing`), never inserted as a dangling record. Records seed `starred=0` —
+  shipped art is the default, not favorited. **Discovery (v0.94.4):**
+  `resolve_collection_dir` walks explicit → each `$XDG_DATA_DIRS` entry
+  (default `/usr/local/share:/usr/share`) for `tt-local-generator/demo-collection`
+  → the in-repo `_REPO_DIR = <parent-of-app>/demo-collection` (dev fallback). The
+  .deb ships the media to **`/usr/share/tt-local-generator/demo-collection/`**
+  (FHS: arch-independent read-only data belongs in /usr/share, not the arch-
+  dependent /usr/lib where the app code lives) — found via the /usr/share XDG
+  entry; an admin can override with a copy in `/usr/local/share/tt-local-generator/`
+  (earlier in XDG order) without the package touching /usr/local. The "Welcome …"
+  name is a curated tile source for the "Start something" wall
+  (`possibilities._default_curated_matcher` matches "welcome"). (v0.94.2 applied
+  Copilot PR#24 review: --force fix, missing-media guard, playlist rename,
+  un-favorited default, stale comment.)
+- **Wiring:** `tt-ctl seed-demo` (`--db`/`--collection-dir`/`--force`); `debian/
+  rules` installs `demo-collection` to `/usr/share/tt-local-generator/` (separate
+  from the `/usr/lib` app `cp -r`); `debian/postinst` runs `tt-ctl seed-demo` for
+  `$SUDO_USER` (fail-soft — never aborts install; skipped for a root-only install
+  with no `SUDO_USER`). Tests: `tests/test_demo_seed.py` (caption→prompt, files
+  copied, playlist membership, idempotency, XDG discovery + precedence, + an
+  end-to-end seed of the REAL shipped collection).
+- **Curation tool:** the collection was picked with a visual "Demo Curator"
+  Artifact (a size-budget-aware grid; export → paste-back JSON) — not committed,
+  it's a claude.ai artifact. Re-curate from there or edit `manifest.json` by hand.
+
+## AnimateDiff multi-chip mode in the GUI (v0.90.0)
+
+The Create surface's AnimateDiff options had only a boolean "Use all chips in
+parallel" checkbox, and `worker.py` hardwired `multichip_mode = "remix" if
+(multi_chip and effective_chips > 1) else "off"` — so **Coherent mode (sequential
+latent-chained segments → one continuous longer video) was unreachable from the
+GUI**, CLI-only (`animatediff.py --multichip-mode {off,remix,coherent}`). Now the
+panel has a 3-way **Multi-chip** selector (Remix / Coherent / Off), threaded end
+to end:
+
+- **`create_param_panels.py`** — the checkbox `_ad_multi_chip` is replaced by a
+  `Gtk.DropDown` `_ad_multichip_mode` (`_ANIMATEDIFF_MULTICHIP_CHOICES`, default
+  "Remix …". (v0.91.0 briefly defaulted to "Coherent …", but Coherent's
+  multi-board mesh teardown hit this QB2's fragile ethernet fabric and aborted
+  — SIGABRT in `RiscFirmwareInitializer::teardown`, "try resetting the board" —
+  so v0.91.1 reverted the default to the proven-reliable Remix; Coherent stays
+  opt-in.) `_collect_animatediff_args` maps the label →
+  `multichip_mode` via `_ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE` and derives the
+  legacy `multi_chip` bool as `mode != "off"` — so BOTH keys are present and
+  consistent. `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode` ("remix"; see the default-mode note above).
+- **`worker.py`** — `AnimateDiffGenerationWorker` gained `multichip_mode: str |
+  None = None`; line ~877 now uses `mode_sel = self._multichip_mode if not None
+  else "remix"`, gated on `multi_chip and effective_chips > 1` (a single
+  effective chip is always "off"). **Back-compat is exact:** a None/legacy mode
+  → "remix", byte-identical to the old boolean behaviour (older worker tests
+  pass unchanged).
+- **`main_window.py`** — `_ANIMATEDIFF_DEFAULTS` gains `multichip_mode` ("remix");
+  the worker construction passes `multichip_mode=ad["multichip_mode"]`.
+- **Invariant:** `multi_chip` is kept everywhere (defaults, worker param,
+  `_make_mw` decouple tests) so nothing downstream that still reads it breaks;
+  the selector just additionally carries the explicit engine mode. Tests:
+  `test_worker_animatediff.py::TestMultichipMode` (coherent flows to
+  `run_subprocess`; None→remix; single-chip→off), `test_create_param_panels.py`
+  (selector → mode+bool mapping), plus the `test_main_window_create_generate.py`
+  full-args pass-through updated for the new key.
+
 ## "Start something" copy + tensix-grid centering (v0.89.0)
 
 Two small Create-surface polish fixes:

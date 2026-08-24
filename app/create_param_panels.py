@@ -855,6 +855,7 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     lightning=False,
     lightning_steps=4,
     multi_chip=True,
+    multichip_mode="remix",
     device_id=None,
     chain_from=None,
     chain_save=False,
@@ -863,6 +864,36 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter_alpha=1.0,
     motion_adapter_skip=None,
 )
+
+# Multi-chip selector: user-facing label -> engine `multichip_mode` value
+# (worker.py -> animatediff.run_subprocess --multichip-mode {off,remix,coherent}).
+# "off" is single-chip; "remix" spreads independent per-chip clips (stitched);
+# "coherent" latent-chains segments into one continuous longer video. Remix is
+# the default (preserves the historical `multi_chip=True` behaviour).
+_ANIMATEDIFF_MULTICHIP_CHOICES = [
+    "Remix — varied clips across chips",
+    "Coherent — one longer video",
+    "Off — single chip",
+]
+_ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE = {
+    "Remix — varied clips across chips": "remix",
+    "Coherent — one longer video": "coherent",
+    "Off — single chip": "off",
+}
+_ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL = "Remix — varied clips across chips"
+# Reverse map (mode -> label) so a persisted `animatediff_multichip_default`
+# setting can drive the panel's initial dropdown selection.
+_ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL = {
+    v: k for k, v in _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE.items()
+}
+
+
+def _animatediff_multichip_default_label() -> str:
+    """The dropdown label to preselect, from the persisted
+    `animatediff_multichip_default` setting (falls back to Remix)."""
+    mode = str(_settings.get("animatediff_multichip_default") or "remix")
+    return _ANIMATEDIFF_MULTICHIP_MODE_TO_LABEL.get(
+        mode, _ANIMATEDIFF_MULTICHIP_DEFAULT_LABEL)
 
 _DEFAULT_VIDEO_MODEL_KEY = "wan2"
 
@@ -877,8 +908,9 @@ class VideoParamPanel(CreateParamPanel):
 
     Every widget here is a FRESH construction — no widget instances are
     shared with `ControlPanel`. Defaults:
-      - steps=20, seed=-1 (mirrors `ImageParamPanel` / `ControlPanel`'s
-        `_settings.get("quality_steps") or 20` and `_seed = -1`)
+      - steps=20, seed=-1 (a hardcoded default; the old `quality_steps`
+        setting that used to seed this was removed in the v0.93.0 audit —
+        nothing read it back)
       - steps range 12-50 (NOT 4-50 like images) — mirrors the server-side
         clamp in `api_client.APIClient.submit`/`submit_animate`
         (`max(12, min(50, num_inference_steps))`), which differs from
@@ -921,7 +953,7 @@ class VideoParamPanel(CreateParamPanel):
         self._ad_lightning: Optional[Gtk.CheckButton] = None
         self._ad_lightning_steps: Optional[Gtk.DropDown] = None
         self._ad_lightning_steps_row: Optional[Gtk.Widget] = None
-        self._ad_multi_chip: Optional[Gtk.CheckButton] = None
+        self._ad_multichip_mode: Optional[Gtk.DropDown] = None
         self._ad_device_id: Optional[Gtk.SpinButton] = None
         self._ad_chain_from: Optional[Gtk.Entry] = None
         self._ad_chain_save: Optional[Gtk.CheckButton] = None
@@ -1354,10 +1386,14 @@ class VideoParamPanel(CreateParamPanel):
             "notify::selected", lambda *_a: self._sync_ad_lightning_steps_visibility()
         )
 
-        self._ad_multi_chip = Gtk.CheckButton(label="Use all chips in parallel")
-        self._ad_multi_chip.set_active(True)
-        self._ad_multi_chip.add_css_class("video-param-hint")
-        content.append(self._ad_multi_chip)
+        # Multi-chip mode — a 3-way selector (Remix / Coherent / Off) that
+        # picks the actual engine behaviour, replacing the old boolean "use all
+        # chips in parallel" checkbox (which could only ever mean remix). See
+        # `_ANIMATEDIFF_MULTICHIP_CHOICES`.
+        self._ad_multichip_mode = self._ad_dd(
+            _ANIMATEDIFF_MULTICHIP_CHOICES, _animatediff_multichip_default_label()
+        )
+        content.append(_sub_row("Multi-chip", self._ad_multichip_mode))
 
         self._ad_device_id = self._ad_spin(-1, 7, 1, -1)
         self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
@@ -1434,13 +1470,21 @@ class VideoParamPanel(CreateParamPanel):
 
         raw_device_id = int(self._ad_device_id.get_value())
 
+        # The single Multi-chip selector drives BOTH the engine mode string and
+        # the legacy `multi_chip` bool (mode != "off"), so downstream consumers
+        # that still read either key stay consistent.
+        mc_mode = _ANIMATEDIFF_MULTICHIP_LABEL_TO_MODE.get(
+            self._ad_dd_val(self._ad_multichip_mode), "remix"
+        )
+
         return dict(
             mode=self._ad_dd_val(self._ad_mode) or "blackhole",
             negative_prompt=self._ad_neg_prompt.get_text() or "blurry, low quality",
             temporal_alpha=round(self._ad_temporal_alpha.get_value(), 2),
             lightning=self._ad_lightning.get_active(),
             lightning_steps=int(self._ad_dd_val(self._ad_lightning_steps) or "4"),
-            multi_chip=self._ad_multi_chip.get_active(),
+            multi_chip=(mc_mode != "off"),
+            multichip_mode=mc_mode,
             device_id=raw_device_id if raw_device_id >= 0 else None,
             chain_from=self._ad_chain_from.get_text().strip() or None,
             chain_save=self._ad_chain_save.get_active(),

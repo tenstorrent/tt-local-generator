@@ -29,15 +29,70 @@ override_dh_install:
 	# the built-in generators at /usr/lib/tt-local-generator/plugins/.
 	cp -r app bin patches plugins \
 	    debian/tt-local-generator/usr/lib/tt-local-generator/
+	# Strip test/build artifacts cp -r drags in from a dev checkout (pytest
+	# cache, bytecode) — they bloat the package and trip lintian. Target the
+	# whole install dir so patches/ and plugins/ __pycache__ are covered too,
+	# not just app/ (vendor/ is copied + cleaned separately below).
+	find debian/tt-local-generator/usr/lib/tt-local-generator \
+	    \( -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + \)
+	find debian/tt-local-generator/usr/lib/tt-local-generator -name '*.pyc' -delete
+
+	# The bundled demo/seed media is arch-independent read-only DATA → its FHS
+	# home is /usr/share, NOT /usr/lib. demo_seed.resolve_collection_dir finds
+	# it via $XDG_DATA_DIRS (/usr/local/share:/usr/share), so an admin can also
+	# drop overrides in /usr/local/share/tt-local-generator/ without the package
+	# touching /usr/local.
+	install -d debian/tt-local-generator/usr/share/tt-local-generator
+	cp -r demo-collection \
+	    debian/tt-local-generator/usr/share/tt-local-generator/
 
 	# Copy the vendored tt-inference-server snapshot (if already materialised;
 	# otherwise snapshot_vendor.sh must be run before dpkg-buildpackage).
 	if [ -d vendor/tt-inference-server ]; then \
 	    cp -r vendor \
 	        debian/tt-local-generator/usr/lib/tt-local-generator/; \
+	    : "Strip runtime/build junk that can leak into vendor/ when the media" ; \
+	    : "server has been run on the build box — uv-created .workflow_venvs" ; \
+	    : "(compiled .so, bundled uv/libc, ~133MB) plus caches and patch .baks." ; \
+	    : "These are recreated at runtime; shipping them bloats the .deb and" ; \
+	    : "trips lintian (embedded-library/unstripped/missing-libc). Excluding" ; \
+	    : "here keeps the package clean regardless of the build box's state." ; \
+	    rm -rf debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-inference-server/.workflow_venvs; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor \
+	        \( -type d \( -name __pycache__ -o -name .git \) -prune -exec rm -rf {} + \) ; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor \
+	        \( -name '*.pyc' -o -name '*.bak' -o -name '.gitignore' -o -name '.gitmodules' \) -delete; \
 	else \
 	    echo "WARNING: vendor/tt-inference-server not found." \
 	         "Run bin/snapshot_vendor.sh first." >&2; \
+	fi
+	# ── tt-animatediff submodule: ship ONLY the runner, guard its presence ──
+	# vendor/tt-animatediff (git submodule, pinned v0.9.0) is what
+	# app/artgen/generators/animatediff.py execs at
+	# /usr/lib/tt-local-generator/vendor/tt-animatediff/examples/generate.py.
+	# The `cp -r vendor` above copied whatever the build box had; here we
+	# (a) strip its heavy non-runtime trees — docs/generated/demo galleries are
+	# ~275 MB and would roughly DOUBLE the .deb — leaving only the ~1 MB of
+	# runner code (examples/ + animatediff_ttnn/ + scripts/), and (b) FAIL LOUD
+	# if generate.py is absent, so a submodule-less build can never silently
+	# ship an AnimateDiff that cannot run.
+	if [ -d debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff ]; then \
+	    for d in docs generated demo tests output; do \
+	        rm -rf debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff/$$d; \
+	    done; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff \
+	        \( -type d \( -name __pycache__ -o -name .git \) -prune -exec rm -rf {} + \) ; \
+	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff \
+	        \( -name '*.pyc' -o -name '.git' \) -delete 2>/dev/null || true ; \
+	fi
+	if [ ! -f debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff/examples/generate.py ]; then \
+	    echo "ERROR: vendor/tt-animatediff/examples/generate.py is missing from the" >&2; \
+	    echo "  staged tree — the AnimateDiff runner would not ship, so AnimateDiff" >&2; \
+	    echo "  generation would fail at runtime on every install. Initialise the" >&2; \
+	    echo "  submodule before building:" >&2; \
+	    echo "    git submodule update --init vendor/tt-animatediff" >&2; \
+	    echo "  (CI's actions/checkout uses 'submodules: recursive' for this.)" >&2; \
+	    exit 1; \
 	fi
 	# snapshot_vendor.sh saves the env template as .env.default; promote it to
 	# .env so the conffiles entry is satisfied (dpkg rejects packages that list

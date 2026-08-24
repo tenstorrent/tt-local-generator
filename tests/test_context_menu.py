@@ -61,12 +61,15 @@ def _collect_menu_labels(menu: Gio.Menu) -> list:
     return labels
 
 
-def test_video_context_has_quality():
+def test_no_context_has_quality():
+    """v0.93.0 audit removed the Quality preset menu (it wrote a dead
+    `quality_steps` setting nothing read; the per-panel Steps spinner is the
+    real control). No source should surface it anymore."""
     from main_window import _build_context_menu_for_source
-    labels = _collect_menu_labels(_build_context_menu_for_source("video"))
-    assert any("Fast" in l for l in labels)
-    assert any("Standard" in l for l in labels)
-    assert any("High Quality" in l for l in labels)
+    for src in ("video", "animate", "image", "artgen"):
+        labels = _collect_menu_labels(_build_context_menu_for_source(src))
+        assert not any("High Quality" in l for l in labels), src
+        assert not any("Fast (10 steps)" in l for l in labels), src
 
 
 def test_video_context_has_director_style():
@@ -97,10 +100,13 @@ def test_animate_context_has_no_director_style():
     assert not any("Random" in l for l in labels)
 
 
-def test_animate_context_has_quality():
+def test_image_context_has_no_director_style():
+    """v0.93.0 audit: Director Style only affects video prompts, so it was
+    dropped from the Image context where it had no effect."""
     from main_window import _build_context_menu_for_source
-    labels = _collect_menu_labels(_build_context_menu_for_source("animate"))
-    assert any("Fast" in l for l in labels)
+    labels = _collect_menu_labels(_build_context_menu_for_source("image"))
+    assert not any("Sometimes" in l for l in labels)
+    assert not any("Director Style" in l for l in labels)
 
 
 def test_artgen_context_has_no_auto_generate():

@@ -132,6 +132,31 @@ def test_build_thumb_frame_no_path_no_intent_falls_back_to_generic_glyph():
     assert placeholder.get_label() == "\U0001f5bc️"  # 🖼️
 
 
+def test_prune_thumb_cache_trims_oldest_beyond_cap(tmp_path):
+    """The transient stage-thumb cache is bounded: files past the cap are
+    deleted oldest-first, so /tmp can't grow without limit across many runs."""
+    import os
+    import pipeline_studio as ps
+    cache = tmp_path / "cache"; cache.mkdir()  # own dir (tmp_path root gets store dirs)
+    for i in range(10):
+        p = cache / f"{i:02d}.png"
+        p.write_bytes(b"x")
+        # Stagger mtimes so "oldest" is deterministic (i=0 oldest).
+        os.utime(p, (1000 + i, 1000 + i))
+    ps._prune_thumb_cache(cache, cap=4)
+    survivors = sorted(p.name for p in cache.iterdir())
+    assert survivors == ["06.png", "07.png", "08.png", "09.png"]  # newest 4 kept
+
+
+def test_prune_thumb_cache_under_cap_is_noop(tmp_path):
+    import pipeline_studio as ps
+    cache = tmp_path / "cache"; cache.mkdir()
+    for i in range(3):
+        (cache / f"{i}.png").write_bytes(b"x")
+    ps._prune_thumb_cache(cache, cap=256)
+    assert len(list(cache.iterdir())) == 3
+
+
 def test_wrap_centered_caps_oversize_child_width():
     """Fix #5 (review follow-up): the column cap must be a REAL ceiling, not
     just a set_size_request floor. A deliberately-too-wide (3000px) child

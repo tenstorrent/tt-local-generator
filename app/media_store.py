@@ -316,6 +316,12 @@ class MediaStore:
         rows = self._conn.execute(sql, params).fetchall()
         return [MediaRecord(*r) for r in rows]
 
+    def all_ids(self) -> "set[str]":
+        """Return the id of every record — a lightweight `SELECT id` that avoids
+        materializing full MediaRecord rows just to test membership (used by the
+        demo-seed idempotency check)."""
+        return {row[0] for row in self._conn.execute("SELECT id FROM media")}
+
     def count(self, media_type: Optional[str] = None) -> int:
         """Return a COUNT(*) for records matching media_type (None = all types)."""
         if media_type is not None:

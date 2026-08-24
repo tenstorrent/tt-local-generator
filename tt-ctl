@@ -27,6 +27,9 @@ Usage:
                                     stale artgen thumbnails.
                                     Example: tt-ctl convert-library --apply --backup
                                     Flags: --apply  --db PATH  --no-thumbnails  --backup
+    tt-ctl seed-demo                Load the bundled demo collection into the library
+                                    (idempotent) as a "Welcome to tt-local-generator" playlist.
+                                    Flags: --db PATH  --collection-dir PATH  --force
     tt-ctl run "prompt"             Run one generation right now (blocking)
                                     Flags: --steps N  --model wan2|mochi|flux
                                            --server URL  --neg "negative prompt"
@@ -982,6 +985,39 @@ def cmd_convert_library(args):
             print(yellow(f"  {report['thumbs_failed']} thumbnail(s) failed to render — left as-is."))
 
 
+# ── seed-demo ────────────────────────────────────────────────────────────────
+
+def cmd_seed_demo(args):
+    """Load the bundled demo collection into the media library (idempotent).
+
+    Copies the curated demo media/thumbnails into the library's storage and
+    registers them as a "Welcome to tt-local-generator" playlist so a fresh
+    install opens with real art.
+    """
+    import demo_seed  # lazy: media_store/sqlite only paid when this runs
+
+    try:
+        report = demo_seed.seed_demo(
+            db_path=getattr(args, "db", None),
+            collection_dir=getattr(args, "collection_dir", None),
+            force=getattr(args, "force", False),
+        )
+    except FileNotFoundError as exc:
+        print(red(str(exc)))
+        sys.exit(1)
+
+    print(bold(f"Demo collection: {report['collection_dir']}"))
+    if report.get("already_seeded"):
+        print(dim("  Already seeded this collection version — nothing to do "
+                  "(use --force to re-seed)."))
+        return
+    print(green(f"  Seeded {report['seeded']} new record(s); {report['skipped']} already present."))
+    if report.get("missing"):
+        print(yellow(f"  {report['missing']} manifest item(s) skipped — media file missing on disk."))
+    print(f"  Added {report['playlist_added']} to the 'Welcome to tt-local-generator' playlist.")
+    print(dim(f"  Media copied under: {report['target_dir']}"))
+
+
 # ── run ───────────────────────────────────────────────────────────────────────
 
 def cmd_run(args):
@@ -1183,6 +1219,18 @@ def _build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--backup", action="store_true",
                     help="Copy the DB aside before mutating it (only meaningful with --apply)")
 
+    # seed-demo
+    sd = sub.add_parser(
+        "seed-demo",
+        help="Load the bundled demo collection into the library (idempotent)",
+    )
+    sd.add_argument("--db", default=None, metavar="PATH",
+                    help="Path to media.db (default: the standard library path)")
+    sd.add_argument("--collection-dir", default=None, metavar="PATH", dest="collection_dir",
+                    help="Path to the demo-collection dir (default: installed, else in-repo)")
+    sd.add_argument("--force", action="store_true",
+                    help="Re-seed records even if their id already exists")
+
     # artgen
     _build_artgen_parser(sub)
 
@@ -1287,6 +1335,7 @@ def main():
         "logs":     cmd_logs,
         "recover":          cmd_recover,
         "convert-library":  cmd_convert_library,
+        "seed-demo":        cmd_seed_demo,
         "run":              cmd_run,
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,

@@ -12,7 +12,7 @@
   <meta property="og:url" content="https://docs.tenstorrent.com/tt-local-generator/">
   <meta property="og:title" content="Local AI video &amp; image generation on Tenstorrent hardware">
   <meta property="og:description" content="Run Wan2.2, SkyReels, FLUX, Motif, Z-Image-Turbo, and AnimateDiff on your own QB2 — no cloud costs, no API key. On-device prompt AI, SVG art, ANSI art, and animated GIFs included.">
-  <meta property="og:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/tt-local-generator-main.png">
+  <meta property="og:image" content="https://docs.tenstorrent.com/tt-local-generator/assets/library-browse.png">
   <meta property="og:image:width" content="1920">
   <meta property="og:image:height" content="1080">
   <meta property="og:image:alt" content="tt-local-generator gallery and artgen panel running on Tenstorrent QB2">
@@ -911,9 +911,9 @@
   <!-- Screenshot lives outside hero-inner so it can span full viewport width -->
   <div class="hero-screenshot-wrap">
     <div class="hero-screenshot">
-      <img src="assets/tt-local-generator-main.png"
-           alt="tt-local-generator main interface — video generation, history gallery, and TT-TV mode"
-           width="1920" height="1080"
+      <img src="assets/library-browse.png"
+           alt="tt-local-generator — browse your whole library with an inline player and full generation metadata"
+           width="2050" height="1166"
            loading="eager">
     </div>
   </div>
@@ -938,6 +938,37 @@
         allowfullscreen
         style="position:absolute;inset:0;width:100%;height:100%;border:none;">
       </iframe>
+    </div>
+  </div>
+</section>
+
+<!-- ── Create showcase ────────────────────────────────────────────────── -->
+<section id="create-showcase">
+  <div class="wrap" style="text-align:center;">
+    <div class="section-label">Create</div>
+    <h2 class="section-title">Configure it. Watch the chips work.</h2>
+    <p class="section-sub" style="margin-left:auto;margin-right:auto;">
+      Pick a medium, shape the prompt in plain language, and generate. The
+      Create surface shows it happening live — here <strong>AnimateDiff running
+      across all four Blackhole chips in parallel</strong>, with the built-in
+      <strong>Monitor HW</strong> visualizer pulsing as each chip decodes its frames.
+    </p>
+    <div style="max-width:1100px;margin:0 auto;border-radius:var(--radius);
+                overflow:hidden;border:1px solid var(--border);
+                box-shadow:0 0 48px rgba(79,209,197,.10);">
+      <img src="assets/create-animatediff.png"
+           alt="Create surface — AnimateDiff options, live per-chip progress, and the Monitor HW visualizer"
+           width="2050" height="1166" loading="lazy"
+           style="width:100%;height:auto;display:block;">
+    </div>
+    <p class="section-sub" style="margin:2rem auto .75rem;">Watch your hardware work through generating you something amazing:</p>
+    <div style="max-width:900px;margin:0 auto;border-radius:var(--radius);
+                overflow:hidden;border:1px solid var(--border);
+                box-shadow:0 0 48px rgba(79,209,197,.08);">
+      <img src="assets/animatediff-generating.gif"
+           alt="AnimateDiff finishing across four Blackhole chips and delivering the result, with the live hardware monitor"
+           width="1000" height="525" loading="lazy"
+           style="width:100%;height:auto;display:block;">
     </div>
   </div>
 </section>

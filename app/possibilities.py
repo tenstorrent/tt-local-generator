@@ -205,7 +205,7 @@ def example_idea_for(medium) -> str:
 
 def _default_curated_matcher(name: str) -> bool:
     n = (name or "").lower()
-    return any(k in n for k in ("demo", "sample", "showcase", "favorite", "favourite"))
+    return any(k in n for k in ("welcome", "demo", "sample", "showcase", "favorite", "favourite"))
 
 
 class PossibilitiesWall(Gtk.Box):

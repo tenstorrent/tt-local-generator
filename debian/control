@@ -25,7 +25,8 @@ Depends:
  ca-certificates
 Recommends:
  docker-ce | docker.io,
- tt-installer
+ tt-installer,
+ tt-model-animatediff
 Suggests:
  nvidia-container-toolkit
 Description: GTK4 frontend for Tenstorrent AI media generation
@@ -114,6 +115,17 @@ Description: Qwen3-0.6B model weights (~1.2 GB) for tt-local-generator
  polish tier in the prompt-server. The model is fully public; no token
  or license acceptance is required.
 
+Package: tt-model-animatediff
+Architecture: all
+Depends: tt-local-generator, python3-pip
+Description: AnimateDiff model weights (~5.7 GB) for tt-local-generator
+ Downloads the two HuggingFace repos the AnimateDiff (TTNN) animated-GIF
+ generator needs -- the CompVis/stable-diffusion-v1-4 base model and the
+ guoyww/animatediff-motion-adapter-v1-5-2 motion adapter. AnimateDiff is the
+ default, no-server video model; with these weights present it generates on
+ Blackhole out of the box (the tt-metal runtime from tt-installer is also
+ required). Both repos are fully public -- no token or license acceptance.
+
 Package: tt-model-animate
 Architecture: all
 Depends: tt-local-generator, debconf | debconf-2.0, python3-pip
@@ -177,6 +189,7 @@ Depends:
  tt-model-flux-dev,
  tt-model-mochi,
  tt-model-qwen3,
+ tt-model-animatediff,
  tt-model-animate,
  tt-model-skyreels-t2v,
  tt-model-skyreels-i2v,

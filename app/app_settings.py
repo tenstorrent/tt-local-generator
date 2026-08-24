@@ -9,8 +9,8 @@ the history and queue files.
 
 Usage:
     from app_settings import settings
-    steps = settings.get("quality_steps")   # returns int/float/bool/str
-    settings.set("quality_steps", 50)       # writes through to disk immediately
+    frames = settings.get("animatediff_frames")  # returns int/float/bool/str
+    settings.set("animatediff_frames", 12)        # writes through to disk immediately
 
 All keys and their defaults are defined in DEFAULTS below.  Unknown keys in the
 JSON file are preserved on load (forward-compatibility) but get() only serves
@@ -43,8 +43,6 @@ PIPELINE_MODE_ENABLED: bool = (
 # ── Defaults for every known key ──────────────────────────────────────────────
 
 DEFAULTS: dict = {
-    # Generation quality
-    "quality_steps": 20,            # default inference steps loaded into the steps spin
     # Sleep / power
     "sleep_after_n_gens": 0,        # 0 = never; N = call systemctl suspend after N completions
     # Screensaver
@@ -58,24 +56,32 @@ DEFAULTS: dict = {
     # Prompt director style
     "director_style_prob": 0.33,    # probability a video prompt draws a named director aesthetic
     "director_pin": "",             # "" = random pick; else exact string from CINEMATIC_DIRECTORS
-    # SkyReels video length
-    # Valid counts: (N-1) % 4 == 0  →  9 (~0.4s), 33 (~1.4s), 65 (~2.7s), 97 (~4s)
-    "skyreels_num_frames": 33,
     # AnimateDiff frame count (Blackhole local TTNN runner)
     # More frames → longer GIF, longer generation time (~5 min/frame)
     "animatediff_frames": 8,
     # Create zone — named control state
     "clip_length_slot":      "standard",  # "short"|"standard"|"long"|"extended"
-    "preferred_video_model": "",          # "wan2"|"mochi"|"skyreels"|"" (auto)
-    "hidden_plugins":        [],          # plugin/model keys to hide from UI surfaces (video dropdown, artgen picker); does NOT affect MCP tool exposure
-    "last_successful_deployment": "",     # server key of the last health-confirmed server
-    "seed_mode":             "random",    # "random"|"repeat"|"keep"
-    "pinned_seed":           -1,          # used when seed_mode == "keep"
+    "seed_mode":             "random",    # "random"|"repeat"|"keep" (SeedModeControl offers all three)
+    # AnimateDiff multi-chip default mode for the Create panel — "off" (single
+    # chip) | "remix" (varied clips) | "coherent" (one longer video). Set from
+    # Preferences so the default survives without a code edit; Remix is the safe
+    # default (Coherent can stress the board's multi-chip fabric).
+    "animatediff_multichip_default": "remix",
+    # Hardware monitor (📊 Monitor HW) — remembered across sessions; restored on
+    # launch. Toggled from the View menu + the header toggle next to Servers.
+    "hw_monitor_default_on": False,
     # Recovery
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
     # Animate picker — user-chosen disk folder
     "motion_clips_dir": "",         # empty = Disk tab shows only Browse tile
 }
+# NOTE (v0.93.0 pre-release audit): removed 6 dead keys that nothing consumed —
+# quality_steps (the menu "Quality" radios wrote it but no generation path read
+# it; the per-panel Steps spinner is the real control), hidden_plugins (the
+# Preferences "Plugins" section persisted it but no picker filtered on it),
+# skyreels_num_frames / preferred_video_model / pinned_seed (vestiges of an
+# unmerged create-zone-redesign plan), and last_successful_deployment (its only
+# reader was the deleted ControlPanel startup pre-select).
 
 
 class AppSettings:

@@ -332,6 +332,45 @@ else
 fi
 
 # =============================================================================
+# STEP 6b — AnimateDiff prerequisites (tt-metal runtime + weights)
+#   AnimateDiff is the app's no-server default video model, but it runs its
+#   TTNN runner under the tt-metal python_env — NOT the tt-inference-server
+#   Docker path. The runner itself (vendor/tt-animatediff/examples/generate.py)
+#   ships in this package (debian/rules fails the build if it is missing), and
+#   the weights come from the Recommended tt-model-animatediff package. Flag the
+#   tt-metal runtime + the weight status so a fresh install knows what's left.
+# =============================================================================
+_section "Checking AnimateDiff prerequisites"
+
+TTMETAL_PY=""
+if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    _AD_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+    [[ -n "$_AD_HOME" ]] && TTMETAL_PY="$_AD_HOME/tt-metal/python_env/bin/python"
+fi
+
+if [[ -n "$TTMETAL_PY" && -x "$TTMETAL_PY" ]]; then
+    echo "Found tt-metal python_env — AnimateDiff can run on Blackhole."
+else
+    echo ""
+    echo "NOTE: tt-metal python_env not found (~/tt-metal/python_env/bin/python)."
+    echo "AnimateDiff (the default Blackhole video model) runs its TTNN runner"
+    echo "under tt-metal, not the Docker inference server. Build/install tt-metal"
+    echo "(via tt-installer) to enable it:"
+    echo "  https://github.com/tenstorrent/tt-installer"
+fi
+echo ""
+if dpkg-query -W -f='${Status}' tt-model-animatediff 2>/dev/null | grep -q "install ok installed"; then
+    echo "AnimateDiff weights: provided by the installed tt-model-animatediff"
+    echo "package (base model + motion adapter, both public)."
+else
+    echo "AnimateDiff weights: install the tt-model-animatediff package (~5.7 GB,"
+    echo "both repos public, no token) for offline-ready weights —"
+    echo "  sudo apt install tt-model-animatediff"
+    echo "Otherwise AnimateDiff downloads them from HuggingFace on first generation"
+    echo "(network required for that first run only)."
+fi
+
+# =============================================================================
 # STEP 7 — Optional: nvidia-container-toolkit
 # =============================================================================
 if _have nvidia-smi; then
@@ -372,6 +411,19 @@ if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]] && id "$REAL_USER" &>/dev/nul
             fi
         "
     fi
+
+    # -- Seed the bundled demo collection into the user's library ----------
+    #   So a fresh install opens with real art (a "Welcome to tt-local-generator"
+    #   playlist), not an empty gallery. Idempotent (seeded-once marker) +
+    #   fail-soft: a seed failure must never abort package configuration.
+    _section "Seeding the demo collection"
+    #   `set -o pipefail` inside the bash -c so the exit status reflects tt-ctl,
+    #   not the trailing `sed` (which is always 0) — otherwise a real seed
+    #   failure would look identical to success and the `||` below could never fire.
+    runuser -u "$REAL_USER" -- bash -c "
+        set -o pipefail
+        /usr/bin/python3 /usr/lib/tt-local-generator/tt-ctl seed-demo 2>&1 | sed 's/^/  /'
+    " || echo "  ! demo seeding skipped (non-fatal) — run 'tt-ctl seed-demo' later to retry."
 fi
 
 # =============================================================================

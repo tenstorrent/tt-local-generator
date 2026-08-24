@@ -792,6 +792,19 @@ def _caption_drawtext_chain(captions: "list[str]", n: int, seconds_per: float) -
     return ",".join(parts)
 
 
+def _concat_quote(path: str) -> str:
+    """Quote a path for an ffmpeg concat-demuxer ``file`` line.
+
+    The demuxer wraps the path in single quotes; a literal single quote inside
+    must be written as ``'\\''`` (close-quote, escaped-quote, reopen-quote) —
+    the same convention a POSIX shell uses. Without this, a path containing an
+    apostrophe (e.g. ``/home/me/O'Brien/frame.png``) prematurely terminates the
+    quoted string and ffmpeg fails to parse the list (or, worse, misreads the
+    tail as another directive). Backslashes are left as-is: inside single quotes
+    the demuxer treats ``\\`` literally, so only the quote needs escaping."""
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
 def _write_concat_list(list_path: Path, images: "list[str]", seconds_per: float) -> None:
     """Write an ffmpeg concat-demuxer list file for a fixed-duration slideshow.
 
@@ -803,9 +816,9 @@ def _write_concat_list(list_path: Path, images: "list[str]", seconds_per: float)
     """
     lines = []
     for img in images:
-        lines.append(f"file '{img}'")
+        lines.append(f"file {_concat_quote(img)}")
         lines.append(f"duration {seconds_per}")
-    lines.append(f"file '{images[-1]}'")
+    lines.append(f"file {_concat_quote(images[-1])}")
     list_path.write_text("\n".join(lines) + "\n")
 
 
