@@ -1,5 +1,111 @@
 # tt-local-generator — developer notes
 
+## Status bar by function + inline video in Create (v0.97.0)
+
+Two user-reported bugs, one shared theme: a surface that reported something
+other than what was actually true.
+
+- **The status bar is four per-FUNCTION segments now, not one aggregate dot**
+  (`app/status_segments.py` + `_StatusBar` in `main_window.py`). The report:
+  *"it showed when a model was being started but stopped showing updates after
+  I closed the Servers overlay. now it reports a model being ready, but it's
+  just the prompt gen being ready."* Both halves were the SAME root cause, and
+  the Servers overlay was coincidental, not causal: `_render_status_snapshot`
+  folded every `SERVERS` key into ONE state (`READY > STARTING > ERROR > OFF`),
+  and `_autostart_prompt_server` brings the CPU-only prompt-server up within
+  seconds of launch — so (a) the aggregate was permanently READY and the bar
+  read "ready" forever, and (b) `update_starting()`'s elapsed timer was stomped
+  by the very next poll's `update_server(True, "ready")`, which is what "stopped
+  showing updates" was. Now: `● Prompt  ○ Image  ● Video  ● Art LLM`, each
+  resolved independently, so no function can speak for another.
+  - **`app/status_segments.py`** (GTK-free, unit-tested — same shape as
+    `ready_to_run.py`): the `SEGMENTS` table + `segment_states(snap,
+    artgen_detected=)`. `animate` folds into **Video** (it IS video, per the
+    v0.61.0 "Video is Video" merge); `animatediff` is deliberately NOT a
+    segment (no `SERVERS` entry — no live service state to report; its popover
+    row is still owned by `_check_animatediff_hardware`). The
+    `running_artgen_model()` override for an unregistered chat model is folded
+    into the `artgen` segment so the bar can't disagree with CreateView's own
+    "(detected)" entry.
+  - **State is a SHAPE as well as a colour** (`● ◐ ○ ✕`, mirroring CreateView's
+    `◌/◐/●` model-dot convention) so the bar reads without relying on hue.
+    "starting" is the docs-site semantic yellow `#F6BC42`, NOT `@tt_accent` —
+    the accent teal `#4FD1C5` and `@tt_success` `#27AE60` are indistinguishable
+    at 9px, which defeats an at-a-glance bar (caught by screenshotting it, not
+    by a test).
+  - **The elapsed timer is per-segment** and only a STARTING segment carries
+    one (`Video 1:23`); the phase word from the log tail goes to the segment's
+    **tooltip** via `set_phase`, never the visible label, so a chatty startup
+    phase can't widen the bar. One shared 1 s source, started/stopped by
+    `_sync_segment_timer()`; the clock resets ONLY on the transition INTO
+    starting — resetting on every repaint is exactly how the retired
+    `update_starting()` froze the counter at 0:00.
+  - **Removed:** `update_server`/`update_starting`/`update_error`/`_set_srv_dot`
+    /`_srv_dot`/`_srv_lbl`/`_status_agg_prev`. `_on_start_server` now lights the
+    resolved segment optimistically via
+    `status_segments.segment_for_server_key(key)` -> `mark_starting()` (instant
+    click feedback; `note_starting()` makes the next snapshot agree);
+    `_on_stop_server` paints nothing (the retired aggregate literally painted a
+    STOP as "starting"). The capability popover, `update_capability`, and the
+    queue/disk/chip segments are untouched — the bar is the glance, the popover
+    is the detail.
+  - **`_log_tail_stop`/"Server ready" now hang off `media_ready`**, not the
+    aggregate — the auto-started prompt-server used to kill the log tail of a
+    video launch that was still in progress.
+
+- **Shared-port STARTING inference fixed (`model_status.py::_tick`).** Exposed,
+  not caused, by the bar above: servers here are NOT one-per-port — every media
+  model is the SAME port-8000 container (artgen models share 8002), only one
+  running at a time. So while Wan2.2 was healthy, `flux`'s probe found :8000
+  open, its own health check failed (wrong runner), and `_resolve` rule 3 read
+  that as "flux is launching" — **permanently**. The aggregate hid it; the new
+  bar rendered it as a live `◐ Image 4:32` while nothing was starting (seen in
+  the first verification screenshot). Fix: a new `_endpoint_of(key)` +
+  `owned_endpoints` pass drops the probe result for any key whose `(host, port)`
+  a DIFFERENT healthy server already answers on. Only the INFERENCE is
+  suppressed — `self._starting` is consulted first by `_resolve`, so a launch
+  we actually started still reports STARTING, and a genuinely-listening-but-not-
+  yet-healthy server with no healthy owner still infers STARTING as before.
+
+- **A generated video PLAYS in the Create result panel** (`create_view.py`).
+  The report: *"after generating a video, the video doesn't play in the
+  resultant box. I can go to library and watch it play."* Not a wiring failure
+  — `_build_artifact_widget`'s `kind == "video"` branch never built a player at
+  all. It returned a static `Gtk.Picture` of `thumbnail_path`, an explicit
+  unfinished v1 placeholder whose own comment said so ("a real inline player is
+  a reasonable follow-up **once this panel is actually wired in**") — written
+  before the panel was wired into Create, and never revisited after it was. The
+  `.gif` branch beside it already animated, which is why AnimateDiff results
+  looked fine and only `.mp4` was dead.
+  - New `_make_video_player(path)`/`_release_video()` mirror
+    `DetailPanel.show_record`'s proven recipe: `Gtk.Video` +
+    **`set_autoplay(True)` AND `set_loop(True)` together** — `set_loop` only
+    actually loops while GTK drives playback; manually driving
+    `get_media_stream().play()` bypasses GTK's `notify::ended` -> seek(0) ->
+    play() restart (CLAUDE.md's "Video hover / looping" note). Same
+    `_USE_SYSTEM_PLAYER` macOS split (`GstPlayer` — note its API is `close()`,
+    not `stop()`), degrading to the OLD poster rather than a blank video frame
+    when gtk4paintablesink is absent.
+  - **`_clear_current()` calls `_release_video()`** (pause the stream, then
+    `set_file(None)` to start pipeline teardown immediately, mirroring
+    `DetailPanel.clear()`) so swapping results never leaves a GStreamer
+    pipeline decoding — and its audio playing — behind the new one.
+  - `tests/test_create_result_panel.py::test_video_record_still_uses_static_poster`
+    pinned the OLD behaviour; its premise ("explicitly OUT of scope for **this**
+    fix") was scoped to the artgen-showcase task, not a claim that a poster was
+    correct forever. Replaced by five tests (real player / autoplay+loop /
+    points at the artifact not the thumbnail / missing file still degrades /
+    teardown on swap).
+
+**Verification note:** the bar was checked by screenshotting the real app under
+Xvfb, which is what caught both the phantom "Image starting" and the
+indistinguishable starting colour — neither was visible from a green test run.
+`GDK_BACKEND=x11` + `env -u WAYLAND_DISPLAY` is REQUIRED for that: this box is a
+Plasma **Wayland** session, so GTK4 ignores `DISPLAY=:N` and opens a real window
+on Taylor's actual desktop instead (done twice by accident before noticing).
+The yellow "starting" colour is CSS-verified only — no launch was in flight
+during the final screenshot.
+
 ## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.1)
 
 - **v0.96.1 — Copilot PR#24 re-review.** (a) `demo_seed`: when `--db` is passed

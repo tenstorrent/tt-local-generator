@@ -1,3 +1,35 @@
+tt-local-generator (0.97.0) noble; urgency=medium
+
+  * feat(status bar): the bottom bar now shows one indicator per FUNCTION —
+    "Prompt · Image · Video · Art LLM" — instead of a single aggregate dot.
+    Each carries its own state as a shape as well as a colour (● ready /
+    ◐ starting / ○ off / ✕ failed), with the model name and startup phase in
+    its tooltip and the existing capability popover unchanged behind a click.
+  * fix(status bar): the aggregate dot it replaces folded every server into one
+    READY > STARTING > ERROR > OFF state. Since the CPU-only prompt-server is
+    auto-started on launch and goes ready within seconds, the bar reported
+    "ready" for the entire session no matter what the media servers were doing,
+    and the next poll stomped the elapsed timer of any launch in flight — so a
+    server start appeared to stop updating partway through. Segments resolve
+    independently, so no function can speak for another one.
+  * fix(model status): an open port that a DIFFERENT, healthy server is already
+    answering on is no longer read as "this server is launching". Every media
+    model shares the one port-8000 container (artgen models share 8002), so
+    while Wan2.2 was healthy the Image key's probe found :8000 open, its own
+    health check failed, and the service inferred STARTING for it forever. The
+    old aggregate dot hid this; a per-function bar rendered it as "Image
+    starting... 4:32" while nothing was starting. A launch we actually started
+    is tracked separately, so genuine starts are unaffected.
+  * fix(create): a generated video now PLAYS in the result panel it was made
+    in. That branch rendered a static poster thumbnail — an unfinished v1
+    placeholder from before the panel was wired into Create — so an .mp4 sat
+    still in Create while the Library played it fine. It now builds a real
+    player (Gtk.Video with autoplay+loop, GstPlayer on macOS), torn down on
+    every state change so a swapped result never leaves a pipeline decoding
+    behind the new one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 17:48:33 -0700
+
 tt-local-generator (0.96.4) noble; urgency=medium
 
   * fix(postinst): weight downloads no longer fail with permission errors on a

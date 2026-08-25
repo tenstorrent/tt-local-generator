@@ -434,16 +434,76 @@ def test_gif_record_missing_file_degrades_to_placeholder_no_crash(tmp_path):
     assert isinstance(widget, Gtk.Label)
 
 
-def test_video_record_still_uses_static_poster(tmp_path):
-    """Video (.mp4) is explicitly OUT of scope for this fix — it keeps the
-    existing static-poster/placeholder behavior."""
+def test_video_record_gets_a_real_inline_player(tmp_path):
+    """A generated .mp4 must PLAY in the result panel, not show a poster.
+
+    This branch used to return a static `Gtk.Picture` of the thumbnail — an
+    explicit v1 placeholder from before the panel was wired into Create ("a
+    real inline player is a reasonable follow-up once this panel is actually
+    wired in"). The user's report: the video plays in the Library but not in
+    the box it was just generated into.
+    """
     from artgen_gallery import _AnimatedGifWidget
     p = cv.CreateResultPanel()
     rec = _rec(tmp_path, kind="video")
     widget = p._build_artifact_widget(rec)
     assert not isinstance(widget, _AnimatedGifWidget)
-    # Static poster: a Gtk.Picture pointed at the thumbnail (unchanged).
-    assert isinstance(widget, Gtk.Picture)
+    assert isinstance(widget, Gtk.Video), (
+        "an .mp4 result must render in a real player container, not a poster"
+    )
+
+
+def test_video_player_autoplays_and_loops(tmp_path):
+    """The recipe proven by `DetailPanel.show_record`'s Linux branch.
+
+    `set_loop(True)` only actually loops when GTK drives playback — i.e. with
+    autoplay on. Manually driving `get_media_stream().play()` bypasses GTK's
+    `notify::ended` -> seek(0) -> play() restart (see CLAUDE.md's "Video hover
+    / looping" note), which is why both flags belong together.
+    """
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="video")
+    widget = p._build_artifact_widget(rec)
+    assert widget.get_autoplay() is True
+    assert widget.get_loop() is True
+
+
+def test_video_player_points_at_the_artifact_not_the_thumbnail(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="video")
+    widget = p._build_artifact_widget(rec)
+    gfile = widget.get_file()
+    assert gfile is not None
+    assert gfile.get_path() == rec.media_file_path
+    assert gfile.get_path().endswith(".mp4")
+
+
+def test_missing_video_file_still_degrades_to_a_placeholder(tmp_path):
+    """No player for a path that isn't on disk — an honest label instead."""
+    from history_store import GenerationRecord
+    rec = GenerationRecord(
+        id="gone", prompt="a flying car", negative_prompt="",
+        num_inference_steps=20, seed=7,
+        video_path=str(tmp_path / "never-written.mp4"),
+        thumbnail_path="", created_at="2026-08-24T00:00:00",
+    )
+    p = cv.CreateResultPanel()
+    widget = p._build_artifact_widget(rec)
+    assert not isinstance(widget, Gtk.Video)
+    assert isinstance(widget, Gtk.Label)
+
+
+def test_switching_result_tears_down_the_video_player(tmp_path):
+    """A swapped-out player must stop, not keep a GStreamer pipeline (and its
+    audio) running behind the next result. Mirrors `DetailPanel.clear()`."""
+    p = cv.CreateResultPanel()
+    p.show_finished(_rec(tmp_path, kind="video"))
+    player = p._result_video
+    assert isinstance(player, Gtk.Video)
+
+    p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._result_video is None
+    assert player.get_file() is None, "the old player still holds its file open"
 
 
 def test_clicking_a_recent_rerenders_it(tmp_path):

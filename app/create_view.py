@@ -3033,6 +3033,14 @@ _CHIP_LINE_RE = chip_progress.CHIP_LINE_RE
 # perfectly valid, existing file.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 _VIDEO_EXTS = {".mp4"}
+#: Height of the inline result player. Wide-open on width (it expands to the
+#: result column) but capped vertically so a tall video can't push the recents
+#: strip off-screen.
+_RESULT_VIDEO_H = 320
+#: macOS's Homebrew GTK4 bottle ships without libmedia-gstreamer, so `Gtk.Video`
+#: renders a blank frame there and `GstPlayer` (gtk4paintablesink -> Gtk.Picture)
+#: stands in. Same split `main_window` makes for `DetailPanel`.
+_USE_SYSTEM_PLAYER: bool = sys.platform == "darwin"
 _GIF_EXTS = {".gif"}
 _SVG_EXTS = {".svg"}
 _ANSI_EXTS = {".ans"}
@@ -3209,6 +3217,15 @@ class CreateResultPanel(Gtk.Box):
         self._pending_status_lbl: Optional[Gtk.Label] = None
         self._pending_elapsed_lbl: Optional[Gtk.Label] = None
 
+        # The ONE inline video player this panel may own at a time (a freshly
+        # generated .mp4 plays right where it was made). Exactly one of these
+        # is ever set — `Gtk.Video` everywhere, `GstPlayer` on macOS where the
+        # Homebrew GTK4 bottle has no GStreamer backend. `_release_video()`
+        # tears down whichever is live on every state transition, so a swapped
+        # result can never leave a pipeline decoding behind the new one.
+        self._result_video: Optional[Gtk.Video] = None
+        self._result_gst = None
+
         # Per-chip progress breakdown (multi-chip AnimateDiff). `_chip_status`
         # is the persistent job state (chip index -> latest line) so a return to
         # the pending view restores every chip's row. The row widget itself is
@@ -3321,11 +3338,89 @@ class CreateResultPanel(Gtk.Box):
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
+    # ── Inline video player ──────────────────────────────────────────────────
+
+    def _make_video_player(self, path: str) -> "Gtk.Widget | None":
+        """Build the inline player for `path`, or None if this platform has no
+        usable one (the caller then falls back to a static poster).
+
+        Mirrors `DetailPanel.show_record`'s platform split: on macOS the
+        Homebrew GTK4 bottle ships without libmedia-gstreamer, so `Gtk.Video`
+        renders a blank frame and `GstPlayer` (gtk4paintablesink -> Gtk.Picture)
+        is used instead; everywhere else `Gtk.Video` is the real player.
+        """
+        self._release_video()
+
+        if _USE_SYSTEM_PLAYER:
+            # macOS: only usable when gtk4paintablesink is actually present.
+            # Returning None here preserves today's poster fallback rather than
+            # regressing a working thumbnail into a blank video frame.
+            try:
+                from gst_player import GstPlayer
+            except Exception:
+                return None
+            try:
+                gp = GstPlayer(muted=True)
+                if not gp.available:
+                    return None
+                gp.widget.set_hexpand(True)
+                gp.widget.add_css_class("create-result-picture")
+                gp.load(path)
+                gp.set_on_eos(lambda p=gp: (p.seek(0), p.play()))
+                gp.play()
+                self._result_gst = gp
+                return gp.widget
+            except Exception:
+                self._result_gst = None
+                return None
+
+        try:
+            video = Gtk.Video.new_for_filename(path)
+        except Exception:
+            return None
+        # Both flags together — see `_build_artifact_widget`'s comment.
+        video.set_autoplay(True)
+        video.set_loop(True)
+        video.set_hexpand(True)
+        video.set_size_request(-1, _RESULT_VIDEO_H)
+        video.add_css_class("create-result-picture")
+        self._result_video = video
+        return video
+
+    def _release_video(self) -> None:
+        """Stop and drop any live player this panel owns.
+
+        Without this, swapping results leaves the previous GStreamer pipeline
+        running behind the new one (audio keeps playing, the decoder keeps
+        working). Mirrors `DetailPanel.clear()`'s teardown: pause the stream,
+        then `set_file(None)` to start pipeline teardown immediately rather
+        than waiting on GTK's async widget destruction.
+        """
+        video = getattr(self, "_result_video", None)
+        if video is not None:
+            try:
+                stream = video.get_media_stream()
+                if stream is not None and stream.get_playing():
+                    stream.pause()
+                video.set_file(None)
+            except Exception:
+                pass
+        self._result_video = None
+
+        gst = getattr(self, "_result_gst", None)
+        if gst is not None:
+            try:
+                gst.close()
+            except Exception:
+                pass
+        self._result_gst = None
+
     def _clear_current(self) -> None:
         """Tear down every child of the current-result box. Called at the
         start of every state transition so each state's `_show_*`/`show_*`
         method starts from a clean slate (mirrors `_swap_panel`'s tear-down-
         then-rebuild pattern elsewhere in this file)."""
+        self._release_video()
         child = self._current_box.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
@@ -3584,10 +3679,25 @@ class CreateResultPanel(Gtk.Box):
             return label
 
         if kind == "video" and exists:
-            # v1: a poster/thumbnail stands in for the real lazy-stream+loop
-            # video widget (GenerationCard's pattern in main_window.py) — an
-            # acceptable v1 per the brief. A real inline player is a
-            # reasonable follow-up once this panel is actually wired in.
+            # A real inline player, not a poster. This branch used to return a
+            # static Gtk.Picture of the thumbnail — an explicit v1 placeholder
+            # from before the panel was wired into Create — so a freshly
+            # generated video sat still in the very box it was made in while
+            # the Library played it fine.
+            #
+            # The recipe is DetailPanel.show_record's (main_window.py), which
+            # is the proven-working one: autoplay + loop TOGETHER. set_loop()
+            # only actually loops while GTK drives playback; manually driving
+            # get_media_stream().play() bypasses GTK's notify::ended -> seek(0)
+            # -> play() restart (see CLAUDE.md's "Video hover / looping" note).
+            #
+            # Only ONE player can exist in this panel at a time, and it must be
+            # torn down on the next state change — see `_release_video`.
+            player = self._make_video_player(path)
+            if player is not None:
+                return player
+            # No usable player on this platform — keep the old poster/
+            # placeholder rather than showing a blank video frame.
             thumb_path = getattr(record, "thumbnail_path", "") or ""
             if thumb_path and Path(thumb_path).exists():
                 try:
