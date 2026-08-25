@@ -1,3 +1,22 @@
+tt-local-generator (0.98.0) noble; urgency=medium
+
+  * feat(create): watch an AnimateDiff video form as it generates. The result
+    panel showed a spinner and a status line; it now shows the animation itself,
+    updating each denoising step, with "Denoising step N/M" beneath it. Driven
+    by tt-animatediff's runner, which emits a rolling latent-preview GIF and a
+    "PREVIEW: <step>/<total> <path>" line per step over the stdout channel the
+    panel already drains for per-chip progress.
+    The preview is CPU-side in the runner (3 of 4 latent channels mapped to RGB,
+    no VAE decode, no device work), so it costs the hardware pipeline nothing —
+    measured ~3% wall-clock on CPU and no measurable cost on Blackhole.
+    Multi-chip runs preview chip 0 only: each chip denoises its own segment, so
+    letting all four write the single rolling image would flicker between
+    unrelated latents.
+    Verified end to end on real Blackhole hardware (9/9 preview lines, 11.0s,
+    2.8s/frame) and on CPU.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:03:52 -0700
+
 tt-local-generator (0.97.2) noble; urgency=medium
 
   * fix(create): the macOS inline-player path now checks `GstPlayer.load()`'s

@@ -1,5 +1,73 @@
 # tt-local-generator — developer notes
 
+## Watch it form — AnimateDiff live previews (v0.98.0)
+
+The Create panel showed a spinner while a video was being made. It now shows
+the video being made. Spans two repos; **tt-animatediff is ours**, so no
+tt-media-server involvement at all — AnimateDiff is a local subprocess, not a
+server model.
+
+- **The capability already existed and was half-wired.**
+  `generate_frames_temporal` has taken an `on_step` hook and
+  `temporal_attention._latent_preview` has rendered CPU-side previews since the
+  Gradio UI landed — but only `app.py` wired them together. `examples/
+  generate.py`, the runner tt-local-generator execs, ran blind. Both are present
+  in **v0.9.0, the exact tag `vendor/tt-animatediff` pins**, so nothing needed
+  a submodule bump.
+- **`animatediff_ttnn/preview.py`** (new, in tt-animatediff) is the shared,
+  importable, torch-free-testable half: `make_step_callback()` (cadence, atomic
+  write, the line format) and `parse_preview_line()`. The runner stays thin —
+  `_preview_callback(args)` plus `--preview-path`/`--preview-every`.
+  - **Wired into BOTH paths**, because the first attempt was silently ignored on
+    CPU: TTNN passes `on_step` straight to `generate_frames_temporal`; the CPU
+    path goes through diffusers, whose hook is
+    `callback_on_step_end(pipe, step, t, kwargs)` and whose latents are ONE
+    `(B, C, F, H, W)` tensor, so `as_diffusers_callback()` splits on the frame
+    axis. A flag that means something in one mode and nothing in the other is
+    the same class of lie as the status bar this release opened with.
+  - **256x256, not 512.** The source is a 64x64 latent grid, so a 512 upsample
+    carries no more information — it just costs CPU, a bigger GIF to rewrite
+    each step, and a thumbnail that dwarfs the finished result.
+  - **Atomic writes** (temp file + `os.replace`): the consumer polls that exact
+    path while the runner rewrites it, so an in-place write would eventually
+    hand it a truncated GIF. Every failure is swallowed — a lost preview frame
+    costs a UI update; raising would cost the user their run.
+- **`CreateResultPanel`** intercepts `PREVIEW:` lines in `show_progress`
+  **before** the `_CHIP_LINE_RE` match (a multi-chip preview arrives wearing a
+  `chipN:` prefix and would otherwise be filed as that chip's status text).
+  `_preview_path` is job state that outlives the pending VIEW, so
+  `_render_pending` restores the image after a visit to a recent mid-generation
+  — the same shape as `_chip_status` restoring the per-chip rows. Reset on new
+  job / finish / error so a straggler can't resurrect a stale frame.
+  Only chip 0 drives the preview (each chip denoises its own segment).
+- **GTK sizing gotcha, measured not guessed.** `AnimatedGifWidget` sets
+  `hexpand/vexpand=True` + `ContentFit.COVER` — right for a finished result
+  filling its pane, wrong for a progress thumbnail: it inflated to ~530px square
+  and dwarfed the result it previews. Clearing hexpand/vexpand, `halign=CENTER`,
+  AND `set_can_shrink(False)` were all insufficient inside this panel (probed
+  live: still 534x534 despite `halign=CENTER`, `can_shrink=False` and a 256x256
+  intrinsic). **A wrapper `Gtk.Box` with its own hard `set_size_request` is what
+  actually pins it** (probed: 220x220). The same config in a plain Box measured
+  256x256 — so the inflation comes from this panel's height-for-width
+  negotiation, not from the widget.
+- **`animatediff._build_cmd(preview_path=)`** is opt-in: `None` yields
+  byte-identical argv, so a vendored runner predating the flag is unaffected.
+
+**Verified on real Blackhole under a gozer lease** (`--exact 0000:01:00.0`, the
+healthy board — chip 3 on ...924055 has the ARC-NOC fault in
+[[reference_qb2_card924055_fragility]]): 9/9 preview lines, 11.0s total
+(2.8s/frame), device closed cleanly, chips released and reset. The koi are
+clearly recognisable in the step-9 preview, in the same positions as the final
+VAE decode — the latent proxy is genuinely informative, not just "some
+structure". Also verified on CPU (~3% overhead, 105.7s vs 102.5s).
+
+**Noted, not fixed:** the TTNN path runs `--steps 8` as **9** loop iterations
+(previews report `1/9`..`9/9`). The line honestly reports what the loop reports;
+the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.
+Multi-chip shows only chip 0's quarter of the animation — a 2x2 composite is the
+obvious follow-up. `.venv/` is untracked and un-gitignored in tt-animatediff, so
+`git add -A` there tries to stage the whole virtualenv.
+
 ## Status bar by function + inline video in Create (v0.97.0)
 
 Two user-reported bugs, one shared theme: a surface that reported something
