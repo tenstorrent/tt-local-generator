@@ -744,7 +744,8 @@ def _run_one(
                 run_log.flush()
                 _log.debug("[subprocess] %s", line)
                 if on_progress and (
-                    "Frame" in line or "Step" in line
+                    line.startswith("PREVIEW:")
+                    or "Frame" in line or "Step" in line
                     or "Generating" in line or "Loading" in line
                     or "chain" in line.lower() or "adapter" in line.lower()
                     or "lightning" in line.lower()
@@ -1167,7 +1168,8 @@ def _run_multi_chip(
                         lf.flush()
                         _log.debug("[chip%d] %s", chip_i, line)
                         if on_progress and (
-                            "Frame" in line or "Step" in line
+                            line.startswith("PREVIEW:")
+                            or "Frame" in line or "Step" in line
                             or "Generating" in line or "Loading" in line
                             or "Error" in line or "Traceback" in line
                             or "fatal" in line.lower() or "ARC" in line

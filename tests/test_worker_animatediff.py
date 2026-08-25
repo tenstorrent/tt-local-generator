@@ -251,3 +251,57 @@ class TestPreviewPath:
 
     def test_none_is_byte_identical_to_the_pre_preview_command(self):
         assert self._cmd(preview_path=None) == self._cmd()
+
+
+class TestPreviewLineReachesTheGui:
+    """The stdout filter must let `PREVIEW:` lines through.
+
+    Both drains (`_run_one` for single-chip, `_run_multi_chip`'s per-chip
+    closure) forward only lines matching a keyword allow-list. A `PREVIEW:`
+    line contains none of those keywords, so it was logged and then dropped —
+    the runner emitted previews correctly, the panel rendered them correctly,
+    and the two were never connected. The end-to-end feature was inert.
+    """
+
+    KEYWORDS_LINE = "PREVIEW: 7/9 /tmp/run/preview.gif"
+
+    def _forwards(self, src_slice: str, line: str) -> bool:
+        """Evaluate a drain's filter condition against `line`."""
+        import re
+        cond = re.search(r"if on_progress and \((.*?)\):", src_slice, re.S)
+        assert cond, "could not locate the drain's filter condition"
+        # The condition spans several indented source lines; flatten it so it
+        # evaluates as a single expression.
+        expr = " ".join(part.strip() for part in cond.group(1).splitlines())
+        return bool(eval(expr, {"line": line}))
+
+    def _src(self):
+        from pathlib import Path
+        import artgen.generators.animatediff as ad
+        return Path(ad.__file__).read_text()
+
+    def test_single_chip_drain_forwards_preview_lines(self):
+        src = self._src()
+        start = src.index("def _run_one(")
+        body = src[start:src.index("\ndef ", start + 1)]
+        assert self._forwards(body, self.KEYWORDS_LINE), (
+            "_run_one drops PREVIEW lines, so the live preview never reaches "
+            "CreateResultPanel"
+        )
+
+    def test_multi_chip_drain_forwards_preview_lines(self):
+        src = self._src()
+        start = src.index("def _run_multi_chip(")
+        body = src[start:src.index("\ndef ", start + 1)]
+        assert self._forwards(body, self.KEYWORDS_LINE), (
+            "_run_multi_chip drops PREVIEW lines"
+        )
+
+    def test_ordinary_chatter_is_still_filtered_out(self):
+        """The allow-list still has to be an allow-list — widening it for
+        PREVIEW must not turn the drain into a firehose."""
+        src = self._src()
+        start = src.index("def _run_one(")
+        body = src[start:src.index("\ndef ", start + 1)]
+        assert not self._forwards(body, "  0%|          | 0/8 [00:00<?, ?it/s]")
+        assert not self._forwards(body, "some unrelated library warning")

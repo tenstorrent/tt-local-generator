@@ -459,3 +459,68 @@ def test_prompt_gen_fallback_lights_neither_the_art_llm_segment_nor_its_row():
         (r, d) for c, r, d in obj._hw_statusbar.capability_calls if c == "artgen"
     ]
     assert artgen_rows == [(False, "")], artgen_rows
+
+
+# ── Local-busy lifecycle (AnimateDiff) ──────────────────────────────────────
+
+def test_local_busy_helpers_light_and_clear_every_segment():
+    """`_set_local_busy` / `_clear_local_busy` are the seam the AnimateDiff run
+    uses to light the Video segment, since no server backs it."""
+    import main_window as mw
+
+    calls = []
+
+    class _Bar:
+        def set_segment_busy(self, seg, busy, what=""):
+            calls.append((seg, busy, what))
+
+    class _W:
+        pass
+
+    obj = _W()
+    obj._hw_statusbar = _Bar()
+    obj._set_local_busy = mw.MainWindow._set_local_busy.__get__(obj)
+    obj._clear_local_busy = mw.MainWindow._clear_local_busy.__get__(obj)
+
+    obj._set_local_busy("video", "AnimateDiff")
+    assert calls == [("video", True, "AnimateDiff")]
+
+    calls.clear()
+    obj._clear_local_busy()
+    assert {c[0] for c in calls} == set(mw._status_segments.SEGMENT_KEYS)
+    assert all(c[1] is False for c in calls)
+
+
+def test_local_busy_helpers_are_fail_soft():
+    """A status-bar problem must never interfere with generation itself."""
+    import main_window as mw
+
+    class _Boom:
+        def set_segment_busy(self, *_a, **_k):
+            raise RuntimeError("bar exploded")
+
+    class _W:
+        pass
+
+    obj = _W()
+    obj._hw_statusbar = _Boom()
+    obj._set_local_busy = mw.MainWindow._set_local_busy.__get__(obj)
+    obj._clear_local_busy = mw.MainWindow._clear_local_busy.__get__(obj)
+    obj._set_local_busy("video", "AnimateDiff")  # must not raise
+    obj._clear_local_busy()                      # must not raise
+
+
+def test_every_terminal_create_path_clears_the_busy_light():
+    """A light that can outlive its job is worse than no light. Each path that
+    clears `_create_job_active` must also clear the override."""
+    from pathlib import Path
+    import main_window as mw
+
+    src = Path(mw.__file__).read_text()
+    # Every site that ends a Create job, and the bail-out guard.
+    assert src.count("_clear_local_busy()") >= 4, (
+        "expected a clear on the bail-out, both finished paths and the error path"
+    )
+    # And it is lit exactly where AnimateDiff is actually launched.
+    i = src.index("AnimateDiffGenerationWorker(")
+    assert '_set_local_busy("video", "AnimateDiff")' in src[i - 700:i]

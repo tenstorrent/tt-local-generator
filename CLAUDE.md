@@ -61,6 +61,38 @@ clearly recognisable in the step-9 preview, in the same positions as the final
 VAE decode — the latent proxy is genuinely informative, not just "some
 structure". Also verified on CPU (~3% overhead, 105.7s vs 102.5s).
 
+- **The preview line never reached the panel (v0.99.0).** Found by a pre-PR
+  review, not by a test: `_run_one` and `_run_multi_chip` both forward only
+  stdout lines matching a keyword allow-list (`"Frame"`, `"Step"`, `"Loading"`,
+  `"Error"`, ...). `PREVIEW: 7/9 /path.gif` matches NONE of them, so every
+  preview line was written to the run log and dropped. The runner emitted them
+  correctly and `CreateResultPanel` rendered them correctly; the two were never
+  connected, and the feature was inert end to end. **The earlier "verified end
+  to end" claim was too broad** — both ends were tested, the middle never was.
+  Both drains now allow `line.startswith("PREVIEW:")`, guarded by a test that
+  *evaluates each drain's actual filter condition* against a real preview line,
+  plus a control asserting the allow-list still rejects ordinary chatter.
+- **The Video segment lights while AnimateDiff runs (v0.99.0).** AnimateDiff has
+  no `SERVERS` entry, so the service reports Video OFF for the whole generation
+  — true, and misleading. `_StatusBar.set_segment_busy(seg, busy, what)` +
+  `_seg_busy` overrides an OFF snapshot, in the same shape as `_seg_sticky_error`.
+  Deliberately **not** `●`: that glyph means "a server is up and can take work",
+  and nothing is served here, so it uses `◉` (`main_window._BUSY_GLYPH`) in the
+  same `@tt_success` green — live at a glance, without claiming a server exists;
+  the tooltip reads `Video: AnimateDiff generating (local, no server)`. A real
+  server going READY clears the override (better information wins); every other
+  snapshot state leaves it standing. Lit at the `AnimateDiffGenerationWorker`
+  construction — the one site that knows it is AnimateDiff specifically — and
+  cleared by `_clear_local_busy()` on **every** terminal path (bail-out, both
+  finished paths, error), because a light that outlives its job is worse than no
+  light. Both helpers are fail-soft: a status-bar problem must never interfere
+  with generation.
+  - **Gotcha:** `_seg_busy`/`_seg_sticky_error` must be initialised BEFORE the
+    segment-construction loop — `_apply_segment_tooltip` runs inside it and
+    reads both. Also: the `busy` CSS comment initially used em-dashes, which
+    broke `_CSS`'s `b"""` literal (`SyntaxError: bytes can only contain ASCII`)
+    — the ASCII-only rule for that block is real and easy to trip.
+
 **Noted, not fixed:** the TTNN path runs `--steps 8` as **9** loop iterations
 (previews report `1/9`..`9/9`). The line honestly reports what the loop reports;
 the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.

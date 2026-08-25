@@ -70,6 +70,13 @@ import prompt_client
 import server_manager as _sm
 import status_segments as _status_segments
 
+#: Glyph for a segment doing LOCAL work with no managed server behind it —
+#: today only AnimateDiff, which runs as a subprocess and therefore has no
+#: `server_manager.SERVERS` entry for `ModelStatusService` to report on. Its own
+#: shape so it can't be read as "a server is ready" (see `_BUSY_GLYPH` use in
+#: `_StatusBar.set_segment_busy`).
+_BUSY_GLYPH = "◉"  # ◉
+
 # On macOS the Homebrew GTK4 bottle ships without libmedia-gstreamer.dylib,
 # so Gtk.Video always returns None from get_media_stream() and shows a blank
 # frame.  When this flag is True we skip all Gtk.Video widgets and route video
@@ -981,6 +988,12 @@ video > mediacontrols { opacity: 0; }
     font-size: 10px;
 }
 .tt-statusbar-segname-ready    { color: @tt_success; }
+/* "busy" = local work with no server behind it (AnimateDiff). Same success
+   green as ready (the function IS live), but its own glyph: ready means "a
+   server is up" and here there is no server at all. ASCII only - this block
+   is a b-string literal. */
+.tt-statusbar-dot-busy         { color: @tt_success; }
+.tt-statusbar-segname-busy     { color: @tt_success; }
 .tt-statusbar-segname-offline  { color: @tt_text_muted; }
 .tt-statusbar-segname-starting { color: #F6BC42; }
 .tt-statusbar-segname-error    { color: @tt_error; }
@@ -4491,6 +4504,19 @@ class _StatusBar(Gtk.Box):
         self._seg_phase: dict = {}   # segment key → phase word for the tooltip
         self._seg_error: dict = {}   # segment key → error message for the tooltip
 
+        # Segments whose ERROR was painted LOCALLY (a start script we watched
+        # exit non-zero), as opposed to one that merely came from a snapshot.
+        # A local failure outlives the next poll — see `update_segments`.
+        self._seg_sticky_error: set = set()
+
+        # Segments doing local work with no managed server behind them:
+        # {segment key: what is running}. Overrides an OFF snapshot (see
+        # `update_segments`) — AnimateDiff generates video for minutes with
+        # every SERVERS key legitimately OFF, and reporting Video as off while
+        # a video is being made is exactly the kind of true-but-misleading the
+        # by-function bar exists to remove.
+        self._seg_busy: dict = {}
+
         for _seg_key, _seg_label, _caps in _status_segments.SEGMENTS:
             holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
             holder.set_margin_end(10)
@@ -4515,10 +4541,6 @@ class _StatusBar(Gtk.Box):
             self._seg_error[_seg_key] = ""
             self._apply_segment_tooltip(_seg_key)
 
-        # Segments whose ERROR was painted LOCALLY (a start script we watched
-        # exit non-zero), as opposed to one that merely came from a snapshot.
-        # A local failure outlives the next poll — see `update_segments`.
-        self._seg_sticky_error: set = set()
 
         self._srv_menu_btn = Gtk.MenuButton()
         self._srv_menu_btn.set_has_frame(False)
@@ -4641,6 +4663,17 @@ class _StatusBar(Gtk.Box):
         """
         label = self._seg_labels[seg_key]
         state = self._seg_state[seg_key]
+        busy = self._seg_busy.get(seg_key)
+        if busy:
+            # Name what is running AND that nothing is served, so the green
+            # light can't be misread as "a server is up".
+            self._seg_dots[seg_key].set_tooltip_text(
+                f"{label}: {busy} generating (local, no server)"
+            )
+            self._seg_names[seg_key].set_tooltip_text(
+                f"{label}: {busy} generating (local, no server)"
+            )
+            return
         if state == Status.READY:
             tip = f"{label}: ready"
         elif state == Status.STARTING:
@@ -4655,21 +4688,22 @@ class _StatusBar(Gtk.Box):
     def _paint_segment(self, seg_key: str) -> None:
         """Repaint one segment's glyph, colour, label and tooltip from state."""
         state = self._seg_state[seg_key]
-        css = _status_segments.css_state_for(state)
+        busy = self._seg_busy.get(seg_key)
+        css = "busy" if busy else _status_segments.css_state_for(state)
 
         dot = self._seg_dots[seg_key]
-        dot.set_label(_status_segments.glyph_for(state))
-        for cls in ("ready", "offline", "starting", "error"):
+        dot.set_label(_BUSY_GLYPH if busy else _status_segments.glyph_for(state))
+        for cls in ("ready", "offline", "starting", "error", "busy"):
             dot.remove_css_class(f"tt-statusbar-dot-{cls}")
         dot.add_css_class(f"tt-statusbar-dot-{css}")
 
         name = self._seg_names[seg_key]
-        for cls in ("ready", "offline", "starting", "error"):
+        for cls in ("ready", "offline", "starting", "error", "busy"):
             name.remove_css_class(f"tt-statusbar-segname-{cls}")
         name.add_css_class(f"tt-statusbar-segname-{css}")
         # Only a launching segment carries an elapsed counter — a steady-state
         # bar is four short words, no ticking noise.
-        if state == Status.STARTING:
+        if state == Status.STARTING and not busy:
             name.set_label(f"{self._seg_labels[seg_key]} {self._elapsed_str(seg_key)}")
         else:
             name.set_label(self._seg_labels[seg_key])
@@ -4718,6 +4752,12 @@ class _StatusBar(Gtk.Box):
                 if state != Status.READY:
                     continue  # keep showing the failure we actually observed
                 self._seg_sticky_error.discard(seg_key)
+            # A real server going READY is better information than "local work
+            # in progress", so let the snapshot clear the busy override; any
+            # other state leaves it standing (the service reports OFF for the
+            # whole of an AnimateDiff run).
+            if seg_key in self._seg_busy and state == Status.READY:
+                self._seg_busy.pop(seg_key, None)
             self._set_segment(seg_key, state)
 
     def mark_starting(self, seg_key: str) -> None:
@@ -4731,6 +4771,27 @@ class _StatusBar(Gtk.Box):
         """
         self._seg_sticky_error.discard(seg_key)
         self._set_segment(seg_key, Status.STARTING)
+
+    def set_segment_busy(self, seg_key: str, busy: bool, what: str = "") -> None:
+        """Light a segment for LOCAL work that has no managed server behind it.
+
+        AnimateDiff generates video as a subprocess, so it has no
+        `server_manager.SERVERS` entry and `ModelStatusService` correctly
+        reports Video as OFF for the entire run — true, but misleading while a
+        video is visibly being made.
+
+        Deliberately NOT painted as READY: `●` means "a server is up and can
+        take work", and nothing is served here. `◉` in the same success green
+        reads as "this function is live" at a glance without claiming a server
+        exists, and the tooltip names what is actually running.
+        """
+        if seg_key not in self._seg_state:
+            return
+        if busy:
+            self._seg_busy[seg_key] = what or "generating"
+        else:
+            self._seg_busy.pop(seg_key, None)
+        self._paint_segment(seg_key)
 
     def mark_error(self, seg_key: str, msg: str = "failed — click for log") -> None:
         """Flag a failed launch on one segment (the message shows in its tooltip).
@@ -9245,6 +9306,26 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         return True
 
+    def _set_local_busy(self, seg_key: str, what: str) -> None:
+        """Mark a status-bar segment as doing local, serverless work.
+
+        Fail-soft: a status-bar problem must never interfere with generation.
+        """
+        try:
+            self._hw_statusbar.set_segment_busy(seg_key, True, what)
+        except Exception:
+            pass
+
+    def _clear_local_busy(self) -> None:
+        """Drop every local-busy override. Called from every terminal path of a
+        generation (finished / error / early-return bail-out) -- a light that
+        can outlive its job is worse than no light at all."""
+        try:
+            for _seg in _status_segments.SEGMENT_KEYS:
+                self._hw_statusbar.set_segment_busy(_seg, False)
+        except Exception:
+            pass
+
     def _fail_create_job(self, reason: str) -> None:
         """Clear Create-job state and surface *reason* in the inline result
         panel when `_on_generate` bails out via an early return before doing
@@ -9271,6 +9352,7 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
         self._create_job_active = False
+        self._clear_local_busy()
 
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
@@ -9423,6 +9505,13 @@ class MainWindow(Gtk.ApplicationWindow):
                     chain_save_path = os.path.join(
                         tempfile.gettempdir(), f"tt_ad_chain_{seed if seed >= 0 else 'auto'}.pt"
                     )
+                # Light the Video segment for the duration of this run.
+                # AnimateDiff is a local subprocess with no `SERVERS` entry, so
+                # ModelStatusService reports Video OFF the whole time -- true,
+                # but a bar reading "off" while a video is visibly being made is
+                # the kind of true-but-misleading this bar exists to remove.
+                # Cleared by `_clear_local_busy` on every terminal path.
+                self._set_local_busy("video", "AnimateDiff")
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,
                     prompt=prompt,
@@ -10177,6 +10266,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         return GLib.SOURCE_REMOVE
 
     # ── Server start / stop ────────────────────────────────────────────────────
@@ -11060,6 +11150,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         self._gen_gallery = None
         self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
         # SP-3d-5: ControlPanel's own "Repeat last" availability sync (which
@@ -11117,6 +11208,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         self._start_next_queued()
         return False
 

@@ -1,3 +1,22 @@
+tt-local-generator (0.99.0) noble; urgency=medium
+
+  * fix(create): live AnimateDiff previews actually reach the panel. Both stdout
+    drains in the animatediff generator forward only lines matching a keyword
+    allow-list ("Frame", "Step", "Loading", "Error", ...); a
+    "PREVIEW: <step>/<total> <path>" line matches none of them, so every preview
+    was written to the run log and then dropped. The runner emitted correctly
+    and the panel rendered correctly, but nothing connected them - the feature
+    was inert end to end.
+  * feat(status bar): the Video indicator now lights while AnimateDiff is
+    generating. AnimateDiff is a local subprocess with no managed server, so
+    ModelStatusService correctly reports Video as off for the whole run - true,
+    but misleading when a video is visibly being made. It lights in the same
+    success green as a ready server but with its own glyph, and a tooltip
+    naming what is running: a filled dot means "a server is up and can take
+    work", and here there is no server at all.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:36:29 -0700
+
 tt-local-generator (0.98.0) noble; urgency=medium
 
   * feat(create): watch an AnimateDiff video form as it generates. The result
