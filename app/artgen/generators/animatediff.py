@@ -350,8 +350,17 @@ def _build_cmd(
     motion_adapter_alpha: float,
     motion_adapter_skip: list[str] | None,
     prompt_schedule: "list[tuple[int, str]] | None" = None,
+    preview_path: "str | None" = None,
 ) -> list[str]:
-    """Assemble the generate.py command list for a single-chip invocation."""
+    """Assemble the generate.py command list for a single-chip invocation.
+
+    `preview_path` opts into tt-animatediff's rolling latent preview: the runner
+    writes that GIF as denoising proceeds and prints
+    `PREVIEW: <step>/<total> <path>`, which CreateResultPanel drains from stdout
+    to show the animation forming. Opt-in by construction — a vendored runner
+    predating the flag would reject it, so None must (and does) yield exactly
+    the command this built before previews existed.
+    """
     cmd = [
         str(_PYTHON),
         str(script),
@@ -387,6 +396,8 @@ def _build_cmd(
     if prompt_schedule:
         for frame, keyframe_prompt in prompt_schedule:
             cmd += ["--prompt-schedule", f"{frame}:{keyframe_prompt}"]
+    if preview_path:
+        cmd += ["--preview-path", str(preview_path)]
     return cmd
 
 
@@ -1044,6 +1055,11 @@ def run_subprocess(
         motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
         motion_adapter_skip=motion_adapter_skip,
         prompt_schedule=prompt_schedule,
+        # Rolling latent preview beside the output, so the GUI can show the
+        # animation forming instead of a spinner. Only worth asking for when
+        # someone is actually draining our stdout to see it.
+        preview_path=str(out_path.with_name(out_path.stem + "_preview.gif"))
+        if on_progress else None,
     )
 
     # run_id passed to _run_one folds in out_path.stem so the per-run log file

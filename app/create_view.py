@@ -81,6 +81,7 @@ exercised by the injected-fake test path.
 """
 from __future__ import annotations
 
+import re
 import json
 import sys
 import threading
@@ -3037,6 +3038,17 @@ _VIDEO_EXTS = {".mp4"}
 #: result column) but capped vertically so a tall video can't push the recents
 #: strip off-screen.
 _RESULT_VIDEO_H = 320
+#: `PREVIEW: <step>/<total> <path>` — emitted by tt-animatediff's runner each
+#: time it rewrites the rolling latent-preview GIF (see
+#: `animatediff_ttnn.preview`). An optional `chipN: ` prefix survives a
+#: multi-chip run, where only chip 0 drives the preview. The path is captured to
+#: end-of-line so a path containing spaces round-trips.
+_PREVIEW_LINE_RE = re.compile(
+    r"^(?:chip(\d+):\s*)?PREVIEW:\s+(\d+)/(\d+)\s+(.+?)\s*$"
+)
+#: Height of the in-progress preview. Smaller than a finished result — it is a
+#: progress indicator, not the deliverable.
+_PREVIEW_H = 220
 #: macOS's Homebrew GTK4 bottle ships without libmedia-gstreamer, so `Gtk.Video`
 #: renders a blank frame there and `GstPlayer` (gtk4paintablesink -> Gtk.Picture)
 #: stands in. Same split `main_window` makes for `DetailPanel`.
@@ -3238,6 +3250,14 @@ class CreateResultPanel(Gtk.Box):
         self._chip_status: dict = {}
         self._chip_rows = chip_progress.ChipProgressRows()
 
+        # Live latent preview (tt-animatediff). `_preview_path` is the job state
+        # that outlives the pending VIEW, so `_render_pending` can restore the
+        # image after the user visits a recent mid-generation — exactly how
+        # `_chip_status` restores the per-chip rows. `_preview_widget` is the
+        # mounted widget, or None when there is nothing to show.
+        self._preview_path: "str | None" = None
+        self._preview_widget = None
+
         self._current_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._current_box.add_css_class("create-result-current")
         self.append(self._current_box)
@@ -3433,6 +3453,10 @@ class CreateResultPanel(Gtk.Box):
         method starts from a clean slate (mirrors `_swap_panel`'s tear-down-
         then-rebuild pattern elsewhere in this file)."""
         self._release_video()
+        # The widget is about to be destroyed with the rest of the view; drop
+        # our reference so it can't be mistaken for a mounted one. `_preview_path`
+        # deliberately SURVIVES — `_render_pending` rebuilds from it.
+        self._preview_widget = None
         child = self._current_box.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
@@ -3491,6 +3515,7 @@ class CreateResultPanel(Gtk.Box):
         self._pending_medium = medium
         self._pending_last_status = header_text
         self._chip_status = {}   # fresh job -> drop any previous run's chip rows
+        self._reset_preview()    # ...and any previous run's last preview frame
         self._pending_start = time.monotonic()
         self._render_pending()
         self._drive_activity_active()
@@ -3532,6 +3557,12 @@ class CreateResultPanel(Gtk.Box):
         # fresh job, since `show_pending` resets it first).
         self._chip_rows.restore(self._chip_status)
         self._current_box.append(self._chip_rows)
+
+        # Restore the live preview, if this job has produced one. `_preview_widget`
+        # was destroyed with the old view by `_clear_current`, so drop the stale
+        # reference before rebuilding from `_preview_path` (the surviving state).
+        self._preview_widget = None
+        self._refresh_preview()
 
         self._pending_elapsed_lbl = Gtk.Label(label=self._elapsed_text())
         self._pending_elapsed_lbl.add_css_class("create-result-elapsed")
@@ -3585,6 +3616,11 @@ class CreateResultPanel(Gtk.Box):
         status line, which is left showing the latest coordinator/phase line."""
         if not self._pending_active:
             return
+        # A preview line is not status text — it carries an image. Checked
+        # BEFORE the chip match, since a multi-chip preview arrives wearing a
+        # `chipN:` prefix and would otherwise be filed as that chip's status.
+        if self._consume_preview_line(message):
+            return
         m = _CHIP_LINE_RE.match(message)
         if m:
             idx, text = int(m.group(1)), m.group(2)
@@ -3596,11 +3632,111 @@ class CreateResultPanel(Gtk.Box):
         if self._state == "pending" and self._pending_status_lbl is not None:
             self._pending_status_lbl.set_label(message)
 
+    # ── Live latent preview ──────────────────────────────────────────────────
+
+    def _consume_preview_line(self, message: str) -> bool:
+        """Handle a `PREVIEW:` line. Returns True if it was one (and so should
+        not be treated as status text).
+
+        A multi-chip run prefixes every line `chipN:`; only chip 0 drives the
+        preview, because each chip denoises its own segment and letting all
+        four write the single rolling image would just make it flicker between
+        unrelated latents.
+        """
+        m = _PREVIEW_LINE_RE.match(message)
+        if m is None:
+            return False
+        chip, step, total, path = m.group(1), m.group(2), m.group(3), m.group(4)
+        if chip is not None and chip != "0":
+            return True  # consumed, deliberately not shown
+        # The runner writes the GIF atomically (temp file + rename), so a path
+        # that exists is a complete file — but the line can still outlive the
+        # file (cleanup, a cancelled run), so a miss leaves the CURRENT preview
+        # alone rather than blanking it.
+        try:
+            if not path or not Path(path).exists():
+                return True
+        except OSError:
+            return True
+        self._preview_path = path
+        self._pending_last_status = f"Denoising step {step}/{total}…"
+        if self._state == "pending":
+            if self._pending_status_lbl is not None:
+                self._pending_status_lbl.set_label(self._pending_last_status)
+            self._refresh_preview()
+        return True
+
+    def _refresh_preview(self) -> None:
+        """(Re)build the preview image from `_preview_path`. Main thread only.
+
+        The widget is rebuilt per update rather than re-pointed: the runner
+        rewrites the SAME path each step, and GdkPixbuf caches by path+mtime, so
+        reusing one widget can show a stale frame. A preview is a handful of
+        small frames, so rebuilding is cheap.
+        """
+        if not self._preview_path:
+            return
+        self._drop_preview_widget()
+        try:
+            from artgen_gallery import _AnimatedGifWidget
+
+            w = _AnimatedGifWidget(self._preview_path)
+            if w.get_paintable() is None:
+                return  # unreadable (mid-write, truncated) — try again next step
+            # AnimatedGifWidget defaults to hexpand/vexpand + ContentFit.COVER,
+            # which is right for a finished result filling its pane and wrong
+            # for a progress thumbnail — left alone it inflated to ~530px square
+            # and dwarfed the very result it is previewing.
+            #
+            # Clearing hexpand/vexpand, setting halign CENTER, and even
+            # `set_can_shrink(False)` are all NOT enough on their own: measured
+            # inside this panel the picture still took 534x534 despite reporting
+            # halign=CENTER, can_shrink=False and a 256x256 intrinsic size —
+            # the surrounding height-for-width negotiation wins. A wrapper with
+            # its own hard size request is what actually pins it (measured:
+            # 220x220), so the preview is mounted inside one.
+            w.set_vexpand(False)
+            w.set_hexpand(False)
+            w.set_content_fit(Gtk.ContentFit.CONTAIN)
+            w.set_size_request(_PREVIEW_H, _PREVIEW_H)
+            w.add_css_class("create-result-picture")
+
+            holder = Gtk.Box()
+            holder.set_size_request(_PREVIEW_H, _PREVIEW_H)
+            holder.set_halign(Gtk.Align.CENTER)
+            holder.set_hexpand(False)
+            holder.set_vexpand(False)
+            holder.append(w)
+
+            self._preview_widget = holder
+            # Directly under the spinner, above the status line, so the image is
+            # the thing you look at and the text explains it.
+            self._current_box.insert_child_after(
+                holder, self._current_box.get_first_child()
+            )
+        except Exception:
+            self._preview_widget = None  # never break a running job over a preview
+
+    def _drop_preview_widget(self) -> None:
+        """Unmount the current preview widget (its own unrealize handler stops
+        its animation timer — see `artgen_gallery._AnimatedGifWidget`)."""
+        w = self._preview_widget
+        self._preview_widget = None
+        if w is not None and w.get_parent() is self._current_box:
+            self._current_box.remove(w)
+
+    def _reset_preview(self) -> None:
+        """Forget the preview entirely — a new job must not open showing the
+        previous job's last frame."""
+        self._drop_preview_widget()
+        self._preview_path = None
+
     # ── State: error ─────────────────────────────────────────────────────────
 
     def show_error(self, message: str) -> None:
         self._stop_timer()
         self._pending_active = False
+        self._reset_preview()
         self._clear_current()
         self._state = "error"
         self._pending_status_lbl = None
@@ -3620,6 +3756,7 @@ class CreateResultPanel(Gtk.Box):
         """
         self._stop_timer()
         self._pending_active = False   # the job that was pending is now done
+        self._reset_preview()          # the real result supersedes the preview
         self._drive_activity_idle()
         self._render_record(record)
         self._push_recent(record)

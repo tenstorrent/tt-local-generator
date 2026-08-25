@@ -213,3 +213,41 @@ class TestCancellation:
         assert len(errors) == 1
         assert "cancel" in errors[0].lower()
         run_sub.assert_not_called()
+
+
+# ── Live latent previews (--preview-path) ───────────────────────────────────
+
+class TestPreviewPath:
+    """`_build_cmd` opts into tt-animatediff's rolling latent preview.
+
+    The runner writes the GIF beside the output and prints
+    `PREVIEW: <step>/<total> <path>`; CreateResultPanel drains that from stdout
+    and shows the animation forming. Opt-in by construction — a runner that
+    predates the flag would reject it, so `preview_path=None` must produce the
+    exact command it always did.
+    """
+
+    def _cmd(self, **kw):
+        from artgen.generators import animatediff as ad
+        from pathlib import Path
+
+        base = dict(
+            script=Path("/x/generate.py"), out_path=Path("/out/a.gif"), mode="ttnn",
+            prompt="p", negative_prompt="n", frames=8, steps=25, seed=1,
+            temporal_alpha=0.35, lightning=False, lightning_steps=4,
+            device_id=None, chain_from=None, chain_save=None, chain_alpha=0.6,
+            motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
+        )
+        base.update(kw)
+        return ad._build_cmd(**base)
+
+    def test_absent_by_default(self):
+        assert "--preview-path" not in self._cmd()
+
+    def test_passed_when_requested(self):
+        cmd = self._cmd(preview_path="/out/preview.gif")
+        assert "--preview-path" in cmd
+        assert cmd[cmd.index("--preview-path") + 1] == "/out/preview.gif"
+
+    def test_none_is_byte_identical_to_the_pre_preview_command(self):
+        assert self._cmd(preview_path=None) == self._cmd()

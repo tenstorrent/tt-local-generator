@@ -818,3 +818,116 @@ def test_macos_player_is_height_capped_like_the_gtk_video_path(tmp_path, fake_gs
     p._build_artifact_widget(_rec(tmp_path, kind="video"))
     _w, h = fake_gst.instances[0].widget.get_size_request()
     assert h == cv._RESULT_VIDEO_H
+
+
+# ── Live latent previews during a generation ────────────────────────────────
+#
+# tt-animatediff's runner emits `PREVIEW: <step>/<total> <path>` as denoising
+# proceeds, rewriting one rolling GIF. The pending view shows it forming, so
+# you watch the thing being made instead of a spinner. The preview is CPU-side
+# in the runner (no VAE, no device work), so it costs the generation nothing.
+
+def _preview_line(path, step=3, total=25):
+    return f"PREVIEW: {step}/{total} {path}"
+
+
+def _write_gif(path):
+    _write_real_gif(Path(path))
+    return str(path)
+
+
+def test_preview_line_is_not_shown_as_status_text(tmp_path):
+    """The raw marker line must never land in the status label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert "PREVIEW:" not in p._pending_status_lbl.get_label()
+
+
+def test_preview_line_reports_step_progress_in_the_status(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif, step=7, total=25))
+    assert "7/25" in p._pending_status_lbl.get_label()
+
+
+def test_preview_renders_a_widget_in_the_pending_view(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert p._preview_widget is not None
+    assert p._preview_widget.get_parent() is not None, "must be mounted, not orphaned"
+
+
+def test_preview_survives_a_return_to_pending(tmp_path):
+    """Viewing a recent mid-generation and coming back must restore the preview,
+    the same way `_chip_status` restores the per-chip rows."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    p._render_pending()  # the return path
+    assert p._preview_widget is not None
+    assert p._preview_path == gif
+
+
+def test_preview_is_reset_between_jobs(tmp_path):
+    """A new job must not open showing the previous job's last preview."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_path is not None
+    p.show_pending("second", None)
+    assert p._preview_path is None
+    assert p._preview_widget is None
+
+
+def test_missing_preview_file_is_ignored(tmp_path):
+    """A line can arrive before/after the file exists — never crash, never
+    blank out a preview that is already showing."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    good = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(good))
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))  # must not raise
+    assert p._preview_path == good, "a bad line must not drop the good preview"
+
+
+def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
+    """Mirrors show_progress's existing guard — a straggler must not resurrect
+    anything after the result has landed."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_finished(_rec(tmp_path, kind="image"))
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_path is None
+
+
+def test_chip_prefixed_preview_from_chip0_is_honored(tmp_path):
+    """Multi-chip runs prefix every line `chipN:`. Chip 0 drives the preview;
+    other chips are ignored so the single rolling image doesn't flicker between
+    four different chips' latents."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(f"chip0: {_preview_line(gif)}")
+    assert p._preview_path == gif
+
+
+def test_chip_prefixed_preview_from_other_chips_is_ignored(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    other = _write_gif(tmp_path / "other.gif")
+    p.show_progress(f"chip2: {_preview_line(other)}")
+    assert p._preview_path is None
+
+
+def test_finished_result_clears_the_preview(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._preview_widget is None
