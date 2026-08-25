@@ -107,26 +107,86 @@ def test_animate_capability_folds_into_the_video_segment():
 
 # ── The detected-chat-model case ─────────────────────────────────────────────
 
-def test_detected_chat_model_lights_art_llm_only():
+class _Info:
+    """Stand-in for `model_status.ArtgenModelInfo`."""
+
+    def __init__(self, model_id, url, matched_key):
+        self.model_id = model_id
+        self.url = url
+        self.matched_key = matched_key
+
+
+def test_detected_unregistered_chat_model_lights_art_llm_only():
     """A chat LLM started outside the app matches no ServerDef, so every artgen
     key is legitimately OFF in the snapshot — the segment must still read on,
     matching the "(detected)" entry CreateView already offers.
     """
-    states = _states({}, artgen_detected=True)
+    info = _Info("some-org/some-70b", "http://localhost:8009", None)
+    states = _states({}, artgen_model=info)
     assert states["artgen"] == Status.READY
     assert states["video"] == Status.OFF
     assert states["image"] == Status.OFF
     assert states["prompt"] == Status.OFF
 
 
+def test_prompt_gen_fallback_does_not_light_art_llm():
+    """THE bug this parameter had to grow a brain for.
+
+    `artgen.detect_artgen_endpoint()` deliberately falls back to the tiny
+    prompt-gen server (Qwen3-0.6B on :8001) as a LAST RESORT when no real chat
+    model is up. So `running_artgen_model()` is non-None whenever the auto-
+    started prompt server is alive — and treating that as "a chat model is
+    running" lit Art LLM off the Prompt model, which is the exact complaint
+    ("it reports a model being ready, but it's just the prompt gen") one layer
+    up from where it was first fixed.
+    """
+    info = _Info("Qwen/Qwen3-0.6B", "http://localhost:8001", "prompt-server")
+    states = _states({"prompt-server": Status.READY}, artgen_model=info)
+    assert states["prompt"] == Status.READY
+    assert states["artgen"] == Status.OFF, (
+        "the prompt-gen model belongs to the Prompt segment, not Art LLM"
+    )
+
+
+def test_prompt_gen_endpoint_ignored_even_if_its_id_matches_nothing():
+    """Belt and braces: if the prompt server ever reports an id `match_model_id`
+    doesn't recognise, `matched_key` is None — but the URL still says :8001, so
+    it must not be mistaken for a foreign chat model."""
+    info = _Info("weird-unreleased-id", "http://localhost:8001", None)
+    states = _states({}, artgen_model=info)
+    assert states["artgen"] == Status.OFF
+
+
+def test_detected_model_matching_a_real_artgen_server_lights_art_llm():
+    info = _Info("Qwen/Qwen3-8B", "http://localhost:8002", "artgen-qwen3-8b")
+    states = _states({"artgen-qwen3-8b": Status.READY}, artgen_model=info)
+    assert states["artgen"] == Status.READY
+
+
 def test_detected_flag_never_downgrades_a_real_starting_artgen_server():
-    states = _states({"artgen-qwen3-8b": Status.STARTING}, artgen_detected=True)
+    info = _Info("Qwen/Qwen3-8B", "http://localhost:8002", "artgen-qwen3-8b")
+    states = _states({"artgen-qwen3-8b": Status.STARTING}, artgen_model=info)
     assert states["artgen"] == Status.READY  # detected endpoint answers now
 
 
 def test_no_detected_model_leaves_artgen_off():
-    states = _states({}, artgen_detected=False)
+    states = _states({}, artgen_model=None)
     assert states["artgen"] == Status.OFF
+
+
+def test_detected_model_is_artgen_helper():
+    """The policy is exposed on its own so main_window can paint the bar AND
+    the capability popover row from ONE decision (they must never disagree)."""
+    assert ss.detected_model_is_artgen(None) is False
+    assert ss.detected_model_is_artgen(
+        _Info("Qwen/Qwen3-0.6B", "http://localhost:8001", "prompt-server")
+    ) is False
+    assert ss.detected_model_is_artgen(
+        _Info("Qwen/Qwen3-8B", "http://localhost:8002", "artgen-qwen3-8b")
+    ) is True
+    assert ss.detected_model_is_artgen(
+        _Info("some-org/some-70b", "http://localhost:8009", None)
+    ) is True
 
 
 # ── Glyph / CSS maps ─────────────────────────────────────────────────────────

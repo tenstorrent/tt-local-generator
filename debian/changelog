@@ -1,3 +1,24 @@
+tt-local-generator (0.97.1) noble; urgency=medium
+
+  * fix(status bar): the Art LLM indicator no longer lights up because the
+    prompt-gen model is running. `artgen.detect_artgen_endpoint()` deliberately
+    falls back to the tiny Qwen3-0.6B prompt server on :8001 as a last resort
+    (so Inspire keeps working with nothing else up), which makes
+    `running_artgen_model()` non-None whenever the auto-started prompt server is
+    alive — and v0.97.0 carried the old aggregate's "detected model => artgen is
+    ready" override across verbatim, so Art LLM lit off the PROMPT model. That
+    is the same "it's just the prompt gen being ready" report the by-function
+    bar exists to fix, one layer up. A detection now counts for Art LLM only
+    when it isn't a model another segment already owns
+    (`status_segments.detected_model_is_artgen`), which also covers the case
+    where the prompt server reports an id we don't recognise (matched_key None)
+    by checking its port. A genuinely foreign chat model still lights it.
+  * fix(status bar): the capability popover's "Generative art" row had the same
+    pre-existing flaw, claiming "Qwen/Qwen3-0.6B (detected)". Both surfaces are
+    now painted from ONE decision so they cannot disagree.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 11:40:42 -0700
+
 tt-local-generator (0.97.0) noble; urgency=medium
 
   * feat(status bar): the bottom bar now shows one indicator per FUNCTION —

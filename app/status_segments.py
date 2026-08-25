@@ -20,6 +20,8 @@ so it stays unit-testable without a display, in the same spirit as
 
 from __future__ import annotations
 
+from urllib.parse import urlparse as _urlparse
+
 from model_status import Status
 
 import server_manager as _sm
@@ -76,23 +78,79 @@ CSS_STATES: dict = {
 _PRECEDENCE: tuple = (Status.READY, Status.STARTING, Status.ERROR)
 
 
+#: The prompt-gen server's own key — the model the "Prompt" segment owns.
+_PROMPT_KEY = "prompt-server"
+
+
+def _endpoint_ports_of(key: str) -> "set":
+    """Ports the given server's health check targets (empty on any failure)."""
+    try:
+        sdef = _sm.SERVERS.get(key)
+        if sdef is None:
+            return set()
+        port = _urlparse(sdef.health_url).port
+        return {port} if port else set()
+    except Exception:
+        return set()
+
+
+def detected_model_is_artgen(artgen_model) -> bool:
+    """Does this detected chat endpoint actually represent an **Art LLM**?
+
+    ``artgen.detect_artgen_endpoint()`` deliberately falls back to the tiny
+    prompt-gen server (Qwen3-0.6B on :8001) as a LAST RESORT when no real chat
+    model is up — that fallback exists so ✨ Inspire still works with nothing
+    else running.  A consequence is that ``running_artgen_model()`` is non-None
+    whenever the auto-started prompt server is alive, so treating it as "a chat
+    model is running" lights **Art LLM off the Prompt model** — the same
+    complaint that motivated the by-function bar in the first place ("it
+    reports a model being ready, but it's just the prompt gen"), one layer up.
+
+    So a detection counts for Art LLM only when it is not something another
+    segment already owns:
+
+    * ``matched_key`` resolved -> it belongs to THAT key's segment; count it
+      only if that segment is "artgen".
+    * ``matched_key is None`` (a model started outside this app, with no
+      registered ``ServerDef``) -> genuinely a foreign chat model and Art LLM's
+      to claim, UNLESS its URL is the prompt server's own port, which would
+      mean the prompt-gen fallback merely reported an id we don't recognise.
+
+    Returns False for ``None`` (nothing detected at all).
+    """
+    if artgen_model is None:
+        return False
+    matched = getattr(artgen_model, "matched_key", None)
+    if matched is not None:
+        return segment_for_server_key(matched) == "artgen"
+    # Unregistered model — make sure it isn't the prompt-gen endpoint in
+    # disguise before handing it to Art LLM.
+    try:
+        port = _urlparse(getattr(artgen_model, "url", "") or "").port
+    except Exception:
+        port = None
+    return port not in _endpoint_ports_of(_PROMPT_KEY)
+
+
 def segment_states(
     snap: dict,
     *,
-    artgen_detected: bool = False,
+    artgen_model=None,
     servers_for_capability=None,
 ) -> dict:
     """Resolve one :class:`~model_status.Status` per segment.
 
     Args:
         snap: a ``ModelStatusService.snapshot()`` — ``{server key: Status}``.
-        artgen_detected: True when ``ModelStatusService.running_artgen_model()``
-            resolved a live chat endpoint.  Folded into the "artgen" segment so
-            a chat model started outside this app — one that matches no
-            registered ``ServerDef``, and therefore leaves every artgen key
-            legitimately OFF in ``snap`` (see ``model_status._tick``) — still
-            reads as on.  CreateView already surfaces exactly this case as a
-            selectable "(detected)" entry; the bar must not disagree with it.
+        artgen_model: ``ModelStatusService.running_artgen_model()`` (an
+            ``ArtgenModelInfo`` or None).  Folded into the "artgen" segment
+            only when :func:`detected_model_is_artgen` says it really is an Art
+            LLM — a chat model started outside this app matches no registered
+            ``ServerDef`` and therefore leaves every artgen key legitimately
+            OFF in ``snap`` (see ``model_status._tick``), so without this the
+            segment would under-report it; but the prompt-gen fallback must NOT
+            light it.  CreateView surfaces the genuine case as a selectable
+            "(detected)" entry; the bar must agree with that and nothing else.
         servers_for_capability: injection seam for tests; defaults to
             ``server_manager.servers_for_capability``.
 
@@ -102,6 +160,7 @@ def segment_states(
         reflow a segment.
     """
     lookup = servers_for_capability or _sm.servers_for_capability
+    artgen_detected = detected_model_is_artgen(artgen_model)
 
     out: dict = {}
     for key, _label, caps in SEGMENTS:

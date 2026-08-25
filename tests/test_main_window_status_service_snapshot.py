@@ -433,3 +433,29 @@ def test_check_animatediff_hardware_runs_in_background_thread(monkeypatch):
     fn, args = idle_calls[0]
     assert fn == obj._hw_statusbar.update_capability
     assert args[0] == "animatediff"
+
+
+def test_prompt_gen_fallback_lights_neither_the_art_llm_segment_nor_its_row():
+    """`detect_artgen_endpoint()` falls back to the tiny prompt-gen server
+    (Qwen3-0.6B on :8001) when no real chat model is up, so
+    `running_artgen_model()` is non-None whenever the auto-started prompt
+    server is alive. Treating that as "a chat model is running" lit Art LLM
+    off the PROMPT model — the same "it's just the prompt gen being ready"
+    complaint the by-function bar exists to fix, one layer up.
+
+    Both surfaces are painted from ONE decision, so this pins both.
+    """
+    from model_status import ArtgenModelInfo
+
+    info = ArtgenModelInfo("Qwen/Qwen3-0.6B", "http://localhost:8001", "prompt-server")
+    obj, mw = _make_mw(artgen_model=info)
+    obj._render_status_snapshot({"prompt-server": mw.Status.READY})
+
+    segs = obj._hw_statusbar.segments
+    assert segs["prompt"] == mw.Status.READY
+    assert segs["artgen"] == mw.Status.OFF
+    # ...and the capability popover row must agree — no "(detected)" claim.
+    artgen_rows = [
+        (r, d) for c, r, d in obj._hw_statusbar.capability_calls if c == "artgen"
+    ]
+    assert artgen_rows == [(False, "")], artgen_rows

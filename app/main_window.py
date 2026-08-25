@@ -8272,6 +8272,14 @@ class MainWindow(Gtk.ApplicationWindow):
         snapshot never disagree with each other.
         """
         artgen_model = self._status_service.running_artgen_model()
+        # ONE decision, used by both the popover row and the bar below, so the
+        # two surfaces painted from this snapshot can never disagree.
+        # `running_artgen_model()` is non-None whenever the auto-started
+        # prompt-gen server is alive, because `detect_artgen_endpoint()` falls
+        # back to it last — counting that as an Art LLM lit the Art LLM
+        # indicator off the PROMPT model, which is the same "it's just the
+        # prompt gen being ready" complaint the by-function bar exists to fix.
+        artgen_detected = _status_segments.detected_model_is_artgen(artgen_model)
 
         for cap, cap_label in _sm.CAPABILITY_LABELS.items():
             if cap == "animatediff":
@@ -8281,7 +8289,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ready_sdef = next((s for s in sdefs if snap.get(s.key) == Status.READY), None)
             if ready_sdef is not None:
                 self._hw_statusbar.update_capability(cap, True, ready_sdef.label)
-            elif cap == "artgen" and artgen_model is not None:
+            elif cap == "artgen" and artgen_detected:
                 self._hw_statusbar.update_capability(
                     cap, True, f"{artgen_model.model_id} (detected)"
                 )
@@ -8294,9 +8302,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # independently. There is deliberately no aggregate any more — see
         # `status_segments.py`'s module docstring for why the old one lied.
         self._hw_statusbar.update_segments(
-            _status_segments.segment_states(
-                snap, artgen_detected=artgen_model is not None
-            )
+            _status_segments.segment_states(snap, artgen_model=artgen_model)
         )
 
         # Recover Jobs (File menu): enabled iff a media server (video/image/

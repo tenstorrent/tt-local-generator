@@ -97,6 +97,28 @@ other than what was actually true.
     points at the artifact not the thumbnail / missing file still degrades /
     teardown on swap).
 
+- **The Art LLM segment lit off the PROMPT model (v0.97.1).** Taylor: *"the art
+  LLM appears lit when I don't think we have that model running. is it re-using
+  the prompt model?"* Yes — and it was THE SAME BUG as the original report,
+  reintroduced one layer up by carrying the old aggregate's `artgen_model is not
+  None` override across verbatim. `artgen.detect_artgen_endpoint()` falls back
+  to the tiny prompt-gen server (Qwen3-0.6B, :8001) **last** by design, so
+  `running_artgen_model()` is non-None whenever the auto-started prompt server
+  is alive; `match_model_id` even resolves it to `matched_key="prompt-server"`.
+  Verified live on the box: only :8001 was listening, and detection returned
+  `Qwen/Qwen3-0.6B @ :8001 -> prompt-server`. Fix: new pure
+  `status_segments.detected_model_is_artgen(info)` — a detection counts for Art
+  LLM only when it isn't a model another segment already owns (`matched_key` ->
+  `segment_for_server_key(...) == "artgen"`; `matched_key is None` -> genuinely
+  foreign UNLESS its URL is the prompt server's own port, covering a prompt
+  server that reports an unrecognised id). `segment_states` now takes
+  `artgen_model=` (the `ArtgenModelInfo`) instead of a bare bool, so the policy
+  lives in the pure, testable module. **The capability popover's "Generative
+  art" row had the identical pre-existing flaw** (`elif cap == "artgen" and
+  artgen_model is not None` -> "Qwen/Qwen3-0.6B (detected)"); both surfaces now
+  read ONE `artgen_detected` value computed once in `_render_status_snapshot`,
+  so they cannot disagree.
+
 **Verification note:** the bar was checked by screenshotting the real app under
 Xvfb, which is what caught both the phantom "Image starting" and the
 indistinguishable starting colour — neither was visible from a green test run.
