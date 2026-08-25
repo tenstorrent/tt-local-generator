@@ -739,3 +739,82 @@ def test_set_queue_rerender_replaces_previous_rows():
     assert p.queue_count() == 1
     row = p._queue_box.get_first_child()
     assert row.get_next_sibling() is None  # exactly one row left
+
+
+# ── macOS GstPlayer path (Copilot PR#26 review) ─────────────────────────────
+#
+# `GstPlayer.available` only reports that gtk4paintablesink was created; `load()`
+# independently returns False when playbin can't be made. Ignoring that return
+# handed back a widget that renders nothing — regressing the poster fallback
+# this branch exists to preserve into a blank frame.
+
+class _FakeGstPlayer:
+    """Stand-in for `gst_player.GstPlayer` with controllable availability."""
+
+    instances: list = []
+
+    def __init__(self, muted=False, available=True, load_ok=True):
+        self.available = available
+        self._load_ok = load_ok
+        self.closed = False
+        self.played = False
+        self.widget = Gtk.Picture()
+        _FakeGstPlayer.instances.append(self)
+
+    def load(self, path):
+        return self._load_ok
+
+    def play(self):
+        self.played = True
+
+    def set_on_eos(self, cb):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture()
+def fake_gst(monkeypatch):
+    """Force the macOS branch and inject a fake GstPlayer module."""
+    import types
+    _FakeGstPlayer.instances = []
+    monkeypatch.setattr(cv, "_USE_SYSTEM_PLAYER", True)
+    mod = types.ModuleType("gst_player")
+    mod.GstPlayer = _FakeGstPlayer
+    monkeypatch.setitem(sys.modules, "gst_player", mod)
+    return _FakeGstPlayer
+
+
+def test_macos_player_used_when_load_succeeds(tmp_path, fake_gst):
+    p = cv.CreateResultPanel()
+    widget = p._build_artifact_widget(_rec(tmp_path, kind="video"))
+    assert fake_gst.instances, "the macOS branch should have built a player"
+    player = fake_gst.instances[0]
+    assert widget is player.widget
+    assert player.played is True
+
+
+def test_macos_load_failure_degrades_to_the_poster(tmp_path, fake_gst):
+    """A failed load must fall back to the thumbnail, not a blank frame."""
+    orig = _FakeGstPlayer.__init__
+    monkey = lambda self, muted=False: orig(self, muted=muted, load_ok=False)
+    _FakeGstPlayer.__init__ = monkey
+    try:
+        p = cv.CreateResultPanel()
+        rec = _rec(tmp_path, kind="video")
+        widget = p._build_artifact_widget(rec)
+        assert isinstance(widget, Gtk.Picture)
+        assert widget is not fake_gst.instances[0].widget, "blank player widget returned"
+        assert fake_gst.instances[0].closed is True, "failed player must be closed"
+    finally:
+        _FakeGstPlayer.__init__ = orig
+
+
+def test_macos_player_is_height_capped_like_the_gtk_video_path(tmp_path, fake_gst):
+    """Parity with the Gtk.Video branch — an odd aspect ratio must not push the
+    recents strip off-screen."""
+    p = cv.CreateResultPanel()
+    p._build_artifact_widget(_rec(tmp_path, kind="video"))
+    _w, h = fake_gst.instances[0].widget.get_size_request()
+    assert h == cv._RESULT_VIDEO_H

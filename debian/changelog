@@ -1,3 +1,26 @@
+tt-local-generator (0.97.2) noble; urgency=medium
+
+  * fix(create): the macOS inline-player path now checks `GstPlayer.load()`'s
+    return value, not just `.available`. `.available` reports only that
+    gtk4paintablesink was created; `load()` fails independently when playbin
+    can't be made — so a failed load still returned a widget, turning the
+    poster fallback that branch exists to preserve into a blank frame. The
+    failed player is now closed and the poster shown. The GstPlayer widget is
+    also height-capped to match the Gtk.Video path, so an odd aspect ratio
+    can't push the recents strip off-screen. (Copilot PR#26 review.)
+  * fix(status bar): a locally painted launch failure now survives the next
+    poll. `update_segments()` applied the snapshot unconditionally, so the
+    ERROR from a start script we watched exit non-zero was erased on the very
+    next tick, hiding the failure tooltip. It now sticks until the segment is
+    genuinely READY or the user starts it again. (Copilot PR#26 review.)
+  * fix(status bar): a start script exiting non-zero now clears the service's
+    starting bookkeeping. `_resolve` reports STARTING while `starting_at` is
+    set and within `start_timeout` (180 s), so a failed launch showed a ticking
+    "starting" clock for three minutes — and that stale STARTING is precisely
+    what overwrote the failure above. (Copilot PR#26 review.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 13:25:22 -0700
+
 tt-local-generator (0.97.1) noble; urgency=medium
 
   * fix(status bar): the Art LLM indicator no longer lights up because the

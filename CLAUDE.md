@@ -119,6 +119,28 @@ other than what was actually true.
   read ONE `artgen_detected` value computed once in `_render_status_snapshot`,
   so they cannot disagree.
 
+- **Copilot PR#26 review (v0.97.2) — three follow-ups, all the same theme.**
+  (a) `create_view._make_video_player`'s macOS branch checked `GstPlayer
+  .available` but ignored `load()`'s bool. `.available` only reports that
+  gtk4paintablesink was created; `load()` fails independently when `playbin`
+  can't be made — so a failed load still returned a widget, turning the poster
+  fallback that branch exists to preserve into a blank frame. Now checks both,
+  `close()`s the dead player, and falls through to the poster; the GstPlayer
+  widget also gets `_RESULT_VIDEO_H` for parity with the `Gtk.Video` path.
+  (b) `_StatusBar.mark_error` was erased by the next poll, because
+  `update_segments()` applies the snapshot unconditionally. New
+  `_seg_sticky_error` set: a LOCALLY observed failure (a start script we
+  watched exit non-zero) outlives snapshots until the segment is genuinely
+  READY or the user retries (`mark_starting` clears it). A snapshot-sourced
+  ERROR is deliberately NOT sticky — it's just the current state.
+  (c) `_on_start_server`'s failure branch now calls `note_stopping(server_key)`.
+  `_resolve` reports STARTING while `starting_at` is set and within
+  `start_timeout` (180 s), so a dead launch showed a ticking clock for three
+  minutes — and that stale STARTING is exactly what overwrote (b). The two fix
+  one bug from both ends: (c) stops the false STARTING, (b) keeps the real
+  failure visible (without (b), (c) alone resolves the segment to OFF, which
+  still erases the error).
+
 **Verification note:** the bar was checked by screenshotting the real app under
 Xvfb, which is what caught both the phantom "Image starting" and the
 indistinguishable starting colour — neither was visible from a green test run.

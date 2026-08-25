@@ -4515,6 +4515,11 @@ class _StatusBar(Gtk.Box):
             self._seg_error[_seg_key] = ""
             self._apply_segment_tooltip(_seg_key)
 
+        # Segments whose ERROR was painted LOCALLY (a start script we watched
+        # exit non-zero), as opposed to one that merely came from a snapshot.
+        # A local failure outlives the next poll — see `update_segments`.
+        self._seg_sticky_error: set = set()
+
         self._srv_menu_btn = Gtk.MenuButton()
         self._srv_menu_btn.set_has_frame(False)
         self._srv_menu_btn.add_css_class("tt-statusbar-srv-btn")
@@ -4698,21 +4703,44 @@ class _StatusBar(Gtk.Box):
         The single entry point `_render_status_snapshot` drives on each poll.
         Segments absent from `states` are left alone, so an optimistic
         `mark_starting()` is never silently blanked by a partial map.
+
+        A segment carrying a LOCALLY painted failure (`mark_error`) keeps it
+        until the service reports it genuinely READY, or the user starts it
+        again (`mark_starting`). Without that, the failure was erased by the
+        very next tick — the start script's own exit code is better evidence
+        than a stale STARTING the service hasn't finished timing out yet, and
+        that stale report is exactly what a failed launch produces.
         """
         for seg_key, state in states.items():
-            if seg_key in self._seg_state:
-                self._set_segment(seg_key, state)
+            if seg_key not in self._seg_state:
+                continue
+            if seg_key in self._seg_sticky_error:
+                if state != Status.READY:
+                    continue  # keep showing the failure we actually observed
+                self._seg_sticky_error.discard(seg_key)
+            self._set_segment(seg_key, state)
 
     def mark_starting(self, seg_key: str) -> None:
         """Optimistically light one segment the instant its launch is kicked off.
 
         `ModelStatusService.note_starting()` makes the next snapshot agree, but
         that is up to one poll interval away and a click should feel immediate.
+
+        Starting again is an explicit user action that supersedes any previous
+        failure, so it clears the sticky-error flag.
         """
+        self._seg_sticky_error.discard(seg_key)
         self._set_segment(seg_key, Status.STARTING)
 
     def mark_error(self, seg_key: str, msg: str = "failed — click for log") -> None:
-        """Flag a failed launch on one segment (the message shows in its tooltip)."""
+        """Flag a failed launch on one segment (the message shows in its tooltip).
+
+        This is a failure we OBSERVED (a start script exited non-zero), so it
+        sticks until the segment is genuinely READY or the user retries — a
+        snapshot alone can't clear it. See `update_segments`.
+        """
+        if seg_key in self._seg_state:
+            self._seg_sticky_error.add(seg_key)
         self._set_segment(seg_key, Status.ERROR, error_msg=msg)
 
     def update_capability(self, cap: str, ready: bool, detail: str = "") -> None:
@@ -10224,6 +10252,20 @@ class MainWindow(Gtk.ApplicationWindow):
                                   f"Script exited with code {proc.returncode}")
                     GLib.idle_add(self._set_status, "Server start script failed — check log")
                     GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
+                    # Drop the starting bookkeeping now that we KNOW it failed.
+                    # `_resolve` reports STARTING for as long as `starting_at`
+                    # is set and within `start_timeout` (180 s), so leaving it
+                    # would show a ticking "starting" clock for three minutes
+                    # on a server that already died — and would overwrite the
+                    # failure painted just below. `note_stopping` is the
+                    # existing method that drops exactly this bookkeeping; it
+                    # takes only its own lock and touches no widgets, so it is
+                    # safe to call directly from this thread.
+                    if server_key:
+                        try:
+                            self._status_service.note_stopping(server_key)
+                        except Exception:
+                            pass
                     if start_seg:
                         GLib.idle_add(self._hw_statusbar.mark_error, start_seg,
                                       "start failed — click for log")

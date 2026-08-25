@@ -3361,11 +3361,23 @@ class CreateResultPanel(Gtk.Box):
                 return None
             try:
                 gp = GstPlayer(muted=True)
-                if not gp.available:
+                # `available` only reports that gtk4paintablesink was created;
+                # `load()` fails independently when playbin can't be made. Both
+                # must be checked, or we hand back a widget that renders
+                # nothing — turning the poster fallback this branch exists to
+                # preserve into a blank frame.
+                if not gp.available or not gp.load(path):
+                    try:
+                        gp.close()
+                    except Exception:
+                        pass
                     return None
                 gp.widget.set_hexpand(True)
+                # Height-capped for parity with the Gtk.Video path below —
+                # otherwise an odd aspect ratio pushes the recents strip
+                # off-screen.
+                gp.widget.set_size_request(-1, _RESULT_VIDEO_H)
                 gp.widget.add_css_class("create-result-picture")
-                gp.load(path)
                 gp.set_on_eos(lambda p=gp: (p.seek(0), p.play()))
                 gp.play()
                 self._result_gst = gp

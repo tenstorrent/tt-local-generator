@@ -201,3 +201,64 @@ def test_stop_retires_the_tick_source(bar):
     assert bar._timer_id is not None
     bar.stop()
     assert bar._timer_id is None
+
+
+# ── A painted failure must survive the next poll ─────────────────────────────
+#
+# `update_segments()` applies the snapshot unconditionally, so a locally-painted
+# ERROR was erased by the very next tick — the failure tooltip vanished before
+# anyone could read it. (Copilot PR#26 review.)
+
+def test_mark_error_survives_the_next_snapshot(bar):
+    bar.mark_error("video", "start failed — click for log")
+    bar.update_segments({"video": Status.OFF})
+    assert bar._seg_state["video"] == Status.ERROR
+    assert bar._seg_dots["video"].get_tooltip_text() == (
+        "Video: start failed — click for log"
+    )
+
+
+def test_mark_error_survives_a_lingering_starting_report(bar):
+    """The concrete case: the start script died but ModelStatusService may still
+    report STARTING until its bookkeeping clears. The bar must not flip back to
+    a ticking clock on a server we know has failed."""
+    bar.mark_error("video", "start failed — click for log")
+    bar.update_segments({"video": Status.STARTING})
+    assert bar._seg_state["video"] == Status.ERROR
+    assert bar._timer_id is None, "a failed segment must not run an elapsed timer"
+
+
+def test_a_failed_segment_clears_once_it_actually_comes_up(bar):
+    """READY is real evidence the failure is over — the error must not be
+    sticky forever."""
+    bar.mark_error("video", "start failed — click for log")
+    bar.update_segments({"video": Status.READY})
+    assert bar._seg_state["video"] == Status.READY
+    assert bar._seg_dots["video"].get_tooltip_text() == "Video: ready"
+    # ...and it does not come back on the following poll.
+    bar.update_segments({"video": Status.OFF})
+    assert bar._seg_state["video"] == Status.OFF
+
+
+def test_starting_a_new_launch_clears_a_previous_failure(bar):
+    """The user retrying is an explicit action that supersedes the old error."""
+    bar.mark_error("video", "start failed — click for log")
+    bar.mark_starting("video")
+    assert bar._seg_state["video"] == Status.STARTING
+    bar.update_segments({"video": Status.STARTING})
+    assert bar._seg_state["video"] == Status.STARTING
+
+
+def test_sticky_error_is_per_segment(bar):
+    bar.mark_error("video", "boom")
+    bar.update_segments({"video": Status.OFF, "image": Status.READY})
+    assert bar._seg_state["video"] == Status.ERROR
+    assert bar._seg_state["image"] == Status.READY
+
+
+def test_a_snapshot_error_is_not_sticky(bar):
+    """Only a LOCALLY painted failure is sticky. An ERROR that came from the
+    service is just the current snapshot, and must follow it."""
+    bar.update_segments({"video": Status.ERROR})
+    bar.update_segments({"video": Status.OFF})
+    assert bar._seg_state["video"] == Status.OFF
