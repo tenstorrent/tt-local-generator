@@ -81,6 +81,7 @@ exercised by the injected-fake test path.
 """
 from __future__ import annotations
 
+import logging
 import re
 import json
 import sys
@@ -106,6 +107,8 @@ except (ImportError, ValueError):
     _WEBKIT_OK = False
 
 import artgen_render  # noqa: E402
+
+_log = logging.getLogger(__name__)
 import chip_progress  # noqa: E402
 import gtk_layout  # noqa: E402
 import server_manager  # noqa: E402
@@ -3268,6 +3271,9 @@ class CreateResultPanel(Gtk.Box):
         # that outlives the pending VIEW, like `_chip_status`.
         self._preview_paths: dict = {}
         self._preview_widget = None
+        # Paths already reported as missing, so the debug log stays one line per
+        # path rather than one per denoising step.
+        self._preview_missing_logged: set = set()
         # Latest step each chip has reported, for the headline status.
         self._preview_steps: dict = {}
 
@@ -3672,6 +3678,15 @@ class CreateResultPanel(Gtk.Box):
         # alone rather than blanking them.
         try:
             if not path or not Path(path).exists():
+                # Log once per distinct path. This guard is correct — a line can
+                # legitimately outlive its file — but its silence is how a
+                # corrupted path went unnoticed end to end: an elapsed suffix
+                # appended upstream made every path miss, the previews simply
+                # never appeared, and nothing raised. A whole generation showing
+                # no previews should leave a trace somewhere.
+                if path and path not in self._preview_missing_logged:
+                    self._preview_missing_logged.add(path)
+                    _log.debug("preview path does not exist: %r", path)
                 return True
         except OSError:
             return True

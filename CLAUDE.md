@@ -99,6 +99,28 @@ the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.
 `.venv/` is untracked and un-gitignored in tt-animatediff, so
 `git add -A` there tries to stage the whole virtualenv.
 
+- **The elapsed suffix corrupted the preview path (v0.100.1).** Reported as
+  "ran a generation but didn't see the progress component". `worker.py`'s
+  `_progress_fwd` appends `"  ({elapsed}s)"` to EVERY message it forwards —
+  correct for human status text, corrupting for a machine-readable one. The
+  panel's path group runs to end-of-line, so it captured
+  `/run/preview_chip0.gif  (47s)`, `Path(...).exists()` was False, and the
+  missing-file guard dropped every preview. **Nothing appeared and nothing
+  errored** — the guard did exactly what it was written to do.
+  New module-level `worker.is_machine_readable_progress(msg)` (matches
+  `PREVIEW:` with or without a `chipN:` prefix); `_progress_fwd` forwards those
+  verbatim and returns BEFORE decorating. Human status keeps its elapsed hint.
+  Tests pin the classification AND the wiring order — the arithmetic test alone
+  would have passed against the bug.
+  **This was the THIRD silent break in the same pipe** (allow-list filter,
+  stdout buffering, now this). Each component was correct in isolation and each
+  hop transformed the line a little; only the composition was wrong. Diagnosis
+  that worked, and would have worked all three times: read the per-chip run log
+  (`~/.local/share/tt-local-generator/logs/animatediff/run_*_chipN.log`) to
+  confirm the runner emitted, then replay those exact lines through a real
+  `CreateResultPanel`. `create_view` now debug-logs a missing preview path once
+  per path so the next mismatch leaves a trace.
+
 - **All four chips are tracked now (v0.100.0).** The first cut previewed only
   chip 0 — a quarter of the animation. Each chip now gets its OWN rolling
   preview file (`_multichip_cmds(preview_path_for_chip=)`; sharing one path

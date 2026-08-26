@@ -342,3 +342,66 @@ class TestMultiChipPreviewPaths:
 
     def test_none_is_byte_identical_to_the_pre_preview_command(self):
         assert self._cmds(preview_path_for_chip=None) == self._cmds()
+
+
+class TestProgressForwardingPreservesPreviewLines:
+    """`_progress_fwd` appends "  (Ns)" to every message it forwards.
+
+    That is right for human status text and wrong for a machine-readable line:
+    it turned `PREVIEW: 3/21 /path.gif` into `... /path.gif  (47s)`, so the
+    panel parsed the elapsed suffix as part of the path, failed its exists()
+    check and silently dropped every preview. Reported as "ran a generation but
+    didn't see the progress component" — nothing appeared and nothing errored,
+    because the missing-file guard did exactly what it was written to do.
+    """
+
+    def test_plain_preview_line_is_machine_readable(self):
+        import worker as w
+        assert w.is_machine_readable_progress("PREVIEW: 3/21 /tmp/p.gif")
+
+    def test_chip_prefixed_preview_line_is_machine_readable(self):
+        import worker as w
+        assert w.is_machine_readable_progress("chip2: PREVIEW: 3/21 /tmp/p.gif")
+
+    def test_leading_whitespace_tolerated(self):
+        import worker as w
+        assert w.is_machine_readable_progress("   PREVIEW: 1/9 /tmp/p.gif")
+
+    def test_human_status_is_not_machine_readable(self):
+        """The elapsed suffix is useful on human text — it must keep getting it."""
+        import worker as w
+        for line in ("Loading pipeline", "Frame 3/8", "Step 2/25",
+                     "Error: boom", "", "a prompt mentioning PREVIEW: later"):
+            assert not w.is_machine_readable_progress(line), line
+
+    def test_forwarder_routes_through_the_helper(self):
+        """Pin the wiring, not just the arithmetic: the closure must consult the
+        helper and return BEFORE appending the elapsed suffix."""
+        import inspect
+        import worker as w
+
+        src = inspect.getsource(w.AnimateDiffGenerationWorker.run_with_callbacks)
+        body = src[src.index("def _progress_fwd"):]
+        body = body[:body.index("run_subprocess")]
+        assert "is_machine_readable_progress(msg)" in body
+        guard = body.index("is_machine_readable_progress(msg)")
+        suffix = body.index('elapsed}s)')
+        assert guard < suffix, "the verbatim path must come first"
+
+
+def test_preview_line_survives_the_whole_chain():
+    """End to end over the string transforms, which is where this broke twice:
+    runner emit -> multi-chip drain prefix -> worker forward -> panel regex."""
+    import re
+    from artgen.generators import animatediff as ad  # noqa: F401
+
+    emitted = "PREVIEW: 3/21 /tmp/run/preview_chip0.gif"
+    prefixed = f"chip0: {emitted.strip()}"          # _run_multi_chip's drain
+    forwarded = prefixed                            # _progress_fwd, post-fix
+
+    RE = re.compile(r"^(?:chip(\d+):\s*)?PREVIEW:\s+(\d+)/(\d+)\s+(.+?)\s*$")
+    m = RE.match(forwarded)
+    assert m is not None
+    assert m.group(4) == "/tmp/run/preview_chip0.gif", (
+        "the path must arrive clean — no decoration appended anywhere"
+    )

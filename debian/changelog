@@ -1,3 +1,23 @@
+tt-local-generator (0.100.1) noble; urgency=medium
+
+  * fix(create): live previews never appeared in a real generation. The
+    AnimateDiff worker's progress forwarder appends an elapsed hint - "  (47s)"
+    - to every message it passes along. That is right for human status text and
+    wrong for a machine-readable line: it turned
+    "PREVIEW: 3/21 /run/preview_chip0.gif" into
+    "... /preview_chip0.gif  (47s)", so the panel parsed the suffix as part of
+    the path, the file failed its exists() check, and every preview was dropped.
+    Nothing appeared and nothing errored, because the missing-file guard did
+    exactly what it was written to do. Preview lines are now forwarded verbatim
+    via the new worker.is_machine_readable_progress(); human status keeps its
+    elapsed hint.
+  * fix(create): a preview path that does not exist is now logged once per path
+    at debug level. The guard is still fail-soft - a line can legitimately
+    outlive its file - but a whole generation showing no previews should leave
+    a trace rather than being silently correct.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:10:34 -0700
+
 tt-local-generator (0.100.0) noble; urgency=medium
 
   * feat(create): a multi-chip AnimateDiff run now previews EVERY chip, not just
