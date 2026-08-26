@@ -96,9 +96,28 @@ structure". Also verified on CPU (~3% overhead, 105.7s vs 102.5s).
 **Noted, not fixed:** the TTNN path runs `--steps 8` as **9** loop iterations
 (previews report `1/9`..`9/9`). The line honestly reports what the loop reports;
 the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.
-Multi-chip shows only chip 0's quarter of the animation — a 2x2 composite is the
-obvious follow-up. `.venv/` is untracked and un-gitignored in tt-animatediff, so
+`.venv/` is untracked and un-gitignored in tt-animatediff, so
 `git add -A` there tries to stage the whole virtualenv.
+
+- **All four chips are tracked now (v0.100.0).** The first cut previewed only
+  chip 0 — a quarter of the animation. Each chip now gets its OWN rolling
+  preview file (`_multichip_cmds(preview_path_for_chip=)`; sharing one path
+  would have four processes overwrite each other every step, showing whichever
+  wrote last). `CreateResultPanel` keys `_preview_paths` by chip and renders a
+  `Gtk.FlowBox` grid, 2 across, so the QB2 case is a 2x2 square.
+  - **Tiles are held in CHIP order, not arrival order** (`_preview_paths` is
+    re-sorted on every insert): chips report at their own pace, so arrival order
+    is arbitrary and tiles would otherwise reshuffle mid-run.
+  - **The headline reports the SLOWEST chip** (`min` over `_preview_steps`). A
+    run finishes when the last chip does; reporting the fastest overstated
+    progress — the same class of overclaim as the aggregate status dot.
+  - Tiles shrink to `_PREVIEW_H_MULTI` (140px) when there is more than one;
+    four 220px tiles would overflow the result column. A single-chip run keeps
+    the full 220px and gets NO "chip 0" caption — captioning it would invent a
+    distinction that isn't there.
+  - Composited as GTK widgets, deliberately not as pixels: each tile keeps
+    animating natively, and a per-chip label is honest about them being separate
+    segments rather than one image.
 
 ## Status bar by function + inline video in Create (v0.97.0)
 

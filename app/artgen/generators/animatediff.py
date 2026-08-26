@@ -415,6 +415,7 @@ def _multichip_cmds(
     motion_adapter_skip: "list[str] | None",
     chips: "list[ChipParams]",
     prompt_schedule: "list[tuple[int, str]] | None" = None,
+    preview_path_for_chip=None,
 ) -> "list[list[str]]":
     """Build one generate.py argv per chip from the per-chip plan.
 
@@ -425,6 +426,12 @@ def _multichip_cmds(
     for every chip — prompt travel is a time-axis feature applied within each
     chip's own frames, while per-chip prompts remain the spatial (across-chip)
     lever; the two features coexist rather than compete.
+
+    `preview_path_for_chip(i) -> str` (optional) gives chip `i` its OWN rolling
+    preview file. Each chip denoises its own segment, so sharing one path would
+    have them overwrite each other every step and the consumer would show
+    whichever wrote last instead of the whole animation forming. `None` leaves
+    the argv byte-identical to a pre-preview build.
     """
     cmds: list[list[str]] = []
     for i, cp in enumerate(chips):
@@ -440,6 +447,8 @@ def _multichip_cmds(
             motion_adapter_alpha=cp.motion_adapter_alpha,
             motion_adapter_skip=motion_adapter_skip,
             prompt_schedule=prompt_schedule,
+            preview_path=(preview_path_for_chip(i)
+                          if preview_path_for_chip else None),
         ))
     return cmds
 
@@ -1148,6 +1157,12 @@ def _run_multi_chip(
         steps=steps, lightning=lightning, lightning_steps=lightning_steps,
         motion_adapter=motion_adapter, motion_adapter_skip=motion_adapter_skip,
         chips=chips, prompt_schedule=prompt_schedule,
+        # One rolling preview per chip, beside its shard, so the panel can show
+        # all four segments forming instead of just chip 0's quarter. Only
+        # requested when someone is draining our stdout to see them.
+        preview_path_for_chip=(
+            (lambda i: str(tmp_dir / f"preview_chip{i}.gif")) if on_progress else None
+        ),
     )
 
     for chip_idx in range(num_chips):

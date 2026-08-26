@@ -871,7 +871,7 @@ def test_preview_survives_a_return_to_pending(tmp_path):
     p.show_progress(_preview_line(gif))
     p._render_pending()  # the return path
     assert p._preview_widget is not None
-    assert p._preview_path == gif
+    assert p._preview_paths[cv._NO_CHIP] == gif
 
 
 def test_preview_is_reset_between_jobs(tmp_path):
@@ -879,9 +879,9 @@ def test_preview_is_reset_between_jobs(tmp_path):
     p = cv.CreateResultPanel()
     p.show_pending("first", None)
     p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
-    assert p._preview_path is not None
+    assert p._preview_paths
     p.show_pending("second", None)
-    assert p._preview_path is None
+    assert p._preview_paths == {}
     assert p._preview_widget is None
 
 
@@ -893,7 +893,9 @@ def test_missing_preview_file_is_ignored(tmp_path):
     good = _write_gif(tmp_path / "preview.gif")
     p.show_progress(_preview_line(good))
     p.show_progress(_preview_line(str(tmp_path / "gone.gif")))  # must not raise
-    assert p._preview_path == good, "a bad line must not drop the good preview"
+    assert p._preview_paths[cv._NO_CHIP] == good, (
+        "a bad line must not drop the good preview"
+    )
 
 
 def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
@@ -903,26 +905,26 @@ def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
     p.show_pending("a koi pond", None)
     p.show_finished(_rec(tmp_path, kind="image"))
     p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
-    assert p._preview_path is None
+    assert p._preview_paths == {}
 
 
-def test_chip_prefixed_preview_from_chip0_is_honored(tmp_path):
-    """Multi-chip runs prefix every line `chipN:`. Chip 0 drives the preview;
-    other chips are ignored so the single rolling image doesn't flicker between
-    four different chips' latents."""
+def test_chip_prefixed_preview_is_keyed_by_chip(tmp_path):
+    """Multi-chip runs prefix every line `chipN:`. Each chip previews its own
+    segment and they are shown together — an earlier version showed only chip 0,
+    which meant watching a quarter of the work."""
     p = cv.CreateResultPanel()
     p.show_pending("a koi pond", None)
     gif = _write_gif(tmp_path / "preview.gif")
     p.show_progress(f"chip0: {_preview_line(gif)}")
-    assert p._preview_path == gif
+    assert p._preview_paths == {0: gif}
 
 
-def test_chip_prefixed_preview_from_other_chips_is_ignored(tmp_path):
+def test_a_non_zero_chip_is_shown_too(tmp_path):
     p = cv.CreateResultPanel()
     p.show_pending("a koi pond", None)
     other = _write_gif(tmp_path / "other.gif")
     p.show_progress(f"chip2: {_preview_line(other)}")
-    assert p._preview_path is None
+    assert p._preview_paths == {2: other}
 
 
 def test_finished_result_clears_the_preview(tmp_path):
@@ -930,4 +932,70 @@ def test_finished_result_clears_the_preview(tmp_path):
     p.show_pending("a koi pond", None)
     p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
     p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._preview_widget is None
+
+
+# ── Multi-chip: every chip's segment forming at once ────────────────────────
+#
+# A multi-chip AnimateDiff run splits the animation into one segment per chip,
+# each denoising independently. Showing only chip 0 meant watching a quarter of
+# the work and guessing about the rest. Each chip now writes its own preview and
+# they render together, in chip order.
+
+def test_multi_chip_previews_render_one_tile_per_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in range(4):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert sorted(p._preview_paths) == [0, 1, 2, 3]
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_tiles_stay_in_chip_order_regardless_of_arrival(tmp_path):
+    """Chips finish steps at their own pace, so lines interleave arbitrarily —
+    the tiles must not reshuffle as they arrive."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in (2, 0, 3, 1):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert list(p._preview_paths) == sorted(p._preview_paths)
+
+
+def test_a_later_step_replaces_that_chips_tile_not_adds_one(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "c0.gif")
+    p.show_progress(f"chip0: PREVIEW: 1/9 {gif}")
+    p.show_progress(f"chip0: PREVIEW: 5/9 {gif}")
+    assert list(p._preview_paths) == [0]
+
+
+def test_single_chip_run_still_shows_one_untitled_preview(tmp_path):
+    """A plain run has no chip prefix and must not grow a "chip 0" label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "p.gif")))
+    assert list(p._preview_paths) == [-1], "no-chip runs use the sentinel key"
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_status_reports_the_slowest_chip(tmp_path):
+    """With chips at different steps, the headline should not claim the fastest
+    one's progress — the run is done when the LAST chip is."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(f"chip0: PREVIEW: 8/9 {_write_gif(tmp_path / 'c0.gif')}")
+    p.show_progress(f"chip1: PREVIEW: 3/9 {_write_gif(tmp_path / 'c1.gif')}")
+    assert "3/9" in p._pending_status_lbl.get_label()
+
+
+def test_preview_reset_clears_every_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    for i in range(2):
+        p.show_progress(f"chip{i}: PREVIEW: 1/9 {_write_gif(tmp_path / f'c{i}.gif')}")
+    p.show_pending("second", None)
+    assert p._preview_paths == {}
     assert p._preview_widget is None

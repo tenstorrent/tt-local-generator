@@ -305,3 +305,40 @@ class TestPreviewLineReachesTheGui:
         body = src[start:src.index("\ndef ", start + 1)]
         assert not self._forwards(body, "  0%|          | 0/8 [00:00<?, ?it/s]")
         assert not self._forwards(body, "some unrelated library warning")
+
+
+class TestMultiChipPreviewPaths:
+    """Each chip previews its own segment, so each needs its OWN preview file.
+
+    Sharing one path across chips would have them overwrite each other every
+    step, and the panel would show whichever wrote last rather than four
+    segments forming.
+    """
+
+    def _cmds(self, n=4, **kw):
+        from artgen.generators import animatediff as ad
+        from pathlib import Path
+
+        chips = [ad.ChipParams(prompt=f"p{i}", seed=i, temporal_alpha=0.35,
+                               motion_adapter_alpha=1.0) for i in range(n)]
+        base = dict(
+            script=Path("/x/generate.py"),
+            shard_paths=[Path(f"/out/shard{i}.gif") for i in range(n)],
+            mode="ttnn", negative_prompt="", frames_per_chip=2, steps=8,
+            lightning=False, lightning_steps=4, motion_adapter=None,
+            motion_adapter_skip=None, chips=chips,
+        )
+        base.update(kw)
+        return ad._multichip_cmds(**base)
+
+    def test_absent_by_default(self):
+        assert all("--preview-path" not in c for c in self._cmds())
+
+    def test_each_chip_gets_a_distinct_preview_path(self):
+        cmds = self._cmds(preview_path_for_chip=lambda i: f"/out/preview_chip{i}.gif")
+        paths = [c[c.index("--preview-path") + 1] for c in cmds]
+        assert len(set(paths)) == 4, "chips must not share one preview file"
+        assert paths == [f"/out/preview_chip{i}.gif" for i in range(4)]
+
+    def test_none_is_byte_identical_to_the_pre_preview_command(self):
+        assert self._cmds(preview_path_for_chip=None) == self._cmds()

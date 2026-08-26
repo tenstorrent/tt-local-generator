@@ -1,3 +1,18 @@
+tt-local-generator (0.100.0) noble; urgency=medium
+
+  * feat(create): a multi-chip AnimateDiff run now previews EVERY chip, not just
+    chip 0. Each chip denoises its own segment, so watching one was watching a
+    quarter of the work. Each chip gets its own rolling preview file (sharing
+    one path would have them overwrite each other every step), and the tiles
+    render as a grid - 2 across, so the 4-chip QB2 case is a square - labelled
+    and held in chip order, since chips report at their own pace and the tiles
+    must not reshuffle mid-run.
+  * fix(create): the headline step count now reports the SLOWEST chip. A run
+    finishes when the last chip does, so showing the fastest chip's progress
+    overstated how far along the generation was.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:00:17 -0700
+
 tt-local-generator (0.99.1) noble; urgency=medium
 
   * chore(vendor): bump the tt-animatediff submodule v0.9.0 -> v0.10.0, the
