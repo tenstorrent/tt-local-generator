@@ -85,6 +85,15 @@ override_dh_install:
 	    find debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff \
 	        \( -name '*.pyc' -o -name '.git' \) -delete 2>/dev/null || true ; \
 	fi
+	if [ ! -f debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff/animatediff_ttnn/preview.py ]; then \
+	    echo "ERROR: vendor/tt-animatediff/animatediff_ttnn/preview.py is missing from" >&2; \
+	    echo "  the staged tree. The runner imports it for --preview-path, and that" >&2; \
+	    echo "  import is fail-soft, so its absence would NOT break generation - it" >&2; \
+	    echo "  would silently drop the live previews instead. Fail loudly here" >&2; \
+	    echo "  rather than shipping a feature that quietly does nothing." >&2; \
+	    echo "  (Requires vendor/tt-animatediff >= v0.10.0.)" >&2; \
+	    exit 1; \
+	fi
 	if [ ! -f debian/tt-local-generator/usr/lib/tt-local-generator/vendor/tt-animatediff/examples/generate.py ]; then \
 	    echo "ERROR: vendor/tt-animatediff/examples/generate.py is missing from the" >&2; \
 	    echo "  staged tree — the AnimateDiff runner would not ship, so AnimateDiff" >&2; \

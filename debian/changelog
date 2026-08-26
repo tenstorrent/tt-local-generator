@@ -1,3 +1,15 @@
+tt-local-generator (0.99.1) noble; urgency=medium
+
+  * chore(vendor): bump the tt-animatediff submodule v0.9.0 -> v0.10.0, the
+    release that adds --preview-path. Without this the flag does not exist in
+    the vendored runner, so the live-preview feature has nothing to talk to.
+  * build: debian/rules now also fails loudly when
+    vendor/tt-animatediff/animatediff_ttnn/preview.py is missing from the
+    staged tree. The runner's import of it is fail-soft, so its absence would
+    not break generation - it would silently drop the previews, which is worse.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 08:54:29 -0700
+
 tt-local-generator (0.99.0) noble; urgency=medium
 
   * fix(create): live AnimateDiff previews actually reach the panel. Both stdout
