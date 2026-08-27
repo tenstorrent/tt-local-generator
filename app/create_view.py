@@ -3043,9 +3043,10 @@ _VIDEO_EXTS = {".mp4"}
 _RESULT_VIDEO_H = 320
 #: `PREVIEW: <step>/<total> <path>` — emitted by tt-animatediff's runner each
 #: time it rewrites the rolling latent-preview GIF (see
-#: `animatediff_ttnn.preview`). An optional `chipN: ` prefix survives a
-#: multi-chip run, where only chip 0 drives the preview. The path is captured to
-#: end-of-line so a path containing spaces round-trips.
+#: `animatediff_ttnn.preview`). An optional `chipN: ` prefix identifies which
+#: chip's own preview file this line updates — a multi-chip run gives each
+#: chip its own rolling preview, rendered as one tile per chip. The path is
+#: captured to end-of-line so a path containing spaces round-trips.
 _PREVIEW_LINE_RE = re.compile(
     r"^(?:chip(\d+):\s*)?PREVIEW:\s+(\d+)/(\d+)\s+(.+?)\s*$"
 )
@@ -3659,10 +3660,9 @@ class CreateResultPanel(Gtk.Box):
         """Handle a `PREVIEW:` line. Returns True if it was one (and so should
         not be treated as status text).
 
-        A multi-chip run prefixes every line `chipN:`; only chip 0 drives the
-        preview, because each chip denoises its own segment and letting all
-        four write the single rolling image would just make it flicker between
-        unrelated latents.
+        A multi-chip run prefixes every line `chipN:` — each chip denoises its
+        own segment and writes its own rolling preview file, shown as its own
+        tile, so the previews never flicker between unrelated latents.
         """
         m = _PREVIEW_LINE_RE.match(message)
         if m is None:
@@ -3819,6 +3819,7 @@ class CreateResultPanel(Gtk.Box):
         self._drop_preview_widget()
         self._preview_paths = {}
         self._preview_steps = {}
+        self._preview_missing_logged = set()
 
     # ── State: error ─────────────────────────────────────────────────────────
 

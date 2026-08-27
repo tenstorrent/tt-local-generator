@@ -898,6 +898,19 @@ def test_missing_preview_file_is_ignored(tmp_path):
     )
 
 
+def test_missing_preview_logged_set_resets_between_jobs(tmp_path):
+    """`_preview_missing_logged` must reset with the rest of the per-job
+    preview state, or it grows without bound across jobs and silently
+    suppresses the "missing preview path" debug log for a path that recurs
+    in a later job."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))
+    assert p._preview_missing_logged
+    p.show_pending("second", None)
+    assert p._preview_missing_logged == set()
+
+
 def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
     """Mirrors show_progress's existing guard — a straggler must not resurrect
     anything after the result has landed."""

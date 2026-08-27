@@ -1,3 +1,18 @@
+tt-local-generator (0.100.2) noble; urgency=medium
+
+  * fix(create): `_reset_preview()` now clears `_preview_missing_logged` along
+    with the rest of the per-job preview state. Copilot PR#27 review: the set
+    was left to grow without bound across jobs, and once a path had been
+    logged once it stayed suppressed forever - so a path recurring in a later
+    job (e.g. a reused preview filename) silently lost its "missing preview
+    path" debug trace.
+  * docs(create): the `_PREVIEW_LINE_RE` and `_consume_preview_line` comments
+    still described the pre-v0.100.0 "only chip 0 drives the preview"
+    behavior. Updated to describe the current one-preview-file-per-chip
+    behavior (Copilot PR#27 review).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 27 Aug 2026 00:00:00 -0700
+
 tt-local-generator (0.100.1) noble; urgency=medium
 
   * fix(create): live previews never appeared in a real generation. The
