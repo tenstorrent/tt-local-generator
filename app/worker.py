@@ -35,6 +35,7 @@ Communication back to the UI is via plain callbacks. The caller (GTK main window
 wraps each callback in GLib.idle_add() so UI updates always happen on the main
 thread. Never import or touch GTK widgets from here.
 """
+import re
 import logging
 import shutil
 import subprocess
@@ -728,6 +729,26 @@ class ImageGenerationWorker:
 
 # ── AnimateDiff (local Blackhole) generation worker ────────────────────────────
 
+#: A preview announcement, with or without the `chipN:` prefix a multi-chip run
+#: wears by the time it reaches `_progress_fwd`.
+_PREVIEW_LINE_RE = re.compile(r"^(?:chip\d+:\s*)?PREVIEW:")
+
+
+def is_machine_readable_progress(msg: str) -> bool:
+    """True for progress lines a CONSUMER parses rather than a human reads.
+
+    Today that is tt-animatediff's `PREVIEW: <step>/<total> <path>` (see
+    `animatediff_ttnn.preview.parse_preview_line`), optionally chip-prefixed.
+
+    It matters because decorating such a line corrupts it. Appending the
+    elapsed hint turned `... /preview.gif` into `... /preview.gif  (47s)`, so
+    the consumer parsed the suffix as part of the path, failed its exists()
+    check, and silently dropped every preview — a generation that showed no
+    progress component and raised nothing.
+    """
+    return bool(_PREVIEW_LINE_RE.match((msg or "").lstrip()))
+
+
 class AnimateDiffGenerationWorker:
     """
     Runs a single AnimateDiff generation job locally on Blackhole hardware.
@@ -864,9 +885,20 @@ class AnimateDiffGenerationWorker:
         on_progress(f"Loading AnimateDiff model ({chip_info})…")
 
         def _progress_fwd(msg: str) -> None:
-            if not self._is_cancelled():
-                elapsed = int(time.monotonic() - start_time)
-                on_progress(f"{msg}  ({elapsed}s)")
+            if self._is_cancelled():
+                return
+            # A `PREVIEW:` line is MACHINE-READABLE — the consumer parses the
+            # path out of it (see animatediff_ttnn.preview.parse_preview_line).
+            # Appending the elapsed hint turned "... /preview.gif" into
+            # "... /preview.gif  (47s)", so the path failed its exists() check
+            # and every preview was silently dropped. Forward those verbatim;
+            # the elapsed suffix belongs on human status text only, and means
+            # nothing on a preview line anyway.
+            if is_machine_readable_progress(msg):
+                on_progress(msg)
+                return
+            elapsed = int(time.monotonic() - start_time)
+            on_progress(f"{msg}  ({elapsed}s)")
 
         # The Create AnimateDiff options expose a Multi-chip selector that
         # picks the ACTUAL engine mode: "off" (single chip), "remix" (seed-

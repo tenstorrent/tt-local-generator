@@ -818,3 +818,197 @@ def test_macos_player_is_height_capped_like_the_gtk_video_path(tmp_path, fake_gs
     p._build_artifact_widget(_rec(tmp_path, kind="video"))
     _w, h = fake_gst.instances[0].widget.get_size_request()
     assert h == cv._RESULT_VIDEO_H
+
+
+# ── Live latent previews during a generation ────────────────────────────────
+#
+# tt-animatediff's runner emits `PREVIEW: <step>/<total> <path>` as denoising
+# proceeds, rewriting one rolling GIF. The pending view shows it forming, so
+# you watch the thing being made instead of a spinner. The preview is CPU-side
+# in the runner (no VAE, no device work), so it costs the generation nothing.
+
+def _preview_line(path, step=3, total=25):
+    return f"PREVIEW: {step}/{total} {path}"
+
+
+def _write_gif(path):
+    _write_real_gif(Path(path))
+    return str(path)
+
+
+def test_preview_line_is_not_shown_as_status_text(tmp_path):
+    """The raw marker line must never land in the status label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert "PREVIEW:" not in p._pending_status_lbl.get_label()
+
+
+def test_preview_line_reports_step_progress_in_the_status(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif, step=7, total=25))
+    assert "7/25" in p._pending_status_lbl.get_label()
+
+
+def test_preview_renders_a_widget_in_the_pending_view(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert p._preview_widget is not None
+    assert p._preview_widget.get_parent() is not None, "must be mounted, not orphaned"
+
+
+def test_preview_survives_a_return_to_pending(tmp_path):
+    """Viewing a recent mid-generation and coming back must restore the preview,
+    the same way `_chip_status` restores the per-chip rows."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    p._render_pending()  # the return path
+    assert p._preview_widget is not None
+    assert p._preview_paths[cv._NO_CHIP] == gif
+
+
+def test_preview_is_reset_between_jobs(tmp_path):
+    """A new job must not open showing the previous job's last preview."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_paths
+    p.show_pending("second", None)
+    assert p._preview_paths == {}
+    assert p._preview_widget is None
+
+
+def test_missing_preview_file_is_ignored(tmp_path):
+    """A line can arrive before/after the file exists — never crash, never
+    blank out a preview that is already showing."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    good = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(good))
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))  # must not raise
+    assert p._preview_paths[cv._NO_CHIP] == good, (
+        "a bad line must not drop the good preview"
+    )
+
+
+def test_missing_preview_logged_set_resets_between_jobs(tmp_path):
+    """`_preview_missing_logged` must reset with the rest of the per-job
+    preview state, or it grows without bound across jobs and silently
+    suppresses the "missing preview path" debug log for a path that recurs
+    in a later job."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))
+    assert p._preview_missing_logged
+    p.show_pending("second", None)
+    assert p._preview_missing_logged == set()
+
+
+def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
+    """Mirrors show_progress's existing guard — a straggler must not resurrect
+    anything after the result has landed."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_finished(_rec(tmp_path, kind="image"))
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_paths == {}
+
+
+def test_chip_prefixed_preview_is_keyed_by_chip(tmp_path):
+    """Multi-chip runs prefix every line `chipN:`. Each chip previews its own
+    segment and they are shown together — an earlier version showed only chip 0,
+    which meant watching a quarter of the work."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(f"chip0: {_preview_line(gif)}")
+    assert p._preview_paths == {0: gif}
+
+
+def test_a_non_zero_chip_is_shown_too(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    other = _write_gif(tmp_path / "other.gif")
+    p.show_progress(f"chip2: {_preview_line(other)}")
+    assert p._preview_paths == {2: other}
+
+
+def test_finished_result_clears_the_preview(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._preview_widget is None
+
+
+# ── Multi-chip: every chip's segment forming at once ────────────────────────
+#
+# A multi-chip AnimateDiff run splits the animation into one segment per chip,
+# each denoising independently. Showing only chip 0 meant watching a quarter of
+# the work and guessing about the rest. Each chip now writes its own preview and
+# they render together, in chip order.
+
+def test_multi_chip_previews_render_one_tile_per_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in range(4):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert sorted(p._preview_paths) == [0, 1, 2, 3]
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_tiles_stay_in_chip_order_regardless_of_arrival(tmp_path):
+    """Chips finish steps at their own pace, so lines interleave arbitrarily —
+    the tiles must not reshuffle as they arrive."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in (2, 0, 3, 1):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert list(p._preview_paths) == sorted(p._preview_paths)
+
+
+def test_a_later_step_replaces_that_chips_tile_not_adds_one(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "c0.gif")
+    p.show_progress(f"chip0: PREVIEW: 1/9 {gif}")
+    p.show_progress(f"chip0: PREVIEW: 5/9 {gif}")
+    assert list(p._preview_paths) == [0]
+
+
+def test_single_chip_run_still_shows_one_untitled_preview(tmp_path):
+    """A plain run has no chip prefix and must not grow a "chip 0" label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "p.gif")))
+    assert list(p._preview_paths) == [-1], "no-chip runs use the sentinel key"
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_status_reports_the_slowest_chip(tmp_path):
+    """With chips at different steps, the headline should not claim the fastest
+    one's progress — the run is done when the LAST chip is."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(f"chip0: PREVIEW: 8/9 {_write_gif(tmp_path / 'c0.gif')}")
+    p.show_progress(f"chip1: PREVIEW: 3/9 {_write_gif(tmp_path / 'c1.gif')}")
+    assert "3/9" in p._pending_status_lbl.get_label()
+
+
+def test_preview_reset_clears_every_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    for i in range(2):
+        p.show_progress(f"chip{i}: PREVIEW: 1/9 {_write_gif(tmp_path / f'c{i}.gif')}")
+    p.show_pending("second", None)
+    assert p._preview_paths == {}
+    assert p._preview_widget is None

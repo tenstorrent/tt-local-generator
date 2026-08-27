@@ -262,3 +262,64 @@ def test_a_snapshot_error_is_not_sticky(bar):
     bar.update_segments({"video": Status.ERROR})
     bar.update_segments({"video": Status.OFF})
     assert bar._seg_state["video"] == Status.OFF
+
+
+# ── Local work with no server behind it (AnimateDiff) ───────────────────────
+#
+# AnimateDiff runs as a local subprocess, not a managed server, so
+# ModelStatusService has no SERVERS entry for it and the Video segment sits at
+# ○ off for the whole generation. Technically true, practically misleading:
+# video IS being made. `set_segment_busy` lights it — but with its own glyph,
+# because ● means "a server is ready to accept work" and no server exists here.
+
+def test_busy_lights_the_segment_with_its_own_glyph(bar):
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    assert bar._seg_dots["video"].get_label() == mw._BUSY_GLYPH
+    assert bar._seg_dots["video"].get_label() != ss.GLYPHS[Status.READY], (
+        "busy must not be indistinguishable from a ready server"
+    )
+
+
+def test_busy_says_what_is_running_in_the_tooltip(bar):
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    tip = bar._seg_dots["video"].get_tooltip_text()
+    assert "AnimateDiff" in tip and "no server" in tip
+
+
+def test_busy_survives_the_next_snapshot(bar):
+    """The service will keep reporting OFF for the whole run — that must not
+    switch the light back off mid-generation."""
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    bar.update_segments({"video": Status.OFF})
+    assert bar._seg_dots["video"].get_label() == mw._BUSY_GLYPH
+
+
+def test_clearing_busy_returns_to_the_snapshot_state(bar):
+    bar.update_segments({"video": Status.OFF})
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    bar.set_segment_busy("video", False)
+    assert bar._seg_dots["video"].get_label() == ss.GLYPHS[Status.OFF]
+
+
+def test_busy_does_not_mask_a_real_server_coming_up(bar):
+    """If a real Video server goes READY mid-run, that is better information
+    than 'local work in progress' — the snapshot wins."""
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    bar.update_segments({"video": Status.READY})
+    assert bar._seg_dots["video"].get_label() == ss.GLYPHS[Status.READY]
+
+
+def test_busy_is_per_segment(bar):
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    assert bar._seg_dots["image"].get_label() == ss.GLYPHS[Status.OFF]
+
+
+def test_busy_on_an_unknown_segment_is_ignored(bar):
+    bar.set_segment_busy("not-a-segment", True, "x")  # must not raise
+
+
+def test_busy_does_not_start_the_elapsed_timer(bar):
+    """Busy is not 'starting' — it must not grow a launch clock."""
+    bar.set_segment_busy("video", True, "AnimateDiff")
+    assert bar._timer_id is None
+    assert bar._seg_names["video"].get_label() == "Video"

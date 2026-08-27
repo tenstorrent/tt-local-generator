@@ -1,5 +1,146 @@
 # tt-local-generator — developer notes
 
+## Watch it form — AnimateDiff live previews (v0.98.0)
+
+The Create panel showed a spinner while a video was being made. It now shows
+the video being made. Spans two repos; **tt-animatediff is ours**, so no
+tt-media-server involvement at all — AnimateDiff is a local subprocess, not a
+server model.
+
+- **The capability already existed and was half-wired.**
+  `generate_frames_temporal` has taken an `on_step` hook and
+  `temporal_attention._latent_preview` has rendered CPU-side previews since the
+  Gradio UI landed — but only `app.py` wired them together. `examples/
+  generate.py`, the runner tt-local-generator execs, ran blind. Both are present
+  in **v0.9.0, the exact tag `vendor/tt-animatediff` pins**, so nothing needed
+  a submodule bump.
+- **`animatediff_ttnn/preview.py`** (new, in tt-animatediff) is the shared,
+  importable, torch-free-testable half: `make_step_callback()` (cadence, atomic
+  write, the line format) and `parse_preview_line()`. The runner stays thin —
+  `_preview_callback(args)` plus `--preview-path`/`--preview-every`.
+  - **Wired into BOTH paths**, because the first attempt was silently ignored on
+    CPU: TTNN passes `on_step` straight to `generate_frames_temporal`; the CPU
+    path goes through diffusers, whose hook is
+    `callback_on_step_end(pipe, step, t, kwargs)` and whose latents are ONE
+    `(B, C, F, H, W)` tensor, so `as_diffusers_callback()` splits on the frame
+    axis. A flag that means something in one mode and nothing in the other is
+    the same class of lie as the status bar this release opened with.
+  - **256x256, not 512.** The source is a 64x64 latent grid, so a 512 upsample
+    carries no more information — it just costs CPU, a bigger GIF to rewrite
+    each step, and a thumbnail that dwarfs the finished result.
+  - **Atomic writes** (temp file + `os.replace`): the consumer polls that exact
+    path while the runner rewrites it, so an in-place write would eventually
+    hand it a truncated GIF. Every failure is swallowed — a lost preview frame
+    costs a UI update; raising would cost the user their run.
+- **`CreateResultPanel`** intercepts `PREVIEW:` lines in `show_progress`
+  **before** the `_CHIP_LINE_RE` match (a multi-chip preview arrives wearing a
+  `chipN:` prefix and would otherwise be filed as that chip's status text).
+  `_preview_path` is job state that outlives the pending VIEW, so
+  `_render_pending` restores the image after a visit to a recent mid-generation
+  — the same shape as `_chip_status` restoring the per-chip rows. Reset on new
+  job / finish / error so a straggler can't resurrect a stale frame.
+  Only chip 0 drives the preview (each chip denoises its own segment).
+- **GTK sizing gotcha, measured not guessed.** `AnimatedGifWidget` sets
+  `hexpand/vexpand=True` + `ContentFit.COVER` — right for a finished result
+  filling its pane, wrong for a progress thumbnail: it inflated to ~530px square
+  and dwarfed the result it previews. Clearing hexpand/vexpand, `halign=CENTER`,
+  AND `set_can_shrink(False)` were all insufficient inside this panel (probed
+  live: still 534x534 despite `halign=CENTER`, `can_shrink=False` and a 256x256
+  intrinsic). **A wrapper `Gtk.Box` with its own hard `set_size_request` is what
+  actually pins it** (probed: 220x220). The same config in a plain Box measured
+  256x256 — so the inflation comes from this panel's height-for-width
+  negotiation, not from the widget.
+- **`animatediff._build_cmd(preview_path=)`** is opt-in: `None` yields
+  byte-identical argv, so a vendored runner predating the flag is unaffected.
+
+**Verified on real Blackhole under a gozer lease** (`--exact 0000:01:00.0`, the
+healthy board — chip 3 on ...924055 has the ARC-NOC fault in
+[[reference_qb2_card924055_fragility]]): 9/9 preview lines, 11.0s total
+(2.8s/frame), device closed cleanly, chips released and reset. The koi are
+clearly recognisable in the step-9 preview, in the same positions as the final
+VAE decode — the latent proxy is genuinely informative, not just "some
+structure". Also verified on CPU (~3% overhead, 105.7s vs 102.5s).
+
+- **The preview line never reached the panel (v0.99.0).** Found by a pre-PR
+  review, not by a test: `_run_one` and `_run_multi_chip` both forward only
+  stdout lines matching a keyword allow-list (`"Frame"`, `"Step"`, `"Loading"`,
+  `"Error"`, ...). `PREVIEW: 7/9 /path.gif` matches NONE of them, so every
+  preview line was written to the run log and dropped. The runner emitted them
+  correctly and `CreateResultPanel` rendered them correctly; the two were never
+  connected, and the feature was inert end to end. **The earlier "verified end
+  to end" claim was too broad** — both ends were tested, the middle never was.
+  Both drains now allow `line.startswith("PREVIEW:")`, guarded by a test that
+  *evaluates each drain's actual filter condition* against a real preview line,
+  plus a control asserting the allow-list still rejects ordinary chatter.
+- **The Video segment lights while AnimateDiff runs (v0.99.0).** AnimateDiff has
+  no `SERVERS` entry, so the service reports Video OFF for the whole generation
+  — true, and misleading. `_StatusBar.set_segment_busy(seg, busy, what)` +
+  `_seg_busy` overrides an OFF snapshot, in the same shape as `_seg_sticky_error`.
+  Deliberately **not** `●`: that glyph means "a server is up and can take work",
+  and nothing is served here, so it uses `◉` (`main_window._BUSY_GLYPH`) in the
+  same `@tt_success` green — live at a glance, without claiming a server exists;
+  the tooltip reads `Video: AnimateDiff generating (local, no server)`. A real
+  server going READY clears the override (better information wins); every other
+  snapshot state leaves it standing. Lit at the `AnimateDiffGenerationWorker`
+  construction — the one site that knows it is AnimateDiff specifically — and
+  cleared by `_clear_local_busy()` on **every** terminal path (bail-out, both
+  finished paths, error), because a light that outlives its job is worse than no
+  light. Both helpers are fail-soft: a status-bar problem must never interfere
+  with generation.
+  - **Gotcha:** `_seg_busy`/`_seg_sticky_error` must be initialised BEFORE the
+    segment-construction loop — `_apply_segment_tooltip` runs inside it and
+    reads both. Also: the `busy` CSS comment initially used em-dashes, which
+    broke `_CSS`'s `b"""` literal (`SyntaxError: bytes can only contain ASCII`)
+    — the ASCII-only rule for that block is real and easy to trip.
+
+**Noted, not fixed:** the TTNN path runs `--steps 8` as **9** loop iterations
+(previews report `1/9`..`9/9`). The line honestly reports what the loop reports;
+the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.
+`.venv/` is untracked and un-gitignored in tt-animatediff, so
+`git add -A` there tries to stage the whole virtualenv.
+
+- **The elapsed suffix corrupted the preview path (v0.100.1).** Reported as
+  "ran a generation but didn't see the progress component". `worker.py`'s
+  `_progress_fwd` appends `"  ({elapsed}s)"` to EVERY message it forwards —
+  correct for human status text, corrupting for a machine-readable one. The
+  panel's path group runs to end-of-line, so it captured
+  `/run/preview_chip0.gif  (47s)`, `Path(...).exists()` was False, and the
+  missing-file guard dropped every preview. **Nothing appeared and nothing
+  errored** — the guard did exactly what it was written to do.
+  New module-level `worker.is_machine_readable_progress(msg)` (matches
+  `PREVIEW:` with or without a `chipN:` prefix); `_progress_fwd` forwards those
+  verbatim and returns BEFORE decorating. Human status keeps its elapsed hint.
+  Tests pin the classification AND the wiring order — the arithmetic test alone
+  would have passed against the bug.
+  **This was the THIRD silent break in the same pipe** (allow-list filter,
+  stdout buffering, now this). Each component was correct in isolation and each
+  hop transformed the line a little; only the composition was wrong. Diagnosis
+  that worked, and would have worked all three times: read the per-chip run log
+  (`~/.local/share/tt-local-generator/logs/animatediff/run_*_chipN.log`) to
+  confirm the runner emitted, then replay those exact lines through a real
+  `CreateResultPanel`. `create_view` now debug-logs a missing preview path once
+  per path so the next mismatch leaves a trace.
+
+- **All four chips are tracked now (v0.100.0).** The first cut previewed only
+  chip 0 — a quarter of the animation. Each chip now gets its OWN rolling
+  preview file (`_multichip_cmds(preview_path_for_chip=)`; sharing one path
+  would have four processes overwrite each other every step, showing whichever
+  wrote last). `CreateResultPanel` keys `_preview_paths` by chip and renders a
+  `Gtk.FlowBox` grid, 2 across, so the QB2 case is a 2x2 square.
+  - **Tiles are held in CHIP order, not arrival order** (`_preview_paths` is
+    re-sorted on every insert): chips report at their own pace, so arrival order
+    is arbitrary and tiles would otherwise reshuffle mid-run.
+  - **The headline reports the SLOWEST chip** (`min` over `_preview_steps`). A
+    run finishes when the last chip does; reporting the fastest overstated
+    progress — the same class of overclaim as the aggregate status dot.
+  - Tiles shrink to `_PREVIEW_H_MULTI` (140px) when there is more than one;
+    four 220px tiles would overflow the result column. A single-chip run keeps
+    the full 220px and gets NO "chip 0" caption — captioning it would invent a
+    distinction that isn't there.
+  - Composited as GTK widgets, deliberately not as pixels: each tile keeps
+    animating natively, and a per-chip label is honest about them being separate
+    segments rather than one image.
+
 ## Status bar by function + inline video in Create (v0.97.0)
 
 Two user-reported bugs, one shared theme: a surface that reported something

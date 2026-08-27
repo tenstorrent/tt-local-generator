@@ -1,3 +1,103 @@
+tt-local-generator (0.100.2) noble; urgency=medium
+
+  * fix(create): `_reset_preview()` now clears `_preview_missing_logged` along
+    with the rest of the per-job preview state. Copilot PR#27 review: the set
+    was left to grow without bound across jobs, and once a path had been
+    logged once it stayed suppressed forever - so a path recurring in a later
+    job (e.g. a reused preview filename) silently lost its "missing preview
+    path" debug trace.
+  * docs(create): the `_PREVIEW_LINE_RE` and `_consume_preview_line` comments
+    still described the pre-v0.100.0 "only chip 0 drives the preview"
+    behavior. Updated to describe the current one-preview-file-per-chip
+    behavior (Copilot PR#27 review).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 27 Aug 2026 00:00:00 -0700
+
+tt-local-generator (0.100.1) noble; urgency=medium
+
+  * fix(create): live previews never appeared in a real generation. The
+    AnimateDiff worker's progress forwarder appends an elapsed hint - "  (47s)"
+    - to every message it passes along. That is right for human status text and
+    wrong for a machine-readable line: it turned
+    "PREVIEW: 3/21 /run/preview_chip0.gif" into
+    "... /preview_chip0.gif  (47s)", so the panel parsed the suffix as part of
+    the path, the file failed its exists() check, and every preview was dropped.
+    Nothing appeared and nothing errored, because the missing-file guard did
+    exactly what it was written to do. Preview lines are now forwarded verbatim
+    via the new worker.is_machine_readable_progress(); human status keeps its
+    elapsed hint.
+  * fix(create): a preview path that does not exist is now logged once per path
+    at debug level. The guard is still fail-soft - a line can legitimately
+    outlive its file - but a whole generation showing no previews should leave
+    a trace rather than being silently correct.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:10:34 -0700
+
+tt-local-generator (0.100.0) noble; urgency=medium
+
+  * feat(create): a multi-chip AnimateDiff run now previews EVERY chip, not just
+    chip 0. Each chip denoises its own segment, so watching one was watching a
+    quarter of the work. Each chip gets its own rolling preview file (sharing
+    one path would have them overwrite each other every step), and the tiles
+    render as a grid - 2 across, so the 4-chip QB2 case is a square - labelled
+    and held in chip order, since chips report at their own pace and the tiles
+    must not reshuffle mid-run.
+  * fix(create): the headline step count now reports the SLOWEST chip. A run
+    finishes when the last chip does, so showing the fastest chip's progress
+    overstated how far along the generation was.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:00:17 -0700
+
+tt-local-generator (0.99.1) noble; urgency=medium
+
+  * chore(vendor): bump the tt-animatediff submodule v0.9.0 -> v0.10.0, the
+    release that adds --preview-path. Without this the flag does not exist in
+    the vendored runner, so the live-preview feature has nothing to talk to.
+  * build: debian/rules now also fails loudly when
+    vendor/tt-animatediff/animatediff_ttnn/preview.py is missing from the
+    staged tree. The runner's import of it is fail-soft, so its absence would
+    not break generation - it would silently drop the previews, which is worse.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 08:54:29 -0700
+
+tt-local-generator (0.99.0) noble; urgency=medium
+
+  * fix(create): live AnimateDiff previews actually reach the panel. Both stdout
+    drains in the animatediff generator forward only lines matching a keyword
+    allow-list ("Frame", "Step", "Loading", "Error", ...); a
+    "PREVIEW: <step>/<total> <path>" line matches none of them, so every preview
+    was written to the run log and then dropped. The runner emitted correctly
+    and the panel rendered correctly, but nothing connected them - the feature
+    was inert end to end.
+  * feat(status bar): the Video indicator now lights while AnimateDiff is
+    generating. AnimateDiff is a local subprocess with no managed server, so
+    ModelStatusService correctly reports Video as off for the whole run - true,
+    but misleading when a video is visibly being made. It lights in the same
+    success green as a ready server but with its own glyph, and a tooltip
+    naming what is running: a filled dot means "a server is up and can take
+    work", and here there is no server at all.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:36:29 -0700
+
+tt-local-generator (0.98.0) noble; urgency=medium
+
+  * feat(create): watch an AnimateDiff video form as it generates. The result
+    panel showed a spinner and a status line; it now shows the animation itself,
+    updating each denoising step, with "Denoising step N/M" beneath it. Driven
+    by tt-animatediff's runner, which emits a rolling latent-preview GIF and a
+    "PREVIEW: <step>/<total> <path>" line per step over the stdout channel the
+    panel already drains for per-chip progress.
+    The preview is CPU-side in the runner (3 of 4 latent channels mapped to RGB,
+    no VAE decode, no device work), so it costs the hardware pipeline nothing —
+    measured ~3% wall-clock on CPU and no measurable cost on Blackhole.
+    Multi-chip runs preview chip 0 only: each chip denoises its own segment, so
+    letting all four write the single rolling image would flicker between
+    unrelated latents.
+    Verified end to end on real Blackhole hardware (9/9 preview lines, 11.0s,
+    2.8s/frame) and on CPU.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:03:52 -0700
+
 tt-local-generator (0.97.2) noble; urgency=medium
 
   * fix(create): the macOS inline-player path now checks `GstPlayer.load()`'s
