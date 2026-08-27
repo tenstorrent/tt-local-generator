@@ -193,3 +193,67 @@ def test_running_or_starting_falls_back_to_starting():
 def test_running_or_starting_none_when_all_off():
     svc = _svc({}); svc._tick()
     assert svc.running_or_starting("video") is None
+
+
+# ---------------------------------------------------------------------------
+# Shared-port STARTING inference
+# ---------------------------------------------------------------------------
+#
+# Every media server (video/image/animate) is the SAME port-8000 container --
+# only one runs at a time. So while Wan2.2 is healthy on 8000, `flux`'s port
+# probe finds 8000 open and its own health check fails (wrong runner), and
+# `_resolve` rule 3 inferred STARTING from that -- permanently. Invisible while
+# the status bar folded everything into one aggregate dot; with a per-function
+# bar it renders as "Image starting... 4:32" while nothing is starting at all.
+#
+# An open port that a DIFFERENT, healthy server is already answering on is not
+# evidence that this key is launching.
+
+def test_shared_port_with_a_healthy_other_server_is_off_not_starting():
+    svc = _svc(
+        {"wan2.2": True},                      # video server up on :8000
+        ports={"wan2.2": True, "flux": True},  # flux probes the SAME :8000
+    )
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.READY
+    assert svc.status("flux") == ms.Status.OFF, (
+        "an open port owned by another healthy server is not a launch"
+    )
+
+
+def test_shared_port_inference_also_covers_animate():
+    svc = _svc(
+        {"wan2.2": True},
+        ports={"wan2.2": True, "animate": True, "flux-dev": True},
+    )
+    svc._tick()
+    assert svc.status("animate") == ms.Status.OFF
+    assert svc.status("flux-dev") == ms.Status.OFF
+
+
+def test_an_explicit_note_starting_still_wins_over_the_shared_port_rule():
+    """A real launch we kicked off ourselves is tracked by `starting_at`, which
+    `_resolve` consults BEFORE the port probe -- suppressing the inference must
+    not suppress a genuine, recorded start."""
+    svc = _svc({"wan2.2": True}, ports={"wan2.2": True, "flux": True})
+    svc.note_starting("flux")
+    svc._tick()
+    assert svc.status("flux") == ms.Status.STARTING
+
+
+def test_open_port_with_no_healthy_owner_still_infers_starting():
+    """Regression control: the ordinary "something is listening on my port but
+    hasn't passed health yet" case must keep inferring STARTING."""
+    svc = _svc({}, ports={"flux": True})
+    svc._tick()
+    assert svc.status("flux") == ms.Status.STARTING
+
+
+def test_artgen_keys_sharing_8002_do_not_infer_starting_off_a_ready_sibling():
+    svc = _svc(
+        {"artgen-qwen3-8b": True},
+        ports={"artgen-qwen3-8b": True, "artgen-qwen3-32b": True},
+    )
+    svc._tick()
+    assert svc.status("artgen-qwen3-8b") == ms.Status.READY
+    assert svc.status("artgen-qwen3-32b") == ms.Status.OFF

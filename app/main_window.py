@@ -68,6 +68,14 @@ from worker import (
 import attractor
 import prompt_client
 import server_manager as _sm
+import status_segments as _status_segments
+
+#: Glyph for a segment doing LOCAL work with no managed server behind it —
+#: today only AnimateDiff, which runs as a subprocess and therefore has no
+#: `server_manager.SERVERS` entry for `ModelStatusService` to report on. Its own
+#: shape so it can't be read as "a server is ready" (see `_BUSY_GLYPH` use in
+#: `_StatusBar.set_segment_busy`).
+_BUSY_GLYPH = "◉"  # ◉
 
 # On macOS the Homebrew GTK4 bottle ships without libmedia-gstreamer.dylib,
 # so Gtk.Video always returns None from get_media_stream() and shows a blank
@@ -963,8 +971,32 @@ video > mediacontrols { opacity: 0; }
 }
 .tt-statusbar-dot-ready   { color: @tt_success; }
 .tt-statusbar-dot-offline { color: @tt_text_muted; }
-.tt-statusbar-dot-starting { color: @tt_accent; }
+/* "starting" is the docs-site semantic yellow, NOT @tt_accent: the accent teal
+   #4FD1C5 and @tt_success #27AE60 are indistinguishable at 9px, which defeats
+   the whole point of an at-a-glance bar. Same semantic yellow this app already
+   uses for active/warning (see CLAUDE.md's v0.84.0 palette note). */
+.tt-statusbar-dot-starting { color: #F6BC42; }
 .tt-statusbar-dot-error   { color: @tt_error; }
+/* Per-function segments: glyph + name, one pair per Prompt/Image/Video/Art LLM.
+   The glyph carries the state as a SHAPE too (see status_segments.GLYPHS), so
+   the bar stays readable without relying on colour alone. */
+.tt-statusbar-segdot {
+    font-size: 9px;
+    margin-right: 4px;
+}
+.tt-statusbar-segname {
+    font-size: 10px;
+}
+.tt-statusbar-segname-ready    { color: @tt_success; }
+/* "busy" = local work with no server behind it (AnimateDiff). Same success
+   green as ready (the function IS live), but its own glyph: ready means "a
+   server is up" and here there is no server at all. ASCII only - this block
+   is a b-string literal. */
+.tt-statusbar-dot-busy         { color: @tt_success; }
+.tt-statusbar-segname-busy     { color: @tt_success; }
+.tt-statusbar-segname-offline  { color: @tt_text_muted; }
+.tt-statusbar-segname-starting { color: #F6BC42; }
+.tt-statusbar-segname-error    { color: @tt_error; }
 .tt-statusbar-seg-error   { font-size: 10px; color: @tt_error; }
 .tt-statusbar-seg {
     font-size: 10px;
@@ -4451,18 +4483,64 @@ class _StatusBar(Gtk.Box):
             lbl.add_css_class("tt-statusbar-sep")
             return lbl
 
-        # ── Server segment: MenuButton (dot + label) → capability dashboard popover ──
-        self._srv_dot = Gtk.Label(label="⬤")
-        self._srv_dot.add_css_class("tt-statusbar-dot")
-        self._srv_dot.add_css_class("tt-statusbar-dot-offline")
-        self._srv_lbl = Gtk.Label(label="offline")
-        self._srv_lbl.add_css_class("tt-statusbar-seg")
-        self._srv_lbl.set_max_width_chars(1)
-        self._srv_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        # ── Server segment: MenuButton → capability dashboard popover ─────────
+        #
+        # One glyph+name pair per FUNCTION (Prompt / Image / Video / Art LLM),
+        # not one aggregate dot.  The aggregate this replaces folded every
+        # server into a single `READY > STARTING > ERROR > OFF` state, so the
+        # auto-started CPU prompt-server made the bar read "ready" for the whole
+        # session and stomped the elapsed timer of any launch in flight.  See
+        # `status_segments.py`'s module docstring.
+        #
+        # The bar is the glance; the popover below it (unchanged) is the detail,
+        # naming the actual model behind each capability.
+        srv_btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
 
-        srv_btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        srv_btn_content.append(self._srv_dot)
-        srv_btn_content.append(self._srv_lbl)
+        self._seg_dots: dict = {}    # segment key → Gtk.Label (glyph)
+        self._seg_names: dict = {}   # segment key → Gtk.Label (name [+ elapsed])
+        self._seg_labels: dict = {}  # segment key → display name (static)
+        self._seg_state: dict = {}   # segment key → Status
+        self._seg_start_ts: dict = {}  # segment key → time.monotonic() at STARTING
+        self._seg_phase: dict = {}   # segment key → phase word for the tooltip
+        self._seg_error: dict = {}   # segment key → error message for the tooltip
+
+        # Segments whose ERROR was painted LOCALLY (a start script we watched
+        # exit non-zero), as opposed to one that merely came from a snapshot.
+        # A local failure outlives the next poll — see `update_segments`.
+        self._seg_sticky_error: set = set()
+
+        # Segments doing local work with no managed server behind them:
+        # {segment key: what is running}. Overrides an OFF snapshot (see
+        # `update_segments`) — AnimateDiff generates video for minutes with
+        # every SERVERS key legitimately OFF, and reporting Video as off while
+        # a video is being made is exactly the kind of true-but-misleading the
+        # by-function bar exists to remove.
+        self._seg_busy: dict = {}
+
+        for _seg_key, _seg_label, _caps in _status_segments.SEGMENTS:
+            holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            holder.set_margin_end(10)
+
+            dot = Gtk.Label(label=_status_segments.GLYPHS[Status.OFF])
+            dot.add_css_class("tt-statusbar-segdot")
+            dot.add_css_class("tt-statusbar-dot-offline")
+            holder.append(dot)
+
+            name = Gtk.Label(label=_seg_label)
+            name.add_css_class("tt-statusbar-segname")
+            name.add_css_class("tt-statusbar-segname-offline")
+            holder.append(name)
+
+            srv_btn_content.append(holder)
+            self._seg_dots[_seg_key] = dot
+            self._seg_names[_seg_key] = name
+            self._seg_labels[_seg_key] = _seg_label
+            self._seg_state[_seg_key] = Status.OFF
+            self._seg_start_ts[_seg_key] = 0.0
+            self._seg_phase[_seg_key] = "starting"
+            self._seg_error[_seg_key] = ""
+            self._apply_segment_tooltip(_seg_key)
+
 
         self._srv_menu_btn = Gtk.MenuButton()
         self._srv_menu_btn.set_has_frame(False)
@@ -4562,27 +4640,169 @@ class _StatusBar(Gtk.Box):
         threading.Thread(target=self._poll_loop, daemon=True).start()
 
         # ── Elapsed-timer state ──────────────────────────────────────────────
-        # Set by update_starting(), ticked every second, cleared by
-        # update_server() and update_error().
-        self._phase: str = "starting"
-        self._start_ts: float = 0.0
+        # One shared 1 s source, running only while some segment is STARTING.
+        # Started/stopped by `_sync_segment_timer()`; per-segment start times
+        # live in `self._seg_start_ts`.
         self._timer_id: "int | None" = None
-        self._in_error: bool = False
 
     # ── Public update methods (main-thread only) ───────────────────────────────
 
-    def _set_srv_dot(self, css_state: str, model_text: str, _unused: str = "") -> None:
-        for cls in ("tt-statusbar-dot-ready", "tt-statusbar-dot-offline",
-                    "tt-statusbar-dot-starting", "tt-statusbar-dot-error"):
-            self._srv_dot.remove_css_class(cls)
-        self._srv_dot.add_css_class(f"tt-statusbar-dot-{css_state}")
-        self._srv_lbl.set_label(model_text)
-        # Mirror error vs normal colour on the label too
-        self._srv_lbl.remove_css_class("tt-statusbar-seg-error")
-        self._srv_lbl.remove_css_class("tt-statusbar-seg")
-        self._srv_lbl.add_css_class(
-            "tt-statusbar-seg-error" if css_state == "error" else "tt-statusbar-seg"
-        )
+    # ── Per-function segments (Prompt / Image / Video / Art LLM) ─────────────
+
+    def _elapsed_str(self, seg_key: str) -> str:
+        """`M:SS` since this segment entered STARTING."""
+        m, s = divmod(int(time.monotonic() - self._seg_start_ts[seg_key]), 60)
+        return f"{m}:{s:02d}"
+
+    def _apply_segment_tooltip(self, seg_key: str) -> None:
+        """The bar shows the shape; the tooltip says what it means.
+
+        The phase word (from the server log tail, via `set_phase`) lives here
+        rather than in the visible label so a chatty startup phase can never
+        push the bar wider than the window.
+        """
+        label = self._seg_labels[seg_key]
+        state = self._seg_state[seg_key]
+        busy = self._seg_busy.get(seg_key)
+        if busy:
+            # Name what is running AND that nothing is served, so the green
+            # light can't be misread as "a server is up".
+            self._seg_dots[seg_key].set_tooltip_text(
+                f"{label}: {busy} generating (local, no server)"
+            )
+            self._seg_names[seg_key].set_tooltip_text(
+                f"{label}: {busy} generating (local, no server)"
+            )
+            return
+        if state == Status.READY:
+            tip = f"{label}: ready"
+        elif state == Status.STARTING:
+            tip = f"{label}: {self._seg_phase[seg_key]}… {self._elapsed_str(seg_key)}"
+        elif state == Status.ERROR:
+            tip = f"{label}: {self._seg_error[seg_key] or 'failed'}"
+        else:
+            tip = f"{label}: off"
+        self._seg_dots[seg_key].set_tooltip_text(tip)
+        self._seg_names[seg_key].set_tooltip_text(tip)
+
+    def _paint_segment(self, seg_key: str) -> None:
+        """Repaint one segment's glyph, colour, label and tooltip from state."""
+        state = self._seg_state[seg_key]
+        busy = self._seg_busy.get(seg_key)
+        css = "busy" if busy else _status_segments.css_state_for(state)
+
+        dot = self._seg_dots[seg_key]
+        dot.set_label(_BUSY_GLYPH if busy else _status_segments.glyph_for(state))
+        for cls in ("ready", "offline", "starting", "error", "busy"):
+            dot.remove_css_class(f"tt-statusbar-dot-{cls}")
+        dot.add_css_class(f"tt-statusbar-dot-{css}")
+
+        name = self._seg_names[seg_key]
+        for cls in ("ready", "offline", "starting", "error", "busy"):
+            name.remove_css_class(f"tt-statusbar-segname-{cls}")
+        name.add_css_class(f"tt-statusbar-segname-{css}")
+        # Only a launching segment carries an elapsed counter — a steady-state
+        # bar is four short words, no ticking noise.
+        if state == Status.STARTING and not busy:
+            name.set_label(f"{self._seg_labels[seg_key]} {self._elapsed_str(seg_key)}")
+        else:
+            name.set_label(self._seg_labels[seg_key])
+
+        self._apply_segment_tooltip(seg_key)
+
+    def _set_segment(self, seg_key: str, state: "Status", *, error_msg: str = "") -> None:
+        """Transition one segment, managing its elapsed-timer bookkeeping.
+
+        The clock is reset ONLY on the transition INTO starting — resetting it
+        on every repaint is exactly how the old `update_starting()` froze the
+        counter at 0:00 when it was called from each poll tick.
+        """
+        if seg_key not in self._seg_state:
+            return
+        prev = self._seg_state[seg_key]
+        if state == Status.STARTING and prev != Status.STARTING:
+            self._seg_start_ts[seg_key] = time.monotonic()
+            self._seg_phase[seg_key] = "starting"
+        if state != Status.ERROR:
+            self._seg_error[seg_key] = ""
+        elif error_msg:
+            self._seg_error[seg_key] = error_msg
+        self._seg_state[seg_key] = state
+        self._paint_segment(seg_key)
+        self._sync_segment_timer()
+
+    def update_segments(self, states: dict) -> None:
+        """Repaint every segment from a `status_segments.segment_states()` map.
+
+        The single entry point `_render_status_snapshot` drives on each poll.
+        Segments absent from `states` are left alone, so an optimistic
+        `mark_starting()` is never silently blanked by a partial map.
+
+        A segment carrying a LOCALLY painted failure (`mark_error`) keeps it
+        until the service reports it genuinely READY, or the user starts it
+        again (`mark_starting`). Without that, the failure was erased by the
+        very next tick — the start script's own exit code is better evidence
+        than a stale STARTING the service hasn't finished timing out yet, and
+        that stale report is exactly what a failed launch produces.
+        """
+        for seg_key, state in states.items():
+            if seg_key not in self._seg_state:
+                continue
+            if seg_key in self._seg_sticky_error:
+                if state != Status.READY:
+                    continue  # keep showing the failure we actually observed
+                self._seg_sticky_error.discard(seg_key)
+            # A real server going READY is better information than "local work
+            # in progress", so let the snapshot clear the busy override; any
+            # other state leaves it standing (the service reports OFF for the
+            # whole of an AnimateDiff run).
+            if seg_key in self._seg_busy and state == Status.READY:
+                self._seg_busy.pop(seg_key, None)
+            self._set_segment(seg_key, state)
+
+    def mark_starting(self, seg_key: str) -> None:
+        """Optimistically light one segment the instant its launch is kicked off.
+
+        `ModelStatusService.note_starting()` makes the next snapshot agree, but
+        that is up to one poll interval away and a click should feel immediate.
+
+        Starting again is an explicit user action that supersedes any previous
+        failure, so it clears the sticky-error flag.
+        """
+        self._seg_sticky_error.discard(seg_key)
+        self._set_segment(seg_key, Status.STARTING)
+
+    def set_segment_busy(self, seg_key: str, busy: bool, what: str = "") -> None:
+        """Light a segment for LOCAL work that has no managed server behind it.
+
+        AnimateDiff generates video as a subprocess, so it has no
+        `server_manager.SERVERS` entry and `ModelStatusService` correctly
+        reports Video as OFF for the entire run — true, but misleading while a
+        video is visibly being made.
+
+        Deliberately NOT painted as READY: `●` means "a server is up and can
+        take work", and nothing is served here. `◉` in the same success green
+        reads as "this function is live" at a glance without claiming a server
+        exists, and the tooltip names what is actually running.
+        """
+        if seg_key not in self._seg_state:
+            return
+        if busy:
+            self._seg_busy[seg_key] = what or "generating"
+        else:
+            self._seg_busy.pop(seg_key, None)
+        self._paint_segment(seg_key)
+
+    def mark_error(self, seg_key: str, msg: str = "failed — click for log") -> None:
+        """Flag a failed launch on one segment (the message shows in its tooltip).
+
+        This is a failure we OBSERVED (a start script exited non-zero), so it
+        sticks until the segment is genuinely READY or the user retries — a
+        snapshot alone can't clear it. See `update_segments`.
+        """
+        if seg_key in self._seg_state:
+            self._seg_sticky_error.add(seg_key)
+        self._set_segment(seg_key, Status.ERROR, error_msg=msg)
 
     def update_capability(self, cap: str, ready: bool, detail: str = "") -> None:
         """Update one capability row in the dashboard popover.
@@ -4601,59 +4821,37 @@ class _StatusBar(Gtk.Box):
         lbl.remove_css_class("cap-row-offline")
         lbl.add_css_class("cap-row-ready" if ready else "cap-row-offline")
 
-    def update_server(self, ready: bool, model: "str | None") -> None:
-        """Reflect server health in the status dot and model label.
-
-        Ignores ready=False calls while in error state so the health worker
-        does not silently overwrite the error indicator between retries.
-        """
-        if not ready and self._in_error:
-            return
-        self._in_error = False
-        self._stop_timer()
-        if ready:
-            self._set_srv_dot("ready", model or "ready", "")
-        else:
-            self._set_srv_dot("offline", model or "offline", "")
-        # Re-enable popover controls once the launch/stop operation has settled.
-        self._pop_start.set_sensitive(True)
-        self._pop_stop.set_sensitive(True)
-
-    def update_starting(self) -> None:
-        """Show 'starting' state while the server launch script is running."""
-        self._in_error = False
-        self._phase = "starting"
-        self._start_ts = time.monotonic()
-        self._set_srv_dot("starting", "starting… 0:00", "Server starting…")
-        # Disable popover buttons while the script is in flight — prevents
-        # double-starting or stopping a server that is mid-launch.
-        self._pop_start.set_sensitive(False)
-        self._pop_stop.set_sensitive(False)
-        self._start_timer()
-
-    def update_error(self, msg: str = "failed — click for details") -> None:
-        """Show the error state: red dot, error message, re-enable Start."""
-        self._in_error = True
-        self._stop_timer()
-        self._set_srv_dot("error", msg, "Server failed to start")
-        self._pop_start.set_sensitive(True)
-        self._pop_stop.set_sensitive(False)
-
     def set_phase(self, phase: str) -> None:
-        """Update the phase label while in starting state (called on main thread)."""
-        if self._timer_id is None:
-            return  # not in starting state; ignore stale callbacks
-        self._phase = phase
-        elapsed = int(time.monotonic() - self._start_ts)
-        m, s = divmod(elapsed, 60)
-        self._srv_lbl.set_label(f"{phase}… {m}:{s:02d}")
+        """Note a recognised startup milestone from the server log tail.
+
+        The phase applies to whichever segments are currently launching (in
+        practice the one port-8000 media server whose log is being tailed). It
+        shows in the tooltip, not the visible label — see
+        `_apply_segment_tooltip`. Main thread only.
+        """
+        # Nothing launching -> nothing to label; a stale tail callback after the
+        # server settled simply finds no STARTING segment and does nothing.
+        for seg_key, state in self._seg_state.items():
+            if state == Status.STARTING:
+                self._seg_phase[seg_key] = phase
+                self._apply_segment_tooltip(seg_key)
 
     # ── Elapsed timer (runs on main thread via GLib.timeout_add) ─────────────
+    #
+    # One shared 1 s source drives every launching segment's counter; it runs
+    # only while at least one segment is STARTING, so a steady-state bar has no
+    # timer at all.
 
-    def _start_timer(self) -> None:
-        if self._timer_id is not None:
+    def _sync_segment_timer(self) -> None:
+        """Start or stop the shared tick source to match the current states."""
+        any_starting = any(
+            s == Status.STARTING for s in self._seg_state.values()
+        )
+        if any_starting and self._timer_id is None:
+            self._timer_id = GLib.timeout_add(1000, self._tick)
+        elif not any_starting and self._timer_id is not None:
             GLib.source_remove(self._timer_id)
-        self._timer_id = GLib.timeout_add(1000, self._tick)
+            self._timer_id = None
 
     def _stop_timer(self) -> None:
         if self._timer_id is not None:
@@ -4661,11 +4859,14 @@ class _StatusBar(Gtk.Box):
             self._timer_id = None
 
     def _tick(self) -> bool:
-        """Update the elapsed-time counter in the starting label. Main thread."""
-        elapsed = int(time.monotonic() - self._start_ts)
-        m, s = divmod(elapsed, 60)
-        self._srv_lbl.set_label(f"{self._phase}… {m}:{s:02d}")
-        return True  # keep repeating until _stop_timer() cancels the source
+        """Advance every launching segment's elapsed counter. Main thread."""
+        starting = [k for k, s in self._seg_state.items() if s == Status.STARTING]
+        if not starting:
+            self._timer_id = None
+            return False  # nothing to tick; drop the source
+        for seg_key in starting:
+            self._paint_segment(seg_key)
+        return True  # keep repeating until _sync_segment_timer() cancels it
 
     def update_queue(self, depth: int) -> None:
         """Show or hide the queue-depth segment."""
@@ -4926,8 +5127,10 @@ class _StatusBar(Gtk.Box):
         return "  ".join(parts)
 
     def stop(self) -> None:
-        """Signal the background polling thread to exit. Call from do_close_request."""
+        """Signal the background polling thread to exit and retire the segment
+        tick source. Call from do_close_request."""
         self._stop.set()
+        self._stop_timer()
 
 
 # ── Preferences Dialog ─────────────────────────────────────────────────────────
@@ -5464,12 +5667,12 @@ class MainWindow(Gtk.ApplicationWindow):
         # The three legacy pollers that used to feed it (`_health_loop`/
         # `_artgen_health_loop`/`_prompt_gen_health_loop`, each with its own
         # background thread hitting a different port) are retired -- one
-        # status dot, one source of truth. Subscribe LAST (mirrors
+        # status service, one source of truth (rendered as four per-function
+        # segments; see status_segments.py). Subscribe LAST (mirrors
         # ServersControl.__init__'s own ordering) so a synchronous notify
         # from within subscribe() can never hit a half-built widget, then
         # paint the already-known snapshot immediately since subscribe()
         # only pushes on the *next* change.
-        self._status_agg_prev = Status.OFF
         self._status_unsubscribe = self._status_service.subscribe(
             lambda snap: GLib.idle_add(self._on_status_snapshot, snap)
         )
@@ -8134,13 +8337,15 @@ class MainWindow(Gtk.ApplicationWindow):
         `SERVERS` entry (see `_sm.CAPABILITY_LABELS`'s comment) so it's skipped
         here — `_check_animatediff_hardware` owns that row instead.
 
-        Aggregate dot: READY > STARTING > ERROR > OFF across EVERY key,
-        mirroring `ServersControl._refresh_bar_dot`'s aggregation policy (the
-        `TODO(SP-3d)` this replaces asked for exactly this). STARTING only
-        calls `update_starting()` on the actual transition into that state —
-        `update_starting()` resets the elapsed timer to 0:00 on every call, so
-        calling it on every snapshot while already STARTING would freeze the
-        counter instead of letting it tick.
+        Status-bar segments: there is NO aggregate dot any more. It folded
+        `READY > STARTING > ERROR > OFF` across every key, and since the
+        CPU-only `prompt-server` is auto-started on launch and goes READY in
+        seconds, the bar reported "ready" for the whole session no matter what
+        Video/Image/Art LLM were doing — and the next poll's `update_server(
+        True, "ready")` stomped the elapsed timer of any launch in flight.
+        `status_segments.segment_states` resolves one state per FUNCTION
+        instead, folding only across servers that serve the same function, so
+        no segment can speak for another one.
 
         Unregistered running chat model (bugfix): `snap`'s per-key statuses
         alone under-report "artgen" when the running chat-LLM backend
@@ -8156,6 +8361,14 @@ class MainWindow(Gtk.ApplicationWindow):
         snapshot never disagree with each other.
         """
         artgen_model = self._status_service.running_artgen_model()
+        # ONE decision, used by both the popover row and the bar below, so the
+        # two surfaces painted from this snapshot can never disagree.
+        # `running_artgen_model()` is non-None whenever the auto-started
+        # prompt-gen server is alive, because `detect_artgen_endpoint()` falls
+        # back to it last — counting that as an Art LLM lit the Art LLM
+        # indicator off the PROMPT model, which is the same "it's just the
+        # prompt gen being ready" complaint the by-function bar exists to fix.
+        artgen_detected = _status_segments.detected_model_is_artgen(artgen_model)
 
         for cap, cap_label in _sm.CAPABILITY_LABELS.items():
             if cap == "animatediff":
@@ -8165,7 +8378,7 @@ class MainWindow(Gtk.ApplicationWindow):
             ready_sdef = next((s for s in sdefs if snap.get(s.key) == Status.READY), None)
             if ready_sdef is not None:
                 self._hw_statusbar.update_capability(cap, True, ready_sdef.label)
-            elif cap == "artgen" and artgen_model is not None:
+            elif cap == "artgen" and artgen_detected:
                 self._hw_statusbar.update_capability(
                     cap, True, f"{artgen_model.model_id} (detected)"
                 )
@@ -8174,38 +8387,12 @@ class MainWindow(Gtk.ApplicationWindow):
             else:
                 self._hw_statusbar.update_capability(cap, False, "")
 
-        values = list(snap.values())
-        if Status.READY in values:
-            agg = Status.READY
-        elif Status.STARTING in values:
-            agg = Status.STARTING
-        elif Status.ERROR in values:
-            agg = Status.ERROR
-        else:
-            agg = Status.OFF
-
-        if agg != Status.READY and artgen_model is not None:
-            agg = Status.READY
-
-        if agg == Status.READY:
-            self._hw_statusbar.update_server(True, "ready")
-            # A launch script may have handed off to a Docker log tail (see
-            # _start_log_tail) — stop it now that a real health check has
-            # confirmed readiness. Same trigger point the retired
-            # _on_health_result used to own.
-            if self._log_tail_stop:
-                self._log_tail_stop.set()
-                self._log_tail_stop = None
-            if not (self._worker_gen and self._worker_gen._running()):
-                self._set_status("Server ready — enter a prompt and click Generate")
-        elif agg == Status.STARTING:
-            if self._status_agg_prev != Status.STARTING:
-                self._hw_statusbar.update_starting()
-        elif agg == Status.ERROR:
-            self._hw_statusbar.update_error()
-        else:
-            self._hw_statusbar.update_server(False, "offline")
-        self._status_agg_prev = agg
+        # The status bar itself: one glyph+name per FUNCTION, resolved
+        # independently. There is deliberately no aggregate any more — see
+        # `status_segments.py`'s module docstring for why the old one lied.
+        self._hw_statusbar.update_segments(
+            _status_segments.segment_states(snap, artgen_model=artgen_model)
+        )
 
         # Recover Jobs (File menu): enabled iff a media server (video/image/
         # animate — NOT artgen/prompt, which _on_recover has nothing to do
@@ -8220,6 +8407,18 @@ class MainWindow(Gtk.ApplicationWindow):
             for cap in ("video", "image", "animate")
             for s in _sm.servers_for_capability(cap)
         )
+
+        # A launch script may have handed off to a Docker log tail (see
+        # _start_log_tail) — stop it now that a real health check has confirmed
+        # the MEDIA server is up. This used to hang off the global aggregate,
+        # which meant the auto-started prompt-server killed the tail of a
+        # video-server launch that was still in progress.
+        if media_ready:
+            if self._log_tail_stop:
+                self._log_tail_stop.set()
+                self._log_tail_stop = None
+            if not (self._worker_gen and self._worker_gen._running()):
+                self._set_status("Server ready — enter a prompt and click Generate")
         if a := self.lookup_action("recover-jobs"):
             a.set_enabled(media_ready)
 
@@ -9107,6 +9306,26 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
         return True
 
+    def _set_local_busy(self, seg_key: str, what: str) -> None:
+        """Mark a status-bar segment as doing local, serverless work.
+
+        Fail-soft: a status-bar problem must never interfere with generation.
+        """
+        try:
+            self._hw_statusbar.set_segment_busy(seg_key, True, what)
+        except Exception:
+            pass
+
+    def _clear_local_busy(self) -> None:
+        """Drop every local-busy override. Called from every terminal path of a
+        generation (finished / error / early-return bail-out) -- a light that
+        can outlive its job is worse than no light at all."""
+        try:
+            for _seg in _status_segments.SEGMENT_KEYS:
+                self._hw_statusbar.set_segment_busy(_seg, False)
+        except Exception:
+            pass
+
     def _fail_create_job(self, reason: str) -> None:
         """Clear Create-job state and surface *reason* in the inline result
         panel when `_on_generate` bails out via an early return before doing
@@ -9133,6 +9352,7 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:
             pass
         self._create_job_active = False
+        self._clear_local_busy()
 
     def _on_generate(self, prompt, neg, steps, seed, seed_image_path="",
                      model_source="video", guidance_scale=3.5,
@@ -9285,6 +9505,13 @@ class MainWindow(Gtk.ApplicationWindow):
                     chain_save_path = os.path.join(
                         tempfile.gettempdir(), f"tt_ad_chain_{seed if seed >= 0 else 'auto'}.pt"
                     )
+                # Light the Video segment for the duration of this run.
+                # AnimateDiff is a local subprocess with no `SERVERS` entry, so
+                # ModelStatusService reports Video OFF the whole time -- true,
+                # but a bar reading "off" while a video is visibly being made is
+                # the kind of true-but-misleading this bar exists to remove.
+                # Cleared by `_clear_local_busy` on every terminal path.
+                self._set_local_busy("video", "AnimateDiff")
                 gen = AnimateDiffGenerationWorker(
                     store=self._store,
                     prompt=prompt,
@@ -10039,6 +10266,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         return GLib.SOURCE_REMOVE
 
     # ── Server start / stop ────────────────────────────────────────────────────
@@ -10076,7 +10304,16 @@ class MainWindow(Gtk.ApplicationWindow):
         self._servers_control.set_server_launching(launch_key, True)
         self._servers_control.append_server_log(f"Starting {label} server ({script_name} --gui)…")
         self._set_status(f"Launching {label} server…")
-        self._hw_statusbar.update_starting()
+        # Light THIS function's segment immediately. `note_starting()` above
+        # makes the next ModelStatusService snapshot agree, but that is up to a
+        # poll interval away and a click should feel instant. A key that backs
+        # no segment (unresolvable script name) resolves None — skip it and let
+        # the snapshot speak.
+        start_seg = (
+            _status_segments.segment_for_server_key(server_key) if server_key else None
+        )
+        if start_seg:
+            self._hw_statusbar.mark_starting(start_seg)
         if a := self.lookup_action("recover-jobs"):
             a.set_enabled(False)
 
@@ -10105,7 +10342,23 @@ class MainWindow(Gtk.ApplicationWindow):
                                   f"Script exited with code {proc.returncode}")
                     GLib.idle_add(self._set_status, "Server start script failed — check log")
                     GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
-                    GLib.idle_add(self._hw_statusbar.update_error, "start failed — click for log")
+                    # Drop the starting bookkeeping now that we KNOW it failed.
+                    # `_resolve` reports STARTING for as long as `starting_at`
+                    # is set and within `start_timeout` (180 s), so leaving it
+                    # would show a ticking "starting" clock for three minutes
+                    # on a server that already died — and would overwrite the
+                    # failure painted just below. `note_stopping` is the
+                    # existing method that drops exactly this bookkeeping; it
+                    # takes only its own lock and touches no widgets, so it is
+                    # safe to call directly from this thread.
+                    if server_key:
+                        try:
+                            self._status_service.note_stopping(server_key)
+                        except Exception:
+                            pass
+                    if start_seg:
+                        GLib.idle_add(self._hw_statusbar.mark_error, start_seg,
+                                      "start failed — click for log")
                 else:
                     GLib.idle_add(self._set_status,
                                   f"{label} server started — waiting for health check…")
@@ -10208,7 +10461,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._servers_control.set_server_launching(launch_key, True)
         self._servers_control.append_server_log("Stopping inference server…")
         self._set_status("Stopping inference server…")
-        self._hw_statusbar.update_starting()
+        # No optimistic segment paint on stop: `note_stopping()` (above) makes
+        # the next snapshot report OFF, and painting a stop as "starting" —
+        # which the retired aggregate `update_starting()` literally did — reads
+        # as the opposite of what is happening.
         if a := self.lookup_action("recover-jobs"):
             a.set_enabled(False)
 
@@ -10894,6 +11150,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         self._gen_gallery = None
         self._last_error_log_path = None  # clear stale error so status bar click no longer opens old log
         # SP-3d-5: ControlPanel's own "Repeat last" availability sync (which
@@ -10951,6 +11208,7 @@ class MainWindow(Gtk.ApplicationWindow):
             except Exception:
                 pass
             self._create_job_active = False
+        self._clear_local_busy()
         self._start_next_queued()
         return False
 

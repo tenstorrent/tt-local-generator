@@ -1,5 +1,296 @@
 # tt-local-generator — developer notes
 
+## Watch it form — AnimateDiff live previews (v0.98.0)
+
+The Create panel showed a spinner while a video was being made. It now shows
+the video being made. Spans two repos; **tt-animatediff is ours**, so no
+tt-media-server involvement at all — AnimateDiff is a local subprocess, not a
+server model.
+
+- **The capability already existed and was half-wired.**
+  `generate_frames_temporal` has taken an `on_step` hook and
+  `temporal_attention._latent_preview` has rendered CPU-side previews since the
+  Gradio UI landed — but only `app.py` wired them together. `examples/
+  generate.py`, the runner tt-local-generator execs, ran blind. Both are present
+  in **v0.9.0, the exact tag `vendor/tt-animatediff` pins**, so nothing needed
+  a submodule bump.
+- **`animatediff_ttnn/preview.py`** (new, in tt-animatediff) is the shared,
+  importable, torch-free-testable half: `make_step_callback()` (cadence, atomic
+  write, the line format) and `parse_preview_line()`. The runner stays thin —
+  `_preview_callback(args)` plus `--preview-path`/`--preview-every`.
+  - **Wired into BOTH paths**, because the first attempt was silently ignored on
+    CPU: TTNN passes `on_step` straight to `generate_frames_temporal`; the CPU
+    path goes through diffusers, whose hook is
+    `callback_on_step_end(pipe, step, t, kwargs)` and whose latents are ONE
+    `(B, C, F, H, W)` tensor, so `as_diffusers_callback()` splits on the frame
+    axis. A flag that means something in one mode and nothing in the other is
+    the same class of lie as the status bar this release opened with.
+  - **256x256, not 512.** The source is a 64x64 latent grid, so a 512 upsample
+    carries no more information — it just costs CPU, a bigger GIF to rewrite
+    each step, and a thumbnail that dwarfs the finished result.
+  - **Atomic writes** (temp file + `os.replace`): the consumer polls that exact
+    path while the runner rewrites it, so an in-place write would eventually
+    hand it a truncated GIF. Every failure is swallowed — a lost preview frame
+    costs a UI update; raising would cost the user their run.
+- **`CreateResultPanel`** intercepts `PREVIEW:` lines in `show_progress`
+  **before** the `_CHIP_LINE_RE` match (a multi-chip preview arrives wearing a
+  `chipN:` prefix and would otherwise be filed as that chip's status text).
+  `_preview_path` is job state that outlives the pending VIEW, so
+  `_render_pending` restores the image after a visit to a recent mid-generation
+  — the same shape as `_chip_status` restoring the per-chip rows. Reset on new
+  job / finish / error so a straggler can't resurrect a stale frame.
+  Only chip 0 drives the preview (each chip denoises its own segment).
+- **GTK sizing gotcha, measured not guessed.** `AnimatedGifWidget` sets
+  `hexpand/vexpand=True` + `ContentFit.COVER` — right for a finished result
+  filling its pane, wrong for a progress thumbnail: it inflated to ~530px square
+  and dwarfed the result it previews. Clearing hexpand/vexpand, `halign=CENTER`,
+  AND `set_can_shrink(False)` were all insufficient inside this panel (probed
+  live: still 534x534 despite `halign=CENTER`, `can_shrink=False` and a 256x256
+  intrinsic). **A wrapper `Gtk.Box` with its own hard `set_size_request` is what
+  actually pins it** (probed: 220x220). The same config in a plain Box measured
+  256x256 — so the inflation comes from this panel's height-for-width
+  negotiation, not from the widget.
+- **`animatediff._build_cmd(preview_path=)`** is opt-in: `None` yields
+  byte-identical argv, so a vendored runner predating the flag is unaffected.
+
+**Verified on real Blackhole under a gozer lease** (`--exact 0000:01:00.0`, the
+healthy board — chip 3 on ...924055 has the ARC-NOC fault in
+[[reference_qb2_card924055_fragility]]): 9/9 preview lines, 11.0s total
+(2.8s/frame), device closed cleanly, chips released and reset. The koi are
+clearly recognisable in the step-9 preview, in the same positions as the final
+VAE decode — the latent proxy is genuinely informative, not just "some
+structure". Also verified on CPU (~3% overhead, 105.7s vs 102.5s).
+
+- **The preview line never reached the panel (v0.99.0).** Found by a pre-PR
+  review, not by a test: `_run_one` and `_run_multi_chip` both forward only
+  stdout lines matching a keyword allow-list (`"Frame"`, `"Step"`, `"Loading"`,
+  `"Error"`, ...). `PREVIEW: 7/9 /path.gif` matches NONE of them, so every
+  preview line was written to the run log and dropped. The runner emitted them
+  correctly and `CreateResultPanel` rendered them correctly; the two were never
+  connected, and the feature was inert end to end. **The earlier "verified end
+  to end" claim was too broad** — both ends were tested, the middle never was.
+  Both drains now allow `line.startswith("PREVIEW:")`, guarded by a test that
+  *evaluates each drain's actual filter condition* against a real preview line,
+  plus a control asserting the allow-list still rejects ordinary chatter.
+- **The Video segment lights while AnimateDiff runs (v0.99.0).** AnimateDiff has
+  no `SERVERS` entry, so the service reports Video OFF for the whole generation
+  — true, and misleading. `_StatusBar.set_segment_busy(seg, busy, what)` +
+  `_seg_busy` overrides an OFF snapshot, in the same shape as `_seg_sticky_error`.
+  Deliberately **not** `●`: that glyph means "a server is up and can take work",
+  and nothing is served here, so it uses `◉` (`main_window._BUSY_GLYPH`) in the
+  same `@tt_success` green — live at a glance, without claiming a server exists;
+  the tooltip reads `Video: AnimateDiff generating (local, no server)`. A real
+  server going READY clears the override (better information wins); every other
+  snapshot state leaves it standing. Lit at the `AnimateDiffGenerationWorker`
+  construction — the one site that knows it is AnimateDiff specifically — and
+  cleared by `_clear_local_busy()` on **every** terminal path (bail-out, both
+  finished paths, error), because a light that outlives its job is worse than no
+  light. Both helpers are fail-soft: a status-bar problem must never interfere
+  with generation.
+  - **Gotcha:** `_seg_busy`/`_seg_sticky_error` must be initialised BEFORE the
+    segment-construction loop — `_apply_segment_tooltip` runs inside it and
+    reads both. Also: the `busy` CSS comment initially used em-dashes, which
+    broke `_CSS`'s `b"""` literal (`SyntaxError: bytes can only contain ASCII`)
+    — the ASCII-only rule for that block is real and easy to trip.
+
+**Noted, not fixed:** the TTNN path runs `--steps 8` as **9** loop iterations
+(previews report `1/9`..`9/9`). The line honestly reports what the loop reports;
+the off-by-one is in `generate_frames_temporal`, pre-existing and out of scope.
+`.venv/` is untracked and un-gitignored in tt-animatediff, so
+`git add -A` there tries to stage the whole virtualenv.
+
+- **The elapsed suffix corrupted the preview path (v0.100.1).** Reported as
+  "ran a generation but didn't see the progress component". `worker.py`'s
+  `_progress_fwd` appends `"  ({elapsed}s)"` to EVERY message it forwards —
+  correct for human status text, corrupting for a machine-readable one. The
+  panel's path group runs to end-of-line, so it captured
+  `/run/preview_chip0.gif  (47s)`, `Path(...).exists()` was False, and the
+  missing-file guard dropped every preview. **Nothing appeared and nothing
+  errored** — the guard did exactly what it was written to do.
+  New module-level `worker.is_machine_readable_progress(msg)` (matches
+  `PREVIEW:` with or without a `chipN:` prefix); `_progress_fwd` forwards those
+  verbatim and returns BEFORE decorating. Human status keeps its elapsed hint.
+  Tests pin the classification AND the wiring order — the arithmetic test alone
+  would have passed against the bug.
+  **This was the THIRD silent break in the same pipe** (allow-list filter,
+  stdout buffering, now this). Each component was correct in isolation and each
+  hop transformed the line a little; only the composition was wrong. Diagnosis
+  that worked, and would have worked all three times: read the per-chip run log
+  (`~/.local/share/tt-local-generator/logs/animatediff/run_*_chipN.log`) to
+  confirm the runner emitted, then replay those exact lines through a real
+  `CreateResultPanel`. `create_view` now debug-logs a missing preview path once
+  per path so the next mismatch leaves a trace.
+
+- **All four chips are tracked now (v0.100.0).** The first cut previewed only
+  chip 0 — a quarter of the animation. Each chip now gets its OWN rolling
+  preview file (`_multichip_cmds(preview_path_for_chip=)`; sharing one path
+  would have four processes overwrite each other every step, showing whichever
+  wrote last). `CreateResultPanel` keys `_preview_paths` by chip and renders a
+  `Gtk.FlowBox` grid, 2 across, so the QB2 case is a 2x2 square.
+  - **Tiles are held in CHIP order, not arrival order** (`_preview_paths` is
+    re-sorted on every insert): chips report at their own pace, so arrival order
+    is arbitrary and tiles would otherwise reshuffle mid-run.
+  - **The headline reports the SLOWEST chip** (`min` over `_preview_steps`). A
+    run finishes when the last chip does; reporting the fastest overstated
+    progress — the same class of overclaim as the aggregate status dot.
+  - Tiles shrink to `_PREVIEW_H_MULTI` (140px) when there is more than one;
+    four 220px tiles would overflow the result column. A single-chip run keeps
+    the full 220px and gets NO "chip 0" caption — captioning it would invent a
+    distinction that isn't there.
+  - Composited as GTK widgets, deliberately not as pixels: each tile keeps
+    animating natively, and a per-chip label is honest about them being separate
+    segments rather than one image.
+
+## Status bar by function + inline video in Create (v0.97.0)
+
+Two user-reported bugs, one shared theme: a surface that reported something
+other than what was actually true.
+
+- **The status bar is four per-FUNCTION segments now, not one aggregate dot**
+  (`app/status_segments.py` + `_StatusBar` in `main_window.py`). The report:
+  *"it showed when a model was being started but stopped showing updates after
+  I closed the Servers overlay. now it reports a model being ready, but it's
+  just the prompt gen being ready."* Both halves were the SAME root cause, and
+  the Servers overlay was coincidental, not causal: `_render_status_snapshot`
+  folded every `SERVERS` key into ONE state (`READY > STARTING > ERROR > OFF`),
+  and `_autostart_prompt_server` brings the CPU-only prompt-server up within
+  seconds of launch — so (a) the aggregate was permanently READY and the bar
+  read "ready" forever, and (b) `update_starting()`'s elapsed timer was stomped
+  by the very next poll's `update_server(True, "ready")`, which is what "stopped
+  showing updates" was. Now: `● Prompt  ○ Image  ● Video  ● Art LLM`, each
+  resolved independently, so no function can speak for another.
+  - **`app/status_segments.py`** (GTK-free, unit-tested — same shape as
+    `ready_to_run.py`): the `SEGMENTS` table + `segment_states(snap,
+    artgen_detected=)`. `animate` folds into **Video** (it IS video, per the
+    v0.61.0 "Video is Video" merge); `animatediff` is deliberately NOT a
+    segment (no `SERVERS` entry — no live service state to report; its popover
+    row is still owned by `_check_animatediff_hardware`). The
+    `running_artgen_model()` override for an unregistered chat model is folded
+    into the `artgen` segment so the bar can't disagree with CreateView's own
+    "(detected)" entry.
+  - **State is a SHAPE as well as a colour** (`● ◐ ○ ✕`, mirroring CreateView's
+    `◌/◐/●` model-dot convention) so the bar reads without relying on hue.
+    "starting" is the docs-site semantic yellow `#F6BC42`, NOT `@tt_accent` —
+    the accent teal `#4FD1C5` and `@tt_success` `#27AE60` are indistinguishable
+    at 9px, which defeats an at-a-glance bar (caught by screenshotting it, not
+    by a test).
+  - **The elapsed timer is per-segment** and only a STARTING segment carries
+    one (`Video 1:23`); the phase word from the log tail goes to the segment's
+    **tooltip** via `set_phase`, never the visible label, so a chatty startup
+    phase can't widen the bar. One shared 1 s source, started/stopped by
+    `_sync_segment_timer()`; the clock resets ONLY on the transition INTO
+    starting — resetting on every repaint is exactly how the retired
+    `update_starting()` froze the counter at 0:00.
+  - **Removed:** `update_server`/`update_starting`/`update_error`/`_set_srv_dot`
+    /`_srv_dot`/`_srv_lbl`/`_status_agg_prev`. `_on_start_server` now lights the
+    resolved segment optimistically via
+    `status_segments.segment_for_server_key(key)` -> `mark_starting()` (instant
+    click feedback; `note_starting()` makes the next snapshot agree);
+    `_on_stop_server` paints nothing (the retired aggregate literally painted a
+    STOP as "starting"). The capability popover, `update_capability`, and the
+    queue/disk/chip segments are untouched — the bar is the glance, the popover
+    is the detail.
+  - **`_log_tail_stop`/"Server ready" now hang off `media_ready`**, not the
+    aggregate — the auto-started prompt-server used to kill the log tail of a
+    video launch that was still in progress.
+
+- **Shared-port STARTING inference fixed (`model_status.py::_tick`).** Exposed,
+  not caused, by the bar above: servers here are NOT one-per-port — every media
+  model is the SAME port-8000 container (artgen models share 8002), only one
+  running at a time. So while Wan2.2 was healthy, `flux`'s probe found :8000
+  open, its own health check failed (wrong runner), and `_resolve` rule 3 read
+  that as "flux is launching" — **permanently**. The aggregate hid it; the new
+  bar rendered it as a live `◐ Image 4:32` while nothing was starting (seen in
+  the first verification screenshot). Fix: a new `_endpoint_of(key)` +
+  `owned_endpoints` pass drops the probe result for any key whose `(host, port)`
+  a DIFFERENT healthy server already answers on. Only the INFERENCE is
+  suppressed — `self._starting` is consulted first by `_resolve`, so a launch
+  we actually started still reports STARTING, and a genuinely-listening-but-not-
+  yet-healthy server with no healthy owner still infers STARTING as before.
+
+- **A generated video PLAYS in the Create result panel** (`create_view.py`).
+  The report: *"after generating a video, the video doesn't play in the
+  resultant box. I can go to library and watch it play."* Not a wiring failure
+  — `_build_artifact_widget`'s `kind == "video"` branch never built a player at
+  all. It returned a static `Gtk.Picture` of `thumbnail_path`, an explicit
+  unfinished v1 placeholder whose own comment said so ("a real inline player is
+  a reasonable follow-up **once this panel is actually wired in**") — written
+  before the panel was wired into Create, and never revisited after it was. The
+  `.gif` branch beside it already animated, which is why AnimateDiff results
+  looked fine and only `.mp4` was dead.
+  - New `_make_video_player(path)`/`_release_video()` mirror
+    `DetailPanel.show_record`'s proven recipe: `Gtk.Video` +
+    **`set_autoplay(True)` AND `set_loop(True)` together** — `set_loop` only
+    actually loops while GTK drives playback; manually driving
+    `get_media_stream().play()` bypasses GTK's `notify::ended` -> seek(0) ->
+    play() restart (CLAUDE.md's "Video hover / looping" note). Same
+    `_USE_SYSTEM_PLAYER` macOS split (`GstPlayer` — note its API is `close()`,
+    not `stop()`), degrading to the OLD poster rather than a blank video frame
+    when gtk4paintablesink is absent.
+  - **`_clear_current()` calls `_release_video()`** (pause the stream, then
+    `set_file(None)` to start pipeline teardown immediately, mirroring
+    `DetailPanel.clear()`) so swapping results never leaves a GStreamer
+    pipeline decoding — and its audio playing — behind the new one.
+  - `tests/test_create_result_panel.py::test_video_record_still_uses_static_poster`
+    pinned the OLD behaviour; its premise ("explicitly OUT of scope for **this**
+    fix") was scoped to the artgen-showcase task, not a claim that a poster was
+    correct forever. Replaced by five tests (real player / autoplay+loop /
+    points at the artifact not the thumbnail / missing file still degrades /
+    teardown on swap).
+
+- **The Art LLM segment lit off the PROMPT model (v0.97.1).** Taylor: *"the art
+  LLM appears lit when I don't think we have that model running. is it re-using
+  the prompt model?"* Yes — and it was THE SAME BUG as the original report,
+  reintroduced one layer up by carrying the old aggregate's `artgen_model is not
+  None` override across verbatim. `artgen.detect_artgen_endpoint()` falls back
+  to the tiny prompt-gen server (Qwen3-0.6B, :8001) **last** by design, so
+  `running_artgen_model()` is non-None whenever the auto-started prompt server
+  is alive; `match_model_id` even resolves it to `matched_key="prompt-server"`.
+  Verified live on the box: only :8001 was listening, and detection returned
+  `Qwen/Qwen3-0.6B @ :8001 -> prompt-server`. Fix: new pure
+  `status_segments.detected_model_is_artgen(info)` — a detection counts for Art
+  LLM only when it isn't a model another segment already owns (`matched_key` ->
+  `segment_for_server_key(...) == "artgen"`; `matched_key is None` -> genuinely
+  foreign UNLESS its URL is the prompt server's own port, covering a prompt
+  server that reports an unrecognised id). `segment_states` now takes
+  `artgen_model=` (the `ArtgenModelInfo`) instead of a bare bool, so the policy
+  lives in the pure, testable module. **The capability popover's "Generative
+  art" row had the identical pre-existing flaw** (`elif cap == "artgen" and
+  artgen_model is not None` -> "Qwen/Qwen3-0.6B (detected)"); both surfaces now
+  read ONE `artgen_detected` value computed once in `_render_status_snapshot`,
+  so they cannot disagree.
+
+- **Copilot PR#26 review (v0.97.2) — three follow-ups, all the same theme.**
+  (a) `create_view._make_video_player`'s macOS branch checked `GstPlayer
+  .available` but ignored `load()`'s bool. `.available` only reports that
+  gtk4paintablesink was created; `load()` fails independently when `playbin`
+  can't be made — so a failed load still returned a widget, turning the poster
+  fallback that branch exists to preserve into a blank frame. Now checks both,
+  `close()`s the dead player, and falls through to the poster; the GstPlayer
+  widget also gets `_RESULT_VIDEO_H` for parity with the `Gtk.Video` path.
+  (b) `_StatusBar.mark_error` was erased by the next poll, because
+  `update_segments()` applies the snapshot unconditionally. New
+  `_seg_sticky_error` set: a LOCALLY observed failure (a start script we
+  watched exit non-zero) outlives snapshots until the segment is genuinely
+  READY or the user retries (`mark_starting` clears it). A snapshot-sourced
+  ERROR is deliberately NOT sticky — it's just the current state.
+  (c) `_on_start_server`'s failure branch now calls `note_stopping(server_key)`.
+  `_resolve` reports STARTING while `starting_at` is set and within
+  `start_timeout` (180 s), so a dead launch showed a ticking clock for three
+  minutes — and that stale STARTING is exactly what overwrote (b). The two fix
+  one bug from both ends: (c) stops the false STARTING, (b) keeps the real
+  failure visible (without (b), (c) alone resolves the segment to OFF, which
+  still erases the error).
+
+**Verification note:** the bar was checked by screenshotting the real app under
+Xvfb, which is what caught both the phantom "Image starting" and the
+indistinguishable starting colour — neither was visible from a green test run.
+`GDK_BACKEND=x11` + `env -u WAYLAND_DISPLAY` is REQUIRED for that: this box is a
+Plasma **Wayland** session, so GTK4 ignores `DISPLAY=:N` and opens a real window
+on Taylor's actual desktop instead (done twice by accident before noticing).
+The yellow "starting" colour is CSS-verified only — no launch was in flight
+during the final screenshot.
+
 ## PR#24 review round 2 + AnimateDiff clean-install + media (v0.95.0–v0.96.1)
 
 - **v0.96.1 — Copilot PR#24 re-review.** (a) `demo_seed`: when `--db` is passed

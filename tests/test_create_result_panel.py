@@ -434,16 +434,76 @@ def test_gif_record_missing_file_degrades_to_placeholder_no_crash(tmp_path):
     assert isinstance(widget, Gtk.Label)
 
 
-def test_video_record_still_uses_static_poster(tmp_path):
-    """Video (.mp4) is explicitly OUT of scope for this fix — it keeps the
-    existing static-poster/placeholder behavior."""
+def test_video_record_gets_a_real_inline_player(tmp_path):
+    """A generated .mp4 must PLAY in the result panel, not show a poster.
+
+    This branch used to return a static `Gtk.Picture` of the thumbnail — an
+    explicit v1 placeholder from before the panel was wired into Create ("a
+    real inline player is a reasonable follow-up once this panel is actually
+    wired in"). The user's report: the video plays in the Library but not in
+    the box it was just generated into.
+    """
     from artgen_gallery import _AnimatedGifWidget
     p = cv.CreateResultPanel()
     rec = _rec(tmp_path, kind="video")
     widget = p._build_artifact_widget(rec)
     assert not isinstance(widget, _AnimatedGifWidget)
-    # Static poster: a Gtk.Picture pointed at the thumbnail (unchanged).
-    assert isinstance(widget, Gtk.Picture)
+    assert isinstance(widget, Gtk.Video), (
+        "an .mp4 result must render in a real player container, not a poster"
+    )
+
+
+def test_video_player_autoplays_and_loops(tmp_path):
+    """The recipe proven by `DetailPanel.show_record`'s Linux branch.
+
+    `set_loop(True)` only actually loops when GTK drives playback — i.e. with
+    autoplay on. Manually driving `get_media_stream().play()` bypasses GTK's
+    `notify::ended` -> seek(0) -> play() restart (see CLAUDE.md's "Video hover
+    / looping" note), which is why both flags belong together.
+    """
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="video")
+    widget = p._build_artifact_widget(rec)
+    assert widget.get_autoplay() is True
+    assert widget.get_loop() is True
+
+
+def test_video_player_points_at_the_artifact_not_the_thumbnail(tmp_path):
+    p = cv.CreateResultPanel()
+    rec = _rec(tmp_path, kind="video")
+    widget = p._build_artifact_widget(rec)
+    gfile = widget.get_file()
+    assert gfile is not None
+    assert gfile.get_path() == rec.media_file_path
+    assert gfile.get_path().endswith(".mp4")
+
+
+def test_missing_video_file_still_degrades_to_a_placeholder(tmp_path):
+    """No player for a path that isn't on disk — an honest label instead."""
+    from history_store import GenerationRecord
+    rec = GenerationRecord(
+        id="gone", prompt="a flying car", negative_prompt="",
+        num_inference_steps=20, seed=7,
+        video_path=str(tmp_path / "never-written.mp4"),
+        thumbnail_path="", created_at="2026-08-24T00:00:00",
+    )
+    p = cv.CreateResultPanel()
+    widget = p._build_artifact_widget(rec)
+    assert not isinstance(widget, Gtk.Video)
+    assert isinstance(widget, Gtk.Label)
+
+
+def test_switching_result_tears_down_the_video_player(tmp_path):
+    """A swapped-out player must stop, not keep a GStreamer pipeline (and its
+    audio) running behind the next result. Mirrors `DetailPanel.clear()`."""
+    p = cv.CreateResultPanel()
+    p.show_finished(_rec(tmp_path, kind="video"))
+    player = p._result_video
+    assert isinstance(player, Gtk.Video)
+
+    p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._result_video is None
+    assert player.get_file() is None, "the old player still holds its file open"
 
 
 def test_clicking_a_recent_rerenders_it(tmp_path):
@@ -679,3 +739,276 @@ def test_set_queue_rerender_replaces_previous_rows():
     assert p.queue_count() == 1
     row = p._queue_box.get_first_child()
     assert row.get_next_sibling() is None  # exactly one row left
+
+
+# ── macOS GstPlayer path (Copilot PR#26 review) ─────────────────────────────
+#
+# `GstPlayer.available` only reports that gtk4paintablesink was created; `load()`
+# independently returns False when playbin can't be made. Ignoring that return
+# handed back a widget that renders nothing — regressing the poster fallback
+# this branch exists to preserve into a blank frame.
+
+class _FakeGstPlayer:
+    """Stand-in for `gst_player.GstPlayer` with controllable availability."""
+
+    instances: list = []
+
+    def __init__(self, muted=False, available=True, load_ok=True):
+        self.available = available
+        self._load_ok = load_ok
+        self.closed = False
+        self.played = False
+        self.widget = Gtk.Picture()
+        _FakeGstPlayer.instances.append(self)
+
+    def load(self, path):
+        return self._load_ok
+
+    def play(self):
+        self.played = True
+
+    def set_on_eos(self, cb):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture()
+def fake_gst(monkeypatch):
+    """Force the macOS branch and inject a fake GstPlayer module."""
+    import types
+    _FakeGstPlayer.instances = []
+    monkeypatch.setattr(cv, "_USE_SYSTEM_PLAYER", True)
+    mod = types.ModuleType("gst_player")
+    mod.GstPlayer = _FakeGstPlayer
+    monkeypatch.setitem(sys.modules, "gst_player", mod)
+    return _FakeGstPlayer
+
+
+def test_macos_player_used_when_load_succeeds(tmp_path, fake_gst):
+    p = cv.CreateResultPanel()
+    widget = p._build_artifact_widget(_rec(tmp_path, kind="video"))
+    assert fake_gst.instances, "the macOS branch should have built a player"
+    player = fake_gst.instances[0]
+    assert widget is player.widget
+    assert player.played is True
+
+
+def test_macos_load_failure_degrades_to_the_poster(tmp_path, fake_gst):
+    """A failed load must fall back to the thumbnail, not a blank frame."""
+    orig = _FakeGstPlayer.__init__
+    monkey = lambda self, muted=False: orig(self, muted=muted, load_ok=False)
+    _FakeGstPlayer.__init__ = monkey
+    try:
+        p = cv.CreateResultPanel()
+        rec = _rec(tmp_path, kind="video")
+        widget = p._build_artifact_widget(rec)
+        assert isinstance(widget, Gtk.Picture)
+        assert widget is not fake_gst.instances[0].widget, "blank player widget returned"
+        assert fake_gst.instances[0].closed is True, "failed player must be closed"
+    finally:
+        _FakeGstPlayer.__init__ = orig
+
+
+def test_macos_player_is_height_capped_like_the_gtk_video_path(tmp_path, fake_gst):
+    """Parity with the Gtk.Video branch — an odd aspect ratio must not push the
+    recents strip off-screen."""
+    p = cv.CreateResultPanel()
+    p._build_artifact_widget(_rec(tmp_path, kind="video"))
+    _w, h = fake_gst.instances[0].widget.get_size_request()
+    assert h == cv._RESULT_VIDEO_H
+
+
+# ── Live latent previews during a generation ────────────────────────────────
+#
+# tt-animatediff's runner emits `PREVIEW: <step>/<total> <path>` as denoising
+# proceeds, rewriting one rolling GIF. The pending view shows it forming, so
+# you watch the thing being made instead of a spinner. The preview is CPU-side
+# in the runner (no VAE, no device work), so it costs the generation nothing.
+
+def _preview_line(path, step=3, total=25):
+    return f"PREVIEW: {step}/{total} {path}"
+
+
+def _write_gif(path):
+    _write_real_gif(Path(path))
+    return str(path)
+
+
+def test_preview_line_is_not_shown_as_status_text(tmp_path):
+    """The raw marker line must never land in the status label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert "PREVIEW:" not in p._pending_status_lbl.get_label()
+
+
+def test_preview_line_reports_step_progress_in_the_status(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif, step=7, total=25))
+    assert "7/25" in p._pending_status_lbl.get_label()
+
+
+def test_preview_renders_a_widget_in_the_pending_view(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    assert p._preview_widget is not None
+    assert p._preview_widget.get_parent() is not None, "must be mounted, not orphaned"
+
+
+def test_preview_survives_a_return_to_pending(tmp_path):
+    """Viewing a recent mid-generation and coming back must restore the preview,
+    the same way `_chip_status` restores the per-chip rows."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(gif))
+    p._render_pending()  # the return path
+    assert p._preview_widget is not None
+    assert p._preview_paths[cv._NO_CHIP] == gif
+
+
+def test_preview_is_reset_between_jobs(tmp_path):
+    """A new job must not open showing the previous job's last preview."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_paths
+    p.show_pending("second", None)
+    assert p._preview_paths == {}
+    assert p._preview_widget is None
+
+
+def test_missing_preview_file_is_ignored(tmp_path):
+    """A line can arrive before/after the file exists — never crash, never
+    blank out a preview that is already showing."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    good = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(_preview_line(good))
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))  # must not raise
+    assert p._preview_paths[cv._NO_CHIP] == good, (
+        "a bad line must not drop the good preview"
+    )
+
+
+def test_missing_preview_logged_set_resets_between_jobs(tmp_path):
+    """`_preview_missing_logged` must reset with the rest of the per-job
+    preview state, or it grows without bound across jobs and silently
+    suppresses the "missing preview path" debug log for a path that recurs
+    in a later job."""
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    p.show_progress(_preview_line(str(tmp_path / "gone.gif")))
+    assert p._preview_missing_logged
+    p.show_pending("second", None)
+    assert p._preview_missing_logged == set()
+
+
+def test_preview_ignored_once_the_job_is_no_longer_active(tmp_path):
+    """Mirrors show_progress's existing guard — a straggler must not resurrect
+    anything after the result has landed."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_finished(_rec(tmp_path, kind="image"))
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    assert p._preview_paths == {}
+
+
+def test_chip_prefixed_preview_is_keyed_by_chip(tmp_path):
+    """Multi-chip runs prefix every line `chipN:`. Each chip previews its own
+    segment and they are shown together — an earlier version showed only chip 0,
+    which meant watching a quarter of the work."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "preview.gif")
+    p.show_progress(f"chip0: {_preview_line(gif)}")
+    assert p._preview_paths == {0: gif}
+
+
+def test_a_non_zero_chip_is_shown_too(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    other = _write_gif(tmp_path / "other.gif")
+    p.show_progress(f"chip2: {_preview_line(other)}")
+    assert p._preview_paths == {2: other}
+
+
+def test_finished_result_clears_the_preview(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "preview.gif")))
+    p.show_finished(_rec(tmp_path, kind="image"))
+    assert p._preview_widget is None
+
+
+# ── Multi-chip: every chip's segment forming at once ────────────────────────
+#
+# A multi-chip AnimateDiff run splits the animation into one segment per chip,
+# each denoising independently. Showing only chip 0 meant watching a quarter of
+# the work and guessing about the rest. Each chip now writes its own preview and
+# they render together, in chip order.
+
+def test_multi_chip_previews_render_one_tile_per_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in range(4):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert sorted(p._preview_paths) == [0, 1, 2, 3]
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_tiles_stay_in_chip_order_regardless_of_arrival(tmp_path):
+    """Chips finish steps at their own pace, so lines interleave arbitrarily —
+    the tiles must not reshuffle as they arrive."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    for i in (2, 0, 3, 1):
+        gif = _write_gif(tmp_path / f"c{i}.gif")
+        p.show_progress(f"chip{i}: PREVIEW: 3/9 {gif}")
+    assert list(p._preview_paths) == sorted(p._preview_paths)
+
+
+def test_a_later_step_replaces_that_chips_tile_not_adds_one(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    gif = _write_gif(tmp_path / "c0.gif")
+    p.show_progress(f"chip0: PREVIEW: 1/9 {gif}")
+    p.show_progress(f"chip0: PREVIEW: 5/9 {gif}")
+    assert list(p._preview_paths) == [0]
+
+
+def test_single_chip_run_still_shows_one_untitled_preview(tmp_path):
+    """A plain run has no chip prefix and must not grow a "chip 0" label."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(_preview_line(_write_gif(tmp_path / "p.gif")))
+    assert list(p._preview_paths) == [-1], "no-chip runs use the sentinel key"
+    assert p._preview_widget is not None
+
+
+def test_multi_chip_status_reports_the_slowest_chip(tmp_path):
+    """With chips at different steps, the headline should not claim the fastest
+    one's progress — the run is done when the LAST chip is."""
+    p = cv.CreateResultPanel()
+    p.show_pending("a koi pond", None)
+    p.show_progress(f"chip0: PREVIEW: 8/9 {_write_gif(tmp_path / 'c0.gif')}")
+    p.show_progress(f"chip1: PREVIEW: 3/9 {_write_gif(tmp_path / 'c1.gif')}")
+    assert "3/9" in p._pending_status_lbl.get_label()
+
+
+def test_preview_reset_clears_every_chip(tmp_path):
+    p = cv.CreateResultPanel()
+    p.show_pending("first", None)
+    for i in range(2):
+        p.show_progress(f"chip{i}: PREVIEW: 1/9 {_write_gif(tmp_path / f'c{i}.gif')}")
+    p.show_pending("second", None)
+    assert p._preview_paths == {}
+    assert p._preview_widget is None

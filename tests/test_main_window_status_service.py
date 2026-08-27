@@ -85,3 +85,26 @@ def test_on_start_stop_server_resolve_and_note_keys():
     assert "_server_key_for_script(" in body2
     assert "self._status_service.note_stopping(server_key)" in body2
 
+
+
+def test_failed_start_script_clears_the_starting_bookkeeping():
+    """A start script that exits non-zero must drop `note_starting`.
+
+    `ModelStatusService._resolve` reports STARTING for as long as
+    `starting_at` is set and within `start_timeout` (180 s by default). Leaving
+    the bookkeeping in place after a KNOWN failure meant the per-function
+    status bar showed a ticking "starting" clock for three minutes on a server
+    that had already failed -- and it also overwrote the failure state painted
+    by `mark_error`, hiding it entirely. (Copilot PR#26 review.)
+    """
+    start = _SRC.index("def _on_start_server(self, model_source: str) -> None:")
+    end = _SRC.index("\n    def ", start + 1)
+    body = _SRC[start:end]
+
+    fail = body.index("if proc.returncode != 0:")
+    nxt = body.index("else:", fail)
+    fail_branch = body[fail:nxt]
+    assert "note_stopping(server_key)" in fail_branch, (
+        "the non-zero-exit branch must clear the starting bookkeeping"
+    )
+    assert "mark_error" in fail_branch, "...and still paint the failure"

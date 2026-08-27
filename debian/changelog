@@ -1,3 +1,179 @@
+tt-local-generator (0.100.2) noble; urgency=medium
+
+  * fix(create): `_reset_preview()` now clears `_preview_missing_logged` along
+    with the rest of the per-job preview state. Copilot PR#27 review: the set
+    was left to grow without bound across jobs, and once a path had been
+    logged once it stayed suppressed forever - so a path recurring in a later
+    job (e.g. a reused preview filename) silently lost its "missing preview
+    path" debug trace.
+  * docs(create): the `_PREVIEW_LINE_RE` and `_consume_preview_line` comments
+    still described the pre-v0.100.0 "only chip 0 drives the preview"
+    behavior. Updated to describe the current one-preview-file-per-chip
+    behavior (Copilot PR#27 review).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 27 Aug 2026 00:00:00 -0700
+
+tt-local-generator (0.100.1) noble; urgency=medium
+
+  * fix(create): live previews never appeared in a real generation. The
+    AnimateDiff worker's progress forwarder appends an elapsed hint - "  (47s)"
+    - to every message it passes along. That is right for human status text and
+    wrong for a machine-readable line: it turned
+    "PREVIEW: 3/21 /run/preview_chip0.gif" into
+    "... /preview_chip0.gif  (47s)", so the panel parsed the suffix as part of
+    the path, the file failed its exists() check, and every preview was dropped.
+    Nothing appeared and nothing errored, because the missing-file guard did
+    exactly what it was written to do. Preview lines are now forwarded verbatim
+    via the new worker.is_machine_readable_progress(); human status keeps its
+    elapsed hint.
+  * fix(create): a preview path that does not exist is now logged once per path
+    at debug level. The guard is still fail-soft - a line can legitimately
+    outlive its file - but a whole generation showing no previews should leave
+    a trace rather than being silently correct.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:10:34 -0700
+
+tt-local-generator (0.100.0) noble; urgency=medium
+
+  * feat(create): a multi-chip AnimateDiff run now previews EVERY chip, not just
+    chip 0. Each chip denoises its own segment, so watching one was watching a
+    quarter of the work. Each chip gets its own rolling preview file (sharing
+    one path would have them overwrite each other every step), and the tiles
+    render as a grid - 2 across, so the 4-chip QB2 case is a square - labelled
+    and held in chip order, since chips report at their own pace and the tiles
+    must not reshuffle mid-run.
+  * fix(create): the headline step count now reports the SLOWEST chip. A run
+    finishes when the last chip does, so showing the fastest chip's progress
+    overstated how far along the generation was.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 09:00:17 -0700
+
+tt-local-generator (0.99.1) noble; urgency=medium
+
+  * chore(vendor): bump the tt-animatediff submodule v0.9.0 -> v0.10.0, the
+    release that adds --preview-path. Without this the flag does not exist in
+    the vendored runner, so the live-preview feature has nothing to talk to.
+  * build: debian/rules now also fails loudly when
+    vendor/tt-animatediff/animatediff_ttnn/preview.py is missing from the
+    staged tree. The runner's import of it is fail-soft, so its absence would
+    not break generation - it would silently drop the previews, which is worse.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 26 Aug 2026 08:54:29 -0700
+
+tt-local-generator (0.99.0) noble; urgency=medium
+
+  * fix(create): live AnimateDiff previews actually reach the panel. Both stdout
+    drains in the animatediff generator forward only lines matching a keyword
+    allow-list ("Frame", "Step", "Loading", "Error", ...); a
+    "PREVIEW: <step>/<total> <path>" line matches none of them, so every preview
+    was written to the run log and then dropped. The runner emitted correctly
+    and the panel rendered correctly, but nothing connected them - the feature
+    was inert end to end.
+  * feat(status bar): the Video indicator now lights while AnimateDiff is
+    generating. AnimateDiff is a local subprocess with no managed server, so
+    ModelStatusService correctly reports Video as off for the whole run - true,
+    but misleading when a video is visibly being made. It lights in the same
+    success green as a ready server but with its own glyph, and a tooltip
+    naming what is running: a filled dot means "a server is up and can take
+    work", and here there is no server at all.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:36:29 -0700
+
+tt-local-generator (0.98.0) noble; urgency=medium
+
+  * feat(create): watch an AnimateDiff video form as it generates. The result
+    panel showed a spinner and a status line; it now shows the animation itself,
+    updating each denoising step, with "Denoising step N/M" beneath it. Driven
+    by tt-animatediff's runner, which emits a rolling latent-preview GIF and a
+    "PREVIEW: <step>/<total> <path>" line per step over the stdout channel the
+    panel already drains for per-chip progress.
+    The preview is CPU-side in the runner (3 of 4 latent channels mapped to RGB,
+    no VAE decode, no device work), so it costs the hardware pipeline nothing —
+    measured ~3% wall-clock on CPU and no measurable cost on Blackhole.
+    Multi-chip runs preview chip 0 only: each chip denoises its own segment, so
+    letting all four write the single rolling image would flicker between
+    unrelated latents.
+    Verified end to end on real Blackhole hardware (9/9 preview lines, 11.0s,
+    2.8s/frame) and on CPU.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 16:03:52 -0700
+
+tt-local-generator (0.97.2) noble; urgency=medium
+
+  * fix(create): the macOS inline-player path now checks `GstPlayer.load()`'s
+    return value, not just `.available`. `.available` reports only that
+    gtk4paintablesink was created; `load()` fails independently when playbin
+    can't be made — so a failed load still returned a widget, turning the
+    poster fallback that branch exists to preserve into a blank frame. The
+    failed player is now closed and the poster shown. The GstPlayer widget is
+    also height-capped to match the Gtk.Video path, so an odd aspect ratio
+    can't push the recents strip off-screen. (Copilot PR#26 review.)
+  * fix(status bar): a locally painted launch failure now survives the next
+    poll. `update_segments()` applied the snapshot unconditionally, so the
+    ERROR from a start script we watched exit non-zero was erased on the very
+    next tick, hiding the failure tooltip. It now sticks until the segment is
+    genuinely READY or the user starts it again. (Copilot PR#26 review.)
+  * fix(status bar): a start script exiting non-zero now clears the service's
+    starting bookkeeping. `_resolve` reports STARTING while `starting_at` is
+    set and within `start_timeout` (180 s), so a failed launch showed a ticking
+    "starting" clock for three minutes — and that stale STARTING is precisely
+    what overwrote the failure above. (Copilot PR#26 review.)
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 13:25:22 -0700
+
+tt-local-generator (0.97.1) noble; urgency=medium
+
+  * fix(status bar): the Art LLM indicator no longer lights up because the
+    prompt-gen model is running. `artgen.detect_artgen_endpoint()` deliberately
+    falls back to the tiny Qwen3-0.6B prompt server on :8001 as a last resort
+    (so Inspire keeps working with nothing else up), which makes
+    `running_artgen_model()` non-None whenever the auto-started prompt server is
+    alive — and v0.97.0 carried the old aggregate's "detected model => artgen is
+    ready" override across verbatim, so Art LLM lit off the PROMPT model. That
+    is the same "it's just the prompt gen being ready" report the by-function
+    bar exists to fix, one layer up. A detection now counts for Art LLM only
+    when it isn't a model another segment already owns
+    (`status_segments.detected_model_is_artgen`), which also covers the case
+    where the prompt server reports an id we don't recognise (matched_key None)
+    by checking its port. A genuinely foreign chat model still lights it.
+  * fix(status bar): the capability popover's "Generative art" row had the same
+    pre-existing flaw, claiming "Qwen/Qwen3-0.6B (detected)". Both surfaces are
+    now painted from ONE decision so they cannot disagree.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 25 Aug 2026 11:40:42 -0700
+
+tt-local-generator (0.97.0) noble; urgency=medium
+
+  * feat(status bar): the bottom bar now shows one indicator per FUNCTION —
+    "Prompt · Image · Video · Art LLM" — instead of a single aggregate dot.
+    Each carries its own state as a shape as well as a colour (● ready /
+    ◐ starting / ○ off / ✕ failed), with the model name and startup phase in
+    its tooltip and the existing capability popover unchanged behind a click.
+  * fix(status bar): the aggregate dot it replaces folded every server into one
+    READY > STARTING > ERROR > OFF state. Since the CPU-only prompt-server is
+    auto-started on launch and goes ready within seconds, the bar reported
+    "ready" for the entire session no matter what the media servers were doing,
+    and the next poll stomped the elapsed timer of any launch in flight — so a
+    server start appeared to stop updating partway through. Segments resolve
+    independently, so no function can speak for another one.
+  * fix(model status): an open port that a DIFFERENT, healthy server is already
+    answering on is no longer read as "this server is launching". Every media
+    model shares the one port-8000 container (artgen models share 8002), so
+    while Wan2.2 was healthy the Image key's probe found :8000 open, its own
+    health check failed, and the service inferred STARTING for it forever. The
+    old aggregate dot hid this; a per-function bar rendered it as "Image
+    starting... 4:32" while nothing was starting. A launch we actually started
+    is tracked separately, so genuine starts are unaffected.
+  * fix(create): a generated video now PLAYS in the result panel it was made
+    in. That branch rendered a static poster thumbnail — an unfinished v1
+    placeholder from before the panel was wired into Create — so an .mp4 sat
+    still in Create while the Library played it fine. It now builds a real
+    player (Gtk.Video with autoplay+loop, GstPlayer on macOS), torn down on
+    every state change so a swapped result never leaves a pipeline decoding
+    behind the new one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Mon, 24 Aug 2026 17:48:33 -0700
+
 tt-local-generator (0.96.4) noble; urgency=medium
 
   * fix(postinst): weight downloads no longer fail with permission errors on a

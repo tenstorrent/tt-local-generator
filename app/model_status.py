@@ -379,6 +379,29 @@ class ModelStatusService:
         finally:
             s.close()
 
+    @staticmethod
+    def _endpoint_of(key: str) -> "tuple | None":
+        """`(host, port)` this key's health check targets, or None if it has no
+        explicit port (nothing shareable to reason about).
+
+        Used to tell "my port is open because I'm launching" apart from "my port
+        is open because a different server is already serving on it" — see the
+        shared-port suppression in `_tick`.
+        """
+        import server_manager
+
+        try:
+            sdef = server_manager.SERVERS.get(key)
+            if sdef is None:
+                return None
+            u = urllib.parse.urlparse(sdef.health_url)
+            if not u.port:
+                return None
+            return (u.hostname or "127.0.0.1", u.port)
+        except Exception:
+            log.debug("endpoint parse failed for %r", key, exc_info=True)
+            return None
+
     def _safe_port_probe(self, key: str) -> bool:
         """Wraps the (possibly injected) `port_probe` callable so a bad probe
         — real or fake — can never raise out of `_tick()` and abort the whole
@@ -469,6 +492,30 @@ class ModelStatusService:
             healthy = health.get(key, False) or (key == matched)
             port_open = False if healthy else self._safe_port_probe(key)
             per_key[key] = (healthy, port_open)
+
+        # Suppress the shared-port STARTING inference.
+        #
+        # Servers are not one-per-port here: every media model (video/image/
+        # animate) is the SAME port-8000 container and only one runs at a time;
+        # the artgen chat models likewise share port 8002. So while Wan2.2 is
+        # healthy on :8000, `flux`'s probe finds :8000 open and its own health
+        # check fails (wrong runner) -- and `_resolve` rule 3 read that open
+        # port as "flux is launching", permanently.
+        #
+        # An open port that a DIFFERENT, healthy server is already answering on
+        # says nothing about THIS key, so drop the probe result for it. Only the
+        # inference is suppressed: a launch we actually started is recorded in
+        # `self._starting` and `_resolve` consults that first, so a genuine
+        # start still reports STARTING (and a genuinely-listening-but-not-yet-
+        # healthy server with no healthy owner still infers STARTING as before).
+        owned_endpoints = {
+            self._endpoint_of(key) for key, (healthy, _p) in per_key.items() if healthy
+        }
+        owned_endpoints.discard(None)
+        if owned_endpoints:
+            for key, (healthy, port_open) in list(per_key.items()):
+                if port_open and self._endpoint_of(key) in owned_endpoints:
+                    per_key[key] = (healthy, False)
 
         # -- state phase: lock held, no I/O -----------------------------
         # Only `self._starting`/`self._ready_at` (read+mutate),
