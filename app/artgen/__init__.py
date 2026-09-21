@@ -173,6 +173,53 @@ def _scan_ports() -> "list[int]":
     return list(_SCAN_PORT_RANGE)
 
 
+# ── tt-model-manager (tt-model CLI) discovery ─────────────────────────────────
+# Models served by the tt-model CLI (tt-model-manager) are docker containers
+# labelled `org.tenstorrent.tt-model`. They may be published on ANY host port
+# (the default is 20000, well outside the 8000-8020 sweep below), so a blind
+# port sweep would miss them. We discover them explicitly by asking docker for
+# every container carrying that label and reading its published host port.
+
+_TT_MODEL_LABEL = "org.tenstorrent.tt-model"
+
+
+def _tt_model_host_ports() -> "list[int]":
+    """Host ports of running tt-model-manager (tt-model CLI) containers.
+
+    Queries docker for containers labelled ``org.tenstorrent.tt-model`` and
+    returns the sorted set of host ports they publish. Returns an empty list
+    when docker is unavailable, no such container is running, or the output
+    cannot be parsed — discovery must never raise or block the caller.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("docker") is None:
+        return []
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--filter", f"label={_TT_MODEL_LABEL}",
+             "--format", "{{.Ports}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return []
+    if out.returncode != 0:
+        return []
+
+    ports = set()
+    for line in out.stdout.splitlines():
+        for part in line.split(","):
+            part = part.strip()
+            # Only published (host-reachable) ports carry a "->" mapping.
+            if "->" not in part:
+                continue
+            host_port = part.split("->", 1)[0].rsplit(":", 1)[-1]
+            if host_port.isdigit():
+                ports.add(int(host_port))
+    return sorted(ports)
+
+
 def detect_artgen_endpoint(
     preferred_url: str | None = None,
 ) -> "tuple[str, str] | tuple[None, None]":
@@ -181,11 +228,14 @@ def detect_artgen_endpoint(
     Resolution order:
       1. preferred_url  — explicit CLI/UI override
       2. dedicated artgen port (8002) — a model the app started itself
-      3. any OpenAI-compatible chat server discovered by sweeping local ports —
+      3. models served by tt-model-manager (the tt-model CLI) — discovered via
+         their docker label, so they are found on any port (their default is
+         20000, outside the sweep below)
+      4. any OpenAI-compatible chat server discovered by sweeping local ports —
          picks up models started outside the app on non-standard ports
-      4. prompt-gen server (8001, Qwen3-0.6B) — last-resort fallback
+      5. prompt-gen server (8001, Qwen3-0.6B) — last-resort fallback
 
-    The port sweep (step 3) means the app isn't precious about port numbers:
+    The port sweep (step 4) means the app isn't precious about port numbers:
     hardcoded ports matter only for servers *it* launches; a model started any
     other way is found wherever it happens to be listening. The tiny prompt-gen
     server is deliberately ranked last so a real chat model always wins over it
@@ -219,10 +269,12 @@ def detect_artgen_endpoint(
 
     _add(preferred_url)                                  # 1. explicit override
     _add(artgen_url)                                     # 2. dedicated artgen port
-    for port in _scan_ports():                           # 3. discovered chat servers
+    for port in _tt_model_host_ports():                  # 3. tt-model-manager models
+        _add(f"http://{host}:{port}")
+    for port in _scan_ports():                           # 4. blind port sweep
         if port not in exclude_ports:
             _add(f"http://{host}:{port}")
-    _add(prompt_url)                                     # 4. tiny fallback, last
+    _add(prompt_url)                                     # 5. tiny fallback, last
 
     # The explicit endpoints get the full timeout; the sweep uses a short one so
     # a run of closed/filtered ports can't stall generation for many seconds.

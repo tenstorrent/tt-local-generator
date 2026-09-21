@@ -30,6 +30,10 @@ def fake_servers(monkeypatch):
         return servers.get(base)
 
     monkeypatch.setattr(artgen, "detect_model", _fake_detect_model)
+    # Isolate from any real tt-model-manager containers on this host: by default
+    # no tt-model-manager model is "up" unless a test opts in (see the
+    # test_ttm_* tests, which override this with their own ports).
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [])
     return servers
 
 
@@ -96,3 +100,59 @@ def test_diffusion_port_not_used_for_chat(fake_servers):
     base_url, model_id = artgen.detect_artgen_endpoint()
 
     assert base_url == "http://localhost:8003"
+
+
+# ── tt-model-manager (tt-model CLI) discovery ─────────────────────────────────
+# These models are docker containers labelled org.tenstorrent.tt-model and may
+# live on ANY host port (default 20000, outside the 8000-8020 sweep). Discovery
+# must find them via the docker label, not the blind port sweep.
+
+
+def test_ttm_model_outside_sweep_range_is_found(fake_servers, monkeypatch):
+    """A tt-model-manager model on its default port (20000, outside the
+    8000-8020 sweep) must still be found via the docker-label discovery."""
+    fake_servers["http://localhost:20000"] = "Qwen/Qwen3.8-27B"
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:20000"
+    assert model_id == "Qwen/Qwen3.8-27B"
+
+
+def test_ttm_model_beats_blind_sweep_hit(fake_servers, monkeypatch):
+    """An explicitly-labelled tt-model-manager model is preferred over a
+    coincidental blind-sweep hit on a lower port."""
+    fake_servers["http://localhost:20000"] = "Qwen/Qwen3.8-27B"
+    fake_servers["http://localhost:8005"] = "some/other-chat-model"
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:20000"
+    assert model_id == "Qwen/Qwen3.8-27B"
+
+
+def test_dedicated_artgen_port_beats_ttm_model(fake_servers, monkeypatch):
+    """The app's own artgen server (8002) still outranks a tt-model-manager
+    model — the app's own launch is the strongest signal."""
+    fake_servers["http://localhost:8002"] = "Qwen3-8B"
+    fake_servers["http://localhost:20000"] = "Qwen/Qwen3.8-27B"
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:8002"
+    assert model_id == "Qwen3-8B"
+
+
+def test_ttm_model_in_sweep_range_still_found(fake_servers, monkeypatch):
+    """A tt-model-manager model that happens to sit inside the sweep range is
+    still found (and de-duplicated, not double-probed into a conflict)."""
+    fake_servers["http://localhost:8010"] = "Qwen/Qwen3.8-27B"
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [8010])
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:8010"
+    assert model_id == "Qwen/Qwen3.8-27B"

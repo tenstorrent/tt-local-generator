@@ -1233,12 +1233,20 @@ matter only for servers the *app* starts. For models started any other way it
 sweeps local ports (`_SCAN_PORT_RANGE`, override via `TTLG_ARTGEN_SCAN_PORTS`)
 for any OpenAI-compatible `/v1/models` responder.
 
-Resolution order: `preferred_url` → artgen (8002) → swept ports → prompt-gen
-(8001, tiny Qwen3-0.6B) **last**. The prompt-gen fallback is deliberately last
-so a real chat model always beats it — the original bug was a vLLM Llama-3.3-70B
-on 8003 losing to Qwen3-0.6B on 8001 because 8003 was never probed. The known
-diffusion port (8000) and the two explicit ports are excluded from the sweep.
-`mcp_server._make_call_fn` routes through the same function for consistency.
+Resolution order: `preferred_url` → artgen (8002) → **tt-model-manager models**
+→ swept ports → prompt-gen (8001, tiny Qwen3-0.6B) **last**. The prompt-gen
+fallback is deliberately last so a real chat model always beats it — the
+original bug was a vLLM Llama-3.3-70B on 8003 losing to Qwen3-0.6B on 8001
+because 8003 was never probed. The known diffusion port (8000) and the two
+explicit ports are excluded from the sweep. `mcp_server._make_call_fn` routes
+through the same function for consistency.
+
+**tt-model-manager models** (served by the `tt-model` CLI, e.g. a
+`Qwen/Qwen3.8-27B` vLLM container) are found by docker label, not the port
+sweep: `_tt_model_host_ports()` asks docker for every container labelled
+`org.tenstorrent.tt-model` and probes each published host port. This is what
+lets the app see a model on the tt-model default port (20000, outside the
+8000–8020 sweep) or any other port the blind sweep would miss.
 
 **Single source of truth for "is a model on".** The artgen panel's health dot
 (`ArtgenPanel._check_health_bg`) also calls `detect_artgen_endpoint()`, so the
