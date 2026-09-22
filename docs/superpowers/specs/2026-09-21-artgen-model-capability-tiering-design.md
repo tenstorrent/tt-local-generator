@@ -253,7 +253,51 @@ Pure-function unit tests, no live model required (mirrors the existing
   fake responses (including deliberately malformed ones, to exercise the
   fail-soft paths).
 
-## Section 6 — Backlog: other generators (audit, not implemented this pass)
+## Section 6 — Backlog: other generators
+
+**Update (2026-09-22):** this backlog was acted on and live-validated in the
+same PR (#28). Outcomes, in the order the audit ranked them:
+
+- **skyline: tried, REVERTED.** The recommended per-depth-layer split was
+  implemented and tested live against the real motivating model twice.
+  First attempt (max_tokens=1500/layer call) truncated every layer
+  mid-element — badly miscalibrated for "5-7 buildings x up to 8 windows
+  each" in one response. Second attempt (max_tokens=4096/layer) was worse,
+  not better: still invalid XML, this time from massive overproduction
+  (392 rects vs. ~155 in the single-call baseline at the same --density
+  high setting) — asked for one layer in isolation, without the whole-
+  image context, the model had no natural stopping cue for how many
+  buildings is enough and kept going until it ran out of budget again.
+  Both attempts were worse than the unmodified single-call prompt, which
+  was already valid and clean at --density high. Reverted in full;
+  `plugins/skyline/plugin.py` is untouched.
+- **landscape: kept, preventive.** No observed failure — the monolithic
+  prompt was live-tested clean at --mountains --clouds --stars before this
+  change too. Implemented the recommended per-layer split (background /
+  clouds / mountains, plus a locally-built deterministic ground rect) and
+  re-tested live at the same settings: still valid, no regression. Kept as
+  a defensible preventive change since it didn't make anything worse.
+- **constellation: kept, FIXES A REAL FAILURE.** `tt-ctl artgen
+  constellation --culture greek --stars 20 --lore` against the real model
+  reproducibly failed — response truncated mid-element (no `</svg>` at
+  all) at the CLI's flat 4096-token default, because up to 60 background
+  filler stars were eating the budget the 20 actual named stars needed.
+  Building those filler stars locally (zero creative content — uniformly
+  random dim dots) and giving the one remaining model call a budget that
+  scales with `star_count` fixed it: re-tested live at the same settings,
+  valid SVG, exactly 21 text labels (20 stars + 1 name), coherent lore.
+
+The lesson from skyline's revert, worth carrying forward: **splitting a
+single call into several doesn't uniformly help** — it removed the
+whole-image context that was apparently giving the model an implicit
+"how much is enough" signal for a pure enumerate-N-similar-items task.
+Constellation and landscape's splits worked because each split-out call
+still has a natural, self-contained stopping point (a fixed star_count, a
+fixed mountain-layer count) — skyline's per-layer building count did not
+compress that same way. Live-validate before keeping, every time; this is
+not a mechanical transform of the audit's ranking into code.
+
+---
 
 Surveyed all ten LLM-backed generators' actual prompt bodies
 (`plugins/*/plugin.py`, the canonical runtime copies). Ranked by resemblance

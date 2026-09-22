@@ -1,5 +1,71 @@
 # tt-local-generator — developer notes
 
+## Dropping the redundant colorize call + the Section 6 backlog (v0.102.0)
+
+Follow-up to the PR #28 final review, all landed in the same PR.
+
+- **The pass-3 "apply this legend" LLM call was pure overhead — removed
+  entirely.** The reviewer found empirically that
+  `_pairs_to_ansi_row(pairs=[], ...)` (i.e. the model returning nothing)
+  produced byte-identical output to a "perfect" model response, because
+  the legend already covers every character and the prompt explicitly
+  forbids the model from deciding anything else. `_build_row_colorize_prompt`
+  /`_build_mechanical_colorize_prompt`/`_extract_colored_cells`/
+  `_pairs_to_ansi_row`/`_pairs_to_ansi_grid` are gone, replaced by two pure
+  functions with no LLM call at all: `_colorize_row`/`_colorize_grid`.
+  Small tier drops from 25 calls to 5 (3 band + 1 refine + 1 legend);
+  medium tier drops from 4 to 3. This also retires the
+  now-moot "unbounded per-row calls" and "undersized medium-tier token
+  budget" findings from the same review — there's no LLM call left to
+  bound or budget. Verified live end-to-end afterward (not just unit
+  tests): `tt-ctl artgen ansi --subject "a coffee cup steaming"` produced
+  a valid 20×40 grid with 7 distinct colors.
+- **CI never actually installed `fastapi`.** `tests/test_mcp_server.py`
+  and `tests/test_mcp_server_call_fn.py` both `pytest.importorskip
+  ("fastapi", ...)` at module scope, so the MCP-path tier-stamping change
+  (v0.101.0) had literally never executed anywhere except a dev box that
+  happened to have the dependency — confirmed by reading PR #28's own CI
+  log. Fixed: `.github/workflows/ci.yml` now pip-installs `fastapi`,
+  `uvicorn[standard]`, and `httpx2` (the real, currently-published package
+  starlette's `TestClient` now depends on — not a typo, verified via `pip
+  index versions` before trusting it). Installing exposed the tests really
+  do pass; they were never failing, just silently skipped.
+- **Section 6 backlog, live-validated per generator, not applied
+  mechanically:**
+  - **constellation — fixes a real, reproduced failure.** `tt-ctl artgen
+    constellation --culture greek --stars 20 --lore` against
+    `Qwen/Qwen3.8-27B` returned a response truncated mid-element (no
+    `</svg>` at all) at the CLI's flat 4096-token default — up to 60
+    background filler stars (zero creative content) were eating the
+    budget the 20 actual named stars needed. Built the filler stars
+    locally with `random`; the one remaining model call gets a budget
+    that scales with `star_count`. Re-tested live: valid SVG, exactly 21
+    text labels (20 stars + 1 constellation name), coherent lore.
+  - **landscape — kept, preventive.** No observed failure (the monolithic
+    prompt was already live-tested clean with `--mountains --clouds
+    --stars`); split into up to 3 calls by layer plus a locally-built
+    deterministic ground rect, per the design doc's recommendation.
+    Re-tested live at the same settings: still valid, no regression.
+  - **skyline — tried, REVERTED.** Same per-depth-layer split, tested
+    live TWICE. First attempt (max_tokens=1500/layer) truncated every
+    layer mid-element. Second attempt (max_tokens=4096/layer) was *worse*,
+    not better — 392 rects vs. ~155 in the single-call baseline, still
+    invalid XML: asked for one layer in isolation, the model had no
+    natural "how many buildings is enough" stopping cue that the
+    whole-image context apparently provided, and just kept generating
+    until it ran out of budget again. Both attempts underperformed the
+    unmodified baseline. `plugins/skyline/plugin.py` is untouched.
+  - **The lesson, worth carrying forward:** splitting one call into
+    several doesn't uniformly help. It worked for constellation/landscape
+    because each split-out call still has a self-contained stopping point
+    (a fixed count); it didn't for skyline because per-layer building
+    count doesn't compress that way. Live-validate before keeping every
+    time — this is not a mechanical transform of an audit's risk ranking
+    into code.
+- Design doc updated in place (`docs/superpowers/specs/
+  2026-09-21-artgen-model-capability-tiering-design.md`, Section 6) with
+  these outcomes.
+
 ## Model-capability-aware ANSI prompting (v0.101.0)
 
 Bringing up `Qwen/Qwen3.8-27B` via tt-model-manager (profile

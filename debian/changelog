@@ -1,3 +1,28 @@
+tt-local-generator (0.102.0) noble; urgency=medium
+
+  * fix(artgen): the `ansi` generator's small/medium-tier "apply this
+    color legend" call to the LLM was pure overhead — verified empirically
+    that an empty model response produces byte-identical output to the
+    real deterministic fallback — so it's removed entirely in favor of two
+    pure functions (`_colorize_row`/`_colorize_grid`). Small tier drops
+    from 25 LLM calls to 5; medium tier from 4 to 3.
+  * fix(artgen): `constellation --stars 20 --lore` against a constrained
+    model was reproducibly truncating mid-element (no `</svg>` at all) at
+    the CLI's flat 4096-token default, because up to 60 background filler
+    stars were eating the budget the named stars needed. Filler stars are
+    now built locally; the one remaining model call gets a token budget
+    that scales with `--stars`.
+  * fix(artgen): `landscape`'s small tier now splits its prompt by layer
+    (sky/clouds/mountains) with a locally-built ground rect, matching the
+    same defensive pattern as ansi and constellation. No observed failure
+    motivated this one — kept because live retesting showed no regression.
+  * ci: install fastapi/uvicorn/httpx2 so `tests/test_mcp_server.py` and
+    `tests/test_mcp_server_call_fn.py` actually run instead of being
+    silently skipped — confirmed via this repo's own CI logs that they
+    never had, since fastapi was never installed there.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 22 Sep 2026 12:57:45 -0700
+
 tt-local-generator (0.101.0) noble; urgency=medium
 
   * feat(artgen): the `ansi` generator now scales its prompting strategy to
