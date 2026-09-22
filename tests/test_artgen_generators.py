@@ -26,9 +26,16 @@ _ANIMATEDIFF_PLUGIN = Path(__file__).parent.parent / "plugins" / "animatediff" /
 
 
 def _load_plugin(path: Path, module_name: str):
-    """Load a plugin module from an absolute path, bypassing sys.modules cache."""
+    """Load a plugin module from an absolute path, bypassing sys.modules cache.
+
+    Registers the freshly-loaded module in sys.modules under module_name
+    BEFORE exec_module runs — required for `from <module_name> import ...`
+    to resolve inside individual test methods (a bare module_from_spec()
+    result is not importable by name on its own; Python's import machinery
+    only ever looks in sys.modules)."""
     spec = importlib.util.spec_from_file_location(module_name, path)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -354,6 +361,87 @@ class TestAnsiGenerator:
                      board_name="", tagline="")
         self.g.generate_artifact(args, fn)
         assert len(calls) == 3
+
+    def test_generate_artifact_small_tier_band_and_per_row_calls(self):
+        # small tier: 3 band calls (pass 1) + 1 refine call (pass 2) +
+        # 1 legend call + N per-row colorize calls (pass 3, N = height).
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            n = len(calls)
+            if n <= 3:
+                # band calls — JSON array of row-strings. Width/height for
+                # this test come from the bbs style defaults (40x20); bands
+                # split into [2, 16, 2] rows for bbs. Reply with a plausible
+                # JSON array sized to whatever the prompt actually asked for.
+                if "exactly 2 strings" in prompt:
+                    return '["                                        ", "                                        "]'
+                return '[' + ", ".join(
+                    ['"' + ("#" * 40) + '"'] * 16
+                ) + ']'
+            if n == 4:
+                return "\n".join(["#" * 40] * 20)  # pass 2: block refine (identity)
+            if n == 5:
+                return '{"#": 236, " ": 232}'  # legend
+            # pass 3: one call per row — echo back a fully-wrapped row
+            return "".join(f"\033[38;5;236m#" for _ in range(40)) + "\033[0m"
+
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        fn.model_tier = "small"
+        result = self.g.generate_artifact(args, fn)
+
+        # 3 band calls + 1 refine + 1 legend + 20 per-row colorize calls
+        assert len(calls) == 3 + 1 + 1 + 20
+        lines = result.split("\n")
+        assert len(lines) == 20
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 40
+            assert line.endswith("\033[0m")
+
+    def test_split_bands_even_division(self):
+        from ansi_plugin import _split_bands
+        assert _split_bands(12, 3) == [4, 4, 4]
+
+    def test_split_bands_uneven_division_favors_earlier_bands(self):
+        from ansi_plugin import _split_bands
+        assert _split_bands(20, 3) == [7, 7, 6]
+
+    def test_parse_row_json_pads_short_rows(self):
+        from ansi_plugin import _parse_row_json
+        raw = '["ab", "cd"]'
+        rows = _parse_row_json(raw, n_rows=3, width=4)
+        assert rows == ["ab  ", "cd  ", "    "]
+
+    def test_parse_row_json_truncates_long_rows(self):
+        from ansi_plugin import _parse_row_json
+        raw = '["abcdef"]'
+        rows = _parse_row_json(raw, n_rows=1, width=4)
+        assert rows == ["abcd"]
+
+    def test_parse_row_json_fails_soft_on_garbage(self):
+        from ansi_plugin import _parse_row_json
+        rows = _parse_row_json("not json at all", n_rows=2, width=3)
+        assert rows == ["   ", "   "]
+
+    def test_extract_colored_cells_parses_escape_sequences(self):
+        from ansi_plugin import _extract_colored_cells
+        raw = "\033[38;5;51m█\033[38;5;82m▒"
+        pairs = _extract_colored_cells(raw, expected_n=5)
+        assert pairs == [("51", "█"), ("82", "▒")]
+
+    def test_extract_colored_cells_handles_literal_backslash_notation(self):
+        from ansi_plugin import _extract_colored_cells
+        raw = "\\033[38;5;51m█\\033[38;5;82m▒"
+        pairs = _extract_colored_cells(raw, expected_n=5)
+        assert pairs == [("51", "█"), ("82", "▒")]
+
+    def test_pairs_to_ansi_row_pads_shortfall_from_legend(self):
+        from ansi_plugin import _pairs_to_ansi_row
+        pairs = [("236", "#")]
+        row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
+        assert row == "\033[38;5;236m#\033[38;5;236m#\033[0m"
 
 
 class TestAnimateDiffGenerator:

@@ -20,6 +20,7 @@ multi-pass remix pipeline that will be generalised in remix-mode.
 
 from __future__ import annotations
 
+import json
 import re
 
 from artgen import ArtGenerator
@@ -243,6 +244,246 @@ RULES:
 """
 
 
+# ── Small/medium-tier helpers (band-segmented structure, legend-based color) ──
+#
+# A whole-canvas free-form prompt ("compose this scene, decide the colors")
+# reliably collapses into repeating token loops or rambling explanation on a
+# heavily quantized / speculative-decoding model — validated live against
+# Qwen/Qwen3.8-27B (q4kv + dflash2) on 2026-09-21; see the design doc. The
+# fix that worked: small, explicitly-anchored, mechanical sub-tasks instead
+# of one big creative one. These helpers implement that for the "small" tier
+# (band-segmented structure, per-row colorize) and are reused by the
+# "medium" tier's colorize pass (legend generation, boundary-independent
+# parsing).
+
+# Per-style band roles for pass-1 structure, mirroring the same 3-way split
+# _build_ascii_prompt already uses (bbs / landscape / everything else).
+# Each style maps to exactly 3 bands: (band_label, characters_to_use,
+# row_role_phrases). row_role_phrases is a short list describing what a row
+# at that RELATIVE position within the band should contain — proportionally
+# indexed to whatever the band's actual row count turns out to be, so the
+# same table works for any canvas height.
+_BAND_ROLE_PHRASES: dict[str, list[tuple[str, str, list[str]]]] = {
+    "bbs": [
+        ("void top", "space",
+         ["all void, empty space"]),
+        ("neon subject", "| / \\ o O 0 ( ) - = ^ * # @ X %",
+         ["top of the neon icon/sigil, its highest point",
+          "upper body of the icon",
+          "widest/boldest part of the icon",
+          "lower body of the icon, tapering toward its base"]),
+        ("void bottom", "space",
+         ["all void, empty space"]),
+    ],
+    "landscape": [
+        ("sky", "space . , ' ` ^ - ~",
+         ["highest sky, sparse stars or clouds",
+          "sky with more texture, drifting clouds",
+          "lower sky nearing the horizon, denser cloud texture",
+          "horizon line texture, where sky meets terrain"]),
+        ("horizon", "| / \\ o O 0 ( ) - = ^",
+         ["silhouette breaking the horizon line",
+          "main shapes along the horizon",
+          "foreground shapes, larger and closer",
+          "base of the foreground shapes"]),
+        ("terrain", "space _ = ~ # . , :",
+         ["terrain or water just past the horizon",
+          "midground terrain/water texture",
+          "busier foreground terrain/water texture",
+          "nearest, densest terrain/water texture"]),
+    ],
+    "_default": [
+        ("background", "space . , : ; - = + ~ / \\",
+         ["sparse faint texture, mostly empty space",
+          "light texture, a few scattered marks",
+          "denser texture, more marks mixed together",
+          "densest texture in this band, closest to the subject"]),
+        ("subject", "| / \\ o O 0 ( ) - = ^ * # @ X %",
+         ["top of the main subject, its highest point",
+          "upper body of the subject",
+          "middle body of the subject, its widest or most detailed part",
+          "lower body of the subject, tapering toward its base"]),
+        ("foreground", "space ~ = # X . , :",
+         ["structure or ground directly beneath the subject",
+          "first layer of ground/base texture",
+          "a busier, more turbulent layer of ground/base texture",
+          "calmest, plainest layer, farthest from the subject"]),
+    ],
+}
+
+
+def _split_bands(height: int, n_bands: int = 3) -> list[int]:
+    """Split height rows into n_bands as evenly as possible, giving any
+    remainder to the earliest bands. _split_bands(12, 3) == [4, 4, 4];
+    _split_bands(20, 3) == [7, 7, 6]."""
+    base = height // n_bands
+    rem = height % n_bands
+    return [base + (1 if i < rem else 0) for i in range(n_bands)]
+
+
+def _build_band_prompt(subject: str, style: str, band_label: str, chars: str,
+                        row_phrases: list[str], width: int, n_rows: int) -> str:
+    """Pass 1 (small tier) — one band of the canvas, with an explicit
+    content instruction per row (proportionally indexed into row_phrases).
+    A generic 'vary each row' instruction was validated to still collapse
+    into repetition; naming what a specific row contains did not."""
+    hint = _STYLE_HINTS.get(style, _STYLE_HINTS["scene"])
+    lines = []
+    for i in range(n_rows):
+        idx = min(len(row_phrases) - 1, (i * len(row_phrases)) // n_rows)
+        lines.append(f"Row {i + 1}: {row_phrases[idx]}")
+    row_block = "\n".join(lines)
+    return f"""\
+Draw the "{band_label}" band of an ASCII art scene: "{subject}".
+Style: {hint}
+Respond with ONLY a JSON array of exactly {n_rows} strings, each exactly
+{width} characters long, using only these characters: {chars}
+
+Row-by-row content:
+{row_block}
+
+Output only the JSON array, nothing else.
+"""
+
+
+def _parse_row_json(raw: str, n_rows: int, width: int) -> list[str]:
+    """Parse a JSON array of row-strings; fails soft to blank-padded rows
+    on any parse error (malformed JSON, no array found, wrong element
+    types) rather than raising."""
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    text = re.sub(r"```\w*\s*|```", "", text).strip()
+    rows: list[str] = []
+    try:
+        start = text.index("[")
+        end = text.rindex("]")
+        arr = json.loads(text[start:end + 1])
+        rows = [str(r) for r in arr]
+    except Exception:
+        # Fail soft to blank rows — do NOT fall back to the raw text split
+        # into lines: unparseable garbage (a stray sentence, an error
+        # message) is not row content and must not leak into the canvas.
+        rows = []
+    out: list[str] = []
+    for row in rows[:n_rows]:
+        row = row[:width].ljust(width)
+        out.append(row)
+    while len(out) < n_rows:
+        out.append(" " * width)
+    return out
+
+
+def _build_legend_prompt(distinct_chars: str, subject: str, style: str,
+                          board_name: str, tagline: str) -> str:
+    """One small call that decides colors ONCE, as a lookup table, rather
+    than asking the model to decide colors for every cell of a whole canvas
+    in one shot (the freeform version of pass 3 that was validated to make
+    the model ramble through visible reasoning text instead of ever
+    emitting the requested output)."""
+    color_guide = _COLOR_GUIDE_BBS if style == "bbs" else _COLOR_GUIDE_SCENE
+    board_ctx = ""
+    if style == "bbs" and board_name:
+        board_ctx = (
+            f"\nBBS IDENTITY: Board name: {board_name}"
+            + (f"  |  Tagline: {tagline}" if tagline else "")
+            + "\nLet the name drive the color theme — neon identity.\n"
+        )
+    return f"""\
+Decide ONE xterm-256 color index (0-255) for each distinct character below,
+for a colorized drawing of "{subject}".
+{board_ctx}
+CHARACTERS PRESENT: {distinct_chars}
+
+{color_guide}
+
+Respond with ONLY a JSON object mapping each character to its color index,
+e.g. {{"#": 236, " ": 232}}. Space must always be included. No explanation,
+no markdown fences — only the JSON object.
+"""
+
+
+def _parse_legend_json(raw: str) -> dict[str, int]:
+    """Parse the legend JSON object; fails soft to an empty dict on any
+    parse error (the caller fills in fallback colors for every character
+    the model omitted or that failed to parse)."""
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    text = re.sub(r"```\w*\s*|```", "", text).strip()
+    try:
+        start = text.index("{")
+        end = text.rindex("}")
+        obj = json.loads(text[start:end + 1])
+        return {str(k)[:1]: int(v) for k, v in obj.items() if str(k)}
+    except Exception:
+        return {}
+
+
+def _generate_legend(call_fn, block_art: str, subject: str, style: str,
+                      board_name: str, tagline: str) -> dict[str, int]:
+    """Build the character→color legend for block_art. Never raises: any
+    character missing from the model's response (or the whole response
+    being unparseable) gets a neutral gray fallback (244), and space
+    always resolves to the void color (232)."""
+    distinct = "".join(sorted(set(block_art) - {"\n"}))
+    raw = call_fn(
+        _build_legend_prompt(distinct, subject, style, board_name, tagline),
+        max_tokens=400,
+    )
+    legend = _parse_legend_json(raw)
+    for ch in distinct:
+        legend.setdefault(ch, 244)
+    legend.setdefault(" ", 232)
+    return legend
+
+
+def _build_row_colorize_prompt(row: str, legend: dict[str, int], width: int) -> str:
+    """Pass 3 (small tier) — apply an ALREADY-DECIDED legend mechanically to
+    one row. This is deliberately NOT 'decide the color for each character'
+    (that phrasing was validated to make the model ramble instead of
+    comply) — it's 'apply this lookup table', a much smaller and more
+    mechanical task."""
+    used = sorted(set(row))
+    mapping_lines = "\n".join(f"  {ch!r} -> {legend.get(ch, 244)}" for ch in used)
+    return f"""\
+Wrap each character of this {width}-character row with an ANSI 256-color
+foreground escape code: \\033[38;5;Nm<char>
+Row: {row}
+CHARACTER-TO-COLOR MAPPING (apply exactly, mechanical, do not decide creatively):
+{mapping_lines}
+Output ONLY the wrapped characters in order, no row-end reset, no
+explanation, no markdown.
+"""
+
+
+_CELL_RE = re.compile(r"\x1b\[38;5;(\d+)m(.)")
+
+
+def _extract_colored_cells(raw: str, expected_n: int) -> list[tuple[str, str]]:
+    """Extract (color, char) pairs from a colorize response by regex,
+    ignoring wherever the model actually put its line breaks. Validated
+    live: a whole-canvas mechanical-apply call reliably dropped row
+    boundaries under token pressure even though the (color, char) sequence
+    itself stayed correct — trusting the model's own newlines would have
+    silently corrupted the grid. Returns at most expected_n pairs."""
+    text = raw.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b")
+    pairs = _CELL_RE.findall(text)
+    return pairs[:expected_n]
+
+
+def _pairs_to_ansi_row(pairs: list[tuple[str, str]], original_row: str,
+                        legend: dict[str, int]) -> str:
+    """Reconstruct one fully-wrapped ANSI row from extracted (color, char)
+    pairs, padding any shortfall (the model returned fewer cells than the
+    row is wide) using the row's own original characters and the legend's
+    color for them — never raises, never leaves a row short."""
+    width = len(original_row)
+    cells = list(pairs)
+    if len(cells) < width:
+        for ch in original_row[len(cells):]:
+            cells.append((str(legend.get(ch, 244)), ch))
+    cells = cells[:width]
+    body = "".join(f"\033[38;5;{c}m{ch}" for c, ch in cells)
+    return body + "\033[0m"
+
+
 # ── Generator ─────────────────────────────────────────────────────────────────
 
 
@@ -346,6 +587,47 @@ class AnsiGenerator(ArtGenerator):
             max_tokens=8192,
         )
         return self.parse_output(raw3, args)
+
+    def _generate_small(self, call_fn, subject, style, width, height,
+                         board_name, tagline) -> str:
+        """Band-segmented structure (pass 1) + unchanged whole-canvas block
+        refinement (pass 2) + legend-then-per-row-mechanical-apply color
+        (pass 3). Validated live against Qwen/Qwen3.8-27B (q4kv + dflash2)
+        on 2026-09-21 — see the design doc for the full investigation."""
+        print("[small-tier: band-segmented ASCII structure …]", flush=True)
+        specs = _BAND_ROLE_PHRASES.get(style, _BAND_ROLE_PHRASES["_default"])
+        if style == "bbs":
+            band_heights = [2, max(1, height - 4), 2]
+        else:
+            band_heights = _split_bands(height, 3)
+
+        rows: list[str] = []
+        for (band_label, chars, phrases), n_rows in zip(specs, band_heights):
+            if n_rows <= 0:
+                continue
+            raw = call_fn(
+                _build_band_prompt(subject, style, band_label, chars,
+                                    phrases, width, n_rows),
+                max_tokens=max(200, n_rows * 40),
+            )
+            rows.extend(_parse_row_json(raw, n_rows, width))
+        ascii_art = _normalize_grid("\n".join(rows), width, height)
+
+        print("[small-tier: block refinement …]", flush=True)
+        raw2 = call_fn(_build_refine_prompt(ascii_art, subject, width, height),
+                       max_tokens=1024)
+        block_art = _normalize_grid(raw2, width, height)
+
+        print("[small-tier: legend + per-row colorization …]", flush=True)
+        legend = _generate_legend(call_fn, block_art, subject, style,
+                                   board_name, tagline)
+        colored_rows = []
+        for row in block_art.split("\n"):
+            raw_row = call_fn(_build_row_colorize_prompt(row, legend, width),
+                              max_tokens=max(150, width * 12))
+            pairs = _extract_colored_cells(raw_row, width)
+            colored_rows.append(_pairs_to_ansi_row(pairs, row, legend))
+        return "\n".join(colored_rows)
 
     def parse_output(self, raw: str, args) -> str:
         """Strip think-blocks, fences, and normalise escape notations."""
