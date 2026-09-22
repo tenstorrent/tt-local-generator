@@ -318,6 +318,43 @@ class TestAnsiGenerator:
         self.g.generate_artifact(args, fn)
         assert len(calls) == 3
 
+    def test_generate_artifact_defaults_to_large_tier_without_model_tier_attr(self):
+        # A call_fn with no .model_tier attribute at all (e.g. a hand-rolled
+        # test double, or any caller predating this change) must reproduce
+        # today's exact 3-call whole-canvas behavior.
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return "A B C\nD E F"
+            if len(calls) == 2:
+                return "█ ░ ▒\n▓ ▀ ▄"
+            return "\033[38;5;51m█\033[0m \033[38;5;82m▒\033[0m"
+
+        assert not hasattr(fn, "model_tier")
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        self.g.generate_artifact(args, fn)
+        assert len(calls) == 3
+
+    def test_generate_artifact_large_tier_explicit(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return "A B C\nD E F"
+            if len(calls) == 2:
+                return "█ ░ ▒\n▓ ▀ ▄"
+            return "\033[38;5;51m█\033[0m \033[38;5;82m▒\033[0m"
+
+        fn.model_tier = "large"
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        self.g.generate_artifact(args, fn)
+        assert len(calls) == 3
+
 
 class TestAnimateDiffGenerator:
     @pytest.fixture(autouse=True)

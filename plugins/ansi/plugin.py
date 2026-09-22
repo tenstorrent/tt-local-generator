@@ -292,8 +292,13 @@ class AnsiGenerator(ArtGenerator):
         )
 
     def generate_artifact(self, args, call_fn) -> str:
-        """3-pass pipeline: ASCII structure → block refinement → colorization."""
-        import sys
+        """Dispatch to a tier-specific pipeline based on call_fn.model_tier
+        (stamped by _make_call_fn in cli.py/mcp_server.py — see
+        model_capability.py). Any call_fn without the attribute (e.g. a
+        hand-rolled test double, or any caller predating this change)
+        defaults to "large", reproducing this generator's original
+        whole-canvas 3-pass behavior byte-for-byte."""
+        tier = getattr(call_fn, "model_tier", "large")
 
         style      = getattr(args, "ansi_style", "scene")
         subject    = getattr(args, "subject", "a mountain at sunset")
@@ -302,6 +307,24 @@ class AnsiGenerator(ArtGenerator):
         width      = getattr(args, "width", None) or (80 if style == "bbs" else 40)
         height     = 20 if style == "bbs" else max(12, width // 2)
 
+        if tier == "small":
+            return self._generate_small(
+                call_fn, subject, style, width, height, board_name, tagline,
+            )
+        if tier == "medium":
+            return self._generate_medium(
+                call_fn, subject, style, width, height, board_name, tagline,
+            )
+        return self._generate_large(
+            args, call_fn, subject, style, width, height, board_name, tagline,
+        )
+
+    def _generate_large(self, args, call_fn, subject, style, width, height,
+                         board_name, tagline) -> str:
+        """3-pass pipeline: ASCII structure → block refinement → colorization.
+        This is the original ansi generator behavior, unchanged — the
+        regression-safety default for every model this generator has ever
+        worked on."""
         # Pass 1 — ASCII composition
         print("[pass 1/3: ASCII structure …]", flush=True)
         raw1 = call_fn(_build_ascii_prompt(subject, width, height, style),
