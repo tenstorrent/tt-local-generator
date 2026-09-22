@@ -72,3 +72,20 @@ def test_model_tier_known_override_wins_even_though_id_looks_clean():
 def test_model_tier_never_raises_on_garbage_input():
     assert mc.model_tier("") == "large"
     assert mc.model_tier("???...") == "large"
+
+
+def test_model_tier_never_raises_on_non_string_input():
+    # model_tier is documented as "never raises" — a caller that couldn't
+    # resolve a served id at all (None) or passed a non-string by mistake
+    # must fall back to "large" like any other unparseable input, not
+    # raise TypeError deep inside the regex search.
+    assert mc.model_tier(None) == "large"
+    assert mc.model_tier(123) == "large"
+
+
+def test_model_tier_known_override_matches_case_insensitively():
+    # The override list exists specifically to catch a served id whose
+    # quantization/speculative-decoding profile is invisible in the id
+    # itself — it must not silently stop working just because the served
+    # id differs in case from how we characterized it.
+    assert mc.model_tier("qwen/qwen3.8-27b") == "small"

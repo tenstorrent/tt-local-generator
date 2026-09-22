@@ -38,8 +38,11 @@ reasoning text instead of ever emitting the requested output.
   legend-then-whole-canvas-mechanical-apply color pass — **not yet
   hardware-validated**, no medium-tier model was available during this
   work), or `_generate_small` (band-segmented structure + a
-  legend-then-per-row-mechanical-apply color pass — validated live against
-  the real Qwen/Qwen3.8-27B endpoint).
+  legend-then-per-row-mechanical-apply color pass — the underlying
+  technique was validated live against the real Qwen/Qwen3.8-27B endpoint,
+  but this assembled, generalized pipeline has not itself been run
+  end-to-end against real hardware yet; see the plan's "Post-plan
+  validation" section).
 - **The technique that actually worked, validated live:** small,
   explicitly-anchored, mechanical sub-tasks instead of one big creative
   one — band-segmented structure with an explicit per-row content

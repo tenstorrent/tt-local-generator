@@ -437,11 +437,48 @@ class TestAnsiGenerator:
         pairs = _extract_colored_cells(raw, expected_n=5)
         assert pairs == [("51", "█"), ("82", "▒")]
 
+    def test_extract_colored_cells_handles_caret_bracket_notation(self):
+        # "^[" is the caret-notation display of the ESC byte itself (as
+        # `cat -v` would show it); the CSI-introducing "[" is a second,
+        # separate character right after it — same convention parse_output
+        # and artgen_render._normalize_ansi_escapes already use.
+        from ansi_plugin import _extract_colored_cells
+        raw = "^[[38;5;51m█^[[38;5;82m▒"
+        pairs = _extract_colored_cells(raw, expected_n=5)
+        assert pairs == [("51", "█"), ("82", "▒")]
+
+    def test_extract_colored_cells_handles_bare_octal_notation(self):
+        # Llama-3.3 emits bare octal 033[ with no backslash/x1b prefix —
+        # parse_output already normalizes this; _extract_colored_cells must
+        # too, or it silently drops every cell a model emits this way.
+        from ansi_plugin import _extract_colored_cells
+        raw = "033[38;5;51m█033[38;5;82m▒"
+        pairs = _extract_colored_cells(raw, expected_n=5)
+        assert pairs == [("51", "█"), ("82", "▒")]
+
     def test_pairs_to_ansi_row_pads_shortfall_from_legend(self):
         from ansi_plugin import _pairs_to_ansi_row
         pairs = [("236", "#")]
         row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
         assert row == "\033[38;5;236m#\033[38;5;236m#\033[0m"
+
+    def test_pairs_to_ansi_row_uses_original_character_not_models_character(self):
+        # Regression for the silent-corruption bug: the model's own pair
+        # can carry a hallucinated/wrong character. The reconstructed row
+        # must take the COLOR from the model's pair but the CHARACTER from
+        # the original row — never the model's own character.
+        from ansi_plugin import _pairs_to_ansi_row
+        # Model reports color 51 but a wrong character "Z" at position 0;
+        # original_row's actual character there is "#".
+        pairs = [("51", "Z"), ("82", "#")]
+        row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
+        assert row == "\033[38;5;51m#\033[38;5;82m#\033[0m"
+
+    def test_pairs_to_ansi_row_clamps_out_of_range_color(self):
+        from ansi_plugin import _pairs_to_ansi_row
+        pairs = [("9999", "#")]
+        row = _pairs_to_ansi_row(pairs, original_row="#", legend={"#": 236})
+        assert row == "\033[38;5;255m#\033[0m"
 
     def test_generate_artifact_medium_tier_legend_and_whole_canvas_calls(self):
         # medium tier: pass1 (whole canvas) + pass2 (whole canvas) +
@@ -491,10 +528,6 @@ class TestAnsiGenerator:
             # pass 3: only the first 5 of 12 cells before running out of budget
             return "".join("\033[38;5;236m#" for _ in range(5))
 
-        args = _args(ansi_style="scene", subject="test", width=4, height=None,
-                     board_name="", tagline="")
-        args.width = 4
-        fn.model_tier = "medium"
         # Force a small 4x3 canvas directly via _generate_medium to keep
         # this test's expected sizes simple and explicit.
         result = self.g._generate_medium(fn, "test", "scene", 4, 3, "", "")
@@ -511,6 +544,14 @@ class TestAnsiGenerator:
         assert "'#' -> 236" in prompt
         assert "' ' -> 232" in prompt
 
+    def test_parse_legend_json_drops_only_the_bad_entry(self):
+        # Regression: one bad value (a color name instead of an int) used
+        # to discard the whole legend via one shared try/except. The good
+        # entry must survive.
+        from ansi_plugin import _parse_legend_json
+        legend = _parse_legend_json('{"#": 236, " ": "black"}')
+        assert legend == {"#": 236}
+
     def test_pairs_to_ansi_grid_pads_shortfall_from_legend(self):
         from ansi_plugin import _pairs_to_ansi_grid
         pairs = [("236", "#")]
@@ -519,6 +560,23 @@ class TestAnsiGenerator:
         assert len(lines) == 2
         for line in lines:
             assert line.count("\033[38;5;236m#") == 2
+
+    def test_pairs_to_ansi_grid_uses_original_character_not_models_character(self):
+        # Same regression as the row-level test: color from the model's
+        # pair, character always from the original grid.
+        from ansi_plugin import _pairs_to_ansi_grid
+        pairs = [("51", "Z"), ("82", "#"), ("236", "#"), ("236", "#")]
+        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
+        lines = grid.split("\n")
+        assert lines[0] == "\033[38;5;51m#\033[38;5;82m#\033[0m"
+        assert lines[1] == "\033[38;5;236m#\033[38;5;236m#\033[0m"
+
+    def test_pairs_to_ansi_grid_clamps_out_of_range_color(self):
+        from ansi_plugin import _pairs_to_ansi_grid
+        pairs = [("9999", "#"), ("236", "#"), ("236", "#"), ("236", "#")]
+        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
+        lines = grid.split("\n")
+        assert lines[0].startswith("\033[38;5;255m#")
 
 
 class TestAnimateDiffGenerator:

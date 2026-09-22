@@ -411,9 +411,23 @@ def _parse_legend_json(raw: str) -> dict[str, int]:
         start = text.index("{")
         end = text.rindex("}")
         obj = json.loads(text[start:end + 1])
-        return {str(k)[:1]: int(v) for k, v in obj.items() if str(k)}
     except Exception:
         return {}
+    # Build entry-by-entry: one bad value (e.g. a color given as a color
+    # name instead of an int) must only drop THAT entry, never discard the
+    # whole legend — losing the whole legend turns the entire picture
+    # monochrome gray via the caller's fallback, which is worse than a
+    # legend that's merely missing one character's color.
+    legend: dict[str, int] = {}
+    for k, v in obj.items():
+        key = str(k)[:1]
+        if not key:
+            continue
+        try:
+            legend[key] = int(v)
+        except (TypeError, ValueError):
+            continue
+    return legend
 
 
 def _generate_legend(call_fn, block_art: str, subject: str, style: str,
@@ -464,8 +478,26 @@ def _extract_colored_cells(raw: str, expected_n: int) -> list[tuple[str, str]]:
     itself stayed correct — trusting the model's own newlines would have
     silently corrupted the grid. Returns at most expected_n pairs."""
     text = raw.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b")
+    text = text.replace("^[", "\x1b")
+    # Bare octal 033[ (no backslash/x1b prefix) — same real-world notation
+    # parse_output already normalizes; mirrored here so this extractor
+    # doesn't miss cells a model emitted this way.
+    text = re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
     pairs = _CELL_RE.findall(text)
     return pairs[:expected_n]
+
+
+def _clamp_color_index(color: str) -> str:
+    """Clamp a color index string to the valid xterm-256 range [0, 255]
+    before it lands in an escape code — a model or legend can hand back an
+    out-of-range value (e.g. a typo'd "9999"), and an unclamped index would
+    emit an escape code no terminal defines a color for."""
+    try:
+        n = int(color)
+    except (TypeError, ValueError):
+        n = 244
+    n = max(0, min(255, n))
+    return str(n)
 
 
 def _pairs_to_ansi_row(pairs: list[tuple[str, str]], original_row: str,
@@ -473,14 +505,24 @@ def _pairs_to_ansi_row(pairs: list[tuple[str, str]], original_row: str,
     """Reconstruct one fully-wrapped ANSI row from extracted (color, char)
     pairs, padding any shortfall (the model returned fewer cells than the
     row is wide) using the row's own original characters and the legend's
-    color for them — never raises, never leaves a row short."""
+    color for them — never raises, never leaves a row short.
+
+    Color comes from the model's pair; the CHARACTER always comes from
+    original_row, never from the model's own output. The model's only job
+    is choosing colors for an already-fixed layout — trusting its character
+    too would let a deviating/hallucinating response silently overwrite the
+    actual artwork passes 1 and 2 produced, with no size/shape signal to
+    catch it downstream."""
     width = len(original_row)
     cells = list(pairs)
     if len(cells) < width:
         for ch in original_row[len(cells):]:
             cells.append((str(legend.get(ch, 244)), ch))
     cells = cells[:width]
-    body = "".join(f"\033[38;5;{c}m{ch}" for c, ch in cells)
+    body = "".join(
+        f"\033[38;5;{_clamp_color_index(c)}m{original_row[i]}"
+        for i, (c, _ch) in enumerate(cells)
+    )
     return body + "\033[0m"
 
 
@@ -536,7 +578,13 @@ def _pairs_to_ansi_grid(pairs: list[tuple[str, str]], block_art: str,
     out_rows = []
     for r in range(height):
         row_cells = cells[r * width:(r + 1) * width]
-        body = "".join(f"\033[38;5;{c}m{ch}" for c, ch in row_cells)
+        # Color comes from the model's pair; the CHARACTER always comes
+        # from flat_original, never from the model's own output — same
+        # contract as _pairs_to_ansi_row, see its docstring.
+        body = "".join(
+            f"\033[38;5;{_clamp_color_index(c)}m{flat_original[r * width + i]}"
+            for i, (c, _ch) in enumerate(row_cells)
+        )
         out_rows.append(body + "\033[0m")
     return "\n".join(out_rows)
 
@@ -649,8 +697,16 @@ class AnsiGenerator(ArtGenerator):
                          board_name, tagline) -> str:
         """Band-segmented structure (pass 1) + unchanged whole-canvas block
         refinement (pass 2) + legend-then-per-row-mechanical-apply color
-        (pass 3). Validated live against Qwen/Qwen3.8-27B (q4kv + dflash2)
-        on 2026-09-21 — see the design doc for the full investigation."""
+        (pass 3). The underlying technique (band-segmented structure,
+        legend-then-mechanical-apply color) was validated live against
+        Qwen/Qwen3.8-27B (q4kv + dflash2) on 2026-09-21. This assembled,
+        generalized pipeline has not itself been run end-to-end against
+        real hardware yet — see the plan's "Post-plan validation" section.
+
+        Intentionally bypasses parse_output — this pipeline already builds
+        clean, normalized ANSI output itself (no think-blocks/fences/escape
+        notations to strip), so a future override of parse_output for this
+        generator would only affect the large tier, not this one."""
         print("[small-tier: band-segmented ASCII structure …]", flush=True)
         specs = _BAND_ROLE_PHRASES.get(style, _BAND_ROLE_PHRASES["_default"])
         if style == "bbs":
@@ -692,7 +748,12 @@ class AnsiGenerator(ArtGenerator):
         prompts as the large tier — no evidence they fail at this tier)
         plus a legend-then-mechanical-whole-canvas-apply color pass. See
         _build_mechanical_colorize_prompt's docstring for this tier's
-        validation status."""
+        validation status.
+
+        Intentionally bypasses parse_output — this pipeline already builds
+        clean, normalized ANSI output itself (no think-blocks/fences/escape
+        notations to strip), so a future override of parse_output for this
+        generator would only affect the large tier, not this one."""
         print("[medium-tier: ASCII structure …]", flush=True)
         raw1 = call_fn(_build_ascii_prompt(subject, width, height, style),
                        max_tokens=1024)

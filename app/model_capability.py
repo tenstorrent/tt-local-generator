@@ -34,6 +34,12 @@ _KNOWN_CONSTRAINED_IDS = frozenset({
     "Qwen/Qwen3.8-27B",
 })
 
+# Lowercased once at module load so the override list matches regardless of
+# how the serving container happens to case its /v1/models id — the served
+# id's casing is not something this module controls, and a case mismatch
+# would silently stop catching the very model this list exists for.
+_KNOWN_CONSTRAINED_IDS_LOWER = frozenset(s.lower() for s in _KNOWN_CONSTRAINED_IDS)
+
 _TIER_ORDER: tuple[Tier, ...] = ("small", "medium", "large")
 
 
@@ -76,8 +82,12 @@ def _downgrade(tier: Tier) -> Tier:
 def model_tier(model_id: str) -> Tier:
     """Capability tier for the given served model id: "small", "medium", or
     "large". Never raises — an unparseable id defaults to "large" (assume
-    capable; never punish a model we haven't characterized)."""
+    capable; never punish a model we haven't characterized), and a
+    non-string input (e.g. None, from a caller that couldn't resolve an id)
+    is treated the same as unparseable rather than raising."""
+    if not isinstance(model_id, str):
+        return "large"
     tier = _base_tier(parse_model_scale_b(model_id))
-    if has_constrained_hint(model_id) or model_id in _KNOWN_CONSTRAINED_IDS:
+    if has_constrained_hint(model_id) or model_id.lower() in _KNOWN_CONSTRAINED_IDS_LOWER:
         tier = _downgrade(tier)
     return tier
