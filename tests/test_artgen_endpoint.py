@@ -156,3 +156,135 @@ def test_ttm_model_in_sweep_range_still_found(fake_servers, monkeypatch):
 
     assert base_url == "http://localhost:8010"
     assert model_id == "Qwen/Qwen3.8-27B"
+
+
+# ── _tt_model_host_ports — direct coverage of the docker-ps parser ───────────
+# Previously every test above monkeypatched this function away entirely, so
+# a regression in parsing real `docker ps --format '{{.Ports}}'` output could
+# make tt-model-manager discovery silently disappear while every other test
+# still passed (Copilot review, PR #28).
+
+
+def test_tt_model_host_ports_returns_empty_when_docker_missing(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert artgen._tt_model_host_ports() == []
+
+
+def test_tt_model_host_ports_returns_empty_on_subprocess_exception(monkeypatch):
+    """A subprocess.run failure (docker daemon not running, permission
+    denied, etc.) must degrade to 'no containers found', never raise."""
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+
+    def _raise(*a, **k):
+        raise OSError("docker: Cannot connect to the Docker daemon")
+
+    monkeypatch.setattr(_subprocess, "run", _raise)
+    assert artgen._tt_model_host_ports() == []
+
+
+def test_tt_model_host_ports_returns_empty_on_nonzero_exit(monkeypatch):
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **k: _subprocess.CompletedProcess(a, returncode=1, stdout=""),
+    )
+    assert artgen._tt_model_host_ports() == []
+
+
+def test_tt_model_host_ports_parses_real_dual_stack_output(monkeypatch):
+    """Real `docker ps --format '{{.Ports}}'` output for a container
+    publishing one port on both IPv4 and IPv6 (observed live on a running
+    tt-model-manager container, 2026-09-22): the same host port appears
+    twice, once per address family, and must de-duplicate to one entry."""
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    stdout = "0.0.0.0:20000->20000/tcp, [::]:20000->20000/tcp\n"
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **k: _subprocess.CompletedProcess(a, returncode=0, stdout=stdout),
+    )
+    assert artgen._tt_model_host_ports() == [20000]
+
+
+def test_tt_model_host_ports_parses_multiple_containers_multiple_ports(monkeypatch):
+    """Two containers, one with two published ports — every line of
+    `docker ps` output (one per container) and every comma-separated
+    port mapping within a line must be parsed, sorted, and de-duplicated."""
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    stdout = (
+        "0.0.0.0:20000->20000/tcp, [::]:20000->20000/tcp\n"
+        "0.0.0.0:20001->8000/tcp, 0.0.0.0:20002->8001/tcp\n"
+    )
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **k: _subprocess.CompletedProcess(a, returncode=0, stdout=stdout),
+    )
+    assert artgen._tt_model_host_ports() == [20000, 20001, 20002]
+
+
+def test_tt_model_host_ports_ignores_unpublished_ports(monkeypatch):
+    """A container port with no host mapping (no '->') is not host-reachable
+    and must not be treated as a candidate endpoint."""
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    stdout = "8000/tcp\n"  # exposed but not published to the host
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **k: _subprocess.CompletedProcess(a, returncode=0, stdout=stdout),
+    )
+    assert artgen._tt_model_host_ports() == []
+
+
+def test_tt_model_host_ports_empty_output_returns_empty(monkeypatch):
+    import subprocess as _subprocess
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        _subprocess, "run",
+        lambda *a, **k: _subprocess.CompletedProcess(a, returncode=0, stdout=""),
+    )
+    assert artgen._tt_model_host_ports() == []
+
+
+# ── Docker discovery ordering: never blocks a fast, higher-priority hit ──────
+
+
+def test_docker_discovery_not_queried_when_artgen_port_answers(fake_servers, monkeypatch):
+    """The docker-label query (`_tt_model_host_ports`) must not run at all
+    when a higher-priority endpoint (the app's own artgen port) already
+    answers — a slow/hung docker subprocess (up to a 10s timeout) must never
+    delay a request that a healthy 8002 server would have served instantly."""
+    fake_servers["http://localhost:8002"] = "Qwen3-8B"
+    calls = []
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: calls.append(1) or [])
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:8002"
+    assert calls == []  # never called
+
+
+def test_docker_discovery_queried_when_artgen_port_silent(fake_servers, monkeypatch):
+    """Once the higher-priority endpoints have failed to answer, docker
+    discovery still runs — this is not a regression to 'never check'."""
+    fake_servers["http://localhost:20000"] = "Qwen/Qwen3.8-27B"
+    calls = []
+
+    def _tt_model_host_ports():
+        calls.append(1)
+        return [20000]
+
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", _tt_model_host_ports)
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert base_url == "http://localhost:20000"
+    assert calls == [1]

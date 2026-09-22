@@ -258,32 +258,53 @@ def detect_artgen_endpoint(
         except (TypeError, ValueError):
             continue
 
-    # Build the ordered candidate list, de-duplicated, preserving priority.
-    candidates: list = []
+    # De-duplicated across every stage below (one shared set, same as the
+    # single flat candidate list this replaced).
     seen: set = set()
 
-    def _add(url: str | None) -> None:
-        if url and url not in seen:
+    def _probe(urls: "list[str | None]", *, is_sweep: bool) -> "tuple[str, str] | None":
+        # The explicit endpoints get the full timeout; the sweep uses a
+        # short one so a run of closed/filtered ports can't stall
+        # generation for many seconds.
+        timeout = 1.5 if is_sweep else 5.0
+        for url in urls:
+            if not url or url in seen:
+                continue
             seen.add(url)
-            candidates.append(url)
+            m = detect_model(url, timeout=timeout)
+            if m:
+                return url, m
+        return None
 
-    _add(preferred_url)                                  # 1. explicit override
-    _add(artgen_url)                                     # 2. dedicated artgen port
-    for port in _tt_model_host_ports():                  # 3. tt-model-manager models
-        _add(f"http://{host}:{port}")
-    for port in _scan_ports():                           # 4. blind port sweep
-        if port not in exclude_ports:
-            _add(f"http://{host}:{port}")
-    _add(prompt_url)                                     # 5. tiny fallback, last
+    # Stages 1-2: explicit override + the app's own dedicated artgen port.
+    # Checked BEFORE any docker query, so a healthy 8002 server never waits
+    # on `_tt_model_host_ports()`'s subprocess (up to a 10s timeout if
+    # docker is installed but unresponsive) — that call only happens once
+    # these two have already failed to answer.
+    hit = _probe([preferred_url, artgen_url], is_sweep=False)
+    if hit:
+        return hit
 
-    # The explicit endpoints get the full timeout; the sweep uses a short one so
-    # a run of closed/filtered ports can't stall generation for many seconds.
-    for url in candidates:
-        is_sweep = url not in (preferred_url, artgen_url, prompt_url)
-        m = detect_model(url, timeout=1.5 if is_sweep else 5.0)
-        if m:
-            return url, m
-    return None, None
+    # Stage 3: tt-model-manager models (docker label discovery) — same
+    # short timeout the original flat list gave these (they were never
+    # `preferred_url`/`artgen_url`/`prompt_url`, so they fell into the
+    # "sweep" bucket there too; unchanged here).
+    hit = _probe([f"http://{host}:{port}" for port in _tt_model_host_ports()],
+                 is_sweep=True)
+    if hit:
+        return hit
+
+    # Stage 4: blind port sweep.
+    hit = _probe(
+        [f"http://{host}:{port}" for port in _scan_ports() if port not in exclude_ports],
+        is_sweep=True,
+    )
+    if hit:
+        return hit
+
+    # Stage 5: tiny fallback, last.
+    hit = _probe([prompt_url], is_sweep=False)
+    return hit if hit else (None, None)
 
 
 def call_llm(
