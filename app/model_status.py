@@ -525,6 +525,38 @@ class ModelStatusService:
         # so it's safe (and fast) to do under the lock.
         changed = False
         with self._lock:
+            # Second suppression: an open port genuinely SHARED by multiple
+            # distinct server keys (every media ServerDef's health_url
+            # resolves to the exact same host:port today) where NONE of
+            # them is confirmed healthy is not evidence for WHICH of them
+            # is starting. Without this, a foreign or crashed process
+            # occupying that port (e.g. a model launched outside this app
+            # entirely, or one whose device init failed so /tt-liveness
+            # never returns 2xx) makes _resolve infer STARTING for EVERY
+            # key sharing it, and ready_to_run.conflicting_server then
+            # blames whichever one happens first in SERVERS' declaration
+            # order — observed live: a Wan2.2 container started via the
+            # standalone `tt serve` CLI (outside this app) crashed during
+            # mesh device init, leaving :8000 open but never healthy, and
+            # the app confidently reported "Mochi-1 is running" — which was
+            # never true; nothing else was running at all. A key we're
+            # actually tracking via note_starting() is unaffected — rule 2
+            # in _resolve consults self._starting before the port probe
+            # ever matters, so a genuine launch still reports STARTING.
+            endpoint_owners: "dict[tuple, list[str]]" = {}
+            for key in per_key:
+                ep = self._endpoint_of(key)
+                if ep is not None:
+                    endpoint_owners.setdefault(ep, []).append(key)
+            for ep, keys in endpoint_owners.items():
+                if len(keys) < 2 or any(per_key[k][0] for k in keys):
+                    continue  # single-owner endpoint, or already health-confirmed above
+                for k in keys:
+                    if k in self._starting:
+                        continue
+                    healthy, _port_open = per_key[k]
+                    per_key[k] = (healthy, False)
+
             new_statuses: "dict[str, Status]" = {}
             for key, (healthy, port_open) in per_key.items():
                 starting_at = self._starting.get(key)
