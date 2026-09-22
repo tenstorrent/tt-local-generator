@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import artgen
+import model_capability
 from server_config import server_config
 
 # Args that are scaffolding / not meaningful to store in a record's params.
@@ -287,6 +288,13 @@ def _make_call_fn(model_id: str, base_url: str, args):
     prompt per call without mutating the args namespace.
     The max_tokens override lets multi-pass generators tune each pass budget
     independently (e.g. 1024 for ASCII structure, 8192 for colorisation).
+
+    The returned closure also carries a `.model_tier` attribute
+    (model_capability.model_tier(model_id)) so tier-aware generators (e.g.
+    AnsiGenerator) can scale their prompting strategy to what this model can
+    actually follow. Generators that never read the attribute are
+    unaffected — this is decoration on the closure, not a new call_fn
+    parameter.
     """
     def _call_fn(prompt, system=None, max_tokens=None):
         raw, _ = artgen.call_llm(
@@ -298,6 +306,7 @@ def _make_call_fn(model_id: str, base_url: str, args):
         )
         return raw
 
+    _call_fn.model_tier = model_capability.model_tier(model_id)
     return _call_fn
 
 

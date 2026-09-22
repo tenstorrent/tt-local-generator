@@ -97,8 +97,17 @@ def _make_call_fn(base_url: str | None = None):
 
     Discovery runs per-call so a server started after the MCP server is already
     running is found on the next tool invocation.
+
+    The returned closure also carries a `.model_tier` attribute, resolved
+    from ONE upfront detection call here (unlike the real per-call
+    detection inside _call_fn below) — a generator reads the tier before its
+    first real call, so there's no way to derive it lazily from inside
+    _call_fn without changing every generator's call order. The endpoint and
+    model can still change call-to-call as before; only the tier snapshot is
+    fixed at construction time.
     """
     import artgen
+    import model_capability
 
     # TTLG_LLM_URL may be a full .../v1/chat/completions URL; detect_artgen_endpoint
     # wants a base (http://host:port). Strip the known chat suffixes so the
@@ -125,6 +134,10 @@ def _make_call_fn(base_url: str | None = None):
         )
         return text
 
+    _, _detected_model = artgen.detect_artgen_endpoint(preferred_url=preferred)
+    _call_fn.model_tier = (
+        model_capability.model_tier(_detected_model) if _detected_model else "large"
+    )
     return _call_fn
 
 
