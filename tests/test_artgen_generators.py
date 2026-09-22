@@ -443,6 +443,83 @@ class TestAnsiGenerator:
         row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
         assert row == "\033[38;5;236m#\033[38;5;236m#\033[0m"
 
+    def test_generate_artifact_medium_tier_legend_and_whole_canvas_calls(self):
+        # medium tier: pass1 (whole canvas) + pass2 (whole canvas) +
+        # legend + 1 mechanical-apply call = 4 calls total.
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            n = len(calls)
+            if n == 1:
+                return "\n".join(["#" * 40] * 20)  # pass 1
+            if n == 2:
+                return "\n".join(["#" * 40] * 20)  # pass 2
+            if n == 3:
+                return '{"#": 236, " ": 232}'  # legend
+            # pass 3: whole-canvas mechanical apply, well-formed
+            row = "".join("\033[38;5;236m#" for _ in range(40)) + "\033[0m\n"
+            return row * 20
+
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        fn.model_tier = "medium"
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 4
+        lines = result.split("\n")
+        assert len(lines) == 20
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 40
+
+    def test_generate_artifact_medium_tier_pads_shortfall_from_truncated_response(self):
+        # Live-observed failure mode: a whole-canvas mechanical-apply call
+        # can run out of token budget partway through and drop the
+        # remaining cells entirely (no trailing newlines at all, not even a
+        # partial row). The grid must still come back the right size.
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            n = len(calls)
+            if n == 1:
+                return "\n".join(["#" * 4] * 3)  # pass 1: 4x3 grid
+            if n == 2:
+                return "\n".join(["#" * 4] * 3)  # pass 2
+            if n == 3:
+                return '{"#": 236}'  # legend
+            # pass 3: only the first 5 of 12 cells before running out of budget
+            return "".join("\033[38;5;236m#" for _ in range(5))
+
+        args = _args(ansi_style="scene", subject="test", width=4, height=None,
+                     board_name="", tagline="")
+        args.width = 4
+        fn.model_tier = "medium"
+        # Force a small 4x3 canvas directly via _generate_medium to keep
+        # this test's expected sizes simple and explicit.
+        result = self.g._generate_medium(fn, "test", "scene", 4, 3, "", "")
+        lines = result.split("\n")
+        assert len(lines) == 3
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 4
+
+    def test_build_mechanical_colorize_prompt_lists_distinct_characters(self):
+        from ansi_plugin import _build_mechanical_colorize_prompt
+        prompt = _build_mechanical_colorize_prompt(
+            "##\n  ", {"#": 236, " ": 232}, width=2, height=2,
+        )
+        assert "'#' -> 236" in prompt
+        assert "' ' -> 232" in prompt
+
+    def test_pairs_to_ansi_grid_pads_shortfall_from_legend(self):
+        from ansi_plugin import _pairs_to_ansi_grid
+        pairs = [("236", "#")]
+        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
+        lines = grid.split("\n")
+        assert len(lines) == 2
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 2
+
 
 class TestAnimateDiffGenerator:
     @pytest.fixture(autouse=True)

@@ -484,6 +484,63 @@ def _pairs_to_ansi_row(pairs: list[tuple[str, str]], original_row: str,
     return body + "\033[0m"
 
 
+def _build_mechanical_colorize_prompt(block_art: str, legend: dict[str, int],
+                                       width: int, height: int) -> str:
+    """Pass 3 (medium tier) — apply an already-decided legend to the WHOLE
+    canvas in one call, mechanically. Still explicitly 'apply, don't
+    decide' (the freeform 'creatively assign colors' phrasing was validated
+    to make the model ramble through visible reasoning text instead of
+    emitting output at all) — the difference from the small-tier version is
+    scope (whole canvas vs. one row), which is why this tier's output is
+    parsed the same boundary-independent way rather than trusted to keep
+    its row breaks intact.
+
+    UNVALIDATED AGAINST REAL HARDWARE: no medium-tier (8-30B, unquantized)
+    model was available during the investigation this pipeline is based on.
+    This is a reasoned middle ground between the large tier's single
+    freeform colorize call and the small tier's one-call-per-row loop; if a
+    medium-tier model still runs this call out of budget in practice, the
+    fallback is to route medium tier through the small tier's per-row loop
+    instead (see the design doc's Section 3)."""
+    used = sorted({ch for ch in block_art if ch != "\n"})
+    mapping_lines = "\n".join(f"  {ch!r} -> {legend.get(ch, 244)}" for ch in used)
+    return f"""\
+Wrap EVERY character below with an ANSI 256-color foreground escape code:
+\\033[38;5;Nm<char>
+
+CHARACTER-TO-COLOR MAPPING (apply exactly, mechanical, do not decide creatively):
+{mapping_lines}
+
+GRID ({width}x{height}):
+{block_art}
+
+Output the wrapped characters in reading order (row by row), nothing else.
+No explanation, no markdown, no analysis text.
+"""
+
+
+def _pairs_to_ansi_grid(pairs: list[tuple[str, str]], block_art: str,
+                         legend: dict[str, int], width: int, height: int) -> str:
+    """Reconstruct a full width×height ANSI grid from extracted (color,
+    char) pairs, ignoring the model's own row breaks entirely (they were
+    validated live to be unreliable under token pressure) and padding any
+    shortfall from block_art's own characters via the legend — never
+    raises, never returns a short grid."""
+    flat_original = block_art.replace("\n", "")
+    total = width * height
+    cells = list(pairs)
+    if len(cells) < total:
+        for ch in flat_original[len(cells):total]:
+            cells.append((str(legend.get(ch, 244)), ch))
+    cells = cells[:total]
+    out_rows = []
+    for r in range(height):
+        row_cells = cells[r * width:(r + 1) * width]
+        body = "".join(f"\033[38;5;{c}m{ch}" for c, ch in row_cells)
+        out_rows.append(body + "\033[0m")
+    return "\n".join(out_rows)
+
+
 # ── Generator ─────────────────────────────────────────────────────────────────
 
 
@@ -628,6 +685,33 @@ class AnsiGenerator(ArtGenerator):
             pairs = _extract_colored_cells(raw_row, width)
             colored_rows.append(_pairs_to_ansi_row(pairs, row, legend))
         return "\n".join(colored_rows)
+
+    def _generate_medium(self, call_fn, subject, style, width, height,
+                          board_name, tagline) -> str:
+        """Unchanged whole-canvas structure/refine (passes 1-2, same
+        prompts as the large tier — no evidence they fail at this tier)
+        plus a legend-then-mechanical-whole-canvas-apply color pass. See
+        _build_mechanical_colorize_prompt's docstring for this tier's
+        validation status."""
+        print("[medium-tier: ASCII structure …]", flush=True)
+        raw1 = call_fn(_build_ascii_prompt(subject, width, height, style),
+                       max_tokens=1024)
+        ascii_art = _normalize_grid(raw1, width, height)
+
+        print("[medium-tier: block refinement …]", flush=True)
+        raw2 = call_fn(_build_refine_prompt(ascii_art, subject, width, height),
+                       max_tokens=1024)
+        block_art = _normalize_grid(raw2, width, height)
+
+        print("[medium-tier: legend + mechanical colorization …]", flush=True)
+        legend = _generate_legend(call_fn, block_art, subject, style,
+                                   board_name, tagline)
+        raw3 = call_fn(
+            _build_mechanical_colorize_prompt(block_art, legend, width, height),
+            max_tokens=8192,
+        )
+        pairs = _extract_colored_cells(raw3, width * height)
+        return _pairs_to_ansi_grid(pairs, block_art, legend, width, height)
 
     def parse_output(self, raw: str, args) -> str:
         """Strip think-blocks, fences, and normalise escape notations."""
