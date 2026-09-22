@@ -107,18 +107,52 @@ def test_landscape_panel_mountains_switch_off_collects_false():
 # ── F2: None-default numeric args ────────────────────────────────────────────
 
 
-def test_ansi_width_none_default_zero_collects_as_none():
-    """ansi's --width is `type=int default=None` — its spin starts at 0 and an
-    untouched 0 must collect as None (unset), so the seam omits the flag and
-    the generator's own auto-default (80 for bbs, 40 otherwise) applies."""
+def test_ansi_width_shows_the_real_default_not_a_bare_zero():
+    """ansi's --width is `type=int default=None`, but AnsiGenerator exposes
+    a `dynamic_default()` hook — so instead of the generic 0-means-auto
+    sentinel, the spin shows and forwards the REAL effective width (40 for
+    the default "scene" style) immediately on build, with no guesswork."""
     panel = ArtgenParamPanel("ansi")
     panel.build()
     controls = _controls_by_dest(panel)
 
     width = controls["width"]
     assert width.none_default is True
-    assert width.widget.get_value() == 0  # spin starts at 0 for a None default
-    assert panel.collect()["width"] is None
+    assert width.is_auto is True
+    assert width.widget.get_value() == 40
+    assert panel.collect()["width"] == 40
+
+
+def test_ansi_width_auto_updates_when_style_changes_to_bbs():
+    """Switching the ansi_style dropdown to 'bbs' must live-update the
+    still-untouched width field to bbs's own default (80), not leave it
+    showing scene's 40."""
+    panel = ArtgenParamPanel("ansi")
+    panel.build()
+    controls = _controls_by_dest(panel)
+
+    bbs_idx = controls["ansi_style"].choices.index("bbs")
+    controls["ansi_style"].widget.set_selected(bbs_idx)
+
+    assert controls["width"].widget.get_value() == 80
+    assert panel.collect()["width"] == 80
+
+
+def test_ansi_width_manual_edit_is_not_clobbered_by_a_later_style_change():
+    """Once the user types their own width, it must survive a subsequent
+    ansi_style change — auto-tracking is only for an untouched field."""
+    panel = ArtgenParamPanel("ansi")
+    panel.build()
+    controls = _controls_by_dest(panel)
+
+    controls["width"].widget.set_value(60)
+    assert controls["width"].is_auto is False
+
+    bbs_idx = controls["ansi_style"].choices.index("bbs")
+    controls["ansi_style"].widget.set_selected(bbs_idx)
+
+    assert controls["width"].widget.get_value() == 60
+    assert panel.collect()["width"] == 60
 
 
 def test_ansi_width_nonzero_forwards_the_value():
@@ -129,6 +163,20 @@ def test_ansi_width_nonzero_forwards_the_value():
 
     controls["width"].widget.set_value(50)
     assert panel.collect()["width"] == 50
+
+
+def test_landscape_glitch_seed_keeps_the_bare_sentinel_behavior():
+    """landscape's --glitch-seed has NO dynamic_default hook (its "default"
+    is "pick a random seed each run" — there's no fixed number to show),
+    so it must keep the prior 0-means-auto/None-collect behavior exactly."""
+    panel = ArtgenParamPanel("landscape")
+    panel.build()
+    controls = _controls_by_dest(panel)
+
+    seed = controls["glitch_seed"]
+    assert seed.none_default is True
+    assert seed.widget.get_value() == 0
+    assert panel.collect()["glitch_seed"] is None
 
 
 def test_concrete_default_int_zero_still_forwards():

@@ -312,6 +312,16 @@ _BAND_ROLE_PHRASES: dict[str, list[tuple[str, str, list[str]]]] = {
 }
 
 
+def _default_width(style: str) -> int:
+    """The canvas width used when --width is omitted: wider for bbs's
+    80x20 splash-screen convention, narrower for everything else. Single
+    source of truth for this — both build_prompt/generate_artifact and
+    the GUI's dynamic_default() hook (AnsiGenerator.dynamic_default) call
+    this exact function, so the number the Create panel shows can never
+    drift from the number a generation actually uses."""
+    return 80 if style == "bbs" else 40
+
+
 def _split_bands(height: int, n_bands: int = 3) -> list[int]:
     """Split height rows into n_bands as evenly as possible, giving any
     remainder to the earliest bands. _split_bands(12, 3) == [4, 4, 4];
@@ -536,7 +546,7 @@ class AnsiGenerator(ArtGenerator):
     def build_prompt(self, args) -> str:
         """Return the pass-1 ASCII structure prompt (used by --simulate)."""
         style = getattr(args, "ansi_style", "scene")
-        width = getattr(args, "width", None) or (80 if style == "bbs" else 40)
+        width = getattr(args, "width", None) or _default_width(style)
         height = 20 if style == "bbs" else max(12, width // 2)
         return _build_ascii_prompt(
             subject=getattr(args, "subject", "a mountain at sunset"),
@@ -544,6 +554,21 @@ class AnsiGenerator(ArtGenerator):
             height=height,
             style=style,
         )
+
+    def dynamic_default(self, dest: str, values: dict) -> "int | None":
+        """Optional hook `create_param_panels.ArtgenParamPanel` calls so the
+        Create surface's width field can SHOW and forward the real
+        effective default (80 for bbs, 40 otherwise) instead of a bare
+        0-means-auto sentinel the user has to trust a tooltip to interpret.
+        `values` is a snapshot of every field's current collected value —
+        keyed the same as `args` would be. Calls the exact same
+        `_default_width` that `build_prompt`/`generate_artifact` use, so
+        the number shown in the GUI can never drift from the number an
+        actual generation uses. Returns None for any other dest (no
+        dynamic default there) — never raises."""
+        if dest != "width":
+            return None
+        return _default_width(values.get("ansi_style") or "scene")
 
     def generate_artifact(self, args, call_fn) -> str:
         """Dispatch to a tier-specific pipeline based on call_fn.model_tier
@@ -558,7 +583,7 @@ class AnsiGenerator(ArtGenerator):
         subject    = getattr(args, "subject", "a mountain at sunset")
         board_name = getattr(args, "board_name", "")
         tagline    = getattr(args, "tagline", "")
-        width      = getattr(args, "width", None) or (80 if style == "bbs" else 40)
+        width      = getattr(args, "width", None) or _default_width(style)
         height     = 20 if style == "bbs" else max(12, width // 2)
 
         if tier == "small":
