@@ -319,3 +319,27 @@ def test_artgen_keys_sharing_8002_do_not_infer_starting_off_a_ready_sibling():
     svc._tick()
     assert svc.status("artgen-qwen3-8b") == ms.Status.READY
     assert svc.status("artgen-qwen3-32b") == ms.Status.OFF
+
+
+def test_ambiguous_shared_port_no_longer_lights_both_image_and_video_segments():
+    """The user-visible symptom this whole fix was reported for: the status
+    bar's Image AND Video segments both showed "starting" at the same time,
+    even though only one physical port-8000 container can ever be loading
+    one model. Reproduced end-to-end (real ModelStatusService._tick() feeding
+    the real status_segments.segment_states(), not a fake capability map) via
+    the exact bug scenario — nothing healthy, every media key's shared port
+    genuinely open (observed live: a foreign/crashed model on :8000).
+
+    Confirmed this test actually catches the regression by running it against
+    the pre-fix model_status.py (git rev e6f1aef) — both segments came back
+    STARTING there; after the fix, both come back OFF."""
+    import server_manager as sm
+    import status_segments as ss
+
+    media_keys = [k for k, d in sm.SERVERS.items() if "video" in d.capabilities
+                  or "image" in d.capabilities or "animate" in d.capabilities]
+    svc = _svc({}, ports={k: True for k in media_keys})
+    svc._tick()
+    segments = ss.segment_states(svc.snapshot())
+    assert segments["image"] == ms.Status.OFF
+    assert segments["video"] == ms.Status.OFF
