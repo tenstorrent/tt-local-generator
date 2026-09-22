@@ -1,3 +1,18 @@
+tt-local-generator (0.101.0) noble; urgency=medium
+
+  * feat(artgen): the `ansi` generator now scales its prompting strategy to
+    the serving model's capability tier (small/medium/large), derived from
+    parsed parameter size and known quantization/speculative-decoding
+    markers (app/model_capability.py). A heavily quantized model (validated
+    live against a q4kv + dflash2 27B) collapsed the previous whole-canvas
+    prompts into repeating token loops or rambling explanation instead of
+    ANSI output; band-segmented structure plus legend-then-mechanical-apply
+    colorization fixes this without changing behavior for any
+    already-working model (the "large" tier is byte-identical to the prior
+    single pipeline).
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 22 Sep 2026 10:32:00 -0700
+
 tt-local-generator (0.100.2) noble; urgency=medium
 
   * fix(create): `_reset_preview()` now clears `_preview_missing_logged` along

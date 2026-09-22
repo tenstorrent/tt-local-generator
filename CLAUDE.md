@@ -1,5 +1,67 @@
 # tt-local-generator — developer notes
 
+## Model-capability-aware ANSI prompting (v0.101.0)
+
+Bringing up `Qwen/Qwen3.8-27B` via tt-model-manager (profile
+`qwen3.8-27b-dflash2-vision-p300x2-q4kv`) exposed that the `ansi`
+generator's whole-canvas 3-pass prompts assume a level of instruction-
+following and output diversity a heavily quantized + speculative-decoding
+model doesn't have — live testing showed pass 1 collapsing into a repeating
+token loop regardless of temperature/penalty tuning, and pass 3's freeform
+"creatively assign colors" prompt making the model ramble through visible
+reasoning text instead of ever emitting the requested output.
+
+- **`app/model_capability.py`** (new, pure/stdlib) derives a `small` /
+  `medium` / `large` tier from a model id: parsed `<N>B` parameter count,
+  downgraded one tier by a regex quantization/speculative-decoding hint
+  (`q4`/`awq`/`gptq`/`dflash`/etc.) OR an explicit
+  `_KNOWN_CONSTRAINED_IDS` override. The override list exists because the
+  served `/v1/models` id for this exact case (`Qwen/Qwen3.8-27B`) carries
+  **no** quantization signal at all — that lives only in the serving
+  container's docker label, which the app doesn't read. Unparseable ids
+  default to `large` (never punish a model we haven't characterized).
+- **Both `_make_call_fn` implementations** (`app/artgen/cli.py`,
+  `app/mcp_server.py`) stamp `.model_tier` onto the `call_fn` closure they
+  already build — no change to the `call_fn(prompt, system=,
+  max_tokens=)` contract every generator depends on. The MCP path needed a
+  different fix than a copy-paste of the CLI one: it discovers
+  `(endpoint, model)` lazily inside `_call_fn` on every real call (so a
+  server started after the MCP server launches is still picked up), so
+  there's no upfront model id to stamp a tier from — fixed with one extra
+  upfront detection call at `_make_call_fn` construction time.
+- **`plugins/ansi/plugin.py`** (mirrored into
+  `app/artgen/generators/ansi.py`, per the existing dual-copy convention)
+  reads `getattr(call_fn, "model_tier", "large")` and dispatches to
+  `_generate_large` (today's exact pipeline, byte-identical — the
+  regression safety net for every currently-working model),
+  `_generate_medium` (whole-canvas structure/refine unchanged + a
+  legend-then-whole-canvas-mechanical-apply color pass — **not yet
+  hardware-validated**, no medium-tier model was available during this
+  work), or `_generate_small` (band-segmented structure + a
+  legend-then-per-row-mechanical-apply color pass — validated live against
+  the real Qwen/Qwen3.8-27B endpoint).
+- **The technique that actually worked, validated live:** small,
+  explicitly-anchored, mechanical sub-tasks instead of one big creative
+  one — band-segmented structure with an explicit per-row content
+  instruction (not "vary each row," which still collapsed), a JSON array
+  of row-strings instead of a raw grid block, and a fixed
+  character→color legend applied mechanically rather than decided
+  creatively. Colorize output is parsed by regex-extracting `(color,
+  char)` pairs rather than trusting the model's own line breaks, which
+  the medium/whole-canvas path was validated to drop under token
+  pressure even while the pair sequence itself stayed correct.
+- **Audit of the other 9 LLM-backed generators** (not implemented this
+  pass — see the design doc's Section 6 for the full ranking): `skyline`
+  and `landscape` are the highest-risk for the same repetition-collapse
+  failure (skyline asks for up to 28-38 buildings × 2-8 windows each in
+  one shot; landscape asks for 35-50 background stars + several cloud/
+  mountain layers with exact-coordinate closure rules), `constellation` a
+  smaller-scale version of the same risk. `verse`/`emoji-storyteller`/
+  `palette`/`circuit`/`codeart`/`geometric`/`freeform` are low-risk or
+  risk-neutral by design.
+- Spec: `docs/superpowers/specs/2026-09-21-artgen-model-capability-tiering-design.md`.
+  Plan: `docs/superpowers/plans/2026-09-22-artgen-model-capability-tiering.md`.
+
 ## Watch it form — AnimateDiff live previews (v0.98.0)
 
 The Create panel showed a spinner while a video was being made. It now shows
