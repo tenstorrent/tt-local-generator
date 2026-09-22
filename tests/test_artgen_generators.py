@@ -362,9 +362,13 @@ class TestAnsiGenerator:
         self.g.generate_artifact(args, fn)
         assert len(calls) == 3
 
-    def test_generate_artifact_small_tier_band_and_per_row_calls(self):
+    def test_generate_artifact_small_tier_band_calls_no_colorize_call(self):
         # small tier: 3 band calls (pass 1) + 1 refine call (pass 2) +
-        # 1 legend call + N per-row colorize calls (pass 3, N = height).
+        # 1 legend call = 5 calls total. Colorization (pass 3) is now a
+        # pure local function (_colorize_grid) — no LLM call at all, since
+        # a per-row 'apply this legend' call was validated to return output
+        # identical to the local fallback at real cost (up to 20+ extra
+        # sequential round-trips on this tier before this fix).
         calls = []
 
         def fn(prompt, system=None, max_tokens=None):
@@ -382,18 +386,16 @@ class TestAnsiGenerator:
                 ) + ']'
             if n == 4:
                 return "\n".join(["#" * 40] * 20)  # pass 2: block refine (identity)
-            if n == 5:
-                return '{"#": 236, " ": 232}'  # legend
-            # pass 3: one call per row — echo back a fully-wrapped row
-            return "".join(f"\033[38;5;236m#" for _ in range(40)) + "\033[0m"
+            # n == 5: legend
+            return '{"#": 236, " ": 232}'
 
         args = _args(ansi_style="bbs", subject="test", width=40, height=20,
                      board_name="", tagline="")
         fn.model_tier = "small"
         result = self.g.generate_artifact(args, fn)
 
-        # 3 band calls + 1 refine + 1 legend + 20 per-row colorize calls
-        assert len(calls) == 3 + 1 + 1 + 20
+        # 3 band calls + 1 refine + 1 legend — no per-row colorize calls.
+        assert len(calls) == 5
         lines = result.split("\n")
         assert len(lines) == 20
         for line in lines:
@@ -425,64 +427,44 @@ class TestAnsiGenerator:
         rows = _parse_row_json("not json at all", n_rows=2, width=3)
         assert rows == ["   ", "   "]
 
-    def test_extract_colored_cells_parses_escape_sequences(self):
-        from ansi_plugin import _extract_colored_cells
-        raw = "\033[38;5;51m█\033[38;5;82m▒"
-        pairs = _extract_colored_cells(raw, expected_n=5)
-        assert pairs == [("51", "█"), ("82", "▒")]
-
-    def test_extract_colored_cells_handles_literal_backslash_notation(self):
-        from ansi_plugin import _extract_colored_cells
-        raw = "\\033[38;5;51m█\\033[38;5;82m▒"
-        pairs = _extract_colored_cells(raw, expected_n=5)
-        assert pairs == [("51", "█"), ("82", "▒")]
-
-    def test_extract_colored_cells_handles_caret_bracket_notation(self):
-        # "^[" is the caret-notation display of the ESC byte itself (as
-        # `cat -v` would show it); the CSI-introducing "[" is a second,
-        # separate character right after it — same convention parse_output
-        # and artgen_render._normalize_ansi_escapes already use.
-        from ansi_plugin import _extract_colored_cells
-        raw = "^[[38;5;51m█^[[38;5;82m▒"
-        pairs = _extract_colored_cells(raw, expected_n=5)
-        assert pairs == [("51", "█"), ("82", "▒")]
-
-    def test_extract_colored_cells_handles_bare_octal_notation(self):
-        # Llama-3.3 emits bare octal 033[ with no backslash/x1b prefix —
-        # parse_output already normalizes this; _extract_colored_cells must
-        # too, or it silently drops every cell a model emits this way.
-        from ansi_plugin import _extract_colored_cells
-        raw = "033[38;5;51m█033[38;5;82m▒"
-        pairs = _extract_colored_cells(raw, expected_n=5)
-        assert pairs == [("51", "█"), ("82", "▒")]
-
-    def test_pairs_to_ansi_row_pads_shortfall_from_legend(self):
-        from ansi_plugin import _pairs_to_ansi_row
-        pairs = [("236", "#")]
-        row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
+    def test_colorize_row_applies_legend_to_every_character(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("##", legend={"#": 236})
         assert row == "\033[38;5;236m#\033[38;5;236m#\033[0m"
 
-    def test_pairs_to_ansi_row_uses_original_character_not_models_character(self):
-        # Regression for the silent-corruption bug: the model's own pair
-        # can carry a hallucinated/wrong character. The reconstructed row
-        # must take the COLOR from the model's pair but the CHARACTER from
-        # the original row — never the model's own character.
-        from ansi_plugin import _pairs_to_ansi_row
-        # Model reports color 51 but a wrong character "Z" at position 0;
-        # original_row's actual character there is "#".
-        pairs = [("51", "Z"), ("82", "#")]
-        row = _pairs_to_ansi_row(pairs, original_row="##", legend={"#": 236})
-        assert row == "\033[38;5;51m#\033[38;5;82m#\033[0m"
+    def test_colorize_row_falls_back_to_gray_for_unknown_character(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("#?", legend={"#": 236})
+        assert row == "\033[38;5;236m#\033[38;5;244m?\033[0m"
 
-    def test_pairs_to_ansi_row_clamps_out_of_range_color(self):
-        from ansi_plugin import _pairs_to_ansi_row
-        pairs = [("9999", "#")]
-        row = _pairs_to_ansi_row(pairs, original_row="#", legend={"#": 236})
+    def test_colorize_row_never_changes_the_characters(self):
+        # There is no model-provided character to trust or distrust here
+        # (this function takes no LLM response at all) — every character
+        # in the output is exactly the one passed in, in order, by
+        # construction. Regexing the wrapped chars back out confirms it.
+        import re
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("a#Z", legend={})
+        wrapped_chars = re.findall(r"\033\[38;5;\d+m(.)", row)
+        assert "".join(wrapped_chars) == "a#Z"
+
+    def test_colorize_row_clamps_out_of_range_color(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("#", legend={"#": 9999})
         assert row == "\033[38;5;255m#\033[0m"
 
-    def test_generate_artifact_medium_tier_legend_and_whole_canvas_calls(self):
+    def test_colorize_grid_joins_rows(self):
+        from ansi_plugin import _colorize_grid
+        grid = _colorize_grid("##\n##", {"#": 236})
+        lines = grid.split("\n")
+        assert len(lines) == 2
+        for line in lines:
+            assert line == "\033[38;5;236m#\033[38;5;236m#\033[0m"
+
+    def test_generate_artifact_medium_tier_no_colorize_call(self):
         # medium tier: pass1 (whole canvas) + pass2 (whole canvas) +
-        # legend + 1 mechanical-apply call = 4 calls total.
+        # legend = 3 calls total. Colorization (pass 3) is now a pure
+        # local function (_colorize_grid) — no LLM call.
         calls = []
 
         def fn(prompt, system=None, max_tokens=None):
@@ -492,57 +474,19 @@ class TestAnsiGenerator:
                 return "\n".join(["#" * 40] * 20)  # pass 1
             if n == 2:
                 return "\n".join(["#" * 40] * 20)  # pass 2
-            if n == 3:
-                return '{"#": 236, " ": 232}'  # legend
-            # pass 3: whole-canvas mechanical apply, well-formed
-            row = "".join("\033[38;5;236m#" for _ in range(40)) + "\033[0m\n"
-            return row * 20
+            # n == 3: legend
+            return '{"#": 236, " ": 232}'
 
         args = _args(ansi_style="bbs", subject="test", width=40, height=20,
                      board_name="", tagline="")
         fn.model_tier = "medium"
         result = self.g.generate_artifact(args, fn)
 
-        assert len(calls) == 4
+        assert len(calls) == 3
         lines = result.split("\n")
         assert len(lines) == 20
         for line in lines:
             assert line.count("\033[38;5;236m#") == 40
-
-    def test_generate_artifact_medium_tier_pads_shortfall_from_truncated_response(self):
-        # Live-observed failure mode: a whole-canvas mechanical-apply call
-        # can run out of token budget partway through and drop the
-        # remaining cells entirely (no trailing newlines at all, not even a
-        # partial row). The grid must still come back the right size.
-        calls = []
-
-        def fn(prompt, system=None, max_tokens=None):
-            calls.append(prompt)
-            n = len(calls)
-            if n == 1:
-                return "\n".join(["#" * 4] * 3)  # pass 1: 4x3 grid
-            if n == 2:
-                return "\n".join(["#" * 4] * 3)  # pass 2
-            if n == 3:
-                return '{"#": 236}'  # legend
-            # pass 3: only the first 5 of 12 cells before running out of budget
-            return "".join("\033[38;5;236m#" for _ in range(5))
-
-        # Force a small 4x3 canvas directly via _generate_medium to keep
-        # this test's expected sizes simple and explicit.
-        result = self.g._generate_medium(fn, "test", "scene", 4, 3, "", "")
-        lines = result.split("\n")
-        assert len(lines) == 3
-        for line in lines:
-            assert line.count("\033[38;5;236m#") == 4
-
-    def test_build_mechanical_colorize_prompt_lists_distinct_characters(self):
-        from ansi_plugin import _build_mechanical_colorize_prompt
-        prompt = _build_mechanical_colorize_prompt(
-            "##\n  ", {"#": 236, " ": 232}, width=2, height=2,
-        )
-        assert "'#' -> 236" in prompt
-        assert "' ' -> 232" in prompt
 
     def test_parse_legend_json_drops_only_the_bad_entry(self):
         # Regression: one bad value (a color name instead of an int) used
@@ -551,32 +495,6 @@ class TestAnsiGenerator:
         from ansi_plugin import _parse_legend_json
         legend = _parse_legend_json('{"#": 236, " ": "black"}')
         assert legend == {"#": 236}
-
-    def test_pairs_to_ansi_grid_pads_shortfall_from_legend(self):
-        from ansi_plugin import _pairs_to_ansi_grid
-        pairs = [("236", "#")]
-        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
-        lines = grid.split("\n")
-        assert len(lines) == 2
-        for line in lines:
-            assert line.count("\033[38;5;236m#") == 2
-
-    def test_pairs_to_ansi_grid_uses_original_character_not_models_character(self):
-        # Same regression as the row-level test: color from the model's
-        # pair, character always from the original grid.
-        from ansi_plugin import _pairs_to_ansi_grid
-        pairs = [("51", "Z"), ("82", "#"), ("236", "#"), ("236", "#")]
-        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
-        lines = grid.split("\n")
-        assert lines[0] == "\033[38;5;51m#\033[38;5;82m#\033[0m"
-        assert lines[1] == "\033[38;5;236m#\033[38;5;236m#\033[0m"
-
-    def test_pairs_to_ansi_grid_clamps_out_of_range_color(self):
-        from ansi_plugin import _pairs_to_ansi_grid
-        pairs = [("9999", "#"), ("236", "#"), ("236", "#"), ("236", "#")]
-        grid = _pairs_to_ansi_grid(pairs, "##\n##", {"#": 236}, width=2, height=2)
-        lines = grid.split("\n")
-        assert lines[0].startswith("\033[38;5;255m#")
 
 
 class TestAnimateDiffGenerator:

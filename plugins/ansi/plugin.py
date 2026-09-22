@@ -448,50 +448,11 @@ def _generate_legend(call_fn, block_art: str, subject: str, style: str,
     return legend
 
 
-def _build_row_colorize_prompt(row: str, legend: dict[str, int], width: int) -> str:
-    """Pass 3 (small tier) — apply an ALREADY-DECIDED legend mechanically to
-    one row. This is deliberately NOT 'decide the color for each character'
-    (that phrasing was validated to make the model ramble instead of
-    comply) — it's 'apply this lookup table', a much smaller and more
-    mechanical task."""
-    used = sorted(set(row))
-    mapping_lines = "\n".join(f"  {ch!r} -> {legend.get(ch, 244)}" for ch in used)
-    return f"""\
-Wrap each character of this {width}-character row with an ANSI 256-color
-foreground escape code: \\033[38;5;Nm<char>
-Row: {row}
-CHARACTER-TO-COLOR MAPPING (apply exactly, mechanical, do not decide creatively):
-{mapping_lines}
-Output ONLY the wrapped characters in order, no row-end reset, no
-explanation, no markdown.
-"""
-
-
-_CELL_RE = re.compile(r"\x1b\[38;5;(\d+)m(.)")
-
-
-def _extract_colored_cells(raw: str, expected_n: int) -> list[tuple[str, str]]:
-    """Extract (color, char) pairs from a colorize response by regex,
-    ignoring wherever the model actually put its line breaks. Validated
-    live: a whole-canvas mechanical-apply call reliably dropped row
-    boundaries under token pressure even though the (color, char) sequence
-    itself stayed correct — trusting the model's own newlines would have
-    silently corrupted the grid. Returns at most expected_n pairs."""
-    text = raw.replace("\\033", "\x1b").replace("\\x1b", "\x1b").replace("\\e", "\x1b")
-    text = text.replace("^[", "\x1b")
-    # Bare octal 033[ (no backslash/x1b prefix) — same real-world notation
-    # parse_output already normalizes; mirrored here so this extractor
-    # doesn't miss cells a model emitted this way.
-    text = re.sub(r"(?<![\\x\d])033\[", "\x1b[", text)
-    pairs = _CELL_RE.findall(text)
-    return pairs[:expected_n]
-
-
-def _clamp_color_index(color: str) -> str:
-    """Clamp a color index string to the valid xterm-256 range [0, 255]
-    before it lands in an escape code — a model or legend can hand back an
-    out-of-range value (e.g. a typo'd "9999"), and an unclamped index would
-    emit an escape code no terminal defines a color for."""
+def _clamp_color_index(color) -> str:
+    """Clamp a color index to the valid xterm-256 range [0, 255] before it
+    lands in an escape code — a legend can hand back an out-of-range value
+    (e.g. a typo'd "9999"), and an unclamped index would emit an escape
+    code no terminal defines a color for."""
     try:
         n = int(color)
     except (TypeError, ValueError):
@@ -500,93 +461,34 @@ def _clamp_color_index(color: str) -> str:
     return str(n)
 
 
-def _pairs_to_ansi_row(pairs: list[tuple[str, str]], original_row: str,
-                        legend: dict[str, int]) -> str:
-    """Reconstruct one fully-wrapped ANSI row from extracted (color, char)
-    pairs, padding any shortfall (the model returned fewer cells than the
-    row is wide) using the row's own original characters and the legend's
-    color for them — never raises, never leaves a row short.
+def _colorize_row(row: str, legend: dict[str, int]) -> str:
+    """Mechanically apply an already-decided legend to one row: wrap every
+    character of ROW (never a model's own output — there is no model call
+    on this path) in its legend color, falling back to a neutral gray for
+    any character the legend doesn't cover.
 
-    Color comes from the model's pair; the CHARACTER always comes from
-    original_row, never from the model's own output. The model's only job
-    is choosing colors for an already-fixed layout — trusting its character
-    too would let a deviating/hallucinating response silently overwrite the
-    actual artwork passes 1 and 2 produced, with no size/shape signal to
-    catch it downstream."""
-    width = len(original_row)
-    cells = list(pairs)
-    if len(cells) < width:
-        for ch in original_row[len(cells):]:
-            cells.append((str(legend.get(ch, 244)), ch))
-    cells = cells[:width]
+    No LLM call here. Both a per-row 'apply this mapping' call (small tier)
+    and a whole-canvas version of the same call (medium tier) were
+    validated to return output byte-identical to this pure function, at a
+    real cost (up to 20+ sequential round-trips on the small tier's
+    original per-row design) for zero information gain — the model's only
+    real contribution is `_generate_legend`'s color choices, not the
+    mechanical act of applying them. See the design doc's "Validated
+    technique" section for the empirical finding."""
     body = "".join(
-        f"\033[38;5;{_clamp_color_index(c)}m{original_row[i]}"
-        for i, (c, _ch) in enumerate(cells)
+        f"\033[38;5;{_clamp_color_index(legend.get(ch, 244))}m{ch}"
+        for ch in row
     )
     return body + "\033[0m"
 
 
-def _build_mechanical_colorize_prompt(block_art: str, legend: dict[str, int],
-                                       width: int, height: int) -> str:
-    """Pass 3 (medium tier) — apply an already-decided legend to the WHOLE
-    canvas in one call, mechanically. Still explicitly 'apply, don't
-    decide' (the freeform 'creatively assign colors' phrasing was validated
-    to make the model ramble through visible reasoning text instead of
-    emitting output at all) — the difference from the small-tier version is
-    scope (whole canvas vs. one row), which is why this tier's output is
-    parsed the same boundary-independent way rather than trusted to keep
-    its row breaks intact.
-
-    UNVALIDATED AGAINST REAL HARDWARE: no medium-tier (8-30B, unquantized)
-    model was available during the investigation this pipeline is based on.
-    This is a reasoned middle ground between the large tier's single
-    freeform colorize call and the small tier's one-call-per-row loop; if a
-    medium-tier model still runs this call out of budget in practice, the
-    fallback is to route medium tier through the small tier's per-row loop
-    instead (see the design doc's Section 3)."""
-    used = sorted({ch for ch in block_art if ch != "\n"})
-    mapping_lines = "\n".join(f"  {ch!r} -> {legend.get(ch, 244)}" for ch in used)
-    return f"""\
-Wrap EVERY character below with an ANSI 256-color foreground escape code:
-\\033[38;5;Nm<char>
-
-CHARACTER-TO-COLOR MAPPING (apply exactly, mechanical, do not decide creatively):
-{mapping_lines}
-
-GRID ({width}x{height}):
-{block_art}
-
-Output the wrapped characters in reading order (row by row), nothing else.
-No explanation, no markdown, no analysis text.
-"""
-
-
-def _pairs_to_ansi_grid(pairs: list[tuple[str, str]], block_art: str,
-                         legend: dict[str, int], width: int, height: int) -> str:
-    """Reconstruct a full width×height ANSI grid from extracted (color,
-    char) pairs, ignoring the model's own row breaks entirely (they were
-    validated live to be unreliable under token pressure) and padding any
-    shortfall from block_art's own characters via the legend — never
-    raises, never returns a short grid."""
-    flat_original = block_art.replace("\n", "")
-    total = width * height
-    cells = list(pairs)
-    if len(cells) < total:
-        for ch in flat_original[len(cells):total]:
-            cells.append((str(legend.get(ch, 244)), ch))
-    cells = cells[:total]
-    out_rows = []
-    for r in range(height):
-        row_cells = cells[r * width:(r + 1) * width]
-        # Color comes from the model's pair; the CHARACTER always comes
-        # from flat_original, never from the model's own output — same
-        # contract as _pairs_to_ansi_row, see its docstring.
-        body = "".join(
-            f"\033[38;5;{_clamp_color_index(c)}m{flat_original[r * width + i]}"
-            for i, (c, _ch) in enumerate(row_cells)
-        )
-        out_rows.append(body + "\033[0m")
-    return "\n".join(out_rows)
+def _colorize_grid(block_art: str, legend: dict[str, int]) -> str:
+    """`_colorize_row` applied to every row of block_art — the medium
+    tier's whole-canvas equivalent of the small tier's per-row pass. Since
+    neither tier calls the model for this step, "whole canvas" vs. "one
+    row" no longer has any cost difference; this just joins the per-row
+    results."""
+    return "\n".join(_colorize_row(row, legend) for row in block_art.split("\n"))
 
 
 # ── Generator ─────────────────────────────────────────────────────────────────
@@ -696,9 +598,9 @@ class AnsiGenerator(ArtGenerator):
     def _generate_small(self, call_fn, subject, style, width, height,
                          board_name, tagline) -> str:
         """Band-segmented structure (pass 1) + unchanged whole-canvas block
-        refinement (pass 2) + legend-then-per-row-mechanical-apply color
-        (pass 3). The underlying technique (band-segmented structure,
-        legend-then-mechanical-apply color) was validated live against
+        refinement (pass 2) + legend-then-local-mechanical-apply color
+        (pass 3, no LLM call — see `_colorize_row`'s docstring for why).
+        The band-segmented structure technique was validated live against
         Qwen/Qwen3.8-27B (q4kv + dflash2) on 2026-09-21. This assembled,
         generalized pipeline has not itself been run end-to-end against
         real hardware yet — see the plan's "Post-plan validation" section.
@@ -731,24 +633,17 @@ class AnsiGenerator(ArtGenerator):
                        max_tokens=1024)
         block_art = _normalize_grid(raw2, width, height)
 
-        print("[small-tier: legend + per-row colorization …]", flush=True)
+        print("[small-tier: legend + colorization …]", flush=True)
         legend = _generate_legend(call_fn, block_art, subject, style,
                                    board_name, tagline)
-        colored_rows = []
-        for row in block_art.split("\n"):
-            raw_row = call_fn(_build_row_colorize_prompt(row, legend, width),
-                              max_tokens=max(150, width * 12))
-            pairs = _extract_colored_cells(raw_row, width)
-            colored_rows.append(_pairs_to_ansi_row(pairs, row, legend))
-        return "\n".join(colored_rows)
+        return _colorize_grid(block_art, legend)
 
     def _generate_medium(self, call_fn, subject, style, width, height,
                           board_name, tagline) -> str:
         """Unchanged whole-canvas structure/refine (passes 1-2, same
         prompts as the large tier — no evidence they fail at this tier)
-        plus a legend-then-mechanical-whole-canvas-apply color pass. See
-        _build_mechanical_colorize_prompt's docstring for this tier's
-        validation status.
+        plus a legend-then-local-mechanical-apply color pass (no LLM call
+        — see `_colorize_row`'s docstring for why).
 
         Intentionally bypasses parse_output — this pipeline already builds
         clean, normalized ANSI output itself (no think-blocks/fences/escape
@@ -764,15 +659,10 @@ class AnsiGenerator(ArtGenerator):
                        max_tokens=1024)
         block_art = _normalize_grid(raw2, width, height)
 
-        print("[medium-tier: legend + mechanical colorization …]", flush=True)
+        print("[medium-tier: legend + colorization …]", flush=True)
         legend = _generate_legend(call_fn, block_art, subject, style,
                                    board_name, tagline)
-        raw3 = call_fn(
-            _build_mechanical_colorize_prompt(block_art, legend, width, height),
-            max_tokens=8192,
-        )
-        pairs = _extract_colored_cells(raw3, width * height)
-        return _pairs_to_ansi_grid(pairs, block_art, legend, width, height)
+        return _colorize_grid(block_art, legend)
 
     def parse_output(self, raw: str, args) -> str:
         """Strip think-blocks, fences, and normalise escape notations."""
