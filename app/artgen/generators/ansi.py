@@ -357,7 +357,13 @@ def _parse_row_json(raw: str, n_rows: int, width: int) -> list[str]:
         start = text.index("[")
         end = text.rindex("]")
         arr = json.loads(text[start:end + 1])
-        rows = [str(r) for r in arr]
+        # A JSON array element need not be a string (could be a number,
+        # object, null, ...) — str()-ing a dict/list would leak its Python
+        # repr straight into the canvas as if it were row content. Keep
+        # real strings; replace anything else with a blank placeholder so
+        # row POSITIONS stay aligned (a filter would shift every row after
+        # a bad one up by one).
+        rows = [r if isinstance(r, str) else "" for r in arr]
     except Exception:
         # Fail soft to blank rows — do NOT fall back to the raw text split
         # into lines: unparseable garbage (a stray sentence, an error
@@ -621,10 +627,15 @@ class AnsiGenerator(ArtGenerator):
         for (band_label, chars, phrases), n_rows in zip(specs, band_heights):
             if n_rows <= 0:
                 continue
+            # Each response needs to carry n_rows * width characters plus
+            # JSON syntax overhead (quotes, commas) per row — a budget that
+            # only scales with n_rows (not width) undersizes wide canvases:
+            # bbs's default width=80 needs roughly double what width=40
+            # needs for the same row count.
             raw = call_fn(
                 _build_band_prompt(subject, style, band_label, chars,
                                     phrases, width, n_rows),
-                max_tokens=max(200, n_rows * 40),
+                max_tokens=max(200, n_rows * (width + 20)),
             )
             rows.extend(_parse_row_json(raw, n_rows, width))
         ascii_art = _normalize_grid("\n".join(rows), width, height)

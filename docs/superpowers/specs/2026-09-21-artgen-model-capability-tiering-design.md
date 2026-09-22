@@ -216,16 +216,34 @@ today's live test subject.
 regardless of tier — it's the existing pad/truncate safety net and needs no
 change.
 
+**Update (2026-09-22, PR #28 final review):** the pass-3 mechanical-apply
+LLM call described above — for BOTH `medium` (whole-canvas) and `small`
+(per-row) — was removed entirely after the reviewer found empirically that
+an empty model response produces byte-identical output to the deterministic
+local fallback (the legend already covers every character, and the prompt
+explicitly forbids the model from deciding anything else). `_build_legend_
+prompt` and `_generate_legend` are unchanged (the legend's color choices are
+the one genuinely creative part), but `_build_mechanical_colorize_prompt`,
+`_build_row_colorize_prompt`, and the boundary-independent `(color, char)`
+extractor described above are gone, replaced by two pure functions with no
+LLM call at all: `_colorize_row(row, legend)` and `_colorize_grid(block_art,
+legend)`. Small tier dropped from 25 calls to 5; medium tier from 4 to 3.
+Verified live end-to-end after the change, not just via unit tests.
+
 ## Section 4 — Error handling / fail-soft behavior
 
 Consistent with the rest of this codebase's artgen generators: no tier-aware
 call raises on a malformed/short LLM response. Missing rows are padded with
-blank rows (existing `_normalize_grid` behavior); a colorize call that
-returns fewer `(color, char)` pairs than the row width pads the remainder
-using the legend's own mapping for whatever character was at that position
-(matching the pad behavior already prototyped live), never crashing the
-generation. Tier detection itself (`model_tier`) never raises — an
-unparseable model id string just falls through to `large`.
+blank rows (existing `_normalize_grid` behavior). Tier detection itself
+(`model_tier`) never raises — an unparseable model id string just falls
+through to `large`.
+
+**Update (2026-09-22):** the "colorize call returns fewer pairs than the row
+width" fail-soft path described above no longer exists — per the Section 3
+update above, there is no colorize LLM call left to return a short response.
+`_colorize_row`/`_colorize_grid` still fail soft in their own way: any
+character missing from the legend falls back to a neutral gray (244) rather
+than raising.
 
 ## Section 5 — Testing approach
 
@@ -243,11 +261,11 @@ Pure-function unit tests, no live model required (mirrors the existing
   `call_fn` with `.model_tier` set to each of the three values drives
   `AnsiGenerator.generate_artifact` and asserts (a) `large` produces byte-
   identical prompts/call count to today's behavior (regression pin — this is
-  the one that must never break), (b) `small` makes 3 band calls + N
-  per-row colorize calls (not 3 total calls), (c) `medium` makes the
-  legend + single mechanical-apply shape. Band assembly, boundary-
-  independent parsing, and the pad-on-shortfall behavior each get a direct
-  unit test independent of tier dispatch.
+  the one that must never break), (b) `small` makes 3 band calls + 1 refine
+  + 1 legend call (5 total — no per-row colorize calls, per the Section 3
+  update above), (c) `medium` makes 3 calls (structure + refine + legend).
+  Band assembly and the legend-fallback/clamping behavior in `_colorize_row`/
+  `_colorize_grid` each get a direct unit test independent of tier dispatch.
 - No test depends on a real model or the live QB2 board — everything here
   is prompt-construction and response-parsing logic, testable with canned
   fake responses (including deliberately malformed ones, to exercise the
@@ -355,8 +373,30 @@ reserve left for the rest, compounding the repetition-collapse risk.
   why this isn't the identical change)
 - `tests/test_artgen_generators.py` (extended with tier-dispatch cases)
 
-Not touched this pass: skyline/landscape/constellation (Section 6 backlog),
-any other generator, `create_mediums.py`/GUI surfaces (tier detection is
-CLI/MCP-path only for now — the GUI's artgen jobs also route through
-`_make_call_fn` in `cli.py`/`mcp_server.py`, so this is not a gap, just
-noting no GUI-specific code changes are needed).
+Not touched this pass: skyline/landscape/constellation (Section 6 backlog —
+see below, these WERE touched in a later pass of the same PR), any other
+generator, `create_mediums.py`/GUI surfaces (tier detection is CLI/MCP-path
+only for now — the GUI's artgen jobs also route through `_make_call_fn` in
+`cli.py`/`mcp_server.py`, so this is not a gap, just noting no GUI-specific
+code changes are needed).
+
+**Update (2026-09-22, later in the same PR #28) — files touched by the
+follow-up passes**, on top of the list above:
+
+- `plugins/ansi/plugin.py` / `app/artgen/generators/ansi.py` (again): the
+  colorize-call removal described in Section 3's update, plus a fix for
+  `_parse_row_json` stringifying non-string JSON elements instead of
+  blanking them, and scaling the band prompt's `max_tokens` with `width`
+  (a fixed-canvas-width assumption undersized bbs's default width=80).
+- `plugins/constellation/plugin.py` / `app/artgen/generators/
+  constellation.py` (new): small-tier split, per Section 6's update.
+- `plugins/landscape/plugin.py` / `app/artgen/generators/landscape.py`
+  (new): small-tier split, per Section 6's update.
+- `.github/workflows/ci.yml`: install `fastapi`/`uvicorn`/`httpx2` so the
+  MCP-path tests actually execute (they were silently skipped in every CI
+  run before this).
+- `VERSION`, `debian/changelog`, `CLAUDE.md`: version bump + changelog for
+  the follow-up passes (0.102.0).
+
+Still not touched: `plugins/skyline/plugin.py` (tried, reverted — see
+Section 6's update).

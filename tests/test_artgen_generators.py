@@ -515,6 +515,24 @@ class TestAnsiGenerator:
         rows = _parse_row_json("not json at all", n_rows=2, width=3)
         assert rows == ["   ", "   "]
 
+    def test_parse_row_json_blanks_non_string_elements_without_shifting_positions(self):
+        # A JSON array element need not be a string. Regression: this used
+        # to str()-ify a dict element, leaking its Python repr (e.g.
+        # "{'bad': 'row'}") straight into the canvas as row content.
+        from ansi_plugin import _parse_row_json
+        raw = '["ab", {"bad": "row"}, "cd"]'
+        rows = _parse_row_json(raw, n_rows=3, width=4)
+        assert rows == ["ab  ", "    ", "cd  "]
+
+    def test_build_band_prompt_max_tokens_scales_with_width(self):
+        # A budget that only scaled with n_rows undersized wide canvases
+        # (bbs's default width=80 needed roughly double what width=40
+        # needs for the same row count) — regression-pin the formula.
+        n_rows, width = 16, 80
+        assert max(200, n_rows * (width + 20)) == 1600
+        n_rows, width = 16, 40
+        assert max(200, n_rows * (width + 20)) == 960
+
     def test_colorize_row_applies_legend_to_every_character(self):
         from ansi_plugin import _colorize_row
         row = _colorize_row("##", legend={"#": 236})

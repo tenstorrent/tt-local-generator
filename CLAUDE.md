@@ -119,15 +119,17 @@ reasoning text instead of ever emitting the requested output.
   char)` pairs rather than trusting the model's own line breaks, which
   the medium/whole-canvas path was validated to drop under token
   pressure even while the pair sequence itself stayed correct.
-- **Audit of the other 9 LLM-backed generators** (not implemented this
-  pass — see the design doc's Section 6 for the full ranking): `skyline`
-  and `landscape` are the highest-risk for the same repetition-collapse
-  failure (skyline asks for up to 28-38 buildings × 2-8 windows each in
-  one shot; landscape asks for 35-50 background stars + several cloud/
-  mountain layers with exact-coordinate closure rules), `constellation` a
-  smaller-scale version of the same risk. `verse`/`emoji-storyteller`/
-  `palette`/`circuit`/`codeart`/`geometric`/`freeform` are low-risk or
-  risk-neutral by design.
+- **Audit of the other 9 LLM-backed generators** (not implemented in
+  *this* pass — see the design doc's Section 6 for the full ranking;
+  **landscape and constellation were implemented in a later pass of the
+  same PR, see the v0.102.0 section above** — skyline was tried the same
+  way and reverted): `skyline` and `landscape` are the highest-risk for
+  the same repetition-collapse failure (skyline asks for up to 28-38
+  buildings × 2-8 windows each in one shot; landscape asks for 35-50
+  background stars + several cloud/mountain layers with exact-coordinate
+  closure rules), `constellation` a smaller-scale version of the same
+  risk. `verse`/`emoji-storyteller`/`palette`/`circuit`/`codeart`/
+  `geometric`/`freeform` are low-risk or risk-neutral by design.
 - Spec: `docs/superpowers/specs/2026-09-21-artgen-model-capability-tiering-design.md`.
   Plan: `docs/superpowers/plans/2026-09-22-artgen-model-capability-tiering.md`.
 
