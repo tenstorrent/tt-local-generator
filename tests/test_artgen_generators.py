@@ -191,6 +191,59 @@ class TestConstellationGenerator:
         result = self.g.generate_artifact(_args(culture="greek", stars=5, lore=False), fn)
         fn.assert_called_once()
 
+    def test_generate_artifact_small_tier_makes_one_call_and_includes_local_stars(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append((prompt, max_tokens))
+            return '<circle cx="10" cy="10" r="4" fill="#E8F0F2"/><text>Arktouros</text>'
+
+        fn.model_tier = "small"
+        args = _args(culture="greek", stars=20, lore=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 1
+        # max_tokens scales with star_count, not the flat CLI default —
+        # this is what fixes the real truncation failure at --stars 20.
+        assert calls[0][1] == max(4096, 250 * 20)
+        assert result.startswith("<svg")
+        assert result.endswith("</svg>")
+        assert "Arktouros" in result
+        assert result.count("<circle") > 20  # local filler stars + the model's own
+
+    def test_generate_artifact_small_tier_splits_out_trailing_lore(self):
+        def fn(prompt, system=None, max_tokens=None):
+            return (
+                '<circle cx="10" cy="10" r="4"/>'
+                '<!-- LORE: A tale of stars. -->'
+            )
+
+        fn.model_tier = "small"
+        args = _args(culture="greek", stars=5, lore=True)
+        result = self.g.generate_artifact(args, fn)
+
+        assert "</svg>" in result
+        assert result.rstrip().endswith("-->")
+        # Lore comment must come AFTER </svg>, matching the large tier's layout.
+        assert result.index("</svg>") < result.index("<!-- LORE:")
+
+    def test_local_background_stars_count_matches_original_range(self):
+        from constellation_plugin import _local_background_stars_svg
+        svg = _local_background_stars_svg(star_count=8, seed=1)
+        assert svg.count("<circle") in range(8 * 3, 8 * 3 + 21)
+
+    def test_split_lore_separates_comment_from_body(self):
+        from constellation_plugin import _split_lore
+        body, lore = _split_lore('<circle/>\n<!-- LORE: hello -->')
+        assert body == "<circle/>"
+        assert lore == "<!-- LORE: hello -->"
+
+    def test_split_lore_returns_empty_string_when_no_lore(self):
+        from constellation_plugin import _split_lore
+        body, lore = _split_lore('<circle/>')
+        assert body == "<circle/>"
+        assert lore == ""
+
 
 class TestGeometricGenerator:
     @pytest.fixture(autouse=True)
@@ -292,6 +345,41 @@ class TestLandscapeGenerator:
         result = self.g.generate_artifact(args, fn)
         fn.assert_called_once()
         assert result.startswith("<svg")
+
+    def test_generate_artifact_small_tier_makes_one_call_with_no_optional_features(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            return "<rect fill='#123456'/>"
+
+        fn.model_tier = "small"
+        args = _args(palette="sunset", mountains=False, clouds=False, stars=False, glitch=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 1  # background only — no clouds/mountains calls
+        assert result.startswith("<svg")
+        assert result.endswith("</svg>")
+        assert "#0F0805" in result  # sunset palette's ground color, built locally
+
+    def test_generate_artifact_small_tier_makes_three_calls_with_all_features(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            return "<rect/>"
+
+        fn.model_tier = "small"
+        args = _args(palette="sunset", mountains=True, clouds=True, stars=True, glitch=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 3  # background + clouds + mountains
+        assert result.startswith("<svg")
+
+    def test_clean_fragment_unwraps_a_full_svg_the_model_added_anyway(self):
+        from landscape_plugin import _clean_fragment
+        raw = "<svg xmlns='...'><rect fill='red'/></svg>"
+        assert _clean_fragment(raw) == "<rect fill='red'/>"
 
 
 class TestAnsiGenerator:

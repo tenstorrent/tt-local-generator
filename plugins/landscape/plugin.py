@@ -150,6 +150,116 @@ def _build_prompt(
     )
 
 
+# ── Small-tier helpers (split by layer, per the design doc's Section 6) ──────
+#
+# EXPERIMENTAL / not yet validated to actually help — the large single-shot
+# prompt above was live-tested clean (no repetition, valid XML) with
+# --mountains --clouds --stars against the same constrained model this is
+# meant to defend against. This split exists for a case not exercised live;
+# if a before/after comparison doesn't show an improvement, it should not
+# be relied on — see the design doc's Section 6 discussion.
+
+
+def _build_background_prompt(p: dict, has_stars: bool) -> str:
+    """Small tier, pass 1 — sky gradient, atmosphere glow, sun/moon, and
+    stars if enabled. Bare fragment elements only."""
+    w, h = SVG_W, SVG_H
+    horizon_y = int(h * 0.50)
+    star_hint = (
+        f"  - Stars: 35-50 <circle> elements, r=0.5-2, fill={p['sun']}, "
+        f"opacity 0.5-0.9, scattered above y={int(h*0.48)}\n"
+        if has_stars else ""
+    )
+    return (
+        f"Generate ONLY the sky background of a layered landscape SVG "
+        f"({w}x{h}px) as bare SVG elements — no <svg> root tag, no clouds, "
+        f"no mountains, no ground.\n\n"
+        f"PALETTE (use ONLY these colors):\n"
+        f"  sky_top={p['sky_top']}  sky_mid={p['sky_mid']}  sky_bottom={p['sky_bottom']}\n"
+        f"  sun/moon={p['sun']}  atmosphere={p['atmosphere']}\n\n"
+        f"ELEMENTS (in this order):\n"
+        f"  - <defs>: linearGradient id='sky' (gradientUnits='objectBoundingBox', "
+        f"x1='0' y1='0' x2='0' y2='1') with 3 stops {p['sky_top']} -> {p['sky_mid']} "
+        f"-> {p['sky_bottom']}\n"
+        f"  - Full-canvas <rect> using the sky gradient\n"
+        + star_hint
+        + f"  - Atmospheric glow: one wide <ellipse> centered near y={horizon_y}, "
+        f"fill={p['atmosphere']}, opacity 0.15-0.30, no stroke\n"
+        f"  - Sun or moon: <circle> r=28-44, center near x={int(w*0.25)}-{int(w*0.75)}, "
+        f"y={int(h*0.12)}-{int(h*0.42)}, fill={p['sun']}\n\n"
+        f"RULES:\n"
+        f"  - Use ONLY the palette colors above\n"
+        f"  - Output ONLY these elements in the order listed — no <svg> tag, "
+        f"no clouds, no mountains, no ground, no explanation, no markdown."
+    )
+
+
+def _build_clouds_prompt(p: dict) -> str:
+    """Small tier — clouds only, one call, bare fragment elements."""
+    w, h = SVG_W, SVG_H
+    return (
+        f"Generate ONLY cloud formations for a layered landscape SVG "
+        f"({w}x{h}px) as bare SVG elements — no <svg> root tag, no sky, "
+        f"no mountains, no ground.\n\n"
+        f"Clouds: 4-6 groups, each group = 3-5 overlapping <ellipse> in "
+        f"{p['cloud']}, placed at varied x, y={int(h*0.10)}-{int(h*0.40)}\n\n"
+        f"RULES:\n"
+        f"  - Use ONLY {p['cloud']} for fill\n"
+        f"  - Output ONLY the cloud <ellipse> elements — no <svg> tag, no "
+        f"sky, no mountains, no ground, no explanation, no markdown."
+    )
+
+
+def _build_mountains_prompt(p: dict) -> str:
+    """Small tier — the three mountain ridge layers, one call, bare
+    fragment elements. Kept as a single call (unlike skyline's per-layer
+    split) — three polygons is not a large-count risk; the risk here is
+    the exact-coordinate closure rule, which doesn't benefit from
+    splitting across calls."""
+    w, h = SVG_W, SVG_H
+    return (
+        f"Generate ONLY three layers of mountain ridges for a layered "
+        f"landscape SVG ({w}x{h}px) as bare SVG <polygon> elements — no "
+        f"<svg> root tag, no sky, no clouds, no ground.\n\n"
+        f"Far mountains: <polygon> peaks at y={int(h*0.28)}-{int(h*0.48)}, "
+        f"fill={p['mountain_far']} — must start 0,{h} and end {w},{h}\n"
+        f"Mid mountains: <polygon> peaks at y={int(h*0.40)}-{int(h*0.58)}, "
+        f"fill={p['mountain_mid']} — must start 0,{h} and end {w},{h}\n"
+        f"Near mountains: <polygon> peaks at y={int(h*0.52)}-{int(h*0.68)}, "
+        f"fill={p['mountain_near']} — must start 0,{h} and end {w},{h}\n\n"
+        f"MOUNTAIN POLYGON RULE: Each polygon must span the full canvas "
+        f"width. The points string must begin with '0,{h}' and end with "
+        f"'{w},{h}' so the shape closes along the bottom edge. Add 8-12 "
+        f"irregular peaks between those anchors for natural ridgelines.\n\n"
+        f"RULES:\n"
+        f"  - Output ONLY the three <polygon> elements, far to near — no "
+        f"<svg> tag, no sky, no clouds, no ground, no explanation, no markdown."
+    )
+
+
+def _local_ground_svg(p: dict, w: int, h: int) -> str:
+    """The ground rect is fully determined by the palette and fixed
+    geometry — no creative content, so no LLM call for it at all."""
+    ground_y = int(h * 0.76)
+    return (
+        f'<rect x="0" y="{ground_y}" width="{w}" height="{h - ground_y}" '
+        f'fill="{p["ground"]}"/>'
+    )
+
+
+def _clean_fragment(raw: str) -> str:
+    """Strip think-blocks/fences from a fragment response and, if the model
+    wrapped it in a full <svg>...</svg> despite being asked not to, unwrap
+    it to just the inner elements."""
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    cleaned = re.sub(r"```(?:svg|xml)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```\s*", "", cleaned.strip())
+    m = re.search(r"<svg\b[^>]*>(.*)</svg>", cleaned, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return cleaned.strip()
+
+
 # ── SVG parser ────────────────────────────────────────────────────────────────
 
 
@@ -302,6 +412,57 @@ class LandscapeGenerator(ArtGenerator):
             getattr(args, "clouds", False),
             getattr(args, "stars", False),
         )
+
+    def generate_artifact(self, args, call_fn) -> str:
+        """large/medium tier: unchanged single-call whole-image prompt (no
+        evidence of failure at those tiers, live-tested clean with
+        --mountains --clouds --stars). small tier: EXPERIMENTAL split by
+        layer — see the module docstring above _build_background_prompt."""
+        tier = getattr(call_fn, "model_tier", "large")
+        if tier == "small":
+            key = getattr(args, "palette", "random")
+            if key == "random" or key not in PALETTES:
+                key = _random.choice(list(PALETTES))
+            artifact = self._generate_small(
+                call_fn, PALETTES[key],
+                getattr(args, "mountains", True),
+                getattr(args, "clouds", False),
+                getattr(args, "stars", False),
+            )
+            return self.post_process(artifact, args)
+        raw = call_fn(self.build_prompt(args))
+        return self.post_process(self.parse_output(raw, args), args)
+
+    def _generate_small(self, call_fn, p: dict, has_mountains: bool,
+                         has_clouds: bool, has_stars: bool) -> str:
+        w, h = SVG_W, SVG_H
+
+        # Generous budgets throughout: a too-small budget previously
+        # truncated every fragment mid-element (found via live before/after
+        # testing) — up to 50 stars alone can run past 1200 tokens once
+        # gradient defs, atmosphere, and the sun/moon are included too.
+        print("[small-tier: sky background …]", flush=True)
+        frags = [_clean_fragment(
+            call_fn(_build_background_prompt(p, has_stars), max_tokens=2500)
+        )]
+
+        if has_clouds:
+            print("[small-tier: clouds …]", flush=True)
+            frags.append(_clean_fragment(
+                call_fn(_build_clouds_prompt(p), max_tokens=1500)
+            ))
+
+        if has_mountains:
+            print("[small-tier: mountains …]", flush=True)
+            frags.append(_clean_fragment(
+                call_fn(_build_mountains_prompt(p), max_tokens=2500)
+            ))
+
+        frags.append(_local_ground_svg(p, w, h))
+
+        body = "\n".join(frags)
+        assembled = f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">\n{body}\n</svg>'
+        return self.parse_output(assembled, None)
 
     def parse_output(self, raw: str, args) -> str:
         svg = _parse_svg(raw)
