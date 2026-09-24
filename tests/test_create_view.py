@@ -2521,11 +2521,14 @@ def test_artgen_param_panel_ansi_collect_returns_generator_defaults():
 
     assert panel.collect() == {
         "subject": "a mountain at sunset",
-        # --width is `type=int default=None`; its spin starts at 0 and an
-        # untouched 0 collects as None (unset) so the generator's own
-        # auto-default applies — NOT a literal 0 that would build a 0-column
-        # canvas (whole-branch review F2).
-        "width": None,
+        # --width is `type=int default=None`, but AnsiGenerator exposes a
+        # `dynamic_default()` hook (see create_param_panels.py's
+        # ArtgenParamPanel._wire_dynamic_defaults) — so instead of a bare
+        # 0-means-auto sentinel (whole-branch review F2's original concern:
+        # a literal 0 would build a 0-column canvas), the field shows and
+        # forwards the REAL effective default for the current ansi_style
+        # ("scene" here -> 40) with no guesswork required.
+        "width": 40,
         "colors": "256",
         "ansi_style": "scene",
         "board_name": "",

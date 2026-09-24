@@ -31,6 +31,19 @@ jobs:
           # WebKit (gir1.2-webkit-6.0) is deliberately NOT installed — the app
           #   guards it (_WEBKIT_OK) and the reading-view tests fall back, so CI
           #   exercises the no-WebKit path.
+          # fastapi/uvicorn (pip, per debian/postinst's own MCP-server install
+          #   step): tests/test_mcp_server.py and tests/test_mcp_server_call_fn.py
+          #   both `pytest.importorskip("fastapi", ...)` at module scope — without
+          #   this, both files were silently skipped in every CI run (confirmed
+          #   on PR #28), so the MCP-path tier-stamping change never actually
+          #   executed anywhere except a dev machine that happened to have it.
+          # httpx2: current fastapi/starlette's TestClient (used by
+          #   test_mcp_server.py) requires this — it's starlette's real,
+          #   currently-published successor to the old `httpx` test-client
+          #   dependency, not a typo. Without it, TestClient construction
+          #   raises RuntimeError for every test that builds one.
+          python3 -m pip install --quiet --break-system-packages \
+            "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "httpx2"
 
       - name: Run tests
         run: |

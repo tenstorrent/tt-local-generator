@@ -1984,6 +1984,18 @@ class _ArgControl:
     # back as None (the "unset — use the generator's auto-default" sentinel)
     # rather than the literal 0 that would override that default downstream.
     none_default: bool = False
+    # Only meaningful when `none_default` is set. True until the user
+    # actually edits the field — while True, `ArtgenParamPanel` may
+    # auto-populate it with the generator's own `dynamic_default()` hook
+    # (see that method) so the field SHOWS the real number instead of a
+    # bare 0-means-auto sentinel. Flips to False on a genuine user edit, so
+    # a later auto-refresh (e.g. the user changing a sibling field) never
+    # clobbers an intentional override.
+    is_auto: bool = True
+    # Guards against `set_value()`'s own "value-changed" signal being
+    # mistaken for a user edit while `ArtgenParamPanel` is programmatically
+    # refreshing this field's displayed auto-default.
+    _updating: bool = field(default=False, repr=False)
 
     def read(self) -> object:
         if self.kind == "choice":
@@ -2277,9 +2289,76 @@ class ArtgenParamPanel(CreateParamPanel):
                 box.append(row)
                 self._controls.append(control)
                 self._rows[spec.dest] = row
+            self._wire_dynamic_defaults()
 
         self._widget = box
         return box
+
+    def _wire_dynamic_defaults(self) -> None:
+        """Optional per-generator hook: if the generator exposes
+        `dynamic_default(dest, values) -> value | None` (ansi does, for
+        `width` — see `AnsiGenerator.dynamic_default`), a None-default
+        int/float field shows and forwards the TRUE effective default
+        computed from the other fields' current values, instead of a bare
+        0-means-auto sentinel the user has to trust a tooltip to interpret.
+
+        Purely additive: a generator without this method (e.g. landscape's
+        `--glitch-seed`, which has no fixed number to show — its default is
+        "pick a random seed each run", not a constant) keeps the exact
+        prior 0/tooltip behavior untouched.
+        """
+        try:
+            import artgen as _artgen
+            gen = _artgen.get(self._generator_name)
+        except Exception:
+            return
+        hook = getattr(gen, "dynamic_default", None)
+        if hook is None:
+            return
+
+        def _on_driver_changed(*_args) -> None:
+            self._refresh_dynamic_defaults(hook)
+
+        def _make_driven_handler(control: "_ArgControl"):
+            def _on_driven_changed(*_args) -> None:
+                # A real user edit (not our own programmatic set_value
+                # inside _refresh_dynamic_defaults) — stop auto-tracking so
+                # a later sibling-field change never clobbers this choice.
+                if not control._updating:
+                    control.is_auto = False
+            return _on_driven_changed
+
+        for control in self._controls:
+            if control.kind == "choice":
+                control.widget.connect("notify::selected", _on_driver_changed)
+            elif control.none_default and control.kind in ("int", "float"):
+                control.widget.connect("value-changed", _make_driven_handler(control))
+
+        # Populate the initial display immediately (e.g. width shows 40 for
+        # ansi's default "scene" style right away — never a bare 0) rather
+        # than waiting for the user to touch the driver field first.
+        self._refresh_dynamic_defaults(hook)
+
+    def _refresh_dynamic_defaults(self, hook: "Callable[[str, dict], object]") -> None:
+        values = {c.dest: c.read() for c in self._controls}
+        for control in self._controls:
+            if not (control.none_default and control.is_auto
+                    and control.kind in ("int", "float")):
+                continue
+            try:
+                new_val = hook(control.dest, values)
+            except Exception:
+                continue
+            if new_val is None:
+                continue
+            control._updating = True
+            try:
+                control.widget.set_value(new_val)
+                control.widget.set_tooltip_text(
+                    f"Auto: {new_val} for the current settings — type a value to override."
+                )
+            finally:
+                control._updating = False
 
     def collect(self) -> dict:
         """Read every mounted control's current value into `{dest: value}`.

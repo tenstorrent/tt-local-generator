@@ -26,9 +26,16 @@ _ANIMATEDIFF_PLUGIN = Path(__file__).parent.parent / "plugins" / "animatediff" /
 
 
 def _load_plugin(path: Path, module_name: str):
-    """Load a plugin module from an absolute path, bypassing sys.modules cache."""
+    """Load a plugin module from an absolute path, bypassing sys.modules cache.
+
+    Registers the freshly-loaded module in sys.modules under module_name
+    BEFORE exec_module runs — required for `from <module_name> import ...`
+    to resolve inside individual test methods (a bare module_from_spec()
+    result is not importable by name on its own; Python's import machinery
+    only ever looks in sys.modules)."""
     spec = importlib.util.spec_from_file_location(module_name, path)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -184,6 +191,59 @@ class TestConstellationGenerator:
         result = self.g.generate_artifact(_args(culture="greek", stars=5, lore=False), fn)
         fn.assert_called_once()
 
+    def test_generate_artifact_small_tier_makes_one_call_and_includes_local_stars(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append((prompt, max_tokens))
+            return '<circle cx="10" cy="10" r="4" fill="#E8F0F2"/><text>Arktouros</text>'
+
+        fn.model_tier = "small"
+        args = _args(culture="greek", stars=20, lore=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 1
+        # max_tokens scales with star_count, not the flat CLI default —
+        # this is what fixes the real truncation failure at --stars 20.
+        assert calls[0][1] == max(4096, 250 * 20)
+        assert result.startswith("<svg")
+        assert result.endswith("</svg>")
+        assert "Arktouros" in result
+        assert result.count("<circle") > 20  # local filler stars + the model's own
+
+    def test_generate_artifact_small_tier_splits_out_trailing_lore(self):
+        def fn(prompt, system=None, max_tokens=None):
+            return (
+                '<circle cx="10" cy="10" r="4"/>'
+                '<!-- LORE: A tale of stars. -->'
+            )
+
+        fn.model_tier = "small"
+        args = _args(culture="greek", stars=5, lore=True)
+        result = self.g.generate_artifact(args, fn)
+
+        assert "</svg>" in result
+        assert result.rstrip().endswith("-->")
+        # Lore comment must come AFTER </svg>, matching the large tier's layout.
+        assert result.index("</svg>") < result.index("<!-- LORE:")
+
+    def test_local_background_stars_count_matches_original_range(self):
+        from constellation_plugin import _local_background_stars_svg
+        svg = _local_background_stars_svg(star_count=8, seed=1)
+        assert svg.count("<circle") in range(8 * 3, 8 * 3 + 21)
+
+    def test_split_lore_separates_comment_from_body(self):
+        from constellation_plugin import _split_lore
+        body, lore = _split_lore('<circle/>\n<!-- LORE: hello -->')
+        assert body == "<circle/>"
+        assert lore == "<!-- LORE: hello -->"
+
+    def test_split_lore_returns_empty_string_when_no_lore(self):
+        from constellation_plugin import _split_lore
+        body, lore = _split_lore('<circle/>')
+        assert body == "<circle/>"
+        assert lore == ""
+
 
 class TestGeometricGenerator:
     @pytest.fixture(autouse=True)
@@ -286,6 +346,41 @@ class TestLandscapeGenerator:
         fn.assert_called_once()
         assert result.startswith("<svg")
 
+    def test_generate_artifact_small_tier_makes_one_call_with_no_optional_features(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            return "<rect fill='#123456'/>"
+
+        fn.model_tier = "small"
+        args = _args(palette="sunset", mountains=False, clouds=False, stars=False, glitch=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 1  # background only — no clouds/mountains calls
+        assert result.startswith("<svg")
+        assert result.endswith("</svg>")
+        assert "#0F0805" in result  # sunset palette's ground color, built locally
+
+    def test_generate_artifact_small_tier_makes_three_calls_with_all_features(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            return "<rect/>"
+
+        fn.model_tier = "small"
+        args = _args(palette="sunset", mountains=True, clouds=True, stars=True, glitch=False)
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 3  # background + clouds + mountains
+        assert result.startswith("<svg")
+
+    def test_clean_fragment_unwraps_a_full_svg_the_model_added_anyway(self):
+        from landscape_plugin import _clean_fragment
+        raw = "<svg xmlns='...'><rect fill='red'/></svg>"
+        assert _clean_fragment(raw) == "<rect fill='red'/>"
+
 
 class TestAnsiGenerator:
     @pytest.fixture(autouse=True)
@@ -317,6 +412,195 @@ class TestAnsiGenerator:
                      board_name="", tagline="")
         self.g.generate_artifact(args, fn)
         assert len(calls) == 3
+
+    def test_generate_artifact_defaults_to_large_tier_without_model_tier_attr(self):
+        # A call_fn with no .model_tier attribute at all (e.g. a hand-rolled
+        # test double, or any caller predating this change) must reproduce
+        # today's exact 3-call whole-canvas behavior.
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return "A B C\nD E F"
+            if len(calls) == 2:
+                return "█ ░ ▒\n▓ ▀ ▄"
+            return "\033[38;5;51m█\033[0m \033[38;5;82m▒\033[0m"
+
+        assert not hasattr(fn, "model_tier")
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        self.g.generate_artifact(args, fn)
+        assert len(calls) == 3
+
+    def test_generate_artifact_large_tier_explicit(self):
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return "A B C\nD E F"
+            if len(calls) == 2:
+                return "█ ░ ▒\n▓ ▀ ▄"
+            return "\033[38;5;51m█\033[0m \033[38;5;82m▒\033[0m"
+
+        fn.model_tier = "large"
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        self.g.generate_artifact(args, fn)
+        assert len(calls) == 3
+
+    def test_generate_artifact_small_tier_band_calls_no_colorize_call(self):
+        # small tier: 3 band calls (pass 1) + 1 refine call (pass 2) +
+        # 1 legend call = 5 calls total. Colorization (pass 3) is now a
+        # pure local function (_colorize_grid) — no LLM call at all, since
+        # a per-row 'apply this legend' call was validated to return output
+        # identical to the local fallback at real cost (up to 20+ extra
+        # sequential round-trips on this tier before this fix).
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            n = len(calls)
+            if n <= 3:
+                # band calls — JSON array of row-strings. Width/height for
+                # this test come from the bbs style defaults (40x20); bands
+                # split into [2, 16, 2] rows for bbs. Reply with a plausible
+                # JSON array sized to whatever the prompt actually asked for.
+                if "exactly 2 strings" in prompt:
+                    return '["                                        ", "                                        "]'
+                return '[' + ", ".join(
+                    ['"' + ("#" * 40) + '"'] * 16
+                ) + ']'
+            if n == 4:
+                return "\n".join(["#" * 40] * 20)  # pass 2: block refine (identity)
+            # n == 5: legend
+            return '{"#": 236, " ": 232}'
+
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        fn.model_tier = "small"
+        result = self.g.generate_artifact(args, fn)
+
+        # 3 band calls + 1 refine + 1 legend — no per-row colorize calls.
+        assert len(calls) == 5
+        lines = result.split("\n")
+        assert len(lines) == 20
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 40
+            assert line.endswith("\033[0m")
+
+    def test_split_bands_even_division(self):
+        from ansi_plugin import _split_bands
+        assert _split_bands(12, 3) == [4, 4, 4]
+
+    def test_split_bands_uneven_division_favors_earlier_bands(self):
+        from ansi_plugin import _split_bands
+        assert _split_bands(20, 3) == [7, 7, 6]
+
+    def test_parse_row_json_pads_short_rows(self):
+        from ansi_plugin import _parse_row_json
+        raw = '["ab", "cd"]'
+        rows = _parse_row_json(raw, n_rows=3, width=4)
+        assert rows == ["ab  ", "cd  ", "    "]
+
+    def test_parse_row_json_truncates_long_rows(self):
+        from ansi_plugin import _parse_row_json
+        raw = '["abcdef"]'
+        rows = _parse_row_json(raw, n_rows=1, width=4)
+        assert rows == ["abcd"]
+
+    def test_parse_row_json_fails_soft_on_garbage(self):
+        from ansi_plugin import _parse_row_json
+        rows = _parse_row_json("not json at all", n_rows=2, width=3)
+        assert rows == ["   ", "   "]
+
+    def test_parse_row_json_blanks_non_string_elements_without_shifting_positions(self):
+        # A JSON array element need not be a string. Regression: this used
+        # to str()-ify a dict element, leaking its Python repr (e.g.
+        # "{'bad': 'row'}") straight into the canvas as row content.
+        from ansi_plugin import _parse_row_json
+        raw = '["ab", {"bad": "row"}, "cd"]'
+        rows = _parse_row_json(raw, n_rows=3, width=4)
+        assert rows == ["ab  ", "    ", "cd  "]
+
+    def test_build_band_prompt_max_tokens_scales_with_width(self):
+        # A budget that only scaled with n_rows undersized wide canvases
+        # (bbs's default width=80 needed roughly double what width=40
+        # needs for the same row count) — regression-pin the formula.
+        n_rows, width = 16, 80
+        assert max(200, n_rows * (width + 20)) == 1600
+        n_rows, width = 16, 40
+        assert max(200, n_rows * (width + 20)) == 960
+
+    def test_colorize_row_applies_legend_to_every_character(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("##", legend={"#": 236})
+        assert row == "\033[38;5;236m#\033[38;5;236m#\033[0m"
+
+    def test_colorize_row_falls_back_to_gray_for_unknown_character(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("#?", legend={"#": 236})
+        assert row == "\033[38;5;236m#\033[38;5;244m?\033[0m"
+
+    def test_colorize_row_never_changes_the_characters(self):
+        # There is no model-provided character to trust or distrust here
+        # (this function takes no LLM response at all) — every character
+        # in the output is exactly the one passed in, in order, by
+        # construction. Regexing the wrapped chars back out confirms it.
+        import re
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("a#Z", legend={})
+        wrapped_chars = re.findall(r"\033\[38;5;\d+m(.)", row)
+        assert "".join(wrapped_chars) == "a#Z"
+
+    def test_colorize_row_clamps_out_of_range_color(self):
+        from ansi_plugin import _colorize_row
+        row = _colorize_row("#", legend={"#": 9999})
+        assert row == "\033[38;5;255m#\033[0m"
+
+    def test_colorize_grid_joins_rows(self):
+        from ansi_plugin import _colorize_grid
+        grid = _colorize_grid("##\n##", {"#": 236})
+        lines = grid.split("\n")
+        assert len(lines) == 2
+        for line in lines:
+            assert line == "\033[38;5;236m#\033[38;5;236m#\033[0m"
+
+    def test_generate_artifact_medium_tier_no_colorize_call(self):
+        # medium tier: pass1 (whole canvas) + pass2 (whole canvas) +
+        # legend = 3 calls total. Colorization (pass 3) is now a pure
+        # local function (_colorize_grid) — no LLM call.
+        calls = []
+
+        def fn(prompt, system=None, max_tokens=None):
+            calls.append(prompt)
+            n = len(calls)
+            if n == 1:
+                return "\n".join(["#" * 40] * 20)  # pass 1
+            if n == 2:
+                return "\n".join(["#" * 40] * 20)  # pass 2
+            # n == 3: legend
+            return '{"#": 236, " ": 232}'
+
+        args = _args(ansi_style="bbs", subject="test", width=40, height=20,
+                     board_name="", tagline="")
+        fn.model_tier = "medium"
+        result = self.g.generate_artifact(args, fn)
+
+        assert len(calls) == 3
+        lines = result.split("\n")
+        assert len(lines) == 20
+        for line in lines:
+            assert line.count("\033[38;5;236m#") == 40
+
+    def test_parse_legend_json_drops_only_the_bad_entry(self):
+        # Regression: one bad value (a color name instead of an int) used
+        # to discard the whole legend via one shared try/except. The good
+        # entry must survive.
+        from ansi_plugin import _parse_legend_json
+        legend = _parse_legend_json('{"#": 236, " ": "black"}')
+        assert legend == {"#": 236}
 
 
 class TestAnimateDiffGenerator:

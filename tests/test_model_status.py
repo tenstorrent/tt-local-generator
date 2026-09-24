@@ -100,9 +100,14 @@ def test_tick_artgen_detect_marks_matched_key_ready():
 
 
 def test_tick_inferred_starting_from_port(monkeypatch):
-    svc = _svc({"flux": False}, ports={"flux": True})
+    # prompt-server (:8001) is the one media-adjacent key with a genuinely
+    # unique health_url — no sibling shares it, so the new shared-endpoint
+    # suppression (see test_shared_port_open_with_no_healthy_owner_infers_
+    # nothing_specific below) doesn't apply and this stays a clean single-key
+    # "port open, no health yet" case.
+    svc = _svc({"prompt-server": False}, ports={"prompt-server": True})
     svc._tick()
-    assert svc.status("flux") == ms.Status.STARTING
+    assert svc.status("prompt-server") == ms.Status.STARTING
 
 
 def test_tick_app_started_then_ready(monkeypatch):
@@ -185,8 +190,17 @@ def test_running_or_starting_prefers_ready():
     assert svc.running_or_starting("video") == "wan2.2"
 
 
-def test_running_or_starting_falls_back_to_starting():
-    svc = _svc({"mochi": False}, ports={"mochi": True}); svc._tick()
+def test_running_or_starting_falls_back_to_starting_for_a_tracked_launch():
+    """Before the shared-endpoint fix (see
+    test_shared_port_open_with_no_healthy_owner_infers_nothing_specific), a
+    bare open port on ANY video-capability key — even one we never started —
+    was enough to claim "starting", since mochi shares its port-8000
+    health_url with every other media key. That's now only true for a key
+    we're actually tracking via note_starting(); an untracked, ambiguous,
+    shared-port open no longer counts."""
+    svc = _svc({"mochi": False}, ports={"mochi": True})
+    svc.note_starting("mochi")
+    svc._tick()
     assert svc.running_or_starting("video") == "mochi"
 
 
@@ -243,10 +257,58 @@ def test_an_explicit_note_starting_still_wins_over_the_shared_port_rule():
 
 def test_open_port_with_no_healthy_owner_still_infers_starting():
     """Regression control: the ordinary "something is listening on my port but
-    hasn't passed health yet" case must keep inferring STARTING."""
-    svc = _svc({}, ports={"flux": True})
+    hasn't passed health yet" case must keep inferring STARTING — for a key
+    whose health_url ISN'T shared with any sibling (prompt-server, :8001, is
+    the one media-adjacent key with a genuinely unique port), so there's no
+    ambiguity about which key the open port belongs to."""
+    svc = _svc({}, ports={"prompt-server": True})
     svc._tick()
-    assert svc.status("flux") == ms.Status.STARTING
+    assert svc.status("prompt-server") == ms.Status.STARTING
+
+
+def test_shared_port_open_with_no_healthy_owner_infers_nothing_specific():
+    """The bug this guards against, reproduced: a model started OUTSIDE this
+    app entirely (or one whose device init crashed) leaves the shared
+    port-8000 endpoint open but never healthy. Every media ServerDef's
+    health_url resolves to that exact same host:port, so a REAL port probe
+    returns the identical result for all of them — unlike the single-key
+    fake above, this simulates that correlation directly, matching what
+    `_default_port_probe`/`_endpoint_of` actually do in production.
+
+    Before the fix, `_resolve` inferred STARTING for every single one of
+    these keys, and `ready_to_run.conflicting_server` picked an ARBITRARY
+    one (SERVERS' declaration order — "mochi") and reported it as
+    definitely running, which was never true: observed live against a
+    Wan2.2 container launched via the standalone `tt serve` CLI whose mesh
+    device init crashed, leaving :8000 open-but-never-healthy."""
+    import server_manager as sm
+
+    media_keys = [k for k, d in sm.SERVERS.items() if "video" in d.capabilities
+                  or "image" in d.capabilities or "animate" in d.capabilities]
+    assert len(media_keys) > 1  # sanity: this really is a shared-port group
+    svc = _svc({}, ports={k: True for k in media_keys})
+    svc._tick()
+    for key in media_keys:
+        assert svc.status(key) == ms.Status.OFF, (
+            f"{key} falsely inferred as starting off an ambiguous shared port"
+        )
+
+
+def test_note_starting_still_wins_within_an_ambiguous_shared_port_group():
+    """A launch we actually tracked must still report STARTING even when
+    every sibling sharing its port is ALSO (falsely) port-open — the new
+    suppression must never blind a genuine, app-initiated start."""
+    import server_manager as sm
+
+    media_keys = [k for k, d in sm.SERVERS.items() if "video" in d.capabilities
+                  or "image" in d.capabilities or "animate" in d.capabilities]
+    svc = _svc({}, ports={k: True for k in media_keys})
+    svc.note_starting("wan2.2")
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.STARTING
+    for key in media_keys:
+        if key != "wan2.2":
+            assert svc.status(key) == ms.Status.OFF
 
 
 def test_artgen_keys_sharing_8002_do_not_infer_starting_off_a_ready_sibling():
@@ -257,3 +319,27 @@ def test_artgen_keys_sharing_8002_do_not_infer_starting_off_a_ready_sibling():
     svc._tick()
     assert svc.status("artgen-qwen3-8b") == ms.Status.READY
     assert svc.status("artgen-qwen3-32b") == ms.Status.OFF
+
+
+def test_ambiguous_shared_port_no_longer_lights_both_image_and_video_segments():
+    """The user-visible symptom this whole fix was reported for: the status
+    bar's Image AND Video segments both showed "starting" at the same time,
+    even though only one physical port-8000 container can ever be loading
+    one model. Reproduced end-to-end (real ModelStatusService._tick() feeding
+    the real status_segments.segment_states(), not a fake capability map) via
+    the exact bug scenario — nothing healthy, every media key's shared port
+    genuinely open (observed live: a foreign/crashed model on :8000).
+
+    Confirmed this test actually catches the regression by running it against
+    the pre-fix model_status.py (git rev e6f1aef) — both segments came back
+    STARTING there; after the fix, both come back OFF."""
+    import server_manager as sm
+    import status_segments as ss
+
+    media_keys = [k for k, d in sm.SERVERS.items() if "video" in d.capabilities
+                  or "image" in d.capabilities or "animate" in d.capabilities]
+    svc = _svc({}, ports={k: True for k in media_keys})
+    svc._tick()
+    segments = ss.segment_states(svc.snapshot())
+    assert segments["image"] == ms.Status.OFF
+    assert segments["video"] == ms.Status.OFF
