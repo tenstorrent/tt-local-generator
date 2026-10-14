@@ -251,3 +251,54 @@ def test_served_run_drops_motion_adapter_when_server_lacks_it(tmp_path, monkeypa
                               on_progress=msgs.append)
     assert ok and "motion_adapter" not in seen
     assert any("motion adapter" in m for m in msgs)
+
+
+# ── PR review fixes ─────────────────────────────────────────────────────────
+
+def test_no_server_does_not_start_container_without_opt_in(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "served_launcher_available", lambda: True)
+    monkeypatch.delenv(rt.AUTOSTART_ENV, raising=False)
+    started = []
+    monkeypatch.setattr(rt, "start_served", lambda **k: started.append(1) or (None, "x"))
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif")
+    assert not ok and not started and "tt-model serve" in err
+
+
+def test_autostart_only_with_explicit_opt_in(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "served_launcher_available", lambda: True)
+    monkeypatch.setenv(rt.AUTOSTART_ENV, "1")
+    started = []
+    monkeypatch.setattr(rt, "start_served", lambda **k: started.append(1) or (None, "boom"))
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif")
+    assert not ok and started and "boom" in err
+
+
+def test_discovery_survives_malformed_models_response(monkeypatch):
+    for bad in ({"data": None}, {"data": ["str", 3]}, {"data": {"a": 1}}, []):
+        monkeypatch.setattr(rt, "_http_json", lambda *a, _b=bad, **k: _b)
+        assert rt._is_animatediff_server("http://h:1") is False
+    monkeypatch.setattr(rt, "_http_json", lambda *a, **k: {"data": [
+        "junk", {"id": "CompVis/stable-diffusion-v1-4"}]})
+    assert rt._is_animatediff_server("http://h:1") is True
+
+
+def test_panel_empty_string_motion_adapter_still_enables_it(tmp_path, monkeypatch):
+    # The Create panel sends "" for "adapter on, default weights".
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post(monkeypatch)
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", motion_adapter="")
+    assert ok, err
+    assert seen["motion_adapter"] is True
+
+
+def test_panel_bool_chain_save_keys_on_output_file(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post(monkeypatch)
+    out = tmp_path / "x.gif"
+    ok, err = ad.run_subprocess("p", out, chain_save=True)
+    assert ok, err
+    assert seen["chain_save"] == rt.chain_name_for(out)

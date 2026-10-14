@@ -30,6 +30,7 @@ Script resolution order:
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -741,8 +742,14 @@ def _run_served(
 
     url = _runtime.find_served()
     if url is None:
+        # Starting the container is a hardware backend switch. The app's
+        # Ready-to-Run flow (ready_to_run.py) forbids doing that without the
+        # user's confirmation, so a missing server is an actionable error here,
+        # not an auto-start, unless the operator opted in explicitly.
         if not _runtime.served_launcher_available():
             return False, _runtime.MISSING_MESSAGE
+        if os.environ.get(_runtime.AUTOSTART_ENV) != "1":
+            return False, _runtime.NOT_RUNNING_MESSAGE
         url, err = _runtime.start_served(on_progress=on_progress)
         if url is None:
             return False, f"{err}\n{_runtime.MISSING_MESSAGE}"
@@ -750,11 +757,17 @@ def _run_served(
     if lightning:
         extra["sampler"] = "euler"  # the CLI's --lightning on the base UNet
     if chain_save:
-        extra["chain_save"] = _runtime.chain_name_for(chain_save)
+        # The Create panel passes a bool ("Save latents for chaining"), the CLI
+        # a path. A bool has no path to name, so key the saved chain on this
+        # run's own output file.
+        extra["chain_save"] = _runtime.chain_name_for(
+            chain_save if isinstance(chain_save, (str, os.PathLike)) else out_path)
     if chain_from:
         extra["chain_from"] = _runtime.chain_name_for(chain_from)
         extra["chain_alpha"] = chain_alpha
-    if motion_adapter:
+    # `is not None`, not truthiness: the Create panel encodes "adapter on, default
+    # weights" as "" (see _build_cmd), which is falsy.
+    if motion_adapter is not None:
         if _runtime.motion_adapter_enabled(url):
             extra["motion_adapter"] = True
             extra["motion_adapter_alpha"] = motion_adapter_alpha

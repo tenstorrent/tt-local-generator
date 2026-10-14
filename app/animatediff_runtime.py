@@ -71,14 +71,18 @@ def _http_json(url: str, timeout: float = 2.0, data: bytes | None = None):
 
 
 def _is_animatediff_server(base_url: str) -> bool:
+    # Everything that touches the response stays inside the try: any labelled
+    # tt-model container may answer with an unexpected shape, and that must read
+    # as "not AnimateDiff", not stop discovery of a later valid server.
     try:
         models = _http_json(base_url + "/v1/models").get("data", [])
+        return any(
+            isinstance(entry, dict)
+            and any(m in str(entry.get("id", "")).lower() for m in _SERVED_MODEL_MARKERS)
+            for entry in models
+        )
     except Exception:
         return False
-    return any(
-        any(m in str(entry.get("id", "")).lower() for m in _SERVED_MODEL_MARKERS)
-        for entry in models
-    )
 
 
 def _candidate_ports() -> list[int]:
@@ -313,6 +317,18 @@ def _post_generation(base_url, out_path, prompt, negative_prompt, frames, steps,
         return False, f"could not write {out_path}: {e}"
     return True, ""
 
+
+#: Operators who accept that a run may start the container themselves (headless
+#: use, no confirmation dialog) set this to "1".
+AUTOSTART_ENV = "TTLG_ANIMATEDIFF_AUTOSTART"
+
+#: Shown when the served package is the right runtime but is not running.
+NOT_RUNNING_MESSAGE = (
+    f"The AnimateDiff server is not running. Start it first: tt-model serve {SERVED_PACKAGE}\n"
+    f"(or set {AUTOSTART_ENV}=1 to let a run start it; that switches the chips' "
+    "backend without asking, so stop any other model server first).\n"
+    "Alternatively install tt-metal so ~/tt-metal/python_env exists."
+)
 
 #: What the generator tells the user when neither runtime exists and the
 #: served package cannot be started either.

@@ -17,10 +17,14 @@ tt-model-manager, or as a .deb.
 - **`run_subprocess`** falls back to `_run_served` when `_PYTHON` is missing and
   the caller did not pass `script`. Local stays first because it supports
   everything. The served server takes prompt, negative prompt, frames, steps,
-  seed, temporal_alpha and a fixed 512x512; multi-chip, motion adapter,
-  lightning, chaining, device pin and prompt-schedule are dropped with an
-  `on_progress` note. The seamless-loop crossfade still applies (local PIL).
-  `cpu` mode does not use it.
+  seed, temporal_alpha, prompt_schedule, sampler (lightning), chaining and a
+  capability-gated motion adapter at a fixed 512x512; only device pinning and
+  multi-chip are dropped, with an `on_progress` note (detail in the next
+  bullet). The seamless-loop crossfade still applies (local PIL). `cpu` mode
+  does not use it. The generator never starts the container on its own: that is
+  a backend switch, which `ready_to_run` forbids without confirmation, so a
+  missing server returns `NOT_RUNNING_MESSAGE` unless
+  `TTLG_ANIMATEDIFF_AUTOSTART=1` opts in.
 - **Served previews + prompt-schedule (client done; server commit e6f2f7c on
   tt-animatediff `feat/lora-support`, local only).** `poll_previews` polls
   `GET /v1/videos/preview` (`{step,total,gif_b64,running}`) during the blocking
@@ -40,10 +44,9 @@ tt-model-manager, or as a .deb.
   to e6f2f7c/fb9ef60 until the tt-animatediff session says it is on origin. Not run
   against a real server by this session. More served features (chaining,
   Lightning) are coming from that session.
-- **Not done:** the auto-start does not go through the Ready-to-Run confirm gate
-  (stop/reset of a conflicting media server). Starting the container while
-  another server holds the chips is the churn that has hung this box before;
-  routing it through `_ensure_server_ready_then` is the follow-up.
+- **Not done:** a GUI confirm flow for starting the served container (routing it
+  through `_ensure_server_ready_then`). Until then the user starts it, or opts
+  in with `TTLG_ANIMATEDIFF_AUTOSTART=1`.
   The served path has not been run against real hardware from this session.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
