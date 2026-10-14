@@ -1,3 +1,12 @@
+tt-local-generator (0.104.1) noble; urgency=medium
+
+  * feat(create): every AnimateDiff option now has a one-sentence description
+    under it. The Style (LoRA) dropdown reads "name - what it does" for each
+    variant (pixel, pixel-fast, lcm; any other name gets a generic line), and the
+    selection still sends the plain name.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 16:30:11 -0700
+
 tt-local-generator (0.104.0) noble; urgency=medium
 
   * feat(create): AnimateDiff options get a "Style (LoRA)" dropdown listing the

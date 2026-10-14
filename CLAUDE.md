@@ -52,6 +52,20 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.104.1 - option descriptions
+
+`create_param_panels._ANIMATEDIFF_OPTION_HELP` holds one sentence per AnimateDiff
+option; `_build_animatediff_options_row` renders each under its control
+(`.ad-option-help`, `create_view._CSS`). A row and its description share one
+container, so hiding a row (Distill steps, Style) hides its text too. The server
+returns LoRA names only, so what each does lives in
+`_ANIMATEDIFF_LORA_DESCRIPTIONS` (from tt-animatediff `docs/LORA.md`); the dropdown
+shows `_lora_label(name)` = `name - what it does` and `_selected_lora` maps the
+index back to the real name through `_ad_lora_names`, so the description text never
+reaches the request. A new catalog variant needs an entry there or it gets the
+generic line. Better long term: have the server return a description per variant.
+Tests pin that every table entry is rendered and that collect() sends the name.
+
 ### v0.104.0 - Style (LoRA) dropdown in Create
 
 `VideoParamPanel` shows a "Style (LoRA)" dropdown in the AnimateDiff options.

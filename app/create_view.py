@@ -435,6 +435,12 @@ _CSS = b"""
     color: #607D8B;
     font-size: 11px;
 }
+/* One-sentence plain-English description under an AnimateDiff option. */
+.ad-option-help {
+    color: #8AA4AE;
+    font-size: 11px;
+    margin-bottom: 4px;
+}
 
 /* -- SeedModeControl (SP-3d-2) -- random/repeat-last/keep dropdown, shared by
    Image/Video/Animate's seed rows. Small left margin separates it from the

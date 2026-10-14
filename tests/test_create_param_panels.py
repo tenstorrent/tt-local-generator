@@ -609,3 +609,50 @@ def test_selecting_animatediff_looks_up_the_catalog(monkeypatch):
     monkeypatch.setattr(cpp.threading.Thread, "start", lambda self: self.run())
     panel._model_dropdown.set_selected(_video_model_index("animatediff"))
     assert calls == [1] and applied == [["pixel"]]
+
+
+# ── option descriptions ─────────────────────────────────────────────────────
+
+def _labels_in(widget):
+    out = []
+    child = widget.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            out.append(child)
+        out.extend(_labels_in(child))
+        child = child.get_next_sibling()
+    return out
+
+
+def test_every_animatediff_option_has_a_visible_description():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    shown = {l.get_label() for l in _labels_in(panel._ad_options_row)
+             if "ad-option-help" in l.get_css_classes()}
+    # Every entry in the table is rendered, and none is empty.
+    assert shown == set(cpp._ANIMATEDIFF_OPTION_HELP.values())
+    assert all(len(t) > 20 for t in shown)
+
+
+def test_hiding_the_lora_row_hides_its_description_too():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras([])
+    assert panel._ad_lora_row.get_visible() is False  # row wraps control + help
+
+
+def test_lora_dropdown_reads_name_dash_what_it_does_but_collects_the_name():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm", "mystery"])
+    m = panel._ad_lora.get_model()
+    texts = [m.get_string(i) for i in range(m.get_n_items())]
+    assert texts[0] == "None"
+    assert texts[1] == "pixel - " + cpp._ANIMATEDIFF_LORA_DESCRIPTIONS["pixel"]
+    assert texts[3] == "mystery - " + cpp._ANIMATEDIFF_LORA_GENERIC
+    panel._ad_lora.set_selected(1)
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"  # name, not the text
+    panel._apply_loras(["lcm", "pixel"])  # refresh keeps the pick by name
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"
