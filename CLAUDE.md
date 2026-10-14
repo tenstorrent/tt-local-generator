@@ -52,6 +52,28 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.104.0 - Style (LoRA) dropdown in Create
+
+`VideoParamPanel` shows a "Style (LoRA)" dropdown in the AnimateDiff options.
+`_refresh_loras` looks the catalog up on a background thread
+(`_fetch_served_loras` -> `find_served` + `served_loras`) whenever AnimateDiff
+becomes the selected model, and `_apply_loras` (main thread, via `GLib.idle_add`)
+rebuilds the list, keeps the current pick if it is still offered, and hides the
+row when there is no catalog. `collect()` reports `lora` (None for "None"), which
+flows `_ANIMATEDIFF_DEFAULTS` -> `AnimateDiffGenerationWorker(lora=)` ->
+`run_subprocess(lora=)`. A local tt-metal run ignores it and says so. Not done:
+nudging Steps to 4 for an LCM variant (needs the server to say which variants are
+LCM). `tests/conftest.py` stubs `_fetch_served_loras` for every test so selecting
+AnimateDiff never touches the real machine's containers.
+
+Copy: "AnimateDiff has no server" stopped being true once the served package
+existed, so the benefit line (`server_manager.MODEL_BENEFITS`), the picker label
+(`_VIDEO_MODEL_CHOICES`) and the busy status tooltip no longer claim it.
+`test_busy_says_what_is_running_in_the_tooltip` had pinned the old wording.
+Code comments elsewhere that say "local, no server" still describe the
+always-ready dot logic and were left alone. That dot still reads ready for
+AnimateDiff even when a run would need the served server to be started.
+
 ### v0.103.3 - review fixes on PR #29
 
 Copilot's second review, both checked against the code first.

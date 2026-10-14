@@ -1,3 +1,15 @@
+tt-local-generator (0.104.0) noble; urgency=medium
+
+  * feat(create): AnimateDiff options get a "Style (LoRA)" dropdown listing the
+    variants the running tt-animatediff server offers. It stays hidden until a
+    server with a catalog is found, and the pick is passed through the worker to
+    the served request.
+  * fix(copy): the AnimateDiff model description, the model-picker label and the
+    status-bar tooltip no longer say "no server". A run uses a local tt-metal when
+    there is one, and the tt-animatediff server otherwise.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 16:22:10 -0700
+
 tt-local-generator (0.103.3) noble; urgency=medium
 
   * fix(animatediff): served previews are matched to the request. Each served

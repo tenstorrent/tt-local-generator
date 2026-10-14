@@ -99,7 +99,7 @@ CAPABILITY_LABELS: dict = {
 # These are read ONLY by the Create model picker (create_view) — logs, the
 # Servers control, and ModelStatusService all key off the raw label/key.
 MODEL_BENEFITS: dict = {
-    "animatediff": "Runs locally on Blackhole — no server to start. Quick looping animation.",
+    "animatediff": "Quick looping animation on Blackhole. Runs on a local tt-metal, or through the tt-animatediff server when there is none.",
 }
 MODEL_DISPLAY_NAMES: dict = {
     "animatediff": "AnimateDiff",

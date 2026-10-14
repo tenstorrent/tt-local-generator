@@ -283,7 +283,10 @@ def test_busy_lights_the_segment_with_its_own_glyph(bar):
 def test_busy_says_what_is_running_in_the_tooltip(bar):
     bar.set_segment_busy("video", True, "AnimateDiff")
     tip = bar._seg_dots["video"].get_tooltip_text()
-    assert "AnimateDiff" in tip and "no server" in tip
+    # Names the job, and claims neither "local" nor "no server": the run may be a
+    # local tt-metal process or a request to the tt-animatediff server.
+    assert "AnimateDiff" in tip and "generating" in tip
+    assert "no server" not in tip and "local" not in tip
 
 
 def test_busy_survives_the_next_snapshot(bar):

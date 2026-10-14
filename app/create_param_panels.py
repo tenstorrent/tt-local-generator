@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -806,7 +807,7 @@ _VIDEO_MODEL_CHOICES: "list[tuple[str, str]]" = [
     ("wan2", "Wan2.2 — 720p video"),
     ("mochi", "Mochi-1 — 480×848 video"),
     ("skyreels", "SkyReels-V2-I2V — 960×544 (needs a seed image)"),
-    ("animatediff", "AnimateDiff — local, no server needed"),
+    ("animatediff", "AnimateDiff — quick looping animation"),
 ]
 
 # Internal key -> server-side model id string, passed as `model=` to
@@ -863,7 +864,23 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter=None,
     motion_adapter_alpha=1.0,
     motion_adapter_skip=None,
+    lora=None,
 )
+
+#: First entry of the Style (LoRA) dropdown: no variant.
+_ANIMATEDIFF_NO_LORA = "None"
+
+
+def _fetch_served_loras() -> "list[str]":
+    """LoRA variant names of a running served tt-animatediff, or [].
+
+    Seam for tests; blocking (docker + HTTP), so call it off the GTK thread.
+    """
+    import animatediff_runtime as rt
+
+    url = rt.find_served()
+    return rt.served_loras(url) if url else []
+
 
 # Multi-chip selector: user-facing label -> engine `multichip_mode` value
 # (worker.py -> animatediff.run_subprocess --multichip-mode {off,remix,coherent}).
@@ -959,6 +976,10 @@ class VideoParamPanel(CreateParamPanel):
         self._ad_chain_save: Optional[Gtk.CheckButton] = None
         self._ad_chain_alpha: Optional[Gtk.SpinButton] = None
         self._ad_motion_adapter: Optional[Gtk.CheckButton] = None
+        # Served-LoRA picker (shown only when a served tt-animatediff reports a catalog).
+        self._ad_lora: Optional[Gtk.DropDown] = None
+        self._ad_lora_row: Optional[Gtk.Widget] = None
+        self._ad_lora_fetching = False
         self._ad_motion_skip: Optional[Gtk.DropDown] = None
         self._ad_injection_alpha: Optional[Gtk.SpinButton] = None
 
@@ -1273,8 +1294,47 @@ class VideoParamPanel(CreateParamPanel):
         indirectly matter there too (defensive; the two dropdowns are
         independent widgets, so this call is cheap and always safe)."""
         if self._ad_options_row is not None:
-            self._ad_options_row.set_visible(self._selected_video_key() == "animatediff")
+            shown = self._selected_video_key() == "animatediff"
+            self._ad_options_row.set_visible(shown)
+            if shown:
+                self._refresh_loras()
         self._sync_ad_lightning_steps_visibility()
+
+    def _refresh_loras(self) -> None:
+        """Look up the served LoRA catalog off the GTK thread, then apply it.
+
+        Discovery shells out to docker and makes HTTP calls, so it must not run
+        on the main thread. One lookup at a time; the result is posted back with
+        `GLib.idle_add`.
+        """
+        if self._ad_lora is None or self._ad_lora_fetching:
+            return
+        self._ad_lora_fetching = True
+
+        def work():
+            try:
+                names = _fetch_served_loras()
+            except Exception:
+                names = []
+            GLib.idle_add(self._apply_loras, names)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_loras(self, names: "list[str]") -> bool:
+        """Main-thread: rebuild the dropdown from `names`, keeping the current
+        pick if it is still offered. Hidden when there is no catalog."""
+        self._ad_lora_fetching = False
+        if self._ad_lora is None or self._ad_lora_row is None:
+            return False
+        current = self._ad_dd_val(self._ad_lora)
+        items = [_ANIMATEDIFF_NO_LORA] + list(names)
+        sl = Gtk.StringList()
+        for item in items:
+            sl.append(item)
+        self._ad_lora.set_model(sl)
+        self._ad_lora.set_selected(items.index(current) if current in items else 0)
+        self._ad_lora_row.set_visible(bool(names))
+        return False
 
     def _sync_ad_lightning_steps_visibility(self) -> None:
         """Mirrors `ControlPanel`'s `_on_ad_lightning_toggled` exactly
@@ -1395,6 +1455,19 @@ class VideoParamPanel(CreateParamPanel):
         )
         content.append(_sub_row("Multi-chip", self._ad_multichip_mode))
 
+        # Style (LoRA): the variants a served tt-animatediff offers. Starts
+        # hidden with only "None"; `_refresh_loras` fills and reveals it when a
+        # server with a catalog is found. Absent catalog -> row stays hidden
+        # and `collect()` reports lora=None, same as before this control.
+        self._ad_lora = self._ad_dd([_ANIMATEDIFF_NO_LORA], _ANIMATEDIFF_NO_LORA)
+        self._ad_lora_row = _sub_row("Style (LoRA)", self._ad_lora)
+        self._ad_lora_row.set_tooltip_text(
+            "Style variants offered by the running AnimateDiff server. "
+            "Not applied by a local tt-metal run."
+        )
+        self._ad_lora_row.set_visible(False)
+        content.append(self._ad_lora_row)
+
         self._ad_device_id = self._ad_spin(-1, 7, 1, -1)
         self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
         content.append(_sub_row("Device ID", self._ad_device_id))
@@ -1492,7 +1565,15 @@ class VideoParamPanel(CreateParamPanel):
             motion_adapter="" if self._ad_motion_adapter.get_active() else None,
             motion_adapter_alpha=round(self._ad_injection_alpha.get_value(), 2),
             motion_adapter_skip=motion_skip,
+            lora=self._selected_lora(),
         )
+
+    def _selected_lora(self) -> "str | None":
+        """The picked LoRA variant name, or None for "None"/no catalog."""
+        if self._ad_lora is None:
+            return None
+        val = self._ad_dd_val(self._ad_lora)
+        return None if val in ("", _ANIMATEDIFF_NO_LORA) else val
 
 
 # ─────────────────────────────────────────────────────────────────────────────

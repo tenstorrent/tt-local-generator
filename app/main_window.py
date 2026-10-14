@@ -1752,6 +1752,7 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter=None,
     motion_adapter_alpha=1.0,
     motion_adapter_skip=None,
+    lora=None,
 )
 
 
@@ -4665,14 +4666,11 @@ class _StatusBar(Gtk.Box):
         state = self._seg_state[seg_key]
         busy = self._seg_busy.get(seg_key)
         if busy:
-            # Name what is running AND that nothing is served, so the green
-            # light can't be misread as "a server is up".
-            self._seg_dots[seg_key].set_tooltip_text(
-                f"{label}: {busy} generating (local, no server)"
-            )
-            self._seg_names[seg_key].set_tooltip_text(
-                f"{label}: {busy} generating (local, no server)"
-            )
+            # Name what is running. The glyph is not the "server is up" dot: this
+            # state comes from the job itself, which may be a local tt-metal run or
+            # a request to the tt-animatediff server, so the text claims neither.
+            self._seg_dots[seg_key].set_tooltip_text(f"{label}: {busy} generating")
+            self._seg_names[seg_key].set_tooltip_text(f"{label}: {busy} generating")
             return
         if state == Status.READY:
             tip = f"{label}: ready"
@@ -9533,6 +9531,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     motion_adapter=ad["motion_adapter"],
                     motion_adapter_alpha=ad["motion_adapter_alpha"],
                     motion_adapter_skip=ad["motion_adapter_skip"],
+                    lora=ad.get("lora"),
                 )
             else:
                 model_name = _VIDEO_MODEL_IDS.get(

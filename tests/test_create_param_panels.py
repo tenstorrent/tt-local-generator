@@ -563,3 +563,49 @@ def test_animate_panel_seed_mode_random_write_throughs_spin_to_negative_one():
 
     assert panel._seed_adj.get_value() == -1
     assert panel.collect()["seed"] == -1
+
+
+# ── Style (LoRA) dropdown ───────────────────────────────────────────────────
+
+def test_lora_row_hidden_and_collect_none_without_catalog():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras([])
+    assert panel._ad_lora_row.get_visible() is False
+    assert panel.collect()["animatediff_args"]["lora"] is None
+
+
+def test_lora_catalog_reveals_dropdown_and_selection_is_collected():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm"])
+    assert panel._ad_lora_row.get_visible() is True
+    assert panel.collect()["animatediff_args"]["lora"] is None  # "None" is first
+    panel._ad_lora.set_selected(2)  # None, pixel, lcm
+    assert panel.collect()["animatediff_args"]["lora"] == "lcm"
+
+
+def test_lora_refresh_keeps_current_pick_and_resets_when_gone():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm"])
+    panel._ad_lora.set_selected(1)  # pixel
+    panel._apply_loras(["lcm", "pixel"])
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"
+    panel._apply_loras(["lcm"])
+    assert panel.collect()["animatediff_args"]["lora"] is None
+
+
+def test_selecting_animatediff_looks_up_the_catalog(monkeypatch):
+    import create_param_panels as cpp
+    calls = []
+    monkeypatch.setattr(cpp, "_fetch_served_loras", lambda: calls.append(1) or ["pixel"])
+    panel = VideoParamPanel()
+    panel.build()
+    applied = []
+    monkeypatch.setattr(panel, "_apply_loras", lambda names: applied.append(names) or False)
+    # Run the worker inline so the test does not wait on the GLib loop.
+    monkeypatch.setattr(cpp.GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(cpp.threading.Thread, "start", lambda self: self.run())
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1] and applied == [["pixel"]]
