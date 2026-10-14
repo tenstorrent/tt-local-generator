@@ -1,5 +1,53 @@
 # tt-local-generator — developer notes
 
+## AnimateDiff runs without ~/tt-metal (v0.103.0)
+
+Prompt: a fresh QB2 with no `~/tt-metal` could not generate a loop, because
+`animatediff.py` hardcoded `~/tt-metal/python_env` and failed with a build
+instruction. Nobody should hit that when tt-animatediff exists on HF, in
+tt-model-manager, or as a .deb.
+
+- **`app/animatediff_runtime.py`** (new, stdlib): `find_tt_metal()` (`$TT_METAL_HOME`
+  then `~/tt-metal`), `find_served()` (docker-label port discovery reused from
+  `artgen._tt_model_host_ports`, then `/v1/models` must name SD 1.4 or
+  animatediff, so tt-media-server's Wan2.2 on the same route is not mistaken
+  for it), `start_served()` (`tt-model serve episod/tt-animatediff --detach`,
+  polled until ready) and `generate_served()` (`POST /v1/videos/generations`,
+  b64 GIF).
+- **`run_subprocess`** falls back to `_run_served` when `_PYTHON` is missing and
+  the caller did not pass `script`. Local stays first because it supports
+  everything. The served server takes prompt, negative prompt, frames, steps,
+  seed, temporal_alpha and a fixed 512x512; multi-chip, motion adapter,
+  lightning, chaining, device pin and prompt-schedule are dropped with an
+  `on_progress` note. The seamless-loop crossfade still applies (local PIL).
+  `cpu` mode does not use it.
+- **Served previews + prompt-schedule (client done; server commit e6f2f7c on
+  tt-animatediff `feat/lora-support`, local only).** `poll_previews` polls
+  `GET /v1/videos/preview` (`{step,total,gif_b64,running}`) during the blocking
+  POST and relays each new step as a `PREVIEW: n/N path` line to the sibling
+  `<stem>_preview.gif`. Contract points that matter: the POST must send
+  `"preview": true` or the server never renders a GIF (each render costs ~0.4 s);
+  `total` is the loop's real count (21 for a 20-step request); the last frame
+  stays readable after a run, so frames seen while `running` is false are
+  ignored. 404/405 stops polling quietly (older server). `prompt_schedule` is now
+  forwarded instead of dropped. Server commit fb9ef60 adds `sampler`/chain/motion adapter, now mapped:
+  `lightning`->`sampler:"euler"`; `chain_save/from` paths -> stable server names via
+  `chain_name_for` (sha1 of the resolved path; server keeps newest 32, lost on
+  restart, unknown `chain_from` is a 400); `motion_adapter` only sent when
+  `/v1/models` reports `motion_adapter: true`, else dropped with a note. Still
+  dropped: device pin, multi-chip. Not yet used: `lora` (needs a UI/param) and
+  `preview_every`. Do NOT pin `tt_model_package.yaml` `extra_code`
+  to e6f2f7c/fb9ef60 until the tt-animatediff session says it is on origin. Not run
+  against a real server by this session. More served features (chaining,
+  Lightning) are coming from that session.
+- **Not done:** the auto-start does not go through the Ready-to-Run confirm gate
+  (stop/reset of a conflicting media server). Starting the container while
+  another server holds the chips is the churn that has hung this box before;
+  routing it through `_ensure_server_ready_then` is the follow-up.
+  The served path has not been run against real hardware from this session.
+- Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
+  failing with the fallback disabled.
+
 ## Dropping the redundant colorize call + the Section 6 backlog (v0.102.0)
 
 Follow-up to the PR #28 final review, all landed in the same PR.

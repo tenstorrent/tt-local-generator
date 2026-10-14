@@ -380,10 +380,12 @@ if [[ -n "$TTMETAL_PY" && -x "$TTMETAL_PY" ]]; then
 else
     echo ""
     echo "NOTE: tt-metal python_env not found (~/tt-metal/python_env/bin/python)."
-    echo "AnimateDiff (the default Blackhole video model) runs its TTNN runner"
-    echo "under tt-metal, not the Docker inference server. Build/install tt-metal"
-    echo "(via tt-installer) to enable it:"
-    echo "  https://github.com/tenstorrent/tt-installer"
+    echo "AnimateDiff (the default Blackhole video model) will instead use the"
+    echo "tt-model-manager package episod/tt-animatediff, started on first use,"
+    echo "if tt-model and docker are installed:"
+    echo "  tt-model serve episod/tt-animatediff"
+    echo "For the full option set (multi-chip, motion adapter) install tt-metal"
+    echo "via tt-installer: https://github.com/tenstorrent/tt-installer"
 fi
 echo ""
 if dpkg-query -W -f='${Status}' tt-model-animatediff 2>/dev/null | grep -q "install ok installed"; then

@@ -123,7 +123,13 @@ def _ensure_log_handler() -> None:
     except OSError:
         _log.addHandler(logging.NullHandler())
 
-_TT_METAL = Path.home() / "tt-metal"
+# $TT_METAL_HOME wins, then ~/tt-metal; when neither has a python_env the
+# paths below still point at ~/tt-metal so `_PYTHON.exists()` is simply False
+# and run_subprocess falls back to the served tt-animatediff container (see
+# animatediff_runtime). Tests monkeypatch `_PYTHON` directly.
+import animatediff_runtime as _runtime  # noqa: E402
+
+_TT_METAL = _runtime.find_tt_metal() or (Path.home() / "tt-metal")
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 
 # Prefer the copy bundled inside this repo (app/animatediff/ — synced from
@@ -709,6 +715,71 @@ def _finalize_seamless_loop(
             on_progress("Note: seamless-loop post-process failed; GIF is valid but not loop-blended")
 
 
+def _run_served(
+    *, prompt, out_path, mode, frames, steps, seed, negative_prompt,
+    temporal_alpha, on_progress, timeout, loop, unsupported, prompt_schedule=None,
+    lightning=False, chain_from=None, chain_save=None, chain_alpha=0.6,
+    motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
+) -> tuple[bool, str]:
+    """Generate through the tt-model-manager tt-animatediff server.
+
+    Used when there is no local tt-metal. Single-chip basics only: options the
+    server cannot honour are reported once through on_progress and dropped,
+    never silently. The seamless-loop crossfade is local post-processing, so
+    it still applies.
+    """
+    _ensure_log_handler()
+    if mode != "blackhole":
+        return False, (
+            f"mode={mode!r} needs a local tt-metal python_env; the served "
+            "AnimateDiff package runs on Blackhole only.\n" + _runtime.MISSING_MESSAGE
+        )
+    dropped = sorted(k for k, v in unsupported.items() if v)
+    if dropped and on_progress:
+        on_progress("Note: served AnimateDiff ignores " + ", ".join(dropped)
+                    + " (needs a local tt-metal)")
+
+    url = _runtime.find_served()
+    if url is None:
+        if not _runtime.served_launcher_available():
+            return False, _runtime.MISSING_MESSAGE
+        url, err = _runtime.start_served(on_progress=on_progress)
+        if url is None:
+            return False, f"{err}\n{_runtime.MISSING_MESSAGE}"
+    extra = {}
+    if lightning:
+        extra["sampler"] = "euler"  # the CLI's --lightning on the base UNet
+    if chain_save:
+        extra["chain_save"] = _runtime.chain_name_for(chain_save)
+    if chain_from:
+        extra["chain_from"] = _runtime.chain_name_for(chain_from)
+        extra["chain_alpha"] = chain_alpha
+    if motion_adapter:
+        if _runtime.motion_adapter_enabled(url):
+            extra["motion_adapter"] = True
+            extra["motion_adapter_alpha"] = motion_adapter_alpha
+            if motion_adapter_skip:
+                extra["motion_adapter_skip"] = list(motion_adapter_skip)
+        elif on_progress:
+            on_progress("Note: this AnimateDiff server was not started with a "
+                        "motion adapter (ANIMATEDIFF_MOTION_ADAPTER); ignoring it")
+    _log.info("served_run url=%s out=%s frames=%d steps=%d", url, out_path, frames, steps)
+    if on_progress:
+        on_progress(f"Generating on the AnimateDiff server at {url}")
+    ok, err = _runtime.generate_served(
+        url, out_path, prompt, negative_prompt, frames, steps, seed,
+        temporal_alpha, timeout=timeout, on_progress=on_progress,
+        # Same sibling-file convention the local runner uses, so the panel's
+        # existing PREVIEW: handling finds it.
+        preview_path=out_path.with_name(out_path.stem + "_preview.gif") if on_progress else None,
+        prompt_schedule=prompt_schedule, extra=extra,
+    )
+    if not ok:
+        return False, err
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
+    return True, ""
+
+
 def _run_one(
     cmd: "list[str]",
     *,
@@ -911,6 +982,25 @@ def run_subprocess(
     _ensure_log_handler()
     import tempfile, datetime as _dt
 
+    # No local tt-metal python_env: use the served tt-animatediff container
+    # instead of failing (a fresh box has no ~/tt-metal). A caller-supplied
+    # `script` means someone is deliberately driving the local runner, so that
+    # case is left alone and reports the missing env as before.
+    if script is None and not _PYTHON.exists():
+        return _run_served(
+            prompt=prompt, out_path=out_path, mode=mode, frames=frames, steps=steps,
+            seed=seed, negative_prompt=negative_prompt, temporal_alpha=temporal_alpha,
+            on_progress=on_progress, timeout=timeout, loop=loop,
+            prompt_schedule=prompt_schedule, lightning=lightning,
+            chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
+            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip,
+            unsupported={
+                "device_id": device_id,
+                "multichip": multichip_mode != "off" and (num_chips or 1) > 1,
+            },
+        )
+
     if script is None:
         script = _SCRIPT_DIR / "examples" / "generate.py"
         if not script.exists():
@@ -922,7 +1012,7 @@ def run_subprocess(
     if not _PYTHON.exists():
         return False, (
             f"tt-metal Python env not found: {_PYTHON}\n"
-            "Run: cd ~/tt-metal && ./build_metal.sh"
+            + _runtime.MISSING_MESSAGE
         )
 
     import os
