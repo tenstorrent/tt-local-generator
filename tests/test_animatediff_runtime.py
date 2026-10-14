@@ -302,3 +302,76 @@ def test_panel_bool_chain_save_keys_on_output_file(tmp_path, monkeypatch):
     ok, err = ad.run_subprocess("p", out, chain_save=True)
     assert ok, err
     assert seen["chain_save"] == rt.chain_name_for(out)
+
+
+# ── served LoRA variants ────────────────────────────────────────────────────
+
+def _capture_post_with_loras(monkeypatch, loras):
+    seen = {}
+
+    def fake(url, timeout=2.0, data=None):
+        import json
+        if data is None:  # /v1/models
+            return {"data": [], "loras": loras, "motion_adapter": False}
+        seen.update(json.loads(data))
+        return {"data": [{"b64_json": base64.b64encode(b"G").decode()}]}
+    monkeypatch.setattr(rt, "_http_json", fake)
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    return seen
+
+
+def test_served_loras_lists_the_catalog_and_survives_bad_answers(monkeypatch):
+    monkeypatch.setattr(rt, "_http_json", lambda *a, **k: {"loras": ["pixel", "lcm"]})
+    assert rt.served_loras("http://h:1") == ["pixel", "lcm"]
+    for bad in ({}, {"loras": None}, {"loras": "pixel"}, {"loras": [3, None]}):
+        monkeypatch.setattr(rt, "_http_json", lambda *a, _b=bad, **k: _b)
+        assert rt.served_loras("http://h:1") == []
+
+    def boom(*a, **k):
+        raise OSError("down")
+    monkeypatch.setattr(rt, "_http_json", boom)
+    assert rt.served_loras("http://h:1") == []
+
+
+def test_served_run_sends_the_named_lora(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post_with_loras(monkeypatch, ["pixel", "lcm"])
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel")
+    assert ok, err
+    assert seen["lora"] == "pixel"
+    seen.clear()
+    ok, err = ad.run_subprocess("p", tmp_path / "y.gif")
+    assert ok, err
+    assert "lora" not in seen
+
+
+def test_served_run_refuses_an_unknown_lora_and_lists_the_catalog(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post_with_loras(monkeypatch, ["pixel", "lcm"])
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="storybook")
+    assert not ok
+    assert "storybook" in err and "pixel" in err and "lcm" in err
+    assert not seen, "an unknown LoRA must not reach the generation endpoint"
+
+
+def test_served_run_explains_a_server_with_no_catalog(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post_with_loras(monkeypatch, [])
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel")
+    assert not ok and not seen
+    assert "no LoRA catalog" in err and "plain" in err
+
+
+def test_local_runtime_says_it_does_not_apply_a_lora(tmp_path, monkeypatch):
+    """With a local tt-metal the LoRA is not forwarded; that must be said, not dropped."""
+    py = tmp_path / "python_env" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    monkeypatch.setattr(ad, "_PYTHON", py)
+    ran = []
+    monkeypatch.setattr(ad, "_run_one", lambda cmd, **k: ran.append(cmd) or (True, ""))
+    msgs = []
+    ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel", on_progress=msgs.append,
+                      script=tmp_path / "gen.py")
+    assert any("LoRA" in m for m in msgs)
+    assert ran and not any("lora" in " ".join(map(str, c)).lower() for c in ran)

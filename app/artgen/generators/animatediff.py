@@ -721,6 +721,7 @@ def _run_served(
     temporal_alpha, on_progress, timeout, loop, unsupported, prompt_schedule=None,
     lightning=False, chain_from=None, chain_save=None, chain_alpha=0.6,
     motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
+    lora=None,
 ) -> tuple[bool, str]:
     """Generate through the tt-model-manager tt-animatediff server.
 
@@ -754,6 +755,18 @@ def _run_served(
         if url is None:
             return False, f"{err}\n{_runtime.MISSING_MESSAGE}"
     extra = {}
+    if lora:
+        # A LoRA is a named variant from the operator's catalog, resident on the
+        # chip. Checked here so the user sees what is on offer, not only a bare 400.
+        names = _runtime.served_loras(url)
+        if lora not in names:
+            if names:
+                return False, (f"This AnimateDiff server has no LoRA variant {lora!r}. "
+                               f"Available: {', '.join(names)}.")
+            return False, (f"This AnimateDiff server has no LoRA catalog, so {lora!r} cannot be "
+                           f"applied. The default profile of `tt-model serve {_runtime.SERVED_PACKAGE}` "
+                           "has one; `--profile plain` does not.")
+        extra["lora"] = lora
     if lightning:
         extra["sampler"] = "euler"  # the CLI's --lightning on the base UNet
     if chain_save:
@@ -915,6 +928,7 @@ def run_subprocess(
     stitch_order: str = "interleave",
     prompt_schedule: "list[tuple[int, str]] | None" = None,
     loop: str = "none",
+    lora: str | None = None,
 ) -> tuple[bool, str]:
     """Run the unified generate.py, optionally spreading work across Blackhole chips.
 
@@ -1007,12 +1021,18 @@ def run_subprocess(
             prompt_schedule=prompt_schedule, lightning=lightning,
             chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
             motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip,
+            motion_adapter_skip=motion_adapter_skip, lora=lora,
             unsupported={
                 "device_id": device_id,
                 "multichip": multichip_mode != "off" and (num_chips or 1) > 1,
             },
         )
+
+    # The local runner has no LoRA option here: variants live in the served package's
+    # catalog. Say so instead of dropping the request without a word.
+    if lora and on_progress:
+        on_progress(f"Note: LoRA {lora!r} is applied only by the served AnimateDiff package; "
+                    "this run uses the local tt-metal and ignores it")
 
     if script is None:
         script = _SCRIPT_DIR / "examples" / "generate.py"

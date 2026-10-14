@@ -1,3 +1,13 @@
+tt-local-generator (0.103.1) noble; urgency=medium
+
+  * feat(animatediff): served LoRA variants. run_subprocess takes lora=NAME and
+    sends it to the served tt-animatediff package after checking the name
+    against /v1/models; an unknown name or a server with no catalog returns a
+    message listing what is available. The local tt-metal runner reports that
+    it ignores a LoRA.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 12:00:00 -0700
+
 tt-local-generator (0.103.0) noble; urgency=medium
 
   * fix(animatediff): a fresh machine with no ~/tt-metal could not generate

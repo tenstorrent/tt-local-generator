@@ -176,6 +176,21 @@ def motion_adapter_enabled(base_url: str) -> bool:
         return False
 
 
+def served_loras(base_url: str) -> list[str]:
+    """LoRA variant names the served model offers (``/v1/models`` -> ``loras``).
+
+    The operator's catalog is fixed when the package is built (a serve profile in
+    its manifest), and a request names a variant; it never carries a repo id or a
+    path. An old server, a plain profile, an unreachable server or a malformed
+    answer all give an empty list.
+    """
+    try:
+        names = _http_json(base_url + "/v1/models").get("loras")
+    except Exception:
+        return []
+    return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+
+
 def _write_atomic(path: Path, data: bytes) -> None:
     """Temp file + rename, so a consumer polling `path` never sees a partial GIF."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")

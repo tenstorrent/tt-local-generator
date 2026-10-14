@@ -25,8 +25,8 @@ tt-model-manager, or as a .deb.
   a backend switch, which `ready_to_run` forbids without confirmation, so a
   missing server returns `NOT_RUNNING_MESSAGE` unless
   `TTLG_ANIMATEDIFF_AUTOSTART=1` opts in.
-- **Served previews + prompt-schedule (client done; server commit e6f2f7c on
-  tt-animatediff `feat/lora-support`, local only).** `poll_previews` polls
+- **Served previews + prompt-schedule (client done; server commits are on origin
+  `feat/lora-support` of tt-animatediff, PR #15, head cc1d1f9).** `poll_previews` polls
   `GET /v1/videos/preview` (`{step,total,gif_b64,running}`) during the blocking
   POST and relays each new step as a `PREVIEW: n/N path` line to the sibling
   `<stem>_preview.gif`. Contract points that matter: the POST must send
@@ -39,17 +39,34 @@ tt-model-manager, or as a .deb.
   `chain_name_for` (sha1 of the resolved path; server keeps newest 32, lost on
   restart, unknown `chain_from` is a 400); `motion_adapter` only sent when
   `/v1/models` reports `motion_adapter: true`, else dropped with a note. Still
-  dropped: device pin, multi-chip. Not yet used: `lora` (needs a UI/param) and
-  `preview_every`. Do NOT pin `tt_model_package.yaml` `extra_code`
-  to e6f2f7c/fb9ef60 until the tt-animatediff session says it is on origin. Not run
-  against a real server by this session. More served features (chaining,
-  Lightning) are coming from that session.
+  dropped: device pin, multi-chip. `preview_every` is not sent: the server's default
+  (every step up to 10 steps, every other step beyond) is what we want.
+  tt-animatediff's `tt_model_package.yaml` `extra_code` ref still points at an old
+  release until a tag is cut, so a published package does not carry these
+  features yet. The client was run against the tt-animatediff container image
+  (not through `tt-model serve`, which cannot serve an unpushed package).
 - **Not done:** a GUI confirm flow for starting the served container (routing it
   through `_ensure_server_ready_then`). Until then the user starts it, or opts
   in with `TTLG_ANIMATEDIFF_AUTOSTART=1`.
   The served path has not been run against real hardware from this session.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
+
+### v0.103.1 - served LoRA variants
+
+`run_subprocess(..., lora="name")` sends `lora` to the served package. A variant
+is a name from the operator's catalog, never a repo id or a path. The catalog is
+set in the tt-animatediff package's serve profile (`tt-model serve` has no
+`--env`): the default profile `full` carries `pixel`, `pixel-fast` and `lcm`,
+`--profile plain` has none. `runtime.served_loras(url)` reads `/v1/models` ->
+`loras` and `_run_served` checks the name first, so an unknown name or a server
+with no catalog returns a message that lists what is available instead of a bare
+400. The local tt-metal runner does not apply a LoRA; it says so through
+`on_progress`. A catalog variant that includes the LCM-LoRA defaults to 4 steps
+and guidance 1.5 only when the request leaves them out, and this client always
+sends `steps`, so an LCM variant runs at the caller's step count: pass 4 for the
+fast path. No Create-panel control yet. Five tests in
+`tests/test_animatediff_runtime.py` (seen failing before the change).
 
 ## Dropping the redundant colorize call + the Section 6 backlog (v0.102.0)
 
