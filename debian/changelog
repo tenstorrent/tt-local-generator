@@ -1,3 +1,15 @@
+tt-local-generator (0.103.0) noble; urgency=medium
+
+  * fix(animatediff): a fresh machine with no ~/tt-metal could not generate
+    a loop. The runner path was hardcoded to ~/tt-metal/python_env. New
+    app/animatediff_runtime.py resolves a runtime: $TT_METAL_HOME, then
+    ~/tt-metal, then a running tt-model-manager `episod/tt-animatediff`
+    container, which is started on demand with `tt-model serve --detach`.
+    Served runs support the single-chip basics and report any dropped
+    option; with no runtime the error lists both ways to get one.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Tue, 13 Oct 2026 16:04:39 -0700
+
 tt-local-generator (0.102.0) noble; urgency=medium
 
   * fix(artgen): the `ansi` generator's small/medium-tier "apply this
