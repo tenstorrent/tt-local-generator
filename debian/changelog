@@ -1,3 +1,16 @@
+tt-local-generator (0.103.3) noble; urgency=medium
+
+  * fix(animatediff): served previews are matched to the request. Each served
+    generation sends a fresh request_id and shows only previews that carry it.
+    The server keeps one preview and queues requests on a device lock, so a
+    queued request used to show another client's frame and then drop its own
+    early steps. Needs tt-animatediff 0.13.1 or later; an older server gives no
+    previews.
+  * fix(artgen): chat discovery skips a served AnimateDiff container found by
+    docker label or port sweep. An explicit URL is still taken as given.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 16:00:00 -0700
+
 tt-local-generator (0.103.2) noble; urgency=medium
 
   * fix(animatediff): the served package id is episod/tt-animatediff-container-v5.1.

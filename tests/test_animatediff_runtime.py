@@ -4,6 +4,7 @@ The wiring tests drive the real `run_subprocess` with no local python_env, so
 they fail if the fallback is not actually reached from the caller.
 """
 import base64
+import json
 import sys
 from pathlib import Path
 
@@ -138,10 +139,10 @@ def test_poll_previews_relays_new_steps_only(tmp_path):
     stop = threading.Event()
     replies = iter([
         {"step": 3, "total": 3, "gif_b64": base64.b64encode(b"S").decode(),
-         "running": False},  # stale frame from the previous request
-        {"step": 1, "total": 3, "gif_b64": base64.b64encode(b"A").decode(), "running": True},
-        {"step": 1, "total": 3, "gif_b64": base64.b64encode(b"A").decode(), "running": True},
-        {"step": 2, "total": 3, "gif_b64": base64.b64encode(b"B").decode(), "running": True},
+         "running": False, "request_id": "mine"},  # stale frame from the previous request
+        {"step": 1, "total": 3, "gif_b64": base64.b64encode(b"A").decode(), "running": True, "request_id": "mine"},
+        {"step": 1, "total": 3, "gif_b64": base64.b64encode(b"A").decode(), "running": True, "request_id": "mine"},
+        {"step": 2, "total": 3, "gif_b64": base64.b64encode(b"B").decode(), "running": True, "request_id": "mine"},
     ])
     lines = []
 
@@ -152,9 +153,63 @@ def test_poll_previews_relays_new_steps_only(tmp_path):
             stop.set()
             return {"step": 0}
     p = tmp_path / "x_preview.gif"
-    rt.poll_previews("http://h:1", p, lines.append, stop, interval_s=0, fetch=fetch)
+    rt.poll_previews("http://h:1", p, lines.append, stop, "mine", interval_s=0, fetch=fetch)
     assert lines == [f"PREVIEW: 1/3 {p}", f"PREVIEW: 2/3 {p}"]
     assert p.read_bytes() == b"B"
+
+
+def test_poll_previews_ignores_another_clients_generation(tmp_path):
+    """Review finding: the server keeps one global preview and queues requests on a device lock.
+    While this request waited, the poller showed another client's step-20 frame and set its step
+    watermark to 20, so once this request started every one of its own previews (steps 1-19) was
+    thrown away. Ownership is the request id, not the server's running flag."""
+    stop = threading.Event()
+
+    def frame(step, rid, running=True):
+        return {"step": step, "total": 25, "running": running, "request_id": rid,
+                "gif_b64": base64.b64encode(f"{rid}{step}".encode()).decode()}
+    replies = iter([
+        frame(20, "other"),            # another client's generation is running; mine is queued
+        frame(21, "other"),
+        frame(1, "mine"),              # mine starts: lower step numbers than the other client's
+        frame(2, "mine"),
+        frame(25, "other", running=False),  # a stale frame left by someone else
+    ])
+    lines = []
+
+    def fetch(url):
+        try:
+            return next(replies)
+        except StopIteration:
+            stop.set()
+            return {"step": 0}
+    p = tmp_path / "x_preview.gif"
+    rt.poll_previews("http://h:1", p, lines.append, stop, "mine", interval_s=0, fetch=fetch)
+    assert lines == [f"PREVIEW: 1/25 {p}", f"PREVIEW: 2/25 {p}"]
+    assert p.read_bytes() == b"mine2"
+
+
+def test_a_served_run_names_its_request_and_polls_for_that_name(tmp_path, monkeypatch):
+    # Wiring: poll_previews can filter correctly while generate_served never sends an id, or
+    # sends one id to the server and a different one to the poller.
+    seen = {}
+
+    def fake_http(url, timeout=2.0, data=None):
+        seen["body"] = json.loads(data.decode())
+        return {"data": [{"b64_json": base64.b64encode(b"G").decode()}]}
+
+    def fake_poll(base_url, preview_path, on_progress, stop, request_id, **kw):
+        seen["polled_for"] = request_id
+
+    monkeypatch.setattr(rt, "_http_json", fake_http)
+    monkeypatch.setattr(rt, "poll_previews", fake_poll)
+    rt.generate_served("http://h:1", tmp_path / "o.gif", "p", "", 8, 10, 1, 0.3,
+                       on_progress=lambda line: None, preview_path=tmp_path / "pv.gif")
+    assert seen["body"]["request_id"] and seen["polled_for"] == seen["body"]["request_id"]
+    first = seen["body"]["request_id"]
+    rt.generate_served("http://h:1", tmp_path / "o.gif", "p", "", 8, 10, 1, 0.3,
+                       on_progress=lambda line: None, preview_path=tmp_path / "pv.gif")
+    assert seen["body"]["request_id"] != first, "two generations must not share an id"
 
 
 def test_poll_previews_stops_quietly_on_old_server(tmp_path):
@@ -162,7 +217,7 @@ def test_poll_previews_stops_quietly_on_old_server(tmp_path):
         raise urllib.error.HTTPError(url, 404, "nf", {}, None)
     lines = []
     rt.poll_previews("http://h:1", tmp_path / "p.gif", lines.append,
-                     threading.Event(), interval_s=0, fetch=fetch)
+                     threading.Event(), "mine", interval_s=0, fetch=fetch)
     assert lines == []
 
 

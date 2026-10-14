@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -43,6 +44,15 @@ SERVED_PACKAGE = "episod/tt-animatediff-container-v5.1"
 #: same ``/v1/videos/generations`` route on another port and must not be taken
 #: for AnimateDiff.
 _SERVED_MODEL_MARKERS = ("stable-diffusion-v1-4", "animatediff")
+
+
+def is_animatediff_model_id(model_id: object) -> bool:
+    """True when a ``/v1/models`` id names the AnimateDiff server's model.
+
+    Used by discovery here, and by artgen's chat discovery to leave this server out: it
+    answers ``/v1/models`` like a chat server but has no ``/v1/chat/completions``.
+    """
+    return any(m in str(model_id).lower() for m in _SERVED_MODEL_MARKERS)
 
 
 def find_tt_metal(env: dict | None = None, home: Path | None = None) -> Path | None:
@@ -77,8 +87,7 @@ def _is_animatediff_server(base_url: str) -> bool:
     try:
         models = _http_json(base_url + "/v1/models").get("data", [])
         return any(
-            isinstance(entry, dict)
-            and any(m in str(entry.get("id", "")).lower() for m in _SERVED_MODEL_MARKERS)
+            isinstance(entry, dict) and is_animatediff_model_id(entry.get("id", ""))
             for entry in models
         )
     except Exception:
@@ -211,6 +220,7 @@ def poll_previews(
     preview_path: Path,
     on_progress: Callable[[str], None],
     stop: threading.Event,
+    request_id: str,
     interval_s: float = 2.0,
     fetch: Callable[[str], dict] = _http_json,
 ) -> None:
@@ -221,7 +231,14 @@ def poll_previews(
     the loop's real count, e.g. 21 for a 20-step request, so it is reported
     as given). The last frame of a finished run stays readable until the next
     request starts, so frames seen while ``running`` is false are ignored: they
-    may belong to the previous request. Each new step is written to
+    may belong to the previous request.
+
+    The server keeps one preview for all clients and queues requests on a device
+    lock, so ``running`` only says that *some* generation is active. A frame is
+    ours when its ``request_id`` is the one this generation sent. Frames from
+    another client's generation are skipped without touching the step watermark;
+    otherwise a queued request that saw another client's step 20 would then drop
+    its own steps 1-19. Each new step is written to
     ``preview_path`` and announced in the same line format the local runner
     prints (``animatediff_ttnn.preview``), so the Create panel needs no
     changes. A server without the endpoint (older package) makes the first
@@ -241,6 +258,8 @@ def poll_previews(
         try:
             step, total = int(info.get("step") or 0), int(info.get("total") or 0)
             b64 = info.get("gif_b64")
+            if info.get("request_id") != request_id:
+                continue
             if not info.get("running") or not b64 or step <= last_step:
                 continue
             _write_atomic(preview_path, base64.b64decode(b64))
@@ -272,17 +291,19 @@ def generate_served(
     """
     stop = threading.Event()
     poller = None
+    # Names this generation to the server, which echoes it with every preview.
+    request_id = uuid.uuid4().hex
     if on_progress and preview_path is not None:
         preview_path.parent.mkdir(parents=True, exist_ok=True)
         poller = threading.Thread(
-            target=poll_previews, args=(base_url, preview_path, on_progress, stop),
+            target=poll_previews, args=(base_url, preview_path, on_progress, stop, request_id),
             daemon=True,
         )
         poller.start()
     try:
         return _post_generation(base_url, out_path, prompt, negative_prompt, frames,
                                 steps, seed, temporal_alpha, timeout,
-                                want_preview=poller is not None,
+                                want_preview=poller is not None, request_id=request_id,
                                 prompt_schedule=prompt_schedule, extra=extra)
     finally:
         stop.set()
@@ -292,7 +313,7 @@ def generate_served(
 
 def _post_generation(base_url, out_path, prompt, negative_prompt, frames, steps,
                      seed, temporal_alpha, timeout, want_preview=False,
-                     prompt_schedule=None, extra=None) -> tuple[bool, str]:
+                     prompt_schedule=None, extra=None, request_id=None) -> tuple[bool, str]:
     payload = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
@@ -302,6 +323,8 @@ def _post_generation(base_url, out_path, prompt, negative_prompt, frames, steps,
         "temporal_alpha": temporal_alpha,
         "response_format": "b64_json",
     }
+    if request_id:
+        payload["request_id"] = request_id
     # The server only renders preview GIFs on request (each costs ~0.4 s per
     # rendered step), so ask only when someone is watching.
     if want_preview:

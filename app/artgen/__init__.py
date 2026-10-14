@@ -148,6 +148,12 @@ def detect_model(base_url: str, timeout: float = 5.0) -> str | None:
 # share port 8000; it speaks a custom media API, not OpenAI /v1/chat/completions.
 _NON_CHAT_SERVICE_KEYS = ("wan2.2", "mochi", "flux", "animate", "skyreels")
 
+def _is_diffusion_model(model_id: str) -> bool:
+    from animatediff_runtime import is_animatediff_model_id
+
+    return is_animatediff_model_id(model_id)
+
+
 # Local port window swept to discover chat servers started outside the app.
 # We don't want to be precious about *which* port a manually-launched model
 # lands on — if it answers /v1/models on the LLM host, we use it.
@@ -272,6 +278,11 @@ def detect_artgen_endpoint(
                 continue
             seen.add(url)
             m = detect_model(url, timeout=timeout)
+            if m and is_sweep and _is_diffusion_model(m):
+                # A docker-label or port-sweep hit that is the AnimateDiff server: it answers
+                # /v1/models like a chat server and has no /v1/chat/completions. An explicit
+                # URL (is_sweep False) is taken as given.
+                continue
             if m:
                 return url, m
         return None

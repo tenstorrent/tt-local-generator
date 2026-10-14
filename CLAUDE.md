@@ -52,6 +52,20 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.103.3 - review fixes on PR #29
+
+Copilot's second review, both checked against the code first.
+* **Preview ownership.** `poll_previews` takes a `request_id`; `generate_served`
+  makes a fresh one per generation, sends it in the request and polls for it.
+  Frames with another id are skipped without moving the step watermark. This
+  needs tt-animatediff 0.13.1 (`request_id` on the request, echoed by
+  `GET /v1/videos/preview`); an older server echoes nothing, so no previews show.
+* **Chat discovery.** `artgen.detect_artgen_endpoint` drops a docker-label or
+  sweep hit whose model id is the AnimateDiff server's (`is_animatediff_model_id`).
+  An explicit URL is not filtered. The explicit-URL test was seen failing with the
+  filter made unconditional.
+* Tests: `tests/test_animatediff_runtime.py`, `tests/test_artgen_endpoint.py`.
+
 ### v0.103.1 - served LoRA variants (package id moved in v0.103.2)
 
 `run_subprocess(..., lora="name")` sends `lora` to the served package. A variant
