@@ -375,3 +375,10 @@ def test_local_runtime_says_it_does_not_apply_a_lora(tmp_path, monkeypatch):
                       script=tmp_path / "gen.py")
     assert any("LoRA" in m for m in msgs)
     assert ran and not any("lora" in " ".join(map(str, c)).lower() for c in ran)
+
+
+def test_served_package_is_the_container_repo_not_the_thin_bundle():
+    """episod/tt-animatediff is the v6 thin bundle and the diffusers pipeline. The container
+    package, the one `tt-model serve` runs under docker, lives in its own repo."""
+    assert rt.SERVED_PACKAGE == "episod/tt-animatediff-container-v5.1"
+    assert rt.SERVED_PACKAGE in rt.NOT_RUNNING_MESSAGE and rt.SERVED_PACKAGE in rt.MISSING_MESSAGE

@@ -1,3 +1,11 @@
+tt-local-generator (0.103.2) noble; urgency=medium
+
+  * fix(animatediff): the served package id is episod/tt-animatediff-container-v5.1.
+    episod/tt-animatediff is the v6 thin bundle and the diffusers pipeline;
+    the docker container package has its own repo.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 14:00:00 -0700
+
 tt-local-generator (0.103.1) noble; urgency=medium
 
   * feat(animatediff): served LoRA variants. run_subprocess takes lora=NAME and

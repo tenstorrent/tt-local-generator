@@ -4,7 +4,7 @@ GUI-free and stdlib-only. AnimateDiff has two ways to execute on Blackhole:
 
   * **local**  -- ``examples/generate.py`` exec'd under a tt-metal ``python_env``
     (``$TT_METAL_HOME`` or ``~/tt-metal``). Needs a built tt-metal tree.
-  * **served** -- the tt-model-manager package ``episod/tt-animatediff``
+  * **served** -- the tt-model-manager package ``episod/tt-animatediff-container-v5.1``
     (``kind: tt-dit-server``): a container with its own tt-metal build and an
     HTTP surface (``POST /v1/videos/generations``). Needs only docker and the
     ``tt-model`` CLI, so it works on a fresh box with no ``~/tt-metal``.
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Callable
 
 #: tt-model-manager package that serves AnimateDiff.
-SERVED_PACKAGE = "episod/tt-animatediff"
+SERVED_PACKAGE = "episod/tt-animatediff-container-v5.1"
 
 #: Substrings of the served model id (``/v1/models``) that identify an
 #: AnimateDiff server. The tt-animatediff server reports the SD 1.4 repo it
@@ -121,7 +121,7 @@ def start_served(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[str | None, str]:
-    """Start ``tt-model serve episod/tt-animatediff --detach`` and wait for it.
+    """Start ``tt-model serve episod/tt-animatediff-container-v5.1 --detach`` and wait for it.
 
     Returns ``(base_url, "")`` on success or ``(None, reason)``. The first
     start pulls the image and weights and warms the pipeline, so ``wait_s`` is

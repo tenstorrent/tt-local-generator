@@ -11,7 +11,7 @@ tt-model-manager, or as a .deb.
   then `~/tt-metal`), `find_served()` (docker-label port discovery reused from
   `artgen._tt_model_host_ports`, then `/v1/models` must name SD 1.4 or
   animatediff, so tt-media-server's Wan2.2 on the same route is not mistaken
-  for it), `start_served()` (`tt-model serve episod/tt-animatediff --detach`,
+  for it), `start_served()` (`tt-model serve episod/tt-animatediff-container-v5.1 --detach`,
   polled until ready) and `generate_served()` (`POST /v1/videos/generations`,
   b64 GIF).
 - **`run_subprocess`** falls back to `_run_served` when `_PYTHON` is missing and
@@ -52,7 +52,7 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
-### v0.103.1 - served LoRA variants
+### v0.103.1 - served LoRA variants (package id moved in v0.103.2)
 
 `run_subprocess(..., lora="name")` sends `lora` to the served package. A variant
 is a name from the operator's catalog, never a repo id or a path. The catalog is

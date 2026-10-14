@@ -381,9 +381,9 @@ else
     echo ""
     echo "NOTE: tt-metal python_env not found (~/tt-metal/python_env/bin/python)."
     echo "AnimateDiff (the default Blackhole video model) will instead use the"
-    echo "tt-model-manager package episod/tt-animatediff, started on first use,"
+    echo "tt-model-manager package episod/tt-animatediff-container-v5.1, started on first use,"
     echo "if tt-model and docker are installed:"
-    echo "  tt-model serve episod/tt-animatediff"
+    echo "  tt-model serve episod/tt-animatediff-container-v5.1"
     echo "For the full option set (multi-chip, motion adapter) install tt-metal"
     echo "via tt-installer: https://github.com/tenstorrent/tt-installer"
 fi
