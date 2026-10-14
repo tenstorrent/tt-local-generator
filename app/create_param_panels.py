@@ -881,8 +881,8 @@ _ANIMATEDIFF_OPTION_HELP: "dict[str, str]" = {
     "multichip": "How the Blackhole chips share the work. Remix: each chip makes "
                  "its own take and they are stitched. Coherent: chips continue "
                  "each other for one longer clip. Off: one chip.",
-    "lora": "A style the server has loaded, such as pixel art. Pick None for the "
-            "plain look.",
+    "lora": "A style the AnimateDiff server has loaded, such as pixel art. Pick "
+            "None for the plain look.",
     "device_id": "Run on one specific chip. Leave at -1 to let the app choose.",
     "chain_from": "Continue from a saved clip so the new loop starts where "
                   "that one ended.",
@@ -908,6 +908,14 @@ _ANIMATEDIFF_LORA_DESCRIPTIONS: "dict[str, str]" = {
     "lcm": "quick drafts, no style change: about 4 steps (set Steps to 4)",
 }
 _ANIMATEDIFF_LORA_GENERIC = "style variant from the AnimateDiff server"
+
+#: Hint under the greyed-out Style row when no server with a catalog is found.
+#: The command is the served package id, so keep it in step with
+#: `animatediff_runtime.SERVED_PACKAGE`.
+_ANIMATEDIFF_LORA_NO_SERVER_HELP = (
+    "No AnimateDiff server with styles is running. Start one with: "
+    "tt-model serve episod/tt-animatediff-container-v5.1, then press the refresh button."
+)
 
 
 def _lora_label(name: str) -> str:
@@ -1027,6 +1035,7 @@ class VideoParamPanel(CreateParamPanel):
         # Served-LoRA picker (shown only when a served tt-animatediff reports a catalog).
         self._ad_lora: Optional[Gtk.DropDown] = None
         self._ad_lora_row: Optional[Gtk.Widget] = None
+        self._ad_lora_help: Optional[Gtk.Label] = None
         self._ad_lora_fetching = False
         self._ad_lora_names: "list[str]" = []  # real names, parallel to dropdown entries 1..
         self._ad_motion_skip: Optional[Gtk.DropDown] = None
@@ -1383,7 +1392,12 @@ class VideoParamPanel(CreateParamPanel):
             sl.append(item)
         self._ad_lora.set_model(sl)
         self._ad_lora.set_selected(1 + names.index(current) if current in names else 0)
-        self._ad_lora_row.set_visible(bool(names))
+        # Greyed out (not hidden) with no catalog, so the control stays findable.
+        self._ad_lora.set_sensitive(bool(names))
+        if self._ad_lora_help is not None:
+            self._ad_lora_help.set_label(
+                _ANIMATEDIFF_OPTION_HELP["lora"] if names else _ANIMATEDIFF_LORA_NO_SERVER_HELP
+            )
         return False
 
     def _sync_ad_lightning_steps_visibility(self) -> None:
@@ -1525,17 +1539,22 @@ class VideoParamPanel(CreateParamPanel):
         )
         content.append(_sub_row("Multi-chip", self._ad_multichip_mode, "multichip"))
 
-        # Style (LoRA): the variants a served tt-animatediff offers. Starts
-        # hidden with only "None"; `_refresh_loras` fills and reveals it when a
-        # server with a catalog is found. Absent catalog -> row stays hidden
-        # and `collect()` reports lora=None, same as before this control.
+        # Style (LoRA): the variants a served tt-animatediff offers. The row is
+        # always shown (a control that is absent cannot be discovered); with no
+        # server it is greyed out and the hint says how to get one.
+        # `_apply_loras` fills it when `_refresh_loras` finds a catalog.
         self._ad_lora = self._ad_dd([_ANIMATEDIFF_NO_LORA], _ANIMATEDIFF_NO_LORA)
-        self._ad_lora_row = _sub_row("Style (LoRA)", self._ad_lora, "lora")
-        self._ad_lora_row.set_tooltip_text(
-            "Style variants offered by the running AnimateDiff server. "
-            "Not applied by a local tt-metal run."
-        )
-        self._ad_lora_row.set_visible(False)
+        self._ad_lora.set_sensitive(False)
+        lora_refresh = Gtk.Button(label="\u21bb")
+        lora_refresh.add_css_class("video-param-hint")
+        lora_refresh.set_tooltip_text("Look for a running AnimateDiff server again")
+        lora_refresh.connect("clicked", lambda *_a: self._refresh_loras())
+        lora_ctl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lora_ctl.append(self._ad_lora)
+        lora_ctl.append(lora_refresh)
+        self._ad_lora_row = _sub_row("Style (LoRA)", lora_ctl, "lora")
+        self._ad_lora_help = self._ad_lora_row.get_last_child()
+        self._ad_lora_help.set_label(_ANIMATEDIFF_LORA_NO_SERVER_HELP)
         content.append(self._ad_lora_row)
 
         self._ad_device_id = self._ad_spin(-1, 7, 1, -1)

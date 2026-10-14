@@ -1,3 +1,13 @@
+tt-local-generator (0.104.2) noble; urgency=medium
+
+  * fix(create): the Style (LoRA) row was hidden whenever no AnimateDiff server
+    with a catalog was running, so the control could not be found. It is now
+    always shown in the AnimateDiff options: greyed out with a hint that names the
+    `tt-model serve` command when there is no server, live when there is, and a
+    refresh button looks for a server again.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 16:33:44 -0700
+
 tt-local-generator (0.104.1) noble; urgency=medium
 
   * feat(create): every AnimateDiff option now has a one-sentence description

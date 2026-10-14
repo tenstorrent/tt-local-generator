@@ -567,11 +567,16 @@ def test_animate_panel_seed_mode_random_write_throughs_spin_to_negative_one():
 
 # ── Style (LoRA) dropdown ───────────────────────────────────────────────────
 
-def test_lora_row_hidden_and_collect_none_without_catalog():
+def test_lora_row_stays_visible_but_greyed_out_without_catalog():
+    import create_param_panels as cpp
     panel = VideoParamPanel()
     panel.build()
     panel._apply_loras([])
-    assert panel._ad_lora_row.get_visible() is False
+    # Findable, not hidden: greyed out, with a hint that says how to get styles.
+    assert panel._ad_lora_row.get_visible() is True
+    assert panel._ad_lora.get_sensitive() is False
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
+    assert "tt-model serve" in panel._ad_lora_help.get_label()
     assert panel.collect()["animatediff_args"]["lora"] is None
 
 
@@ -580,6 +585,7 @@ def test_lora_catalog_reveals_dropdown_and_selection_is_collected():
     panel.build()
     panel._apply_loras(["pixel", "lcm"])
     assert panel._ad_lora_row.get_visible() is True
+    assert panel._ad_lora.get_sensitive() is True
     assert panel.collect()["animatediff_args"]["lora"] is None  # "None" is first
     panel._ad_lora.set_selected(2)  # None, pixel, lcm
     assert panel.collect()["animatediff_args"]["lora"] == "lcm"
@@ -630,16 +636,29 @@ def test_every_animatediff_option_has_a_visible_description():
     panel.build()
     shown = {l.get_label() for l in _labels_in(panel._ad_options_row)
              if "ad-option-help" in l.get_css_classes()}
-    # Every entry in the table is rendered, and none is empty.
-    assert shown == set(cpp._ANIMATEDIFF_OPTION_HELP.values())
+    # Every entry in the table is rendered, and none is empty. The Style entry
+    # shows the "no server" hint until a catalog arrives.
+    expected = set(cpp._ANIMATEDIFF_OPTION_HELP.values())
+    expected.discard(cpp._ANIMATEDIFF_OPTION_HELP["lora"])
+    expected.add(cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP)
+    assert shown == expected
     assert all(len(t) > 20 for t in shown)
 
 
-def test_hiding_the_lora_row_hides_its_description_too():
+def test_lora_hint_switches_back_to_the_description_when_a_catalog_arrives():
+    import create_param_panels as cpp
     panel = VideoParamPanel()
     panel.build()
+    panel._apply_loras(["pixel"])
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_OPTION_HELP["lora"]
     panel._apply_loras([])
-    assert panel._ad_lora_row.get_visible() is False  # row wraps control + help
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
+
+
+def test_lora_hint_names_the_served_package_the_runtime_uses():
+    import animatediff_runtime as rt
+    import create_param_panels as cpp
+    assert rt.SERVED_PACKAGE in cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
 
 
 def test_lora_dropdown_reads_name_dash_what_it_does_but_collects_the_name():

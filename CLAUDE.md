@@ -52,6 +52,18 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.104.2 - Style row always visible
+
+v0.104.0 hid the Style (LoRA) row until a catalog was found, so on a machine with
+no served AnimateDiff the control did not exist and looked missing. It is now
+always shown: dropdown insensitive, hint `_ANIMATEDIFF_LORA_NO_SERVER_HELP` (names
+the `tt-model serve` command, kept in step with `animatediff_runtime.SERVED_PACKAGE`
+by a test), plus a refresh button wired to `_refresh_loras`. `_apply_loras` flips
+sensitivity and the hint instead of visibility. Checked by rendering the real panel
+under Xvfb (`GDK_BACKEND=x11`), with and without a catalog. Discovery only finds a
+server through the `org.tenstorrent.tt-model` docker label, so a server started any
+other way (e.g. plain uvicorn) is not found.
+
 ### v0.104.1 - option descriptions
 
 `create_param_panels._ANIMATEDIFF_OPTION_HELP` holds one sentence per AnimateDiff
