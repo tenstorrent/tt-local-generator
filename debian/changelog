@@ -1,3 +1,14 @@
+tt-local-generator (0.104.4) noble; urgency=medium
+
+  * fix(animatediff): follow-ups from josh's re-review of PR #29.
+    - Picking a chain saved by a served run (a marker file) goes to the server even
+      with a local tt-metal; with no server running the run says so instead of handing
+      the marker to generate.py as latents.
+    - A served run looks the server up once; routing hands the URL and /v1/models
+      document to the run, so a server that stops in between cannot fail the run.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Thu, 15 Oct 2026 12:37:51 -0700
+
 tt-local-generator (0.104.3) noble; urgency=medium
 
   * fix(animatediff): review round on PR #29.

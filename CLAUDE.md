@@ -52,6 +52,13 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.104.4 - josh's re-review notes
+
+A chain marker (served chaining) routes the run to the server, or fails with a message when none
+runs, because generate.py cannot load it. `run_subprocess` finds the server once and passes the
+(url, models) pair to `_run_served`. The `start_served` timeout note needed no code: the deadline is
+computed just before the subprocess, so it already is the remaining time.
+
 ### v0.104.3 - review round on PR #29 (josh)
 
 Ten comments, each checked against the code. A run with a LoRA is routed to a running server even

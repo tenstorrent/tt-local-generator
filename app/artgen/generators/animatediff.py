@@ -721,7 +721,7 @@ def _run_served(
     temporal_alpha, on_progress, timeout, loop, unsupported, prompt_schedule=None,
     lightning=False, chain_from=None, chain_save=None, chain_alpha=0.6,
     motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
-    lora=None,
+    lora=None, served=None,
 ) -> tuple[bool, str]:
     """Generate through the tt-model-manager tt-animatediff server.
 
@@ -742,7 +742,9 @@ def _run_served(
                     + " (needs a local tt-metal)")
 
     # One /v1/models read serves discovery, the LoRA check and the motion-adapter check.
-    url, models = _runtime.find_served_models()
+    # `served` is the (url, models) pair the caller already found, so a server that stops
+    # between the routing decision and here is not looked up a second time.
+    url, models = served if served and served[0] else _runtime.find_served_models()
     if url is None:
         # Starting the container is a hardware backend switch. The app's
         # Ready-to-Run flow (ready_to_run.py) forbids doing that without the
@@ -1028,10 +1030,21 @@ def run_subprocess(
     # server is already running and the run asks for one, it goes there even with a local tt-metal:
     # the local runner would drop the LoRA, and its generate.py would then compete with the
     # container for the chips the container already holds.
-    use_served = script is None and (
-        not _PYTHON.exists()
-        or (bool(lora) and mode == "blackhole" and _runtime.find_served() is not None)
-    )
+    # A chain saved by a served run is only a marker file here; the latents live on the server,
+    # so continuing one also needs the server (the local runner cannot load a marker).
+    found = None
+    if script is None and _PYTHON.exists() and mode == "blackhole":
+        marker = bool(chain_from) and _runtime.read_chain_marker(chain_from) is not None
+        if lora or marker:
+            found = _runtime.find_served_models()  # looked up once; handed on to _run_served
+            if found[0] is None:
+                found = None
+                if marker:
+                    return False, (
+                        f"{chain_from} continues a chain saved by the AnimateDiff server, which is "
+                        "not running. Start it (see the Style hint) or pick a chain from a local run."
+                    )
+    use_served = script is None and (not _PYTHON.exists() or found is not None)
     if use_served:
         return _run_served(
             prompt=prompt, out_path=out_path, mode=mode, frames=frames, steps=steps,
@@ -1040,7 +1053,7 @@ def run_subprocess(
             prompt_schedule=prompt_schedule, lightning=lightning,
             chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
             motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
-            motion_adapter_skip=motion_adapter_skip, lora=lora,
+            motion_adapter_skip=motion_adapter_skip, lora=lora, served=found,
             unsupported={
                 "device_id": device_id,
                 "multichip": multichip_mode != "off" and (num_chips or 1) > 1,

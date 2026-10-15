@@ -471,7 +471,7 @@ def test_a_lora_run_goes_to_a_running_server_even_with_a_local_tt_metal(tmp_path
 def test_a_run_without_a_lora_still_prefers_the_local_tt_metal(tmp_path, monkeypatch):
     _local_present(monkeypatch, tmp_path)
     probed = []
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: probed.append(1) or "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: probed.append(1) or ("http://h:1", {}))
     served = []
     monkeypatch.setattr(ad, "_run_served", lambda **k: served.append(1) or (True, ""))
     monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (False, "stop here"))
@@ -481,11 +481,56 @@ def test_a_run_without_a_lora_still_prefers_the_local_tt_metal(tmp_path, monkeyp
 
 def test_a_lora_run_with_no_server_says_so_and_uses_the_local_runner(tmp_path, monkeypatch):
     _local_present(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: (None, {}))
     monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (False, "stop here"))
     msgs = []
     ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel", on_progress=msgs.append)
     assert any("pixel" in m and "none is running" in m for m in msgs)
+
+
+def test_a_lora_run_looks_the_server_up_once(tmp_path, monkeypatch):
+    """Routing and the run used to each do a `docker ps` plus probe, and a server that stopped
+    between the two failed the run instead of falling back to local."""
+    _local_present(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(rt, "find_served_models",
+                        lambda *a, **k: calls.append(1) or ("http://h:1", {"loras": ["pixel"]}))
+    monkeypatch.setattr(rt, "generate_served",
+                        lambda url, out_path, *a, **k: (out_path.write_bytes(b"GIF"), (True, ""))[1])
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel")
+    assert ok, err
+    assert len(calls) == 1
+
+
+def test_a_chain_marker_goes_to_the_server_not_the_local_runner(tmp_path, monkeypatch):
+    """The marker holds a server-side chain name; generate.py cannot load it as latents."""
+    _local_present(monkeypatch, tmp_path)
+    marker = tmp_path / "chain.pt"
+    rt.write_chain_marker(marker, "chain-abc")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", {}))
+    sent = {}
+
+    def fake_gen(url, out_path, *a, **k):
+        sent.update(k.get("extra") or {})
+        out_path.write_bytes(b"GIF")
+        return True, ""
+    monkeypatch.setattr(rt, "generate_served", fake_gen)
+    local = []
+    monkeypatch.setattr(ad, "_run_one", lambda *a, **k: local.append(1) or (True, ""))
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", chain_from=str(marker))
+    assert ok, err
+    assert sent["chain_from"] == "chain-abc" and not local
+
+
+def test_a_chain_marker_with_no_server_fails_clearly(tmp_path, monkeypatch):
+    _local_present(monkeypatch, tmp_path)
+    marker = tmp_path / "chain.pt"
+    rt.write_chain_marker(marker, "chain-abc")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: (None, {}))
+    local = []
+    monkeypatch.setattr(ad, "_run_one", lambda *a, **k: local.append(1) or (True, ""))
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", chain_from=str(marker))
+    assert not ok and "AnimateDiff server" in err and not local
 
 
 def test_start_served_shares_one_deadline_and_probes_at_least_once(monkeypatch):
