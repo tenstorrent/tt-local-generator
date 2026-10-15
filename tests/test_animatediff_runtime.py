@@ -98,7 +98,7 @@ def _no_local(monkeypatch, tmp_path):
 
 def test_run_subprocess_uses_served_when_no_local_env(tmp_path, monkeypatch):
     _no_local(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", {}))
     got = {}
 
     def fake_gen(url, out_path, *a, **k):
@@ -117,7 +117,7 @@ def test_run_subprocess_uses_served_when_no_local_env(tmp_path, monkeypatch):
 
 def test_run_subprocess_missing_everywhere_gives_actionable_error(tmp_path, monkeypatch):
     _no_local(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: (None, {}))
     monkeypatch.setattr(rt, "served_launcher_available", lambda: False)
     ok, err = ad.run_subprocess("p", tmp_path / "x.gif")
     assert not ok and "tt-model serve" in err and "tt-installer" in err
@@ -223,7 +223,7 @@ def test_poll_previews_stops_quietly_on_old_server(tmp_path):
 
 def test_served_run_passes_preview_path_to_generate(tmp_path, monkeypatch):
     _no_local(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", {}))
     got = {}
 
     def fake_gen(url, out_path, *a, **k):
@@ -278,7 +278,7 @@ def _capture_post(monkeypatch, adapter_on=True):
         seen.update(json.loads(data))
         return {"data": [{"b64_json": base64.b64encode(b"G").decode()}]}
     monkeypatch.setattr(rt, "_http_json", fake)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", rt.served_models("http://h:1")))
     return seen
 
 
@@ -312,7 +312,7 @@ def test_served_run_drops_motion_adapter_when_server_lacks_it(tmp_path, monkeypa
 
 def test_no_server_does_not_start_container_without_opt_in(tmp_path, monkeypatch):
     _no_local(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: (None, {}))
     monkeypatch.setattr(rt, "served_launcher_available", lambda: True)
     monkeypatch.delenv(rt.AUTOSTART_ENV, raising=False)
     started = []
@@ -323,7 +323,7 @@ def test_no_server_does_not_start_container_without_opt_in(tmp_path, monkeypatch
 
 def test_autostart_only_with_explicit_opt_in(tmp_path, monkeypatch):
     _no_local(monkeypatch, tmp_path)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: (None, {}))
     monkeypatch.setattr(rt, "served_launcher_available", lambda: True)
     monkeypatch.setenv(rt.AUTOSTART_ENV, "1")
     started = []
@@ -371,7 +371,7 @@ def _capture_post_with_loras(monkeypatch, loras):
         seen.update(json.loads(data))
         return {"data": [{"b64_json": base64.b64encode(b"G").decode()}]}
     monkeypatch.setattr(rt, "_http_json", fake)
-    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", rt.served_models("http://h:1")))
     return seen
 
 
@@ -437,3 +437,173 @@ def test_served_package_is_the_container_repo_not_the_thin_bundle():
     package, the one `tt-model serve` runs under docker, lives in its own repo."""
     assert rt.SERVED_PACKAGE == "episod/tt-animatediff-container-v5.1"
     assert rt.SERVED_PACKAGE in rt.NOT_RUNNING_MESSAGE and rt.SERVED_PACKAGE in rt.MISSING_MESSAGE
+
+
+# ── review round (josh, PR #29) ─────────────────────────────────────────────
+
+def _local_present(monkeypatch, tmp_path):
+    py = tmp_path / "tt-metal" / "python_env" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    monkeypatch.setattr(ad, "_PYTHON", py)
+
+
+def test_a_lora_run_goes_to_a_running_server_even_with_a_local_tt_metal(tmp_path, monkeypatch):
+    """With ~/tt-metal present the LoRA used to be dropped with a note, and generate.py then
+    competed with the container for the chips the container already held."""
+    _local_present(monkeypatch, tmp_path)
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: "http://h:1")
+    monkeypatch.setattr(rt, "find_served_models", lambda *a, **k: ("http://h:1", {"loras": ["pixel"]}))
+    sent = {}
+
+    def fake_gen(url, out_path, *a, **k):
+        sent.update(k.get("extra") or {})
+        out_path.write_bytes(b"GIF")
+        return True, ""
+    monkeypatch.setattr(rt, "generate_served", fake_gen)
+    local = []
+    monkeypatch.setattr(ad, "_run_one", lambda *a, **k: local.append(1) or (True, ""))
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel")
+    assert ok, err
+    assert sent["lora"] == "pixel" and not local
+
+
+def test_a_run_without_a_lora_still_prefers_the_local_tt_metal(tmp_path, monkeypatch):
+    _local_present(monkeypatch, tmp_path)
+    probed = []
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: probed.append(1) or "http://h:1")
+    served = []
+    monkeypatch.setattr(ad, "_run_served", lambda **k: served.append(1) or (True, ""))
+    monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (False, "stop here"))
+    ad.run_subprocess("p", tmp_path / "x.gif")
+    assert not served and not probed
+
+
+def test_a_lora_run_with_no_server_says_so_and_uses_the_local_runner(tmp_path, monkeypatch):
+    _local_present(monkeypatch, tmp_path)
+    monkeypatch.setattr(rt, "find_served", lambda *a, **k: None)
+    monkeypatch.setattr(ad, "_run_one", lambda *a, **k: (False, "stop here"))
+    msgs = []
+    ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel", on_progress=msgs.append)
+    assert any("pixel" in m and "none is running" in m for m in msgs)
+
+
+def test_start_served_shares_one_deadline_and_probes_at_least_once(monkeypatch):
+    """wait_s used to bound the `serve --detach` subprocess and then a second, fresh readiness
+    wait, so the worst case was twice the number the error message reports."""
+    monkeypatch.setattr(rt, "served_launcher_available", lambda: True)
+    t = {"v": 0.0}
+
+    class P:
+        returncode = 0
+        stdout = stderr = ""
+
+    def slow_serve(*a, **k):
+        t["v"] += 100.0  # the detach consumed the whole budget
+        return P()
+    monkeypatch.setattr(rt.subprocess, "run", slow_serve)
+    probes = []
+    url, err = rt.start_served(ports_fn=lambda: [1], probe=lambda u: probes.append(u) and False,
+                               sleep=lambda s: t.__setitem__("v", t["v"] + s),
+                               clock=lambda: t["v"], wait_s=100, poll_s=5)
+    assert url is None and "100s" in err
+    assert len(probes) == 1, "one last probe after the subprocess, and no fresh wait"
+    assert t["v"] == 100.0
+
+    t["v"] = 0.0
+    probes.clear()
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: P())
+    rt.start_served(ports_fn=lambda: [1], probe=lambda u: False,
+                    sleep=lambda s: t.__setitem__("v", t["v"] + s),
+                    clock=lambda: t["v"], wait_s=100, poll_s=5)
+    assert t["v"] <= 105.0
+
+
+def test_a_server_that_does_not_name_its_previews_gets_one_note_and_no_polling(tmp_path):
+    """The package published first (0.13.0) predates request_id. Its previews cannot be matched
+    to this generation, so none are shown; the user is told once instead of seeing nothing."""
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        return {"step": 3, "total": 25, "running": True, "gif_b64": base64.b64encode(b"x").decode()}
+    lines = []
+    rt.poll_previews("http://h:1", tmp_path / "p.gif", lines.append,
+                     threading.Event(), "mine", interval_s=0, fetch=fetch)
+    assert len(fetched) == 1 and len(lines) == 1
+    assert "older than 0.13.1" in lines[0] and not (tmp_path / "p.gif").exists()
+
+
+def test_an_idle_old_server_is_not_reported(tmp_path):
+    stop = threading.Event()
+    replies = iter([{"step": 0, "running": False}, {"step": 0, "running": False}])
+
+    def fetch(url):
+        try:
+            return next(replies)
+        except StopIteration:
+            stop.set()
+            return {}
+    lines = []
+    rt.poll_previews("http://h:1", tmp_path / "p.gif", lines.append, stop, "mine", interval_s=0, fetch=fetch)
+    assert lines == []
+
+
+def test_a_served_chain_save_leaves_a_marker_the_next_run_reads(tmp_path, monkeypatch):
+    """The chain lives on the server, so the GUI's "Chain from" file picker had nothing to select."""
+    _no_local(monkeypatch, tmp_path)
+    seen = _capture_post(monkeypatch)
+    saved = tmp_path / "tt_ad_chain_7.pt"
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", chain_save=str(saved))
+    assert ok, err
+    assert saved.exists()
+    assert rt.read_chain_marker(saved) == seen["chain_save"] == rt.chain_name_for(saved)
+
+    seen.clear()
+    ok, err = ad.run_subprocess("p", tmp_path / "y.gif", chain_from=str(saved))
+    assert ok, err
+    assert seen["chain_from"] == rt.chain_name_for(saved)
+
+
+def test_chain_from_uses_the_name_in_a_marker_and_hashes_any_other_path(tmp_path):
+    marker = tmp_path / "picked.pt"
+    rt.write_chain_marker(marker, "server-side-name-123")
+    assert rt.chain_name_to_continue(marker) == "server-side-name-123"
+    real = tmp_path / "latents.pt"
+    real.write_bytes(b"PK\x03\x04 not a marker \xff\xfe")
+    assert rt.read_chain_marker(real) is None
+    assert rt.chain_name_to_continue(real) == rt.chain_name_for(real)
+    assert rt.chain_name_to_continue(tmp_path / "absent.pt") == rt.chain_name_for(tmp_path / "absent.pt")
+
+
+def test_cpu_mode_error_points_only_at_tt_metal(tmp_path, monkeypatch):
+    _no_local(monkeypatch, tmp_path)
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", mode="cpu")
+    assert not ok and "tt-installer" in err and "tt-model serve" not in err
+
+
+def test_a_served_run_reads_v1_models_once(tmp_path, monkeypatch):
+    """Discovery, the LoRA check and the motion-adapter check read the same document."""
+    import artgen
+
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+    _no_local(monkeypatch, tmp_path)
+    models_calls = []
+
+    def fake(url, timeout=2.0, data=None):
+        if data is None:
+            models_calls.append(url)
+            return {"data": [{"id": "CompVis/stable-diffusion-v1-4"}], "loras": ["pixel"], "motion_adapter": True}
+        return {"data": [{"b64_json": base64.b64encode(b"G").decode()}]}
+    monkeypatch.setattr(rt, "_http_json", fake)
+    ok, err = ad.run_subprocess("p", tmp_path / "x.gif", lora="pixel", motion_adapter="default")
+    assert ok, err
+    assert models_calls == ["http://localhost:20000/v1/models"]
+
+
+def test_postinst_does_not_promise_an_automatic_start():
+    """A Generate with no server returns NOT_RUNNING_MESSAGE unless the operator opted in, so the
+    installer must not say the package is started on first use."""
+    text = (Path(__file__).parent.parent / "debian" / "postinst").read_text()
+    assert "started on first use" not in text and "started on demand" not in text
+    assert rt.AUTOSTART_ENV in text

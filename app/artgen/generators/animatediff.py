@@ -734,14 +734,15 @@ def _run_served(
     if mode != "blackhole":
         return False, (
             f"mode={mode!r} needs a local tt-metal python_env; the served "
-            "AnimateDiff package runs on Blackhole only.\n" + _runtime.MISSING_MESSAGE
+            "AnimateDiff package runs on Blackhole only.\n" + _runtime.LOCAL_ONLY_MESSAGE
         )
     dropped = sorted(k for k, v in unsupported.items() if v)
     if dropped and on_progress:
         on_progress("Note: served AnimateDiff ignores " + ", ".join(dropped)
                     + " (needs a local tt-metal)")
 
-    url = _runtime.find_served()
+    # One /v1/models read serves discovery, the LoRA check and the motion-adapter check.
+    url, models = _runtime.find_served_models()
     if url is None:
         # Starting the container is a hardware backend switch. The app's
         # Ready-to-Run flow (ready_to_run.py) forbids doing that without the
@@ -754,11 +755,12 @@ def _run_served(
         url, err = _runtime.start_served(on_progress=on_progress)
         if url is None:
             return False, f"{err}\n{_runtime.MISSING_MESSAGE}"
+        models = _runtime.served_models(url)
     extra = {}
     if lora:
         # A LoRA is a named variant from the operator's catalog, resident on the
         # chip. Checked here so the user sees what is on offer, not only a bare 400.
-        names = _runtime.served_loras(url)
+        names = _runtime.served_loras(url, models)
         if lora not in names:
             if names:
                 return False, (f"This AnimateDiff server has no LoRA variant {lora!r}. "
@@ -773,15 +775,15 @@ def _run_served(
         # The Create panel passes a bool ("Save latents for chaining"), the CLI
         # a path. A bool has no path to name, so key the saved chain on this
         # run's own output file.
-        extra["chain_save"] = _runtime.chain_name_for(
-            chain_save if isinstance(chain_save, (str, os.PathLike)) else out_path)
+        chain_save_path = chain_save if isinstance(chain_save, (str, os.PathLike)) else out_path
+        extra["chain_save"] = _runtime.chain_name_for(chain_save_path)
     if chain_from:
-        extra["chain_from"] = _runtime.chain_name_for(chain_from)
+        extra["chain_from"] = _runtime.chain_name_to_continue(chain_from)
         extra["chain_alpha"] = chain_alpha
     # `is not None`, not truthiness: the Create panel encodes "adapter on, default
     # weights" as "" (see _build_cmd), which is falsy.
     if motion_adapter is not None:
-        if _runtime.motion_adapter_enabled(url):
+        if _runtime.motion_adapter_enabled(url, models):
             extra["motion_adapter"] = True
             extra["motion_adapter_alpha"] = motion_adapter_alpha
             if motion_adapter_skip:
@@ -802,6 +804,14 @@ def _run_served(
     )
     if not ok:
         return False, err
+    if chain_save and isinstance(chain_save, (str, os.PathLike)):
+        # The chain lives on the server. Leave a marker at the path the GUI offers for "Chain from"
+        # so the file picker has something to select and chain_from can read the name back.
+        try:
+            _runtime.write_chain_marker(chain_save_path, extra["chain_save"])
+        except OSError as e:
+            if on_progress:
+                on_progress(f"Note: could not write the chain marker {chain_save}: {e}")
     _finalize_seamless_loop(out_path, loop, frames, on_progress)
     return True, ""
 
@@ -1013,7 +1023,16 @@ def run_subprocess(
     # instead of failing (a fresh box has no ~/tt-metal). A caller-supplied
     # `script` means someone is deliberately driving the local runner, so that
     # case is left alone and reports the missing env as before.
-    if script is None and not _PYTHON.exists():
+    #
+    # A LoRA is the one option only the served package has (variants live in its catalog). When a
+    # server is already running and the run asks for one, it goes there even with a local tt-metal:
+    # the local runner would drop the LoRA, and its generate.py would then compete with the
+    # container for the chips the container already holds.
+    use_served = script is None and (
+        not _PYTHON.exists()
+        or (bool(lora) and mode == "blackhole" and _runtime.find_served() is not None)
+    )
+    if use_served:
         return _run_served(
             prompt=prompt, out_path=out_path, mode=mode, frames=frames, steps=steps,
             seed=seed, negative_prompt=negative_prompt, temporal_alpha=temporal_alpha,
@@ -1028,11 +1047,11 @@ def run_subprocess(
             },
         )
 
-    # The local runner has no LoRA option here: variants live in the served package's
-    # catalog. Say so instead of dropping the request without a word.
+    # Reached with a LoRA only when no AnimateDiff server is running (or the mode is not
+    # blackhole). Say so instead of dropping the request without a word.
     if lora and on_progress:
-        on_progress(f"Note: LoRA {lora!r} is applied only by the served AnimateDiff package; "
-                    "this run uses the local tt-metal and ignores it")
+        on_progress(f"Note: LoRA {lora!r} is applied only by the served AnimateDiff package, and none "
+                    "is running; this run uses the local tt-metal and ignores it")
 
     if script is None:
         script = _SCRIPT_DIR / "examples" / "generate.py"

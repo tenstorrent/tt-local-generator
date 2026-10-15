@@ -63,6 +63,7 @@ from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 import field_roles
 import gtk_layout
+from animatediff_runtime import SERVED_PACKAGE as _ANIMATEDIFF_SERVED_PACKAGE
 from app_settings import settings as _settings
 
 
@@ -910,11 +911,10 @@ _ANIMATEDIFF_LORA_DESCRIPTIONS: "dict[str, str]" = {
 _ANIMATEDIFF_LORA_GENERIC = "style variant from the AnimateDiff server"
 
 #: Hint under the greyed-out Style row when no server with a catalog is found.
-#: The command is the served package id, so keep it in step with
-#: `animatediff_runtime.SERVED_PACKAGE`.
+#: The package id comes from `animatediff_runtime.SERVED_PACKAGE`, so a package bump is one edit.
 _ANIMATEDIFF_LORA_NO_SERVER_HELP = (
     "No AnimateDiff server with styles is running. Start one with: "
-    "tt-model serve episod/tt-animatediff-container-v5.1, then press the refresh button."
+    f"tt-model serve {_ANIMATEDIFF_SERVED_PACKAGE}, then press the refresh button."
 )
 
 
@@ -1037,6 +1037,7 @@ class VideoParamPanel(CreateParamPanel):
         self._ad_lora_row: Optional[Gtk.Widget] = None
         self._ad_lora_help: Optional[Gtk.Label] = None
         self._ad_lora_fetching = False
+        self._ad_shown = False  # whether the AnimateDiff options were visible at the last update
         self._ad_lora_names: "list[str]" = []  # real names, parallel to dropdown entries 1..
         self._ad_motion_skip: Optional[Gtk.DropDown] = None
         self._ad_injection_alpha: Optional[Gtk.SpinButton] = None
@@ -1354,7 +1355,12 @@ class VideoParamPanel(CreateParamPanel):
         if self._ad_options_row is not None:
             shown = self._selected_video_key() == "animatediff"
             self._ad_options_row.set_visible(shown)
-            if shown:
+            # Look the catalog up only on the way INTO AnimateDiff. The lookup runs `docker ps`
+            # (up to 10 s) and HTTP probes, and this method also runs on every mode change; the
+            # refresh button next to the dropdown covers a server started later.
+            entered = shown and not self._ad_shown
+            self._ad_shown = shown
+            if entered:
                 self._refresh_loras()
         self._sync_ad_lightning_steps_visibility()
 

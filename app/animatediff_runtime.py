@@ -80,16 +80,23 @@ def _http_json(url: str, timeout: float = 2.0, data: bytes | None = None):
         return json.loads(r.read().decode("utf-8"))
 
 
-def _is_animatediff_server(base_url: str) -> bool:
+def _is_animatediff_models(doc: object) -> bool:
     # Everything that touches the response stays inside the try: any labelled
     # tt-model container may answer with an unexpected shape, and that must read
     # as "not AnimateDiff", not stop discovery of a later valid server.
     try:
-        models = _http_json(base_url + "/v1/models").get("data", [])
+        models = doc.get("data", [])  # type: ignore[union-attr]
         return any(
             isinstance(entry, dict) and is_animatediff_model_id(entry.get("id", ""))
             for entry in models
         )
+    except Exception:
+        return False
+
+
+def _is_animatediff_server(base_url: str) -> bool:
+    try:
+        return _is_animatediff_models(_http_json(base_url + "/v1/models"))
     except Exception:
         return False
 
@@ -116,6 +123,37 @@ def find_served(
     return None
 
 
+def served_models(base_url: str) -> dict:
+    """The server's ``/v1/models`` document, or ``{}`` when it cannot be read.
+
+    One call gives the model id, the LoRA catalog (``loras``) and ``motion_adapter``; a run
+    reads it once and passes it to ``served_loras`` and ``motion_adapter_enabled``.
+    """
+    try:
+        doc = _http_json(base_url + "/v1/models")
+    except Exception:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def find_served_models(
+    host: str = "localhost",
+    ports_fn: Callable[[], list[int]] = _candidate_ports,
+    fetch: Callable[[str], dict] = served_models,
+) -> "tuple[str, dict] | tuple[None, dict]":
+    """Like ``find_served``, and returns the ``/v1/models`` document it matched on.
+
+    The probe and the later LoRA and motion-adapter checks all read the same document,
+    so a run asks the server once instead of three times (each ask has its own timeout).
+    """
+    for port in ports_fn():
+        url = f"http://{host}:{port}"
+        doc = fetch(url)
+        if _is_animatediff_models(doc):
+            return url, doc
+    return None, {}
+
+
 def served_launcher_available() -> bool:
     """True when this box can start the served package itself."""
     return shutil.which("tt-model") is not None and shutil.which("docker") is not None
@@ -140,6 +178,9 @@ def start_served(
         return None, "tt-model and docker are required to serve AnimateDiff"
     if on_progress:
         on_progress(f"Starting {SERVED_PACKAGE} via tt-model (first run downloads the image)")
+    # One deadline for the whole wait: `tt-model serve --detach` (image pull, weights) and the
+    # readiness poll share it, so the worst case is wait_s, the number the error message reports.
+    deadline = clock() + wait_s
     try:
         proc = subprocess.run(
             ["tt-model", "serve", SERVED_PACKAGE, "--detach"],
@@ -151,11 +192,13 @@ def start_served(
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-5:]
         return None, "tt-model serve failed: " + " | ".join(tail)
 
-    deadline = clock() + wait_s
-    while clock() < deadline:
+    while True:
+        # Probe at least once: a slow `serve --detach` can leave no time on the clock for a poll.
         url = find_served(ports_fn=ports_fn, probe=probe)
         if url:
             return url, ""
+        if clock() >= deadline:
+            break
         if on_progress:
             on_progress("Waiting for the AnimateDiff server to finish loading")
         sleep(poll_s)
@@ -177,26 +220,61 @@ def chain_name_for(path: str | os.PathLike) -> str:
     return f"{stem.lstrip('._-') or 'chain'}-{hashlib.sha1(full.encode()).hexdigest()[:12]}"
 
 
-def motion_adapter_enabled(base_url: str) -> bool:
-    """Whether the operator started the server with a motion adapter."""
+#: First line of a chain marker file. A served run saves its chain on the server, not on this
+#: machine, so the GUI's "Chain from" file picker would have nothing to select. The marker is
+#: a small file at the client-side path that records the server-side chain name.
+_CHAIN_MARKER_HEADER = "ttlg-served-chain v1"
+
+
+def write_chain_marker(path: str | os.PathLike, chain_name: str) -> None:
+    """Write the marker for a chain saved on the server, at the client path the user picks from."""
+    p = Path(path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(p, f"{_CHAIN_MARKER_HEADER}\n{chain_name}\n".encode("utf-8"))
+
+
+def read_chain_marker(path: str | os.PathLike) -> str | None:
+    """The server-side chain name stored in a marker file, or None for any other file."""
     try:
-        return bool(_http_json(base_url + "/v1/models").get("motion_adapter"))
-    except Exception:
-        return False
+        with open(Path(path).expanduser(), "rb") as f:
+            head = f.read(256).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = head.splitlines()
+    if len(lines) == 2 and lines[0] == _CHAIN_MARKER_HEADER and lines[1]:
+        return lines[1]
+    return None
 
 
-def served_loras(base_url: str) -> list[str]:
+def chain_name_to_continue(path: str | os.PathLike) -> str:
+    """Server-side chain name for a ``chain_from`` path: the marker's name, else ``chain_name_for``.
+
+    Without a marker (the file does not exist, or is a latents file from a local run) the name
+    is derived from the path, which is what a chain saved by an earlier run to that same path used.
+    """
+    return read_chain_marker(path) or chain_name_for(path)
+
+
+def motion_adapter_enabled(base_url: str, models: dict | None = None) -> bool:
+    """Whether the operator started the server with a motion adapter.
+
+    ``models`` is the ``/v1/models`` document when the caller already has it.
+    """
+    doc = served_models(base_url) if models is None else models
+    return bool(doc.get("motion_adapter"))
+
+
+def served_loras(base_url: str, models: dict | None = None) -> list[str]:
     """LoRA variant names the served model offers (``/v1/models`` -> ``loras``).
 
     The operator's catalog is fixed when the package is built (a serve profile in
     its manifest), and a request names a variant; it never carries a repo id or a
     path. An old server, a plain profile, an unreachable server or a malformed
-    answer all give an empty list.
+    answer all give an empty list. ``models`` is the ``/v1/models`` document when the
+    caller already has it.
     """
-    try:
-        names = _http_json(base_url + "/v1/models").get("loras")
-    except Exception:
-        return []
+    doc = served_models(base_url) if models is None else models
+    names = doc.get("loras")
     return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
 
 
@@ -258,6 +336,15 @@ def poll_previews(
         try:
             step, total = int(info.get("step") or 0), int(info.get("total") or 0)
             b64 = info.get("gif_b64")
+            if "request_id" not in info:
+                # The server predates request_id (older than 0.13.1), so frames cannot be matched
+                # to this generation and are never shown. Say so once, then stop polling.
+                if info.get("running"):
+                    on_progress("Note: this AnimateDiff server is older than 0.13.1 and does not "
+                                "name its previews, so none are shown; update the package "
+                                f"({SERVED_PACKAGE})")
+                    return
+                continue
             if info.get("request_id") != request_id:
                 continue
             if not info.get("running") or not b64 or step <= last_step:
@@ -375,4 +462,10 @@ MISSING_MESSAGE = (
     "  1. install tt-metal (https://github.com/tenstorrent/tt-installer) so that\n"
     "     ~/tt-metal/python_env exists (or set TT_METAL_HOME), or\n"
     f"  2. install tt-model and docker, then run: tt-model serve {SERVED_PACKAGE}"
+)
+
+#: For the modes the served package cannot run (cpu, sim): only a local tt-metal helps.
+LOCAL_ONLY_MESSAGE = (
+    "Install tt-metal (https://github.com/tenstorrent/tt-installer) so that\n"
+    "~/tt-metal/python_env exists (or set TT_METAL_HOME)."
 )

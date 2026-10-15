@@ -617,6 +617,49 @@ def test_selecting_animatediff_looks_up_the_catalog(monkeypatch):
     assert calls == [1] and applied == [["pixel"]]
 
 
+def _inline_lookup(monkeypatch, cpp, panel, calls):
+    monkeypatch.setattr(cpp, "_fetch_served_loras", lambda: calls.append(1) or [])
+    monkeypatch.setattr(cpp.GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(cpp.threading.Thread, "start", lambda self: self.run())
+
+
+def test_the_catalog_is_looked_up_only_on_entering_animatediff(monkeypatch):
+    """The lookup runs `docker ps` (up to 10 s) and HTTP probes. `_update_animatediff_visibility`
+    runs on every model re-selection, so repeating it while AnimateDiff stays selected must not
+    repeat the lookup; leaving and coming back does. The refresh button covers a server started later."""
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    calls = []
+    _inline_lookup(monkeypatch, cpp, panel, calls)
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1]
+    for _ in range(3):
+        panel.set_selected_model_key("animatediff")
+        panel._update_animatediff_visibility()
+    assert calls == [1], "re-selecting AnimateDiff repeated the docker/HTTP lookup"
+    panel._model_dropdown.set_selected(_video_model_index("mochi"))
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1, 1]
+
+
+def test_the_refresh_button_still_looks_the_catalog_up_again(monkeypatch):
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    calls = []
+    _inline_lookup(monkeypatch, cpp, panel, calls)
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    panel._refresh_loras()
+    assert calls == [1, 1]
+
+
+def test_the_no_server_hint_is_built_from_the_runtime_package_id():
+    # Wiring: a hardcoded copy of the package id is one more place to edit on a package bump.
+    src = (Path(__file__).parent.parent / "app" / "create_param_panels.py").read_text()
+    assert "tt-animatediff-container" not in src
+
+
 # ── option descriptions ─────────────────────────────────────────────────────
 
 def _labels_in(widget):

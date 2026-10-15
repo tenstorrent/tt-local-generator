@@ -1,3 +1,25 @@
+tt-local-generator (0.104.3) noble; urgency=medium
+
+  * fix(animatediff): review round on PR #29.
+    - A run that picks a Style (LoRA) goes to a running AnimateDiff server even when
+      ~/tt-metal exists. Before, the LoRA was dropped and generate.py competed with
+      the container for the chips it held. With no server running the note says so.
+    - Served chaining leaves a marker file at the chain-save path, so the Create
+      panel's "Chain from" picker can select it; chain_from reads the server-side
+      name back from it.
+    - A server older than 0.13.1 does not name its previews. The run now says so once
+      and stops polling instead of silently showing nothing.
+    - start_served uses one deadline for `tt-model serve --detach` and the readiness
+      wait, so the worst case is the 900 s the error reports, not twice that.
+    - One /v1/models read per served run (discovery, LoRA check and motion-adapter
+      check shared it). The Style catalog lookup (docker ps plus HTTP) runs when
+      AnimateDiff is selected, not on every refresh of the options row.
+    - cpu and sim errors point only at the tt-metal install; the postinst note no
+      longer says the package starts on first use; the Style hint builds the package
+      id from SERVED_PACKAGE; artgen discovery calls is_animatediff_model_id directly.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 14 Oct 2026 21:25:00 -0700
+
 tt-local-generator (0.104.2) noble; urgency=medium
 
   * fix(create): the Style (LoRA) row was hidden whenever no AnimateDiff server

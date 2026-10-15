@@ -52,6 +52,17 @@ tt-model-manager, or as a .deb.
 - Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
   failing with the fallback disabled.
 
+### v0.104.3 - review round on PR #29 (josh)
+
+Ten comments, each checked against the code. A run with a LoRA is routed to a running server even
+with a local tt-metal (`run_subprocess`: `use_served`). Served chaining writes a marker file
+(`write_chain_marker`) so the file picker has something to select. A server without `request_id`
+gets a one-time note in `poll_previews`; no compatibility path, since the published container
+package (0.13.0) is repackaged before this ships. `start_served` has one deadline. `find_served_models`
+returns the `/v1/models` document so a run reads it once. The Style lookup runs on entering AnimateDiff
+only. New tests were seen failing against the old code; one of them hung it (an unbounded poll loop),
+so run old-code checks on a copy with `timeout`, never with `git stash` in the working tree.
+
 ### v0.104.2 - Style row always visible
 
 v0.104.0 hid the Style (LoRA) row until a catalog was found, so on a machine with
