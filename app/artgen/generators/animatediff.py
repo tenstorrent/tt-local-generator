@@ -30,6 +30,7 @@ Script resolution order:
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -123,7 +124,13 @@ def _ensure_log_handler() -> None:
     except OSError:
         _log.addHandler(logging.NullHandler())
 
-_TT_METAL = Path.home() / "tt-metal"
+# $TT_METAL_HOME wins, then ~/tt-metal; when neither has a python_env the
+# paths below still point at ~/tt-metal so `_PYTHON.exists()` is simply False
+# and run_subprocess falls back to the served tt-animatediff container (see
+# animatediff_runtime). Tests monkeypatch `_PYTHON` directly.
+import animatediff_runtime as _runtime  # noqa: E402
+
+_TT_METAL = _runtime.find_tt_metal() or (Path.home() / "tt-metal")
 _PYTHON = _TT_METAL / "python_env" / "bin" / "python"
 
 # Prefer the copy bundled inside this repo (app/animatediff/ — synced from
@@ -709,6 +716,108 @@ def _finalize_seamless_loop(
             on_progress("Note: seamless-loop post-process failed; GIF is valid but not loop-blended")
 
 
+def _run_served(
+    *, prompt, out_path, mode, frames, steps, seed, negative_prompt,
+    temporal_alpha, on_progress, timeout, loop, unsupported, prompt_schedule=None,
+    lightning=False, chain_from=None, chain_save=None, chain_alpha=0.6,
+    motion_adapter=None, motion_adapter_alpha=1.0, motion_adapter_skip=None,
+    lora=None, served=None,
+) -> tuple[bool, str]:
+    """Generate through the tt-model-manager tt-animatediff server.
+
+    Used when there is no local tt-metal. Single-chip basics only: options the
+    server cannot honour are reported once through on_progress and dropped,
+    never silently. The seamless-loop crossfade is local post-processing, so
+    it still applies.
+    """
+    _ensure_log_handler()
+    if mode != "blackhole":
+        return False, (
+            f"mode={mode!r} needs a local tt-metal python_env; the served "
+            "AnimateDiff package runs on Blackhole only.\n" + _runtime.LOCAL_ONLY_MESSAGE
+        )
+    dropped = sorted(k for k, v in unsupported.items() if v)
+    if dropped and on_progress:
+        on_progress("Note: served AnimateDiff ignores " + ", ".join(dropped)
+                    + " (needs a local tt-metal)")
+
+    # One /v1/models read serves discovery, the LoRA check and the motion-adapter check.
+    # `served` is the (url, models) pair the caller already found, so a server that stops
+    # between the routing decision and here is not looked up a second time.
+    url, models = served if served and served[0] else _runtime.find_served_models()
+    if url is None:
+        # Starting the container is a hardware backend switch. The app's
+        # Ready-to-Run flow (ready_to_run.py) forbids doing that without the
+        # user's confirmation, so a missing server is an actionable error here,
+        # not an auto-start, unless the operator opted in explicitly.
+        if not _runtime.served_launcher_available():
+            return False, _runtime.MISSING_MESSAGE
+        if os.environ.get(_runtime.AUTOSTART_ENV) != "1":
+            return False, _runtime.NOT_RUNNING_MESSAGE
+        url, err = _runtime.start_served(on_progress=on_progress)
+        if url is None:
+            return False, f"{err}\n{_runtime.MISSING_MESSAGE}"
+        models = _runtime.served_models(url)
+    extra = {}
+    if lora:
+        # A LoRA is a named variant from the operator's catalog, resident on the
+        # chip. Checked here so the user sees what is on offer, not only a bare 400.
+        names = _runtime.served_loras(url, models)
+        if lora not in names:
+            if names:
+                return False, (f"This AnimateDiff server has no LoRA variant {lora!r}. "
+                               f"Available: {', '.join(names)}.")
+            return False, (f"This AnimateDiff server has no LoRA catalog, so {lora!r} cannot be "
+                           f"applied. The default profile of `tt-model serve {_runtime.SERVED_PACKAGE}` "
+                           "has one; `--profile plain` does not.")
+        extra["lora"] = lora
+    if lightning:
+        extra["sampler"] = "euler"  # the CLI's --lightning on the base UNet
+    if chain_save:
+        # The Create panel passes a bool ("Save latents for chaining"), the CLI
+        # a path. A bool has no path to name, so key the saved chain on this
+        # run's own output file.
+        chain_save_path = chain_save if isinstance(chain_save, (str, os.PathLike)) else out_path
+        extra["chain_save"] = _runtime.chain_name_for(chain_save_path)
+    if chain_from:
+        extra["chain_from"] = _runtime.chain_name_to_continue(chain_from)
+        extra["chain_alpha"] = chain_alpha
+    # `is not None`, not truthiness: the Create panel encodes "adapter on, default
+    # weights" as "" (see _build_cmd), which is falsy.
+    if motion_adapter is not None:
+        if _runtime.motion_adapter_enabled(url, models):
+            extra["motion_adapter"] = True
+            extra["motion_adapter_alpha"] = motion_adapter_alpha
+            if motion_adapter_skip:
+                extra["motion_adapter_skip"] = list(motion_adapter_skip)
+        elif on_progress:
+            on_progress("Note: this AnimateDiff server was not started with a "
+                        "motion adapter (ANIMATEDIFF_MOTION_ADAPTER); ignoring it")
+    _log.info("served_run url=%s out=%s frames=%d steps=%d", url, out_path, frames, steps)
+    if on_progress:
+        on_progress(f"Generating on the AnimateDiff server at {url}")
+    ok, err = _runtime.generate_served(
+        url, out_path, prompt, negative_prompt, frames, steps, seed,
+        temporal_alpha, timeout=timeout, on_progress=on_progress,
+        # Same sibling-file convention the local runner uses, so the panel's
+        # existing PREVIEW: handling finds it.
+        preview_path=out_path.with_name(out_path.stem + "_preview.gif") if on_progress else None,
+        prompt_schedule=prompt_schedule, extra=extra,
+    )
+    if not ok:
+        return False, err
+    if chain_save and isinstance(chain_save, (str, os.PathLike)):
+        # The chain lives on the server. Leave a marker at the path the GUI offers for "Chain from"
+        # so the file picker has something to select and chain_from can read the name back.
+        try:
+            _runtime.write_chain_marker(chain_save_path, extra["chain_save"])
+        except OSError as e:
+            if on_progress:
+                on_progress(f"Note: could not write the chain marker {chain_save}: {e}")
+    _finalize_seamless_loop(out_path, loop, frames, on_progress)
+    return True, ""
+
+
 def _run_one(
     cmd: "list[str]",
     *,
@@ -831,6 +940,7 @@ def run_subprocess(
     stitch_order: str = "interleave",
     prompt_schedule: "list[tuple[int, str]] | None" = None,
     loop: str = "none",
+    lora: str | None = None,
 ) -> tuple[bool, str]:
     """Run the unified generate.py, optionally spreading work across Blackhole chips.
 
@@ -911,6 +1021,51 @@ def run_subprocess(
     _ensure_log_handler()
     import tempfile, datetime as _dt
 
+    # No local tt-metal python_env: use the served tt-animatediff container
+    # instead of failing (a fresh box has no ~/tt-metal). A caller-supplied
+    # `script` means someone is deliberately driving the local runner, so that
+    # case is left alone and reports the missing env as before.
+    #
+    # A LoRA is the one option only the served package has (variants live in its catalog). When a
+    # server is already running and the run asks for one, it goes there even with a local tt-metal:
+    # the local runner would drop the LoRA, and its generate.py would then compete with the
+    # container for the chips the container already holds.
+    # A chain saved by a served run is only a marker file here; the latents live on the server,
+    # so continuing one also needs the server (the local runner cannot load a marker).
+    found = None
+    if script is None and _PYTHON.exists() and mode == "blackhole":
+        marker = bool(chain_from) and _runtime.read_chain_marker(chain_from) is not None
+        if lora or marker:
+            found = _runtime.find_served_models()  # looked up once; handed on to _run_served
+            if found[0] is None:
+                found = None
+                if marker:
+                    return False, (
+                        f"{chain_from} continues a chain saved by the AnimateDiff server, which is "
+                        "not running. Start it (see the Style hint) or pick a chain from a local run."
+                    )
+    use_served = script is None and (not _PYTHON.exists() or found is not None)
+    if use_served:
+        return _run_served(
+            prompt=prompt, out_path=out_path, mode=mode, frames=frames, steps=steps,
+            seed=seed, negative_prompt=negative_prompt, temporal_alpha=temporal_alpha,
+            on_progress=on_progress, timeout=timeout, loop=loop,
+            prompt_schedule=prompt_schedule, lightning=lightning,
+            chain_from=chain_from, chain_save=chain_save, chain_alpha=chain_alpha,
+            motion_adapter=motion_adapter, motion_adapter_alpha=motion_adapter_alpha,
+            motion_adapter_skip=motion_adapter_skip, lora=lora, served=found,
+            unsupported={
+                "device_id": device_id,
+                "multichip": multichip_mode != "off" and (num_chips or 1) > 1,
+            },
+        )
+
+    # Reached with a LoRA only when no AnimateDiff server is running (or the mode is not
+    # blackhole). Say so instead of dropping the request without a word.
+    if lora and on_progress:
+        on_progress(f"Note: LoRA {lora!r} is applied only by the served AnimateDiff package, and none "
+                    "is running; this run uses the local tt-metal and ignores it")
+
     if script is None:
         script = _SCRIPT_DIR / "examples" / "generate.py"
         if not script.exists():
@@ -922,7 +1077,7 @@ def run_subprocess(
     if not _PYTHON.exists():
         return False, (
             f"tt-metal Python env not found: {_PYTHON}\n"
-            "Run: cd ~/tt-metal && ./build_metal.sh"
+            + _runtime.MISSING_MESSAGE
         )
 
     import os

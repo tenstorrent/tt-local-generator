@@ -405,3 +405,21 @@ def test_preview_line_survives_the_whole_chain():
     assert m.group(4) == "/tmp/run/preview_chip0.gif", (
         "the path must arrive clean — no decoration appended anywhere"
     )
+
+
+def test_worker_forwards_lora_to_run_subprocess(monkeypatch):
+    """The Create panel's LoRA pick must reach run_subprocess, not stop at the worker."""
+    import worker as w
+    import artgen.generators.animatediff as ad
+    seen = {}
+
+    def fake_run(*a, **k):
+        seen.update(k)
+        return False, "stop here"
+    monkeypatch.setattr(ad, "run_subprocess", fake_run)
+    monkeypatch.setattr(ad, "check_hardware", lambda: (True, "blackhole x1", 1))
+    gen = w.AnimateDiffGenerationWorker(
+        store=None, prompt="p", negative_prompt="", steps=4, seed=1, frames=8,
+        temporal_alpha=0.35, lora="pixel")
+    gen.run_with_callbacks(lambda m: None, lambda r: None, lambda e: None)
+    assert seen.get("lora") == "pixel"

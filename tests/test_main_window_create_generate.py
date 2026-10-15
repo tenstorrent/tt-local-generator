@@ -364,7 +364,7 @@ def test_video_medium_animatediff_with_full_panel_args_passes_through_unchanged(
         "multichip_mode": "off",
         "device_id": 2, "chain_from": "/tmp/latents.chain.pt", "chain_save": True,
         "chain_alpha": 0.4, "motion_adapter": "", "motion_adapter_alpha": 0.8,
-        "motion_adapter_skip": ["up2"],
+        "motion_adapter_skip": ["up2"], "lora": "pixel",
     }
     assert set(full_args) == set(mw._ANIMATEDIFF_DEFAULTS)  # test itself stays honest
     params = {"model": "animatediff-blackhole", "animatediff_args": full_args}

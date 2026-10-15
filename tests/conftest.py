@@ -8,6 +8,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 
 @pytest.fixture(autouse=True)
+def _no_real_lora_discovery(monkeypatch):
+    """Selecting AnimateDiff in the Create panel looks up the served LoRA
+    catalog (docker + HTTP) on a background thread. Keep every test off the
+    real machine's containers; tests of the dropdown patch this themselves."""
+    try:
+        import create_param_panels as _cpp
+    except Exception:  # headless without GTK: nothing to patch
+        return
+    monkeypatch.setattr(_cpp, "_fetch_served_loras", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def _isolate_pipeline_store(tmp_path, monkeypatch):
     """Redirect PipelineStore index to tmp_path for every test.
 

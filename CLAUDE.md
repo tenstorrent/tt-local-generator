@@ -1,5 +1,153 @@
 # tt-local-generator — developer notes
 
+## AnimateDiff runs without ~/tt-metal (v0.103.0)
+
+Prompt: a fresh QB2 with no `~/tt-metal` could not generate a loop, because
+`animatediff.py` hardcoded `~/tt-metal/python_env` and failed with a build
+instruction. Nobody should hit that when tt-animatediff exists on HF, in
+tt-model-manager, or as a .deb.
+
+- **`app/animatediff_runtime.py`** (new, stdlib): `find_tt_metal()` (`$TT_METAL_HOME`
+  then `~/tt-metal`), `find_served()` (docker-label port discovery reused from
+  `artgen._tt_model_host_ports`, then `/v1/models` must name SD 1.4 or
+  animatediff, so tt-media-server's Wan2.2 on the same route is not mistaken
+  for it), `start_served()` (`tt-model serve episod/tt-animatediff-container-v5.1 --detach`,
+  polled until ready) and `generate_served()` (`POST /v1/videos/generations`,
+  b64 GIF).
+- **`run_subprocess`** falls back to `_run_served` when `_PYTHON` is missing and
+  the caller did not pass `script`. Local stays first because it supports
+  everything. The served server takes prompt, negative prompt, frames, steps,
+  seed, temporal_alpha, prompt_schedule, sampler (lightning), chaining and a
+  capability-gated motion adapter at a fixed 512x512; only device pinning and
+  multi-chip are dropped, with an `on_progress` note (detail in the next
+  bullet). The seamless-loop crossfade still applies (local PIL). `cpu` mode
+  does not use it. The generator never starts the container on its own: that is
+  a backend switch, which `ready_to_run` forbids without confirmation, so a
+  missing server returns `NOT_RUNNING_MESSAGE` unless
+  `TTLG_ANIMATEDIFF_AUTOSTART=1` opts in.
+- **Served previews + prompt-schedule (client done; server commits are on origin
+  `feat/lora-support` of tt-animatediff, PR #15, head cc1d1f9).** `poll_previews` polls
+  `GET /v1/videos/preview` (`{step,total,gif_b64,running}`) during the blocking
+  POST and relays each new step as a `PREVIEW: n/N path` line to the sibling
+  `<stem>_preview.gif`. Contract points that matter: the POST must send
+  `"preview": true` or the server never renders a GIF (each render costs ~0.4 s);
+  `total` is the loop's real count (21 for a 20-step request); the last frame
+  stays readable after a run, so frames seen while `running` is false are
+  ignored. 404/405 stops polling quietly (older server). `prompt_schedule` is now
+  forwarded instead of dropped. Server commit fb9ef60 adds `sampler`/chain/motion adapter, now mapped:
+  `lightning`->`sampler:"euler"`; `chain_save/from` paths -> stable server names via
+  `chain_name_for` (sha1 of the resolved path; server keeps newest 32, lost on
+  restart, unknown `chain_from` is a 400); `motion_adapter` only sent when
+  `/v1/models` reports `motion_adapter: true`, else dropped with a note. Still
+  dropped: device pin, multi-chip. `preview_every` is not sent: the server's default
+  (every step up to 10 steps, every other step beyond) is what we want.
+  tt-animatediff's `tt_model_package.yaml` `extra_code` ref still points at an old
+  release until a tag is cut, so a published package does not carry these
+  features yet. The client was run against the tt-animatediff container image
+  (not through `tt-model serve`, which cannot serve an unpushed package).
+- **Not done:** a GUI confirm flow for starting the served container (routing it
+  through `_ensure_server_ready_then`). Until then the user starts it, or opts
+  in with `TTLG_ANIMATEDIFF_AUTOSTART=1`.
+  The served path has not been run against real hardware from this session.
+- Tests: `tests/test_animatediff_runtime.py`. The two wiring tests were seen
+  failing with the fallback disabled.
+
+### v0.104.4 - josh's re-review notes
+
+A chain marker (served chaining) routes the run to the server, or fails with a message when none
+runs, because generate.py cannot load it. `run_subprocess` finds the server once and passes the
+(url, models) pair to `_run_served`. The `start_served` timeout note needed no code: the deadline is
+computed just before the subprocess, so it already is the remaining time.
+
+### v0.104.3 - review round on PR #29 (josh)
+
+Ten comments, each checked against the code. A run with a LoRA is routed to a running server even
+with a local tt-metal (`run_subprocess`: `use_served`). Served chaining writes a marker file
+(`write_chain_marker`) so the file picker has something to select. A server without `request_id`
+gets a one-time note in `poll_previews`; no compatibility path, since the published container
+package (0.13.0) is repackaged before this ships. `start_served` has one deadline. `find_served_models`
+returns the `/v1/models` document so a run reads it once. The Style lookup runs on entering AnimateDiff
+only. New tests were seen failing against the old code; one of them hung it (an unbounded poll loop),
+so run old-code checks on a copy with `timeout`, never with `git stash` in the working tree.
+
+### v0.104.2 - Style row always visible
+
+v0.104.0 hid the Style (LoRA) row until a catalog was found, so on a machine with
+no served AnimateDiff the control did not exist and looked missing. It is now
+always shown: dropdown insensitive, hint `_ANIMATEDIFF_LORA_NO_SERVER_HELP` (names
+the `tt-model serve` command, kept in step with `animatediff_runtime.SERVED_PACKAGE`
+by a test), plus a refresh button wired to `_refresh_loras`. `_apply_loras` flips
+sensitivity and the hint instead of visibility. Checked by rendering the real panel
+under Xvfb (`GDK_BACKEND=x11`), with and without a catalog. Discovery only finds a
+server through the `org.tenstorrent.tt-model` docker label, so a server started any
+other way (e.g. plain uvicorn) is not found.
+
+### v0.104.1 - option descriptions
+
+`create_param_panels._ANIMATEDIFF_OPTION_HELP` holds one sentence per AnimateDiff
+option; `_build_animatediff_options_row` renders each under its control
+(`.ad-option-help`, `create_view._CSS`). A row and its description share one
+container, so hiding a row (Distill steps, Style) hides its text too. The server
+returns LoRA names only, so what each does lives in
+`_ANIMATEDIFF_LORA_DESCRIPTIONS` (from tt-animatediff `docs/LORA.md`); the dropdown
+shows `_lora_label(name)` = `name - what it does` and `_selected_lora` maps the
+index back to the real name through `_ad_lora_names`, so the description text never
+reaches the request. A new catalog variant needs an entry there or it gets the
+generic line. Better long term: have the server return a description per variant.
+Tests pin that every table entry is rendered and that collect() sends the name.
+
+### v0.104.0 - Style (LoRA) dropdown in Create
+
+`VideoParamPanel` shows a "Style (LoRA)" dropdown in the AnimateDiff options.
+`_refresh_loras` looks the catalog up on a background thread
+(`_fetch_served_loras` -> `find_served` + `served_loras`) whenever AnimateDiff
+becomes the selected model, and `_apply_loras` (main thread, via `GLib.idle_add`)
+rebuilds the list, keeps the current pick if it is still offered, and hides the
+row when there is no catalog. `collect()` reports `lora` (None for "None"), which
+flows `_ANIMATEDIFF_DEFAULTS` -> `AnimateDiffGenerationWorker(lora=)` ->
+`run_subprocess(lora=)`. A local tt-metal run ignores it and says so. Not done:
+nudging Steps to 4 for an LCM variant (needs the server to say which variants are
+LCM). `tests/conftest.py` stubs `_fetch_served_loras` for every test so selecting
+AnimateDiff never touches the real machine's containers.
+
+Copy: "AnimateDiff has no server" stopped being true once the served package
+existed, so the benefit line (`server_manager.MODEL_BENEFITS`), the picker label
+(`_VIDEO_MODEL_CHOICES`) and the busy status tooltip no longer claim it.
+`test_busy_says_what_is_running_in_the_tooltip` had pinned the old wording.
+Code comments elsewhere that say "local, no server" still describe the
+always-ready dot logic and were left alone. That dot still reads ready for
+AnimateDiff even when a run would need the served server to be started.
+
+### v0.103.3 - review fixes on PR #29
+
+Copilot's second review, both checked against the code first.
+* **Preview ownership.** `poll_previews` takes a `request_id`; `generate_served`
+  makes a fresh one per generation, sends it in the request and polls for it.
+  Frames with another id are skipped without moving the step watermark. This
+  needs tt-animatediff 0.13.1 (`request_id` on the request, echoed by
+  `GET /v1/videos/preview`); an older server echoes nothing, so no previews show.
+* **Chat discovery.** `artgen.detect_artgen_endpoint` drops a docker-label or
+  sweep hit whose model id is the AnimateDiff server's (`is_animatediff_model_id`).
+  An explicit URL is not filtered. The explicit-URL test was seen failing with the
+  filter made unconditional.
+* Tests: `tests/test_animatediff_runtime.py`, `tests/test_artgen_endpoint.py`.
+
+### v0.103.1 - served LoRA variants (package id moved in v0.103.2)
+
+`run_subprocess(..., lora="name")` sends `lora` to the served package. A variant
+is a name from the operator's catalog, never a repo id or a path. The catalog is
+set in the tt-animatediff package's serve profile (`tt-model serve` has no
+`--env`): the default profile `full` carries `pixel`, `pixel-fast` and `lcm`,
+`--profile plain` has none. `runtime.served_loras(url)` reads `/v1/models` ->
+`loras` and `_run_served` checks the name first, so an unknown name or a server
+with no catalog returns a message that lists what is available instead of a bare
+400. The local tt-metal runner does not apply a LoRA; it says so through
+`on_progress`. A catalog variant that includes the LCM-LoRA defaults to 4 steps
+and guidance 1.5 only when the request leaves them out, and this client always
+sends `steps`, so an LCM variant runs at the caller's step count: pass 4 for the
+fast path. No Create-panel control yet. Five tests in
+`tests/test_animatediff_runtime.py` (seen failing before the change).
+
 ## Dropping the redundant colorize call + the Section 6 backlog (v0.102.0)
 
 Follow-up to the PR #28 final review, all landed in the same PR.

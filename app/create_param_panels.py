@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,7 @@ from gi.repository import Gdk, Gio, GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 import field_roles
 import gtk_layout
+from animatediff_runtime import SERVED_PACKAGE as _ANIMATEDIFF_SERVED_PACKAGE
 from app_settings import settings as _settings
 
 
@@ -806,7 +808,7 @@ _VIDEO_MODEL_CHOICES: "list[tuple[str, str]]" = [
     ("wan2", "Wan2.2 — 720p video"),
     ("mochi", "Mochi-1 — 480×848 video"),
     ("skyreels", "SkyReels-V2-I2V — 960×544 (needs a seed image)"),
-    ("animatediff", "AnimateDiff — local, no server needed"),
+    ("animatediff", "AnimateDiff — quick looping animation"),
 ]
 
 # Internal key -> server-side model id string, passed as `model=` to
@@ -863,7 +865,78 @@ _ANIMATEDIFF_DEFAULTS: dict = dict(
     motion_adapter=None,
     motion_adapter_alpha=1.0,
     motion_adapter_skip=None,
+    lora=None,
 )
+
+#: One plain-English sentence per AnimateDiff option, shown under the control.
+#: Keyed by a stable option id so a test can assert every option has one.
+_ANIMATEDIFF_OPTION_HELP: "dict[str, str]" = {
+    "mode": "Where the animation is computed. Blackhole uses the hardware; "
+            "cpu is much slower; sim only checks that the setup works.",
+    "negative_prompt": "Things to steer away from, such as blur or low quality.",
+    "temporal_alpha": "How strongly frames follow each other. Higher gives a "
+                      "steadier, calmer loop; lower allows more movement.",
+    "lightning": "Faster sampling with an Euler schedule. Quicker results, "
+                 "with a little less detail.",
+    "lightning_steps": "How many steps the distilled CPU model uses.",
+    "multichip": "How the Blackhole chips share the work. Remix: each chip makes "
+                 "its own take and they are stitched. Coherent: chips continue "
+                 "each other for one longer clip. Off: one chip.",
+    "lora": "A style the AnimateDiff server has loaded, such as pixel art. Pick "
+            "None for the plain look.",
+    "device_id": "Run on one specific chip. Leave at -1 to let the app choose.",
+    "chain_from": "Continue from a saved clip so the new loop starts where "
+                  "that one ended.",
+    "chain_save": "Keep this clip's internal state so a later clip can "
+                  "continue from it.",
+    "chain_alpha": "How closely a continued clip keeps the previous one's "
+                   "composition. Around 0.2 to 0.55 still follows your new prompt.",
+    "motion_adapter": "Adds a learned motion model for smoother, more natural "
+                      "movement. Slower, and only works if the server was "
+                      "started with it.",
+    "motion_skip": "Skips parts of the motion model to save time. Skipping the "
+                   "upper layers is much faster at a small cost in motion.",
+    "injection_alpha": "How strongly the motion model shapes the movement. "
+                       "1.0 is full strength; lower blends it with the plain look.",
+}
+
+#: What each catalog variant of the served tt-animatediff package does. The
+#: server returns names only, so these come from its docs (docs/LORA.md). An
+#: unknown name still works and gets the generic line.
+_ANIMATEDIFF_LORA_DESCRIPTIONS: "dict[str, str]" = {
+    "pixel": "pixel art look: blocky colors and hard edges",
+    "pixel-fast": "pixel art look, quick: about 4 steps (set Steps to 4)",
+    "lcm": "quick drafts, no style change: about 4 steps (set Steps to 4)",
+}
+_ANIMATEDIFF_LORA_GENERIC = "style variant from the AnimateDiff server"
+
+#: Hint under the greyed-out Style row when no server with a catalog is found.
+#: The package id comes from `animatediff_runtime.SERVED_PACKAGE`, so a package bump is one edit.
+_ANIMATEDIFF_LORA_NO_SERVER_HELP = (
+    "No AnimateDiff server with styles is running. Start one with: "
+    f"tt-model serve {_ANIMATEDIFF_SERVED_PACKAGE}, then press the refresh button."
+)
+
+
+def _lora_label(name: str) -> str:
+    """Dropdown text for a catalog variant: ``name - what it does``."""
+    return f"{name} - {_ANIMATEDIFF_LORA_DESCRIPTIONS.get(name, _ANIMATEDIFF_LORA_GENERIC)}"
+
+
+#: First entry of the Style (LoRA) dropdown: no variant.
+_ANIMATEDIFF_NO_LORA = "None"
+
+
+def _fetch_served_loras() -> "list[str]":
+    """LoRA variant names of a running served tt-animatediff, or [].
+
+    Seam for tests; blocking (docker + HTTP), so call it off the GTK thread.
+    """
+    import animatediff_runtime as rt
+
+    url = rt.find_served()
+    return rt.served_loras(url) if url else []
+
 
 # Multi-chip selector: user-facing label -> engine `multichip_mode` value
 # (worker.py -> animatediff.run_subprocess --multichip-mode {off,remix,coherent}).
@@ -959,6 +1032,13 @@ class VideoParamPanel(CreateParamPanel):
         self._ad_chain_save: Optional[Gtk.CheckButton] = None
         self._ad_chain_alpha: Optional[Gtk.SpinButton] = None
         self._ad_motion_adapter: Optional[Gtk.CheckButton] = None
+        # Served-LoRA picker (shown only when a served tt-animatediff reports a catalog).
+        self._ad_lora: Optional[Gtk.DropDown] = None
+        self._ad_lora_row: Optional[Gtk.Widget] = None
+        self._ad_lora_help: Optional[Gtk.Label] = None
+        self._ad_lora_fetching = False
+        self._ad_shown = False  # whether the AnimateDiff options were visible at the last update
+        self._ad_lora_names: "list[str]" = []  # real names, parallel to dropdown entries 1..
         self._ad_motion_skip: Optional[Gtk.DropDown] = None
         self._ad_injection_alpha: Optional[Gtk.SpinButton] = None
 
@@ -1273,8 +1353,58 @@ class VideoParamPanel(CreateParamPanel):
         indirectly matter there too (defensive; the two dropdowns are
         independent widgets, so this call is cheap and always safe)."""
         if self._ad_options_row is not None:
-            self._ad_options_row.set_visible(self._selected_video_key() == "animatediff")
+            shown = self._selected_video_key() == "animatediff"
+            self._ad_options_row.set_visible(shown)
+            # Look the catalog up only on the way INTO AnimateDiff. The lookup runs `docker ps`
+            # (up to 10 s) and HTTP probes, and this method also runs on every mode change; the
+            # refresh button next to the dropdown covers a server started later.
+            entered = shown and not self._ad_shown
+            self._ad_shown = shown
+            if entered:
+                self._refresh_loras()
         self._sync_ad_lightning_steps_visibility()
+
+    def _refresh_loras(self) -> None:
+        """Look up the served LoRA catalog off the GTK thread, then apply it.
+
+        Discovery shells out to docker and makes HTTP calls, so it must not run
+        on the main thread. One lookup at a time; the result is posted back with
+        `GLib.idle_add`.
+        """
+        if self._ad_lora is None or self._ad_lora_fetching:
+            return
+        self._ad_lora_fetching = True
+
+        def work():
+            try:
+                names = _fetch_served_loras()
+            except Exception:
+                names = []
+            GLib.idle_add(self._apply_loras, names)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_loras(self, names: "list[str]") -> bool:
+        """Main-thread: rebuild the dropdown from `names`, keeping the current
+        pick if it is still offered. Hidden when there is no catalog."""
+        self._ad_lora_fetching = False
+        if self._ad_lora is None or self._ad_lora_row is None:
+            return False
+        current = self._selected_lora()
+        self._ad_lora_names = list(names)
+        items = [_ANIMATEDIFF_NO_LORA] + [_lora_label(n) for n in names]
+        sl = Gtk.StringList()
+        for item in items:
+            sl.append(item)
+        self._ad_lora.set_model(sl)
+        self._ad_lora.set_selected(1 + names.index(current) if current in names else 0)
+        # Greyed out (not hidden) with no catalog, so the control stays findable.
+        self._ad_lora.set_sensitive(bool(names))
+        if self._ad_lora_help is not None:
+            self._ad_lora_help.set_label(
+                _ANIMATEDIFF_OPTION_HELP["lora"] if names else _ANIMATEDIFF_LORA_NO_SERVER_HELP
+            )
+        return False
 
     def _sync_ad_lightning_steps_visibility(self) -> None:
         """Mirrors `ControlPanel`'s `_on_ad_lightning_toggled` exactly
@@ -1344,7 +1474,14 @@ class VideoParamPanel(CreateParamPanel):
         content.set_margin_start(8)
         content.set_margin_top(4)
 
-        def _sub_row(lbl_text: str, widget: Gtk.Widget) -> Gtk.Box:
+        def _help(key: str) -> Gtk.Label:
+            h = Gtk.Label(label=_ANIMATEDIFF_OPTION_HELP[key])
+            h.set_xalign(0)
+            h.set_wrap(True)
+            h.add_css_class("ad-option-help")
+            return h
+
+        def _sub_row(lbl_text: str, widget: Gtk.Widget, help_key: "str | None" = None) -> Gtk.Box:
             r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             lbl = Gtk.Label(label=lbl_text)
             lbl.set_xalign(0)
@@ -1352,30 +1489,43 @@ class VideoParamPanel(CreateParamPanel):
             lbl.add_css_class("video-param-hint")
             r.append(lbl)
             r.append(widget)
-            return r
+            if help_key is None:
+                return r
+            # Row + its description travel together, so hiding the row (Distill
+            # steps, Style) hides the description too.
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            col.append(r)
+            col.append(_help(help_key))
+            return col
+
+        def _check(widget: Gtk.CheckButton, help_key: str) -> Gtk.Box:
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            col.append(widget)
+            col.append(_help(help_key))
+            return col
 
         # Mode
         self._ad_mode = self._ad_dd(_ANIMATEDIFF_MODE_CHOICES, "blackhole")
-        content.append(_sub_row("Mode", self._ad_mode))
+        content.append(_sub_row("Mode", self._ad_mode, "mode"))
 
         # Negative prompt (AnimateDiff's OWN — distinct from the shared
         # "negative_prompt" row above, which other video models use).
         self._ad_neg_prompt = Gtk.Entry()
         self._ad_neg_prompt.set_placeholder_text("blurry, low quality")
         self._ad_neg_prompt.set_hexpand(True)
-        content.append(_sub_row("Negative prompt", self._ad_neg_prompt))
+        content.append(_sub_row("Negative prompt", self._ad_neg_prompt, "negative_prompt"))
 
         # Temporal alpha
         self._ad_temporal_alpha = self._ad_spin(0.0, 1.0, 0.05, 0.35)
-        content.append(_sub_row("Temporal α", self._ad_temporal_alpha))
+        content.append(_sub_row("Temporal α", self._ad_temporal_alpha, "temporal_alpha"))
 
         # Performance
         self._ad_lightning = Gtk.CheckButton(label="Lightning mode (Euler scheduler)")
         self._ad_lightning.add_css_class("video-param-hint")
-        content.append(self._ad_lightning)
+        content.append(_check(self._ad_lightning, "lightning"))
 
         self._ad_lightning_steps = self._ad_dd(_ANIMATEDIFF_LIGHTNING_STEPS_CHOICES, "4")
-        self._ad_lightning_steps_row = _sub_row("Distill steps", self._ad_lightning_steps)
+        self._ad_lightning_steps_row = _sub_row("Distill steps", self._ad_lightning_steps, "lightning_steps")
         self._ad_lightning_steps_row.set_visible(False)
         content.append(self._ad_lightning_steps_row)
 
@@ -1393,11 +1543,29 @@ class VideoParamPanel(CreateParamPanel):
         self._ad_multichip_mode = self._ad_dd(
             _ANIMATEDIFF_MULTICHIP_CHOICES, _animatediff_multichip_default_label()
         )
-        content.append(_sub_row("Multi-chip", self._ad_multichip_mode))
+        content.append(_sub_row("Multi-chip", self._ad_multichip_mode, "multichip"))
+
+        # Style (LoRA): the variants a served tt-animatediff offers. The row is
+        # always shown (a control that is absent cannot be discovered); with no
+        # server it is greyed out and the hint says how to get one.
+        # `_apply_loras` fills it when `_refresh_loras` finds a catalog.
+        self._ad_lora = self._ad_dd([_ANIMATEDIFF_NO_LORA], _ANIMATEDIFF_NO_LORA)
+        self._ad_lora.set_sensitive(False)
+        lora_refresh = Gtk.Button(label="\u21bb")
+        lora_refresh.add_css_class("video-param-hint")
+        lora_refresh.set_tooltip_text("Look for a running AnimateDiff server again")
+        lora_refresh.connect("clicked", lambda *_a: self._refresh_loras())
+        lora_ctl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lora_ctl.append(self._ad_lora)
+        lora_ctl.append(lora_refresh)
+        self._ad_lora_row = _sub_row("Style (LoRA)", lora_ctl, "lora")
+        self._ad_lora_help = self._ad_lora_row.get_last_child()
+        self._ad_lora_help.set_label(_ANIMATEDIFF_LORA_NO_SERVER_HELP)
+        content.append(self._ad_lora_row)
 
         self._ad_device_id = self._ad_spin(-1, 7, 1, -1)
         self._ad_device_id.set_tooltip_text("-1 = auto (all chips)")
-        content.append(_sub_row("Device ID", self._ad_device_id))
+        content.append(_sub_row("Device ID", self._ad_device_id, "device_id"))
 
         # Chain continuity
         self._ad_chain_from = Gtk.Entry()
@@ -1409,27 +1577,27 @@ class VideoParamPanel(CreateParamPanel):
         chain_from_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         chain_from_row.append(self._ad_chain_from)
         chain_from_row.append(chain_pick_btn)
-        content.append(_sub_row("Chain from (.pt)", chain_from_row))
+        content.append(_sub_row("Chain from (.pt)", chain_from_row, "chain_from"))
 
         self._ad_chain_save = Gtk.CheckButton(label="Save latents for chaining")
         self._ad_chain_save.add_css_class("video-param-hint")
-        content.append(self._ad_chain_save)
+        content.append(_check(self._ad_chain_save, "chain_save"))
 
         self._ad_chain_alpha = self._ad_spin(0.0, 1.0, 0.05, 0.6)
-        content.append(_sub_row("Chain α", self._ad_chain_alpha))
+        content.append(_sub_row("Chain α", self._ad_chain_alpha, "chain_alpha"))
 
         # MotionAdapter
         self._ad_motion_adapter = Gtk.CheckButton(label="Enable MotionAdapter")
         self._ad_motion_adapter.add_css_class("video-param-hint")
-        content.append(self._ad_motion_adapter)
+        content.append(_check(self._ad_motion_adapter, "motion_adapter"))
 
         self._ad_motion_skip = self._ad_dd(
             _ANIMATEDIFF_MOTION_SKIP_CHOICES, "None (full quality)"
         )
-        content.append(_sub_row("Skip preset", self._ad_motion_skip))
+        content.append(_sub_row("Skip preset", self._ad_motion_skip, "motion_skip"))
 
         self._ad_injection_alpha = self._ad_spin(0.0, 1.0, 0.05, 1.0)
-        content.append(_sub_row("Injection α", self._ad_injection_alpha))
+        content.append(_sub_row("Injection α", self._ad_injection_alpha, "injection_alpha"))
 
         outer.append(content)
         self._ad_options_row = outer
@@ -1492,7 +1660,18 @@ class VideoParamPanel(CreateParamPanel):
             motion_adapter="" if self._ad_motion_adapter.get_active() else None,
             motion_adapter_alpha=round(self._ad_injection_alpha.get_value(), 2),
             motion_adapter_skip=motion_skip,
+            lora=self._selected_lora(),
         )
+
+    def _selected_lora(self) -> "str | None":
+        """The picked LoRA variant's real name (not its description text), or
+        None for "None"/no catalog."""
+        if self._ad_lora is None:
+            return None
+        idx = self._ad_lora.get_selected()
+        if idx <= 0 or idx > len(self._ad_lora_names):
+            return None
+        return self._ad_lora_names[idx - 1]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -563,3 +563,158 @@ def test_animate_panel_seed_mode_random_write_throughs_spin_to_negative_one():
 
     assert panel._seed_adj.get_value() == -1
     assert panel.collect()["seed"] == -1
+
+
+# ── Style (LoRA) dropdown ───────────────────────────────────────────────────
+
+def test_lora_row_stays_visible_but_greyed_out_without_catalog():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras([])
+    # Findable, not hidden: greyed out, with a hint that says how to get styles.
+    assert panel._ad_lora_row.get_visible() is True
+    assert panel._ad_lora.get_sensitive() is False
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
+    assert "tt-model serve" in panel._ad_lora_help.get_label()
+    assert panel.collect()["animatediff_args"]["lora"] is None
+
+
+def test_lora_catalog_reveals_dropdown_and_selection_is_collected():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm"])
+    assert panel._ad_lora_row.get_visible() is True
+    assert panel._ad_lora.get_sensitive() is True
+    assert panel.collect()["animatediff_args"]["lora"] is None  # "None" is first
+    panel._ad_lora.set_selected(2)  # None, pixel, lcm
+    assert panel.collect()["animatediff_args"]["lora"] == "lcm"
+
+
+def test_lora_refresh_keeps_current_pick_and_resets_when_gone():
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm"])
+    panel._ad_lora.set_selected(1)  # pixel
+    panel._apply_loras(["lcm", "pixel"])
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"
+    panel._apply_loras(["lcm"])
+    assert panel.collect()["animatediff_args"]["lora"] is None
+
+
+def test_selecting_animatediff_looks_up_the_catalog(monkeypatch):
+    import create_param_panels as cpp
+    calls = []
+    monkeypatch.setattr(cpp, "_fetch_served_loras", lambda: calls.append(1) or ["pixel"])
+    panel = VideoParamPanel()
+    panel.build()
+    applied = []
+    monkeypatch.setattr(panel, "_apply_loras", lambda names: applied.append(names) or False)
+    # Run the worker inline so the test does not wait on the GLib loop.
+    monkeypatch.setattr(cpp.GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(cpp.threading.Thread, "start", lambda self: self.run())
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1] and applied == [["pixel"]]
+
+
+def _inline_lookup(monkeypatch, cpp, panel, calls):
+    monkeypatch.setattr(cpp, "_fetch_served_loras", lambda: calls.append(1) or [])
+    monkeypatch.setattr(cpp.GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(cpp.threading.Thread, "start", lambda self: self.run())
+
+
+def test_the_catalog_is_looked_up_only_on_entering_animatediff(monkeypatch):
+    """The lookup runs `docker ps` (up to 10 s) and HTTP probes. `_update_animatediff_visibility`
+    runs on every model re-selection, so repeating it while AnimateDiff stays selected must not
+    repeat the lookup; leaving and coming back does. The refresh button covers a server started later."""
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    calls = []
+    _inline_lookup(monkeypatch, cpp, panel, calls)
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1]
+    for _ in range(3):
+        panel.set_selected_model_key("animatediff")
+        panel._update_animatediff_visibility()
+    assert calls == [1], "re-selecting AnimateDiff repeated the docker/HTTP lookup"
+    panel._model_dropdown.set_selected(_video_model_index("mochi"))
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    assert calls == [1, 1]
+
+
+def test_the_refresh_button_still_looks_the_catalog_up_again(monkeypatch):
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    calls = []
+    _inline_lookup(monkeypatch, cpp, panel, calls)
+    panel._model_dropdown.set_selected(_video_model_index("animatediff"))
+    panel._refresh_loras()
+    assert calls == [1, 1]
+
+
+def test_the_no_server_hint_is_built_from_the_runtime_package_id():
+    # Wiring: a hardcoded copy of the package id is one more place to edit on a package bump.
+    src = (Path(__file__).parent.parent / "app" / "create_param_panels.py").read_text()
+    assert "tt-animatediff-container" not in src
+
+
+# ── option descriptions ─────────────────────────────────────────────────────
+
+def _labels_in(widget):
+    out = []
+    child = widget.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            out.append(child)
+        out.extend(_labels_in(child))
+        child = child.get_next_sibling()
+    return out
+
+
+def test_every_animatediff_option_has_a_visible_description():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    shown = {l.get_label() for l in _labels_in(panel._ad_options_row)
+             if "ad-option-help" in l.get_css_classes()}
+    # Every entry in the table is rendered, and none is empty. The Style entry
+    # shows the "no server" hint until a catalog arrives.
+    expected = set(cpp._ANIMATEDIFF_OPTION_HELP.values())
+    expected.discard(cpp._ANIMATEDIFF_OPTION_HELP["lora"])
+    expected.add(cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP)
+    assert shown == expected
+    assert all(len(t) > 20 for t in shown)
+
+
+def test_lora_hint_switches_back_to_the_description_when_a_catalog_arrives():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel"])
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_OPTION_HELP["lora"]
+    panel._apply_loras([])
+    assert panel._ad_lora_help.get_label() == cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
+
+
+def test_lora_hint_names_the_served_package_the_runtime_uses():
+    import animatediff_runtime as rt
+    import create_param_panels as cpp
+    assert rt.SERVED_PACKAGE in cpp._ANIMATEDIFF_LORA_NO_SERVER_HELP
+
+
+def test_lora_dropdown_reads_name_dash_what_it_does_but_collects_the_name():
+    import create_param_panels as cpp
+    panel = VideoParamPanel()
+    panel.build()
+    panel._apply_loras(["pixel", "lcm", "mystery"])
+    m = panel._ad_lora.get_model()
+    texts = [m.get_string(i) for i in range(m.get_n_items())]
+    assert texts[0] == "None"
+    assert texts[1] == "pixel - " + cpp._ANIMATEDIFF_LORA_DESCRIPTIONS["pixel"]
+    assert texts[3] == "mystery - " + cpp._ANIMATEDIFF_LORA_GENERIC
+    panel._ad_lora.set_selected(1)
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"  # name, not the text
+    panel._apply_loras(["lcm", "pixel"])  # refresh keeps the pick by name
+    assert panel.collect()["animatediff_args"]["lora"] == "pixel"

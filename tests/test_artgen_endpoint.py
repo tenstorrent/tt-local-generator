@@ -102,6 +102,36 @@ def test_diffusion_port_not_used_for_chat(fake_servers):
     assert base_url == "http://localhost:8003"
 
 
+def test_a_served_animatediff_container_is_not_taken_for_a_chat_model(fake_servers, monkeypatch):
+    """Review finding: tt-model containers are found by docker label and any /v1/models id was
+    accepted as a chat model, so a running AnimateDiff container (which reports the SD 1.4 repo)
+    could be chosen to answer chat requests."""
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+    fake_servers["http://localhost:20000"] = "CompVis/stable-diffusion-v1-4"
+    fake_servers["http://localhost:8003"] = "meta-llama/Llama-3.3-70B-Instruct"
+
+    base_url, model_id = artgen.detect_artgen_endpoint()
+
+    assert (base_url, model_id) == ("http://localhost:8003", "meta-llama/Llama-3.3-70B-Instruct")
+
+
+def test_a_diffusion_server_alone_leaves_chat_unavailable(fake_servers, monkeypatch):
+    monkeypatch.setattr(artgen, "_tt_model_host_ports", lambda: [20000])
+    fake_servers["http://localhost:20000"] = "CompVis/stable-diffusion-v1-4"
+    fake_servers["http://localhost:8010"] = "guoyww/animatediff-motion-adapter-v1-5-2"
+
+    assert artgen.detect_artgen_endpoint() == (None, None)
+
+
+def test_an_explicit_override_is_honoured_even_for_a_diffusion_model_id(fake_servers):
+    # The filter is for discovery. A URL the user typed is theirs to point anywhere.
+    fake_servers["http://localhost:9999"] = "CompVis/stable-diffusion-v1-4"
+
+    base_url, _ = artgen.detect_artgen_endpoint(preferred_url="http://localhost:9999")
+
+    assert base_url == "http://localhost:9999"
+
+
 # ── tt-model-manager (tt-model CLI) discovery ─────────────────────────────────
 # These models are docker containers labelled org.tenstorrent.tt-model and may
 # live on ANY host port (default 20000, outside the 8000-8020 sweep). Discovery

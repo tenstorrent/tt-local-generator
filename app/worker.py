@@ -795,6 +795,7 @@ class AnimateDiffGenerationWorker:
         motion_adapter: "str | None" = None,
         motion_adapter_alpha: float = 1.0,
         motion_adapter_skip: "list | None" = None,
+        lora: "str | None" = None,
     ):
         self._store = store
         self._prompt = prompt
@@ -809,6 +810,7 @@ class AnimateDiffGenerationWorker:
         self._lightning_steps = lightning_steps
         self._multi_chip = multi_chip
         self._multichip_mode = multichip_mode
+        self._lora = lora
         self._device_id = device_id
         self._chain_from = chain_from
         self._chain_save = chain_save
@@ -933,6 +935,7 @@ class AnimateDiffGenerationWorker:
             on_progress=_progress_fwd,
             num_chips=effective_chips,
             multichip_mode=multichip_mode,
+            lora=self._lora,
         )
 
         if not ok:
