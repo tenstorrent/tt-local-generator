@@ -668,3 +668,115 @@ def test_public_api():
     assert load_library is C.load_library
     assert GENERIC.get("dialect") is None and GENERIC.get("max_chars") is None
     assert MusicProfile.__dataclass_fields__["max_chars"].default is None
+
+
+# ── fix round 3: promotion with a vocal, markers never silently lost ────────
+
+def _vocal_clauses(t):
+    """Vocal clauses in a prompt: a lead line ("... lead line phrased like a bluegrass vocal") is one."""
+    p = re.sub(r"lead line[^,.;]*", "LEADLINE", t.prompt.lower())
+    return len(re.findall(r"\bvocal\b", p)) + p.count("LEADLINE")
+
+
+@pytest.mark.parametrize("text", ["very slow, with a bluegrass vocal, tortoise-like",
+                                  "very slow, but someone singing a bluegrass song, tortoise-like"])
+def test_promotion_with_a_vocal_card_has_exactly_one_vocal(tmp_path, text):
+    lib = _shipped(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate(text, profile, library=lib)
+        assert "bluegrass-vocal" in t.used_cards
+        assert _vocal_clauses(t) == 1, (t.dialect, t.prompt)
+        assert not re.search(r"\ba vocal\b(?! singing)", t.prompt), t.prompt
+        assert "Alongside it, a vocal." not in t.prompt
+
+
+def test_promotion_without_a_vocal_still_works(tmp_path):
+    t = translate("very slow, with rain sounds, Tortoise-ish", MINIMAX, library=_shipped(tmp_path))
+    assert "vocal" not in t.prompt.lower() and "vibraphone" in t.prompt.lower() and t.instrumental
+
+
+def _promoted(parsed):
+    later = [i for i in range(1, len(parsed.layers)) if parsed.layers[i].matches]
+    return later[0] if parsed.layers and not parsed.layers[0].matches and len(later) == 1 else None
+
+
+def _markers_accounted(t, parsed):
+    """Every marker is in the prompt, named in a note, or carried by a layer clause that rendered."""
+    notes = " ".join(t.notes)
+    promoted = _promoted(parsed)
+    missing = []
+    markers = [(i, l.marker) for i, l in enumerate(parsed.layers) if l.marker] + [(None, d) for d in parsed.dropped]
+    for i, marker in markers:
+        if f"'{marker}'" in notes or re.search(r"\b" + re.escape(marker) + r"\b", t.prompt.lower()):
+            continue
+        layer = parsed.layers[i] if i is not None else None
+        if layer is not None and i != promoted and (layer.matches or layer.vocal):
+            continue                                  # rendered as a layer clause (Over it / Alongside it / tags)
+        missing.append(marker)
+    return missing
+
+
+MARKER_CASES = [
+    "very slow, with rain sounds, Tortoise-ish",
+    "someone is singing about the sea, with tortoise-like",
+    "loud, with jazz",
+    "jazz but loud",
+    "jazz but over loud",
+    "Tortoise-like, but louder",
+    "Tortoise record but",
+    "plus plus jazz",
+]
+
+
+@pytest.mark.parametrize("text", MARKER_CASES)
+def test_every_marker_is_in_the_prompt_or_the_notes(tmp_path, text):
+    lib = _shipped(tmp_path)
+    jazz = _lib(tmp_path, _card("jazz", name="Jazz", sound="Swinging bebop.", tempo_bpm=[120, 200]))
+    lib.cards.update(jazz.cards)
+    lib.by_alias.update(jazz.by_alias)
+    from music_prompts.parse import parse
+    parsed = parse(text, lib)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate(text, profile, library=lib)
+        assert not _markers_accounted(t, parsed), (text, t.dialect, _markers_accounted(t, parsed), t.notes)
+
+
+PROPERTY_CASES = MARKER_CASES + [
+    "post-rock meets jazz",
+    "jazz mixed with rain on top",
+    "very slow layered with tortoise-like",
+    "jazz over post-rock plus a bluegrass song",
+    "rain, mixed with tortoise-like, but loud on top",
+    "with with jazz",
+    "jazz on top on top",
+    "quiet, over tortoise-like but someone is singing a bluegrass song on top",
+    "meets post-rock",
+    "slow plus soft, with jazz meets tortoise-like",
+]
+
+
+def test_property_no_marker_is_silently_lost(tmp_path):
+    lib = _shipped(tmp_path)
+    jazz = _lib(tmp_path, _card("jazz", name="Jazz", sound="Swinging bebop.", tempo_bpm=[120, 200]))
+    lib.cards.update(jazz.cards)
+    lib.by_alias.update(jazz.by_alias)
+    from music_prompts.parse import parse
+    assert len(PROPERTY_CASES) >= 12
+    seen = set()
+    for text in PROPERTY_CASES:
+        parsed = parse(text, lib)
+        seen.update(l.marker for l in parsed.layers if l.marker)
+        seen.update(parsed.dropped)
+        for profile in (MINIMAX, STABLE, None):
+            t = translate(text, profile, library=lib)
+            assert not _markers_accounted(t, parsed), (text, t.dialect, t.prompt, t.notes)
+    assert {"but", "over", "on top", "with", "plus", "meets", "mixed with", "layered with"} <= seen
+
+
+def test_skeleton_note_names_the_users_topic_for_a_cardless_vocal(tmp_path):
+    lib = _shipped(tmp_path)
+    t = translate("tortoise-like but someone is singing about the sea on top", MINIMAX, library=lib)
+    assert any("from the topic you gave" in n for n in t.notes)
+    assert not any("vocal style's themes" in n for n in t.notes)
+    card = translate(EXAMPLE, MINIMAX, library=lib)
+    assert any("vocal style's themes" in n for n in card.notes)

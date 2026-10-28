@@ -93,6 +93,9 @@ EMPTY_NOTE = ("Type a style, an artist, a scene or a mood to start, for example 
               "'tortoise-like song but someone is singing a bluegrass song on top'.")
 PASS_THROUGH_NOTE = "No style in the library matched, so your text is passed through unchanged."
 NO_THEMES_NOTE = "No lyric themes were given: write the lyrics, or pick a vocal style."
+SKELETON_TOPIC_NOTE = ("The lyrics are topic lines from the topic you gave, not finished lyrics. "
+                       "A MiniMax song ends when its lyrics do, so a thin skeleton makes a short clip: "
+                       "write the lines out for a longer one.")
 SKELETON_NOTE = ("The lyrics are topic lines from the vocal style's themes, not finished lyrics. "
                  "A MiniMax song ends when its lyrics do, so a thin skeleton makes a short clip: "
                  "write the lines out for a longer one.")
@@ -423,17 +426,20 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
     # is the base ("very slow, with rain sounds, Tortoise-ish" is a post-rock base).
     layers = list(parsed.layers)
     layer_cards = [[lib.cards[m.card_id] for m in l.matches if m.card_id in lib.cards] for l in layers]
+    orig_cards = [list(cs) for cs in layer_cards]      # before promotion: "does layer i have a vocal card?"
+    promoted = None
     if layer_cards and not layer_cards[0]:
         with_cards = [i for i in range(1, len(layers)) if layer_cards[i]]
         if len(with_cards) == 1:
-            layer_cards[0], layer_cards[with_cards[0]] = layer_cards[with_cards[0]], []
+            promoted = with_cards[0]
+            layer_cards[0], layer_cards[promoted] = layer_cards[promoted], []
     base_cards = layer_cards[0] if layer_cards else []
     vocal_cards: list[StyleCard] = [c for cs in layer_cards for c in cs if c.kind == "vocal"]
 
     # A vocal layer (the base included) with no vocal card takes its voice from the user's words.
     sung: dict[int, tuple[D.Part, str]] = {}
     for i, layer in enumerate(layers):
-        if not layer.vocal or any(c.kind == "vocal" for c in layer_cards[i]):
+        if not layer.vocal or any(c.kind == "vocal" for c in orig_cards[i] + layer_cards[i]):
             continue
         w = next((w for w in words if w.layer == i and not w.has_match and _SING.search(w.text)), None)
         if w is not None:
@@ -444,6 +450,12 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             part, topic = D.Part(kind="vocal", label="", sound="", vocal="a vocal"), ""
         sung[i] = (part, topic)
     has_vocal = bool(vocal_cards) or bool(sung)
+
+    # A marker whose layer renders no clause of its own (promoted to the base, or nothing in it)
+    # is not in the prompt: name it in the glue note so no typed word is silently lost.
+    for i in range(1, len(layers)):
+        if layers[i].marker and (i == promoted or not (layer_cards[i] or i in sung)):
+            glue.append(layers[i].marker)
 
     content = [w.text for w in words]
     if not include_names:
@@ -547,7 +559,8 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             else:
                 part, topic = next(iter(sung.values()))
                 vocal_text, themes = part.vocal, ((topic,) if topic else ())
-            lyrics = _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes)
+            lyrics = _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes,
+                             SKELETON_NOTE if card else SKELETON_TOPIC_NOTE)
 
     # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
     # or the vocal became a lead line (tags for a model that cannot sing).
@@ -604,7 +617,7 @@ def skeleton(themes) -> str:
     return "\n".join(out) + "\n"
 
 
-def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str | None:
+def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes, skeleton_note=None) -> str | None:
     if lyrics_fn is not None:
         try:
             got = lyrics_fn(vocal_text, tuple(themes))
@@ -618,5 +631,5 @@ def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str |
     if not themes:
         notes.append(NO_THEMES_NOTE)
         return None
-    notes.append(SKELETON_NOTE)
+    notes.append(skeleton_note or SKELETON_NOTE)
     return skeleton(themes)
