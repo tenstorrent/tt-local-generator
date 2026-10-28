@@ -56,12 +56,41 @@ def open_externally(path: str) -> None:
         _log.debug("could not open %s externally", path, exc_info=True)
 
 
-def build_audio_widget(record, path: str, exists: bool = True) -> Gtk.Widget:
+def _inside_storage(path: str) -> bool:
+    """True when `path` is a file under the Library storage directory (after resolving links and `..`)."""
+    if not path:
+        return False
+    try:
+        import media_store
+        Path(path).resolve().relative_to(Path(media_store.STORAGE_DIR).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def remove_song_files(rec) -> None:
+    """Delete a song's audio file and waveform picture after its row is gone. Only files inside the Library
+    storage directory are touched, and a missing file is not an error."""
+    for attr in ("file_path", "thumbnail_path"):
+        path = getattr(rec, attr, "") or ""
+        if isinstance(path, str) and _inside_storage(path):
+            try:
+                Path(path).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                _log.debug("could not remove %s", path, exc_info=True)
+
+
+def build_audio_widget(record, path: str, exists: bool = True,
+                       on_use_seed: "Optional[Callable[[int], None]]" = None) -> Gtk.Widget:
     """A finished song: waveform picture, play/pause + seek bar (`Gtk.MediaControls` on a `Gtk.MediaFile`, the
     GStreamer path video uses), the lyrics read-only, the credit line, and "Open externally".
 
     When the file is missing the controls are replaced by "Audio file not found" and Open externally is disabled.
     When GStreamer cannot play the file the controls are replaced by a one-line note, so no dead player is shown.
+    The seed the server used is shown (selectable). With `on_use_seed`, a "Use this seed" button hands it back so the
+    same clip can be asked for again.
     The returned box carries `audio_stream` (the `Gtk.MediaFile`, or None) so the owner can pause it."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     box.add_css_class("create-result-audio")
@@ -134,6 +163,20 @@ def build_audio_widget(record, path: str, exists: bool = True) -> Gtk.Widget:
         sw.set_propagate_natural_height(True)
         sw.set_child(tv)
         box.append(sw)
+
+    seed = params.get("seed")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        seed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        seed_lbl = Gtk.Label(label=f"Seed {seed}", xalign=0.0)
+        seed_lbl.set_selectable(True)
+        seed_lbl.add_css_class("dim-label")
+        seed_row.append(seed_lbl)
+        if on_use_seed is not None:
+            use = Gtk.Button(label="Use this seed")
+            use.set_tooltip_text("Put this seed in the Music form to ask for the same clip again.")
+            use.connect("clicked", lambda _b, s=seed: on_use_seed(s))
+            seed_row.append(use)
+        box.append(seed_row)
 
     credit = params.get("credit")
     if credit:
@@ -219,6 +262,16 @@ class AudioGallery(Gtk.Box):
 
     def records(self) -> list[MediaRecord]:
         return list(self._records)
+
+    def _delete_card(self, media_id: str) -> None:
+        """Remove the row, then the song's files, then the card; tell the owner."""
+        rec = _ms.get(media_id)
+        _ms.delete(media_id)
+        if rec is not None:
+            remove_song_files(rec)
+        self.remove_record(media_id)
+        if self.on_card_deleted:
+            self.on_card_deleted(media_id)
 
     def remove_record(self, media_id: str) -> None:
         self._records = [r for r in self._records if r.id != media_id]
@@ -306,10 +359,7 @@ class AudioGallery(Gtk.Box):
         del_btn.set_tooltip_text("Delete")
 
         def _deleted(media_id: str):
-            _ms.delete(media_id)
-            self.remove_record(media_id)
-            if self.on_card_deleted:
-                self.on_card_deleted(media_id)
+            self._delete_card(media_id)
 
         del_btn.connect("clicked", lambda _b, _r=rec, _o=overlay: _confirm_delete(_o.get_root(), _r, _deleted))
         actions.append(del_btn)
@@ -456,7 +506,10 @@ class AudioDetail(Gtk.Box):
 
     def _delete_confirmed_for(self, media_id: str) -> None:
         """Delete the record, tell the owner, then step to the next song or call on_back when none are left."""
+        rec = _ms.get(media_id)
         _ms.delete(media_id)
+        if rec is not None:
+            remove_song_files(rec)
         self._records = [r for r in self._records if r.id != media_id]
         if self.on_deleted:
             self.on_deleted(media_id)

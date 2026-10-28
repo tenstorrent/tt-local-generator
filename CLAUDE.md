@@ -11,8 +11,10 @@ The version bump (`VERSION` and `debian/changelog`, one minor) is its own commit
 Architecture:
 - **`app/music_runtime.py`** (stdlib only): model profiles (`profile_for`, one per model family, with a generic
   fallback), `MusicClient` (health, submit, poll, fetch, cancel), saved servers with an optional bearer token, and
-  discovery (docker label, the known ports 8795 and 20000, and saved URLs). A model that publishes an OpenAPI schema
-  with paths gets its field names and limits from it; the table is the fallback.
+  discovery (docker label, the known ports 8795 and 20000, and saved URLs; `localhost`, `127.0.0.1` and `[::1]` are one
+  server, the saved entry's address, token and label win). A profile comes from `/v1/health` plus the built-in table.
+  `profile_for` reads an OpenAPI schema only when a caller passes one, and no caller does yet, so `_probe` never fetches
+  a schema.
 - **`MusicParamPanel`** (`create_param_panels.py`): prompt chips, a Lyrics box with its own helper, duration, seed,
   steps, guidance, Instrumental switch and a reference-clip slot. Controls the selected model does not support are hidden
   and left out of `collect()`. It has its own server dropdown and a "Connect..." dialog. `RoleZonePanel` keys its chip
@@ -30,10 +32,13 @@ Decisions from the spec:
 - New `media_type="audio"`, kept out of the Video, Image and artgen galleries by the negative filters.
 - The prompt and lyrics helpers prefer the artgen chat endpoint, because Qwen3-0.6B is too small for lyrics. With no
   LLM the Lyrics helper is disabled with a message, and a typed seed is kept.
-- The token is stored in the settings file as plain text, and the Connect dialog says so. It is scrubbed from every
+- The token is stored in the settings file as plain text, and the Connect dialog says so in one line under the token field. It is scrubbed from every
   error and progress message and is never written to the record.
 - No Remix for audio (no seed kind exists). `INSTRUMENTAL_SWITCH_CONFIRMED` in `create_param_panels.py` is a
-  placeholder: it is True, so the switch shows, and the client sends `[Instrumental]` as the lyrics.
+  placeholder: it is False, so the switch ships off pending a live MiniMax check, and a lyrics model with empty lyrics is
+  refused with a plain message. (The client already sends `[Instrumental]` as the lyrics when the flag is on.)
+- Seed: the result (Create panel and Library detail) shows `Seed N`, selectable. In Create a "Use this seed" button calls
+  `MusicParamPanel.set_seed`. Nothing fills the seed field after a run, because a blank field means random.
 - Credit line "Made with MiniMax-Music3" is stored in the record, shown in the result panel and the Library detail, and
   not written into the exported file.
 
@@ -50,9 +55,16 @@ Found by review and screenshots:
   button reads "Connect...". At 1000 px the shared two-pane layout still clips; that is outside this change.
 - Two tests passed vacuously (a nonexistent `set_error`, an unasserted pause); both were rewritten and seen failing.
 
+Fixed in the final review (`.superpowers/sdd/2026-10-28-music-generation/final-fix-report.md`): the last-used server was
+never saved (`_settings()` was called as a function), a Connect-added server was missing from `MainWindow._music_servers`
+until the next discovery, a deleted song now removes its `.flac` and `.png` when they are inside the library folder, and
+the lyrics helper no longer copies the style prompt into the lyrics box when no chat model answers.
+
+Not done:
+- Schema-driven profiles: fetching a model's OpenAPI schema and passing it to `profile_for`.
+
 Deferred minors (full list in `.superpowers/sdd/2026-10-28-music-generation/progress.md`):
-- Library audio: the card star and the detail star do not sync, a deleted song leaves its `.flac` and `.png` on disk, and
-  the playlist purge in `_on_delete_card` uses `all_records()`, which now omits audio (use `_ms.all_ids()`).
+- Library audio: the card star and the detail star do not sync, and the playlist purge in `_on_delete_card` uses `all_records()`, which now omits audio (use `_ms.all_ids()`).
 - A queued native job is not drained after a Music job (the same gap as artgen).
 - The Music status segment has no starting or error state and can stay READY if discovery keeps failing.
 - Selected chip labels are dark on dark in the shared chip CSS (all mediums).

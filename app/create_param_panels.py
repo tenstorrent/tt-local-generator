@@ -47,6 +47,7 @@ SkyReels-I2V (an image-to-video model that needs a conditioning image).
 from __future__ import annotations
 
 import argparse
+import logging
 import random
 import sys
 import threading
@@ -65,6 +66,8 @@ import field_roles
 import gtk_layout
 from animatediff_runtime import SERVED_PACKAGE as _ANIMATEDIFF_SERVED_PACKAGE
 from app_settings import settings as _settings
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -3372,14 +3375,14 @@ import music_runtime as _mr  # noqa: E402
 from music_runtime import MusicServer, normalize_url, save_server  # noqa: E402
 
 # MiniMax accepting a song with no lyrics is UNCONFIRMED: the client sends INSTRUMENTAL_PLACEHOLDER
-# ("[Instrumental]") and nobody has checked a live server yet. The switch is ON (shown) pending that
-# live check. If MiniMax rejects it, set this to False: the Instrumental switch is then hidden and a
-# lyrics model with empty lyrics is refused.
-INSTRUMENTAL_SWITCH_CONFIRMED = True
+# ("[Instrumental]") and nobody has checked a live server yet. The switch therefore ships OFF (hidden)
+# and a lyrics model with empty lyrics is refused. Set this to True only after a live MiniMax check
+# shows the placeholder is accepted.
+INSTRUMENTAL_SWITCH_CONFIRMED = False
 
 _LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
-_NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve) "
-                "and it turns on by itself. You can still type lyrics.")
+_NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve), "
+                "then pick Music again. You can still type lyrics.")
 _NO_SERVER_HELP = ("No music server is running. Start one with tt-model serve, "
                    "or choose Connect to add its address.")
 _LOCAL_HOSTS = ("localhost", "::1")
@@ -3388,15 +3391,16 @@ _LOCAL_HOSTS = ("localhost", "::1")
 def _remember_music_server(url: str) -> None:
     """Save the user's pick so the next start defaults to it. Fail-soft."""
     try:
-        _settings().set("music_last_server", url)
-    except Exception:
-        pass
+        _settings.set("music_last_server", url)
+    except Exception:  # noqa: BLE001 - only the settings write is guarded; a typo above would surface
+        _log.debug("could not save the last music server", exc_info=True)
 
 
 def _last_music_server() -> str:
     try:
-        return str(_settings().get("music_last_server") or "")
-    except Exception:
+        return str(_settings.get("music_last_server") or "")
+    except Exception:  # noqa: BLE001
+        _log.debug("could not read the last music server", exc_info=True)
         return ""
 
 
@@ -3457,6 +3461,8 @@ class MusicConnectDialog(Gtk.Window):
         self._token_entry.set_show_peek_icon(True)
         box.append(Gtk.Label(label="Access token (only if the server asks for one)", xalign=0.0))
         box.append(self._token_entry)
+        box.append(Gtk.Label(label="The token is stored as plain text in the app settings file.",
+                             xalign=0.0, wrap=True))
         self._warning = Gtk.Label(label="", xalign=0.0, wrap=True)
         self._warning.add_css_class("image-param-hint")
         self._warning.set_visible(False)
@@ -3674,7 +3680,7 @@ class MusicParamPanel(CreateParamPanel):
         self._lyrics_helper_hint.set_visible(False)
         if self._inspire_fn is not None:
             self._lyrics_inspire_btn = attach_inspire_button(
-                _LyricsSeed(self), lambda: "lyrics", self._inspire_fn, label="✨ Write lyrics",
+                _LyricsSeed(self), lambda: "lyrics", self._lyrics_inspire, label="✨ Write lyrics",
                 tooltip="Write lyrics from the prompt, or polish the lyrics you typed.")
             tools.append(self._lyrics_inspire_btn)
         self._lyrics_box.append(tools)
@@ -3888,6 +3894,23 @@ class MusicParamPanel(CreateParamPanel):
             self._lyrics_inspire_btn.set_sensitive(self._llm_ok)
             self._lyrics_helper_hint.set_visible(not self._llm_ok)
 
+    def _lyrics_inspire(self, prompt_type, seed_text, on_result, on_error) -> None:
+        """The lyrics button's seam. With no chat model answering, `generate_prompt` hands the seed back, and
+        when the lyrics box was empty the seed is the STYLE prompt: writing it into the lyrics box would be wrong.
+        An answer that only repeats the style prompt is therefore dropped and the no-model hint is shown."""
+        from_prompt = not self._lyrics_text().strip()
+        prompt = self._prompt_text().strip()
+
+        def _result(text: str) -> None:
+            if from_prompt and prompt and (text or "").strip() == prompt:
+                on_error("No chat model answered, so no lyrics were written.")
+                # After on_error's own idle callback, which re-enables the button.
+                GLib.idle_add(lambda: (self.set_llm_available(False), False)[1])
+                return
+            on_result(text)
+
+        self._inspire_fn(prompt_type, seed_text, _result, on_error)
+
     def _start_llm_check(self) -> None:
         """Ask in the background whether a chat model is reachable (the check opens sockets)."""
         fn = self._llm_available_fn
@@ -3914,7 +3937,10 @@ class MusicParamPanel(CreateParamPanel):
     # ── values ──────────────────────────────────────────────────────────────
 
     def set_seed(self, seed: "Optional[int]") -> None:
-        """Show the seed the server used, so the clip can be asked for again."""
+        """Pin a seed (the result's "Use this seed" button calls this), so the clip can be asked for again.
+
+        Never called on its own after a run: a blank seed field means "random", and filling it would make
+        the next song identical to the last."""
         self._seed_entry.set_text("" if seed is None else str(seed))
 
     def _seed_value(self) -> "tuple[Optional[int], bool]":

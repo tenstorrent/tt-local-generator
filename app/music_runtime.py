@@ -188,7 +188,7 @@ class MusicClient:
             if e.code == 503:
                 raise MusicServerError(f"The music server is not ready: {detail}.") from None
             if e.code in (401, 403):
-                raise MusicServerError("The music server refused the request: it needs a valid token.") from None
+                raise MusicServerError("The music server refused the request. It may need a valid token, or its Host or access rules do not allow this address.") from None
             raise MusicServerError(f"The music server answered {e.code}: {detail}") from None
         except Exception as e:                          # URLError, timeouts, a reply that stops halfway
             raise ServerDown(f"The music server at {self.base} is not reachable ({self._scrub(getattr(e, 'reason', None) or type(e).__name__)}).") from None
@@ -339,6 +339,20 @@ def normalize_url(url: str) -> str:
     return f"{parts.scheme.lower()}://{host}{port}"
 
 
+# 0.0.0.0 is not merged: it is a bind address, not a name for this machine.
+
+
+def _canonical(url: str) -> str:
+    """`url` with every loopback name written as 127.0.0.1, so `localhost:8795` and `127.0.0.1:8795` are one server.
+    Only used to merge discovery entries; the saved entry keeps the address the user typed."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if host in ("localhost", "127.0.0.1", "::1"):
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://127.0.0.1{port}"
+    return url
+
+
 @dataclass(frozen=True)
 class MusicServer:
     url: str
@@ -415,34 +429,35 @@ def discover_music_servers(saved: list, ports: Optional[tuple] = None, probe: Ca
 
     `saved` holds dicts with `url` and optionally `token` and `label`. `probe(url, token)` returns a MusicProfile or None.
     """
-    entries = {}                                        # normalized url -> (saved, token, label), insertion-ordered
+    entries = {}                                        # canonical url -> (url, saved, token, label), insertion-ordered
     for item in saved or []:
         if isinstance(item, dict) and item.get("url"):
             try:
                 key = normalize_url(item["url"])
             except ValueError:
                 continue                                # one bad hand-typed entry must not hide the other servers
-            entries.setdefault(key, (True, item.get("token") or None, str(item.get("label") or "")))
+            entries.setdefault(_canonical(key), (key, True, item.get("token") or None, str(item.get("label") or "")))
     found_ports = list(scan_ports() if ports is None else ports)
     try:
         found_ports += list(docker_ports())
     except Exception:
         pass                                            # discovery must not fail because docker does
     for port in found_ports:
-        entries.setdefault(normalize_url(f"http://127.0.0.1:{port}"), (False, None, ""))
+        url = normalize_url(f"http://127.0.0.1:{port}")
+        entries.setdefault(_canonical(url), (url, False, None, ""))
     if not entries:
         return []
     with ThreadPoolExecutor(max_workers=min(16, len(entries))) as pool:
-        futures = {u: pool.submit(probe, u, entries[u][1]) for u in entries}
+        futures = {c: pool.submit(probe, e[0], e[2]) for c, e in entries.items()}
         profiles = {}
-        for u, fut in futures.items():
+        for c, fut in futures.items():
             try:
-                profiles[u] = fut.result()      # each probe is bounded by its own socket timeouts
+                profiles[c] = fut.result()      # each probe is bounded by its own socket timeouts
             except Exception:
-                profiles[u] = None
+                profiles[c] = None
     out = []
-    for u, (is_saved, token, label) in entries.items():
-        profile = profiles[u]
+    for c, (u, is_saved, token, label) in entries.items():
+        profile = profiles[c]
         if profile is None and not is_saved:
             continue
         out.append(MusicServer(url=u, profile=profile, up=profile is not None, saved=is_saved, token=token,

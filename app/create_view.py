@@ -1119,12 +1119,15 @@ class CreateView(Gtk.Box):
         on_theme_set: Optional[Callable[[Medium, dict], None]] = None,
         on_hw_monitor_close: Optional[Callable[[], None]] = None,
         on_music_selected: Optional[Callable[[], None]] = None,
+        on_music_connected: "Optional[Callable[[object], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
         # Music servers are found by discovery, which blocks, so MainWindow runs it off the GTK thread and hands
         # the result to `set_music_servers`. `on_music_selected` asks it to (re)run discovery when Music is chosen.
         self._on_music_selected = on_music_selected
+        # A server the user just added with Connect: the owner lists it at once instead of waiting for discovery.
+        self._on_music_connected = on_music_connected
         self._music_servers: "list" = []
         self.add_css_class("create-view")
 
@@ -1340,6 +1343,7 @@ class CreateView(Gtk.Box):
         # changes — this replaces and obsoletes the old two-pane MaxWidthBin/
         # prompt-width caps.
         self._result_panel = CreateResultPanel()
+        self._result_panel.on_use_seed = self._use_music_seed
         self.set_vexpand(True)
 
         form_scroll = Gtk.ScrolledWindow()
@@ -2074,7 +2078,7 @@ class CreateView(Gtk.Box):
             zoned = RoleZonePanel(panel, medium)
             # The top prompt box owns the prompt (the panel's own box is hidden by RoleZonePanel).
             panel.set_prompt_getter(lambda: self._prompt_entry.get_text())
-            panel.on_connect_saved = lambda _server: self._ask_for_music_discovery()
+            panel.on_connect_saved = self._music_server_connected
             self._panel_host.append(zoned)
             self._active_panel = zoned
             panel.servers_changed(self._music_servers)
@@ -2120,6 +2124,22 @@ class CreateView(Gtk.Box):
         self._panel_host.append(stub)
 
     # ── Music servers ───────────────────────────────────────────────────────
+
+    def _music_server_connected(self, server) -> None:
+        """The Connect dialog saved `server`: tell the owner so a Create click finds it, then ask for discovery."""
+        if self._on_music_connected is not None:
+            try:
+                self._on_music_connected(server)
+            except Exception:  # noqa: BLE001
+                _log.debug("music connect hand-off failed", exc_info=True)
+        self._ask_for_music_discovery()
+
+    def _use_music_seed(self, seed: int) -> None:
+        """A result's "Use this seed": pin it in the Music panel so the clip can be asked for again.
+        Does nothing when Music is not the medium on screen."""
+        panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
+        if isinstance(panel, MusicParamPanel):
+            panel.set_seed(seed)
 
     def _ask_for_music_discovery(self) -> None:
         """Ask the owner to run music server discovery (it blocks, so the owner does it off the GTK thread)."""
@@ -3303,6 +3323,8 @@ class CreateResultPanel(Gtk.Box):
         self.add_css_class("create-result-panel")
 
         self._state = "empty"
+        # Set by CreateView: called with a song's seed when the user chooses "Use this seed".
+        self.on_use_seed: "Optional[Callable[[int], None]]" = None
         self._timer_id: Optional[int] = None
         self._pending_start: float = 0.0
         # A generation can be IN FLIGHT while the current-result area shows
@@ -4096,10 +4118,14 @@ class CreateResultPanel(Gtk.Box):
         label.add_css_class("create-result-placeholder")
         return label
 
+    def _use_seed(self, seed: int) -> None:
+        if self.on_use_seed is not None:
+            self.on_use_seed(seed)
+
     def _build_audio_widget(self, record, path: str, exists: bool = True) -> Gtk.Widget:
         """A finished song. The block itself lives in `audio_gallery.build_audio_widget`, shared with the Library
         detail; this keeps the stream so `_release_video` can pause it."""
-        box = build_audio_widget(record, path, exists)
+        box = build_audio_widget(record, path, exists, on_use_seed=self._use_seed)
         self._result_audio = getattr(box, "audio_stream", None)
         return box
 

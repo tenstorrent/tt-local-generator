@@ -5990,6 +5990,7 @@ class MainWindow(Gtk.ApplicationWindow):
             inspire_fn=self._create_inspire_fn,
             # Music: discovery blocks, so it is asked for here and run on a thread (`_refresh_music_servers`).
             on_music_selected=self._refresh_music_servers,
+            on_music_connected=self._on_music_connected,
             # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
             # below) — reuses `generate_theme.generate_theme()`, the SAME
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
@@ -8780,6 +8781,14 @@ class MainWindow(Gtk.ApplicationWindow):
             GLib.timeout_add_seconds(_MUSIC_DISCOVERY_INTERVAL_S, self._music_discovery_tick)
         except Exception:  # noqa: BLE001 - no timer means no refresh, never a failed startup
             pass
+
+    def _on_music_connected(self, server) -> None:
+        """Main thread: the Connect dialog saved `server`. List it now, so a Create click does not say "No music
+        server is running" until the next discovery, then refresh to confirm it."""
+        rest = [s for s in getattr(self, "_music_servers", []) if s.url != server.url]
+        self._music_servers = rest + [server]
+        self._paint_music_segment()
+        self._refresh_music_servers()
 
     def _music_discovery_tick(self) -> bool:
         """GLib timer: refresh while the window is alive."""
