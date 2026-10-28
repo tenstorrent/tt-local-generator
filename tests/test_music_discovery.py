@@ -131,8 +131,40 @@ def test_save_and_remove_server(monkeypatch):
     fake = _FakeSettings()
     monkeypatch.setattr(app_settings, "settings", fake)
     mr.save_server("HTTP://Box:8795/", token="tok", label="lab")
-    mr.save_server("http://box:8795", label="renamed")            # same server: replaced, not duplicated
-    assert fake.d["music_servers"] == [{"url": "http://box:8795", "token": None, "label": "renamed"}]
+    mr.save_server("http://box:8795", label="renamed")            # same server: replaced, not duplicated; the token is kept
+    assert fake.d["music_servers"] == [{"url": "http://box:8795", "token": "tok", "label": "renamed"}]
     mr.remove_server("http://BOX:8795/")
     assert fake.d["music_servers"] == []
     assert "music_servers" in __import__("app_settings").DEFAULTS and "music_last_server" in app_settings.DEFAULTS
+
+
+def test_bad_saved_url_does_not_stop_discovery():
+    with FakeMusicServer("audio") as a:
+        saved = [{"url": "http://host:abc"}, {"url": "http://[::1"}, {"url": ""}, {"url": a.url}]
+        found = _discover(saved)
+        assert [s.url for s in found] == [a.url] and found[0].up
+
+
+def test_normalize_url_raises_clear_error_and_save_server_reports_it(monkeypatch):
+    import pytest
+    import app_settings
+    fake = _FakeSettings()
+    monkeypatch.setattr(app_settings, "settings", fake)
+    for bad in ("http://host:abc", "http://[::1", "http://"):
+        with pytest.raises(ValueError, match="not a valid server address"):
+            mr.normalize_url(bad)
+        with pytest.raises(ValueError, match="not a valid server address"):
+            mr.save_server(bad)
+    assert fake.d["music_servers"] == []
+    mr.remove_server("http://host:abc")                      # removing a bad entry must not raise
+
+
+def test_save_server_without_token_keeps_the_saved_one(monkeypatch):
+    import app_settings
+    fake = _FakeSettings()
+    monkeypatch.setattr(app_settings, "settings", fake)
+    mr.save_server("http://box:1", token="tok", label="a")
+    mr.save_server("http://box:1", label="b")
+    assert fake.d["music_servers"][0]["token"] == "tok" and fake.d["music_servers"][0]["label"] == "b"
+    mr.save_server("http://box:1", token="new")
+    assert fake.d["music_servers"][0]["token"] == "new"

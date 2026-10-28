@@ -320,15 +320,22 @@ SCAN_PORTS_ENV = "TTLG_MUSIC_SCAN_PORTS"
 
 
 def normalize_url(url: str) -> str:
-    """`scheme://host[:port]` with the scheme and host in lowercase, no path and no trailing slash; `http://` when no scheme is given."""
+    """`scheme://host[:port]` with the scheme and host in lowercase, no path and no trailing slash; `http://` when no scheme is given.
+
+    Raises ValueError ("... is not a valid server address ...") for an address that cannot be read."""
     url = (url or "").strip()
     if "://" not in url:
         url = "http://" + url
-    parts = urllib.parse.urlsplit(url)
-    host = (parts.hostname or "").lower()
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower()
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        host, port, parts = "", "", None                # a bad port or a bracket that never closes
+    if not host or parts is None:
+        raise ValueError(f"{url!r} is not a valid server address. Use the form http://host:port.")
     if ":" in host:
         host = f"[{host}]"
-    port = f":{parts.port}" if parts.port else ""
     return f"{parts.scheme.lower()}://{host}{port}"
 
 
@@ -411,7 +418,11 @@ def discover_music_servers(saved: list, ports: Optional[tuple] = None, probe: Ca
     entries = {}                                        # normalized url -> (saved, token, label), insertion-ordered
     for item in saved or []:
         if isinstance(item, dict) and item.get("url"):
-            entries.setdefault(normalize_url(item["url"]), (True, item.get("token") or None, str(item.get("label") or "")))
+            try:
+                key = normalize_url(item["url"])
+            except ValueError:
+                continue                                # one bad hand-typed entry must not hide the other servers
+            entries.setdefault(key, (True, item.get("token") or None, str(item.get("label") or "")))
     found_ports = list(scan_ports() if ports is None else ports)
     try:
         found_ports += list(docker_ports())
@@ -426,7 +437,7 @@ def discover_music_servers(saved: list, ports: Optional[tuple] = None, probe: Ca
         profiles = {}
         for u, fut in futures.items():
             try:
-                profiles[u] = fut.result(timeout=PROBE_TIMEOUT_S * 4)
+                profiles[u] = fut.result()      # each probe is bounded by its own socket timeouts
             except Exception:
                 profiles[u] = None
     out = []
@@ -444,16 +455,30 @@ def _settings():
     return app_settings.settings
 
 
+def _same(entry, url: str) -> bool:
+    try:
+        return isinstance(entry, dict) and normalize_url(entry.get("url", "")) == url
+    except ValueError:
+        return False
+
+
 def save_server(url: str, token: Optional[str] = None, label: str = "") -> None:
-    """Add a server by hand, or replace the saved entry for the same URL."""
+    """Add a server by hand, or replace the saved entry for the same URL. A token of None keeps the one already saved.
+
+    Raises ValueError with a message the dialog can show when `url` is not a usable address."""
     url = normalize_url(url)
     s = _settings()
-    kept = [e for e in (s.get("music_servers") or []) if isinstance(e, dict) and normalize_url(e.get("url", "")) != url]
-    kept.append({"url": url, "token": token or None, "label": label})
+    entries = s.get("music_servers") or []
+    old_token = next((e.get("token") for e in entries if _same(e, url)), None)
+    kept = [e for e in entries if not _same(e, url)]
+    kept.append({"url": url, "token": token or old_token or None, "label": label})
     s.set("music_servers", kept)
 
 
 def remove_server(url: str) -> None:
-    url = normalize_url(url)
+    try:
+        url = normalize_url(url)
+    except ValueError:
+        return                                          # nothing so malformed was ever saved under a normalised key
     s = _settings()
-    s.set("music_servers", [e for e in (s.get("music_servers") or []) if isinstance(e, dict) and normalize_url(e.get("url", "")) != url])
+    s.set("music_servers", [e for e in (s.get("music_servers") or []) if not _same(e, url)])
