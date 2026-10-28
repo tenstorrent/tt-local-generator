@@ -3272,6 +3272,7 @@ _CHIP_LABELS: dict[str, str] = {
     "palette": "Palette",
     "code": "Code",
     "text": "TXT",
+    "audio": "MUSIC",
 }
 
 
@@ -4051,8 +4052,10 @@ class CreateResultPanel(Gtk.Box):
             label.add_css_class("create-result-placeholder")
             return label
 
-        if kind == "audio" and exists:
-            return self._build_audio_widget(record, path)
+        if kind == "audio":
+            # Built even when the file is gone: the song's lyrics and credit are still worth showing, with an
+            # honest "not found" in place of the player.
+            return self._build_audio_widget(record, path, exists)
 
         if kind in ("ansi", "palette", "code", "text") and exists:
             # Every "reading" kind renders through `artgen_render`'s themed
@@ -4101,10 +4104,12 @@ class CreateResultPanel(Gtk.Box):
         label.add_css_class("create-result-placeholder")
         return label
 
-    def _build_audio_widget(self, record, path: str) -> Gtk.Widget:
-        """A finished song: play/pause + seek bar (`Gtk.MediaControls` on a `Gtk.MediaFile`, the GStreamer path video
-        uses), the lyrics, the credit line, and "Open externally". When GStreamer cannot play the file the controls are
-        replaced by a one-line note, so no dead player is ever shown. (The waveform comes with the audio thumbnail.)"""
+    def _build_audio_widget(self, record, path: str, exists: bool = True) -> Gtk.Widget:
+        """A finished song: waveform picture, play/pause + seek bar (`Gtk.MediaControls` on a `Gtk.MediaFile`, the
+        GStreamer path video uses), the lyrics read-only, the credit line, and "Open externally".
+
+        When the file is missing the controls are replaced by "Audio file not found" and Open externally is disabled.
+        When GStreamer cannot play the file the controls are replaced by a one-line note, so no dead player is shown."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.add_css_class("create-result-audio")
         params = getattr(record, "params_dict", None) or {}
@@ -4114,48 +4119,77 @@ class CreateResultPanel(Gtk.Box):
         title.set_selectable(True)
         box.append(title)
 
-        note = Gtk.Label(label="This machine could not play the song here. Use Open externally.", xalign=0.0)
+        thumb = getattr(record, "thumbnail_path", "") or ""
+        if exists and isinstance(thumb, str) and thumb and Path(thumb).exists():
+            try:
+                wave = Gtk.Picture.new_for_filename(thumb)
+                wave.set_can_shrink(True)
+                wave.set_content_fit(Gtk.ContentFit.CONTAIN)
+                wave.set_size_request(-1, 120)
+                wave.add_css_class("create-result-picture")
+                box.append(wave)
+            except Exception:  # noqa: BLE001 - the waveform is decoration
+                _log.debug("waveform picture failed", exc_info=True)
+
+        note = Gtk.Label(xalign=0.0)
         note.set_wrap(True)
         note.set_visible(False)
-        controls = None
-        try:
-            stream = Gtk.MediaFile.new_for_filename(path)
-            controls = Gtk.MediaControls.new(stream)
-            self._result_audio = stream
-
-            def _on_error(s, _pspec, c=controls, n=note):
-                if s.get_error() is not None:
-                    c.set_visible(False)
-                    n.set_visible(True)
-
-            stream.connect("notify::error", _on_error)
-            box.append(controls)
-        except Exception:  # noqa: BLE001 - no playback support: the note and the button below still work
+        if not exists:
+            note.set_label("Audio file not found.")
             note.set_visible(True)
+        else:
+            note.set_label("This machine could not play the song here. Use Open externally.")
+            try:
+                stream = Gtk.MediaFile.new_for_filename(path)
+                controls = Gtk.MediaControls.new(stream)
+                self._result_audio = stream
+
+                def _on_error(s, _pspec, c=controls, n=note):
+                    if s.get_error() is not None:
+                        c.set_visible(False)
+                        n.set_visible(True)
+
+                stream.connect("notify::error", _on_error)
+                box.append(controls)
+            except Exception:  # noqa: BLE001 - no playback support: the note and the button below still work
+                note.set_visible(True)
         box.append(note)
 
         got, asked = params.get("seconds_got"), params.get("seconds_asked")
         if isinstance(got, (int, float)):
             length = f"{got:.0f} s"
             if params.get("ended") and isinstance(asked, (int, float)) and got + 0.5 < asked:
-                length += f" (the song ended before the {asked:.0f} s asked for)"
+                length += f". You asked for {asked:.0f} s; the song ended when the lyrics did."
             len_lbl = Gtk.Label(label=length, xalign=0.0)
+            len_lbl.set_wrap(True)
             len_lbl.add_css_class("dim-label")
             box.append(len_lbl)
+
         lyrics = params.get("lyrics")
         if isinstance(lyrics, str) and lyrics.strip():
-            lyr = Gtk.Label(label=lyrics, xalign=0.0)
-            lyr.set_wrap(True)
-            lyr.set_selectable(True)
-            box.append(lyr)
+            tv = Gtk.TextView()
+            tv.set_editable(False)
+            tv.set_cursor_visible(False)
+            tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            tv.get_buffer().set_text(lyrics)
+            sw = Gtk.ScrolledWindow()
+            sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            sw.set_min_content_height(80)
+            sw.set_max_content_height(220)
+            sw.set_propagate_natural_height(True)
+            sw.set_child(tv)
+            box.append(sw)
+
         credit = params.get("credit")
         if credit:
             cr = Gtk.Label(label=f"Made with {credit}", xalign=0.0)
+            cr.set_wrap(True)
             cr.add_css_class("dim-label")
             box.append(cr)
 
         open_btn = Gtk.Button(label="Open externally")
         open_btn.set_halign(Gtk.Align.START)
+        open_btn.set_sensitive(exists)
         open_btn.connect("clicked", lambda _b, p=path: _open_externally(p))
         box.append(open_btn)
         return box
@@ -4252,7 +4286,7 @@ class CreateResultPanel(Gtk.Box):
         if not thumb_path and kind in ("image", "svg"):
             thumb_path = media_path  # image/svg have no separate thumbnail file
 
-        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif", "svg"):
+        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif", "svg", "audio"):
             try:
                 pic = Gtk.Picture.new_for_filename(thumb_path)
                 pic.set_can_shrink(True)

@@ -155,8 +155,19 @@ def test_audio_record_renders_a_player_not_file_not_found(monkeypatch, tmp_path)
             c = c.get_next_sibling()
         return out
     text = " | ".join(labels(widget))
-    assert "not found" not in text and "la la" in text and "Made with MiniMax-Music3" in text
-    assert "ended before" in text
+    assert "not found" not in text and "Made with MiniMax-Music3" in text
+    assert "ended when the lyrics did" in text
+    # Lyrics are in a read-only TextView (Task 6), not a label.
+    def views(w):
+        out, c = [], w.get_first_child()
+        while c is not None:
+            if isinstance(c, Gtk.TextView):
+                out.append(c)
+            out += views(c)
+            c = c.get_next_sibling()
+        return out
+    buf = views(widget)[0].get_buffer()
+    assert buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False) == "la la"
     panel._clear_current()          # tears the stream down without raising
 
 

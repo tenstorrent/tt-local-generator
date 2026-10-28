@@ -1058,6 +1058,14 @@ class MusicGenerationWorker:
         rec_id = str(uuid.uuid4())
         path = self._out_dir / f"music_{rec_id[:8]}.{fmt}"
         path.write_bytes(result.audio)
+        # Waveform thumbnail for the Library tile and the result panel. Fails soft to "" (the placeholder).
+        thumb_path = ""
+        try:
+            import audio_thumb
+
+            thumb_path = audio_thumb.make_waveform_thumbnail(str(path), str(path.with_suffix(".png"))) or ""
+        except Exception:  # noqa: BLE001 - never lose the song over its picture
+            thumb_path = ""
         req = self._request
         params = {
             "prompt": req.prompt,
@@ -1077,8 +1085,7 @@ class MusicGenerationWorker:
         rec = MediaRecord(
             id=rec_id, media_type="audio", created_at=datetime.now(timezone.utc).isoformat(),
             file_path=str(path),
-            # Task 6 adds the waveform thumbnail (audio_thumb) and fills this in; until then an honest empty path.
-            thumbnail_path="",
+            thumbnail_path=thumb_path,
             prompt=req.prompt[:500], model_id=profile.model_id if profile is not None else "music",
             generator_type="music", params=json.dumps(params), starred=0,
         )

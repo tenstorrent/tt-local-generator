@@ -88,7 +88,7 @@ def test_worker_records_ended_early_duration(tmp_path):
 
 def test_worker_busy_calls_on_error_with_plain_message(tmp_path):
     with FakeMusicServer(busy=True) as fake:
-        store, out, _ = _run(fake, _req(), tmp_path)
+        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
     assert out["done"] == [] and store.records == []
     assert len(out["err"]) == 1
     assert "busy" in out["err"][0].lower() and "Traceback" not in out["err"][0] and "Exception" not in out["err"][0]
@@ -97,7 +97,7 @@ def test_worker_busy_calls_on_error_with_plain_message(tmp_path):
 def test_worker_server_dies_mid_job_cancels_and_errors(tmp_path):
     """Review focus 3: the server stops answering after accepting the job."""
     with FakeMusicServer(down_after_submit=True) as fake:
-        store, out, _ = _run(fake, _req(), tmp_path)
+        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
         assert fake.cancelled, "a DELETE for the abandoned job must have been tried"
     assert out["done"] == [] and store.records == []
     assert len(out["err"]) == 1 and "not reachable" in out["err"][0]
@@ -191,3 +191,39 @@ def test_unplayable_profile_format_fails_cleanly(tmp_path):
             mr.MusicClient._result = real
     assert done == [] and len(err) == 1 and "FLAC or WAV" in err[0]
     assert not list(tmp_path.rglob("*.mp3"))
+
+
+def test_worker_sets_waveform_thumbnail_at_save_time(tmp_path, monkeypatch):
+    import audio_thumb
+
+    def fake_thumb(audio, out, size=(320, 180)):
+        Path(out).write_bytes(b"png")
+        return out
+
+    monkeypatch.setattr(audio_thumb, "make_waveform_thumbnail", fake_thumb)
+    with FakeMusicServer(style="music") as fake:
+        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
+    rec = out["done"][0]
+    assert rec.thumbnail_path.endswith(".png") and Path(rec.thumbnail_path).read_bytes() == b"png"
+
+
+def test_worker_thumbnail_failure_leaves_empty_path_and_still_saves(tmp_path, monkeypatch):
+    import audio_thumb
+
+    monkeypatch.setattr(audio_thumb, "make_waveform_thumbnail", lambda *a, **k: None)
+    with FakeMusicServer(style="music") as fake:
+        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
+    assert out["err"] == [] and out["done"][0].thumbnail_path == ""
+    assert store.records == [out["done"][0]]
+
+
+def test_worker_thumbnail_exception_never_reaches_the_user(tmp_path, monkeypatch):
+    import audio_thumb
+
+    def boom(*a, **k):
+        raise RuntimeError("pillow exploded")
+
+    monkeypatch.setattr(audio_thumb, "make_waveform_thumbnail", boom)
+    with FakeMusicServer(style="music") as fake:
+        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
+    assert out["err"] == [] and out["done"][0].thumbnail_path == ""
