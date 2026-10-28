@@ -293,6 +293,7 @@ def test_token_is_in_no_status_error_or_record(monkeypatch, tmp_path):
         server = mr.MusicServer(url=fake.url, profile=mr.profile_for(fake.health_body), up=True, saved=False, token=token)
         obj = _mw(monkeypatch, tmp_path, [server])
         obj._on_create_generate(MUSIC, _params(fake.url))
+    assert obj._create_view._result_panel._state == "error"        # an error was produced, so the checks below are not vacuous
     everything = repr(obj._set_status.call_args_list) + repr(obj._saved_settings) + str(obj._create_view._result_panel._pending_last_status)
     assert token not in everything
 
@@ -324,3 +325,29 @@ def test_discovery_runs_off_the_gtk_thread_and_reaches_the_panel(monkeypatch, tm
     assert seen["thread"] != main_thread
     obj._create_view.set_music_servers.assert_called_once_with([s])
     assert obj._music_discovering is False
+
+
+def test_progress_line_delivered_through_the_real_idle_queue(monkeypatch, tmp_path):
+    """The worker runs on a real thread; GLib.idle_add is NOT replaced. The main thread pumps the default context, so
+    delivery goes through GLib's real idle queue, as in the app."""
+    import time
+    import main_window as mw
+    from gi.repository import GLib
+    real_idle_add = GLib.idle_add            # taken before _mw() replaces it with a synchronous call
+    with FakeMusicServer(steps_before_done=3) as fake:
+        server = mr.MusicServer(url=fake.url, profile=mr.profile_for(fake.health_body), up=True, saved=False)
+        obj = _mw(monkeypatch, tmp_path, [server])
+        monkeypatch.setattr(mw.threading, "Thread", _RealThread)
+        monkeypatch.setattr(mw.GLib, "idle_add", real_idle_add)
+        panel = obj._create_view._result_panel
+        seen, threads = [], []
+        real = panel.show_progress
+        panel.show_progress = lambda m: (real(m), seen.append((m, threading.get_ident())))
+        obj._on_create_generate(MUSIC, _params(fake.url))
+        ctx, deadline = GLib.MainContext.default(), time.monotonic() + 20
+        while obj._create_job_active and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.005)
+    assert obj._create_job_active is False and panel._state == "finished"
+    assert any(m == "sampling" for m, _ in seen), seen
+    assert all(t == threading.get_ident() for _, t in seen), (seen, threading.get_ident())      # delivered on the main thread, not the worker's

@@ -133,3 +133,61 @@ def test_invalid_request_is_a_plain_error_not_a_crash(tmp_path):
     with FakeMusicServer() as fake:
         store, out, _ = _run(fake, _req(seconds=9999.0), tmp_path)
     assert out["done"] == [] and "between" in out["err"][0]
+
+
+def test_token_never_reaches_the_progress_callback(tmp_path):
+    """A server that echoes the Authorization header into the job's `stage` must not put the token on screen."""
+    with FakeMusicServer(require_token=TOKEN, echo_token_in_stage=True, steps_before_done=3) as fake:
+        store, out, _ = _run(fake, _req(), tmp_path, token=TOKEN)
+    assert out["done"], out["err"]
+    assert any(m.startswith("sampling") for m in out["progress"])      # the echoed stage did arrive, scrubbed
+    assert all(TOKEN not in m for m in out["progress"])
+
+
+@pytest.mark.parametrize("bad", ["/../../x", "../evil", "mp3", ""])
+def test_hostile_or_unknown_audio_format_stays_inside_out_dir(tmp_path, bad):
+    """The extension is server-supplied: it can neither name a path nor save a file the result panel cannot play."""
+    out_dir = tmp_path / "lib"
+    store = _Store()
+    with FakeMusicServer() as fake:
+        w = worker.MusicGenerationWorker(store, _server(fake), _req(), out_dir, poll_s=0.01)
+        real = mr.MusicClient._result
+
+        def hostile(self, job_id, view, req):
+            r = real(self, job_id, view, req)
+            r.audio_format = bad
+            return r
+
+        mr.MusicClient._result = hostile
+        try:
+            done, err = [], []
+            w.run_with_callbacks(lambda m: None, done.append, err.append)
+        finally:
+            mr.MusicClient._result = real
+    written = [p for p in tmp_path.rglob("*") if p.is_file() and "media_store" not in p.parts]
+    assert all(out_dir in p.parents for p in written), written
+    assert done and Path(done[0].file_path).suffix in (".flac", ".wav")      # fell back to the profile's own format
+    assert not err
+
+
+def test_unplayable_profile_format_fails_cleanly(tmp_path):
+    import dataclasses
+    with FakeMusicServer() as fake:
+        srv = _server(fake)
+        srv = dataclasses.replace(srv, profile=dataclasses.replace(srv.profile, formats=("mp3",)))
+        real = mr.MusicClient._result
+
+        def mp3(self, job_id, view, req):
+            r = real(self, job_id, view, req)
+            r.audio_format = "mp3"
+            return r
+
+        mr.MusicClient._result = mp3
+        try:
+            done, err = [], []
+            worker.MusicGenerationWorker(_Store(), srv, _req(), tmp_path / "lib", poll_s=0.01).run_with_callbacks(
+                lambda m: None, done.append, err.append)
+        finally:
+            mr.MusicClient._result = real
+    assert done == [] and len(err) == 1 and "FLAC or WAV" in err[0]
+    assert not list(tmp_path.rglob("*.mp3"))

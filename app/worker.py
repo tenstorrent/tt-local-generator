@@ -1000,6 +1000,15 @@ class AnimateDiffGenerationWorker:
 # MusicGenerationWorker (music generation, Task 5)
 # ──────────────────────────────────────────────────────────────────────────────
 
+_MUSIC_FORMATS = ("flac", "wav")
+
+
+def scrub_token(text, token: "str | None") -> str:
+    """`text` with the bearer token removed, wherever a server echoed it back."""
+    text = str(text)
+    return text.replace(token, "***") if token else text
+
+
 class MusicGenerationWorker:
     """One music job against a music server (music_runtime.MusicClient). No GUI imports.
 
@@ -1027,8 +1036,7 @@ class MusicGenerationWorker:
         self._cancelled = True
 
     def _scrub(self, text) -> str:
-        text = str(text)
-        return text.replace(self._token, "***") if self._token else text
+        return scrub_token(text, self._token)
 
     def _save(self, result) -> "object":
         """Write the audio file and build + store the MediaRecord. Raises OSError if the disk refuses."""
@@ -1038,9 +1046,17 @@ class MusicGenerationWorker:
         from media_store import MediaRecord
 
         profile = self._server.profile
+        # The extension comes from the server's reply: only the two the result panel can play are accepted, so a hostile
+        # string cannot name a path and an unplayable format cannot be saved as a song that then shows as "not found".
+        fmt = str(result.audio_format).lower()
+        if fmt not in _MUSIC_FORMATS:
+            fallback = profile.formats[0] if profile is not None and profile.formats else ""
+            if fallback not in _MUSIC_FORMATS:
+                raise ValueError("the server sent audio in a format this app cannot play (it needs FLAC or WAV)")
+            fmt = fallback
         self._out_dir.mkdir(parents=True, exist_ok=True)
         rec_id = str(uuid.uuid4())
-        path = self._out_dir / f"music_{rec_id[:8]}.{result.audio_format}"
+        path = self._out_dir / f"music_{rec_id[:8]}.{fmt}"
         path.write_bytes(result.audio)
         req = self._request
         params = {
@@ -1077,8 +1093,12 @@ class MusicGenerationWorker:
 
         try:
             client = mr.MusicClient(self._server.url, self._server.profile, self._token)
-            on_progress("Sending the job to the music server...")
-            result = client.generate(self._request, on_progress=on_progress, poll_s=self._poll_s,
+            # Progress text is built from fields the server sends (stage, state), so it is scrubbed like an error.
+            def safe_progress(msg):
+                on_progress(self._scrub(msg))
+
+            safe_progress("Sending the job to the music server...")
+            result = client.generate(self._request, on_progress=safe_progress, poll_s=self._poll_s,
                                      should_cancel=lambda: self._cancelled)
         except mr.ServerBusy as e:
             on_error(self._scrub(e))

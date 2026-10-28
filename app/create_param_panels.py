@@ -3740,6 +3740,10 @@ class MusicParamPanel(CreateParamPanel):
             self._refresh()
         self._notify_triggers()
 
+    def servers(self) -> "list[MusicServer]":
+        """The servers the dropdown currently lists."""
+        return list(self._servers)
+
     def selected_server(self) -> "Optional[MusicServer]":
         return self._server
 

@@ -2135,7 +2135,7 @@ class CreateView(Gtk.Box):
         panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
         unchanged = servers == self._music_servers
         self._music_servers = servers
-        if isinstance(panel, MusicParamPanel) and not (unchanged and panel._servers == servers):
+        if isinstance(panel, MusicParamPanel) and not (unchanged and panel.servers() == servers):
             # Skipped when nothing changed: the timer runs every 10 s, and re-setting the dropdown's model
             # would close a list the user has open.
             panel.servers_changed(servers)

@@ -65,6 +65,7 @@ from worker import (
     GenerationWorker,
     ImageGenerationWorker,
     MusicGenerationWorker,
+    scrub_token as worker_scrub,
 )
 import attractor
 import prompt_client
@@ -10345,12 +10346,14 @@ class MainWindow(Gtk.ApplicationWindow):
                     on_error=lambda msg: GLib.idle_add(self._on_create_music_error, medium, msg),
                 )
             except Exception as exc:  # noqa: BLE001 - the worker reports its own errors; this is the last resort
-                GLib.idle_add(self._on_create_music_error, medium, f"Music generation failed: {exc}")
+                GLib.idle_add(self._on_create_music_error, medium, worker_scrub(f"Music generation failed: {exc}", server.token))
 
         threading.Thread(target=run, daemon=True).start()
 
     def _on_create_music_progress(self, msg: str) -> bool:
         """Main thread: forward a progress line to the Create result panel (a no-op once the job is over)."""
+        if not self._alive:
+            return False
         if self._create_job_active:
             try:
                 self._create_view._result_panel.show_progress(msg)
@@ -10360,6 +10363,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_create_music_finished(self, record) -> bool:
         """Main thread: show the finished song and clear the Create-job flag."""
+        if not self._alive:
+            return False
         try:
             from media_store import media_store as _ms
             _ms.ensure_auto_playlists()
@@ -10378,6 +10383,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_create_music_error(self, medium, msg: str) -> bool:
         """Main thread: a failed or cancelled song. `_fail_create_job` moves the panel off "pending"."""
+        if not self._alive:
+            return False
         self._music_worker = None
         self._set_status(f"Couldn't generate {medium.label}: {msg}")
         self._fail_create_job(msg)
@@ -10592,11 +10599,6 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_stop_server(self) -> None:
         """Run the stop command (via start_wan.sh --stop) in a background thread."""
-        if self._current_medium_source() == "music":
-            # This stops the shared port-8000 media container. The app did not start the music server and
-            # must not stop an unrelated one on its behalf.
-            self._set_status("Music servers are stopped outside the app.")
-            return
         # Stop any active log tail before clearing the log panel
         if self._log_tail_stop:
             self._log_tail_stop.set()

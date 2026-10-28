@@ -36,13 +36,15 @@ STYLES = {
 
 class FakeMusicServer:
     def __init__(self, style="audio", health=None, steps_before_done=1, busy=False, down_after_submit=False, ended_early=False,
-                 require_token=None, error_500_echoes_headers=False):
+                 require_token=None, error_500_echoes_headers=False, echo_token_in_stage=False):
         self.style = STYLES[style]
         self.prefix = self.style["prefix"]
         self.health_body = dict(health if health is not None else self.style["health"])
         self.steps_before_done = steps_before_done
         self.busy, self.down_after_submit, self.ended_early = busy, down_after_submit, ended_early
         self.require_token, self.error_500_echoes_headers = require_token, error_500_echoes_headers
+        self.echo_token_in_stage = echo_token_in_stage      # a running job's `stage` carries the Authorization header
+        self.audio_format_header = None                     # when set, the audio reply starts with these bytes instead of fLaC
         self.jobs = {}              # id -> {"body", "polls"}
         self.submitted = []         # request bodies in order
         self.requests = []          # (method, path) in order
@@ -79,7 +81,7 @@ class FakeMusicServer:
                     self.connection.close()
                     return
                 if p.startswith(outer.prefix + "/jobs/") and p.endswith("/audio"):
-                    return self._send(200, raw=b"fLaC-fake-" + p.split("/")[4].encode(), ctype="audio/flac")
+                    return self._send(200, raw=(outer.audio_format_header or b"fLaC") + b"-fake-" + p.split("/")[4].encode(), ctype="audio/flac")
                 if p.startswith(outer.prefix + "/jobs/"):
                     jid = p.split("/")[4]
                     job = outer.jobs.get(jid)
@@ -90,7 +92,7 @@ class FakeMusicServer:
                     job["polls"] += 1
                     asked = job["body"].get(s["req"]["seconds"], 10)
                     if job["polls"] <= outer.steps_before_done:
-                        return self._send(200, {"id": jid, "status": "running", "stage": "sampling", "queue_position": 0})
+                        return self._send(200, {"id": jid, "status": "running", "stage": "sampling" + (" " + str(self.headers.get("Authorization")) if outer.echo_token_in_stage else ""), "queue_position": 0})
                     got = 5.2 if outer.ended_early else float(asked)
                     view = {"id": jid, "status": "done", "stage": "done", "settings": {}, "stats": {"total_s": 3.0}}
                     view[s["seconds_got_in"]][s["seconds_got"]] = got
