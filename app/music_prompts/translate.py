@@ -77,7 +77,7 @@ from typing import Callable
 
 from . import dialects as D
 from .cards import Library, StyleCard, load_library, normalise_alias
-from .parse import Parsed, parse
+from .parse import _SINGING, Layer, Match, Parsed, parse
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +111,8 @@ class Translation:
     dialect: str
     added: tuple[str, ...]
     instrumental: bool = False
+    # Set only by `wand`: the seed that made this result, so a surprise can be reproduced.
+    seed_used: int | None = None
 
 
 _DEFAULT_LIBRARY: Library | None = None
@@ -383,12 +385,72 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
               lyrics_fn: Callable[[str, tuple[str, ...]], str | None] | None = None) -> Translation:
     lib = library if library is not None else _default_library()
     dialect = D.dialect_for(profile)
-    limit = D.limit_of(getattr(profile, "max_chars", None))
     text = text if isinstance(text, str) else ""
     if not text.strip():
         return Translation("", None, (EMPTY_NOTE,), (), (), dialect, (), True)
+    return _render(text, parse(text, lib), profile, lib, include_names=include_names,
+                   smooth=smooth, smooth_fn=smooth_fn, lyrics_fn=lyrics_fn)
 
-    parsed = parse(text, lib)
+
+def translate_cards(base_ids, layer_ids=(), user_text: str = "", profile=None, *,
+                    include_names: bool = False, library: Library | None = None,
+                    smooth: bool = False, smooth_fn=None, lyrics_fn=None) -> Translation:
+    """Render chosen cards exactly as typed text naming them would (the wand's path).
+
+    `base_ids` are the base layer's card ids; `layer_ids` is a sequence of
+    `(marker, ids)` layers after it ("with", "over", "and someone is singing", ...).
+    `user_text` is optional typed text: it is parsed as usual and the card layers
+    are appended after its own layers (when it has no layer at all, `base_ids`
+    becomes the base). The cards go through the same `_render` as `translate`, so
+    the result equals `translate("A with B over C")` for the same cards. Ids that
+    are not in the library are skipped.
+    """
+    lib = library if library is not None else _default_library()
+    user_text = user_text if isinstance(user_text, str) else ""
+    parsed = parse(user_text, lib) if user_text.strip() else Parsed(user_text, (), (), ())
+    text, layers = parsed.text, list(parsed.layers)
+
+    def add(marker, ids):
+        nonlocal text
+        cards = [lib.cards[i] for i in ids if i in lib.cards]
+        if not cards:
+            return
+        if text.strip():
+            text += f" {marker} " if marker else ", "
+        elif marker:
+            marker = None                       # the first layer is the base: no marker
+        matches = []
+        start = len(text)
+        for k, c in enumerate(cards):
+            if k:
+                text += ", "
+            matches.append(Match(c.id, len(text), len(text) + len(c.name), c.name))
+            text += c.name
+        vocal = any(c.kind == "vocal" for c in cards) or bool(
+            marker and any(w in _SINGING for w in _WORD.findall(marker.lower())))
+        layers.append(Layer("layer" if layers else "base", text[start:], tuple(matches),
+                            marker if layers else None, vocal))
+
+    add("with" if layers else None, base_ids)    # the user's own layers come first and are the base
+    for marker, ids in layer_ids:
+        add(marker, ids)
+    if not layers:
+        dialect = D.dialect_for(profile)
+        return Translation("", None, (EMPTY_NOTE,), (), (), dialect, (), True)
+    return _render(text, Parsed(text, tuple(layers), parsed.leftover, parsed.dropped), profile, lib,
+                   include_names=include_names, smooth=smooth, smooth_fn=smooth_fn, lyrics_fn=lyrics_fn,
+                   typed=bool(user_text.strip()))
+
+
+def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: bool, smooth: bool,
+            smooth_fn, lyrics_fn, typed: bool = True) -> Translation:
+    """The back half of translate(): a parsed request to a Translation (one rendering path).
+
+    `typed` is False when only code chose the cards (the wand with no text): the user typed no artist name, so the
+    note "'Name' became the description of its sound" is not written (it would only show a name).
+    """
+    dialect = D.dialect_for(profile)
+    limit = D.limit_of(getattr(profile, "max_chars", None))
     names = _names(lib)
     notes: list[str] = []
     matches = [m for layer in parsed.layers for m in layer.matches if m.card_id in lib.cards]
@@ -415,7 +477,7 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         if m.alternatives:
             others = ", ".join(lib.cards[a].name for a in m.alternatives if a in lib.cards)
             notes.append(f"'{m.text}' could also mean {others}; {c.name} was used.")
-        if c.kind == "artist" and not include_names:
+        if c.kind == "artist" and not include_names and typed:
             notes.append(f"'{m.text}' became the description of its sound; the name is listed under Inspired by.")
 
     # The user's words: content kept verbatim (a phrase next to a match joins it), glue named in a note.
