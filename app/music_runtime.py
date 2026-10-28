@@ -66,6 +66,9 @@ class MusicProfile:
     triggers: tuple
     credit: str
     blurb: str
+    # Added for the music prompt library; at the end with defaults so positional construction keeps working.
+    max_chars: Optional[int] = None     # prompt/caption character limit; None means not known (the library then uses 1000)
+    dialect: str = ""                   # "caption+lyrics" | "tags" | "generic"; "" lets music_prompts.dialect_for decide
 
 
 # What a server cannot say about itself, matched on a lowercase substring of the health `model` string.
@@ -74,12 +77,14 @@ PROFILE_TABLE = [
         label="MiniMax-Music3", jobs_prefix=MUSIC_PREFIX, text_fields=("caption", "lyrics"), has_lyrics=True,
         min_seconds=5, max_seconds=60, steps_default=None, steps_max=100, cfg_default=None, cfg_min=None, cfg_max=None,
         formats=("flac",), audio_in="none", triggers=("fiona crapple",), credit="MiniMax-Music3",
-        blurb="Writes a song from lyrics and a description of the music. A song ends when its lyrics do.")),
+        blurb="Writes a song from lyrics and a description of the music. A song ends when its lyrics do.",
+        max_chars=1000, dialect="caption+lyrics")),          # 1000 is the caption limit, UNCONFIRMED until a live clip shows it
     (("stable-audio", "stable audio"), dict(
         label="Stable Audio 3 small-music", jobs_prefix=AUDIO_PREFIX, text_fields=("prompt",), has_lyrics=False,
         min_seconds=1, max_seconds=120, steps_default=8, steps_max=100, cfg_default=1.0, cfg_min=1.0, cfg_max=20.0,
         formats=("flac", "wav"), audio_in="none", triggers=(), credit="Stable Audio 3 small-music",
-        blurb="Makes an instrumental clip from a text prompt.")),
+        blurb="Makes an instrumental clip from a text prompt.",
+        max_chars=MAX_PROMPT_CHARS, dialect="tags")),
 ]
 GENERIC = dict(
     label="Music server", jobs_prefix=AUDIO_PREFIX, text_fields=("prompt",), has_lyrics=False,

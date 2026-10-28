@@ -17,6 +17,7 @@ tempo_bpm: [100, 160]
 avoid: [electronic drums, heavy distortion, auto-tune effects]
 lyric_themes: [a long road home, a river and the hills, a lost love, hard work and small wages, a hometown left behind]
 vocal: high lonesome lead with tight close harmony, plain-spoken, a little twang, dry and forward
+lead_instrument: pedal steel
 tags: [bluegrass, high lonesome, close harmony, acoustic, banjo, twang]
 goes_with: [folk, post-rock]
 notes: unverified

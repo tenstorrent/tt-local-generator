@@ -1,4 +1,5 @@
 """music_runtime: profiles from a server's health reply, and the job client, against a fake server."""
+import dataclasses
 import pytest
 
 from fake_music_server import FakeMusicServer, STYLES
@@ -127,3 +128,14 @@ def test_minimax_needs_lyrics_unless_instrumental():
         with pytest.raises(ValueError):
             client_for(srv, "music").submit(req(lyrics="  ", seconds=10))
     assert srv.submitted == []
+
+
+def test_profile_table_sets_max_chars_and_dialect():
+    mm, sa = profile_for(MINIMAX_HEALTH), profile_for(STABLE_HEALTH)
+    assert (mm.max_chars, mm.dialect) == (1000, "caption+lyrics")
+    assert (sa.max_chars, sa.dialect) == (2000, "tags")
+    generic = profile_for({"status": "ok", "model": "mystery-synth"})
+    assert (generic.max_chars, generic.dialect) == (None, "")
+    # positional construction (the fields before the new ones) still works
+    old = mr.MusicProfile(*[getattr(generic, f.name) for f in dataclasses.fields(generic)][:-2])
+    assert old.max_chars is None and old.dialect == ""

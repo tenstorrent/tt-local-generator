@@ -32,7 +32,7 @@ KINDS = ("style", "artist", "scene", "instrument", "vocal", "texture", "era")
 _REQUIRED = ("id", "kind", "name", "family", "sound")
 _LIST_FIELDS = ("aliases", "inspiration", "instruments", "avoid", "lyric_themes",
                 "tags", "goes_with", "clashes_with", "cues")
-_TEXT_FIELDS = ("rhythm", "harmony", "mood", "production", "vocal", "notes")
+_TEXT_FIELDS = ("rhythm", "harmony", "mood", "production", "vocal", "notes", "lead_instrument")
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,8 @@ class StyleCard:
     cues: tuple[str, ...]
     parent: str | None
     notes: str
+    # Vocal cards: the instrument that carries the melody when a model cannot sing.
+    lead_instrument: str = ""
 
 
 @dataclass
@@ -154,6 +156,7 @@ def _build(raw: dict) -> StyleCard:
         cues=_tuple(raw.get("cues")),
         parent=(raw.get("parent") or None),
         notes=str(raw.get("notes") or ""),
+        lead_instrument=str(raw.get("lead_instrument") or "").strip(),
     )
 
 

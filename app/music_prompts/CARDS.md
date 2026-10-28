@@ -29,12 +29,13 @@ Artist cards also require `parent`.
 | `aliases` | Other names and phrases that should find this card. |
 | `family` | Cluster tag the wand uses to mix different families (`post-rock`, `jazz`, `funk`, `electronic`, `chip`, `folk`, `pop`, `scene`). |
 | `inspiration` | Artists and records the card draws on. Shown in the UI, never put in a prompt by default. |
-| `sound` | One to three plain sentences. Never names an artist. |
+| `sound` | One to three plain sentences. Never names an artist. Start with an ordinary word: a caption may print it after the style name ("Post-rock: mostly instrumental rock ..."), which lowercases the first letter. |
 | `instruments`, `rhythm`, `harmony`, `mood`, `production` | Short plain descriptions. |
 | `tempo_bpm` | `[low, high]` whole numbers (floats and booleans are rejected), with 0 < low <= high. Styles need it; scenes and instruments may omit it. |
 | `avoid` | Things to leave out. |
 | `lyric_themes` | Topics a sung layer can be about (vocal cards, singing styles). |
 | `vocal` | How the voice sounds, for vocal cards. |
+| `lead_instrument` | Vocal cards: the instrument that carries the melody when the model cannot sing (Stable Audio). Optional; without it the prompt says "plaintive lead line phrased like a <style> vocal". The bluegrass vocal card uses `pedal steel`. |
 | `tags` | Short tag forms for tag-style prompts. |
 | `goes_with`, `clashes_with` | Card ids or family names the wand favours or avoids. An entry that names nothing is logged and kept as a plain family tag. |
 | `ambiguous` | True when the name is also an ordinary word (Tortoise). The parser then needs a cue word or a capital letter. |
@@ -43,6 +44,8 @@ Artist cards also require `parent`.
 | `notes` | Sources (two or more) or the single word `unverified`. |
 
 List fields (`aliases`, `instruments`, `avoid`, `tags` and so on) must be YAML lists of strings; text fields must be strings. A card with a wrong type is skipped with a message.
+`avoid` entries that mention singing, vocals, verses, choruses or lyrics are left out of a prompt that asks for a vocal, so a post-rock base can carry a sung layer.
+If a card's own text does name an artist or an `inspiration` entry, the translator replaces it with the style name, but write the card so it does not need that.
 An artist card whose `parent` names no card, or a card that is not a style, is kept and a warning is logged. A missing or empty shipped folder logs a warning.
 
 If two cards share a normalised alias, `by_alias[key]` holds every id, in card order: shipped cards first (by file name), then new user ids. A user card that overrides a shipped id keeps the original position.
