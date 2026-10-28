@@ -5991,6 +5991,7 @@ class MainWindow(Gtk.ApplicationWindow):
             # Music: discovery blocks, so it is asked for here and run on a thread (`_refresh_music_servers`).
             on_music_selected=self._refresh_music_servers,
             on_music_connected=self._on_music_connected,
+            on_music_rescan=self._refresh_music_servers,
             # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
             # below) — reuses `generate_theme.generate_theme()`, the SAME
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"

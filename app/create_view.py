@@ -398,6 +398,32 @@ _CSS = b"""
     color: #607D8B;
     font-size: 11px;
 }
+.music-start-card {
+    background-color: #1A3C47;
+    border: 1px solid #2D5566;
+    border-radius: 6px;
+    padding: 10px;
+}
+.music-start-title {
+    color: #4FD1C5;
+    font-weight: bold;
+}
+.music-start-text {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.music-start-note {
+    color: #9FB8BF;
+    font-size: 11px;
+}
+.music-start-cmd {
+    color: #4FD1C5;
+    background-color: #0F2A35;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-family: monospace;
+    font-size: 12px;
+}
 
 /* -- SeedImageWell (SP-3c-1) -- shared by ImageParamPanel + VideoParamPanel;
    one namespace since it's the exact same widget class in both panels. ---- */
@@ -1120,6 +1146,7 @@ class CreateView(Gtk.Box):
         on_hw_monitor_close: Optional[Callable[[], None]] = None,
         on_music_selected: Optional[Callable[[], None]] = None,
         on_music_connected: "Optional[Callable[[object], None]]" = None,
+        on_music_rescan: "Optional[Callable[[], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
@@ -1128,6 +1155,8 @@ class CreateView(Gtk.Box):
         self._on_music_selected = on_music_selected
         # A server the user just added with Connect: the owner lists it at once instead of waiting for discovery.
         self._on_music_connected = on_music_connected
+        # The "Check again" button on the start-a-model card: the same refresh the 10 s timer runs.
+        self._on_music_rescan = on_music_rescan
         self._music_servers: "list" = []
         self.add_css_class("create-view")
 
@@ -2079,6 +2108,7 @@ class CreateView(Gtk.Box):
             # The top prompt box owns the prompt (the panel's own box is hidden by RoleZonePanel).
             panel.set_prompt_getter(lambda: self._prompt_entry.get_text())
             panel.on_connect_saved = self._music_server_connected
+            panel.on_rescan = self._music_rescan
             self._panel_host.append(zoned)
             self._active_panel = zoned
             panel.servers_changed(self._music_servers)
@@ -2134,6 +2164,15 @@ class CreateView(Gtk.Box):
                 _log.debug("music connect hand-off failed", exc_info=True)
         self._ask_for_music_discovery()
 
+    def _music_rescan(self) -> None:
+        """"Check again" on the start-a-model card: run discovery now (falls back to the Music-chosen hook)."""
+        cb = self._on_music_rescan or self._on_music_selected
+        if cb is not None:
+            try:
+                cb()
+            except Exception:  # noqa: BLE001
+                _log.debug("music rescan request failed", exc_info=True)
+
     def _use_music_seed(self, seed: int) -> None:
         """A result's "Use this seed": pin it in the Music panel so the clip can be asked for again.
         Does nothing when Music is not the medium on screen."""
@@ -2156,10 +2195,12 @@ class CreateView(Gtk.Box):
         panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
         unchanged = servers == self._music_servers
         self._music_servers = servers
-        if isinstance(panel, MusicParamPanel) and not (unchanged and panel.servers() == servers):
-            # Skipped when nothing changed: the timer runs every 10 s, and re-setting the dropdown's model
-            # would close a list the user has open.
-            panel.servers_changed(servers)
+        if isinstance(panel, MusicParamPanel):
+            if not (unchanged and panel.servers() == servers):
+                # Skipped when nothing changed: the timer runs every 10 s, and re-setting the dropdown's model
+                # would close a list the user has open.
+                panel.servers_changed(servers)
+            panel.rescan_done()             # a "Looking..." button returns even when the list did not change
 
     # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 

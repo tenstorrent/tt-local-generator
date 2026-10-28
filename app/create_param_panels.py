@@ -3296,6 +3296,11 @@ class RoleZonePanel(Gtk.Box):
         # side). ~940px keeps each column ~460 — roomy for chips/controls
         # without sprawling — while the possibilities wall / prompt / chip row
         # above still use the full form width.
+        # A panel may have status widgets that belong above the zones (Music's start-a-model card).
+        header = getattr(panel, "header_widgets", None)
+        if callable(header):
+            for w in header():
+                self.append(w)
         self.append(gtk_layout.wrap_centered(columns, max_width=940, align="start"))
 
     # ── Public API ───────────────────────────────────────────────────────────
@@ -3383,8 +3388,9 @@ INSTRUMENTAL_SWITCH_CONFIRMED = False
 _LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
 _NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve), "
                 "then pick Music again. You can still type lyrics.")
-_NO_SERVER_HELP = ("No music server is running. Start one with tt-model serve, "
+_NO_SERVER_HELP = ("No music server is running. Start one (the Music panel shows how), "
                    "or choose Connect to add its address.")
+_SERVER_DOWN_HINT = "Server is down"
 _LOCAL_HOSTS = ("localhost", "::1")
 
 
@@ -3432,6 +3438,142 @@ def _run_in_thread(fn: Callable, done: Callable) -> None:
             result = None
         GLib.idle_add(lambda: (done(result), False)[1])
     threading.Thread(target=_work, daemon=True).start()
+
+
+def _set_clipboard(text: str) -> None:
+    """Put `text` on the clipboard (main thread). A seam: tests replace it."""
+    display = Gdk.Display.get_default()
+    if display is not None:
+        display.get_clipboard().set(text)
+
+
+class MusicStartCard(Gtk.Box):
+    """"Start a music model": what to run when no music server is listed. Shows and copies commands; it never runs one.
+
+    Rows come from `music_runtime.KNOWN_MODELS`, so the commands have one source."""
+
+    _COPIED_MS = 2000
+    _LOOK_TIMEOUT_S = 15
+
+    def __init__(self, on_rescan: "Callable[[], None]", on_connect: "Callable[[Gtk.Widget], None]") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add_css_class("music-start-card")
+        self._on_rescan = on_rescan
+        self._copy_buttons: "list[Gtk.Button]" = []
+        self._copy_timer = 0
+        self._look_timer = 0
+
+        title = Gtk.Label(label="Start a music model", xalign=0.0)
+        title.add_css_class("music-start-title")
+        self.append(title)
+        intro = Gtk.Label(label="No music server was found. Run one of these in a terminal, then press Check again.",
+                          xalign=0.0, wrap=True)
+        intro.add_css_class("music-start-text")
+        self.append(intro)
+
+        for m in _mr.KNOWN_MODELS:
+            self.append(self._model_row(m))
+
+        ports = ", ".join(str(p) for p in _mr.scan_ports())
+        scanned = Gtk.Label(label=f"Looking on ports {ports}. Not on these ports? Use Connect...", xalign=0.0, wrap=True)
+        scanned.add_css_class("music-start-note")
+        self.append(scanned)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._check_btn = Gtk.Button(label="Check again")
+        self._check_btn.connect("clicked", self._on_check)
+        buttons.append(self._check_btn)
+        connect = Gtk.Button(label="Connect...")
+        connect.set_tooltip_text("Connect to a model: add the address of a music server")
+        connect.connect("clicked", lambda b: on_connect(b))
+        buttons.append(connect)
+        self.append(buttons)
+        self.connect("unrealize", lambda *_: self._cancel_timers())
+
+    def _model_row(self, m) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        name = Gtk.Label(label=m.label, xalign=0.0, wrap=True)
+        name.add_css_class("music-start-title")
+        box.append(name)
+        for text, css in ((m.blurb, "music-start-text"), (m.listens, "music-start-text"), (m.note, "music-start-note")):
+            if text:
+                lbl = Gtk.Label(label=text, xalign=0.0, wrap=True)
+                lbl.add_css_class(css)
+                box.append(lbl)
+        shown = m.command or m.path
+        if shown:
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            cmd = Gtk.Label(label=shown, xalign=0.0, wrap=True, selectable=True)
+            cmd.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            cmd.set_hexpand(True)
+            cmd.set_tooltip_text(shown)
+            cmd.add_css_class("music-start-cmd")
+            line.append(cmd)
+            if m.command:
+                btn = Gtk.Button(label="Copy")
+                btn.set_valign(Gtk.Align.START)
+                btn.connect("clicked", self._on_copy, m.command)
+                self._copy_buttons.append(btn)
+                line.append(btn)
+            box.append(line)
+        return box
+
+    # Copy: the button reads "Copied" for a moment.
+    def _on_copy(self, btn, command: str) -> None:
+        try:
+            _set_clipboard(command)
+        except Exception:  # noqa: BLE001 - a clipboard problem must not break Create
+            _log.debug("could not copy to the clipboard", exc_info=True)
+            return
+        self._reset_copy_labels()
+        btn.set_label("Copied")
+        if self._copy_timer:
+            GLib.source_remove(self._copy_timer)
+        self._copy_timer = GLib.timeout_add(self._COPIED_MS, self._copy_timeout)
+
+    def _copy_timeout(self) -> bool:
+        self._copy_timer = 0
+        self._reset_copy_labels()
+        return GLib.SOURCE_REMOVE
+
+    def _reset_copy_labels(self) -> None:
+        for b in self._copy_buttons:
+            b.set_label("Copy")
+
+    # Check again: "Looking..." until the next result arrives (or a safety timeout).
+    def _on_check(self, _btn) -> None:
+        if self._on_rescan is None:
+            return
+        self._check_btn.set_label("Looking...")
+        self._check_btn.set_sensitive(False)
+        if self._look_timer:
+            GLib.source_remove(self._look_timer)
+        self._look_timer = GLib.timeout_add_seconds(self._LOOK_TIMEOUT_S, self._look_timeout)
+        try:
+            asked = self._on_rescan()
+        except Exception:  # noqa: BLE001
+            _log.debug("music rescan failed", exc_info=True)
+            asked = False
+        if asked is False:
+            self.scan_done()
+
+    def _look_timeout(self) -> bool:
+        self._look_timer = 0
+        self.scan_done()
+        return GLib.SOURCE_REMOVE
+
+    def scan_done(self) -> None:
+        if self._look_timer:
+            GLib.source_remove(self._look_timer)
+            self._look_timer = 0
+        self._check_btn.set_label("Check again")
+        self._check_btn.set_sensitive(True)
+
+    def _cancel_timers(self) -> None:
+        for attr in ("_copy_timer", "_look_timer"):
+            if getattr(self, attr):
+                GLib.source_remove(getattr(self, attr))
+                setattr(self, attr, 0)
 
 
 class MusicConnectDialog(Gtk.Window):
@@ -3543,6 +3685,7 @@ class MusicParamPanel(CreateParamPanel):
         self._suppress_pick = False
         self.on_triggers_changed: "Optional[Callable[[list], None]]" = None
         self.on_connect_saved: "Optional[Callable[[MusicServer], None]]" = None
+        self.on_rescan: "Optional[Callable[[], None]]" = None     # "Check again" on the start-a-model card
         self._built = False
 
     # ── the profile decides what is accepted ────────────────────────────────
@@ -3623,8 +3766,10 @@ class MusicParamPanel(CreateParamPanel):
         connect.set_tooltip_text("Connect to a model: add the address of a music server")
         connect.connect("clicked", self._on_connect_clicked)
         row.append(connect)
-        self._server_hint = Gtk.Label(label=_NO_SERVER_HELP, xalign=0.0, wrap=True)
+        self._server_hint = Gtk.Label(label=_SERVER_DOWN_HINT, xalign=0.0, wrap=True)
         self._server_hint.add_css_class("image-param-hint")
+        self._start_card = MusicStartCard(on_rescan=self._do_rescan,
+                                          on_connect=self._on_connect_clicked)
         self._rows["server_url"] = row
 
         # Prompt.
@@ -3766,6 +3911,22 @@ class MusicParamPanel(CreateParamPanel):
             self._refresh()
         self._notify_triggers()
 
+    def _do_rescan(self) -> bool:
+        """The card's "Check again". False when nobody is listening, so the button does not wait for a reply."""
+        if self.on_rescan is None:
+            return False
+        self.on_rescan()
+        return True
+
+    def header_widgets(self) -> "list[Gtk.Widget]":
+        """Widgets a wrapper shows above the form: the start-a-model card and the server-is-down hint."""
+        return [self._start_card, self._server_hint]
+
+    def rescan_done(self) -> None:
+        """A discovery result arrived (changed or not): "Check again" stops saying "Looking..."."""
+        if self._built:
+            self._start_card.scan_done()
+
     def servers(self) -> "list[MusicServer]":
         """The servers the dropdown currently lists."""
         return list(self._servers)
@@ -3802,6 +3963,7 @@ class MusicParamPanel(CreateParamPanel):
             finally:
                 self._suppress_pick = False
         self.set_server(self._servers[wanted] if wanted is not None else None)
+        self.rescan_done()
 
     def _on_server_picked(self, dd, _pspec) -> None:
         if self._suppress_pick:
@@ -3841,8 +4003,10 @@ class MusicParamPanel(CreateParamPanel):
         accepted = set(self._accepted())
         for key, row in self._rows.items():
             row.set_visible(key in accepted or key == "server_url" or (key == "lyrics" and bool(p and p.has_lyrics)))
-        self._rows["server_url"].set_visible(True)
-        self._server_hint.set_visible(self._server is None or not self._server.up)
+        # With nothing listed the start-a-model card replaces the empty dropdown; a down server keeps the dropdown.
+        self._rows["server_url"].set_visible(bool(self._servers))
+        self._start_card.set_visible(not self._servers)
+        self._server_hint.set_visible(bool(self._servers) and (self._server is None or not self._server.up))
         self._instrumental_switch.set_visible(self._instrumental_offered())
         self._instrumental_label.set_visible(self._instrumental_offered())
         self._lyrics_box.set_visible("lyrics" in accepted)

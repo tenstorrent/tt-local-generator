@@ -186,7 +186,7 @@ def _keep_activity_viz_webkit_free(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_music_discovery(monkeypatch):
-    """MainWindow runs music server discovery at startup and on a timer (it probes ports 20000 and 8795 and asks
+    """MainWindow runs music server discovery at startup and on a timer (it probes ports 20000, 8795 and 20100 and asks
     docker). Keep every test off the real machine's servers; tests of discovery inject their own probe."""
     import importlib
     try:

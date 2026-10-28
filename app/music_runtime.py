@@ -312,9 +312,43 @@ class MusicClient:
         return MusicResult(audio, fmt, job_id, stats, float(got) if isinstance(got, (int, float)) else None, ended, seed)
 
 
+# ---- models the app knows how to describe -------------------------------------------------------------
+
+@dataclass(frozen=True)
+class KnownModel:
+    """One row of the "Start a music model" card. The app only shows `command`; it never runs it."""
+    key: str
+    label: str
+    blurb: str
+    command: Optional[str] = None       # None when there is no published command to give
+    listens: str = ""                   # where it will listen, in words
+    note: str = ""
+    path: str = ""                      # where to start it from when there is no command
+
+
+KNOWN_MODELS = (
+    KnownModel(
+        key="minimax", label="MiniMax-Music3 (fiona-crapple merged weights, Blackhole)",
+        blurb="Writes a song from lyrics and a description of the music.",
+        command="tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach",
+        listens="Listens on port 20000 by default.",
+        note="Uses one chip. On a shared machine take a chip lease first (gozer)."),
+    KnownModel(
+        key="stable-audio", label="Stable Audio 3 small-music",
+        blurb="Makes an instrumental clip from a text prompt. It has no tt-model package yet.",
+        listens="Listens on 127.0.0.1:20100.",
+        note="Start it from its own repo; the README there has the steps.",
+        path="~/code/tt-stable-audio-3-small-music"),
+    KnownModel(
+        key="find-more", label="Find more",
+        blurb="Search the tt-model catalog for other music models.",
+        command="tt-model search music"),
+)
+
+
 # ---- discovery and saved servers ---------------------------------------------------------------------------
 
-DEFAULT_PORTS = (20000, 8795)           # tt-model's default port, and the music server's own default
+DEFAULT_PORTS = (20000, 8795, 20100)    # tt-model's default port, the music server's own default, Stable Audio's own default
 PROBE_TIMEOUT_S = 1.5
 SCAN_PORTS_ENV = "TTLG_MUSIC_SCAN_PORTS"
 

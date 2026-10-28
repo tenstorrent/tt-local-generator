@@ -13,7 +13,7 @@ The version bump (`VERSION` and `debian/changelog`, one minor) is its own commit
 Architecture:
 - **`app/music_runtime.py`** (stdlib only): model profiles (`profile_for`, one per model family, with a generic
   fallback), `MusicClient` (health, submit, poll, fetch, cancel), saved servers with an optional bearer token, and
-  discovery (docker label, the known ports 8795 and 20000, and saved URLs; `localhost`, `127.0.0.1` and `[::1]` are one
+  discovery (docker label, the known ports 20000, 8795 and 20100, and saved URLs; `localhost`, `127.0.0.1` and `[::1]` are one
   server, the saved entry's address, token and label win). A profile comes from `/v1/health` plus the built-in table.
   `profile_for` reads an OpenAPI schema only when a caller passes one, and no caller does yet, so `_probe` never fetches
   a schema.
@@ -29,6 +29,18 @@ Architecture:
   and the Library (see the Task 7 note below).
 - **Status segment and wall tile**: a fifth segment, Music, is READY when any discovered server is up. The
   Start-something wall has a Music tile with its own example lines and gradient.
+
+Start-a-model card (v0.105.1): with no music server listed, the Music panel hides the empty dropdown and shows a
+"Start a music model" card (`MusicStartCard` in `create_param_panels.py`, rows from `music_runtime.KNOWN_MODELS`).
+It lists MiniMax-Music3 (`tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach`, port 20000, one chip,
+take a gozer lease on a shared machine), Stable Audio 3 small-music (no tt-model package, so no command and no Copy
+button; it names `~/code/tt-stable-audio-3-small-music` and 127.0.0.1:20100) and `tt-model search music`. The app
+shows and copies these commands and never runs them. "Check again" runs the same refresh as the 10 s timer through
+`CreateView(on_music_rescan=)`, which `MainWindow` wires to `_refresh_music_servers`; it reads "Looking..." until the
+next result. "Connect..." opens the existing dialog. A list that holds only servers that are down keeps the dropdown and
+shows the line "Server is down". `RoleZonePanel` mounts the card and that line above the zones through the panel's
+`header_widgets()`, because the panel's own root is not mounted there. Discovery also scans port 20100, Stable Audio's
+default, so `DEFAULT_PORTS` is now 20000, 8795 and 20100.
 
 Decisions from the spec:
 - New `media_type="audio"`, kept out of the Video, Image and artgen galleries by the negative filters.
