@@ -107,6 +107,15 @@ Start flow (``start``; one start per model key at a time, by a per-key lock):
    stop never replaces an older record of the same key either (it gets
    ``<key>#kept-<n>``).
 
+Legacy mode (``start_legacy`` / ``stop_legacy``): ``tt-ctl`` keeps its old
+behaviour for the old ``server_manager`` keys. ``start_legacy`` runs the
+boutique script and returns its raw results: no switch question, no incumbent
+stopped, no duplicate check, no health wait, no lease. ``stop_legacy`` treats
+the explicit command as consent to stop a script-managed service (no
+``stop_external`` question); after a successful stop it releases the lease
+recorded for that service, if any, and removes the record, silently when there
+is nothing to do. The default ``start``/``stop`` above keep all their checks.
+
 Outcome kinds. StartOutcome: started, already_running, starting_elsewhere,
 declined (the user said no), cancelled (the caller's ``cancel()`` fired during
 the chip queue or the boot), waiting_for_chips (the chip queue timed out),
@@ -148,6 +157,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -578,10 +588,16 @@ class ServerControl:
         if results and all(getattr(r, "returncode", 1) == 0 for r in results):
             for name in names:
                 try:
-                    for rec in [r for r in self._records.load() if r.get("name") == name]:
-                        for lid in _lease_ids(rec.get("lease_id")):
-                            if not self._gozer.release(lid):
-                                log.warning("release of lease %s failed", lid)
+                    recs = [r for r in self._records.load() if r.get("name") == name]
+                    for rec in recs:
+                        failed = [lid for lid in _lease_ids(rec.get("lease_id"))
+                                  if not self._gozer.release(lid)]
+                        if failed:
+                            # The one line a legacy stop may add, and only on stderr.
+                            print(f"note: lease {', '.join(failed)} of {name} could not be "
+                                  "released; run `gozer release` once nothing of it runs.",
+                                  file=sys.stderr)
+                    if recs:
                         self._records.remove(name)
                 except Exception:
                     log.exception("lease cleanup after legacy stop of %s failed", name)

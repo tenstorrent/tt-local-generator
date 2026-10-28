@@ -420,3 +420,39 @@ def test_old_key_behaviour_matches_main(name, env, run, main_cli):
         assert nerr.splitlines()[-1] == old[2].splitlines()[-1]
     else:
         assert nerr == old[2]
+
+
+def test_tt_name_start_relays_boot_progress_to_stderr(env, run):
+    env.set_tt({"serve": {"lines": ["pulling image BOOTLINE-1", "booting BOOTLINE-2"],
+                          "exit": 1}})
+    code, out, err = run("start", "ns/bundle")
+    assert code == 1
+    assert "BOOTLINE-1" in err and "BOOTLINE-2" in err
+
+
+def _two_in_one_group(env):
+    """Catalog with two models in one hardware group; one is running."""
+    cat = {"models": [
+        {"name": "Cat-A", "kind": None, "engines": ["vllm"], "hardware": ["p300x2"],
+         "installed": True, "backends": ["inference-server"]},
+        {"name": "Cat-B", "kind": None, "engines": ["vllm"], "hardware": ["p300x2"],
+         "installed": True, "backends": ["inference-server"]}]}
+    row = dict(PS_ROW, name="Cat-A", served_id="Cat-A", container_id="aaaaaaaaaaaa", port=20001,
+               base_url="http://127.0.0.1:20001")
+    env.set_tt({"serve": {"lines": ["BOOT"], "exit": 1}}, ps=[row], catalog=cat)
+
+
+def test_new_name_switch_question_needs_yes_and_yes_never_covers_stop_external(env, run):
+    _two_in_one_group(env)
+    code, out, _ = run("start", "Cat-B")
+    assert code == 1 and "Declined (no terminal)" in out and "Re-run with --yes to allow it" in out
+    assert not any(c[:2] == ["model", "stop"] for c in env.tt_argv())
+    # --yes accepts the switch question (the incumbent was not started by the app, so the
+    # question is the switch one, and the stop of it goes ahead)
+    code, out, _ = run("start", "Cat-B", "--yes")
+    assert "--yes:" in out
+    assert ["model", "stop", "Cat-A"] in env.tt_argv()
+    # but a Stop of an external server still needs its own flag
+    env.set_tt({}, ps=[PS_ROW])
+    code, out, _ = run("stop", "ns/bundle", "--yes")
+    assert code == 1 and "--yes-stop-external" in out

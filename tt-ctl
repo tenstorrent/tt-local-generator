@@ -592,7 +592,7 @@ def _start_new(ctl, boutique, key):
     """Start one tt-named model; print its lines. True on success."""
     entry = _registry_entry(ctl.registry(), key)
     target = entry.key if entry is not None else key
-    outcome = ctl.start(target)
+    outcome = ctl.start(target, on_progress=lambda m: print(dim(f"     {m}"), file=sys.stderr))
     url = f" ({outcome.url})" if outcome.url else ""
     if outcome.kind == "started":
         print(green("✓") + f"  {key} started{url}")

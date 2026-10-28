@@ -1516,3 +1516,20 @@ def test_default_start_and_stop_still_ask(env):
     env.status_map = {"wan-old": "ready"}
     env.control().start("flux")
     assert env.confirms and env.confirms[0][0] == "switch"
+
+
+def test_stop_legacy_is_silent_without_a_recorded_lease(env, capsys):
+    env.gozer_available = False
+    env.control().stop_legacy("flux", names=["flux"])
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err == ""
+    assert "gozer.release" not in env.names()
+
+
+def test_stop_legacy_notes_once_on_stderr_when_a_recorded_release_fails(env, capsys):
+    env.records.add("flux", 8000, None, "L9", 1.0)
+    ctl = env.control()
+    ctl._gozer = type("G", (), {"release": staticmethod(lambda lid: False)})
+    ctl.stop_legacy("flux", names=["flux"])
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err.count("note:") == 1 and "L9" in cap.err
