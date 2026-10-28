@@ -504,7 +504,15 @@ class ModelStatusService:
             # every other artgen/prompt key relies solely on its own
             # health_fn entry (see the docstring note above for why this
             # replaced the old blanket "any artgen/prompt key" behavior).
-            healthy = health.get(key, False) or (key == matched) or (key in extra_ready)
+            healthy = health.get(key, False) or (key == matched)
+            if not healthy and key in extra_ready:
+                # An extra key only counts when no OTHER confirmed-healthy key
+                # already answers on its endpoint (shared :8000 / :8002).
+                ep = self._endpoint_of(key)
+                healthy = ep is None or not any(
+                    c != key and (health.get(c, False) or c == matched)
+                    and self._endpoint_of(c) == ep
+                    for c in server_manager.SERVERS)
             port_open = False if healthy else self._safe_port_probe(key)
             per_key[key] = (healthy, port_open)
 

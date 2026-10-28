@@ -374,3 +374,13 @@ def test_extra_ready_fn_raising_is_ignored():
     svc._tick()
     assert svc.status("flux") == ms.Status.READY
     assert svc.status("wan2.2") == ms.Status.OFF
+
+
+def test_extra_ready_does_not_override_a_healthy_key_on_the_same_endpoint():
+    svc = ms.ModelStatusService(
+        health_fn=lambda: {"wan2.2": True}, detect_fn=lambda: (None, None),
+        port_probe=lambda k: False, clock=lambda: 1.0,
+        extra_ready_fn=lambda: {"flux"})
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.READY
+    assert svc.status("flux") != ms.Status.READY
