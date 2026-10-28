@@ -135,15 +135,17 @@ _find_cache: tuple[str, str | None] | None = None
 def _find() -> str | None:
     """First executable named ``gozer`` on PATH whose ``--version`` says gozer.
 
-    The answer is cached per PATH value, so a call costs one version probe only
-    when PATH changes. A not-found result is cached too (an install mid-session
-    needs a PATH change or a restart to be noticed).
+    A found binary is cached per PATH value (re-checked with isfile/X_OK on each
+    use), so a call costs one version probe only when PATH changes. A not-found
+    result is not cached: the scan is a few stat calls.
     """
     global _find_cache
     path = os.environ.get("PATH", "")
     c = _find_cache
     if c is not None and c[0] == path:
-        return c[1]
+        # Cheap re-check: a cached binary that vanished is re-resolved once.
+        if c[1] is not None and os.path.isfile(c[1]) and os.access(c[1], os.X_OK):
+            return c[1]
     found = _find_uncached(path)
     _find_cache = (path, found)
     return found
@@ -257,7 +259,9 @@ def _lease_from(data: dict) -> Lease | None:
 
 def acquire(chips: int, who: str, reason: str, expect: str = "2h",
             queue: bool = True) -> Lease | Queued | None:
-    """Blocks; call off the GTK thread. Ask for ``chips`` chips. A Lease when granted, Queued(ticket) when the
+    """Blocks; call off the GTK thread.
+
+    Ask for ``chips`` chips. A Lease when granted, Queued(ticket) when the
     chips are busy and ``queue`` is True, None on refusal or error.
 
     The lease is detached: gozer reaps it at 900 s if nothing holds the chip
@@ -314,6 +318,12 @@ def cancel_ticket(ticket: str) -> bool:
     return bool(data and data.get("cancelled") is True)
 
 
+# History events that end a lease (every ``history.log`` event name in tt-gozer
+# was checked: only these two remove a lease; "release_record_mismatch" and
+# "refused" happen during or instead of a release and end nothing).
+_LEASE_ENDING_EVENTS = ("released", "reaped")
+
+
 def find_lease(who: str, history_events: int = 200) -> Lease | None:
     """The open lease held by ``who``, or None (none, or status/history failed).
 
@@ -321,7 +331,9 @@ def find_lease(who: str, history_events: int = 200) -> Lease | None:
     must show chips held by ``who`` (state not FREE), and ``gozer history`` gives
     the id of the newest granted/adopted lease of ``who`` that was not released
     and whose chips are those. Read-only. Used to recover a lease whose id was
-    lost when a ``wait`` was killed.
+    lost when a ``wait`` was killed. Leases ended by ``released`` or ``reaped``
+    events are ignored. When ``who`` holds more than one live lease, only the
+    newest open one is returned.
     """
     held = {str(r["bdf"]) for r in _chips_of(status())
             if r.get("bdf") and r.get("who") == who and r.get("state") != "FREE"}
@@ -342,7 +354,7 @@ def find_lease(who: str, history_events: int = 200) -> Lease | None:
             chips = ev.get("chips")
             open_leases[lid] = tuple(str(c) for c in chips) if isinstance(chips, list) else ()
             order.append(lid)
-        elif kind == "released":
+        elif kind in _LEASE_ENDING_EVENTS:
             open_leases.pop(lid, None)
     for lid in reversed(order):
         if lid in open_leases and (not open_leases[lid] or held & set(open_leases[lid])):

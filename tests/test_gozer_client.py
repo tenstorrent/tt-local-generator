@@ -261,3 +261,34 @@ def test_gozer_path_is_cached_per_path(tmp_path):
     d = _install(tmp_path, {"status": {"stdout": _fixture_text()}})
     gc.status(); gc.status(); gc.status()
     assert sum(1 for c in calls(d) if c == ["--version"]) == 1
+
+
+def _held_by(who, bdfs):
+    return {"chips": [{"bdf": b, "dev_index": i, "board": "B", "state": "HELD", "who": who}
+                      for i, b in enumerate(bdfs)]}
+
+
+def test_find_lease_skips_reaped_lease(tmp_path):
+    hist = {"history": [
+        {"event": "granted", "lease_id": "A", "who": "w", "chips": ["c1", "c2"]},
+        {"event": "granted", "lease_id": "B", "who": "w", "chips": ["c2"]},
+        {"event": "reaped", "lease_id": "B", "who": "w", "chips": ["c2"]}]}
+    _install(tmp_path, {"status": _j(_held_by("w", ["c1", "c2"])), "history": _j(hist)})
+    assert gc.find_lease("w") == gc.Lease("A", ("c1", "c2"))
+
+
+def test_find_lease_none_when_only_lease_was_reaped(tmp_path):
+    hist = {"history": [
+        {"event": "granted", "lease_id": "B", "who": "w", "chips": ["c2"]},
+        {"event": "reaped", "lease_id": "B", "who": "w", "chips": ["c2"]}]}
+    _install(tmp_path, {"status": _j(_held_by("w", ["c2"])), "history": _j(hist)})
+    assert gc.find_lease("w") is None
+
+
+def test_cached_path_revalidated_when_binary_disappears(tmp_path):
+    d = _install(tmp_path, {"status": {"stdout": _fixture_text()}})
+    assert gc.available() is True
+    (d / "gozer").unlink()
+    assert gc.available() is False  # same PATH, binary gone
+    make_fake_gozer(d, {"commands": {}})
+    assert gc.available() is True   # and it comes back
