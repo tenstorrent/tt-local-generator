@@ -1,6 +1,6 @@
 # tt-local-generator — developer notes
 
-## Music generation (v0.105.0 pending)
+## Music generation (v0.105.0)
 
 Prompt (operator, 2026-10-28): "build a UI for generating music using tt-model-manager community models like
 minimax-music3 or stabilityai/stable-audio-3-small-music". Spec:
