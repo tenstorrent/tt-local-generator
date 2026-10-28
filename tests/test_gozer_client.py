@@ -1,5 +1,6 @@
 """gozer_client against a fake `gozer` script. No test runs the real gozer."""
 import json
+import os
 import time
 from pathlib import Path
 
@@ -15,7 +16,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "gozer" / "status.json"
 def _clean(monkeypatch, tmp_path):
     # PATH holds only the fake dir: the real gozer is unreachable.
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    gc._find_cache = None
     yield
+    gc._find_cache = None
 
 
 def _install(tmp_path, commands, version="gozer 0.3.4"):
@@ -53,9 +56,9 @@ def test_acquire_returns_lease_with_chip_ids(tmp_path):
     assert r == gc.Lease("L-1", ("0000:03:00.0", "0000:04:00.0"))
     argv = calls(d)[-1]
     assert argv[0] == "acquire" and "--json" in argv
-    assert argv[argv.index("--chips") + 1] == "1"
-    assert argv[argv.index("--who") + 1] == "tt-gen"
-    assert argv[argv.index("--expect") + 1] == "2h"
+    assert "--chips=1" in argv
+    assert "--who=tt-gen" in argv
+    assert "--expect=2h" in argv
     assert "--no-queue" not in argv
 
 
@@ -85,10 +88,14 @@ def test_wait_returns_none_when_still_queued(tmp_path):
 
 
 def test_wait_cancel_stops_waiting(tmp_path):
-    _install(tmp_path, {"wait": {"hang": True}})
+    pidfile = tmp_path / "wait.pid"
+    _install(tmp_path, {"wait": {"hang": True, "pidfile": str(pidfile)}})
     t0 = time.monotonic()
     assert gc.wait("T-1", 60, cancel=lambda: time.monotonic() - t0 > 0.5) is None
     assert time.monotonic() - t0 < 5
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # the child really is gone
 
 
 def test_release_returns_true_and_false_on_error(tmp_path):
@@ -125,7 +132,7 @@ def test_adopt_wraps_untracked_chip(tmp_path):
     assert r == gc.Lease("L-7", ("0000:01:00.0",))
     argv = [c for c in calls(d) if c[0] == "adopt"][0]
     assert argv[:2] == ["adopt", "0000:01:00.0"]
-    assert argv[argv.index("--who") + 1] == "tt-gen"
+    assert "--who=tt-gen" in argv
 
 
 def test_adopt_refused_when_already_leased(tmp_path):
@@ -175,3 +182,82 @@ def test_read_only_calls_never_mutate(tmp_path):
     for argv in calls(d):
         assert argv == ["--version"] or argv[0] == "status", argv
     assert any(a[0] == "status" for a in calls(d))
+
+
+def test_cancel_ticket_true(tmp_path):
+    d = _install(tmp_path, {"cancel": _j({"cancelled": True})})
+    assert gc.cancel_ticket("T-9") is True
+    assert [c for c in calls(d) if c[0] == "cancel"] == [["cancel", "T-9", "--json"]]
+
+
+def test_cancel_ticket_false(tmp_path):
+    d = _install(tmp_path, {"cancel": _j({"cancelled": False}, 13)})
+    assert gc.cancel_ticket("T-9") is False
+    assert [c for c in calls(d) if c[0] == "cancel"] == [["cancel", "T-9", "--json"]]
+
+
+HISTORY = {"history": [
+    {"event": "granted", "lease_id": "old", "who": "claude:orchard-kernel-ladder",
+     "chips": ["0000:01:00.0", "0000:02:00.0"]},
+    {"event": "released", "lease_id": "old", "who": "claude:orchard-kernel-ladder"},
+    {"event": "granted", "lease_id": "other", "who": "someone-else", "chips": ["0000:03:00.0"]},
+    {"event": "granted", "lease_id": "cur", "who": "claude:orchard-kernel-ladder",
+     "chips": ["0000:01:00.0", "0000:02:00.0"]},
+]}
+
+
+def test_find_lease_with_fixture(tmp_path):
+    d = _install(tmp_path, {"status": {"stdout": _fixture_text()}, "history": _j(HISTORY)})
+    assert gc.find_lease("claude:orchard-kernel-ladder") == gc.Lease(
+        "cur", ("0000:01:00.0", "0000:02:00.0"))
+    assert gc.find_lease("nobody") is None  # holds no chips
+    assert gc.find_lease("someone-else") is None  # not holding per status
+    assert all(c[0] in ("status", "history", "--version") for c in calls(d))
+
+
+def test_find_lease_none_when_status_fails(tmp_path):
+    _install(tmp_path, {"status": {"stdout": "x", "exit": 1}, "history": _j(HISTORY)})
+    assert gc.find_lease("claude:orchard-kernel-ladder") is None
+
+
+def test_adopt_status_failure_after_failed_adopt_is_none(tmp_path):
+    _install(tmp_path, {"adopt": _j({"adopted": False}, 12),
+                        "status": {"stdout": "", "exit": 1}})
+    assert gc.adopt("0000:01:00.0", "w", "r") is None
+
+
+def test_adopt_refused_holder_is_who_string(tmp_path):
+    st = {"chips": [{"bdf": "0000:09:00.0", "dev_index": 0, "board": "B", "state": "HELD", "who": "x"}]}
+    _install(tmp_path, {"adopt": _j({"adopted": False}, 12), "status": _j(st)})
+    assert gc.adopt("0000:09:00.0", "w", "r") == gc.AdoptRefused("x")
+
+
+def test_adopt_reads_back_board_chips_from_status(tmp_path):
+    # target is a board unit; the lease covers both of its chips.
+    _install(tmp_path, {"adopt": _j({"adopted": True, "lease_id": "L-b", "pids": [1]}),
+                        "status": {"stdout": _fixture_text()}})
+    r = gc.adopt("0000046131924062", "w", "r")
+    assert r == gc.Lease("L-b", ("0000:01:00.0", "0000:02:00.0"))
+
+
+def test_values_starting_with_dash_use_equals_form(tmp_path):
+    d = _install(tmp_path, {"acquire": _j(GRANT), "adopt": _j({"adopted": True, "lease_id": "L"})})
+    gc.acquire(1, "--who-evil", "--reason-evil", expect="-1h")
+    argv = [c for c in calls(d) if c[0] == "acquire"][0]
+    assert "--who=--who-evil" in argv and "--reason=--reason-evil" in argv
+    assert "--expect=-1h" in argv and "--chips=1" in argv
+    gc.adopt("x", "--w", "--r")
+    argv = [c for c in calls(d) if c[0] == "adopt"][0]
+    assert "--who=--w" in argv and "--reason=--r" in argv
+
+
+def test_bad_chip_count_returns_none(tmp_path):
+    _install(tmp_path, {"acquire": _j(GRANT)})
+    assert gc.acquire("lots", "w", "r") is None
+    assert gc.acquire(None, "w", "r") is None
+
+
+def test_gozer_path_is_cached_per_path(tmp_path):
+    d = _install(tmp_path, {"status": {"stdout": _fixture_text()}})
+    gc.status(); gc.status(); gc.status()
+    assert sum(1 for c in calls(d) if c == ["--version"]) == 1

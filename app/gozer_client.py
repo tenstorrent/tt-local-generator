@@ -65,7 +65,9 @@ class Queued:
 
 @dataclass(frozen=True)
 class AdoptRefused:
-    """``adopt`` failed because the chips are already leased to ``holder``."""
+    """``adopt`` failed because the chips are already leased.
+
+    ``holder`` is the ``who`` string of the lease that holds them."""
     holder: str
 
 
@@ -127,9 +129,28 @@ def _run(argv: Sequence[str], timeout: float,
         return None, "", f"failed: {exc}"
 
 
+_find_cache: tuple[str, str | None] | None = None
+
+
 def _find() -> str | None:
-    """First executable named ``gozer`` on PATH whose ``--version`` says gozer."""
-    for d in os.environ.get("PATH", "").split(os.pathsep):
+    """First executable named ``gozer`` on PATH whose ``--version`` says gozer.
+
+    The answer is cached per PATH value, so a call costs one version probe only
+    when PATH changes. A not-found result is cached too (an install mid-session
+    needs a PATH change or a restart to be noticed).
+    """
+    global _find_cache
+    path = os.environ.get("PATH", "")
+    c = _find_cache
+    if c is not None and c[0] == path:
+        return c[1]
+    found = _find_uncached(path)
+    _find_cache = (path, found)
+    return found
+
+
+def _find_uncached(path: str) -> str | None:
+    for d in path.split(os.pathsep):
         if not d:
             continue
         p = os.path.join(d, "gozer")
@@ -236,14 +257,20 @@ def _lease_from(data: dict) -> Lease | None:
 
 def acquire(chips: int, who: str, reason: str, expect: str = "2h",
             queue: bool = True) -> Lease | Queued | None:
-    """Ask for ``chips`` chips. A Lease when granted, Queued(ticket) when the
+    """Blocks; call off the GTK thread. Ask for ``chips`` chips. A Lease when granted, Queued(ticket) when the
     chips are busy and ``queue`` is True, None on refusal or error.
 
     The lease is detached: gozer reaps it at 900 s if nothing holds the chip
     open. Use ``adopt`` once the server is up so the lease follows its process.
     """
-    args = ["acquire", "--chips", str(int(chips)), "--who", who, "--reason", reason,
-            "--expect", expect]
+    try:
+        n = int(chips)
+    except (TypeError, ValueError):
+        log.warning("gozer acquire: bad chip count %r", chips)
+        return None
+    # --flag=value form: a value starting with "-" cannot be read as an option.
+    args = ["acquire", f"--chips={n}", f"--who={who}", f"--reason={reason}",
+            f"--expect={expect}"]
     if not queue:
         args.append("--no-queue")
     data, _rc = _json_call(args)
@@ -260,11 +287,18 @@ def acquire(chips: int, who: str, reason: str, expect: str = "2h",
 
 def wait(ticket: str, timeout: float,
          cancel: Callable[[], bool] | None = None) -> Lease | None:
-    """Block on ``gozer wait <ticket>`` for up to ``timeout`` seconds.
+    """Blocks; call off the GTK thread. Runs ``gozer wait <ticket>`` for up to
+    ``timeout`` seconds.
 
     Returns the Lease when granted; None on timeout, cancel (``cancel()`` is
-    checked every 0.1 s and kills the child process group), or error. A
-    cancelled wait leaves the ticket queued; cancel it with ``gozer cancel``.
+    checked every 0.1 s and kills the child process group), or error.
+
+    After a cancelled, timed-out or failed wait the caller MUST clean up:
+    call ``cancel_ticket(ticket)``; if that returns False, the ticket may have
+    been consumed (``gozer wait`` claims the lease and only then prints it, so
+    a kill in that window loses the lease id), so call ``find_lease(who)`` and
+    ``release`` whatever it finds. Otherwise the lease is reaped as STALE
+    after 900 s.
     """
     secs = max(1, int(timeout))
     data, _rc = _json_call(["wait", str(ticket), "--timeout", f"{secs}s"],
@@ -272,8 +306,52 @@ def wait(ticket: str, timeout: float,
     return _lease_from(data) if data else None
 
 
+def cancel_ticket(ticket: str) -> bool:
+    """Drop a queued ticket (``gozer cancel <ticket> --json``). True only when
+    gozer says ``{"cancelled": true}``. False also means the ticket is gone,
+    e.g. already granted; see ``wait()`` for what to do then."""
+    data, _rc = _json_call(["cancel", str(ticket)])
+    return bool(data and data.get("cancelled") is True)
+
+
+def find_lease(who: str, history_events: int = 200) -> Lease | None:
+    """The open lease held by ``who``, or None (none, or status/history failed).
+
+    ``gozer status`` has no lease ids, so this combines two reads: ``status()``
+    must show chips held by ``who`` (state not FREE), and ``gozer history`` gives
+    the id of the newest granted/adopted lease of ``who`` that was not released
+    and whose chips are those. Read-only. Used to recover a lease whose id was
+    lost when a ``wait`` was killed.
+    """
+    held = {str(r["bdf"]) for r in _chips_of(status())
+            if r.get("bdf") and r.get("who") == who and r.get("state") != "FREE"}
+    if not held:
+        return None
+    data, _rc = _json_call(["history", f"-n={int(history_events)}"])
+    events = data.get("history") if isinstance(data, dict) else None
+    if not isinstance(events, list):
+        return None
+    open_leases: dict[str, tuple[str, ...]] = {}
+    order: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict) or not ev.get("lease_id"):
+            continue
+        lid = str(ev["lease_id"])
+        kind = ev.get("event")
+        if kind in ("granted", "adopted") and ev.get("who") == who:
+            chips = ev.get("chips")
+            open_leases[lid] = tuple(str(c) for c in chips) if isinstance(chips, list) else ()
+            order.append(lid)
+        elif kind == "released":
+            open_leases.pop(lid, None)
+    for lid in reversed(order):
+        if lid in open_leases and (not open_leases[lid] or held & set(open_leases[lid])):
+            return Lease(lid, open_leases[lid])
+    return None
+
+
 def release(lease_id: str) -> bool:
-    """``gozer release <lease>``. True on success.
+    """Blocks; call off the GTK thread. ``gozer release <lease>``. True on success.
 
     WARNING: the real call resets the lease's chips.
     """
@@ -282,11 +360,23 @@ def release(lease_id: str) -> bool:
 
 
 def adopt(target: str, who: str, reason: str) -> Lease | AdoptRefused | None:
-    """Wrap a lease around a process that already holds ``target`` (BDF, device
-    index or board). Returns the Lease; ``AdoptRefused(holder)`` when somebody
-    else already has a lease on it; None for any other failure (nothing holds
-    the chip, unknown chip, gozer error)."""
-    data, _rc = _json_call(["adopt", str(target), "--who", who, "--reason", reason])
+    """Blocks; call off the GTK thread. Wrap a lease around a process that
+    already holds ``target`` (BDF, device index or board).
+
+    Returns the Lease; ``AdoptRefused(holder)`` when somebody else already has a
+    lease on it (``holder`` is that lease's ``who``); None for any other
+    failure (nothing holds the chip, unknown chip, gozer error).
+
+    Use this ONLY on the unpinnable path, where the caller holds no lease of its
+    own. After the caller's own earlier ``acquire`` it would be refused against
+    the caller's own lease.
+
+    gozer's JSON drops the refusal reason, so a failed adopt is classified by
+    reading ``status()``. If that read fails too, the result is None, a generic
+    failure: callers must treat None as "failed, stop the server", never as
+    "nothing holds it".
+    """
+    data, _rc = _json_call(["adopt", str(target), f"--who={who}", f"--reason={reason}"])
     if data is None:
         return None
     lease = _lease_from(data)

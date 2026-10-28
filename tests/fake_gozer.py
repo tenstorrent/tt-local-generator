@@ -36,6 +36,8 @@ spec = cmds.get(key)
 if spec is None:
     best = [k for k in cmds if key.startswith(k)]
     spec = cmds[max(best, key=len)] if best else {{"stderr": "fake gozer: no behaviour for " + key, "exit": 2}}
+if spec.get("pidfile"):
+    open(spec["pidfile"], "w").write(str(os.getpid()))
 time.sleep(spec.get("delay", 0))
 if spec.get("hang"):
     time.sleep(3600)
