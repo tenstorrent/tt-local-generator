@@ -324,3 +324,39 @@ def test_music_inspire_keeps_seed_without_llm(monkeypatch):
     monkeypatch.setattr(artgen, "detect_artgen_endpoint", lambda *a, **k: (None, None))
     assert prompt_client.generate_prompt("music", "slow blues in D") == "slow blues in D"
     assert prompt_client.generate_prompt("music", "")           # no seed: a canned line, as before
+
+
+# ── fix round 1 ──────────────────────────────────────────────────────────────
+
+def test_prompt_getter_used_under_role_zone_panel():
+    """The real mount: RoleZonePanel hides the panel's own prompt row, CreateView's top entry owns the text."""
+    calls = []
+    p = cpp.MusicParamPanel(inspire_fn=lambda t, s, ok, err: calls.append((t, s)), llm_available_fn=lambda: True)
+    cpp.RoleZonePanel(p, _music_medium())
+    p.set_server(_server("fiona-crapple"))
+    p.set_prompt_getter(lambda: "  dreamy synth pop ")
+    p._lyrics_buffer.set_text("[Verse]\nhi")
+    assert p.validate() is None
+    assert p.collect()["prompt"] == "dreamy synth pop"
+    p._lyrics_buffer.set_text("")
+    p._lyrics_inspire_btn.emit("clicked")
+    assert calls[-1] == ("lyrics", "dreamy synth pop")
+    assert "lyrics" in p.validate().lower()           # prompt is fine now; lyrics are what is missing
+
+
+def test_collect_before_build_does_not_raise():
+    p = cpp.MusicParamPanel()
+    assert isinstance(p.collect(), dict)
+
+
+def test_guidance_and_steps_reset_only_when_profile_changes():
+    p = _panel("stable-audio")
+    p._cfg_adj.set_value(7.0)
+    p._steps_adj.set_value(20)
+    p.servers_changed([_server("stable-audio")])         # a refresh with the same profile
+    p.set_server(_server("stable-audio", url="http://localhost:9"))
+    assert p._cfg_adj.get_value() == 7.0 and p._steps_adj.get_value() == 20
+    p.set_server(_server("fiona-crapple"))               # a different model: back to its defaults
+    assert p.collect().get("steps") is None              # 20 from Stable Audio is not sent to MiniMax
+    p.set_server(_server("stable-audio"))
+    assert p._cfg_adj.get_value() == 1.0 and p._steps_adj.get_value() == 8

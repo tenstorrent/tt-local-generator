@@ -3372,9 +3372,9 @@ import music_runtime as _mr  # noqa: E402
 from music_runtime import MusicServer, normalize_url, save_server  # noqa: E402
 
 # MiniMax accepting a song with no lyrics is UNCONFIRMED: the client sends INSTRUMENTAL_PLACEHOLDER
-# ("[Instrumental]") and nobody has checked a live server yet. While this is False the Instrumental
-# switch is not shown, and a lyrics model with empty lyrics is refused. Set it to False in one line
-# if the live check shows MiniMax rejects it.
+# ("[Instrumental]") and nobody has checked a live server yet. The switch is ON (shown) pending that
+# live check. If MiniMax rejects it, set this to False: the Instrumental switch is then hidden and a
+# lyrics model with empty lyrics is refused.
 INSTRUMENTAL_SWITCH_CONFIRMED = True
 
 _LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
@@ -3509,7 +3509,7 @@ class _LyricsSeed:
         self._panel = panel
 
     def get_text(self) -> str:
-        return self._panel._lyrics_text().strip() or self._panel._prompt_entry.get_text().strip()
+        return self._panel._lyrics_text().strip() or self._panel._prompt_text()
 
     def set_text(self, text: str) -> None:
         self._panel._lyrics_buffer.set_text(text)
@@ -3532,6 +3532,8 @@ class MusicParamPanel(CreateParamPanel):
         self._rows: "dict[str, Gtk.Widget]" = {}
         self._reference_path = ""
         self._llm_ok = True
+        self._prompt_getter: "Optional[Callable[[], str]]" = None
+        self._applied_model_id: "Optional[str]" = None      # the profile the numeric controls were last set for
         self._suppress_pick = False
         self.on_triggers_changed: "Optional[Callable[[list], None]]" = None
         self.on_connect_saved: "Optional[Callable[[MusicServer], None]]" = None
@@ -3709,6 +3711,16 @@ class MusicParamPanel(CreateParamPanel):
             self._start_llm_check()
         return root
 
+    def set_prompt_getter(self, fn: "Optional[Callable[[], str]]") -> None:
+        """Read the prompt from `fn` instead of this panel's own box. RoleZonePanel hides that box
+        (CreateView's top entry owns the prompt), so CreateView passes a getter for its entry here."""
+        self._prompt_getter = fn
+
+    def _prompt_text(self) -> str:
+        if self._prompt_getter is not None:
+            return (self._prompt_getter() or "").strip()
+        return self._prompt_entry.get_text().strip() if self._built else ""
+
     def _row(self, key: str) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.add_css_class("image-param-row")
@@ -3812,16 +3824,21 @@ class MusicParamPanel(CreateParamPanel):
                 self._seconds_adj.set_value(min(max(30, lo), hi))
             self._seconds_hint.set_label(
                 f"{lo:g} to {hi:g} seconds." + (" A song ends when its lyrics do, so it can be shorter." if p.has_lyrics else ""))
+            # Defaults are applied when the model changes (or a value falls outside the new range), so a
+            # discovery refresh or Connect never resets what the user set.
+            changed = p.model_id != self._applied_model_id
+            self._applied_model_id = p.model_id
             if p.steps_max is not None:
                 self._steps_adj.set_upper(p.steps_max)
-                if p.steps_default is not None and self._steps_adj.get_value() == 0:
-                    self._steps_adj.set_value(p.steps_default)
-                self._steps_hint.set_label("0 lets the model choose" if p.steps_default is None else "")
                 self._steps_adj.set_lower(0 if p.steps_default is None else 1)
+                if changed or not self._steps_adj.get_lower() <= self._steps_adj.get_value() <= p.steps_max:
+                    self._steps_adj.set_value(p.steps_default or 0)
+                self._steps_hint.set_label("0 lets the model choose" if p.steps_default is None else "")
             if p.cfg_max is not None:
                 self._cfg_adj.set_lower(p.cfg_min)
                 self._cfg_adj.set_upper(p.cfg_max)
-                self._cfg_adj.set_value(p.cfg_default if p.cfg_default is not None else p.cfg_min)
+                if changed or not p.cfg_min <= self._cfg_adj.get_value() <= p.cfg_max:
+                    self._cfg_adj.set_value(p.cfg_default if p.cfg_default is not None else p.cfg_min)
         self._apply_llm_state()
 
     # ── lyrics helpers ──────────────────────────────────────────────────────
@@ -3888,11 +3905,13 @@ class MusicParamPanel(CreateParamPanel):
 
     def collect(self) -> dict:
         """Only the keys the chosen profile accepts. A hidden control is never included."""
+        if not self._built:
+            return {}
         accepted = self._accepted()
         out: dict = {}
         for key in accepted:
             if key == "prompt":
-                out[key] = self._prompt_entry.get_text().strip()
+                out[key] = self._prompt_text()
             elif key == "lyrics":
                 out[key] = self._lyrics_text()
             elif key == "instrumental":
@@ -3923,7 +3942,7 @@ class MusicParamPanel(CreateParamPanel):
         `prompt` replaces the panel's own prompt box when the caller keeps the prompt elsewhere."""
         if self._server is None or not self._server.up:
             return _NO_SERVER_HELP
-        text = (self._prompt_entry.get_text() if prompt is None else prompt).strip()
+        text = (self._prompt_text() if prompt is None else prompt).strip()
         if not text:
             return "Describe the music first: a genre, a mood, the instruments."
         p = self._profile
