@@ -119,11 +119,12 @@ gate) sees a model started from a terminal as READY. Its public API does not cha
    Create uses it. A model that another session is still booting returns `Starting` and the UI waits for it.
 2. Ask `ready_to_run.plan_switch` what would conflict (same chips or same port). If something would be stopped, the existing confirm dialog
    names it (the CLI asks on the terminal, or takes `--yes`). The switch runs only after an accept.
-3. If gozer is installed, no lease covers the target, and `tt` does not take leases itself (detected once from `tt --help` or a config flag
-   when `tt` adds one), take a lease. gozer judges a bare `acquire` lease itself: it is reaped as `STALE` 900 s after acquire if no visible fd ever opens the chips
-   (a root-owned container's fds are invisible to an unprivileged gozer). The lease is therefore only a reservation until the server is up; section 9 says how it
-   becomes a lease that follows the container (adopt). Take it with: `gozer acquire --json --chips N --who "tt-local-generator" --reason "<model>" --expect <duration>`,
-   where N comes from the model's device requirement. If the lease is queued, report "waiting for chips" and wait on the ticket; the user can cancel. **(decided: lease for the life of the server; my call: details.)**
+3. Leases. One flow per case. If gozer is not installed, or `tt` takes its own lease (detected once from `tt --help` or a config flag when `tt` adds one), no lease logic runs.
+   - **Pinnable** (a tt-model bundle started with `-- --device-id <ids>`, or a boutique script that passes `--device-id` to `run.py`): `gozer acquire --json --chips N --who "tt-local-generator" --reason "<model>" --expect <duration>`,
+     where N comes from the model's device requirement. If the lease is queued, report "waiting for chips" and wait on the ticket; the user can cancel. Then start pinned to the leased chips (step 4).
+     After the server is healthy, read `gozer status --json` for the lease: `CLAIMED` means no fd is visible and gozer will reap it 900 s after acquire, so log a warning; `HELD-FOREIGN` is normal for a container. **(decided: lease for the life of the server; my call: details.)**
+   - **Unpinnable** (a catalog model, a bundle we cannot pin, a boutique script with no pin): no acquire before the start. Read the free chips from `gozer status --json`, start, find the chips the container opened
+     (`docker inspect` device mounts), and `gozer adopt` them (details in section 9). If adopt reports that someone else holds a lease on them, stop the new server, report `chips_held`, and offer a boutique alternative when the model has one.
 4. Start with the registry's backend: `tt_backend.serve(...)` for `tt` models, `server_manager.start(key)` for boutique ones. Pinning: a tt-model bundle is pinned to
    the leased chips with `tt serve <bundle> -- --device-id <ids>`; a catalog model cannot be pinned through `tt`; a boutique script that passes `--device-id` to
    `run.py` can. Nothing on the `tt` path reads `TT_VISIBLE_DEVICES`, so it is not relied on.
@@ -196,22 +197,23 @@ generalised URL dialog. A long start shows the boot checklist in the existing se
 
 ## 9. Calls made after the builder check (my calls, open to change)
 
-- **Chip count, port and hardware group for a `tt` catalog model.** Sources in order: `tt serve --dry-run --json` (the resolved config), then the `hardware`
-  field of `tt model list --json`, then the override file. The registry emits synthetic `ServerDef`-like entries (key, capabilities, hardware group,
-  port) so `ready_to_run.plan_switch` and the lease size work unchanged. When none of the sources gives a value, the start warns and asks; it does not block.
+- **Chip count, port and hardware group for a `tt` catalog model.** Sources in order: for a bundle, `bundle.device_count` from `tt --json serve <model> --dry-run --offline`
+  (it is the default profile's count); then the `hardware` field of `tt model list --json`; then the override file. For a catalog model the dry-run gives only a device string,
+  so the chip count may be unknown. The registry emits synthetic `ServerDef`-like entries (key, capabilities, hardware group,
+  port) so `ready_to_run.plan_switch` and the lease size work unchanged. When no source gives a value, the start warns and asks; it does not block.
 - **`tt-ctl` output.** `servers --json` keeps its old shape. The merged view is `servers --all` and, under `--json`, an added `merged` key. Old keys and
   exit codes are untouched. `restart` on an `external` or `tt`-owned server is stop (with the same prompt), then start.
 - **Lease that follows the container.** Verified by reading gozer (wire notes item 3): `adopt` makes a non-detached lease owned by the pid that holds the chips, so it survives an
-  app restart and goes `STALE` when the container exits. The start flow is: `acquire` to reserve and queue, start, wait until healthy, then check `gozer status --json`
-  for the lease; if it still reads `CLAIMED` (no fd visible) log a warning that gozer will reap it at 900 s. `HELD-FOREIGN` on the app's own lease is normal for a container
-  and is not treated as a fault. `--owner-pid` is not used (it would tie the lease to the app's lifetime).
+  app restart and goes `STALE` when the container exits. It is used only in the unpinnable flow (spec 4.4 step 3). In the pinnable flow the lease comes from `acquire`; it becomes `HELD` once the
+  container opens the chips (a visible fd), and the post-healthy status check warns if it is still `CLAIMED`. The two flows never mix: after an acquire the chips are leased, so an adopt on them could only fail.
+  `--owner-pid` is not used (it would tie the lease to the app's lifetime).
 - **Leases without the app running.** No supervisor process. The app's refresh and `tt-ctl servers` both reap a lease the app recorded in `servers.json`
   when its server is gone, after one confirming poll. A lease can stay held between sweeps. `gozer reconcile` remains the backstop.
-- **Matching.** A match needs the port and at least one of served model id or runner key. A port match with a different served id is a different model
+- **Matching.** A match needs the port and at least one of served model id, container id or HF repo name (runner key only from our own script health check, as `tt model ps` has none). A port match with a different served id is a different model
   on a shared port: a conflict, not the same server. A recorded container id that no longer exists makes the record stale; that server is `external`.
 - **Deprecation note.** The app never shells out to `tt-ctl` for server control; it calls the layer directly. Any internal caller that does shell out sets
   `TTLG_NO_DEPRECATION_NOTE=1`.
-- **When `tt serve` cannot be pinned to the leased chips** (operator, 2026-10-28: the default is right, and it is best effort; the builder does not go further
+- **Unpinnable starts (catalog model, a bundle we cannot pin, a script with no pin)** (operator, 2026-10-28: the default is right, and it is best effort; the builder does not go further
   than this). Default: the app reads which chips are free from `gozer status --json`, starts, finds the chips the container actually opened (its `--device`
   mounts, from `docker inspect`), and runs `gozer adopt` on them. If another lease already holds any of those chips, the app stops the new server, says so, and
   does not start it. On a machine with no gozer, no lease logic runs. A boutique alternative is offered when the model has one.

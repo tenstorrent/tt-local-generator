@@ -16,7 +16,7 @@ tt-model is `~/.local/share/tenstorrent/bin/tt-model`, from the `tt_kernel` pack
 | `tests/fixtures/tt/list.json` | `tt --json model list` (scope `all` has 140 rows; default has 86 for device p300x2) | Trimmed to 16 rows (14 names): container bundles (`vllm-plugin`, `tt-dit-server`), catalog models (`vLLM`, `media`, `forge` engines). |
 | `tests/fixtures/tt/serve_dry_run.json` | `tt --json serve raahemnabeel/qwen3-coder-next --dry-run --offline` | tt-model bundle shape. |
 | `tests/fixtures/tt/serve_dry_run_catalog.json` | `tt --json serve Qwen3.8-27B --dry-run --offline` | tt-inference-server catalog shape. |
-| `tests/fixtures/gozer/status.json` | `gozer status --json` | Two boards, 4 chips; chips 0-1 leased by another agent, chips 2-3 `BUSY-UNTRACKED`. |
+| `tests/fixtures/gozer/status.json` | `gozer status --json` | Two boards, 4 chips; chips 0-1 `HELD-FOREIGN` (another agent's lease), chips 2-3 `FREE` at capture time. Chip state changes within minutes (the first capture showed chips 2-3 `BUSY-UNTRACKED`, a later one `CLAIMED`), so tests must not depend on it. |
 
 No token or secret is in any of them (grep for `hf_`, `bearer`, `password`, `token` found only the field name `hf_token_source: "env"`).
 
