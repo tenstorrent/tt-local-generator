@@ -1,0 +1,21 @@
+id: post-rock
+kind: style
+name: Post-rock
+aliases: [post rock, postrock]
+family: post-rock
+inspiration: [Slint, Mogwai, Godspeed You! Black Emperor, Tortoise]
+sound: >-
+  Mostly instrumental rock built from clean, interlocking electric guitars and a
+  patient rhythm section. Pieces grow slowly from quiet, repeating figures into
+  large, loud crescendos, then fall away again.
+instruments: [clean electric guitars, bass guitar, drum kit, vibraphone, piano, subtle synth pads]
+rhythm: Steady, often loose or odd-metre drumming that holds a groove for a long time before it builds.
+harmony: Simple repeating chord loops, open fifths and modal colours; tension comes from layering rather than from chord changes.
+mood: Wistful, patient, cinematic, sometimes tense.
+production: Roomy, natural and unhurried; wide dynamics with long quiet passages and no heavy compression.
+tempo_bpm: [70, 130]
+avoid: [verse-chorus song structure, sung lead vocals, short pop hooks]
+tags: [post-rock, instrumental, atmospheric, slow build, clean guitars, dynamic]
+goes_with: [electronic, jazz]
+clashes_with: [chip]
+notes: unverified
