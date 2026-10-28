@@ -68,7 +68,7 @@ def _buttons(w, label):
 
 def test_known_models_shape():
     models = mr.KNOWN_MODELS
-    assert len(models) >= 3
+    assert len(models) >= 4
     by_key = {m.key: m for m in models}
     for m in models:
         assert m.label and m.blurb
@@ -76,8 +76,9 @@ def test_known_models_shape():
             assert isinstance(m.command, str) and m.command.strip()
     assert by_key["stable-audio"].command is None, "no published package: nothing true to copy"
     assert "tt-stable-audio-3-small-music" in by_key["stable-audio"].path
-    assert by_key["minimax"].command == "tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach"
-    assert by_key["find-more"].command == "tt-model search music"
+    assert by_key["minimax"].command == "tt-model serve jashansinghTT/minimax-music3-blackhole --detach"
+    assert "serve/serve_music.py" in by_key["minimax-fiona"].command and "--ui" not in by_key["minimax-fiona"].command
+    assert by_key["find-more"].command == "tt-model search --catalog music"
 
 
 def test_default_ports_include_stable_audio():
@@ -86,10 +87,12 @@ def test_default_ports_include_stable_audio():
 
 def test_connect_dialog_and_card_name_the_same_serve_command():
     """One source: the command in the card is the one the docs name."""
-    cmd = next(m.command for m in mr.KNOWN_MODELS if m.key == "minimax")
-    assert cmd in (Path(__file__).parent.parent / "CLAUDE.md").read_text()
+    doc = (Path(__file__).parent.parent / "CLAUDE.md").read_text()
     p = _panel()
-    assert any(cmd in t for t in _texts(p._start_card))
+    for key in ("minimax", "minimax-fiona", "find-more"):
+        cmd = next(m.command for m in mr.KNOWN_MODELS if m.key == key)
+        assert cmd in doc
+        assert any(cmd in t for t in _texts(p._start_card))
 
 
 # ---- visibility ---------------------------------------------------------------------------------------
@@ -120,14 +123,15 @@ def test_card_lists_commands_ports_and_stable_audio_path():
     p = _panel()
     p.servers_changed([])
     text = "\n".join(_texts(p._start_card))
-    assert "tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach" in text
-    assert "tt-model search music" in text
+    assert "tt-model serve jashansinghTT/minimax-music3-blackhole --detach" in text
+    assert "serve/serve_music.py" in text
+    assert "tt-model search --catalog music" in text
     assert "~/code/tt-stable-audio-3-small-music" in text and "20100" in text
     assert "gozer" in text
     for port in mr.scan_ports():
         assert str(port) in text
     assert "Connect..." in text
-    assert len(_buttons(p._start_card, "Copy")) == 2, "Stable Audio has nothing true to copy"
+    assert len(_buttons(p._start_card, "Copy")) == 3, "Stable Audio has nothing true to copy"
 
 
 def test_card_never_shows_a_token():
@@ -145,12 +149,12 @@ def test_copy_puts_the_exact_command_on_the_clipboard_and_reads_copied(monkeypat
     p.servers_changed([])
     first = _buttons(p._start_card, "Copy")[0]
     first.emit("clicked")
-    assert got == ["tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach"]
+    assert got == ["tt-model serve jashansinghTT/minimax-music3-blackhole --detach"]
     assert first.get_label() == "Copied"
     p._start_card._reset_copy_labels()
     assert first.get_label() == "Copy"
-    _buttons(p._start_card, "Copy")[1].emit("clicked")
-    assert got[-1] == "tt-model search music"
+    _buttons(p._start_card, "Copy")[-1].emit("clicked")
+    assert got[-1] == "tt-model search --catalog music"
 
 
 # ---- Check again / Connect ----------------------------------------------------------------------------

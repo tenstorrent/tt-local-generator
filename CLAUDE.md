@@ -32,9 +32,12 @@ Architecture:
 
 Start-a-model card (v0.105.1): with no music server listed, the Music panel hides the empty dropdown and shows a
 "Start a music model" card (`MusicStartCard` in `create_param_panels.py`, rows from `music_runtime.KNOWN_MODELS`).
-It lists MiniMax-Music3 (`tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach`, port 20000, one chip,
-take a gozer lease on a shared machine), Stable Audio 3 small-music (no tt-model package, so no command and no Copy
-button; it names `~/code/tt-stable-audio-3-small-music` and 127.0.0.1:20100) and `tt-model search music`. The app
+It lists the base MiniMax-Music3 (`tt-model serve jashansinghTT/minimax-music3-blackhole --detach`, port 20000, one chip,
+take a gozer lease on a shared machine), MiniMax-Music3 with the fiona-crapple style (the launcher in
+`~/code/tt-minimax-music-blackhole`: `cd ~/code/tt-minimax-music-blackhole && gozer run --chips 1 -- .venv/bin/python serve/serve_music.py`,
+port 20000; the merged-weights package `episod/minimax-music3-fiona-crapple-blackhole` is not a tt-model bundle), Stable Audio 3
+small-music (no tt-model package, so no command and no Copy button; it names `~/code/tt-stable-audio-3-small-music` and
+127.0.0.1:20100) and `tt-model search --catalog music`. The app
 shows and copies these commands and never runs them. "Check again" runs the same refresh as the 10 s timer through
 `CreateView(on_music_rescan=)`, which `MainWindow` wires to `_refresh_music_servers`; it reads "Looking..." until the
 next result. "Connect..." opens the existing dialog. A list that holds only servers that are down keeps the dropdown and

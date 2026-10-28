@@ -328,11 +328,17 @@ class KnownModel:
 
 KNOWN_MODELS = (
     KnownModel(
-        key="minimax", label="MiniMax-Music3 (fiona-crapple merged weights, Blackhole)",
+        key="minimax", label="MiniMax-Music3 (Blackhole, base model)",
         blurb="Writes a song from lyrics and a description of the music.",
-        command="tt-model serve episod/minimax-music3-fiona-crapple-blackhole --detach",
+        command="tt-model serve jashansinghTT/minimax-music3-blackhole --detach",
         listens="Listens on port 20000 by default.",
         note="Uses one chip. On a shared machine take a chip lease first (gozer)."),
+    KnownModel(
+        key="minimax-fiona", label="MiniMax-Music3 with the fiona-crapple style (merged weights)",
+        blurb="The launcher sets up the container and the weights. It answers to the trigger phrase fiona crapple.",
+        command="cd ~/code/tt-minimax-music-blackhole && gozer run --chips 1 -- .venv/bin/python serve/serve_music.py",
+        listens="Listens on port 20000 by default.",
+        note="Needs tt-model and Docker. The gozer lease holds one chip while it runs."),
     KnownModel(
         key="stable-audio", label="Stable Audio 3 small-music",
         blurb="Makes an instrumental clip from a text prompt. It has no tt-model package yet.",
@@ -342,7 +348,7 @@ KNOWN_MODELS = (
     KnownModel(
         key="find-more", label="Find more",
         blurb="Search the tt-model catalog for other music models.",
-        command="tt-model search music"),
+        command="tt-model search --catalog music"),
 )
 
 
