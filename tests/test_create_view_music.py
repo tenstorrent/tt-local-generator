@@ -128,7 +128,7 @@ def test_music_sites_have_defined_behaviour(monkeypatch):
     assert activity_viz.mode_for_medium(MUSIC) == "inference"
     view._chip_buttons["music"].set_active(True)
     assert view._inspire_prompt_type() == "music"
-    assert sort_mediums_visual_first(_mediums())[-1].id == "music"
+    assert [m.id for m in sort_mediums_visual_first(_mediums())[:3]] == ["video", "image", "music"]
     # the Start-something wall builds a tile for it (gradient + icon) without raising
     assert possibilities.example_idea_for(MUSIC)
     assert view._possibilities is not None

@@ -2,6 +2,8 @@
 
 ## Music generation (v0.105.0)
 
+The Create chip row shows Music right after Video and Image (`_VISUAL_TEXTUAL_ORDER` in `create_mediums.py`). `default_mediums()` and `discover_mediums()` still return it last; only the display sort moves it.
+
 Prompt (operator, 2026-10-28): "build a UI for generating music using tt-model-manager community models like
 minimax-music3 or stabilityai/stable-audio-3-small-music". Spec:
 `docs/superpowers/specs/2026-10-28-music-generation-design.md`; wire notes:

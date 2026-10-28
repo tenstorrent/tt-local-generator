@@ -271,11 +271,11 @@ def default_mediums() -> list[Medium]:
 # that care about the visual gradient sort with `sort_mediums_visual_first`.
 _VISUAL_TEXTUAL_ORDER: tuple = (
     "video", "image",                                             # motion / photo
+    "music",                                                      # audio: next to the other things you make from a prompt
     "landscape", "skyline", "constellation", "geometric", "circuit",  # scenic / abstract SVG
     "palette",                                                    # pure color
     "ansi",                                                       # visual-but-made-of-text bridge
     "codeart", "freeform", "verse",                              # text
-    "music",                                                      # audio: after everything with a picture or words
 )
 
 

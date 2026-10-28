@@ -55,8 +55,9 @@ def test_music_medium_present_and_last():
     assert (m.label, m.icon, m.kind, m.source, m.generator, m.uses_llm) == ("Music", "🎵", "audio", "music", None, False)
     found = create_mediums.discover_mediums(artgen_names=["verse", "ansi"])
     assert found[-1].id == "music"
+    # display order puts Music right after Video and Image
     shuffled = create_mediums.sort_mediums_visual_first(list(reversed(found)))
-    assert shuffled[-1].id == "music"
+    assert [m.id for m in shuffled[:3]] == ["video", "image", "music"]
 
 
 def test_worker_saves_record_with_audio_type_and_params(tmp_path):
