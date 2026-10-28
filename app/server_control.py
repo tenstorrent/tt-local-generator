@@ -35,8 +35,12 @@ Start flow (``start``; one start per model key at a time, by a per-key lock):
    All questions are asked before anything is stopped or started.
 4. An accepted switch stops the incumbent. When ``plan.needs_reset`` and
    there is no gozer on the machine, ``reset_fn()`` runs next (the old
-   Ready-to-Run ``tt-smi -r``). On a gozer machine it never runs: a manual
-   reset is forbidden there, and releasing an app-held lease already resets.
+   Ready-to-Run ``tt-smi -r``), but only when no other healthy local server
+   (outside the stopped incumbent) is in the view: the reset hits every
+   board. When one is, the reset is skipped and the outcome message says
+   "Chips not reset because <name> is running on this machine." On a gozer
+   machine it never runs: a manual reset is forbidden there, and releasing an
+   app-held lease already resets.
 5. Leases, one flow per case. No lease logic when gozer is absent, when the
    ``tt`` in use takes its own lease (``tt_takes_lease``), or for a boutique
    model with no hardware group (CPU only, e.g. the prompt server).
@@ -50,28 +54,46 @@ Start flow (``start``; one start per model key at a time, by a per-key lock):
      acquire. Check free chips, start, find the container (the view's
      container id, else ``docker_container_for_port(port)``), read the chips
      it opened (``docker inspect``), ``gozer adopt`` each. An adopt refused by
-     another lease stops the new server (``chips_held``); a refusal by our own
+     another lease first asks ``confirm_fn("stop_external", ...)`` naming the
+     container and the other lease holder (the container may be someone
+     else's that appeared during our boot): a yes stops it (``chips_held``),
+     a no leaves it running and unrecorded (``chips_held``, leases kept as
+     below); a refusal by our own
      lease is not a conflict (``find_lease`` recovers that lease id); an adopt
      that returns None, or a container that cannot be found, is a failure
      and stops the server (fail closed: an unleased server on a shared box is
      worse than a refused start).
 6. Right before launching, the running check (1) is run again: another party
    may have started the model while we waited for chips or for the user. The
-   matching rows at that moment are the pre-launch snapshot. The health wait
-   and the failure cleanup consider only rows NOT in the snapshot, so a
-   server this start did not launch is never adopted or stopped. The by-name
-   fallback stop (``tt model stop <name>`` or the script's ``--stop``) is used
-   only when the snapshot had no row of this model; otherwise the server is
-   left alone.
+   matching rows at that moment are the pre-launch snapshot; an unreadable
+   view launches nothing. The health wait and the failure cleanup consider
+   only rows NOT in the snapshot. ``tt serve`` blocks through the whole boot,
+   so another party's server can still appear during it; three guards keep
+   it from being taken for ours:
+   * more than one new row of the model: adopt none, stop nothing, keep the
+     leases (see "kept leases" below);
+   * pinnable: a new row counts as ours only when ``docker_devices`` of its
+     container lies within the leased device ids (one inspect); otherwise
+     the same treatment;
+   * unpinnable: an adopt refused by another lease asks before stopping (5).
+   The by-name fallback stop (``tt model stop <name>`` or the script's
+   ``--stop``) is used only when the snapshot had no row of this model and
+   the view is readable; otherwise nothing is stopped and the leases are
+   kept.
 7. Record the started server in ``ServerRecords`` with its lease id(s),
    merged with any lease ids an older record of the same key held.
 8. On any failure: stop what was started, then release the leases taken by
-   this start (gozer resets the chips on release). If the stop itself fails
-   the lease is NOT released (a reset under a running container would break
-   it); the server is recorded with its lease so Stop or the next reap can
-   clean up. When even its port and container id are unknown, the record is
-   marked ``unreapable`` (never pruned by a reap) and the message names the
-   kept lease so it can be released by hand.
+   this start (gozer resets the chips on release). Kept leases: when the stop
+   fails, or nothing may be stopped (the guards in 6), the leases are NOT
+   released (a reset under a running container would break it). A failed
+   stop of an identified server is recorded with its port/container id and
+   leases, so Stop or the next reap can clean up. Anything else is recorded
+   ``unreapable`` under its own name ``<key>#unreapable-<n>``: never pruned
+   by a reap, never replaced by a later record of the key, and its leases
+   never merged into one. The outcome message then names the lease and says
+   to run ``gozer release <ids>`` once nothing of that start runs. A failed
+   stop never replaces an older record of the same key either (it gets
+   ``<key>#kept-<n>``).
 
 Outcome kinds. StartOutcome: started, already_running, starting_elsewhere,
 declined (the user said no), cancelled (the caller's ``cancel()`` fired during
@@ -92,6 +114,12 @@ Notes for callers (Tasks 7 and 8):
   interval), or the health waits slow down to that interval.
 * ``reset_fn`` is MainWindow's existing reset (``pipeline_engine._tt_smi_reset``);
   None returns count as success, only ``False`` is a failure.
+* Records named ``<key>#unreapable-<n>`` or ``<key>#kept-<n>`` are not the
+  key's current server; the Servers menu should show unreapable ones as
+  "needs a manual `gozer release`", not as a running server.
+* ``confirm_fn`` kinds: ``switch``, ``unknown_hardware``, ``unknown_chips``,
+  ``stop_external`` (a Stop of an external server, and an unpinnable start
+  whose chips another lease holds).
 """
 from __future__ import annotations
 
@@ -102,7 +130,7 @@ import subprocess
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Sequence
 from urllib.parse import urlparse
 
@@ -330,6 +358,8 @@ class _Run:
     server: RunningServer | None = None
     # Row ids of this model in the view right before launch. None until then.
     snapshot: set | None = None
+    # Sentences added to the final outcome message (e.g. a skipped reset).
+    notes: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -562,16 +592,21 @@ class ServerControl:
 
             # 4. Act. Anything unexpected undoes what this start did.
             if incumbent:
+                inc_ids = {_row_id(r) for r in self._incumbent_rows(incumbent, registry)}
                 err = self._stop_incumbent(incumbent, registry, say)
                 if not err and plan.needs_reset:
-                    err = self._reset_after_switch(say)
+                    err = self._reset_after_switch(say, inc_ids, run)
                 if err:
                     return StartOutcome("failed", None, f"{name} was not started: {err}", None)
             if pinnable:
-                return self._start_pinnable(entry, registry, chips, tt_plan, port, run, say,
-                                            cancel, cancelled)
-            return self._start_unpinnable(entry, registry, chips, port, leasing, run,
-                                          say, cancel, cancelled)
+                out = self._start_pinnable(entry, registry, chips, tt_plan, port, run, say,
+                                           cancel, cancelled)
+            else:
+                out = self._start_unpinnable(entry, registry, chips, port, leasing, run,
+                                             say, cancel, cancelled)
+            if run.notes:
+                out = replace(out, message=out.message + " " + " ".join(run.notes))
+            return out
         except Exception as exc:
             log.exception("start of %s failed", entry.key)
             try:
@@ -697,15 +732,29 @@ class ServerControl:
                 self._records.remove(key)
         return ""
 
-    def _reset_after_switch(self, say) -> str:
+    def _reset_after_switch(self, say, inc_ids: set, run: _Run) -> str:
         """Reset the chips after an accepted switch, only on a machine with no
-        gozer. Returns an error string, or ""."""
+        gozer, and only when no other healthy local server (outside the
+        stopped incumbent) is running: the reset hits every board. Returns an
+        error string, or ""; a skip adds a note to ``run.notes``."""
         if self._gozer_present():
             log.info("chip reset after the switch skipped: gozer manages this machine, a "
                      "manual reset is not allowed there (releasing an app-held lease resets)")
             return ""
         if self._reset_fn is None:
             log.info("chip reset after the switch skipped: no reset function was given")
+            return ""
+        view = self._view()
+        if view is None:
+            run.notes.append("Chips not reset because tt-local-generator could not read "
+                             "which servers are running on this machine.")
+            return ""
+        others = [s for s in view if s.host_is_local and _row_id(s) not in inc_ids
+                  and self._is_healthy(s)]
+        if others:
+            names = ", ".join(dict.fromkeys(s.name for s in others))
+            run.notes.append(f"Chips not reset because {names} is running on this machine.")
+            log.info("chip reset after the switch skipped: %s is running", names)
             return ""
         say("Resetting the boards.")
         try:
@@ -718,8 +767,12 @@ class ServerControl:
 
     def _launch(self, entry, port, extra: Sequence[str], plan, run: _Run, say,
                 cancel) -> TtResult:
-        """Start the server. Takes the pre-launch snapshot first."""
-        view = self._view() or []
+        """Start the server. Takes the pre-launch snapshot first; an unreadable
+        view launches nothing (fail closed)."""
+        view = self._view()
+        if view is None:
+            return TtResult(False, "tt-local-generator could not read which servers are "
+                                   "running, so it did not launch it")
         run.snapshot = {_row_id(s) for s in view if self._is_entry(s, entry)}
         run.launched = True
         if entry.backend == "tt":
@@ -731,10 +784,13 @@ class ServerControl:
             say(ln)
         return res
 
-    def _new_rows(self, entry, run: _Run, view=None) -> list[RunningServer]:
-        """Local rows of this model that were not there before launch."""
+    def _new_rows(self, entry, run: _Run, view=None) -> list[RunningServer] | None:
+        """Local rows of this model that were not there before launch. None
+        when the view cannot be read (unknown, not "none")."""
         if view is None:
-            view = self._view() or []
+            view = self._view()
+            if view is None:
+                return None
         snap = run.snapshot or set()
         return [s for s in view if self._is_entry(s, entry) and s.host_is_local
                 and _row_id(s) not in snap]
@@ -742,7 +798,11 @@ class ServerControl:
     def _wait_healthy(self, entry, run: _Run, cancelled) -> tuple[RunningServer | None, str]:
         deadline = self._clock() + self._start_timeout
         while True:
-            ok = [s for s in self._new_rows(entry, run) if self._is_healthy(s)]
+            rows = self._new_rows(entry, run) or []
+            if len(rows) > 1:
+                ids = ", ".join(s.container or s.container_id or s.url or s.name for s in rows)
+                return None, f"ambiguous: {len(rows)} servers of it appeared ({ids})"
+            ok = [s for s in rows if self._is_healthy(s)]
             if ok:
                 return ok[0], ""
             if cancelled():
@@ -817,16 +877,37 @@ class ServerControl:
         res = self._launch(entry, port, ["--device-id", ",".join(ids)], tt_plan, run, say,
                            cancel)
         if not res.ok:
-            return self._abort(entry, registry, run, "failed",
+            return self._abort(entry, registry, run, "cancelled" if cancelled() else "failed",
                                f"{name} failed to start ({res.reason}).", res.lines)
         server, why = self._wait_healthy(entry, run, cancelled)
         if server is None:
-            return self._abort(entry, registry, run,
-                               "cancelled" if why == "cancelled" else "failed",
-                               f"{name} did not start: {why}.", res.lines)
+            return self._after_wait_failure(entry, registry, run, why, res.lines)
+        # Ours only if its container opened exactly within the leased chips.
+        devs = self._docker_devices(server.container_id) if server.container_id else None
+        opened = self._targets(devs) if devs is not None else None
+        if not opened or not set(opened) <= set(ids):
+            return self._keep(entry, run, "failed",
+                              f"A {name} server became ready (container "
+                              f"{server.container or server.container_id or 'unknown'}), but "
+                              f"its container does not use the leased chips {','.join(ids)}, "
+                              "so it may be someone else's. It was not adopted and nothing "
+                              "was stopped; check `tt model ps`.")
         run.server = server
         self._check_lease_state(got, say)
         return self._finish(entry, run, server)
+
+    def _after_wait_failure(self, entry, registry, run: _Run, why: str,
+                            lines: Sequence[str]) -> StartOutcome:
+        if why.startswith("ambiguous"):
+            # More than one new row: cannot tell which is ours. Adopt none,
+            # stop none, keep this start's leases.
+            return self._keep(entry, run, "failed",
+                              f"{entry.name} did not start cleanly: {why[len('ambiguous: '):]}. "
+                              "tt-local-generator cannot tell which one it started, so none "
+                              "was adopted and nothing was stopped; check `tt model ps`.",
+                              lines)
+        return self._abort(entry, registry, run, "cancelled" if why == "cancelled" else "failed",
+                           f"{entry.name} did not start: {why}.", lines)
 
     def _check_lease_state(self, lease: Lease, say) -> None:
         rows = self._gozer.status().get("chips") or []
@@ -874,13 +955,11 @@ class ServerControl:
             return again
         res = self._launch(entry, port, (), None, run, say, cancel)
         if not res.ok:
-            return self._abort(entry, registry, run, "failed",
+            return self._abort(entry, registry, run, "cancelled" if cancelled() else "failed",
                                f"{name} failed to start ({res.reason}).", res.lines)
         server, why = self._wait_healthy(entry, run, cancelled)
         if server is None:
-            return self._abort(entry, registry, run,
-                               "cancelled" if why == "cancelled" else "failed",
-                               f"{name} did not start: {why}.", res.lines)
+            return self._after_wait_failure(entry, registry, run, why, res.lines)
         run.server = server
         if leasing:
             bad = self._adopt_opened(entry, registry, server, run, say)
@@ -899,16 +978,15 @@ class ServerControl:
                                f"{name} started on port {server.port}, but tt-local-generator "
                                "could not find its container (`tt model ps` gave no container "
                                f"id and `docker ps --filter publish={server.port}` found none), "
-                               "so it could not tell which chips it opened or lease them. It "
-                               "was stopped so it does not run without a lease on this shared "
-                               "machine.")
+                               "so it could not tell which chips it opened or lease them. A "
+                               "server must not run without a lease on this shared machine.")
         devs = self._docker_devices(cid)
         targets = self._targets(devs) if devs is not None else None
         if targets is None:
             return self._abort(entry, registry, run, "failed",
                                f"{name} started, but tt-local-generator could not tell which "
                                f"chips its container {cid} opened, so it could not lease them. "
-                               "It was stopped so it does not run without a lease.")
+                               "A server must not run without a lease on this shared machine.")
         own_refused = False
         for t in targets:
             r = self._gozer.adopt(t, who, f"serve {entry.key} (tt-local-generator)")
@@ -919,13 +997,23 @@ class ServerControl:
                 if r.holder == who:
                     own_refused = True     # our own lease already covers it
                     continue
+                # The container may be someone else's that appeared during our
+                # boot: never stop it without asking.
+                what = (f"chip {t} that the {name} container {cid} opened is leased by "
+                        f"{r.holder}.")
+                text = (f"{name} started, but {what} The container may be someone else's "
+                        f"server. {_describe(server)} Stop it?")
+                if not self._confirm("stop_external", text):
+                    return self._keep(entry, run, "chips_held",
+                                      f"{name} is not usable here: {what} It was left running "
+                                      "and not recorded." + self._alternative(entry))
                 return self._abort(entry, registry, run, "chips_held",
-                                   f"{name} was stopped: chip {t} it opened is leased by "
-                                   f"{r.holder}." + self._alternative(entry))
+                                   f"{name} could not be leased: {what}"
+                                   + self._alternative(entry))
             else:
                 return self._abort(entry, registry, run, "failed",
-                                   f"{name} was stopped: gozer could not lease chip {t} it "
-                                   "opened.")
+                                   f"{name} could not be leased: gozer could not lease chip "
+                                   f"{t} it opened.")
         if own_refused:
             # Our own lease (possibly an older one of this model) holds a chip:
             # keep its id with this server so it is not orphaned.
@@ -943,83 +1031,144 @@ class ServerControl:
     def _finish(self, entry, run: _Run, server: RunningServer) -> StartOutcome:
         ids = list(run.lease_ids)
         # An older record of this key would be replaced by name: keep its leases.
+        # Never from an unreapable record: its lease may sit under a zombie
+        # container and must not follow the new one.
         for r in self._records.load():
-            if r.get("name") == entry.key:
+            if r.get("name") == entry.key and not r.get("unreapable"):
                 for lid in _lease_ids(r.get("lease_id")):
                     if lid not in ids:
                         ids.append(lid)
         lease = ",".join(ids) or None
-        self._records.add(entry.key, server.port, _short(server.container_id), lease,
-                          time.time())
+        self._add_record(entry.key, server.port, _short(server.container_id), lease,
+                         replace_same_key=True)
         return StartOutcome("started", server.url,
                             f"{entry.name} started at {server.url}.", lease)
+
+    @staticmethod
+    def _free_name(key: str, names: set, tag: str) -> str:
+        n = 1
+        while f"{key}#{tag}-{n}" in names:
+            n += 1
+        return f"{key}#{tag}-{n}"
+
+    def _add_record(self, key: str, port, cid, leases, *, unreapable: bool = False,
+                    replace_same_key: bool = False) -> str:
+        """Write a record without losing another one's leases. Returns its name.
+
+        * An unreapable record always gets its own name ``<key>#unreapable-<n>``,
+          so nothing replaces it by name.
+        * An older unreapable record named exactly ``key`` (written before
+          that rule) is first copied to such a name, then the new record goes in.
+        * A reapable record replaces an older same-key record only with
+          ``replace_same_key`` (``_finish``, which merged its leases first);
+          otherwise it gets ``<key>#kept-<n>``, and with no container id it
+          is unreapable (a reap by endpoint would never match that name).
+        """
+        recs = self._records.load()
+        names = {str(r.get("name")) for r in recs}
+        old = next((r for r in recs if r.get("name") == key), None)
+        if old is not None and old.get("unreapable"):
+            moved = self._free_name(key, names, "unreapable")
+            self._records.add(moved, old.get("port"), old.get("container_id"),
+                              old.get("lease_id"), old.get("started_at"), unreapable=True)
+            self._records.remove(key)
+            names.add(moved)
+            names.discard(key)
+            old = None
+        if unreapable:
+            name = self._free_name(key, names, "unreapable")
+        elif old is not None and not replace_same_key:
+            if cid is None:
+                unreapable = True
+                name = self._free_name(key, names, "unreapable")
+            else:
+                name = self._free_name(key, names, "kept")
+        else:
+            name = key
+        self._records.add(name, port, cid, leases, time.time(), unreapable=unreapable)
+        return name
+
+    def _keep(self, entry, run: _Run, kind: str, message: str,
+              lines: Sequence[str] = ()) -> StartOutcome:
+        """Stop nothing and release nothing: this start's leases are kept in an
+        unreapable record and named in the message for a manual release."""
+        note = ""
+        if run.lease_ids:
+            leases = ",".join(run.lease_ids)
+            self._add_record(entry.key, None, None, leases, unreapable=True)
+            note = (f" This start's chip lease {leases} was kept, because releasing it would "
+                    "reset chips that a container may still use; once nothing of this start "
+                    f"is running, run `gozer release {' '.join(run.lease_ids)}`.")
+        return StartOutcome(kind, None, message + note + _tail(lines), None)
 
     def _abort(self, entry, registry, run: _Run, kind: str, message: str,
                lines: Sequence[str] = ()) -> StartOutcome:
         """Undo a failed start: stop what this start launched, then release its
-        leases. Rows that were listed before the launch are never touched. A
-        failed stop keeps the leases and records them."""
-        stopped = True
-        left_alone = False
-        stop_note = ""
+        leases. Rows that were listed before the launch are never touched; when
+        what this start launched cannot be told apart, nothing is stopped and
+        the leases are kept (``_keep``). A failed stop keeps the leases and
+        records them."""
         server = run.server
         lines = tuple(lines)
-        if run.launched:
-            if server is None:
-                new = self._new_rows(entry, run)
-                server = new[0] if new else None
-            res: TtResult | None
-            if server is not None:
-                res = self._stop_impl(server, registry)
-            elif run.snapshot:
-                # A row of this model was listed before launch: a stop by name
-                # could hit that server, which this start did not launch.
-                res = None
-                left_alone = True
-            elif entry.backend == "tt" and entry.tt_name:
-                res = self._call(lambda: self._tt.stop([entry.tt_name]))
-            elif entry.sm_key:
-                res = self._call(lambda: self._boutique_result(self._boutique.stop(entry.sm_key)))
-            else:
-                res = TtResult(False, "no way known to stop it")
-            if res is not None and not res.ok:
-                stopped = False
-                lines = lines + tuple(res.lines)
-                stop_note = (f" Stopping it failed too ({res.reason}); it is recorded as "
-                             "started by tt-local-generator.")
-        if stopped:
+        if not run.launched:
             self._release_all(run.lease_ids)
+            if run.lease_ids:
+                message += " Its chip lease was released (gozer resets the chips)."
+            return StartOutcome(kind, None, message + _tail(lines), None)
+        if server is None:
+            new = self._new_rows(entry, run)
+            if new is None or len(new) > 1 or (not new and run.snapshot):
+                # Unknown view, several new rows, or a row of this model listed
+                # before launch: a stop could hit a server this start did not
+                # launch, and a release could reset chips under our own.
+                why = ("the running servers could not be read" if new is None else
+                       "several servers of it appeared" if len(new) > 1 else
+                       f"a server of {entry.name} that this start did not launch is listed "
+                       "(started elsewhere, possibly meanwhile)")
+                return self._keep(entry, run, kind,
+                                  message + f" Nothing was stopped: {why}; it was left alone.",
+                                  lines)
+            server = new[0] if new else None
+        if server is not None:
+            res = self._stop_impl(server, registry)
+        elif entry.backend == "tt" and entry.tt_name:
+            res = self._call(lambda: self._tt.stop([entry.tt_name]))
+        elif entry.sm_key:
+            res = self._call(lambda: self._boutique_result(self._boutique.stop(entry.sm_key)))
         else:
-            port = server.port if server else None
-            cid = _short(server.container_id) if server else None
-            if port is None and cid is None:
-                again = self._new_rows(entry, run)
-                if again:
-                    port, cid = again[0].port, _short(again[0].container_id)
-            unreapable = port is None and cid is None
-            leases = ",".join(run.lease_ids) or None
-            self._records.add(entry.key, port, cid, leases, time.time(),
-                              unreapable=unreapable)
-            if leases:
-                stop_note += (f" Its chip lease {leases} was kept, because releasing it would "
-                              "reset the chips under a container that may still run.")
-            if unreapable:
-                stop_note += (" Its container could not be identified, so it will not be "
-                              "cleaned up automatically: check `tt model ps`, stop it, then "
-                              + (f"run `gozer release {leases.replace(',', ' ')}`."
-                                 if leases else "check `gozer status`."))
-            else:
-                stop_note += (" Stop in the Servers menu, or the next refresh once it is "
-                              "gone, can clean it up.")
-        if left_alone:
-            message += (f" A server of {entry.name} that this start did not launch is listed "
-                        "(started elsewhere, possibly meanwhile); it was left alone and "
-                        "nothing was stopped.")
-        elif run.launched and stopped:
+            res = TtResult(False, "no way known to stop it")
+        if res.ok:
+            self._release_all(run.lease_ids)
             message += " What was started has been stopped."
-        if run.lease_ids and stopped:
-            message += " Its chip lease was released (gozer resets the chips)."
-        return StartOutcome(kind, None, message + stop_note + _tail(lines), None)
+            if run.lease_ids:
+                message += " Its chip lease was released (gozer resets the chips)."
+            return StartOutcome(kind, None, message + _tail(lines), None)
+        # The stop failed: keep the leases, record the server as well as it is known.
+        lines = lines + tuple(res.lines)
+        port = server.port if server else None
+        cid = _short(server.container_id) if server else None
+        if port is None and cid is None:
+            again = self._new_rows(entry, run) or []
+            if len(again) == 1:
+                port, cid = again[0].port, _short(again[0].container_id)
+        unreapable = port is None and cid is None
+        leases = ",".join(run.lease_ids) or None
+        name = self._add_record(entry.key, port, cid, leases, unreapable=unreapable)
+        unreapable = unreapable or name.startswith(f"{entry.key}#unreapable-")
+        note = (f" Stopping it failed too ({res.reason}); it is recorded as started by "
+                "tt-local-generator.")
+        if leases:
+            note += (f" Its chip lease {leases} was kept, because releasing it would reset "
+                     "the chips under a container that may still run.")
+        if unreapable:
+            note += (" Its container could not be identified, so it will not be cleaned up "
+                     "automatically: check `tt model ps`, stop it, then "
+                     + (f"run `gozer release {' '.join(run.lease_ids)}`." if leases
+                        else "check `gozer status`."))
+        else:
+            note += (" Stop in the Servers menu, or the next refresh once it is gone, can "
+                     "clean it up.")
+        return StartOutcome(kind, None, message + note + _tail(lines), None)
 
     # ------------------------------------------------------------------ stop
 

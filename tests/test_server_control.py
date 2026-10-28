@@ -113,7 +113,11 @@ class Env:
         self.boutique_start_rc = 0
         self.boutique_adds = None
         # docker
-        self.devices = {}
+        # the bundle container (started_bundle) opened the leased chips 2,3
+        self.devices = {"60e0b238c988": ["/dev/tenstorrent/2", "/dev/tenstorrent/3"]}
+        self.view_fail_on = set()       # 1-based view_fn call numbers that raise
+        self.view_calls = 0
+        self.boutique_stop_rc = 0
         self.docker_stop_result = TtResult(True, "")
         self.port_containers = {}
         # hooks: run inside gozer.wait / tt.serve, to model a race
@@ -211,14 +215,16 @@ class Env:
             @staticmethod
             def stop(key):
                 env.calls.append(("boutique.stop", key))
-                env.view[:] = [s for s in env.view if s.key != key]
-                return [CP(0)]
+                if env.boutique_stop_rc == 0:
+                    env.view[:] = [s for s in env.view if s.key != key]
+                return [CP(env.boutique_stop_rc, "", "stop failed" if env.boutique_stop_rc else "")]
 
         self.tt, self.gozer, self.boutique = TT, Gozer, Boutique
 
     # injected callables -------------------------------------------------
     def view_fn(self):
-        if self.view_fail:
+        self.view_calls += 1
+        if self.view_fail or self.view_calls in self.view_fail_on:
             raise RuntimeError("ps failed")
         return list(self.view)
 
@@ -481,6 +487,7 @@ def test_queued_lease_granted_after_wait_starts(env):
     env.acquire_result = Queued("T1")
     env.wait_result = Lease("L2", ("0000:01:00.0", "0000:02:00.0"))
     env.serve_adds = started_bundle()
+    env.devices = {"60e0b238c988": ["/dev/tenstorrent/0", "/dev/tenstorrent/1"]}
     out = env.control().start("ns/bundle")
     assert out.kind == "started" and out.lease_id == "L2"
     assert ("tt.serve", "ns/bundle", ("--device-id", "0,1")) in env.calls
@@ -563,8 +570,11 @@ def test_adopt_finds_another_lease_on_those_chips_stops_the_new_server_and_repor
     env.devices = {"abcdef123456": ["/dev/tenstorrent/0", "/dev/tenstorrent/2"]}
     env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",)),
                          "2": AdoptRefused("claude:someone-else")}
+    env.confirm_answers = {"stop_external": True}
     out = env.control().start("wan2.2")
     assert out.kind == "chips_held"
+    assert ("confirm", "stop_external") in env.calls
+    assert "claude:someone-else" in env.confirms[-1][1]
     assert "claude:someone-else" in out.message
     assert ("tt.stop", ("Wan2.2-T2V",)) in env.calls
     # the lease adopted before the refusal is released, after the stop
@@ -876,8 +886,11 @@ def test_failed_start_leaves_a_server_listed_before_launch_alone(env):
     assert out.kind == "failed"
     assert "left alone" in out.message
     assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
-    assert ("gozer.release", "L1") in env.calls      # our own lease only
-    assert env.records.load() == []
+    # Our lease may sit under our own half-booted container: kept, never reaped.
+    assert "gozer.release" not in env.names()
+    assert "gozer release L1" in out.message
+    rec = env.records.load()
+    assert [(r["lease_id"], r.get("unreapable")) for r in rec] == [("L1", True)]
 
 
 def test_health_wait_ignores_a_row_that_existed_before_launch(env):
@@ -888,7 +901,8 @@ def test_health_wait_ignores_a_row_that_existed_before_launch(env):
     env.serve_hook = other_party_brings_it_up
     out = env.control(start_timeout=30).start("ns/bundle")
     assert out.kind == "failed"
-    assert env.records.load() == []
+    # the other party's container is never recorded as ours
+    assert not [r for r in env.records.load() if r.get("container_id") == "cafecafecafe"]
     assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
 
 
@@ -1019,6 +1033,7 @@ def test_remote_only_incumbent_is_not_stopped_locally(env):
     assert out.kind == "failed"
     assert "another machine" in out.message
     assert "boutique.stop" not in env.names() and "boutique.start" not in env.names()
+    assert "confirm" not in env.names()
 
 
 def test_own_adopt_refusal_merges_older_leases_of_the_model(env):
@@ -1139,3 +1154,160 @@ def test_default_docker_container_for_port(monkeypatch):
     for bad in (0, 70000, "8000; rm", None, True):
         assert sc_mod.docker_container_for_port(bad) is None
     assert "argv" not in seen
+
+
+# --------------------------------------------------------------------------
+# Fix round 2: adoption window, unreapable merge, left-alone leases, reset
+# --------------------------------------------------------------------------
+
+def theirs(key="Cat-7B", name="Cat-7B", cid="eeeeeeeeeeee", port=20009, health="healthy"):
+    return rs(key, name=name, container_id=cid, port=port, health=health)
+
+
+def unreapable(env):
+    return [r for r in env.records.load() if r.get("unreapable")]
+
+
+def test_two_new_rows_during_an_unpinnable_boot_adopt_none_and_stop_nothing(env):
+    env.serve_hook = lambda: env.view.extend([started_cat(), theirs()])
+    out = env.control().start("Cat-7B")
+    assert out.kind == "failed"
+    assert "gozer.adopt" not in env.names() and "docker.devices" not in env.names()
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+    assert env.records.load() == []                  # nothing app-owned
+
+
+def test_two_new_rows_during_a_pinned_boot_keep_the_lease_unreapable(env):
+    env.serve_hook = lambda: env.view.extend(
+        [started_bundle(), theirs("ns/bundle", "ns/bundle", port=20009)])
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert not [n for n in env.names() if n in ("tt.stop", "gozer.release")]
+    assert "gozer release L1" in out.message
+    assert [r["lease_id"] for r in unreapable(env)] == ["L1"]
+    assert not [r for r in env.records.load() if not r.get("unreapable")]
+
+
+def test_pinned_boot_ignores_a_container_not_on_the_leased_chips(env):
+    # Their bundle container appears during our boot, on chips 0 and 1.
+    env.serve_adds = theirs("ns/bundle", "ns/bundle", port=20009)
+    env.devices = {"eeeeeeeeeeee": ["/dev/tenstorrent/0", "/dev/tenstorrent/1"]}
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert ("docker.devices", "eeeeeeeeeeee") in env.calls
+    assert not [n for n in env.names() if n in ("tt.stop", "gozer.release")]
+    assert not [r for r in env.records.load() if r.get("container_id") == "eeeeeeeeeeee"]
+    assert [r["lease_id"] for r in unreapable(env)] == ["L1"]
+
+
+def test_chips_held_asks_before_stopping_and_a_no_leaves_it_running(env):
+    # Their container (with their own lease) appears during our unpinnable boot.
+    env.serve_adds = started_cat()
+    env.devices = {"abcdef123456": ["/dev/tenstorrent/0", "/dev/tenstorrent/2"]}
+    env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",)),
+                         "2": AdoptRefused("claude:someone-else")}
+    out = env.control().start("Cat-7B")
+    assert out.kind == "chips_held"
+    assert ("confirm", "stop_external") in env.calls
+    text = env.confirms[-1][1]
+    assert "claude:someone-else" in text and "abcdef123456" in text
+    assert not [n for n in env.names() if n in ("tt.stop", "gozer.release")]
+    assert not [r for r in env.records.load() if not r.get("unreapable")]
+    assert [r["lease_id"] for r in unreapable(env)] == ["A0"]
+    assert "gozer release A0" in out.message
+
+
+def test_a_start_leaves_an_unreapable_record_and_its_lease_alone(env):
+    # Legacy shape (name == key) and the new shape (distinct name) both survive.
+    env.records.add("ns/bundle", None, None, "ZOMBIE", 1.0, unreapable=True)
+    env.records.add("ns/bundle#unreapable-1", None, None, "ZOMBIE2", 1.0, unreapable=True)
+    env.serve_adds = started_bundle()
+    out = env.control().start("ns/bundle")
+    assert out.kind == "started" and out.lease_id == "L1"
+    recs = env.records.load()
+    assert sorted(r["lease_id"] for r in recs if r.get("unreapable")) == ["ZOMBIE", "ZOMBIE2"]
+    normal = [r for r in recs if not r.get("unreapable")]
+    assert [(r["name"], r["lease_id"]) for r in normal] == [("ns/bundle", "L1")]
+    ctl = env.control()
+    ctl.stop(rs("ns/bundle", name="ns/bundle", port=20000, owner="app"))
+    assert [c for c in env.calls if c[0] == "gozer.release"] == [("gozer.release", "L1")]
+
+
+def test_failed_stop_record_does_not_replace_an_older_record_of_the_key(env):
+    env.records.add("ns/bundle", 20000, "aaaaaaaaaaaa", "OLD", 1.0)
+    env.serve_result = TtResult(False, "boom", ("boom",))
+    env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting",
+                        container_id="dddddddddddd", port=20000)
+    env.stop_result = TtResult(False, "tt model stop exited 1")
+    env.control().start("ns/bundle")
+    leases = sorted(r["lease_id"] for r in env.records.load())
+    assert leases == ["L1", "OLD"]
+
+
+def test_reset_skipped_when_another_local_server_runs(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None),
+                rs("Other-LLM", name="Other-LLM", port=8002, container_id="777777777777")]
+    env.confirm_answers = {"switch": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    out = env.control().start("flux")
+    assert out.kind == "started", out.message
+    assert "reset" not in env.names()
+    assert "not reset because Other-LLM is running on this machine" in out.message
+
+
+def test_reset_still_runs_when_only_remote_servers_are_up(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None),
+                rs("Other-LLM", name="Other-LLM", url="http://10.0.0.9:8002/v1", local=False,
+                   owner="unknown")]
+    env.confirm_answers = {"switch": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    env.control().start("flux")
+    assert env.names().count("reset") == 1
+
+
+def test_serve_that_returns_cancelled_is_reported_as_cancelled(env):
+    flag = []
+    env.serve_hook = lambda: flag.append(1)
+    env.serve_result = TtResult(False, "cancelled; a half-booted container may still be running")
+    out = env.control().start("ns/bundle", cancel=lambda: bool(flag))
+    assert out.kind == "cancelled"
+    out2 = Env(env.records.path.parent / "u")
+    out2.serve_hook = lambda: flag.append(1)
+    out2.serve_result = TtResult(False, "cancelled")
+    assert out2.control().start("Cat-7B", cancel=lambda: bool(flag)).kind == "cancelled"
+
+
+def test_unreadable_view_at_launch_fails_closed(env):
+    env.gozer_available = False
+    env.view_fail_on = {3}        # 1: running check, 2: recheck, 3: pre-launch snapshot
+    out = env.control().start("Cat-7B")
+    assert out.kind == "failed"
+    assert "tt.serve" not in env.names()
+
+
+def test_port_lookup_failure_message_follows_the_stop_result(env):
+    env.confirm_answers = {"unknown_chips": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    env.boutique_stop_rc = 1
+    out = env.control().start("flux")
+    assert out.kind == "failed"
+    assert "8000" in out.message
+    assert "was stopped" not in out.message and "has been stopped" not in out.message
+    assert "failed too" in out.message
+
+
+def test_stop_that_raises_during_cleanup_still_records_the_kept_lease(env):
+    env.serve_result = TtResult(False, "boom", ("boom",))
+
+    def boom(names):
+        env.calls.append(("tt.stop", tuple(names)))
+        raise OSError("docker gone")
+    env.tt.stop = staticmethod(boom)
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert "gozer.release" not in env.names()
+    assert [r["lease_id"] for r in unreapable(env)] == ["L1"]
