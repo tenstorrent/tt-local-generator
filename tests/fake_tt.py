@@ -11,7 +11,9 @@ Behaviour JSON::
                      "delay": 0.0,           # sleep before answering
                      "lines": ["a", "b"],    # alternative to stdout: one per line
                      "line_delay": 0.0,      # sleep after each line
-                     "hang": false}}}        # sleep forever after output
+                     "hang": false,          # sleep forever after output
+                     "child_pidfile": "p",   # spawn a sleeping child, write its pid to p
+                     "chatty": false}}}      # print every 10 ms forever        # sleep forever after output
 
 A command matches by exact key, else by longest key that is a prefix of it.
 Every invocation's argv is appended to ``calls.jsonl`` next to the script.
@@ -40,6 +42,14 @@ if spec is None:
     best = [k for k in cmds if key.startswith(k)]
     spec = cmds[max(best, key=len)] if best else {{"stderr": "fake tt: no behaviour for " + key, "exit": 2}}
 time.sleep(spec.get("delay", 0))
+if spec.get("child_pidfile"):
+    import subprocess
+    c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"])
+    open(spec["child_pidfile"], "w").write(str(c.pid))
+if spec.get("chatty"):
+    while True:
+        print("pull progress", flush=True)
+        time.sleep(0.01)
 if "stdout" in spec:
     sys.stdout.write(spec["stdout"]); sys.stdout.flush()
 for ln in spec.get("lines", []):

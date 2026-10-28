@@ -34,6 +34,8 @@ log = logging.getLogger(__name__)
 _VERSION_RE = re.compile(r"^tt \d")
 # How long a terminated serve gets to exit before it is killed.
 _KILL_GRACE_S = 3.0
+# After a cancel/timeout kill, how long serve() keeps draining before it returns.
+_POST_KILL_S = 3.0
 _VERSION_TIMEOUT_S = 10.0
 _DEFAULT_TIMEOUT_S = 30.0
 
@@ -182,6 +184,7 @@ def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None
             cands = [w]
     found: Path | None = None
     skipped: list[str] = []
+    definite = True  # False if any probe timed out or failed to run
     for c in cands:
         try:
             rc, out, _err = run([c, "--version"], _VERSION_TIMEOUT_S)
@@ -190,14 +193,17 @@ def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None
         if rc == 0 and _VERSION_RE.match((out or "").strip()):
             found = Path(c)
             break
+        if rc is None or rc != 0:
+            definite = False
         skipped.append(c)
     if found is not None and skipped:
         log.warning("tt on PATH is shadowed: %s is not the official tt CLI; using %s",
                     ", ".join(skipped), found)
     elif found is None and cands:
         log.warning("no official tt CLI found; rejected: %s", ", ".join(skipped))
-    with _cache_lock:
-        _tt_cache, _tt_cached = found, True
+    if found is not None or definite:  # never cache a None caused by a timeout or error
+        with _cache_lock:
+            _tt_cache, _tt_cached = found, True
     return found
 
 
@@ -334,15 +340,26 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
           timeout: float = 3600.0) -> TtResult:
     """Run ``tt serve`` and stream its output to ``on_line``.
 
-    ``tt serve`` returns once the endpoint answers, so ``detach`` has no flag of
-    its own here; it is accepted for interface stability and ignored (a bundle's
-    argv already detaches). ``cancel`` is polled; when it returns True the
-    process group gets SIGTERM, then SIGKILL after a short grace.
+    ``tt serve --help`` says ``--detach`` is for bundles only ("return once the
+    container is up instead of following the boot"); a catalog model with
+    ``--detach`` exits 2. So ``detach=True`` adds the flag only when
+    ``plan_serve`` says the model is a tt-model bundle; if the kind is unknown
+    the flag is left off.
+
+    ``cancel`` and the deadline are checked on every loop pass. On either, the
+    process group gets SIGTERM, then SIGKILL after a short grace, and serve()
+    returns within a few seconds even if a descendant that left the group still
+    holds the pipe. Killing ``tt`` does not stop a container docker already
+    started; nothing here tries to stop one.
     """
     tt = find_tt()
     if tt is None:
         return TtResult(False, "the official tt CLI was not found on PATH")
     argv = [str(tt), "serve", model] + _serve_args(model, port, device)[2:]
+    if detach:
+        plan = plan_serve(model, port=port, device=device)
+        if plan is not None and plan.backend == "tt-model":
+            argv.append("--detach")
     full_env = None if env is None else {**os.environ, **env}
     try:
         proc = subprocess.Popen(
@@ -367,25 +384,35 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
     lines: list[str] = []
     deadline = time.monotonic() + timeout
     stopped = ""
-    eof = False
-    while not eof:
+    give_up = 0.0
+    while True:
+        now = time.monotonic()
+        if not stopped:
+            if cancel is not None:
+                try:
+                    if cancel():
+                        stopped = ("cancelled; a half-booted container may still be "
+                                   "running, check `tt model ps`")
+                except Exception:
+                    pass
+            if not stopped and now > deadline:
+                stopped = (f"timed out after {timeout:g}s; a half-booted container "
+                           "may still be running, check `tt model ps`")
+            if stopped:
+                _terminate(proc)
+                give_up = time.monotonic() + _POST_KILL_S
+        elif time.monotonic() > give_up:
+            # A descendant outside the group may hold the pipe open. Stop reading.
+            try:
+                proc.stdout.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            break
         try:
             ln = q.get(timeout=0.1)
         except queue.Empty:
-            ln = ""  # no data this tick
-            if cancel is not None and not stopped:
-                try:
-                    if cancel():
-                        stopped = "cancelled"
-                except Exception:
-                    pass
-            if not stopped and time.monotonic() > deadline:
-                stopped = f"timed out after {timeout:g}s"
-            if stopped:
-                _terminate(proc)
             continue
         if ln is None:
-            eof = True
             break
         lines.append(ln)
         if on_line is not None:
@@ -424,6 +451,9 @@ def stop(names: Sequence[str]) -> TtResult:
     names = [str(n) for n in names]
     if not names:
         return TtResult(False, "no server names given")
+    if any(n.startswith("-") for n in names):
+        # `tt model stop --help` documents no `--` separator, so refuse instead.
+        return TtResult(False, "server names may not start with '-'")
     tt = find_tt()
     if tt is None:
         return TtResult(False, "the official tt CLI was not found on PATH")
