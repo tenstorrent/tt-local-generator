@@ -201,7 +201,7 @@ generalised URL dialog. A long start shows the boot checklist in the existing se
   on a shared port: a conflict, not the same server. A recorded container id that no longer exists makes the record stale; that server is `external`.
 - **Deprecation note.** The app never shells out to `tt-ctl` for server control; it calls the layer directly. Any internal caller that does shell out sets
   `TTLG_NO_DEPRECATION_NOTE=1`.
-- **When `tt serve` cannot be pinned to the leased chips** (the open question, see the operator's answer below if it is recorded here). Default until the
-  operator decides: the app reads which chips are free from `gozer status --json`, starts, finds the chips the container actually opened (its `--device`
+- **When `tt serve` cannot be pinned to the leased chips** (operator, 2026-10-28: the default is right, and it is best effort; the builder does not go further
+  than this). Default: the app reads which chips are free from `gozer status --json`, starts, finds the chips the container actually opened (its `--device`
   mounts, from `docker inspect`), and runs `gozer adopt` on them. If another lease already holds any of those chips, the app stops the new server, says so, and
   does not start it. On a machine with no gozer, no lease logic runs. A boutique alternative is offered when the model has one.
