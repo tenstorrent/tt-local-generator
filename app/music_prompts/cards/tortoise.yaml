@@ -1,7 +1,7 @@
 id: tortoise
 kind: artist
 name: Tortoise
-aliases: [tortoise band, a tortoise record]
+aliases: []
 family: post-rock
 parent: post-rock
 inspiration: [Tortoise, Millions Now Living Will Never Die, TNT]
@@ -19,5 +19,5 @@ avoid: [sung lead vocals, distorted guitar walls, glossy modern pop polish]
 tags: [chicago post-rock, vibraphone, dub bass, brushed drums, instrumental, warm analog]
 goes_with: [post-rock]
 ambiguous: true
-cues: [band, record, album, song, music, post-rock, vibraphone, guitar, like, style]
+cues: [band, album, record, song, music video, post-rock, vibraphone]
 notes: unverified
