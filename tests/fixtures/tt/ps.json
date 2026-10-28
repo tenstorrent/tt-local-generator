@@ -1,0 +1,20 @@
+{
+  "served": [
+    {
+      "name": "raahemnabeel/qwen3-coder-next",
+      "backend": "model-manager",
+      "container": "tt-model-qwen3-coder-next-p300",
+      "container_id": "60e0b238c988",
+      "image": "tt-model/qwen3-coder-next:0c170421ca1b",
+      "port": 8011,
+      "base_url": "http://127.0.0.1:8011/v1",
+      "status": "running",
+      "health": "healthy",
+      "started_at": "2026-10-28T20:50:23Z",
+      "uptime_s": 916,
+      "profile": "p300",
+      "served_id": "Qwen/Qwen3-Coder-Next"
+    }
+  ],
+  "probed": true
+}

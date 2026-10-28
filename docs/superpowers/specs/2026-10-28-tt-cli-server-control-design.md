@@ -79,8 +79,9 @@ A thin, typed wrapper over the `tt` executable.
   `which -a tt` shows another binary first. Result cached, re-checked on failure.
 - `ps() -> list[TtServer]`: runs `tt --json model ps`, tolerant of unknown fields and of `tt` being absent (returns `[]` and a reason).
 - `catalog() -> list[TtModel]`: `tt --json model list`, cached with a TTL; works with `--offline`.
-- `plan_serve(model, port=None, device=None) -> ServePlan`: runs `tt serve --dry-run --json` to learn the backend, image and command without
-  touching hardware.
+- `plan_serve(model, port=None, device=None) -> ServePlan`: runs `tt --json serve <model> --dry-run --offline` to learn the backend, image and command without
+  touching hardware. The JSON has two shapes (tt-model bundle: `bundle.device_count`, `argv`; catalog model: `device_requested`, `argv`); neither gives the
+  chip count of the profile that will run, so `chips` may be `None` (wire notes, 2026-10-28).
 - `serve(model, ..., on_line=None) -> ServeResult`, `stop(names)`, `logs(name, lines=200)`. `serve` streams the boot checklist lines
   through `on_line`, runs off the GTK thread, and can be cancelled.
 - All calls use argument lists (never `shell=True`), a timeout per call, and `stdin=subprocess.DEVNULL`.
@@ -103,8 +104,8 @@ our script, because the script carries our patches. **(my call.)**
 - music and artgen discovery results.
 Each entry becomes a `RunningServer(key, name, source, url, host_is_local, port, health, uptime_s, container, served_id, owner)` where
 `source` is `"tt" | "script" | "discovered" | "saved"`, `owner` is `"app" | "external" | "unknown"`, and `host_is_local` is false for network servers.
-Entries are matched across sources by port, then served model id, then runner key, so a script-started SkyReels that `tt model ps`
-also lists shows once. **(decided: one list; my call: matching order.)**
+Entries are matched across sources by port, then served model id, then container id or HF repo name, so a script-started server that `tt model ps`
+also lists shows once. `tt model ps` has no runner key; the runner key comes from our own health check of script servers (wire notes, 2026-10-28). **(decided: one list; my call: matching order.)**
 Ownership: the app records what it started in `~/.local/share/tt-local-generator/servers.json` (name, port, container id, lease id, started
 time). A server is `app`-owned when that record matches a live server, `external` when it is local and unrecorded, `unknown` when its host
 is not local. **(my call: the record file.)**
@@ -119,17 +120,22 @@ gate) sees a model started from a terminal as READY. Its public API does not cha
 2. Ask `ready_to_run.plan_switch` what would conflict (same chips or same port). If something would be stopped, the existing confirm dialog
    names it (the CLI asks on the terminal, or takes `--yes`). The switch runs only after an accept.
 3. If gozer is installed, no lease covers the target, and `tt` does not take leases itself (detected once from `tt --help` or a config flag
-   when `tt` adds one), take a lease: `gozer acquire --json --chips N --who "tt-local-generator" --reason "<model>" --expect <duration>`,
+   when `tt` adds one), take a lease. gozer judges a bare `acquire` lease itself: it is reaped as `STALE` 900 s after acquire if no visible fd ever opens the chips
+   (a root-owned container's fds are invisible to an unprivileged gozer). The lease is therefore only a reservation until the server is up; section 9 says how it
+   becomes a lease that follows the container (adopt). Take it with: `gozer acquire --json --chips N --who "tt-local-generator" --reason "<model>" --expect <duration>`,
    where N comes from the model's device requirement. If the lease is queued, report "waiting for chips" and wait on the ticket; the user can cancel. **(decided: lease for the life of the server; my call: details.)**
-4. Start with the registry's backend: `tt_backend.serve(...)` for `tt` models, `server_manager.start(key)` for boutique ones, with the lease's
-   `TT_VISIBLE_DEVICES` in the environment when the backend honours it.
+4. Start with the registry's backend: `tt_backend.serve(...)` for `tt` models, `server_manager.start(key)` for boutique ones. Pinning: a tt-model bundle is pinned to
+   the leased chips with `tt serve <bundle> -- --device-id <ids>`; a catalog model cannot be pinned through `tt`; a boutique script that passes `--device-id` to
+   `run.py` can. Nothing on the `tt` path reads `TT_VISIBLE_DEVICES`, so it is not relied on.
 5. Poll health until ready or a timeout, streaming progress to the UI/CLI, then record the server in `servers.json` with its lease id.
 6. On failure: stop what was started, release the lease (resets the chips), and show `tt`'s or the script's last lines.
 
 ### 4.5 Stopping
 
 `ServerControl.stop(server) -> StopOutcome`:
-- `owner == "app"`: stop it (`tt model stop` or the boutique `--stop`), then `gozer release <lease>` if the record holds one.
+- `owner == "app"`: stop it (`tt model stop` or the boutique `--stop`), then `gozer release <lease>` if the record holds one. `tt model stop` only accepts a catalog
+  model name or a bundle id; a server whose `ps` name is neither (a raw HF repo from a script-started container) is stopped with its boutique `--stop`, or
+  `docker stop <container_id>` with a long timeout (`tt model stop` on a catalog model uses a plain `docker stop`, 10 s, and does not reset chips).
 - `owner == "external"` and local: the UI asks first, naming the server and who seems to have started it (backend, container, uptime). `tt-ctl` asks
   too, or takes `--yes`. After a yes, stop it the same way. No lease release for a lease the app does not hold. **(decided)**
 - not local (`host_is_local` false): no Stop control exists; the row says "Remote". **(decided)**
@@ -195,6 +201,10 @@ generalised URL dialog. A long start shows the boot checklist in the existing se
   port) so `ready_to_run.plan_switch` and the lease size work unchanged. When none of the sources gives a value, the start warns and asks; it does not block.
 - **`tt-ctl` output.** `servers --json` keeps its old shape. The merged view is `servers --all` and, under `--json`, an added `merged` key. Old keys and
   exit codes are untouched. `restart` on an `external` or `tt`-owned server is stop (with the same prompt), then start.
+- **Lease that follows the container.** Verified by reading gozer (wire notes item 3): `adopt` makes a non-detached lease owned by the pid that holds the chips, so it survives an
+  app restart and goes `STALE` when the container exits. The start flow is: `acquire` to reserve and queue, start, wait until healthy, then check `gozer status --json`
+  for the lease; if it still reads `CLAIMED` (no fd visible) log a warning that gozer will reap it at 900 s. `HELD-FOREIGN` on the app's own lease is normal for a container
+  and is not treated as a fault. `--owner-pid` is not used (it would tie the lease to the app's lifetime).
 - **Leases without the app running.** No supervisor process. The app's refresh and `tt-ctl servers` both reap a lease the app recorded in `servers.json`
   when its server is gone, after one confirming poll. A lease can stay held between sweeps. `gozer reconcile` remains the backstop.
 - **Matching.** A match needs the port and at least one of served model id or runner key. A port match with a different served id is a different model

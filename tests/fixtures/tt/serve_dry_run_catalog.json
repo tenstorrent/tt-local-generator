@@ -1,0 +1,49 @@
+{
+  "model": "Qwen3.8-27B",
+  "workflow": "server",
+  "device_requested": "p300x2",
+  "device_sent": "p300x2",
+  "served_through": null,
+  "engines": [
+    "vLLM"
+  ],
+  "status": "COMPLETE",
+  "spec_docker_image": "ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.25.0-978f93b-a723030",
+  "docker_image": null,
+  "tool_call_parser": "qwen3_coder",
+  "reasoning_parser": "qwen3",
+  "spec_tt_config": {
+    "fabric_config": "FABRIC_1D_RING",
+    "fabric_max_packet_payload_size_bytes": 8192,
+    "l1_small_size": 24576,
+    "sample_on_device_mode": "all",
+    "trace_mode": "decode_only",
+    "trace_region_size": 134217728
+  },
+  "forced_tt_config": null,
+  "host_hf_cache": "/home/ttuser/.cache/huggingface",
+  "host_volume": null,
+  "port": null,
+  "default_port": "20000",
+  "default_port_from_env": false,
+  "installed": true,
+  "hf_token_source": "env",
+  "argv": [
+    "/home/ttuser/.local/share/tenstorrent/tools/tt-inference-server-v0.25.0/venv/bin/python",
+    "/home/ttuser/.local/share/tenstorrent/tools/tt-inference-server-v0.25.0/src/run.py",
+    "--model",
+    "Qwen3.8-27B",
+    "--workflow",
+    "server",
+    "--docker-server",
+    "--no-auth",
+    "--host-hf-cache",
+    "/home/ttuser/.cache/huggingface",
+    "--device",
+    "p300x2",
+    "--vllm-override-args",
+    "{\"enable-auto-tool-choice\": true, \"tool-call-parser\": \"qwen3_coder\", \"reasoning-parser\": \"qwen3\"}",
+    "--service-port",
+    "20000"
+  ]
+}
