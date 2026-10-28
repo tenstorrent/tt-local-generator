@@ -45,9 +45,9 @@ Anti-goals (a failure even if it technically works)
 |---|---|---|
 | Jobs | `POST /v1/music/jobs`, `GET /v1/music/jobs/{id}`, `GET .../{id}/audio`, `DELETE .../{id}` | same with `/v1/audio/jobs` |
 | Health | `GET /v1/health` | `GET /v1/health`, which also returns `limits`, `defaults`, `queue_depth`, `queue_max`, `busy` |
-| Text | `caption` and `lyrics`, both required | `prompt` only, up to `MAX_PROMPT_CHARS` |
-| Duration | 5 to 60 s asked; about 3.2 s of compute per second of audio | 1 to 120 s; a 5 s clip took 16 s including a model reload |
-| Settings | `seed`, `steps` (up to 100) | `seed`, `steps` (1 to 100, default 8), `cfg_scale` (1 to 20, default 1) |
+| Text | `instructions` (the style prompt) and `input` (the lyrics), both required; the panel calls them prompt and lyrics | `prompt` only, up to `MAX_PROMPT_CHARS` |
+| Duration | `audio_duration`, 5 to 60 s asked; about 3.2 s of compute per second of audio | 1 to 120 s; a 5 s clip took 16 s including a model reload |
+| Settings | `seed`, `num_inference_steps` (up to 100) | `seed`, `steps` (1 to 100, default 8), `cfg_scale` (1 to 20, default 1) |
 | Output | FLAC, 32 kHz stereo | FLAC or WAV |
 | Busy | HTTP 429 | busy; queue of 2 |
 | Default port | 20000 (tt-model) | 8795 (loopback only) |
