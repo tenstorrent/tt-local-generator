@@ -123,5 +123,84 @@ def test_unknown_goes_with_id_is_logged_not_fatal(tmp_path, caplog):
     # kept as plain family tags
     assert lib.card("a").goes_with == ("b", "ghost")
     assert "ghost" in caplog.text and "phantom" in caplog.text
-    assert "'b'" not in caplog.text  # real id and family names are not reported
-    assert "fam" not in caplog.text.replace("family", "")
+    # only the two dangling refs are reported (record args), not the real id or family
+    reported = {r.args[1] for r in caplog.records if r.name == C.log.name}
+    assert reported == {"ghost", "phantom"}
+
+
+def _lib_warnings(caplog):
+    return [r for r in caplog.records if r.name == C.log.name and r.levelno >= logging.WARNING]
+
+
+def test_shipped_library_loads_without_warnings(tmp_path, caplog):
+    with caplog.at_level(logging.DEBUG, logger=C.log.name):
+        C.load_library(user_dir=tmp_path / "none")
+    assert _lib_warnings(caplog) == []
+
+
+@pytest.mark.parametrize("bad", [[True, False], [200, 60], [0, 90], [60.5, 90], [60], "fast"])
+def test_tempo_bpm_validation_rejects_bad_ranges(bad):
+    assert any("tempo_bpm" in e for e in C.validate_card(_card(tempo_bpm=bad)))
+
+
+def test_tempo_bpm_accepts_a_valid_range():
+    assert C.validate_card(_card(tempo_bpm=[60, 60])) == []
+    assert C.validate_card(_card(tempo_bpm=[60, 120])) == []
+
+
+def test_shared_alias_lists_ids_in_card_order(tmp_path):
+    ship, user = tmp_path / "ship", tmp_path / "user"
+    _write(ship, "a.yaml", _card("a", aliases=["Funk"]))
+    _write(ship, "b.yaml", _card("b", aliases=["funk"]))
+    _write(user, "c.yaml", _card("c", aliases=["FUNK"]))
+    assert C.load_library(ship, user).by_alias["funk"] == ("a", "b", "c")
+    # an overriding user card keeps the original position
+    _write(user, "a.yaml", _card("a", aliases=["funk"], sound="mine"))
+    assert C.load_library(ship, user).by_alias["funk"] == ("a", "b", "c")
+
+
+def test_invalid_user_card_leaves_the_shipped_card_intact(tmp_path):
+    ship, user = tmp_path / "ship", tmp_path / "user"
+    _write(ship, "a.yaml", _card("a", sound="shipped"))
+    _write(user, "a.yaml", {"id": "a", "kind": "style"})
+    assert C.load_library(ship, user).card("a").sound == "shipped"
+
+
+def test_user_card_can_change_the_kind_of_a_shipped_id(tmp_path):
+    ship, user = tmp_path / "ship", tmp_path / "user"
+    _write(ship, "a.yaml", _card("a", kind="style"))
+    _write(user, "a.yaml", _card("a", kind="scene"))
+    lib = C.load_library(ship, user)
+    assert lib.card("a").kind == "scene"
+    assert [c.id for c in lib.of_kind("style")] == []
+
+
+def test_missing_or_empty_shipped_dir_warns(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger=C.log.name):
+        C.load_library(tmp_path / "absent", tmp_path / "none")
+    assert len(_lib_warnings(caplog)) == 1
+
+
+def test_artist_parent_must_be_a_style_card(tmp_path, caplog):
+    ship = tmp_path / "ship"
+    _write(ship, "s.yaml", _card("s"))
+    _write(ship, "i.yaml", _card("i", kind="instrument"))
+    _write(ship, "ok.yaml", _card("ok", kind="artist", parent="s"))
+    _write(ship, "gone.yaml", _card("gone", kind="artist", parent="missing"))
+    _write(ship, "wrong.yaml", _card("wrong", kind="artist", parent="i"))
+    with caplog.at_level(logging.WARNING, logger=C.log.name):
+        lib = C.load_library(ship, tmp_path / "none")
+    assert {"ok", "gone", "wrong"} <= set(lib.cards)  # kept
+    assert sorted(r.args[0] for r in _lib_warnings(caplog)) == ["gone", "wrong"]
+
+
+@pytest.mark.parametrize("field,val", [("aliases", 5), ("instruments", "oboe"), ("tags", [1]),
+                                       ("mood", ["x"]), ("ambiguous", "yes")])
+def test_wrong_field_types_are_validation_errors_and_skipped(tmp_path, caplog, field, val):
+    assert any(field in e for e in C.validate_card(_card(**{field: val})))
+    ship = tmp_path / "ship"
+    _write(ship, "bad.yaml", _card("bad", **{field: val}))
+    _write(ship, "good.yaml", _card("good"))
+    with caplog.at_level(logging.WARNING, logger=C.log.name):
+        lib = C.load_library(ship, tmp_path / "none")
+    assert set(lib.cards) == {"good"}

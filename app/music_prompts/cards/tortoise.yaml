@@ -17,8 +17,7 @@ production: Warm analog room sound, tape-style edits and a dub-influenced low en
 tempo_bpm: [80, 125]
 avoid: [sung lead vocals, distorted guitar walls, glossy modern pop polish]
 tags: [chicago post-rock, vibraphone, dub bass, brushed drums, instrumental, warm analog]
-goes_with: [post-rock, jazz]
-clashes_with: [chip]
+goes_with: [post-rock]
 ambiguous: true
 cues: [band, record, album, song, music, post-rock, vibraphone, guitar, like, style]
 notes: unverified

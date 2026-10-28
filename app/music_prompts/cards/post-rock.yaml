@@ -16,6 +16,5 @@ production: Roomy, natural and unhurried; wide dynamics with long quiet passages
 tempo_bpm: [70, 130]
 avoid: [verse-chorus song structure, sung lead vocals, short pop hooks]
 tags: [post-rock, instrumental, atmospheric, slow build, clean guitars, dynamic]
-goes_with: [electronic, jazz]
-clashes_with: [chip]
+goes_with: []
 notes: unverified

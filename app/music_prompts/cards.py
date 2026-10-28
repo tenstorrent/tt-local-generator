@@ -30,6 +30,9 @@ _USER_DIR = Path.home() / ".config" / "tt-local-generator" / "music_styles"
 
 KINDS = ("style", "artist", "scene", "instrument", "vocal", "texture", "era")
 _REQUIRED = ("id", "kind", "name", "family", "sound")
+_LIST_FIELDS = ("aliases", "inspiration", "instruments", "avoid", "lyric_themes",
+                "tags", "goes_with", "clashes_with", "cues")
+_TEXT_FIELDS = ("rhythm", "harmony", "mood", "production", "vocal", "notes")
 
 
 @dataclass(frozen=True)
@@ -94,11 +97,26 @@ def validate_card(raw: dict) -> list[str]:
         errs.append(f"unknown kind '{kind}' (expected one of {', '.join(KINDS)})")
     if kind == "artist" and not (isinstance(raw.get("parent"), str) and raw["parent"].strip()):
         errs.append("artist card requires 'parent' (the id of its style card)")
+    for f in _LIST_FIELDS:
+        v = raw.get(f)
+        if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            errs.append(f"{f} must be a list of strings")
+    for f in _TEXT_FIELDS:
+        v = raw.get(f)
+        if v is not None and not isinstance(v, str):
+            errs.append(f"{f} must be text")
+    if raw.get("ambiguous") is not None and not isinstance(raw["ambiguous"], bool):
+        errs.append("ambiguous must be true or false")
     t = raw.get("tempo_bpm")
-    if t is not None and not (
-        isinstance(t, (list, tuple)) and len(t) == 2 and all(isinstance(x, int) for x in t)
-    ):
-        errs.append("tempo_bpm must be [low, high] integers")
+    if t is not None:
+        ok = (
+            isinstance(t, (list, tuple))
+            and len(t) == 2
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in t)
+            and 0 < t[0] <= t[1]
+        )
+        if not ok:
+            errs.append("tempo_bpm must be [low, high] whole numbers with 0 < low <= high")
     return errs
 
 
@@ -178,6 +196,8 @@ def load_library(shipped_dir: Path | None = None, user_dir: Path | None = None) 
     shipped = Path(shipped_dir) if shipped_dir is not None else _SHIPPED_DIR
     user = Path(user_dir) if user_dir is not None else _USER_DIR
     cards = _read_dir(shipped)
+    if not cards:
+        log.warning("no shipped music cards found in %s (broken install?)", shipped)
     cards.update(_read_dir(user))  # user wins on same id
 
     # goes_with / clashes_with name card ids or family tags. Anything that
@@ -187,6 +207,12 @@ def load_library(shipped_dir: Path | None = None, user_dir: Path | None = None) 
         for ref in c.goes_with + c.clashes_with:
             if ref not in cards and ref not in families:
                 log.warning("music card %r: %r names no card id or family; kept as a plain tag", c.id, ref)
+
+    for c in cards.values():
+        if c.kind == "artist":
+            p = cards.get(c.parent) if c.parent else None
+            if p is None or p.kind != "style":
+                log.warning("music card %r: parent %r is not a style card; card kept", c.id, c.parent)
 
     alias_ids: dict[str, list[str]] = {}
     for c in cards.values():

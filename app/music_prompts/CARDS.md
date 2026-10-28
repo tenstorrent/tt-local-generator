@@ -31,7 +31,7 @@ Artist cards also require `parent`.
 | `inspiration` | Artists and records the card draws on. Shown in the UI, never put in a prompt by default. |
 | `sound` | One to three plain sentences. Never names an artist. |
 | `instruments`, `rhythm`, `harmony`, `mood`, `production` | Short plain descriptions. |
-| `tempo_bpm` | `[low, high]` integers. Styles need it; scenes and instruments may omit it. |
+| `tempo_bpm` | `[low, high]` whole numbers (floats and booleans are rejected), with 0 < low <= high. Styles need it; scenes and instruments may omit it. |
 | `avoid` | Things to leave out. |
 | `lyric_themes` | Topics a sung layer can be about (vocal cards, singing styles). |
 | `vocal` | How the voice sounds, for vocal cards. |
@@ -41,6 +41,11 @@ Artist cards also require `parent`.
 | `cues` | Words that confirm an ambiguous card when they appear within five words. |
 | `parent` | For `artist` cards, the `id` of the style card it points to. |
 | `notes` | Sources (two or more) or the single word `unverified`. |
+
+List fields (`aliases`, `instruments`, `avoid`, `tags` and so on) must be YAML lists of strings; text fields must be strings. A card with a wrong type is skipped with a message.
+An artist card whose `parent` names no card, or a card that is not a style, is kept and a warning is logged. A missing or empty shipped folder logs a warning.
+
+If two cards share a normalised alias, `by_alias[key]` holds every id, in card order: shipped cards first (by file name), then new user ids. A user card that overrides a shipped id keeps the original position.
 
 `by_alias` normalises names: lowercase, hyphens and underscores read as spaces,
 runs of spaces collapsed. "Post-Rock", "post_rock" and "post  rock" are one key.
