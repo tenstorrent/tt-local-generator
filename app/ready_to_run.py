@@ -12,9 +12,12 @@ module only DECIDES; it never touches hardware.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import server_manager
+
+if TYPE_CHECKING:  # no runtime import: server_registry imports this module
+    from server_registry import ModelEntry
 
 # Mutually-exclusive hardware groups today: the diffusion/media server on
 # port 8000 (video | image | animate) and the artgen LLM on port 8002 (artgen).
@@ -71,9 +74,42 @@ class SwitchPlan:
     target: Optional[str]     # server to start (None -> nothing to do)
     conflict: Optional[str]   # running server to stop first (None -> none)
     needs_reset: bool         # tt-smi -r required (True iff a conflict is stopped)
+    # True when the target is a registry model whose hardware group is not known:
+    # `conflict` None then means "could not tell", not "nothing in the way". The
+    # caller (ServerControl) must warn and ask before starting. Default False so
+    # existing constructors and the registry-less path are unchanged.
+    unknown: bool = False
 
 
-def plan_switch(selected_key: Optional[str], status_of: Callable[[str], str]) -> SwitchPlan:
+def _plan_with_registry(selected_key: str, status_of: Callable[[str], str],
+                        registry: "dict[str, ModelEntry]") -> SwitchPlan:
+    entry = registry[selected_key]
+    group = entry.hardware_group
+    if group is None:
+        # A boutique model with no group (prompt-server, CPU only) shares nothing.
+        # A `tt` model with no group is unknown: say so rather than guess.
+        return SwitchPlan(selected_key, None, False, unknown=(entry.backend == "tt"))
+    # Candidates: SERVERS keys the registry does not describe (group from
+    # _group_of), then every registry entry (group from the entry, which may be
+    # overridden). A boutique entry's key is its SERVERS key, so none repeats.
+    cands = [(k, _group_of(k)) for k in server_manager.SERVERS if k not in registry]
+    cands += [(k, e.hardware_group) for k, e in registry.items()]
+    for key, g in cands:
+        if key == selected_key or g != group:
+            continue
+        if status_of(key).lower() in ("ready", "starting"):  # see conflicting_server
+            return SwitchPlan(selected_key, key, True)
+    return SwitchPlan(selected_key, None, False)
+
+
+def plan_switch(selected_key: Optional[str], status_of: Callable[[str], str],
+                *, registry: "Optional[dict[str, ModelEntry]]" = None) -> SwitchPlan:
+    """With `registry=None` (default) this is the original SERVERS-only logic.
+    With a registry, a key it holds takes its hardware group from the entry and
+    conflicts are searched across SERVERS and registry entries. A key the
+    registry lacks falls through to the original logic."""
+    if registry and selected_key and selected_key in registry:
+        return _plan_with_registry(selected_key, status_of, registry)
     target = required_server(selected_key)
     if target is None:
         return SwitchPlan(None, None, False)
