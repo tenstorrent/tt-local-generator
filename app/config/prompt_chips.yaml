@@ -529,3 +529,134 @@
     - label: "impossible object"
       text: "an impossible object or place"
       tip: "Defies its own logic"
+
+# ── Music (ACE-Step style song generation) ───────────────────────────────────
+# Every category here is scoped to `music`, so no native tab ever sees it.
+
+- name: Genre
+  for: [music]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "synthwave"
+      text: "synthwave"
+      tip: "Gated drums, analog arpeggios"
+
+    - label: "lo-fi hip hop"
+      text: "lo-fi hip hop"
+      tip: "Dusty drums, mellow keys"
+
+    - label: "folk"
+      text: "acoustic folk"
+      tip: "Fingerpicked guitar, plain voice"
+
+    - label: "dream pop"
+      text: "dream pop"
+      tip: "Washed-out guitars, hazy vocals"
+
+    - label: "jazz"
+      text: "late-night jazz"
+      tip: "Brushed drums, upright bass"
+
+    - label: "orchestral"
+      text: "cinematic orchestral"
+      tip: "Strings and brass, big dynamics"
+
+- name: Mood
+  for: [music]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "wistful"
+      text: "wistful"
+      tip: "Looking back with affection"
+
+    - label: "triumphant"
+      text: "triumphant"
+      tip: "Lifting, victorious"
+
+    - label: "tense"
+      text: "tense, suspenseful"
+      tip: "Held breath"
+
+    - label: "dreamy"
+      text: "dreamy"
+      tip: "Soft and floating"
+
+    - label: "playful"
+      text: "playful"
+      tip: "Light on its feet"
+
+- name: Instruments
+  for: [music]
+  chips:
+    - label: "🎲 Surprise"
+      surprise: true
+
+    - label: "piano"
+      text: "solo piano"
+      tip: "Just a piano"
+
+    - label: "analog synths"
+      text: "analog synthesizers"
+      tip: "Warm pads and arpeggios"
+
+    - label: "acoustic guitar"
+      text: "acoustic guitar"
+      tip: "Steel strings, close mic"
+
+    - label: "strings"
+      text: "string section"
+      tip: "Violins, violas, cellos"
+
+    - label: "808 drums"
+      text: "808 drum machine"
+      tip: "Deep kick, snapping hats"
+
+- name: Tempo
+  for: [music]
+  chips:
+    - label: "slow"
+      text: "slow tempo, 70 bpm"
+      tip: "Unhurried"
+
+    - label: "mid"
+      text: "mid tempo, 100 bpm"
+      tip: "Easy walking pace"
+
+    - label: "upbeat"
+      text: "upbeat, 128 bpm"
+      tip: "Dance floor pace"
+
+    - label: "fast"
+      text: "fast tempo, 160 bpm"
+      tip: "Driving and urgent"
+
+- name: Era
+  for: [music]
+  chips:
+    - label: "60s"
+      text: "1960s sound"
+      tip: "Tape warmth, tambourine"
+
+    - label: "80s"
+      text: "1980s sound"
+      tip: "Gated reverb, chorus guitars"
+
+    - label: "90s"
+      text: "1990s sound"
+      tip: "Sampled breaks, grunge guitars"
+
+    - label: "modern"
+      text: "modern production"
+      tip: "Tight, bright and wide"
+
+- name: In the style of
+  for: [music]
+  chips:
+    - label: "In the style of..."
+      text: "in the style of {}"
+      freetext: true
+      tip: "Type an artist, band or composer"

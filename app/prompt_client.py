@@ -19,6 +19,7 @@ Functions:
     generate_prompt(source, seed_text, system_prompt, base_url, max_tokens) -> str
 """
 import json as _json
+import re as _re
 import urllib.request
 import urllib.error
 
@@ -91,6 +92,9 @@ def generate_prompt(
         RuntimeError: Only if word_banks.py or generate_prompt.py cannot be
                       imported (i.e. the package itself is broken).
     """
+    if source in _MUSIC_SOURCES:
+        return _generate_music_text(source, seed_text, max_tokens)
+
     import generate_prompt as _gp  # noqa: PLC0415 (lazy import — no GTK needed at module load)
 
     if seed_text.strip():
@@ -127,6 +131,11 @@ def llm_polish_or_none(source: str, seed_text: str) -> "str | None":
     (e.g. palette_prompt.literal_prompt) instead of `generate_prompt`'s
     seed-ignoring algorithmic fallback. Never raises.
     """
+    if source in _MUSIC_SOURCES:
+        try:
+            return _music_llm_text(source, seed_text.strip()) if seed_text.strip() else None
+        except Exception:
+            return None
     try:
         import generate_prompt as _gp  # lazy: no GTK/network at import
         if not seed_text.strip() or not _gp._llm_available():
@@ -135,3 +144,97 @@ def llm_polish_or_none(source: str, seed_text: str) -> "str | None":
         return polished or None
     except Exception:
         return None
+
+
+# ── Music: style prompts and lyrics ───────────────────────────────────────────
+#
+# Lyrics need a real chat model; Qwen3-0.6B on the prompt server is too small to
+# rely on.  So these use artgen.detect_artgen_endpoint(), which prefers the
+# artgen chat model (any port, including tt-model-manager containers) and only
+# then falls back to the prompt server on :8001.  With nothing reachable the
+# LLM helpers return None and generate_prompt() falls back to a local result.
+
+_MUSIC_SOURCES = ("music", "lyrics")
+
+_MUSIC_SYSTEM = (
+    "You write style prompts for an AI music generator. Given an idea, answer with "
+    "one line of comma-separated tags: genre, mood, instruments, tempo, era. "
+    "Under 30 words. No preamble, no quotes, no explanation."
+)
+
+_LYRICS_SYSTEM = (
+    "You write song lyrics for an AI music generator. Put each structure tag on its "
+    "own line, in square brackets: [Verse], [Chorus], [Bridge]. Use [Verse 1] and "
+    "[Verse 2] if there are two verses. Write a short song: two verses and a chorus, "
+    "four lines each, plain language, a clear rhyme or rhythm. Output only the lyrics "
+    "with their tags. No title, no preamble, no explanation."
+)
+
+# Used only when no LLM is reachable and the caller wants a fresh style prompt.
+_MUSIC_FALLBACK = (
+    "synthwave, wistful, analog synthesizers, mid tempo 100 bpm, 1980s sound",
+    "acoustic folk, warm, fingerpicked guitar, slow tempo 70 bpm",
+    "lo-fi hip hop, dreamy, soft piano, mid tempo 85 bpm",
+    "cinematic orchestral, triumphant, strings and brass, 120 bpm",
+    "late-night jazz, smoky, brushed drums and upright bass, slow tempo",
+)
+
+_re_think = _re.compile(r"<think>.*?</think>", _re.DOTALL)
+
+_LYRICS_SKELETON = "[Verse]\n\n[Chorus]\n"
+
+
+def music_llm_available() -> bool:
+    """True when a chat model is reachable for music prompts and lyrics."""
+    try:
+        import artgen  # noqa: PLC0415 (lazy: keeps this module cheap to import)
+        url, _model = artgen.detect_artgen_endpoint()
+        return bool(url)
+    except Exception:
+        return False
+
+
+def _music_llm_text(source: str, seed_text: str) -> "str | None":
+    """Ask the best reachable chat model for music/lyrics text. None on any failure."""
+    import artgen  # noqa: PLC0415
+    url, model = artgen.detect_artgen_endpoint()
+    if not url:
+        return None
+    system = _LYRICS_SYSTEM if source == "lyrics" else _MUSIC_SYSTEM
+    user = seed_text if seed_text else (
+        "Write original lyrics." if source == "lyrics" else "Invent a fresh music style.")
+    payload = _json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "max_tokens": 700 if source == "lyrics" else 120,
+        "temperature": 0.8,
+    }).encode()
+    req = urllib.request.Request(
+        url.rstrip("/") + "/v1/chat/completions", data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            text = _json.loads(r.read())["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+    text = _re_think.sub("", text or "").strip()
+    return text or None
+
+
+def _generate_music_text(source: str, seed_text: str, max_tokens: int) -> str:
+    """generate_prompt() for source 'music' or 'lyrics'. Always non-empty.
+
+    With a seed, the LLM expands it; without one it invents.  With no LLM,
+    lyrics return the seed (or a bare tagged skeleton) and music returns a
+    canned style line, so the caller always has something to put in the box.
+    """
+    text = _music_llm_text(source, seed_text.strip())
+    if text:
+        return text
+    if source == "lyrics":
+        return seed_text.strip() or _LYRICS_SKELETON
+    import random  # noqa: PLC0415
+    return random.choice(_MUSIC_FALLBACK)
