@@ -1,3 +1,9 @@
+tt-local-generator (0.105.1) noble; urgency=medium
+
+  * Music: a start-a-model card in place of the empty server list; scan Stable Audio's default port.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 28 Oct 2026 12:40:35 -0700
+
 tt-local-generator (0.105.0) noble; urgency=medium
 
   * feat(music): generate music in Create.
