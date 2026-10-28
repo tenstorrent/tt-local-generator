@@ -48,6 +48,7 @@ from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_gallery import ArtgenGallery
+from audio_gallery import AudioGallery, AudioDetail
 from artgen_detail import ArtgenDetail
 from artgen_render import AnimatedGifWidget
 import artgen_kind
@@ -1945,6 +1946,11 @@ def _make_scalable_thumb(path: str, min_width: int, min_height: int,
     lbl = Gtk.Label(label=placeholder)
     lbl.add_css_class("muted")
     return lbl
+
+
+def _gallery_page_for_source(source: str) -> str:
+    """The `_gallery_stack` page that shows a medium/source: songs have their own Audio page."""
+    return "audio" if source in ("music", "audio") else source
 
 
 # ── Queue item ─────────────────────────────────────────────────────────────────
@@ -5911,6 +5917,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_gallery, "artgen")
+        # Songs (media_type="audio"): own page and own right-pane detail, wired like the artgen pair.
+        self._audio_gallery = AudioGallery()
+        self._audio_gallery.on_card_activated = self._on_audio_card_selected
+        self._audio_gallery.on_card_deleted = self._on_audio_card_deleted
+        self._audio_gallery.on_card_starred = self._on_audio_card_starred
+        self._gallery_stack.add_named(self._audio_gallery, "audio")
+        GLib.idle_add(self._audio_gallery.refresh)
         # Defer the initial artgen gallery load (ArtgenPanel used to do the
         # same in its own _build()) so it runs after the window paints —
         # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously.
@@ -6095,6 +6108,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._right_stack = Gtk.Stack()
         self._right_stack.add_named(self._detail, "native")
         self._right_stack.add_named(self._artgen_detail, "artgen")
+        self._audio_detail = AudioDetail()
+        self._audio_detail.on_back = lambda: self._set_detail_pane_visible(False)
+        self._audio_detail.on_deleted = self._on_audio_detail_deleted
+        self._audio_detail.on_starred = self._on_audio_detail_starred
+        self._right_stack.add_named(self._audio_detail, "audio")
         self._right_stack.set_visible_child_name("native")
 
         # Queue display lives below the detail/preview panel on the right side.
@@ -6743,6 +6761,9 @@ class MainWindow(Gtk.ApplicationWindow):
             artgen_detail = getattr(self, "_artgen_detail", None)
             if artgen_detail is not None:
                 artgen_detail.pause_animation()
+            audio_detail = getattr(self, "_audio_detail", None)
+            if audio_detail is not None:
+                audio_detail.pause()   # a hidden pane must not keep playing a song
 
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
         self._set_detail_pane_visible(not self._detail_visible)
@@ -6851,6 +6872,9 @@ class MainWindow(Gtk.ApplicationWindow):
         artgen_gallery = getattr(self, "_artgen_gallery", None)
         if artgen_gallery is not None:
             artgen_gallery.set_tile_size(card_w, card_h)
+        audio_gallery = getattr(self, "_audio_gallery", None)
+        if audio_gallery is not None:
+            audio_gallery.set_tile_size(card_w, card_h)
 
     # _on_art_autogen_action / _on_art_autogen_delay_action removed SP-3d-5
     # alongside ArtgenPanel (the only thing that implemented toggle_auto_gen/
@@ -7147,12 +7171,13 @@ class MainWindow(Gtk.ApplicationWindow):
         any other medium gallery, so it no longer needs extra width.
         """
         self._uncheck_pipelines_toggle_if_active()
-        # A source with no gallery page of its own (Music until the audio gallery exists) shows the video page
-        # rather than leaving the stack on whatever it showed before.
-        if self._gallery_stack.get_child_by_name(source) is None:
-            source = "video"
-        self._gallery_stack.set_visible_child_name(source)
-        self._rebuild_context_menu(source)
+        # Music shows the Audio page. A source with no gallery page at all shows the video page rather than
+        # leaving the stack on whatever it showed before.
+        page = _gallery_page_for_source(source)
+        if self._gallery_stack.get_child_by_name(page) is None:
+            page = source = "video"
+        self._gallery_stack.set_visible_child_name(page)
+        self._rebuild_context_menu("music" if page == "audio" else source)
         # Re-establish a deterministic gallery|detail split on every switch so
         # the left column doesn't jitter narrower/wider by click order.
         self._reset_detail_split()
@@ -7256,7 +7281,8 @@ class MainWindow(Gtk.ApplicationWindow):
             ("video", "Video", "source-btn-left"),
             ("image", "Image", "source-btn-mid"),
             ("animate", "Animate", "source-btn-mid"),
-            ("artgen", "Artgen", "source-btn-right"),
+            ("artgen", "Artgen", "source-btn-mid"),
+            ("audio", "Audio", "source-btn-right"),
         ]
 
         buttons: "dict[str, Gtk.ToggleButton]" = {}
@@ -7343,7 +7369,7 @@ class MainWindow(Gtk.ApplicationWindow):
         row = getattr(self, "_discover_type_row", None)
         if row is not None:
             row.set_visible(True)
-        btn = getattr(self, "_discover_type_buttons", {}).get(source)
+        btn = getattr(self, "_discover_type_buttons", {}).get(_gallery_page_for_source(source))
         if btn is not None and not btn.get_active():
             # Triggers "toggled" -> _sync_gallery_to_source(source) again;
             # harmless repeat of the call two lines above, but also correctly
@@ -7948,6 +7974,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # child realized, so an un-paused timer would otherwise keep firing
         # forever (see ArtgenDetail.pause_animation's docstring).
         self._artgen_detail.pause_animation()
+        self._pause_audio_detail()
         self._right_stack.set_visible_child_name("native")
         gallery = self._gallery_for_type(record.media_type)
         # Use all_cards() so prev/next navigation crosses page boundaries.
@@ -7970,6 +7997,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Never force the pane open if the user collapsed it -- matches
         # _on_card_selected above, which also never calls
         # _set_detail_pane_visible(True).
+        self._pause_audio_detail()
         self._right_stack.set_visible_child_name("artgen")
         records = self._artgen_gallery._filtered_records()
         self._artgen_detail.show_record(media_id, records)
@@ -8010,6 +8038,45 @@ class MainWindow(Gtk.ApplicationWindow):
                 r.starred = int(starred)
                 break
         self._artgen_gallery._rebuild_chips()
+
+    # ── Audio card selection (shared right pane) ────────────────────────────────
+
+    def _pause_audio_detail(self) -> None:
+        """Stop a song playing in the hidden Audio detail when another detail takes the pane."""
+        detail = getattr(self, "_audio_detail", None)
+        if detail is not None:
+            detail.pause()
+
+    def _on_audio_card_selected(self, media_id: str) -> None:
+        """A song card was clicked: show it in the shared right pane (never forcing a collapsed pane open)."""
+        self._artgen_detail.pause_animation()
+        self._right_stack.set_visible_child_name("audio")
+        records = self._audio_gallery.records()
+        self._audio_detail.show_record(media_id, records)
+        rec = next((r for r in records if r.id == media_id), None)
+        self._set_crumbs([Crumb("🗂 Library", "library"),
+                          Crumb(_short_title(getattr(rec, "prompt", "") if rec is not None else ""))])
+
+    def _on_audio_card_deleted(self, media_id: str) -> None:
+        """The grid's own hover-delete already removed the record: clear the pane if it shows that song."""
+        if self._right_stack.get_visible_child_name() != "audio":
+            return
+        if self._audio_detail.current_id() == media_id:
+            self._audio_detail.pause()
+            self._set_detail_pane_visible(False)
+
+    def _on_audio_card_starred(self, media_id: str, starred: bool) -> None:
+        pass  # the card already persisted it; the detail re-reads the record's flag when it is next shown
+
+    def _on_audio_detail_deleted(self, media_id: str) -> None:
+        """The detail's own delete removed a record the grid still lists."""
+        self._audio_gallery.remove_record(media_id)
+
+    def _on_audio_detail_starred(self, media_id: str, starred: bool) -> None:
+        for r in self._audio_gallery._records:
+            if r.id == media_id:
+                r.starred = int(starred)
+                break
 
     # ── Remix routing ──────────────────────────────────────────────────────────
     #
@@ -10371,6 +10438,10 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception:  # noqa: BLE001
             pass
         self._music_worker = None
+        try:
+            self._audio_gallery.refresh()
+        except Exception:  # noqa: BLE001 - a refresh failure must not break the result panel
+            pass
         self._set_status("Music ready.")
         if self._create_job_active:
             try:

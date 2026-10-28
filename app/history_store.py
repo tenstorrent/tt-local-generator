@@ -216,6 +216,10 @@ class GenerationRecord:
         return bool(self.thumbnail_path) and Path(self.thumbnail_path).exists()
 
 
+# media_types that live in the shared media table but are not GenerationRecords (own galleries).
+_NON_NATIVE_TYPES = frozenset({"artgen", "audio"})
+
+
 class HistoryStore:
     """
     Thin wrapper around media_store for backward compatibility.
@@ -261,10 +265,11 @@ class HistoryStore:
         ))
 
     def all_records(self) -> list[GenerationRecord]:
-        """Return all non-artgen records, newest first (media_store orders by created_at DESC)."""
+        """Return all video/image records, newest first (media_store orders by created_at DESC).
+        Artgen and audio (music) records have their own galleries and are not GenerationRecords."""
         from media_store import media_store as _ms
         rows = _ms.query()
-        return [self._to_gen(r) for r in rows if r.media_type != "artgen"]
+        return [self._to_gen(r) for r in rows if r.media_type not in _NON_NATIVE_TYPES]
 
     def artgen_records(self) -> list:
         """Return all artgen MediaRecord objects, newest first, for TT-TV artgen channels."""
@@ -279,11 +284,11 @@ class HistoryStore:
     def delete(self, record_id: str) -> Optional[GenerationRecord]:
         """
         Remove the record with the given ID from media_store and return it.
-        Returns None if no matching record was found (or if it is an artgen record).
+        Returns None if no matching record was found (or if it is an artgen or audio record).
         """
         from media_store import media_store as _ms
         rec = _ms.get(record_id)
-        if rec is None or rec.media_type == "artgen":
+        if rec is None or rec.media_type in _NON_NATIVE_TYPES:
             return None
         gen = self._to_gen(rec)
         _ms.delete(record_id)

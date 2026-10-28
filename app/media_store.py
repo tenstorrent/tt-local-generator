@@ -333,9 +333,10 @@ class MediaStore:
         return row[0] if row else 0
 
     def count_non_artgen(self) -> int:
-        """Return a COUNT(*) for all non-artgen records in a single atomic query."""
+        """Return a COUNT(*) for the native (video/image) records in a single atomic query.
+        Artgen and audio (music) records are kept out: each has its own gallery."""
         row = self._conn.execute(
-            "SELECT COUNT(*) FROM media WHERE media_type != 'artgen'"
+            "SELECT COUNT(*) FROM media WHERE media_type NOT IN ('artgen', 'audio')"
         ).fetchone()
         return row[0] if row else 0
 

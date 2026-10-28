@@ -130,6 +130,7 @@ from create_param_panels import (  # noqa: E402
 )
 from model_status import Status  # noqa: E402
 from possibilities import PossibilitiesWall  # noqa: E402
+from audio_gallery import build_audio_widget, open_externally as _open_externally  # noqa: E402,F401
 
 # Video-only alias: server_manager's key for the Wan2.2 text-to-video service
 # is "wan2.2", but VideoParamPanel's own internal short key (and therefore
@@ -3153,15 +3154,6 @@ _CODE_EXTS = {".py"}
 _TEXT_EXTS = {".txt", ".md"}
 
 
-def _open_externally(path: str) -> None:
-    """Hand a file to the desktop's default application. Fail-soft: a missing handler only logs."""
-    try:
-        from gi.repository import Gio
-        Gio.AppInfo.launch_default_for_uri(Path(path).resolve().as_uri(), None)
-    except Exception:  # noqa: BLE001
-        _log.debug("could not open %s externally", path, exc_info=True)
-
-
 def _artifact_kind(path: str, generator_type: "Optional[str]" = None) -> str:
     """Classify an artifact path's rendering kind.
 
@@ -4105,94 +4097,10 @@ class CreateResultPanel(Gtk.Box):
         return label
 
     def _build_audio_widget(self, record, path: str, exists: bool = True) -> Gtk.Widget:
-        """A finished song: waveform picture, play/pause + seek bar (`Gtk.MediaControls` on a `Gtk.MediaFile`, the
-        GStreamer path video uses), the lyrics read-only, the credit line, and "Open externally".
-
-        When the file is missing the controls are replaced by "Audio file not found" and Open externally is disabled.
-        When GStreamer cannot play the file the controls are replaced by a one-line note, so no dead player is shown."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.add_css_class("create-result-audio")
-        params = getattr(record, "params_dict", None) or {}
-
-        title = Gtk.Label(label="🎵 " + (getattr(record, "prompt", "") or "Music"), xalign=0.0)
-        title.set_wrap(True)
-        title.set_selectable(True)
-        box.append(title)
-
-        thumb = getattr(record, "thumbnail_path", "") or ""
-        if exists and isinstance(thumb, str) and thumb and Path(thumb).exists():
-            try:
-                wave = Gtk.Picture.new_for_filename(thumb)
-                wave.set_can_shrink(True)
-                wave.set_content_fit(Gtk.ContentFit.CONTAIN)
-                wave.set_size_request(-1, 120)
-                wave.add_css_class("create-result-picture")
-                box.append(wave)
-            except Exception:  # noqa: BLE001 - the waveform is decoration
-                _log.debug("waveform picture failed", exc_info=True)
-
-        note = Gtk.Label(xalign=0.0)
-        note.set_wrap(True)
-        note.set_visible(False)
-        if not exists:
-            note.set_label("Audio file not found.")
-            note.set_visible(True)
-        else:
-            note.set_label("This machine could not play the song here. Use Open externally.")
-            try:
-                stream = Gtk.MediaFile.new_for_filename(path)
-                controls = Gtk.MediaControls.new(stream)
-                self._result_audio = stream
-
-                def _on_error(s, _pspec, c=controls, n=note):
-                    if s.get_error() is not None:
-                        c.set_visible(False)
-                        n.set_visible(True)
-
-                stream.connect("notify::error", _on_error)
-                box.append(controls)
-                _on_error(stream, None)   # an error set while the stream was being built never fires notify
-            except Exception:  # noqa: BLE001 - no playback support: the note and the button below still work
-                note.set_visible(True)
-        box.append(note)
-
-        got, asked = params.get("seconds_got"), params.get("seconds_asked")
-        if isinstance(got, (int, float)):
-            length = f"{got:.0f} s"
-            if params.get("ended") and isinstance(asked, (int, float)) and got + 0.5 < asked:
-                length += f". You asked for {asked:.0f} s; the song ended when the lyrics did."
-            len_lbl = Gtk.Label(label=length, xalign=0.0)
-            len_lbl.set_wrap(True)
-            len_lbl.add_css_class("dim-label")
-            box.append(len_lbl)
-
-        lyrics = params.get("lyrics")
-        if isinstance(lyrics, str) and lyrics.strip():
-            tv = Gtk.TextView()
-            tv.set_editable(False)
-            tv.set_cursor_visible(False)
-            tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-            tv.get_buffer().set_text(lyrics)
-            sw = Gtk.ScrolledWindow()
-            sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            sw.set_min_content_height(80)
-            sw.set_max_content_height(220)
-            sw.set_propagate_natural_height(True)
-            sw.set_child(tv)
-            box.append(sw)
-
-        credit = params.get("credit")
-        if credit:
-            cr = Gtk.Label(label=f"Made with {credit}", xalign=0.0)
-            cr.set_wrap(True)
-            cr.add_css_class("dim-label")
-            box.append(cr)
-
-        open_btn = Gtk.Button(label="Open externally")
-        open_btn.set_halign(Gtk.Align.START)
-        open_btn.set_sensitive(exists)
-        open_btn.connect("clicked", lambda _b, p=path: _open_externally(p))
-        box.append(open_btn)
+        """A finished song. The block itself lives in `audio_gallery.build_audio_widget`, shared with the Library
+        detail; this keeps the stream so `_release_video` can pause it."""
+        box = build_audio_widget(record, path, exists)
+        self._result_audio = getattr(box, "audio_stream", None)
         return box
 
     # ── Pending-queue display (SP-3c-4) ─────────────────────────────────────

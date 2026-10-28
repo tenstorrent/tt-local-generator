@@ -1,5 +1,26 @@
 # tt-local-generator — developer notes
 
+## Library audio gallery (music, Task 7)
+
+Prompt: close the gaps Task 5 left. With the Music chip selected Discover showed the Video page, and audio rows
+(`media_type="audio"`) leaked into any negative filter.
+
+- **`app/audio_gallery.py`** (new, GTK only, no main_window import): `build_audio_widget` (the player block, shared by the
+  Create result panel and the Library detail so they cannot drift; the stream is on `widget.audio_stream`),
+  `AudioGallery` (grid, newest first, star + delete on hover, no Remix because no seed kind exists), `AudioDetail`
+  (right pane: player, lyrics, "Made with <credit>", star, delete, missing-file note with Open externally disabled).
+  New classes instead of reusing `ArtgenGallery`/`ArtgenDetail`: those query `media_type="artgen"`, render by file
+  extension through WebKit and carry Remix; the audio versions are about 300 lines with none of that.
+- Wiring: `_gallery_stack` page `"audio"`, `_right_stack` child `"audio"`, a Discover "Audio" button, `music` source ->
+  `audio` page via `_gallery_page_for_source`. A single or double click opens the detail (the detail is the viewer;
+  no Fullscreen). Every other detail pauses a song playing in the hidden Audio pane.
+- **Negative filters fixed**: `HistoryStore.all_records/delete` and `MediaStore.count_non_artgen` now also exclude audio.
+  `library_convert` only touches `media_type='artgen'` and the animatediff/animate fold, so audio rows are left alone
+  (pinned by a test).
+- Test gotcha: `test_artgen_detail_shared_pane_wiring` monkeypatches `media_store.star` on the module proxy and the
+  undo leaves a stale bound method on it, so a later `media_store.star(...)` through the proxy hits a dead store.
+  `audio_gallery._ms` and the audio tests resolve `media_store._get_media_store()` instead.
+
 ## AnimateDiff runs without ~/tt-metal (v0.103.0)
 
 Prompt: a fresh QB2 with no `~/tt-metal` could not generate a loop, because
