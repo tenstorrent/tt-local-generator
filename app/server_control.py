@@ -129,6 +129,14 @@ Notes for callers (Tasks 7 and 8):
 * Records named ``<key>#unreapable-<n>`` or ``<key>#kept-<n>`` are not the
   key's current server; the Servers menu should show unreapable ones as
   "needs a manual `gozer release`", not as a running server.
+* ``confirm_fn`` must return the literal ``True`` for yes; any other value
+  or an exception is a no.
+* Every unpinnable failure cleanup that finds a server row asks
+  ``stop_external``, also on a machine without gozer and for CPU-only
+  boutique servers, so the GUI/CLI bridge must answer that question on
+  failure paths of a start, not only on Stop.
+* A cancel that arrives while a question is open is not re-checked after
+  the answer (UX limit): an accepted question goes ahead.
 * ``confirm_fn`` kinds: ``switch``, ``unknown_hardware``, ``unknown_chips``,
   ``stop_external`` (a Stop of an external server, an unpinnable start whose
   chips another lease holds, and a failure cleanup of a row not proven ours),
@@ -440,8 +448,11 @@ class ServerControl:
             return self._key_locks.setdefault(key, threading.Lock())
 
     def _confirm(self, kind: str, text: str) -> bool:
+        """Only a literal ``True`` is a yes. Anything else (False, None, a
+        string such as "no" or even "yes", 1, an exception) is a no, so a
+        buggy bridge can never approve a stop."""
         try:
-            return bool(self._confirm_fn(kind, text))
+            return self._confirm_fn(kind, text) is True
         except Exception:
             log.exception("confirm_fn(%s) raised; treating it as no", kind)
             return False
@@ -1262,6 +1273,8 @@ class ServerControl:
     def _record_for(self, server: RunningServer) -> dict | None:
         cid = _short(server.container_id)
         for r in self._records.load():
+            if r.get("unreapable"):
+                continue      # a zombie's lease: never released by a Stop
             rcid = r.get("container_id")
             if rcid:
                 if cid and rcid == cid:

@@ -1435,3 +1435,42 @@ def test_reset_skipped_while_another_local_server_boots(env):
     out = env.control().start("flux")
     assert "reset" not in env.names()
     assert "not reset because Other-LLM" in out.message
+
+
+# --------------------------------------------------------------------------
+# Fix round 4: confirm is strictly True; Stop skips unreapable records
+# --------------------------------------------------------------------------
+
+class _Boom(Exception):
+    pass
+
+
+@pytest.mark.parametrize("answer", ["no", "n", "yes", "", 0, 1, [], None, "raise"])
+def test_only_a_literal_true_confirms_a_stop(env, answer):
+    def confirm(kind, text):
+        env.calls.append(("confirm", kind))
+        if answer == "raise":
+            raise _Boom("bridge failed")
+        return answer
+    env.confirm_fn = confirm
+    srv = rs("ns/bundle", name="ns/bundle", owner="external")
+    out = env.control().stop(srv)
+    assert out.kind == "declined"
+    assert ("confirm", "stop_external") in env.calls
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+
+
+def test_literal_true_confirms_a_stop(env):
+    env.confirm_fn = lambda kind, text: True
+    srv = rs("ns/bundle", name="ns/bundle", owner="external")
+    assert env.control().stop(srv).kind == "stopped"
+    assert ("tt.stop", ("ns/bundle",)) in env.calls
+
+
+def test_stop_never_releases_a_legacy_unreapable_record(env):
+    env.records.add("flux", None, None, "ZOMBIE", 1.0, unreapable=True)
+    srv = rs("flux", source="script", port=None, container_id=None, owner="app")
+    out = env.control().stop(srv)
+    assert out.kind == "stopped"
+    assert "gozer.release" not in env.names()
+    assert [r["lease_id"] for r in unreapable(env)] == ["ZOMBIE"]
