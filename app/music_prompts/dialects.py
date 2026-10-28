@@ -47,10 +47,12 @@ a note (it only shortens card details). Priority, from kept longest to dropped
 first (spec 10 and the plan's Global Constraints; `avoid` is no longer in the
 prompt): the user's content words and the base sound (never dropped: when they
 alone exceed the hard limit the prompt is returned over it with a note), the
-layers (vocal or other), inspiration names, instruments, tempo and key,
-production, mood, texture, and last the caption's spare details (rhythm,
-harmony, and the caption's production sentence), which the spec's list does
-not name and which go first.
+layers (vocal or other), inspiration names, instruments, tempo and key, mood,
+texture, and last the spare details, which go first: the caption's rhythm,
+harmony and production sentences, and in the tags dialect the card tags after
+the first few. The spec's list puts production above mood; here production is
+a spare detail (the review of Task 3 ruled the caption carries it only while
+the budget allows), so there is no separate production priority.
 
 Standard library only; no GTK, no LLM.
 """
@@ -76,7 +78,6 @@ PRIORITY = {
     "names": 3,
     "instruments": 4,
     "tempo": 5,
-    "production": 6,
     "mood": 7,
     "texture": 9,
     "detail": 10,
@@ -88,7 +89,7 @@ _BASE_TAGS = 4          # tags dialect: card tags kept with the protected base l
 _KIND_WORDS = {
     "vocal": "the vocal layer", "layer": "a layer", "names": "the inspiration names",
     "instruments": "the instrument list", "tempo": "the tempo and key",
-    "production": "the production notes", "mood": "the mood", "texture": "the texture",
+    "mood": "the mood", "texture": "the texture",
     "detail": "rhythm, harmony and production details",
 }
 
@@ -103,13 +104,18 @@ i me my we our you your he she they them their his her
 make makes making made feel feels let lets please want wants need like ish style kind sort
 up down out off top
 """.split())
-# Leftover words that only describe the shape of the request ("song", "someone is singing", "on top").
-# A leftover phrase made only of glue words is not repeated in the prompt and is named in a note.
-# Vocal cues count as glue only when the parser made a vocal layer from them (translate.py).
-PIECE_NOUNS = frozenset("song songs track tracks piece pieces tune tunes number jam record album music".split())
-VOCAL_CUES = frozenset("singing sung sings sing vocal vocals voice voices someone somebody singer".split())
+# Glue: leftover words that only describe the shape of the request ("song", "someone is singing",
+# "on top"). A leftover phrase made only of glue words, and not attached to a match or a content
+# phrase, is not repeated in the prompt and is named in a note. Only articles, auxiliaries, piece
+# nouns and fillers, vocal cues and markers are glue: a preposition or pronoun ("a song for her")
+# makes the phrase content. Vocal cues count as glue only when the parser made a vocal layer.
+ARTICLES = frozenset("a an the some".split())
+AUXILIARIES = frozenset("is are was were be been being am do does doing did".split())
+PIECE_NOUNS = frozenset("song songs track tracks piece pieces tune tunes number jam record album music "
+                        "thing things stuff kind sort of".split())
+VOCAL_CUES = frozenset("singing sung sings sing sang vocal vocals voice voices someone somebody singer".split())
 MARKER_WORDS = frozenset("but over on top with plus meets mixed layered and".split())
-GLUE_WORDS = STOPWORDS | PIECE_NOUNS | VOCAL_CUES | MARKER_WORDS
+GLUE_WORDS = ARTICLES | AUXILIARIES | PIECE_NOUNS | VOCAL_CUES | MARKER_WORDS
 
 
 @dataclass(frozen=True)
@@ -292,8 +298,9 @@ class Part:
     label: str                # style name shown in the prompt ("Post-rock", "Bluegrass vocal")
     sound: str
     tags: tuple[str, ...] = ()
-    vocal: str = ""           # vocal cards: how the voice sounds
+    vocal: str = ""           # vocal cards: how the voice sounds; no card: the user's words ("a vocal singing about the sea")
     lead_instrument: str = ""  # vocal cards: melody instrument when the model cannot sing
+    sung: str = ""            # no card: what the user said is sung about ("about the sea")
 
 
 @dataclass(frozen=True)
@@ -321,6 +328,9 @@ def vocal_style(label: str) -> str:
 
 def lead_line(part: Part) -> str:
     """A vocal rewritten for a model that cannot sing (documented in CARDS.md, `lead_instrument`)."""
+    if not part.label:                       # a vocal from the user's words, no card
+        return f"plaintive lead line carrying a melody {part.sung}" if part.sung else \
+            "plaintive lead line carrying the melody"
     style = vocal_style(part.label)
     if part.lead_instrument:
         return f"plaintive {part.lead_instrument} lead line phrased like a {style} vocal"
@@ -387,11 +397,15 @@ def _compose_caption(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
     if base:
         out.append(clause("base", kept.add(" ".join(_sentence(b) for b in base))))
     for marker, p in _parts(plan, "layers"):
-        if p.kind == "vocal":
+        if p.kind == "vocal" and not p.label:
+            out.append(clause("vocal", kept.add(f"{_intro(marker)}, {p.vocal}.")))
+        elif p.kind == "vocal":
             out.append(clause("vocal", kept.add(f"{_intro(marker)}, a {vocal_style(p.label)} vocal: "
                                                 f"{p.vocal or _lc_first(p.sound)}")))
         elif p.kind == "texture":
             out.append(clause("texture", kept.add(p.sound)))
+        elif _names_style(p, plan):
+            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.sound)}")))
         else:
             out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.label)}: {_lc_first(p.sound)}")))
     if plan.names:
@@ -438,7 +452,9 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         items.append([kind, tag])
 
     def vocal(kind: str, p: Part):
-        if plan.can_sing:
+        if plan.can_sing and not p.label:
+            add(kind, p.vocal)
+        elif plan.can_sing:
             for t in (f"{vocal_style(p.label)} vocal", *p.tags):
                 add(kind, t)
         else:
@@ -448,6 +464,7 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
 
     for w in plan.user_words:
         add("user", w)
+    spare: list[str] = []           # base card tags after the first few: added after the layers
     for kind, group in (("base", "base"), (None, "layers")):
         for _, p in _parts(plan, group):
             k = kind or {"vocal": "vocal", "texture": "texture"}.get(p.kind, "layer")
@@ -459,8 +476,13 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
             else:
                 for i, t in enumerate((_lc_first(p.label), *p.tags)):
                     # In the base, the label and the first _BASE_TAGS card tags are the protected
-                    # base sound; further tags are spare details, trimmed first.
-                    add(k if (k != "base" or i <= _BASE_TAGS) else "detail", t)
+                    # base sound; further tags are spare details, shown after the layers, trimmed first.
+                    if k == "base" and i > _BASE_TAGS:
+                        spare.append(t)
+                    else:
+                        add(k, t)
+    for t in spare:
+        add("detail", t)
     for n in plan.names:
         add("names", n)
     for i in plan.instruments:
@@ -502,11 +524,15 @@ def _compose_generic(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         out.append(clause("base", kept.add("; ".join(base))))
     for marker, p in _parts(plan, "layers"):
         first = _lc_first(_first_sentence(p.sound))
-        if p.kind == "vocal":
-            where = "alongside" if marker in _ALONGSIDE else "on top"
+        where = "alongside" if marker in _ALONGSIDE else "on top"
+        if p.kind == "vocal" and not p.label:
+            out.append(clause("vocal", kept.add(f"with {p.vocal} {where}")))
+        elif p.kind == "vocal":
             out.append(clause("vocal", kept.add(f"with a {vocal_style(p.label)} vocal {where}, {p.vocal or first}")))
         elif p.kind == "texture":
             out.append(clause("texture", kept.add(first)))
+        elif _names_style(p, plan):
+            out.append(clause("layer", kept.add(f"layered in, {first}")))
         else:
             out.append(clause("layer", kept.add(f"with {_lc_first(p.label)} layered in, {first}")))
     if plan.names:

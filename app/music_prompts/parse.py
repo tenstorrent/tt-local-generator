@@ -61,7 +61,7 @@ LAYER_MARKERS: tuple[str, ...] = (
 )
 
 _CUE_WINDOW = 5
-_SINGING = frozenset({"singing", "sung", "vocal", "vocals", "voice"})
+_SINGING = frozenset({"singing", "sung", "sing", "sings", "sang", "singer", "vocal", "vocals", "voice"})
 _TOKEN = re.compile(r"[^\W_]+")
 _HYPHENS = "-‐‑‒–—―−"
 _HYPHEN_GAP = re.compile(r"\s*[" + _HYPHENS + r"]\s*")

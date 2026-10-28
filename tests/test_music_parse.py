@@ -384,3 +384,12 @@ def test_private_helpers_are_unit_testable(tmp_path):
     from music_prompts import parse as P
     toks = P._tokenise("Café, a-b")
     assert [t[2] for t in toks] == ["café", "a", "b"] and toks[0][:2] == (0, 4)
+
+
+@pytest.mark.parametrize("word", ["sing", "sings", "sang", "singer", "vocals"])
+def test_more_singing_words_make_a_vocal_layer(tmp_path, word):
+    lib = _lib(tmp_path, _card("jazz", name="Jazz"))
+    p = parse(f"jazz but a {word} on top about rain", lib)
+    assert p.layers[1].vocal
+    base = parse(f"a {word} about rain, jazz", lib)
+    assert base.layers[0].vocal

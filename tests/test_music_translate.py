@@ -325,9 +325,10 @@ def test_result_over_limit_when_user_words_alone_exceed_it_has_a_note(tmp_path):
 def test_trim_order_drops_avoid_and_texture_first():
     """Render drops whole clauses from the end of the spec's list: details, texture, mood, production,
     tempo, instruments, names, layers; the user's words and the base sound never go."""
-    kinds = ["user", "base", "vocal", "names", "instruments", "tempo", "production", "mood", "texture", "detail"]
+    kinds = ["user", "base", "vocal", "names", "instruments", "tempo", "mood", "texture", "detail"]
     clauses = [D.clause(k, f"{k} words here") for k in kinds]
-    expected = ["detail", "texture", "mood", "production", "tempo", "instruments", "names", "vocal"]
+    expected = ["detail", "texture", "mood", "tempo", "instruments", "names", "vocal"]
+    assert "production" not in D.PRIORITY        # production is a caption detail, not a kind of its own
     for k in range(1, len(expected) + 1):
         keep = [c for c in clauses if c.kind not in expected[:k]]
         target = len(D._join(keep, "caption+lyrics"))
@@ -376,7 +377,8 @@ def test_instrumental_request_is_flagged_and_has_no_vocal_words(tmp_path):
         assert t.instrumental is True and t.lyrics is None
         assert "instrumental" in t.prompt.lower()
         assert t.prompt.lower().count("instrumental") == 1
-        for w in ("vocal", "sung", "singing", "voice", "lyric", "piece"):
+        # "piece" stays: next to the match it is part of the user's phrase ("instrumental post-rock piece")
+        for w in ("vocal", "sung", "singing", "voice", "lyric"):
             assert w not in t.prompt.lower(), (w, t.dialect)
     # instrumental with a vocal layer on a singing model: no vocal in the caption
     t = translate("instrumental tortoise-like piece but a bluegrass song on top", MINIMAX, library=lib)
@@ -428,12 +430,108 @@ def test_label_match_is_word_bounded(tmp_path):
     assert "Rock: guitars" in t.prompt      # "rocking" (typed or in the sound) does not count as naming the style
 
 
-def test_reload_library_drops_the_cache():
+def test_reload_library_drops_the_cache(tmp_path, monkeypatch):
     import importlib
     T = importlib.import_module("music_prompts.translate")
-    T._DEFAULT_LIBRARY = "stale"
-    T.reload_library()
-    assert T._DEFAULT_LIBRARY is None or not isinstance(T._DEFAULT_LIBRARY, str)
+    user = tmp_path / "user"
+    user.mkdir()
+    monkeypatch.setattr(C, "_USER_DIR", user)
+    try:
+        T.reload_library()
+        assert "zydeco-x" not in translate("zydecoxx", None).used_cards
+        (user / "z.yaml").write_text(yaml.safe_dump(_card("zydeco-x", name="Zydecoxx", sound="Accordion and rubboard.")),
+                                     encoding="utf-8")
+        assert translate("zydecoxx", None).used_cards == ()          # still the cached library
+        T.reload_library()
+        assert translate("zydecoxx", None).used_cards == ("zydeco-x",)
+    finally:
+        monkeypatch.undo()
+        T.reload_library()
+
+
+def test_instrumental_flag_means_the_prompt_asks_for_no_singing(tmp_path):
+    lib = _shipped(tmp_path)
+    assert translate(EXAMPLE, STABLE, library=lib).instrumental is True        # vocal became a lead line
+    assert translate(EXAMPLE, None, library=lib).instrumental is False         # generic prompt has a vocal clause
+    assert translate(EXAMPLE, MINIMAX, library=lib).instrumental is False      # vocal and lyrics
+    assert translate("tortoise-like song", MINIMAX, library=lib).instrumental is True
+    assert translate("instrumental tortoise-like piece", MINIMAX, library=lib).instrumental is True
+    assert translate("tortoise-like song", None, library=lib).instrumental is True
+
+
+BAND = "bluegrass band doing a Tortoise-like thing"
+
+
+def test_words_around_a_match_stay_one_phrase(tmp_path):
+    lib = _shipped(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate(BAND, profile, library=lib)
+        p = t.prompt
+        assert "bluegrass band doing a post-rock thing" in p.lower(), p
+        for debris in (", thing", "doing a,", "doing a.", "Band doing a"):
+            assert debris not in p, (debris, p)
+        assert not _contains_name(p, "Tortoise")
+    cap = translate(BAND, MINIMAX, library=lib).prompt
+    assert cap.lower().index("vibraphone") < cap.index("bluegrass vocal:")     # the style's sound before the vocal
+    t = translate("a song for her, Tortoise-like", MINIMAX, library=lib)
+    assert "a song for her" in t.prompt.lower()
+    t = translate("tortoise-like song", STABLE, library=lib)
+    assert not re.search(r"\bsong\b", t.prompt) and any("'song'" in n for n in t.notes)
+    assert "thing" in D.GLUE_WORDS and "stuff" in D.GLUE_WORDS and "for" not in D.GLUE_WORDS
+
+
+def test_singing_in_the_base_layer_counts(tmp_path):
+    lib = _shipped(tmp_path)
+    text = "someone is singing about the sea, tortoise-like"
+    t = translate(text, MINIMAX, library=lib)
+    assert t.instrumental is False and t.lyrics and "The sea" in t.lyrics
+    assert not any("No singing was asked" in n for n in t.notes)
+    assert "instrumental" not in t.prompt.lower()
+    assert "a vocal singing about the sea" in t.prompt
+    assert t.prompt.lower().index("vibraphone") < t.prompt.index("a vocal singing about the sea")
+    assert not any("sung lead vocals" in n for n in t.notes)
+    tags = translate(text, STABLE, library=lib)
+    assert "plaintive lead line carrying a melody about the sea" in tags.prompt and tags.instrumental
+
+
+def test_a_vocal_layer_without_a_card_uses_the_users_words(tmp_path):
+    lib = _shipped(tmp_path)
+    text = "tortoise-like but someone is singing about the sea on top"
+    t = translate(text, MINIMAX, library=lib)
+    assert "Over it, a vocal singing about the sea." in t.prompt
+    assert ":." not in t.prompt and "lead vocal" not in t.prompt
+    assert not t.prompt.lower().startswith("someone")
+    assert t.lyrics.startswith("[Verse]") and "The sea" in t.lyrics and t.instrumental is False
+    tags = translate(text, STABLE, library=lib)
+    assert "plaintive lead line carrying a melody about the sea" in tags.prompt
+    assert "lead vocal" not in tags.prompt and "a vocal" not in tags.prompt
+    gen = translate(text, None, library=lib)
+    assert "a vocal singing about the sea" in gen.prompt and gen.instrumental is False
+    bare = translate("tortoise-like but someone is singing on top", MINIMAX, library=lib)
+    assert bare.lyrics is None and bare.instrumental is False
+    assert any("no lyric themes were given" in n.lower() for n in bare.notes)
+    assert "Over it, a vocal." in bare.prompt
+
+
+def test_tags_detail_items_follow_the_layers(tmp_path):
+    lib = _lib(tmp_path, _card("many", name="Manytag", sound="Busy.", tags=[f"t{i}x" for i in range(8)]),
+               _card("choir", kind="vocal", name="Choir vocal", aliases=["choir"], vocal="a choir",
+                     tags=["choirtag"]))
+    singing = dataclasses.replace(STABLE, has_lyrics=True)
+    p = translate("manytag but a choir on top", singing, library=lib).prompt
+    assert p.index("choirtag") < p.index("t5x"), p
+    assert p.index("t2x") < p.index("choirtag")
+
+
+def test_a_style_only_in_a_later_layer_becomes_the_base(tmp_path):
+    lib = _shipped(tmp_path)
+    text = "very slow, with rain sounds, Tortoise-ish"
+    for profile in (MINIMAX, STABLE, None):
+        t = translate(text, profile, library=lib)
+        p = t.prompt
+        assert "Alongside it" not in p and "alongside" not in p.lower()
+        assert p.lower().index("very slow") < p.index("rain sounds") < p.lower().index("vibraphone")
+        assert len(re.findall(r"post-rock", p.lower())) <= 1, p
 
 
 def test_trim_never_cuts_mid_word(tmp_path):

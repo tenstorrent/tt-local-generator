@@ -44,9 +44,22 @@ lower third when the base card's mood or the user's words say patient, slow,
 unhurried (and similar), or the upper third when they say fast or driving.
 Key: the base card's `key`, else a vocal card's.
 
-Instrumental: `Translation.instrumental` is True when no lyrics are produced
-(the user typed "instrumental", nothing sings, or the model cannot sing), so
-request-building code can send the server's instrumental form.
+Instrumental: `Translation.instrumental` means the rendered prompt asks for no
+singing: the user typed "instrumental", nothing in the request sings, or the
+vocal became a lead line (tags dialect, a model that cannot sing). A prompt
+with a vocal clause is not instrumental even when no lyrics were written
+(generic dialect, or no lyric themes). Request-building code uses it to send
+the server's instrumental form (MiniMax refuses a job with no lyrics otherwise).
+
+Words next to a match form one phrase with it (see `_user_words`), so
+"bluegrass band doing a Tortoise-like thing" keeps "bluegrass band doing a
+post-rock thing". Singing typed in any layer, the base included, makes a vocal;
+with no vocal card the vocal uses the user's words ("a vocal singing about the
+sea") and the sung topic becomes the lyric theme. With no theme at all no
+skeleton is written and a note asks for lyrics or a vocal style.
+
+When the base layer has no card and exactly one later layer does, that layer
+becomes the base.
 
 Triggers: a profile's trigger phrase ("fiona crapple") is never added by the
 library. If the user typed it, it is a content phrase and stays.
@@ -79,6 +92,7 @@ _FAST_WORDS = frozenset("fast driving energetic frantic upbeat urgent rapid quic
 EMPTY_NOTE = ("Type a style, an artist, a scene or a mood to start, for example "
               "'tortoise-like song but someone is singing a bluegrass song on top'.")
 PASS_THROUGH_NOTE = "No style in the library matched, so your text is passed through unchanged."
+NO_THEMES_NOTE = "No lyric themes were given: write the lyrics, or pick a vocal style."
 SKELETON_NOTE = ("The lyrics are topic lines from the vocal style's themes, not finished lyrics. "
                  "A MiniMax song ends when its lyrics do, so a thin skeleton makes a short clip: "
                  "write the lines out for a longer one.")
@@ -206,21 +220,130 @@ def _name_notes(replaced, notes: list[str]) -> None:
 
 # ── the user's words ─────────────────────────────────────────────────────────
 
-def _split_words(parsed: Parsed) -> tuple[list[str], list[str]]:
-    """Leftover phrases as (content, glue), each in text order. Punctuation-only phrases are neither."""
+_SING = re.compile(r"\b(singing|sings|sing|sang|sung)\b", re.I)
+_TOPIC_LEAD = re.compile(r"^(about|of|for|to|on)\s+", re.I)
+_HYPHENS = "-‐‑‒–—―−"
+_FORM = re.compile(r"^(?P<pre>like\s+)?(?P<core>.*?)(?P<suf>\s*[" + _HYPHENS + r"]\s*(?:like|ish|style)|\s+style)?$",
+                   re.I | re.S)
+
+
+@dataclass
+class _Words:
+    """One piece of the user's own words: a content phrase, possibly built around a match."""
+    text: str
+    layer: int
+    has_match: bool
+
+
+def _find_spans(text: str, pieces, blocked) -> list[tuple[int, int]]:
+    """Positions of `pieces` (in text order), skipping spans that overlap `blocked`."""
+    out, cursor = [], 0
+    for piece in pieces:
+        pos = text.find(piece, cursor)
+        while pos >= 0 and any(pos < b and pos + len(piece) > a for a, b in blocked):
+            pos = text.find(piece, pos + 1)
+        if pos < 0:                      # cannot happen for parser output; keep going safely
+            out.append((cursor, cursor))
+            continue
+        out.append((pos, pos + len(piece)))
+        cursor = pos + len(piece)
+    return out
+
+
+def _match_words(m, card: StyleCard, lib: Library, names, include_names: bool, text: str) -> str:
+    """How a match reads inside the user's own phrase: its words, or its style for a name."""
+    named = card.kind == "artist" or _name_spans(m.text, names, case_sensitive=False)
+    if include_names or not named:
+        return m.text
+    f = _FORM.match(m.text)
+    pre = f.group("pre") or ""
+    label = _label(card, lib)
+    core = (f.group("core") or m.text).lstrip()
+    if not pre and core[:1].isupper() and _starts_sentence(text, m.start):
+        return label[:1].upper() + label[1:]
+    return pre + D._lc_first(label)
+
+
+def _user_words(text: str, parsed: Parsed, lib: Library, names, include_names: bool):
+    """The user's leftover words as content pieces and glue phrases, in text order.
+
+    A leftover phrase directly next to a match (whitespace only, no punctuation, same layer)
+    joins it in one phrase, with the match read as its style ("a bluegrass band doing a
+    post-rock thing"). Such a run is content when any of its phrases is content; a run whose
+    phrases are all glue ("tortoise-like song") is glue. Phrases on their own are content or
+    glue by `GLUE_WORDS` (vocal cues count as glue only when the parser made a vocal layer).
+    """
     glue_words = set(D.GLUE_WORDS)
     if not any(layer.vocal for layer in parsed.layers):
-        glue_words -= D.VOCAL_CUES - D.STOPWORDS
-    content, glue = [], []
-    for phrase in parsed.leftover:
+        glue_words -= D.VOCAL_CUES
+
+    def is_glue(phrase: str) -> bool:
         words = [w.lower() for w in _WORD.findall(phrase)]
-        if not words:
+        return all(w in glue_words for w in words)
+
+    layer_spans = _find_spans(text, [l.text for l in parsed.layers], [])
+    match_items = [(m.start, m.end, "m", m) for l in parsed.layers for m in l.matches if m.card_id in lib.cards]
+    phrases = [p for p in parsed.leftover if _WORD.search(p)]           # punctuation alone is neither
+    spans = _find_spans(text, phrases, [(a, b) for a, b, _, _ in match_items])
+    items = sorted(match_items + [(a, b, "p", p) for (a, b), p in zip(spans, phrases)], key=lambda t: t[0])
+
+    def layer_of(pos: int) -> int:
+        best = 0
+        for i, (a, _) in enumerate(layer_spans):
+            if a <= pos:
+                best = i
+        return best
+
+    runs: list[list] = []
+    for it in items:
+        prev = runs[-1][-1] if runs else None
+        if prev is not None:
+            gap = text[prev[1]:it[0]]
+            joined = (gap == "" or gap.isspace()) and text[prev[1] - 1].isalnum() and text[it[0]].isalnum() \
+                and layer_of(prev[0]) == layer_of(it[0])
+            if joined:
+                runs[-1].append(it)
+                continue
+        runs.append([it])
+
+    content: list[_Words] = []
+    glue: list[str] = []
+    for run in runs:
+        ps = [it for it in run if it[2] == "p"]
+        if not ps:
             continue
-        if all(w in glue_words for w in words):
-            glue.append(phrase.strip(" ,;:"))
-        else:
-            content.append(phrase.strip().strip(",;:").strip())
-    return content, glue
+        if any(it[2] == "m" for it in run) and not all(is_glue(it[3]) for it in ps):
+            out, last = [], run[0][0]
+            for a, b, kind, obj in run:
+                out.append(text[last:a])
+                out.append(_match_words(obj, lib.cards[obj.card_id], lib, names, include_names, text)
+                           if kind == "m" else text[a:b])
+                last = b
+            content.append(_Words("".join(out).strip().strip(",;:").strip(), layer_of(run[0][0]), True))
+            continue
+        for a, b, _, phrase in ps:
+            if is_glue(phrase):
+                glue.append(phrase.strip(" ,;:"))
+            else:
+                content.append(_Words(phrase.strip().strip(",;:").strip(), layer_of(a), False))
+    return content, glue, is_glue
+
+
+def _sung_part(words: _Words, is_glue) -> tuple[D.Part, list[str], str]:
+    """A vocal from the user's own words ("someone is singing about the sea").
+
+    Returns the part, glue words it consumed ("someone is") and the sung topic ("the sea").
+    """
+    m = _SING.search(words.text)
+    before, after = words.text[:m.start()].strip(), words.text[m.end():].strip(" ,;:.")
+    if before and not is_glue(before):
+        desc = words.text.strip(" ,;:.")
+        glue = []
+    else:
+        desc = "a vocal singing" + (f" {after}" if after else "")
+        glue = [before] if before else []
+    topic = _TOPIC_LEAD.sub("", after).strip()
+    return D.Part(kind="vocal", label="", sound="", vocal=desc, sung=after), glue, topic
 
 
 # ── the plan ─────────────────────────────────────────────────────────────────
@@ -292,34 +415,55 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         if c.kind == "artist" and not include_names:
             notes.append(f"'{m.text}' became the description of its sound; the name is listed under Inspired by.")
 
-    # The user's words: content kept verbatim, glue named in a note.
-    content, glue = _split_words(parsed)
+    # The user's words: content kept verbatim (a phrase next to a match joins it), glue named in a note.
+    words, glue, is_glue = _user_words(text, parsed, lib, names, include_names)
+    instrumental_asked = bool(_INSTRUMENTAL.search(text))
+
+    # Cards per layer. When the base has none and exactly one later layer has some, that layer
+    # is the base ("very slow, with rain sounds, Tortoise-ish" is a post-rock base).
+    layers = list(parsed.layers)
+    layer_cards = [[lib.cards[m.card_id] for m in l.matches if m.card_id in lib.cards] for l in layers]
+    if layer_cards and not layer_cards[0]:
+        with_cards = [i for i in range(1, len(layers)) if layer_cards[i]]
+        if len(with_cards) == 1:
+            layer_cards[0], layer_cards[with_cards[0]] = layer_cards[with_cards[0]], []
+    base_cards = layer_cards[0] if layer_cards else []
+    vocal_cards: list[StyleCard] = [c for cs in layer_cards for c in cs if c.kind == "vocal"]
+
+    # A vocal layer (the base included) with no vocal card takes its voice from the user's words.
+    sung: dict[int, tuple[D.Part, str]] = {}
+    for i, layer in enumerate(layers):
+        if not layer.vocal or any(c.kind == "vocal" for c in layer_cards[i]):
+            continue
+        w = next((w for w in words if w.layer == i and not w.has_match and _SING.search(w.text)), None)
+        if w is not None:
+            part, consumed, topic = _sung_part(w, is_glue)
+            words.remove(w)
+            glue += consumed
+        else:
+            part, topic = D.Part(kind="vocal", label="", sound="", vocal="a vocal"), ""
+        sung[i] = (part, topic)
+    has_vocal = bool(vocal_cards) or bool(sung)
+
+    content = [w.text for w in words]
     if not include_names:
         replaced = []
         skip = _ambiguous_aliases(lib)
         content = [_scrub(p, names, case_sensitive=True, skip=skip, replaced=replaced) for p in content]
         _name_notes(replaced, notes)
-    instrumental_asked = bool(_INSTRUMENTAL.search(text))
     if instrumental_asked and not any(_INSTRUMENTAL.search(p) for p in content):
         content.append("instrumental")
     glue_all = list(dict.fromkeys(glue + list(parsed.dropped)))
 
-    # Base and layers. A layer whose only signal is singing words (no vocal card) still gets a voice.
-    layers = list(parsed.layers)
-    base_cards = [lib.cards[m.card_id] for m in (layers[0].matches if layers else ()) if m.card_id in lib.cards]
     plan_layers = []
-    vocal_cards: list[StyleCard] = [c for c in base_cards if c.kind == "vocal"]
-    vocal_texts: list[str] = []
-    for layer in layers[1:]:
-        cs = [lib.cards[m.card_id] for m in layer.matches if m.card_id in lib.cards]
-        parts = [_part(c, lib, scrub) for c in cs]
-        vocal_cards += [c for c in cs if c.kind == "vocal"]
-        if layer.vocal and not any(c.kind == "vocal" for c in cs):
-            parts.append(D.Part(kind="vocal", label="lead vocal", sound="", vocal=""))
-            vocal_texts.append(layer.text)
+    if 0 in sung:                                    # singing typed in the base sits on top of it
+        plan_layers.append((None, (sung[0][0],)))
+    for i in range(1, len(layers)):
+        parts = [_part(c, lib, scrub) for c in layer_cards[i]]
+        if i in sung:
+            parts.append(sung[i][0])
         if parts:
-            plan_layers.append((layer.marker, tuple(parts)))
-    has_vocal = bool(vocal_cards) or bool(vocal_texts)
+            plan_layers.append((layers[i].marker, tuple(parts)))
     if glue_all:
         what = "the layout of the request (a vocal layer)" if has_vocal else "the layout of the request"
         quoted = D._and([f"'{g}'" for g in glue_all])
@@ -329,11 +473,8 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
     sound_cards = [c for c in used if c.kind != "vocal"]
     primary = [c for c in base_cards if c.kind not in ("vocal", "texture")]
     if not primary:
-        for layer in layers[1:]:
-            primary = [lib.cards[m.card_id] for m in layer.matches
-                       if m.card_id in lib.cards and lib.cards[m.card_id].kind not in ("vocal", "texture")]
-            if primary:
-                break
+        primary = next(([c for c in cs if c.kind not in ("vocal", "texture")] for cs in layer_cards[1:]
+                        if any(c.kind not in ("vocal", "texture") for c in cs)), [])
     tempo_cards = primary + [c for c in used if c not in primary]
     key = next((c.key for c in primary if c.key), "") or next((c.key for c in vocal_cards if c.key), "") \
         or next((c.key for c in used if c.key), "")
@@ -363,7 +504,8 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
     can_sing = bool(getattr(profile, "has_lyrics", False))
     plan = D.Plan(
         user_words=tuple(content),
-        base=tuple(_part(c, lib, scrub) for c in base_cards),
+        # the style's sound first, a vocal card in the base after it
+        base=tuple(_part(c, lib, scrub) for c in sorted(base_cards, key=lambda c: c.kind == "vocal")),
         layers=tuple(plan_layers),
         names=tuple(inspired) if include_names else (),
         instruments=tuple(scrub(i) for i in instruments),
@@ -400,12 +542,18 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             notes.append("No singing was asked for, so no lyrics were written; the piece is instrumental.")
         else:
             card = vocal_cards[0] if vocal_cards else None
-            vocal_text = (card.vocal or card.sound) if card else (vocal_texts[0] if vocal_texts else "")
-            themes = card.lyric_themes if card else ()
+            if card:
+                vocal_text, themes = card.vocal or card.sound, card.lyric_themes
+            else:
+                part, topic = next(iter(sung.values()))
+                vocal_text, themes = part.vocal, ((topic,) if topic else ())
             lyrics = _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes)
 
+    # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
+    # or the vocal became a lead line (tags for a model that cannot sing).
+    instrumental = instrumental_asked or not has_vocal or (dialect == D.TAGS and not can_sing)
     return Translation(prompt, lyrics, tuple(dict.fromkeys(notes)), tuple(inspired),
-                       tuple(c.id for c in used), dialect, added, lyrics is None)
+                       tuple(c.id for c in used), dialect, added, instrumental)
 
 
 # ── optional steps ───────────────────────────────────────────────────────────
@@ -456,7 +604,7 @@ def skeleton(themes) -> str:
     return "\n".join(out) + "\n"
 
 
-def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str:
+def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str | None:
     if lyrics_fn is not None:
         try:
             got = lyrics_fn(vocal_text, tuple(themes))
@@ -467,5 +615,8 @@ def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str:
             if include_names or not _name_spans(got, names, case_sensitive=False):
                 return got
             notes.append("The written lyrics named an artist, so a skeleton was used instead.")
+    if not themes:
+        notes.append(NO_THEMES_NOTE)
+        return None
     notes.append(SKELETON_NOTE)
     return skeleton(themes)
