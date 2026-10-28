@@ -105,3 +105,20 @@ def test_registry_built_from_the_real_list_fixture(tmp_path):
         else:
             assert reg[m.name].backend == "tt"
     assert reg["Qwen3.8-27B"].capabilities == ("artgen",)
+
+
+def test_non_utf8_override_file_is_ignored(tmp_path):
+    p = tmp_path / "o.yaml"
+    p.write_bytes(b"models:\n  flux:\n    prefer: \xff\xfe\n")
+    reg = sr.build_registry([_m("FLUX.1-schnell")], p)
+    assert reg["flux"].backend == "boutique"
+
+
+def test_override_for_unknown_or_claimed_name_is_logged(tmp_path, caplog):
+    import logging
+    p = _over(tmp_path, "models:\n  Nope:\n    chips: 2\n  FLUX.1-schnell:\n    prefer: tt\n")
+    with caplog.at_level(logging.WARNING, logger="server_registry"):
+        sr.build_registry([_m("FLUX.1-schnell")], p)
+    text = caplog.text
+    assert "'Nope' matches no registry key" in text
+    assert "'FLUX.1-schnell' names a catalog model that a boutique entry" in text

@@ -19,7 +19,6 @@ which asks ``tt_backend.catalog()`` (a read-only ``tt model list``).
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
@@ -85,10 +84,6 @@ class ModelEntry:
     benefit: str
 
 
-def _norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", s.lower())
-
-
 def _group_for_caps(caps: Sequence[str]) -> str | None:
     """Same convention as ready_to_run._group_of, from a capability list."""
     c = frozenset(caps)
@@ -120,11 +115,11 @@ def _port_of(url: str) -> int | None:
 
 def _load_overrides(path: Path | None) -> dict[str, dict]:
     """Read the override file. Returns {key: {valid fields}}; {} on any problem."""
-    import yaml  # same loader chip_config uses
     p = path or _DEFAULT_OVERRIDES
     try:
+        import yaml  # same loader chip_config uses
         raw = p.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, ImportError) as exc:
         log.info("server overrides not read (%s): %s", p, exc)
         return {}
     try:
@@ -232,6 +227,13 @@ def build_registry(catalog: Sequence[tt_backend.TtModel] | None = None,
             chips=o.get("chips", _chips_from_hardware(row.hardware)),
             port=o.get("port"), served_id=None, runner_key=None,
             installed=row.installed, benefit="")
+    known = set(reg) | set(rows)
+    for key in over:
+        if key not in known:
+            log.warning("server override %r matches no registry key or catalog name; ignored", key)
+        elif key in claimed:
+            log.warning("server override %r names a catalog model that a boutique entry "
+                        "owns; use that entry's key instead; ignored", key)
     return reg
 
 

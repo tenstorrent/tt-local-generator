@@ -5,8 +5,10 @@
 #   prefer:         tt | boutique   which backend starts a model that both `tt`
 #                                   and our bin/start_*.sh scripts carry
 #                                   (default: boutique, the script carries our patches)
-#   chips:          int             chip count when neither `tt serve --dry-run`
-#                                   nor the catalog gives one
+#   chips:          int             chip count. Order: the `tt serve --dry-run`
+#                                   plan first, then this override, then the
+#                                   catalog hardware, else unknown (the start
+#                                   warns and asks)
 #   hardware_group: str             group of models that cannot run together
 #                                   (e.g. "media", "artgen")
 #   port:           int             host port the server answers on

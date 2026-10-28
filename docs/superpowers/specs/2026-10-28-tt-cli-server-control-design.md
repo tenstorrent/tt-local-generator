@@ -198,7 +198,7 @@ generalised URL dialog. A long start shows the boot checklist in the existing se
 ## 9. Calls made after the builder check (my calls, open to change)
 
 - **Chip count, port and hardware group for a `tt` catalog model.** Sources in order: for a bundle, `bundle.device_count` from `tt --json serve <model> --dry-run --offline`
-  (it is the default profile's count); then the `hardware` field of `tt model list --json`; then the override file. For a catalog model the dry-run gives only a device string,
+  (it is the default profile's count); then the override file (an explicit operator value); then the `hardware` field of `tt model list --json`. For a catalog model the dry-run gives only a device string,
   so the chip count may be unknown. The registry emits synthetic `ServerDef`-like entries (key, capabilities, hardware group,
   port) so `ready_to_run.plan_switch` and the lease size work unchanged. When no source gives a value, the start warns and asks; it does not block.
 - **`tt-ctl` output.** `servers --json` keeps its old shape. The merged view is `servers --all` and, under `--json`, an added `merged` key. Old keys and

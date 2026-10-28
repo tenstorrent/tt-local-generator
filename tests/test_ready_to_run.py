@@ -3,6 +3,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 import ready_to_run as rtr
+import server_registry as _sr
+import tt_backend as _tb
 
 
 def _status(map_):
@@ -54,8 +56,6 @@ def test_animate_maps_to_animate_server():
 
 
 # --- registry-aware plan_switch (Task 4) -----------------------------------
-import server_registry as _sr
-import tt_backend as _tb
 
 
 def _reg(*models):
