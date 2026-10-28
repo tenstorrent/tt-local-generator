@@ -153,3 +153,21 @@ def test_refresh_possibilities_is_noop_without_a_wall(monkeypatch):
     view = _make_view(monkeypatch)
     view._possibilities = None
     view.refresh_possibilities()  # must not raise
+
+
+def test_collect_params_unchanged_by_pick_music_medium(monkeypatch):
+    """Picking the Music tile only selects the medium and fills the prompt; no param is set directly."""
+    from create_mediums import Medium
+    music = Medium(id="music", label="Music", icon="\U0001f3b5", kind="audio", source="music",
+                   generator=None, uses_llm=False)
+    mf = lambda: _fake_mediums() + [music]  # noqa: E731
+    view = _make_view(monkeypatch, mediums_fn=mf)
+    m = music
+    view._on_possibility_picked(m, "a chorus about rain")
+    picked = view._collect_params()
+
+    view2 = _make_view(monkeypatch, mediums_fn=mf)
+    view2._chip_buttons[m.id].set_active(True)
+    view2._prompt_entry.set_text("a chorus about rain")
+    view2._doors["idea"].set_active(True)
+    assert picked == view2._collect_params()

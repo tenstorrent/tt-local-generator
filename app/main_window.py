@@ -1564,6 +1564,7 @@ popover.picker-popover > contents {
 .poss-grad-video { background-image: linear-gradient(135deg, #123f4a, #e0a24a); }
 .poss-grad-gif   { background-image: linear-gradient(135deg, #1a2b4a, #7d3a8f); }
 .poss-grad-text  { background-image: linear-gradient(135deg, #0b1f28, #2b6373); }
+.poss-grad-audio { background-image: linear-gradient(135deg, #1b2a3f, #c2566b); }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -4529,6 +4530,7 @@ class _StatusBar(Gtk.Box):
         # a video is being made is exactly the kind of true-but-misleading the
         # by-function bar exists to remove.
         self._seg_busy: dict = {}
+        self._seg_detail: dict = {}  # segment key -> tooltip text used while READY (Music: its servers)
 
         for _seg_key, _seg_label, _caps in _status_segments.SEGMENTS:
             holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -4685,7 +4687,8 @@ class _StatusBar(Gtk.Box):
             self._seg_names[seg_key].set_tooltip_text(f"{label}: {busy} generating")
             return
         if state == Status.READY:
-            tip = f"{label}: ready"
+            # A segment may carry a more specific line (Music names its servers).
+            tip = self._seg_detail.get(seg_key) or f"{label}: ready"
         elif state == Status.STARTING:
             tip = f"{label}: {self._seg_phase[seg_key]}… {self._elapsed_str(seg_key)}"
         elif state == Status.ERROR:
@@ -4740,6 +4743,13 @@ class _StatusBar(Gtk.Box):
         self._seg_state[seg_key] = state
         self._paint_segment(seg_key)
         self._sync_segment_timer()
+
+    def set_segment_detail(self, seg_key: str, text: str) -> None:
+        """Set the tooltip a READY segment shows (empty clears it). Main thread only."""
+        if seg_key not in self._seg_state:
+            return
+        self._seg_detail[seg_key] = text or ""
+        self._apply_segment_tooltip(seg_key)
 
     def update_segments(self, states: dict) -> None:
         """Repaint every segment from a `status_segments.segment_states()` map.
@@ -8471,8 +8481,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # independently. There is deliberately no aggregate any more — see
         # `status_segments.py`'s module docstring for why the old one lied.
         self._hw_statusbar.update_segments(
-            _status_segments.segment_states(snap, artgen_model=artgen_model)
+            _status_segments.segment_states(
+                snap, artgen_model=artgen_model,
+                # The list the background discovery refresh last delivered (`_apply_music_servers`).
+                music_servers=getattr(self, "_music_servers", ()),
+            )
         )
+        self._hw_statusbar.set_segment_detail(
+            "music", _status_segments.music_tooltip(getattr(self, "_music_servers", ())))
 
         # Recover Jobs (File menu): enabled iff a media server (video/image/
         # animate — NOT artgen/prompt, which _on_recover has nothing to do
@@ -8800,7 +8816,22 @@ class MainWindow(Gtk.ApplicationWindow):
                     view.set_music_servers(self._music_servers)
                 except Exception:  # noqa: BLE001
                     pass
+            self._paint_music_segment()
         return GLib.SOURCE_REMOVE
+
+    def _paint_music_segment(self) -> None:
+        """Main thread: repaint the Music status segment from the same list the Create panel received.
+        No second discovery: this reuses `self._music_servers`."""
+        bar = getattr(self, "_hw_statusbar", None)
+        if bar is None:
+            return
+        try:
+            servers = getattr(self, "_music_servers", ())
+            state = _status_segments.segment_states({}, music_servers=servers)["music"]
+            bar.update_segments({"music": state})
+            bar.set_segment_detail("music", _status_segments.music_tooltip(servers))
+        except Exception:  # noqa: BLE001 - a status-bar problem must not break discovery
+            pass
 
     def _create_inspire_fn(self, prompt_type, seed_text, on_result, on_error) -> None:
         # (prompt_type: str, seed_text: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None

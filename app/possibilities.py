@@ -59,6 +59,15 @@ _EXAMPLE_POOLS_BY_ID = {
         "curtains breathe in an empty room, afternoon light shifting",
         "a welder's sparks arc across a dark garage in slow motion",
     ],
+    # music: a server-backed medium. Tie-to-shown does not apply (`_example_for` is native-only), so a
+    # stored prompt, which may hold lyrics, never reaches a caption.
+    "music": [
+        "a slow synth ballad for a night drive through an empty city",
+        "a chorus about leaving the porch light on for someone who is not coming back",
+        "a lo-fi beat that sounds like rain on a tin roof",
+        "a brass band playing a funeral march that turns into a party",
+        "a verse about the last bus home, sung low over a single piano",
+    ],
     # artgen — text
     "verse": [
         "the final cartridge, the last checkpoint",
@@ -154,6 +163,7 @@ _GRADIENT_CLASS_BY_KIND = {
     "video": "poss-grad-video",
     "gif": "poss-grad-gif",
     "text": "poss-grad-text",
+    "audio": "poss-grad-audio",
 }
 _TILE_W, _TILE_H = 200, 104
 
@@ -186,6 +196,17 @@ def _bundled_tile_art_path(medium) -> "Optional[str]":
         return None
     p = os.path.join(_ASSETS_DIR, fn)
     return p if os.path.exists(p) else None
+
+
+def _record_filter_for(medium) -> tuple:
+    """(media_type, generator_type) that selects the records a medium's tile may show.
+    Music records are media_type "audio" (the medium id is "music"), so the id cannot be used directly."""
+    source = getattr(medium, "source", None)
+    if source == "artgen":
+        return "artgen", medium.generator
+    if source == "music":
+        return "audio", None
+    return medium.id, None
 
 
 def _pool_for(medium) -> list:
@@ -337,8 +358,7 @@ class PossibilitiesWall(Gtk.Box):
         `_resolve_tile_art`), or None. Mirrors that tier's exact condition
         (starred + a thumbnail that exists on disk) so the copy can only ever
         describe a piece that is genuinely the one on the tile."""
-        mt = "artgen" if medium.source == "artgen" else medium.id
-        gt = medium.generator if medium.source == "artgen" else None
+        mt, gt = _record_filter_for(medium)
         try:
             for r in (self._store.query(media_type=mt, generator_type=gt,
                                         starred=True, limit=1) or []):
@@ -389,8 +409,7 @@ class PossibilitiesWall(Gtk.Box):
         return bool(key) and (n.rstrip("s") == key or n.rstrip("s") == key.rstrip("s"))
 
     def _resolve_tile_art(self, medium):
-        mt = "artgen" if medium.source == "artgen" else medium.id
-        gt = medium.generator if medium.source == "artgen" else None
+        mt, gt = _record_filter_for(medium)
         # 1. An explicit user pick wins over everything — the most-recent
         #    STARRED piece of this medium. Starring IS curation (unlike an
         #    arbitrary recent generation, which we deliberately don't surface),
@@ -442,7 +461,8 @@ class PossibilitiesWall(Gtk.Box):
         # since surfacing an arbitrary recent artgen put unflattering/test
         # artifacts on those tiles (the reason curated-only was introduced). A
         # native medium you've never generated in still degrades to the gradient.
-        if medium.source == "native":
+        # Music joins them: its tile shows the latest song's waveform (a thumbnail may be "", then skipped).
+        if medium.source in ("native", "music"):
             try:
                 recs = self._store.query(media_type=mt, limit=8)
             except Exception:

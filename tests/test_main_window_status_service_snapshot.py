@@ -149,6 +149,9 @@ class _FakeStatusBar:
     def update_segments(self, states):
         self.segment_calls.append(dict(states))
 
+    def set_segment_detail(self, seg_key, text):
+        pass
+
     @property
     def segments(self):
         """The most recently painted segment map (the bar's current state)."""
