@@ -64,6 +64,7 @@ from worker import (
     AnimateGenerationWorker,
     GenerationWorker,
     ImageGenerationWorker,
+    MusicGenerationWorker,
 )
 import attractor
 import prompt_client
@@ -1718,6 +1719,10 @@ _VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
 # "animatediff"`, `self._image_model = "flux"` in `ControlPanel.__init__`) so
 # a caller that omits model selection entirely still behaves the way it did
 # before `_on_generate` read those defaults off `self._controls`.
+# How often a music job asks its server for progress, and how often the Music server list is refreshed (seconds).
+_MUSIC_POLL_S = 2.0
+_MUSIC_DISCOVERY_INTERVAL_S = 10
+
 _DEFAULT_VIDEO_KEY = "animatediff"
 _DEFAULT_IMAGE_KEY = "flux"
 
@@ -5959,6 +5964,8 @@ class MainWindow(Gtk.ApplicationWindow):
             on_create=self._on_create_generate,
             status_service=self._status_service,
             inspire_fn=self._create_inspire_fn,
+            # Music: discovery blocks, so it is asked for here and run on a thread (`_refresh_music_servers`).
+            on_music_selected=self._refresh_music_servers,
             # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
             # below) — reuses `generate_theme.generate_theme()`, the SAME
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
@@ -5970,6 +5977,8 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         # Apply the persisted Monitor-HW preference now that CreateView exists.
         self._apply_hw_monitor_startup()
+        # Music servers: once now, then every few seconds (a server can come and go while the app is open).
+        self._start_music_discovery_timer()
         # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
         # `self._create_view` existed) may already have repopulated
         # `self._queue` from a crash/restart — `_refresh_create_queue_display`
@@ -6418,6 +6427,7 @@ class MainWindow(Gtk.ApplicationWindow):
             "animate": "\U0001f483 Animate",
             "image":   "\U0001f5bc️ Image",
             "artgen":  "\U0001f3a8 Art",
+            "music":   "\U0001f3b5 Music",
         }
         title = _TITLES.get(source, "\U0001f3a5 Video")
 
@@ -7136,6 +7146,10 @@ class MainWindow(Gtk.ApplicationWindow):
         any other medium gallery, so it no longer needs extra width.
         """
         self._uncheck_pipelines_toggle_if_active()
+        # A source with no gallery page of its own (Music until the audio gallery exists) shows the video page
+        # rather than leaving the stack on whatever it showed before.
+        if self._gallery_stack.get_child_by_name(source) is None:
+            source = "video"
         self._gallery_stack.set_visible_child_name(source)
         self._rebuild_context_menu(source)
         # Re-establish a deterministic gallery|detail split on every switch so
@@ -8667,6 +8681,59 @@ class MainWindow(Gtk.ApplicationWindow):
     # rather than fork them, so nothing about prompt generation or theme
     # batches is lost — only the ControlPanel-only launch UI is gone.
 
+    # ── Music servers (discovery blocks, so it never runs on the GTK thread) ───────────────────────
+
+    def _discover_music_servers(self, saved: list) -> list:
+        """The blocking half of discovery. A method so tests can replace it; never call it on the GTK thread."""
+        import music_runtime
+        return music_runtime.discover_music_servers(saved)
+
+    def _start_music_discovery_timer(self) -> None:
+        self._music_servers = []
+        self._music_discovering = False
+        self._refresh_music_servers()
+        try:
+            GLib.timeout_add_seconds(_MUSIC_DISCOVERY_INTERVAL_S, self._music_discovery_tick)
+        except Exception:  # noqa: BLE001 - no timer means no refresh, never a failed startup
+            pass
+
+    def _music_discovery_tick(self) -> bool:
+        """GLib timer: refresh while the window is alive."""
+        if not getattr(self, "_alive", True):
+            return GLib.SOURCE_REMOVE
+        self._refresh_music_servers()
+        return GLib.SOURCE_CONTINUE
+
+    def _refresh_music_servers(self) -> None:
+        """Run discovery on a background thread and hand the result to the Create panel on the main thread.
+        One run at a time: a slow probe must not pile up behind the timer."""
+        if getattr(self, "_music_discovering", False):
+            return
+        self._music_discovering = True
+        saved = list(_settings.get("music_servers") or [])      # read on the GTK thread; the thread gets a copy
+
+        def run():
+            try:
+                servers = self._discover_music_servers(saved)
+            except Exception:  # noqa: BLE001 - keep the last list rather than blank the dropdown
+                servers = None
+            GLib.idle_add(self._apply_music_servers, servers)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _apply_music_servers(self, servers) -> bool:
+        """Main thread: take a discovery result (None = it failed, keep what is shown)."""
+        self._music_discovering = False
+        if servers is not None and getattr(self, "_alive", True):
+            self._music_servers = list(servers)
+            view = getattr(self, "_create_view", None)
+            if view is not None:
+                try:
+                    view.set_music_servers(self._music_servers)
+                except Exception:  # noqa: BLE001
+                    pass
+        return GLib.SOURCE_REMOVE
+
     def _create_inspire_fn(self, prompt_type, seed_text, on_result, on_error) -> None:
         # (prompt_type: str, seed_text: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
         """CreateView's "Inspire me" seam (SP-3c-3) — drives the same
@@ -9027,6 +9094,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # (AnimateDiff runs locally, no server needed), exactly as before.
         if self._active_medium_is_animatediff():
             current_source = "animatediff"
+        elif current_source == "music":
+            current_source = "video"    # TT-TV only makes pictures; with Music selected it runs on the video model
 
         try:
             win = attractor.AttractorWindow(
@@ -9669,6 +9738,11 @@ class MainWindow(Gtk.ApplicationWindow):
                     f"{medium.label} can't be queued yet; try again once it finishes."
                 )
             return
+        if medium.source == "music":
+            # The app never starts music servers (the user does, with tt-model), so there is no server to ready
+            # or switch to: the gate would only be asked about something it cannot act on.
+            self._launch_create_job(medium, params)
+            return
         # RN-S: make sure the server this job needs is ready first. If it is
         # (or there's nothing to start), launch now; otherwise a confirm dialog
         # starts it (stopping + resetting a conflicting server) and launches
@@ -9689,6 +9763,9 @@ class MainWindow(Gtk.ApplicationWindow):
             elif medium.source == "artgen":
                 self._begin_create_job(medium, params)
                 self._create_generate_artgen(medium, params)
+            elif medium.source == "music":
+                self._begin_create_job(medium, params)
+                self._create_generate_music(medium, params)
             else:
                 self._set_status(f"Don't know how to generate a {medium.label} yet.")
         except Exception as exc:
@@ -10223,6 +10300,89 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _create_generate_music(self, medium, params: dict) -> None:
+        """Music: build a `MusicGenerationWorker` for the server the panel chose and run it on a thread.
+
+        No server gate (see `_on_create_generate`). Every terminal path ends in `_on_create_music_finished` or
+        `_on_create_music_error`, and the error one calls `_fail_create_job`, so the result panel never stays on
+        "pending". The token travels only inside the worker's client; nothing here logs or stores it."""
+        import music_runtime as mr
+        from media_store import STORAGE_DIR
+        from media_store import media_store as _ms
+
+        def _fail(msg: str) -> None:
+            self._set_status(msg)
+            self._fail_create_job(msg)
+
+        url = params.get("server_url") or ""
+        server = next((s for s in getattr(self, "_music_servers", []) if s.url == url), None)
+        if server is None or not server.up or server.profile is None:
+            _fail("No music server is running at the chosen address. Start one with tt-model serve, or pick another.")
+            return
+        try:
+            request = mr.MusicRequest(
+                prompt=params.get("prompt", ""), lyrics=params.get("lyrics"), seconds=float(params.get("seconds", 0)),
+                seed=params.get("seed"), steps=params.get("steps"), cfg_scale=params.get("cfg_scale"),
+                instrumental=bool(params.get("instrumental", False)))
+        except (TypeError, ValueError) as exc:
+            _fail(f"The music settings are not valid: {exc}")
+            return
+        try:
+            _settings.set("music_last_server", server.url)          # the panel preselects it next time
+        except Exception:  # noqa: BLE001 - a settings write must not stop a song
+            pass
+
+        worker = MusicGenerationWorker(_ms, server, request, STORAGE_DIR / "music", token=server.token,
+                                       poll_s=_MUSIC_POLL_S)
+        self._music_worker = worker
+        self._set_status(f"Generating {medium.label}…")
+
+        def run():
+            try:
+                worker.run_with_callbacks(
+                    on_progress=lambda msg: GLib.idle_add(self._on_create_music_progress, msg),
+                    on_finished=lambda rec: GLib.idle_add(self._on_create_music_finished, rec),
+                    on_error=lambda msg: GLib.idle_add(self._on_create_music_error, medium, msg),
+                )
+            except Exception as exc:  # noqa: BLE001 - the worker reports its own errors; this is the last resort
+                GLib.idle_add(self._on_create_music_error, medium, f"Music generation failed: {exc}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_create_music_progress(self, msg: str) -> bool:
+        """Main thread: forward a progress line to the Create result panel (a no-op once the job is over)."""
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_music_finished(self, record) -> bool:
+        """Main thread: show the finished song and clear the Create-job flag."""
+        try:
+            from media_store import media_store as _ms
+            _ms.ensure_auto_playlists()
+        except Exception:  # noqa: BLE001
+            pass
+        self._music_worker = None
+        self._set_status("Music ready.")
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:  # noqa: BLE001
+                pass
+            self._create_job_active = False
+        self._clear_local_busy()
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_music_error(self, medium, msg: str) -> bool:
+        """Main thread: a failed or cancelled song. `_fail_create_job` moves the panel off "pending"."""
+        self._music_worker = None
+        self._set_status(f"Couldn't generate {medium.label}: {msg}")
+        self._fail_create_job(msg)
+        return GLib.SOURCE_REMOVE
+
     def _on_create_artgen_done(self, medium) -> bool:
         """Main-thread completion callback for `_create_generate_artgen`."""
         self._set_status(f"{medium.label} ready.")
@@ -10278,6 +10438,11 @@ class MainWindow(Gtk.ApplicationWindow):
         `_SERVER_KEY_TO_SOURCE_MODEL`) instead of
         `self._controls.get_video_model()`/`get_image_model()`.
         """
+        if model_source == "music":
+            # The default below is the Wan2.2 script: a Music "start" must never launch that. The app does not start
+            # music servers.
+            self._set_status("Music servers are started outside the app: tt-model serve <model>.")
+            return
         model_key = self._current_medium_model_key(model_source)
 
         script_name, label = _SERVER_SCRIPTS.get(
@@ -10427,6 +10592,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_stop_server(self) -> None:
         """Run the stop command (via start_wan.sh --stop) in a background thread."""
+        if self._current_medium_source() == "music":
+            # This stops the shared port-8000 media container. The app did not start the music server and
+            # must not stop an unrelated one on its behalf.
+            self._set_status("Music servers are stopped outside the app.")
+            return
         # Stop any active log tail before clearing the log panel
         if self._log_tail_stop:
             self._log_tail_stop.set()

@@ -77,6 +77,8 @@ _MODE_BY_MEDIUM_ID = {
     "video": "video",
     "animate": "video",
     "animatediff": "diffusion",
+    # Music runs on a remote server: the app sees no chip activity for it, so the generic pulse.
+    "music": "inference",
 }
 
 # Human-readable mode captions for the header (keys are tensix-viz modes).

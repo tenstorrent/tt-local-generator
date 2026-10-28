@@ -41,11 +41,12 @@ class Medium:
                 Never a raw class_type or internal tool name.
     icon      — one emoji for the compact chip.
     kind      — the output KIND this medium produces: "image" | "video" |
-                "gif" | "text". Artgen mediums report the kind matching how
+                "gif" | "text" | "audio". Artgen mediums report the kind matching how
                 their results are stored/played in the gallery (e.g. "gif"
                 for animatediff's animated clips).
-    source    — "native" (a GenerationWorker medium the app drives directly)
-                or "artgen" (routed through an artgen generator).
+    source    — "native" (a GenerationWorker medium the app drives directly),
+                "artgen" (routed through an artgen generator) or "music"
+                (a music job server, MusicGenerationWorker).
     generator — the artgen generator name for source="artgen" mediums, else
                 None for native mediums.
     uses_llm  — whether this medium's generation drives the chat-LLM backend
@@ -84,6 +85,13 @@ _NATIVE_MEDIUMS: tuple[Medium, ...] = (
     Medium(id="video", label="Video", icon="🎥", kind="video",
            source="native", generator=None),
 )
+
+
+# Music is its own source: a job API on a server the app never starts (see music_runtime.py), so
+# it is neither native (GenerationWorker) nor artgen (tt-ctl). kind="audio" is the first audio kind;
+# every site that switches on `kind` or `source` gives it a defined behaviour (see the Task 5 commit).
+_MUSIC_MEDIUM = Medium(id="music", label="Music", icon="🎵", kind="audio",
+                       source="music", generator=None, uses_llm=False)
 
 
 # ── Artgen generator → (label, icon) ──────────────────────────────────────
@@ -218,6 +226,7 @@ def discover_mediums(
             # One bad entry must not take down discovery of the rest.
             continue
 
+    mediums.append(_MUSIC_MEDIUM)
     return mediums
 
 
@@ -266,6 +275,7 @@ _VISUAL_TEXTUAL_ORDER: tuple = (
     "palette",                                                    # pure color
     "ansi",                                                       # visual-but-made-of-text bridge
     "codeart", "freeform", "verse",                              # text
+    "music",                                                      # audio: after everything with a picture or words
 )
 
 

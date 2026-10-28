@@ -994,3 +994,110 @@ class AnimateDiffGenerationWorker:
             txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except Exception as _e:
             logging.warning("sidecar write failed for %s: %s", txt_path, _e)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MusicGenerationWorker (music generation, Task 5)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MusicGenerationWorker:
+    """One music job against a music server (music_runtime.MusicClient). No GUI imports.
+
+    Same callback shape as the other workers: `run_with_callbacks(on_progress, on_finished, on_error)`, called from a
+    thread, each callback wrapped in `GLib.idle_add` by MainWindow. On success the audio is written into `out_dir` (the
+    Library storage directory) and a `media_store.MediaRecord` (media_type "audio", generator_type "music") is added to
+    `store` and handed to `on_finished`. Every failure ends in exactly one `on_error` call with a plain sentence. A job
+    that is abandoned (cancel, server gone) is cancelled on the server by `MusicClient.generate`.
+
+    The bearer token goes to the client and nowhere else: the record never holds it, and every message passes
+    through `_scrub` so a server that echoes request headers into an error body cannot leak it.
+    """
+
+    def __init__(self, store, server, request, out_dir: Path, token: "str | None" = None, poll_s: float = 2.0):
+        self._store = store
+        self._server = server
+        self._request = request
+        self._out_dir = Path(out_dir)
+        self._token = token if token is not None else getattr(server, "token", None)
+        self._poll_s = poll_s
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Ask the running job to stop. Takes effect at the next poll; the job is then cancelled on the server."""
+        self._cancelled = True
+
+    def _scrub(self, text) -> str:
+        text = str(text)
+        return text.replace(self._token, "***") if self._token else text
+
+    def _save(self, result) -> "object":
+        """Write the audio file and build + store the MediaRecord. Raises OSError if the disk refuses."""
+        import json
+        from datetime import datetime, timezone
+
+        from media_store import MediaRecord
+
+        profile = self._server.profile
+        self._out_dir.mkdir(parents=True, exist_ok=True)
+        rec_id = str(uuid.uuid4())
+        path = self._out_dir / f"music_{rec_id[:8]}.{result.audio_format}"
+        path.write_bytes(result.audio)
+        req = self._request
+        params = {
+            "prompt": req.prompt,
+            "lyrics": None if req.instrumental else req.lyrics,
+            "seconds_asked": req.seconds,
+            # What the server reports having made. A song can end before the length asked for (MiniMax stops when the
+            # lyrics do), so this is never replaced by the asked-for length.
+            "seconds_got": result.seconds_got,
+            "ended": result.ended,
+            "seed": result.seed,
+            "steps": req.steps,
+            "cfg_scale": req.cfg_scale,
+            "server_url": self._server.url,
+            "credit": profile.credit if profile is not None else "",
+            "source_clip": None,
+        }
+        rec = MediaRecord(
+            id=rec_id, media_type="audio", created_at=datetime.now(timezone.utc).isoformat(),
+            file_path=str(path),
+            # Task 6 adds the waveform thumbnail (audio_thumb) and fills this in; until then an honest empty path.
+            thumbnail_path="",
+            prompt=req.prompt[:500], model_id=profile.model_id if profile is not None else "music",
+            generator_type="music", params=json.dumps(params), starred=0,
+        )
+        # CreateResultPanel reads `media_file_path` (the native GenerationRecord's name); same duck-typed alias artgen sets.
+        rec.media_file_path = str(path)
+        self._store.add(rec)
+        return rec
+
+    def run_with_callbacks(self, on_progress: Callable[[str], None], on_finished: Callable[[object], None],
+                           on_error: Callable[[str], None]) -> None:
+        import music_runtime as mr
+
+        try:
+            client = mr.MusicClient(self._server.url, self._server.profile, self._token)
+            on_progress("Sending the job to the music server...")
+            result = client.generate(self._request, on_progress=on_progress, poll_s=self._poll_s,
+                                     should_cancel=lambda: self._cancelled)
+        except mr.ServerBusy as e:
+            on_error(self._scrub(e))
+            return
+        except mr.ServerDown as e:
+            on_error(self._scrub(e) + " Try again once it is back.")
+            return
+        except mr.MusicServerError as e:
+            on_error("Cancelled." if self._cancelled else self._scrub(e))
+            return
+        except ValueError as e:                     # the client's own check of the request, before anything was sent
+            on_error(self._scrub(e))
+            return
+        except Exception as e:                      # noqa: BLE001 - one plain message, never a traceback in the panel
+            on_error(self._scrub(f"Music generation failed: {type(e).__name__}: {e}"))
+            return
+        try:
+            rec = self._save(result)
+        except Exception as e:                      # noqa: BLE001
+            on_error(self._scrub(f"The song was made but could not be saved: {e}"))
+            return
+        on_finished(rec)

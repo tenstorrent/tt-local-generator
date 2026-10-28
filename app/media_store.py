@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 @dataclass
 class MediaRecord:
     id: str
-    media_type: str          # "video" | "image" | "animate" | "artgen"
+    media_type: str          # "video" | "image" | "animate" | "artgen" | "audio" (music)
     created_at: str          # ISO 8601
     file_path: str
     thumbnail_path: str
