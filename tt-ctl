@@ -10,11 +10,22 @@ history.json files that the GUI persists on every mutation.
 Usage:
     tt-ctl status                   Server health, queue depth, history summary
     tt-ctl servers                  Live status of every managed service
+    tt-ctl servers --all            Also list every running model server (tt containers,
+                                    scripts, remote) and held leases
+    tt-ctl servers --json           {"services": [...]}; with --all also "merged",
+                                    "held_leases" and "tt_note"
     tt-ctl start <service>          Start a service (wan2.2 | mochi | flux | animate |
                                     skyreels | artgen-qwen3-8b | prompt-server | all)
+                                    or a tt catalog model name / tt-model bundle id
+                                    (namespace/name). Old keys behave exactly as they
+                                    always did; tt names ask before stopping or
+                                    switching anything. Flags for tt names:
+                                    --yes (switch / unknown-hardware questions)
+                                    --yes-stop-external (also stop a server tt-local-
+                                    generator did not start)
     tt-ctl start --single-chip      Start artgen + prompt-server only
                                     (single Blackhole card or CPU-only)
-    tt-ctl stop  <service>          Stop a service (same keys as start)
+    tt-ctl stop  <service>          Stop a service (same keys and names as start)
     tt-ctl restart <service>        Stop then re-start a service
     tt-ctl queue                    List pending queue items
     tt-ctl queue add "prompt"       Append a prompt to the persistent queue
@@ -354,8 +365,11 @@ def cmd_servers(args):
         _reg, servers, ps_ok, ps_reason = server_runtime.snapshot_detail(
             script_health=statuses)
         merged = [_merged_dict(s) for s in servers]
-        held = [{"name": r.get("name"), "lease_id": r.get("lease_id")}
-                for r in ServerRecords().load() if _is_held_record(r)]
+        try:
+            held = [{"name": r.get("name"), "lease_id": r.get("lease_id")}
+                    for r in ServerRecords().load() if _is_held_record(r)]
+        except Exception:
+            held = []
 
     if want_json:
         out = {"services": _service_rows(statuses)}
@@ -500,71 +514,105 @@ def _resolve_service_arg(args) -> str:
     return args.service
 
 
-def _service_names(args):
-    """(display keys, is_old_key) for the request; expands ``all`` and --single-chip."""
+def _is_old_key(args):
+    """Old-key requests (anything in server_manager.SERVERS, ``all``, --single-chip)
+    keep the legacy behaviour: same stdout lines, same exit codes, no prompts."""
+    if getattr(args, "single_chip", False):
+        return True
+    return args.service in sm.SERVERS or args.service == sm.ALL_KEY
+
+
+def _legacy_control(args, boutique):
+    import server_runtime
+    return server_runtime.build_server_control(lambda k, t: False, boutique=boutique)
+
+
+def _legacy_start(args):
+    """Old `tt-ctl start`, byte for byte: failures print their lines and exit 0."""
     key = _resolve_service_arg(args)
-    if key in (sm.ALL_KEY, sm.ONE_CHIP_KEY) or key in sm.SERVERS:
-        return [(d.key, d.label) for d in sm._resolve(key)], True
-    return [(key, key)], False
-
-
-def _progress(msg):
-    print(dim(f"     {msg}"), file=sys.stderr)
-
-
-def _start_one(ctl, boutique, key, label, old):
-    """Start one service; print the old per-service lines. True on success."""
-    registry = ctl._registry()
-    entry = _registry_entry(registry, key)
-    target = entry.key if entry is not None else key
-    outcome = ctl.start(target, on_progress=_progress)
-    ok = not _outcome_failed(outcome.kind)
-    results = boutique.last_start.get(target, [])
-    if outcome.kind == "started" and results:
-        print(green("✓") + f"  {key} started")
-        for r in results:
-            if (r.stdout or "").strip():
-                for line in r.stdout.strip().splitlines()[-4:]:
+    sdefs = sm._resolve(key)
+    for sdef in sdefs:
+        print(f"Starting {teal(sdef.key)} — {sdef.label}…")
+    import server_runtime
+    ctl = _legacy_control(args, server_runtime.RecordingBoutique(
+        blocking=getattr(args, "blocking", False)))
+    results = ctl.start_legacy(key)
+    for sdef, result in zip(sdefs, results):
+        if result.returncode == 0:
+            print(green("✓") + f"  {sdef.key} started")
+            if result.stdout.strip():
+                for line in result.stdout.strip().splitlines()[-4:]:
                     print(dim(f"     {line}"))
-    elif outcome.kind == "started":
-        print(green("✓") + f"  {key} started" + (f" ({outcome.url})" if outcome.url else ""))
-    elif outcome.kind == "already_running":
-        print(green("✓") + f"  {key} already running" + (f" ({outcome.url})" if outcome.url else ""))
-    else:
-        bad = [r for r in results if r.returncode != 0]
-        if bad:
-            print(red("✗") + f"  {key} failed (exit {bad[0].returncode})")
-            if (bad[0].stderr or "").strip():
-                for line in bad[0].stderr.strip().splitlines()[-6:]:
-                    print(red(f"     {line}"))
         else:
-            print(red("✗") + f"  {key} {outcome.kind.replace('_', ' ')}")
+            print(red("✗") + f"  {sdef.key} failed (exit {result.returncode})")
+            if result.stderr.strip():
+                for line in result.stderr.strip().splitlines()[-6:]:
+                    print(red(f"     {line}"))
+
+
+def _legacy_stop_results(args, key, sdefs):
+    import server_runtime
+    ctl = _legacy_control(args, server_runtime.RecordingBoutique())
+    return ctl, ctl.stop_legacy(key, names=[d.key for d in sdefs])
+
+
+def _legacy_stop(args):
+    key = _resolve_service_arg(args)
+    sdefs = sm._resolve(key)
+    for sdef in sdefs:
+        print(f"Stopping {teal(sdef.key)}…")
+    _ctl, results = _legacy_stop_results(args, key, sdefs)
+    for sdef, result in zip(sdefs, results):
+        if result.returncode == 0:
+            print(green("✓") + f"  {sdef.key} stopped")
+        else:
+            print(red("✗") + f"  {sdef.key} stop failed (exit {result.returncode})")
+            if result.stderr.strip():
+                for line in result.stderr.strip().splitlines()[-4:]:
+                    print(red(f"     {line}"))
+
+
+def _legacy_restart(args):
+    key = _resolve_service_arg(args)
+    sdefs = sm._resolve(key)
+    print(f"Restarting {teal(key)}…")
+    ctl, _ = _legacy_stop_results(args, key, sdefs)
+    print(dim("  stopped — starting…"))
+    results = ctl.start_legacy(key, gui=not getattr(args, "blocking", False))
+    for sdef, result in zip(sdefs, results):
+        if result.returncode == 0:
+            print(green("✓") + f"  {sdef.key} restarted")
+        else:
+            print(red("✗") + f"  {sdef.key} restart failed (exit {result.returncode})")
+
+
+# ── new names (tt catalog names / bundle ids): the strict ServerControl path ──
+
+def _start_new(ctl, boutique, key):
+    """Start one tt-named model; print its lines. True on success."""
+    entry = _registry_entry(ctl.registry(), key)
+    target = entry.key if entry is not None else key
+    outcome = ctl.start(target)
+    url = f" ({outcome.url})" if outcome.url else ""
+    if outcome.kind == "started":
+        print(green("✓") + f"  {key} started{url}")
+    elif outcome.kind == "already_running":
+        print(green("✓") + f"  {key} already running{url}")
+    else:
+        print(red("✗") + f"  {key} {outcome.kind.replace('_', ' ')}")
         if outcome.message:
             print(red(f"     {outcome.message}") if outcome.kind == "failed"
                   else dim(f"     {outcome.message}"))
-    return ok
+    return not _outcome_failed(outcome.kind)
 
 
-def _stop_targets(ctl, key):
-    """RunningServer rows to stop for ``key``. An old key with no row still gets
-    a stand-in so its stop script runs, as the old `tt-ctl stop` did."""
-    from server_view import RunningServer
+def _stop_new(ctl, key):
+    """Stop one tt-named model (asks first when the app did not start it)."""
     import server_runtime
     registry, servers, _ok = server_runtime.snapshot()
     entry = _registry_entry(registry, key)
     ekey = entry.key if entry is not None else key
     rows = [s for s in servers if s.key == ekey and s.host_is_local]
-    if not rows and entry is not None and entry.sm_key:
-        rows = [RunningServer(key=ekey, name=entry.name, source="script", url=None,
-                              host_is_local=True, port=entry.port, health="unknown",
-                              uptime_s=None, container=None, container_id=None,
-                              served_id=entry.served_id, owner="app")]
-    return rows
-
-
-def _stop_one(ctl, boutique, key, old, verb="stopped"):
-    """Stop one service; print the old lines. True on success."""
-    rows = _stop_targets(ctl, key)
     if not rows:
         print(dim(f"  {key} is not running"))
         return True
@@ -572,66 +620,51 @@ def _stop_one(ctl, boutique, key, old, verb="stopped"):
     for row in rows:
         outcome = ctl.stop(row)
         if outcome.kind == "stopped":
-            print(green("✓") + f"  {key} {verb}")
-            continue
-        ok = False
-        results = boutique.last_stop.get(row.key, [])
-        bad = [r for r in results if r.returncode != 0]
-        if bad:
-            print(red("✗") + f"  {key} stop failed (exit {bad[0].returncode})")
-            if (bad[0].stderr or "").strip():
-                for line in bad[0].stderr.strip().splitlines()[-4:]:
-                    print(red(f"     {line}"))
+            print(green("✓") + f"  {key} stopped")
         else:
+            ok = False
             print(red("✗") + f"  {key} {outcome.kind.replace('_', ' ')}")
-        print(dim(f"     {outcome.message}"))
+            print(dim(f"     {outcome.message}"))
     return ok
 
 
-def cmd_start(args):
-    names, old = _service_names(args)
-    for key, label in names:
-        print(f"Starting {teal(key)} — {label}…")
+def _new_control(args):
     import server_runtime
     boutique = server_runtime.RecordingBoutique(blocking=getattr(args, "blocking", False))
-    ctl = _build_cli_control(args, boutique)
-    ok = True
-    for key, label in names:
-        ok = _start_one(ctl, boutique, key, label, old) and ok
-    if not ok:
+    return _build_cli_control(args, boutique), boutique
+
+
+def cmd_start(args):
+    if _is_old_key(args):
+        return _legacy_start(args)
+    key = _resolve_service_arg(args)
+    print(f"Starting {teal(key)} — {key}…")
+    ctl, boutique = _new_control(args)
+    if not _start_new(ctl, boutique, key):
         sys.exit(1)
 
 
 def cmd_stop(args):
-    names, old = _service_names(args)
-    for key, _label in names:
-        print(f"Stopping {teal(key)}…")
-    import server_runtime
-    boutique = server_runtime.RecordingBoutique()
-    ctl = _build_cli_control(args, boutique)
-    ok = True
-    for key, _label in names:
-        ok = _stop_one(ctl, boutique, key, old) and ok
-    if not ok:
+    if _is_old_key(args):
+        return _legacy_stop(args)
+    key = _resolve_service_arg(args)
+    print(f"Stopping {teal(key)}…")
+    ctl, _b = _new_control(args)
+    if not _stop_new(ctl, key):
         sys.exit(1)
 
 
 def cmd_restart(args):
-    names, old = _service_names(args)
+    if _is_old_key(args):
+        return _legacy_restart(args)
     key = _resolve_service_arg(args)
     print(f"Restarting {teal(key)}…")
-    import server_runtime
-    boutique = server_runtime.RecordingBoutique(blocking=getattr(args, "blocking", False))
-    ctl = _build_cli_control(args, boutique)
-    for k, _label in names:
-        if not _stop_one(ctl, boutique, k, old):
-            print(red("✗") + f"  {k} not stopped; not restarting")
-            sys.exit(1)
+    ctl, boutique = _new_control(args)
+    if not _stop_new(ctl, key):
+        print(red("✗") + f"  {key} not stopped; not restarting")
+        sys.exit(1)
     print(dim("  stopped — starting…"))
-    ok = True
-    for k, label in names:
-        ok = _start_one(ctl, boutique, k, label, old) and ok
-    if not ok:
+    if not _start_new(ctl, boutique, key):
         sys.exit(1)
 
 
@@ -1397,7 +1430,8 @@ def _build_parser() -> argparse.ArgumentParser:
         _sp.add_argument("service", nargs="?", type=_service_type, metavar="SERVICE",
                          help=_service_help)
         _sp.add_argument("--single-chip", action="store_true", dest="single_chip",
-                         help="Start artgen + prompt-server (single Blackhole card or CPU-only)")
+                         help=f"{_verb.capitalize()} artgen + prompt-server "
+                              "(single Blackhole card or CPU-only)")
         _sp.add_argument("--yes", action="store_true",
                          help="Answer yes to switch / unknown-hardware / unknown-chips / "
                               "adopt questions (not to stopping someone else's server)")

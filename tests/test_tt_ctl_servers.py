@@ -68,6 +68,7 @@ class Env:
         self.bin = tmp_path / "bin"
         self.alive: dict[str, bool] = {}
         self.start_rc = 0
+        self.stop_rc = 0
         self.script_calls: list[tuple] = []
         monkeypatch.setenv("PATH", str(self.bin))
         monkeypatch.delenv("TTLG_NO_DEPRECATION_NOTE", raising=False)
@@ -91,8 +92,11 @@ class Env:
             self.script_calls.append(("stop", key))
             out = []
             for sdef in sm._resolve(key):
-                self.alive[sdef.key] = False
-                out.append(subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+                if self.stop_rc == 0:
+                    self.alive[sdef.key] = False
+                out.append(subprocess.CompletedProcess(
+                    [], self.stop_rc, stdout="",
+                    stderr="stopfail\n" if self.stop_rc else ""))
             return out
 
         monkeypatch.setattr(sm, "start", fake_start)
@@ -224,11 +228,21 @@ def test_logs_gains_only_the_note(env, run, main_cli, cli, monkeypatch):
     assert merr == "" and err == NOTE + "\n"
 
 
-def test_exit_codes_unchanged_for_failed_start(env, run):
+def test_old_key_failed_start_keeps_exit_zero_and_old_lines(env, run):
+    """The old code exited 0 even when the script failed; kept on purpose."""
     env.start_rc = 3
     code, out, _ = run("start", "prompt-server")
-    assert code == 1
+    assert code == 0
     assert "✗  prompt-server failed (exit 3)" in out and "boom" in out
+    assert "What was started" not in out and "Last output" not in out
+    assert not any(c[0] == "stop" for c in env.script_calls)
+
+
+def test_new_name_failed_start_exits_one(env, run):
+    env.set_tt({"model serve": {"stderr": "nope", "exit": 1},
+                "serve": {"stderr": "nope", "exit": 1}})
+    code, out, _ = run("start", "ns/bundle", "--yes", "--yes-stop-external")
+    assert code == 1 and "✗  ns/bundle" in out
 
 
 # -------------------------------------------------------- stop / prompts
@@ -268,11 +282,7 @@ def test_no_tty_declines_every_prompt_and_says_which_flag_would_allow_it(env, ru
     code, out, _ = run("stop", "ns/bundle")
     assert code == 1
     assert "Declined (no terminal)" in out and "Re-run with --yes-stop-external" in out
-    # a switch question names --yes
-    env.alive = {"wan2.2": True}
-    code, out, _ = run("start", "flux")
-    assert "Re-run with --yes to allow it" in out and code == 1
-    assert ("start", "flux", True) not in env.script_calls
+    assert not any(c[:2] == ["model", "stop"] for c in env.tt_argv())
 
 
 def test_confirm_returns_only_literal_true(cli, monkeypatch):
@@ -312,10 +322,101 @@ def test_tt_model_name_accepted_as_a_key(env, run):
     assert "http://127.0.0.1:20000" in out
 
 
-def test_restart_stops_then_starts_with_old_lines(env, run):
+def test_restart_old_key_uses_the_old_lines_only(env, run):
     env.alive = {"prompt-server": True}
     env.script_calls.clear()
-    code, out, _ = run("restart", "prompt-server", "--yes-stop-external")
+    code, out, _ = run("restart", "prompt-server")
     assert code == 0
-    assert "Restarting prompt-server" in out and "stopped — starting…" in out
+    assert out == ("Restarting prompt-server…\n  stopped — starting…\n"
+                   "✓  prompt-server restarted\n")
     assert [c[0] for c in env.script_calls] == ["stop", "start"]
+
+
+def test_prerm_style_stop_without_tty_stops_unrecorded_old_key_servers(env, run):
+    """debian/prerm runs `stop all` and `stop prompt-server` as root, no TTY, no flags."""
+    env.alive = {"wan2.2": True, "prompt-server": True}
+    code, out, _ = run("stop", "all")
+    assert code == 0 and env.alive == {"wan2.2": False, "prompt-server": False}
+    env.alive = {"prompt-server": True}
+    code, out, _ = run("stop", "prompt-server")
+    assert code == 0 and "✓  prompt-server stopped" in out
+    assert "Declined" not in out
+
+
+def test_new_name_restart(env, run):
+    env.set_tt({}, ps=[PS_ROW])
+    code, out, _ = run("restart", "ns/bundle", "--yes-stop-external")
+    # stop succeeds; the start then sees the (faked, still listed) row as running
+    assert "stopped — starting" in out and ["model", "stop", "ns/bundle"] in env.tt_argv()
+
+
+def test_tt_ctl_runs_as_a_subprocess_with_temp_home(tmp_path):
+    """Real process, temp HOME, fake tt on PATH: `servers --json --all` end to end."""
+    bin_ = tmp_path / "bin"
+    make_fake_tt(bin_, {"commands": {
+        "model ps": {"stdout": json.dumps({"served": [PS_ROW]})},
+        "--offline model list": {"stdout": json.dumps(CATALOG)}}})
+    envv = {"PATH": f"{bin_}:/usr/bin:/bin", "HOME": str(tmp_path),
+            "TTLG_NO_DEPRECATION_NOTE": "1"}
+    r = subprocess.run([sys.executable, str(ROOT / "tt-ctl"), "servers", "--json", "--all"],
+                       capture_output=True, text=True, env=envv, timeout=120)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+    assert any(m["name"] == "ns/bundle" and m["port"] == 20000 for m in d["merged"])
+    assert "held_leases" in d and "tt_note" in d
+
+
+# ---------------------------------------- old keys behave exactly like main
+
+OLD_SCENARIOS = {
+    "servers": (dict(alive={"prompt-server": True}), ["servers"]),
+    "start_off": (dict(), ["start", "prompt-server"]),
+    "start_running": (dict(alive={"prompt-server": True}), ["start", "prompt-server"]),
+    "stop_off": (dict(), ["stop", "prompt-server"]),
+    "stop_running": (dict(alive={"prompt-server": True}), ["stop", "prompt-server"]),
+    "stop_running_recorded": (dict(alive={"prompt-server": True}, record="prompt-server"),
+                              ["stop", "prompt-server"]),
+    "restart_off": (dict(), ["restart", "prompt-server"]),
+    "restart_running": (dict(alive={"prompt-server": True}), ["restart", "prompt-server"]),
+    "restart_running_recorded": (dict(alive={"prompt-server": True}, record="prompt-server"),
+                                 ["restart", "prompt-server"]),
+    "start_fail": (dict(start_rc=1), ["start", "prompt-server"]),
+    "stop_fail": (dict(alive={"prompt-server": True}, stop_rc=1), ["stop", "prompt-server"]),
+    "stop_all_two": (dict(alive={"wan2.2": True, "prompt-server": True}), ["stop", "all"]),
+    "start_all": (dict(), ["start", "all"]),
+    "start_flux_while_wan_runs": (dict(alive={"wan2.2": True}), ["start", "flux"]),
+    "start_single_chip": (dict(), ["start", "--single-chip"]),
+    "start_blocking": (dict(), ["start", "prompt-server", "--blocking"]),
+    "start_no_service": (dict(), ["start"]),
+    "start_nonsense": (dict(), ["start", "nonsense"]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OLD_SCENARIOS))
+def test_old_key_behaviour_matches_main(name, env, run, main_cli):
+    scen, argv = OLD_SCENARIOS[name]
+
+    def once(module):
+        env.alive = dict(scen.get("alive", {}))
+        env.start_rc = scen.get("start_rc", 0)
+        env.stop_rc = scen.get("stop_rc", 0)
+        env.script_calls.clear()
+        rec = server_view._DEFAULT_RECORDS
+        if rec.exists():
+            rec.unlink()
+        if scen.get("record"):
+            server_view.ServerRecords(rec).add(scen["record"], 8001, None, None, 1.0)
+        code, out, err = run(*argv, module=module)
+        return code, out, err, list(env.script_calls), dict(env.alive)
+
+    new = once(None)
+    old = once(main_cli)
+    assert new[0] == old[0], (new, old)
+    assert new[1] == old[1]
+    assert new[3] == old[3] and new[4] == old[4]       # same scripts run, same end state
+    # stderr: only the deprecation note and the argparse usage flags may differ
+    nerr = new[2].replace(NOTE + "\n", "")
+    if "usage:" in nerr:
+        assert nerr.splitlines()[-1] == old[2].splitlines()[-1]
+    else:
+        assert nerr == old[2]

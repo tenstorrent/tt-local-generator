@@ -552,6 +552,41 @@ class ServerControl:
             if not self._gozer.release(lid):
                 log.warning("release of lease %s failed", lid)
 
+    def registry(self) -> dict:
+        """The model registry as ServerControl sees it (public accessor)."""
+        return self._registry()
+
+    # ------------------------------------------------------- legacy old-key mode
+
+    def start_legacy(self, sm_key: str, gui: bool = True) -> list:
+        """Legacy-compatible start for an OLD ``server_manager`` key (or ``all``
+        / ``single-chip``): run the boutique script and return its raw results.
+
+        This is what ``tt-ctl start <old key>`` always did, kept for callers that
+        promise unchanged behaviour. It never stops an incumbent, never asks
+        ``confirm_fn``, never waits for health and takes no lease. All the new
+        strictness (switch questions, duplicate check, leases, failure cleanup)
+        stays in ``start`` for every other caller."""
+        return list(self._boutique.start(sm_key, gui=gui) or [])
+
+    def stop_legacy(self, sm_key: str, names: Sequence[str] = ()) -> list:
+        """Legacy-compatible stop for an OLD key: an explicit command naming a
+        script-managed service is consent to stop it. Runs the script's stop,
+        never asks ``confirm_fn``, and, when every script exited 0, releases the
+        lease of any record named in ``names`` and removes that record."""
+        results = list(self._boutique.stop(sm_key) or [])
+        if results and all(getattr(r, "returncode", 1) == 0 for r in results):
+            for name in names:
+                try:
+                    for rec in [r for r in self._records.load() if r.get("name") == name]:
+                        for lid in _lease_ids(rec.get("lease_id")):
+                            if not self._gozer.release(lid):
+                                log.warning("release of lease %s failed", lid)
+                        self._records.remove(name)
+                except Exception:
+                    log.exception("lease cleanup after legacy stop of %s failed", name)
+        return results
+
     # ----------------------------------------------------------------- start
 
     def start(self, model_key: str, *, port: int | None = None,

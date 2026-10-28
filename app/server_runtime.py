@@ -97,8 +97,12 @@ def snapshot_detail(records_path: Path | None = None,
         tt_rows, reason = [], f"tt model ps failed: {exc}"
     if script_health is None:
         script_health = _script_health()
-    if registry is None:
-        registry = server_registry.build_registry()
+    try:
+        if registry is None:
+            registry = server_registry.build_registry()
+    except Exception as exc:
+        log.warning("model registry unavailable: %s", exc)
+        registry = {}
     try:
         records = ServerRecords(records_path).load()
         servers = merge(tt_rows, script_health, [], [], records, registry)

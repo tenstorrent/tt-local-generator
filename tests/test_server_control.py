@@ -1474,3 +1474,45 @@ def test_stop_never_releases_a_legacy_unreapable_record(env):
     assert out.kind == "stopped"
     assert "gozer.release" not in env.names()
     assert [r["lease_id"] for r in unreapable(env)] == ["ZOMBIE"]
+
+
+# --------------------------------------------------------------------------
+# Legacy old-key mode (tt-ctl keeps its old behaviour for server_manager keys)
+# --------------------------------------------------------------------------
+
+def test_start_legacy_runs_only_the_script_never_asks_or_stops_incumbent(env):
+    env.view = [rs("wan-old", name="wan-old", source="script", port=8000)]   # an incumbent
+    env.status_map = {"wan-old": "ready"}
+    res = env.control().start_legacy("flux")
+    assert [(c[0], c[1]) for c in env.calls] == [("boutique.start", "flux")]
+    assert env.confirms == [] and res[0].returncode == 0
+
+
+def test_start_legacy_returns_failed_script_results_without_cleanup(env):
+    env.boutique_start_rc = 1
+    res = env.control().start_legacy("flux")
+    assert res[0].returncode == 1
+    assert env.names() == ["boutique.start"]        # no stop, no release, no gozer
+
+
+def test_stop_legacy_stops_without_asking_and_releases_a_recorded_lease(env):
+    env.records.add("flux", 8000, None, "L9", 1.0)
+    res = env.control().stop_legacy("flux", names=["flux"])
+    assert res[0].returncode == 0 and env.confirms == []
+    assert ("boutique.stop", "flux") in env.calls and ("gozer.release", "L9") in env.calls
+    assert env.records.load() == []
+
+
+def test_stop_legacy_keeps_the_record_when_the_script_failed(env):
+    env.boutique_stop_rc = 1
+    env.records.add("flux", 8000, None, "L9", 1.0)
+    env.control().stop_legacy("flux", names=["flux"])
+    assert ("gozer.release", "L9") not in env.calls and len(env.records.load()) == 1
+
+
+def test_default_start_and_stop_still_ask(env):
+    """The strict default is unchanged: a conflicting start still asks first."""
+    env.view = [rs("wan-old", name="wan-old", source="script", port=8000)]
+    env.status_map = {"wan-old": "ready"}
+    env.control().start("flux")
+    assert env.confirms and env.confirms[0][0] == "switch"
