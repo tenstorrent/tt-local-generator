@@ -77,6 +77,15 @@ Or via `tt-ctl`:
 
 ---
 
+## Music
+
+Pick **Music** in Create, describe the song with chips for genre, mood, instruments and tempo, and
+add lyrics if the model sings. The panel finds music servers on this machine (MiniMax-Music3, Stable Audio)
+or you can connect one by URL, and it shows only the controls the chosen model supports. A finished song
+plays in the result panel with its waveform, and it is saved to the Library under **Audio**.
+
+---
+
 ## Generative Art
 
 The **Generative Art** tab offers ten plugin-based generators — SVG

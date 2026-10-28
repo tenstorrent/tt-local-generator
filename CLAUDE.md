@@ -1,5 +1,69 @@
 # tt-local-generator — developer notes
 
+## Music generation (v0.105.0 pending)
+
+Prompt (operator, 2026-10-28): "build a UI for generating music using tt-model-manager community models like
+minimax-music3 or stabilityai/stable-audio-3-small-music". Spec:
+`docs/superpowers/specs/2026-10-28-music-generation-design.md`; wire notes:
+`docs/superpowers/specs/2026-10-28-music-wire-notes.md`. Built on branch `generate_music` in eight reviewed tasks.
+The version bump (`VERSION` and `debian/changelog`, one minor) is its own commit at release and is not in this branch.
+
+Architecture:
+- **`app/music_runtime.py`** (stdlib only): model profiles (`profile_for`, one per model family, with a generic
+  fallback), `MusicClient` (health, submit, poll, fetch, cancel), saved servers with an optional bearer token, and
+  discovery (docker label, the known ports 8795 and 20000, and saved URLs). A model that publishes an OpenAPI schema
+  with paths gets its field names and limits from it; the table is the fallback.
+- **`MusicParamPanel`** (`create_param_panels.py`): prompt chips, a Lyrics box with its own helper, duration, seed,
+  steps, guidance, Instrumental switch and a reference-clip slot. Controls the selected model does not support are hidden
+  and left out of `collect()`. It has its own server dropdown and a "Connect..." dialog. `RoleZonePanel` keys its chip
+  bank by `medium.source in ("artgen", "music")`.
+- **`MusicGenerationWorker`** (`worker.py`): runs the job on a thread, writes the audio, adds a `MediaRecord`
+  (`media_type="audio"`, `generator_type="music"`). `MainWindow._create_generate_music` sends Music jobs around the
+  `ready_to_run` gate, because the app never starts these servers.
+- **`app/audio_thumb.py`**: waveform PNG from ffmpeg-decoded samples, `None` on any failure (the song still saves).
+- **`app/audio_gallery.py`**: `AudioGallery`, `AudioDetail` and `build_audio_widget`, shared by the Create result panel
+  and the Library (see the Task 7 note below).
+- **Status segment and wall tile**: a fifth segment, Music, is READY when any discovered server is up. The
+  Start-something wall has a Music tile with its own example lines and gradient.
+
+Decisions from the spec:
+- New `media_type="audio"`, kept out of the Video, Image and artgen galleries by the negative filters.
+- The prompt and lyrics helpers prefer the artgen chat endpoint, because Qwen3-0.6B is too small for lyrics. With no
+  LLM the Lyrics helper is disabled with a message, and a typed seed is kept.
+- The token is stored in the settings file as plain text, and the Connect dialog says so. It is scrubbed from every
+  error and progress message and is never written to the record.
+- No Remix for audio (no seed kind exists). `INSTRUMENTAL_SWITCH_CONFIRMED` in `create_param_panels.py` is a
+  placeholder: it is True, so the switch shows, and the client sends `[Instrumental]` as the lyrics.
+- Credit line "Made with MiniMax-Music3" is stored in the record, shown in the result panel and the Library detail, and
+  not written into the exported file.
+
+Wire facts the demo clients showed (the spec table was corrected): MiniMax takes `input` (lyrics), `instructions`
+(caption), `audio_duration` and `num_inference_steps`, plus `response_format: flac`. Stable Audio reports the seed in
+`settings.seed`, has no `ended` field and cannot cancel a running job (queued only).
+
+Found by review and screenshots:
+- Progress text carried the bearer token; it is now scrubbed on every path.
+- A hostile `audio_format` from the server reached the file name; only flac and wav are accepted.
+- Under `RoleZonePanel` the panel's own prompt row is hidden, so the panel reads the top prompt through
+  `set_prompt_getter`.
+- The Music form was clipped at a 1300 px window (a 723 px Controls column). Dropdown entries now ellipsize and the
+  button reads "Connect...". At 1000 px the shared two-pane layout still clips; that is outside this change.
+- Two tests passed vacuously (a nonexistent `set_error`, an unasserted pause); both were rewritten and seen failing.
+
+Deferred minors (full list in `.superpowers/sdd/2026-10-28-music-generation/progress.md`):
+- Library audio: the card star and the detail star do not sync, a deleted song leaves its `.flac` and `.png` on disk, and
+  the playlist purge in `_on_delete_card` uses `all_records()`, which now omits audio (use `_ms.all_ids()`).
+- A queued native job is not drained after a Music job (the same gap as artgen).
+- The Music status segment has no starting or error state and can stay READY if discovery keeps failing.
+- Selected chip labels are dark on dark in the shared chip CSS (all mediums).
+
+NOT verified:
+- No run against a live server. The Task 1 spike and the one short clip from the Create panel are pending the Stable
+  Audio server restart; every test uses `tests/fake_music_server.py`, which copies the demo clients.
+- MiniMax: the real health reply (limits, defaults) is unread, and whether it accepts `[Instrumental]` is unconfirmed.
+- The v6 package API difference is unchecked.
+- No hardware playback. Screenshots came from Xvfb against the fake server with a generated tone.
+
 ## Library audio gallery (music, Task 7)
 
 Prompt: close the gaps Task 5 left. With the Music chip selected Discover showed the Video page, and audio rows
