@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import random
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 INSTRUMENTAL_PLACEHOLDER = "[Instrumental]"     # UNCONFIRMED: what MiniMax accepts for a song with no words (see the wire notes)
@@ -307,3 +310,150 @@ class MusicClient:
         else:
             fmt = str(stats.get("audio_format") or self.profile.formats[0])
         return MusicResult(audio, fmt, job_id, stats, float(got) if isinstance(got, (int, float)) else None, ended, seed)
+
+
+# ---- discovery and saved servers ---------------------------------------------------------------------------
+
+DEFAULT_PORTS = (20000, 8795)           # tt-model's default port, and the music server's own default
+PROBE_TIMEOUT_S = 1.5
+SCAN_PORTS_ENV = "TTLG_MUSIC_SCAN_PORTS"
+
+
+def normalize_url(url: str) -> str:
+    """`scheme://host[:port]` with the scheme and host in lowercase, no path and no trailing slash; `http://` when no scheme is given."""
+    url = (url or "").strip()
+    if "://" not in url:
+        url = "http://" + url
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    port = f":{parts.port}" if parts.port else ""
+    return f"{parts.scheme.lower()}://{host}{port}"
+
+
+@dataclass(frozen=True)
+class MusicServer:
+    url: str
+    profile: Optional[MusicProfile]
+    up: bool
+    saved: bool
+    token: Optional[str] = field(default=None, repr=False)      # kept out of repr so it cannot reach a log line
+    label: str = ""
+
+
+def scan_ports() -> tuple:
+    """DEFAULT_PORTS plus the whole numbers in the comma-separated TTLG_MUSIC_SCAN_PORTS."""
+    extra = []
+    for piece in os.environ.get(SCAN_PORTS_ENV, "").split(","):
+        piece = piece.strip()
+        if piece.isdigit() and 0 < int(piece) < 65536:
+            extra.append(int(piece))
+    return DEFAULT_PORTS + tuple(p for p in extra if p not in DEFAULT_PORTS)
+
+
+def _docker_ports() -> list:
+    """Host ports of running tt-model containers. Imported lazily so this module still imports on its own; never raises."""
+    try:
+        import artgen
+        return list(artgen._tt_model_host_ports())
+    except Exception:
+        return []
+
+
+def _get(base: str, path: str, token: Optional[str], timeout: float):
+    """(status, parsed JSON or None) of a GET; None status when nothing answered. Only a reachability check: it never opens a device."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    request = urllib.request.Request(base + path, headers=headers)
+    try:
+        with _opener().open(request, timeout=timeout) as r:
+            status, payload = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+        try:
+            payload = e.read()
+        except Exception:
+            payload = b""
+    except Exception:
+        return None, None
+    try:
+        doc = json.loads(payload)
+    except ValueError:
+        doc = None
+    return status, doc
+
+
+def _is_no_such_job(status, doc) -> bool:
+    """A job route that exists answers an unknown id with 404 and a body naming the job; an unknown route does not."""
+    if status != 404 or not isinstance(doc, dict):
+        return False
+    detail = str(doc.get("detail") or doc.get("error") or "").lower()
+    return "job" in detail and ("no such" in detail or "not found" in detail or "unknown" in detail)
+
+
+def _probe(url: str, token: Optional[str] = None, timeout: float = PROBE_TIMEOUT_S) -> Optional[MusicProfile]:
+    """The profile of the music server at `url`, or None when nothing there is one (down, wrong token, or some other HTTP server)."""
+    status, health = _get(url, "/v1/health", token, timeout)
+    if status != 200 or not isinstance(health, dict):
+        return None
+    for prefix in (MUSIC_PREFIX, AUDIO_PREFIX):
+        if _is_no_such_job(*_get(url, prefix + "/jobs/none", token, timeout)):
+            return dataclasses.replace(profile_for(health), jobs_prefix=prefix)
+    return None
+
+
+def discover_music_servers(saved: list, ports: Optional[tuple] = None, probe: Callable = _probe,
+                           docker_ports: Callable[[], list] = _docker_ports) -> list:
+    """Saved servers first (a down one is kept, with up=False), then every other server answering on `ports` or a tt-model docker port.
+
+    `saved` holds dicts with `url` and optionally `token` and `label`. `probe(url, token)` returns a MusicProfile or None.
+    """
+    entries = {}                                        # normalized url -> (saved, token, label), insertion-ordered
+    for item in saved or []:
+        if isinstance(item, dict) and item.get("url"):
+            entries.setdefault(normalize_url(item["url"]), (True, item.get("token") or None, str(item.get("label") or "")))
+    found_ports = list(scan_ports() if ports is None else ports)
+    try:
+        found_ports += list(docker_ports())
+    except Exception:
+        pass                                            # discovery must not fail because docker does
+    for port in found_ports:
+        entries.setdefault(normalize_url(f"http://127.0.0.1:{port}"), (False, None, ""))
+    if not entries:
+        return []
+    with ThreadPoolExecutor(max_workers=min(16, len(entries))) as pool:
+        futures = {u: pool.submit(probe, u, entries[u][1]) for u in entries}
+        profiles = {}
+        for u, fut in futures.items():
+            try:
+                profiles[u] = fut.result(timeout=PROBE_TIMEOUT_S * 4)
+            except Exception:
+                profiles[u] = None
+    out = []
+    for u, (is_saved, token, label) in entries.items():
+        profile = profiles[u]
+        if profile is None and not is_saved:
+            continue
+        out.append(MusicServer(url=u, profile=profile, up=profile is not None, saved=is_saved, token=token,
+                               label=label or (profile.label if profile else u)))
+    return out
+
+
+def _settings():
+    import app_settings                                 # lazy: keeps the module importable on its own
+    return app_settings.settings
+
+
+def save_server(url: str, token: Optional[str] = None, label: str = "") -> None:
+    """Add a server by hand, or replace the saved entry for the same URL."""
+    url = normalize_url(url)
+    s = _settings()
+    kept = [e for e in (s.get("music_servers") or []) if isinstance(e, dict) and normalize_url(e.get("url", "")) != url]
+    kept.append({"url": url, "token": token or None, "label": label})
+    s.set("music_servers", kept)
+
+
+def remove_server(url: str) -> None:
+    url = normalize_url(url)
+    s = _settings()
+    s.set("music_servers", [e for e in (s.get("music_servers") or []) if isinstance(e, dict) and normalize_url(e.get("url", "")) != url])

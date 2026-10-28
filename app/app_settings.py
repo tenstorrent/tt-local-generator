@@ -74,6 +74,9 @@ DEFAULTS: dict = {
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
     # Animate picker — user-chosen disk folder
     "motion_clips_dir": "",         # empty = Disk tab shows only Browse tile
+    # Music servers the user added by hand: [{"url", "token", "label"}]; and the url last used.
+    "music_servers": [],
+    "music_last_server": "",
 }
 # NOTE (v0.93.0 pre-release audit): removed 6 dead keys that nothing consumed —
 # quality_steps (the menu "Quality" radios wrote it but no generation path read
