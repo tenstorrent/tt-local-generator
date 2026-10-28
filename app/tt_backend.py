@@ -337,7 +337,7 @@ def plan_serve(model: str, *, port: int | None = None,
 def serve(model: str, *, port: int | None = None, device: str | None = None,
           detach: bool = False, on_line: Callable[[str], None] | None = None,
           cancel: Callable[[], bool] | None = None, env: dict | None = None,
-          timeout: float = 3600.0) -> TtResult:
+          timeout: float = 3600.0, extra_args: Sequence[str] = ()) -> TtResult:
     """Run ``tt serve`` and stream its output to ``on_line``.
 
     ``tt serve --help`` says ``--detach`` is for bundles only ("return once the
@@ -345,6 +345,13 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
     ``--detach`` exits 2. So ``detach=True`` adds the flag only when
     ``plan_serve`` says the model is a tt-model bundle; if the kind is unknown
     the flag is left off.
+
+    ``extra_args`` are passed through to tt-model after ``--`` (for example
+    ``["--device-id", "0,1"]`` to pin a bundle to leased chips: wire notes,
+    item 1). Only a tt-model bundle accepts them; a catalog model exits 2 with
+    "Unrecognized arguments", so for a catalog model, or when the kind is
+    unknown, they are left off and a warning is logged. A caller that relies
+    on the pin must check the kind first (``plan_serve(...).backend``).
 
     ``cancel`` and the deadline are checked on every loop pass. On either, the
     process group gets SIGTERM, then SIGKILL after a short grace, and serve()
@@ -356,10 +363,18 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
     if tt is None:
         return TtResult(False, "the official tt CLI was not found on PATH")
     argv = [str(tt), "serve", model] + _serve_args(model, port, device)[2:]
-    if detach:
+    extra = [str(a) for a in extra_args or ()]
+    if detach or extra:
         plan = plan_serve(model, port=port, device=device)
-        if plan is not None and plan.backend == "tt-model":
+        is_bundle = plan is not None and plan.backend == "tt-model"
+        if detach and is_bundle:
             argv.append("--detach")
+        if extra:
+            if is_bundle:
+                argv += ["--", *extra]
+            else:
+                log.warning("tt serve %s: extra args %s dropped (not a tt-model bundle)",
+                            model, extra)
     full_env = None if env is None else {**os.environ, **env}
     try:
         proc = subprocess.Popen(

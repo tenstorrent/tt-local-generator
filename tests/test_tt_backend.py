@@ -206,6 +206,34 @@ def test_serve_passes_detach_only_for_a_bundle(tmp_path):
     assert "--detach" not in by["unknown/x"]
 
 
+def test_serve_appends_extra_args_after_double_dash_for_a_bundle(tmp_path):
+    d = _install(tmp_path, {
+        "serve raahemnabeel/qwen3-coder-next --dry-run --offline":
+            {"stdout": _fx("serve_dry_run.json")},
+        "serve": {"lines": ["ok"]}})
+    assert tb.serve("raahemnabeel/qwen3-coder-next",
+                    extra_args=["--device-id", "0,1"]).ok
+    real = [c for c in calls(d) if "--dry-run" not in c and "--version" not in c]
+    assert real[-1][-3:] == ["--", "--device-id", "0,1"]
+
+
+def test_serve_drops_extra_args_for_a_catalog_model(tmp_path):
+    # A catalog model rejects passthrough args (wire notes item 1): they are left off.
+    d = _install(tmp_path, {
+        "serve Qwen3.8-27B --dry-run --offline":
+            {"stdout": _fx("serve_dry_run_catalog.json")},
+        "serve": {"lines": ["ok"]}})
+    assert tb.serve("Qwen3.8-27B", extra_args=["--device-id", "0"]).ok
+    real = [c for c in calls(d) if "--dry-run" not in c and "--version" not in c]
+    assert "--" not in real[-1] and "--device-id" not in real[-1]
+
+
+def test_serve_without_extra_args_does_no_dry_run(tmp_path):
+    d = _install(tmp_path, {"serve": {"lines": ["ok"]}})
+    assert tb.serve("m").ok
+    assert not [c for c in calls(d) if "--dry-run" in c]
+
+
 def test_serve_cancel_kills_the_whole_process_group(tmp_path):
     pidfile = tmp_path / "child.pid"
     _install(tmp_path, {"serve m": {"lines": ["start"], "child_pidfile": str(pidfile),
