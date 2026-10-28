@@ -8,6 +8,6 @@ GTK-free; imports only the standard library, PyYAML and `music_runtime` (for
 """
 from .cards import Library, StyleCard, load_library, validate_card
 from .dialects import dialect_for
-from .translate import Translation, translate
+from .translate import Translation, reload_library, translate
 
-__all__ = ["Library", "StyleCard", "Translation", "dialect_for", "load_library", "translate", "validate_card"]
+__all__ = ["Library", "StyleCard", "Translation", "dialect_for", "load_library", "reload_library", "translate", "validate_card"]

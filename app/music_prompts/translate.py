@@ -3,41 +3,57 @@
 """translate.py - typed text to a prompt (and lyrics) for one music model.
 
 Public API:
-    Translation   - frozen dataclass, the result
+    Translation      - frozen dataclass, the result
     translate(text, profile, *, include_names=False, library=None, smooth=False,
               smooth_fn=None, lyrics_fn=None) -> Translation
+    reload_library() - forget the cached default library (after cards change)
+    skeleton(themes) - the lyrics skeleton used without an LLM
 
 Steps (spec 4.3): parse the text into layers and card matches, build a `Plan`
-(the user's own line, base parts, layer parts, tempo and the base card's
-details), compose it for the dialect, trim it to the model's limit, then
-optionally smooth it and write lyrics. Deterministic: no LLM call unless the
-caller passes `smooth=True` with a `smooth_fn`, or a `lyrics_fn`.
+(the user's content words, base parts, layer parts, tempo, key and the base
+card's details), compose it for the dialect, trim it to the soft budget and the
+hard limit, then optionally smooth it and write lyrics. Deterministic: no LLM
+call unless the caller passes `smooth=True` with a `smooth_fn`, or a `lyrics_fn`.
 
-The user's own words. Every phrase the parser leaves unmatched
-(`Parsed.leftover`) is kept verbatim and in order, in a "user line": the typed
-text with only the recognised artist names replaced. The user line is emitted
-whenever there is a leftover phrase or a marker that created no layer
-(`Parsed.dropped`, for example a trailing "but" or "on top"); those markers
-therefore stay in the prompt, and a note says they started no layer. When the
-text is all matched names and layer markers, the descriptions say everything
-and no user line is needed. Text with no match at all passes through exactly
-as typed, with a note.
+The user's own words. Every leftover phrase from the parser is either content
+or glue. A phrase is glue when every word in it is in `dialects.GLUE_WORDS`:
+stopwords, generic piece nouns ("song", "track", "piece"), the markers, and
+(only when the parser made a vocal layer) the vocal cues it read ("someone",
+"singing"). Glue phrases and markers that started no layer (`Parsed.dropped`)
+are left out of the prompt and named in one note, so nothing is lost silently.
+Content phrases ("rainy Tuesday", "très lent", "instrumental") are kept
+verbatim and in order; only the first character of the whole prompt may be
+capitalised. Text with no match at all passes through exactly as typed.
 
-Names (spec 6, plan Review Focus 1). Unless `include_names=True`:
-* a match on an artist card, or a match whose words contain an artist or
-  inspiration name, becomes the name of the style it points to
-  ("Tortoise-like song" -> "post-rock song"; "like Tortoise" -> "like post-rock");
-* an `inspiration` entry typed outside any match (it has no card of its own)
-  is replaced by its card's style, matched case-sensitively as the card writes
-  it, and never when the entry is also an alias of an ambiguous card (the
-  parser decides those: "the tortoise crossed the road" stays as typed);
-* card text is scrubbed the same way, as a guard against a user card that
-  names an artist in its `sound`;
+Names (spec 6, plan Review Focus 1). Matched names never reach the prompt:
+a match is replaced by its card's description, and an artist card shows its
+parent style's name as its label (`_label`). Unless `include_names=True`:
+* an `inspiration` entry typed outside any match (no card of its own) is
+  replaced by its card's style, matched case-sensitively as the card writes it,
+  and never when the entry is also an alias of an ambiguous card;
+* card text is scrubbed the same way, guarding against a user card that names
+  an artist in its `sound`;
 * smoothed text and LLM lyrics that add a name are refused.
 `inspired_by` always carries the names for the UI.
 
+`avoid` never reaches the prompt; it is listed in `notes` ("Not asked for:").
+When a vocal is asked for, entries about singing are left out of that note.
+
+Tempo: the middle of the base card's range, leaning to the middle of the
+lower third when the base card's mood or the user's words say patient, slow,
+unhurried (and similar), or the upper third when they say fast or driving.
+Key: the base card's `key`, else a vocal card's.
+
+Instrumental: `Translation.instrumental` is True when no lyrics are produced
+(the user typed "instrumental", nothing sings, or the model cannot sing), so
+request-building code can send the server's instrumental form.
+
 Triggers: a profile's trigger phrase ("fiona crapple") is never added by the
-library. If the user typed it, it is part of their own words and stays.
+library. If the user typed it, it is a content phrase and stays.
+
+The default library is loaded once per process and cached (`_DEFAULT_LIBRARY`);
+call `reload_library()` after user cards change. Callers that pass `library`
+are not affected.
 """
 from __future__ import annotations
 
@@ -54,17 +70,18 @@ log = logging.getLogger(__name__)
 
 _WORD = re.compile(r"[^\W_]+")
 _INSTRUMENTAL = re.compile(r"\binstrumental\b", re.I)
-# An `avoid` entry that argues with a requested vocal is left out when one exists.
+# `avoid` entries about singing are not listed when the user asks for a vocal.
 _VOICE_WORDS = re.compile(r"\b(vocals?|sung|sing\w*|voices?|verse\w*|chorus\w*|lyric\w*)\b", re.I)
-# Form words around a matched name (parse.py's forms); the name is the middle.
-_HYPHENS = "-‐‑‒–—―−"
-_FORM = re.compile(r"^(?P<pre>like\s+)?(?P<core>.*?)(?P<suf>\s*[" + _HYPHENS + r"]\s*(?:like|ish|style)|\s+style)?$",
-                   re.I | re.S)
 _SENTENCE_END = ".!?…\n"
+_SLOW_WORDS = frozenset("patient slow slowly unhurried calm gentle lazy languid relaxed sleepy hushed".split())
+_FAST_WORDS = frozenset("fast driving energetic frantic upbeat urgent rapid quick frenetic".split())
 
 EMPTY_NOTE = ("Type a style, an artist, a scene or a mood to start, for example "
               "'tortoise-like song but someone is singing a bluegrass song on top'.")
 PASS_THROUGH_NOTE = "No style in the library matched, so your text is passed through unchanged."
+SKELETON_NOTE = ("The lyrics are topic lines from the vocal style's themes, not finished lyrics. "
+                 "A MiniMax song ends when its lyrics do, so a thin skeleton makes a short clip: "
+                 "write the lines out for a longer one.")
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,7 @@ class Translation:
     used_cards: tuple[str, ...]
     dialect: str
     added: tuple[str, ...]
+    instrumental: bool = False
 
 
 _DEFAULT_LIBRARY: Library | None = None
@@ -88,6 +106,12 @@ def _default_library() -> Library:
     return _DEFAULT_LIBRARY
 
 
+def reload_library() -> None:
+    """Forget the cached default library; the next translate() loads the cards again."""
+    global _DEFAULT_LIBRARY
+    _DEFAULT_LIBRARY = None
+
+
 # ── names ────────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -98,7 +122,7 @@ class _Name:
 
 
 def _label(card: StyleCard, lib: Library) -> str:
-    """The style name shown for a card: an artist card shows its parent style."""
+    """The style name shown for a card: an artist card shows its parent style, never its own name."""
     if card.kind == "artist":
         p = lib.cards.get(card.parent) if card.parent else None
         return p.name if p is not None and p.kind != "artist" else card.family
@@ -160,17 +184,13 @@ def _starts_sentence(text: str, pos: int) -> bool:
     return not before or before[-1] in _SENTENCE_END
 
 
-def _case_like(label: str, text: str, pos: int) -> str:
-    """A label cased for where it lands: capital only where a sentence starts."""
-    return label[:1].upper() + label[1:] if _starts_sentence(text, pos) else D._lc_first(label)
-
-
 def _scrub(text: str, names: list[_Name], *, case_sensitive: bool, skip=frozenset(), replaced=None) -> str:
     """Replace each name with its style label; record (name, label) pairs in `replaced`."""
     out, last = [], 0
     for s, e, n in _name_spans(text, names, case_sensitive=case_sensitive, skip=skip):
         out.append(text[last:s])
-        out.append(_case_like(n.label, text, s))
+        label = n.label
+        out.append(label[:1].upper() + label[1:] if _starts_sentence(text, s) else D._lc_first(label))
         if replaced is not None:
             replaced.append((text[s:e], n.label))
         last = e
@@ -178,68 +198,58 @@ def _scrub(text: str, names: list[_Name], *, case_sensitive: bool, skip=frozense
     return "".join(out)
 
 
-# ── the user line ────────────────────────────────────────────────────────────
-
-def _user_line(text: str, parsed: Parsed, lib: Library, names: list[_Name], include_names: bool,
-               notes: list[str]) -> str:
-    """The typed text with artist matches (and stray inspiration names) replaced by their style."""
-    if include_names:
-        return text.strip()
-    skip = _ambiguous_aliases(lib)
-    replaced: list[tuple[str, str]] = []
-    out, last = [], 0
-    matches = sorted((m for layer in parsed.layers for m in layer.matches), key=lambda m: m.start)
-    for m in matches:
-        card = lib.cards.get(m.card_id)
-        if card is None:
-            continue
-        out.append(_scrub(text[last:m.start], names, case_sensitive=True, skip=skip, replaced=replaced))
-        named = card.kind == "artist" or _name_spans(m.text, names, case_sensitive=False)
-        if named:
-            f = _FORM.match(m.text)
-            pre = f.group("pre") or ""
-            label = _label(card, lib)
-            core = (f.group("core") or m.text).lstrip()
-            if not pre and core[:1].isupper() and _starts_sentence(text, m.start):
-                out.append(label[:1].upper() + label[1:])      # "Tortoise-like song" opening a sentence
-            else:
-                out.append(pre + D._lc_first(label))           # follows the typed lowercase or mid-sentence
-            replaced.append((m.text, label))
-        else:
-            out.append(m.text)
-        last = m.end
-    out.append(_scrub(text[last:], names, case_sensitive=True, skip=skip, replaced=replaced))
+def _name_notes(replaced, notes: list[str]) -> None:
     for typed, label in dict.fromkeys(replaced):
-        notes.append(f"'{typed}' became its style ({D._lc_first(label)}) and the description of its sound. "
-                     "Names stay out of the prompt unless you ask for them; see Inspired by.")
-    return "".join(out).strip()
+        notes.append(f"'{typed}' became its style ({D._lc_first(label)}); "
+                     "names stay out of the prompt unless you ask for them.")
+
+
+# ── the user's words ─────────────────────────────────────────────────────────
+
+def _split_words(parsed: Parsed) -> tuple[list[str], list[str]]:
+    """Leftover phrases as (content, glue), each in text order. Punctuation-only phrases are neither."""
+    glue_words = set(D.GLUE_WORDS)
+    if not any(layer.vocal for layer in parsed.layers):
+        glue_words -= D.VOCAL_CUES - D.STOPWORDS
+    content, glue = [], []
+    for phrase in parsed.leftover:
+        words = [w.lower() for w in _WORD.findall(phrase)]
+        if not words:
+            continue
+        if all(w in glue_words for w in words):
+            glue.append(phrase.strip(" ,;:"))
+        else:
+            content.append(phrase.strip().strip(",;:").strip())
+    return content, glue
 
 
 # ── the plan ─────────────────────────────────────────────────────────────────
 
 def _part(card: StyleCard, lib: Library, scrub) -> D.Part:
-    if card.kind == "vocal":
-        kind = "vocal"
-    elif card.kind == "texture":
-        kind = "texture"
-    else:
-        kind = "sound"
+    kind = {"vocal": "vocal", "texture": "texture"}.get(card.kind, "sound")
     return D.Part(kind=kind, label=scrub(_label(card, lib)), sound=scrub(card.sound),
                   tags=tuple(scrub(t) for t in card.tags), vocal=scrub(card.vocal),
                   lead_instrument=scrub(card.lead_instrument))
 
 
-def _bpm(cards) -> int | None:
+def _bpm(cards, extra_text: str) -> int | None:
+    """The tempo from the first card with a range, leaning with the mood words (module docstring)."""
     for c in cards:
         if c.tempo_bpm:
-            return (c.tempo_bpm[0] + c.tempo_bpm[1]) // 2
+            lo, hi = c.tempo_bpm
+            words = {w.lower() for w in _WORD.findall(c.mood + " " + extra_text)}
+            slow, fast = bool(words & _SLOW_WORDS), bool(words & _FAST_WORDS)
+            if slow and not fast:
+                return lo + (hi - lo) // 6
+            if fast and not slow:
+                return hi - (hi - lo) // 6
+            return (lo + hi) // 2
     return None
 
 
 def _join_field(cards, attr: str) -> str:
-    return " ".join(D._cap(getattr(c, attr).strip()) if getattr(c, attr).strip()[-1:] in ".!?"
-                    else D._cap(getattr(c, attr).strip()) + "."
-                    for c in cards if getattr(c, attr).strip())
+    texts = [getattr(c, attr).strip() for c in cards if getattr(c, attr).strip()]
+    return " ".join(D._sentence(D._cap(t)) for t in texts)
 
 
 def translate(text: str, profile, *, include_names: bool = False, library: Library | None = None,
@@ -250,7 +260,7 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
     limit = D.limit_of(getattr(profile, "max_chars", None))
     text = text if isinstance(text, str) else ""
     if not text.strip():
-        return Translation("", None, (EMPTY_NOTE,), (), (), dialect, ())
+        return Translation("", None, (EMPTY_NOTE,), (), (), dialect, (), True)
 
     parsed = parse(text, lib)
     names = _names(lib)
@@ -262,13 +272,11 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         if not include_names:
             replaced: list = []
             prompt = _scrub(prompt, names, case_sensitive=True, skip=_ambiguous_aliases(lib), replaced=replaced)
-            for typed, label in dict.fromkeys(replaced):
-                notes.append(f"'{typed}' became its style ({D._lc_first(label)}); "
-                             "names stay out of the prompt unless you ask for them.")
+            _name_notes(replaced, notes)
         notes.insert(0, PASS_THROUGH_NOTE)
         if len(prompt) > limit:
             notes.append(D.over_limit_note(len(prompt), limit))
-        return Translation(prompt, None, tuple(notes), (), (), dialect, ())
+        return Translation(prompt, None, tuple(notes), (), (), dialect, (), True)
 
     def scrub(s: str) -> str:
         return s if include_names else _scrub(s, names, case_sensitive=True)
@@ -281,6 +289,20 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         if m.alternatives:
             others = ", ".join(lib.cards[a].name for a in m.alternatives if a in lib.cards)
             notes.append(f"'{m.text}' could also mean {others}; {c.name} was used.")
+        if c.kind == "artist" and not include_names:
+            notes.append(f"'{m.text}' became the description of its sound; the name is listed under Inspired by.")
+
+    # The user's words: content kept verbatim, glue named in a note.
+    content, glue = _split_words(parsed)
+    if not include_names:
+        replaced = []
+        skip = _ambiguous_aliases(lib)
+        content = [_scrub(p, names, case_sensitive=True, skip=skip, replaced=replaced) for p in content]
+        _name_notes(replaced, notes)
+    instrumental_asked = bool(_INSTRUMENTAL.search(text))
+    if instrumental_asked and not any(_INSTRUMENTAL.search(p) for p in content):
+        content.append("instrumental")
+    glue_all = list(dict.fromkeys(glue + list(parsed.dropped)))
 
     # Base and layers. A layer whose only signal is singing words (no vocal card) still gets a voice.
     layers = list(parsed.layers)
@@ -298,6 +320,11 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         if parts:
             plan_layers.append((layer.marker, tuple(parts)))
     has_vocal = bool(vocal_cards) or bool(vocal_texts)
+    if glue_all:
+        what = "the layout of the request (a vocal layer)" if has_vocal else "the layout of the request"
+        quoted = D._and([f"'{g}'" for g in glue_all])
+        verb = "was" if len(glue_all) == 1 else "were"
+        notes.append(f"{quoted} {verb} read as {what} and not repeated in the prompt.")
 
     sound_cards = [c for c in used if c.kind != "vocal"]
     primary = [c for c in base_cards if c.kind not in ("vocal", "texture")]
@@ -308,14 +335,19 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             if primary:
                 break
     tempo_cards = primary + [c for c in used if c not in primary]
+    key = next((c.key for c in primary if c.key), "") or next((c.key for c in vocal_cards if c.key), "") \
+        or next((c.key for c in used if c.key), "")
 
     avoid: list[str] = []
     for c in used:
         for a in c.avoid:
-            if has_vocal and _VOICE_WORDS.search(a):
+            if (has_vocal or instrumental_asked) and _VOICE_WORDS.search(a):
                 continue
             if a not in avoid:
-                avoid.append(a)
+                avoid.append(scrub(a))
+    if avoid:
+        notes.append(f"Not asked for: {D._and(avoid)}. These stay out of the prompt, because music models "
+                     "tend to hear a 'no X' as 'X'.")
     instruments: list[str] = []
     for c in sound_cards:
         for i in c.instruments:
@@ -328,14 +360,9 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             if n not in inspired:
                 inspired.append(n)
 
-    show_line = bool(parsed.leftover) or bool(parsed.dropped)
-    user_line = _user_line(text, parsed, lib, names, include_names, notes) if show_line else None
-    for marker in dict.fromkeys(parsed.dropped):
-        notes.append(f"'{marker}' started no new layer (nothing came after it); it stays in your words.")
-
     can_sing = bool(getattr(profile, "has_lyrics", False))
     plan = D.Plan(
-        user_line=user_line,
+        user_words=tuple(content),
         base=tuple(_part(c, lib, scrub) for c in base_cards),
         layers=tuple(plan_layers),
         names=tuple(inspired) if include_names else (),
@@ -344,26 +371,33 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
         harmony=scrub(_join_field(primary, "harmony")),
         production=scrub(_join_field(primary, "production")),
         mood=scrub(_join_field(primary, "mood")),
-        bpm=_bpm(tempo_cards),
-        avoid=tuple(scrub(a) for a in avoid),
+        bpm=_bpm(tempo_cards, " ".join(content)),
+        key=scrub(key),
         can_sing=can_sing,
+        instrumental=instrumental_asked,
     )
     clauses, compose_notes = D.compose(plan, dialect)
     kept, trim_notes = D.trim(clauses, dialect, limit)
     prompt = D._join(kept, dialect)
+    # The prompt's first character is capitalised even when it is the user's (only that one
+    # character), except when the user's words open with the profile's trigger phrase, which
+    # must reach the model exactly as typed. Tags stay lowercase.
+    triggers = tuple(getattr(profile, "triggers", ()) or ())
+    if dialect != D.TAGS and kept and kept[0].kind == "user" and not any(
+            prompt.lower().startswith(t.lower()) for t in triggers if t):
+        prompt = prompt[:1].upper() + prompt[1:]
     notes += list(compose_notes) + list(trim_notes)
     added = tuple(c.text for c in kept if c.kind != "user")
 
     if smooth:
-        prompt = _smooth(prompt, smooth_fn, parsed, user_line, names, limit, notes)
+        prompt = _smooth(prompt, smooth_fn, content, names, limit, notes)
 
     lyrics = None
-    instrumental = bool(_INSTRUMENTAL.search(text))
     if dialect == D.CAPTION and can_sing:
-        if not has_vocal:
+        if instrumental_asked:
+            notes.append("You asked for an instrumental, so no vocal or lyrics were written.")
+        elif not has_vocal:
             notes.append("No singing was asked for, so no lyrics were written; the piece is instrumental.")
-        elif instrumental:
-            notes.append("You asked for an instrumental, so no lyrics were written.")
         else:
             card = vocal_cards[0] if vocal_cards else None
             vocal_text = (card.vocal or card.sound) if card else (vocal_texts[0] if vocal_texts else "")
@@ -371,13 +405,13 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
             lyrics = _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes)
 
     return Translation(prompt, lyrics, tuple(dict.fromkeys(notes)), tuple(inspired),
-                       tuple(c.id for c in used), dialect, added)
+                       tuple(c.id for c in used), dialect, added, lyrics is None)
 
 
 # ── optional steps ───────────────────────────────────────────────────────────
 
-def _smooth(prompt, smooth_fn, parsed, user_line, names, limit, notes) -> str:
-    """Run the smoother; keep its text only if it keeps the user's words, adds no names and fits."""
+def _smooth(prompt, smooth_fn, content, names, limit, notes) -> str:
+    """Run the smoother; keep its text only if it keeps the user's content words, adds no names and fits."""
     if smooth_fn is None:
         notes.append("Smoothing was asked for but no smoother is available; the prompt is unsmoothed.")
         return prompt
@@ -393,10 +427,8 @@ def _smooth(prompt, smooth_fn, parsed, user_line, names, limit, notes) -> str:
     if _adds_names(prompt, out, names):
         notes.append("Smoothing added an artist name, so the unsmoothed prompt was kept.")
         return prompt
-    keep = [p for p in parsed.leftover if p in prompt]
-    if user_line and user_line in prompt:
-        keep.append(user_line)
-    if any(p not in out for p in keep):
+    # Compare without the first character, which the prompt may have capitalised.
+    if any(p[1:] in prompt and p[1:] not in out for p in content if len(p) > 1):
         notes.append("Smoothing changed your own words, so the unsmoothed prompt was kept.")
         return prompt
     if len(out) > max(limit, len(prompt)):
@@ -406,11 +438,18 @@ def _smooth(prompt, smooth_fn, parsed, user_line, names, limit, notes) -> str:
 
 
 def skeleton(themes) -> str:
-    """[Verse]/[Chorus] lyrics from a vocal card's themes, one theme per line, tags on their own lines."""
+    """[Verse]/[Chorus] topic lines from a vocal card's themes; tags on their own lines.
+
+    The chorus is two lines: its theme, then the theme with the first theme
+    after it ("A lost love" / "A lost love, a long road home").
+    """
     lines = [t.strip()[:1].upper() + t.strip()[1:] for t in themes if t and t.strip()]
     if not lines:
         return "[Verse]\n\n[Chorus]\n"
-    verse1, chorus, verse2 = lines[:2], lines[2:3] or lines[:1], lines[3:5]
+    hook = lines[2] if len(lines) > 2 else lines[0]
+    other = lines[0] if hook != lines[0] else (lines[1] if len(lines) > 1 else "")
+    chorus = [hook] + ([f"{hook}, {D._lc_first(other)}"] if other else [])
+    verse1, verse2 = lines[:2], lines[3:5]
     out = ["[Verse]", *verse1, "", "[Chorus]", *chorus]
     if verse2:
         out += ["", "[Verse]", *verse2, "", "[Chorus]", *chorus]
@@ -428,5 +467,5 @@ def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes) -> str:
             if include_names or not _name_spans(got, names, case_sensitive=False):
                 return got
             notes.append("The written lyrics named an artist, so a skeleton was used instead.")
-    notes.append("The lyrics are a skeleton from the vocal style's themes: replace each line with your own words.")
+    notes.append(SKELETON_NOTE)
     return skeleton(themes)

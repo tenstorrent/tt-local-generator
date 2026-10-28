@@ -13,6 +13,7 @@ import yaml
 
 from music_prompts import cards as C
 from music_prompts import Translation, dialect_for, load_library, translate
+from music_prompts import dialects as D
 from music_prompts.dialects import Clause, render
 from music_runtime import GENERIC, MusicProfile, profile_for
 
@@ -85,6 +86,16 @@ def _words(s):
     return [w.lower() for w in _WORD.findall(s)]
 
 
+def _repeated_trigram(text):
+    w = _words(text)
+    seen = set()
+    for g in zip(w, w[1:], w[2:]):
+        if g in seen:
+            return g
+        seen.add(g)
+    return None
+
+
 def _contains_name(text, name):
     """Case-insensitive whole-word scan: does `name` (as a word sequence) occur in text?"""
     w, n = _words(text), _words(name)
@@ -103,6 +114,11 @@ def test_example_sentence_caption_dialect(tmp_path):
         assert term in p, term
     assert "over it, a bluegrass vocal" in p
     assert re.search(r"\b\d{2,3} bpm\b", p)
+    assert len(t.prompt) <= 600
+    assert not _repeated_trigram(t.prompt), _repeated_trigram(t.prompt)
+    # the vocal layer comes right after the base sound (the base clause is the first thing added)
+    assert t.prompt.index("Over it, a bluegrass vocal") == len(t.added[0]) + 1
+    assert t.prompt[0].isupper()
     assert not _contains_name(t.prompt, "Tortoise")
     assert t.lyrics and t.lyrics.startswith("[Verse")
     assert "long road home" in t.lyrics.lower()
@@ -110,9 +126,11 @@ def test_example_sentence_caption_dialect(tmp_path):
     assert t.used_cards == ("tortoise", "bluegrass-vocal")
     assert "Tortoise" in t.inspired_by and "Bill Monroe" in t.inspired_by
     assert len(t.prompt) <= 1000
-    # a vocal on top contradicts the base card's "avoid sung lead vocals": it is left out
-    assert "sung lead vocals" not in p
+    assert "sung lead vocals" not in p and "leave out" not in p
     assert t.added and all(a in t.prompt for a in t.added)
+    assert t.instrumental is False
+    for glue in ("someone is singing", "on top", "song but"):
+        assert glue not in p, glue
 
 
 def test_example_sentence_tags_dialect_turns_the_vocal_into_a_lead_line_with_a_note(tmp_path):
@@ -124,6 +142,13 @@ def test_example_sentence_tags_dialect_turns_the_vocal_into_a_lead_line_with_a_n
         assert term in p, term
     assert "pedal steel" in p
     assert "close harmony" not in p          # the voice description is gone; the lead line replaces it
+    for debris in ("singing", "someone", "on top", "song"):
+        assert not re.search(r"\b" + debris + r"\b", p), debris
+    assert len(t.prompt) <= 300
+    assert "major key" in p
+    assert "chicago post-rock" in p and not re.search(r"(^|, )post-rock(,|$)", p)   # the more specific tag wins
+    assert p.count("dub") == 1 and p.count("instrumental") <= 1
+    assert t.instrumental is True
     assert any("this model cannot sing; the vocal became a lead line" in n.lower() for n in t.notes)
     assert not _contains_name(t.prompt, "Tortoise")
     assert len(t.prompt) <= 2000
@@ -136,6 +161,8 @@ def test_generic_dialect_is_one_sentence(tmp_path):
     assert not re.search(r"[.!?]\s", t.prompt)       # no sentence break inside
     assert "\n" not in t.prompt
     assert "vibraphone" in t.prompt.lower() and "bluegrass vocal" in t.prompt.lower()
+    assert len(t.prompt) <= 350 and t.prompt[0].isupper()
+    assert "someone is singing" not in t.prompt
     assert translate(EXAMPLE, UNKNOWN, library=_shipped(tmp_path)).dialect == "generic"
 
 
@@ -185,6 +212,16 @@ def test_a_typed_inspiration_name_with_no_card_is_replaced_by_its_style(tmp_path
     assert any("Harbor Lamps" in n for n in t.notes)
 
 
+def test_artist_label_is_its_parent_style(tmp_path):
+    """The artist card shows its parent style as its label (no other card lists 'Drifters')."""
+    lib = _band(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate("Drifters song", profile, library=lib)
+        assert "drifters" in t.used_cards
+        assert not _contains_name(t.prompt, "Drifters"), t.prompt
+        assert "slowcore" in t.prompt.lower() or t.dialect != "tags"
+
+
 def test_card_text_that_names_an_artist_is_scrubbed(tmp_path):
     """Guard for a user card that breaks the CARDS.md rule and names an artist in its own text."""
     lib = _lib(tmp_path, _card("dream", name="Dreamwave", sound="Hazy synths, a bit like Night Tide.",
@@ -201,7 +238,8 @@ def test_users_own_words_are_kept_verbatim(tmp_path):
     lib = _shipped(tmp_path)
     for profile in (MINIMAX, STABLE, None):
         t = translate("make it feel like a rainy Tuesday, Tortoise-like", profile, library=lib)
-        assert "make it feel like a rainy Tuesday" in t.prompt
+        assert "ake it feel like a rainy Tuesday" in t.prompt           # only the first letter may be capitalised
+        assert t.prompt[0] == ("m" if t.dialect == "tags" else "M")
         assert "tortoise" in t.used_cards
         assert not _contains_name(t.prompt, "Tortoise")
 
@@ -239,12 +277,12 @@ def test_empty_text_returns_a_helpful_note_and_empty_prompt(tmp_path):
 
 
 def test_parsed_dropped_marker_words_are_not_silently_lost(tmp_path):
-    """Choice: a marker that made no layer stays in the prompt (in the user's own words) and gets a note."""
+    """A marker that made no layer is glue: left out of the prompt and named in a note."""
     lib = _band(tmp_path)
     for text, marker in (("slowcore but", "but"), ("slowcore on top", "on top")):
         for profile in (MINIMAX, STABLE, None):
             t = translate(text, profile, library=lib)
-            assert f"slowcore {marker}" in t.prompt, (text, t.prompt)
+            assert not re.search(r"\b" + marker + r"\b", t.prompt.lower()), (text, t.prompt)
             assert any(f"'{marker}'" in n for n in t.notes)
 
 
@@ -256,7 +294,7 @@ def test_trigger_phrase_only_when_the_user_typed_it(tmp_path):
     named = translate("slowcore", MINIMAX, library=lib, include_names=True)
     assert "fiona crapple" not in named.prompt.lower()
     typed = translate("fiona crapple, slowcore", MINIMAX, library=lib)
-    assert "fiona crapple" in typed.prompt
+    assert typed.prompt.startswith("fiona crapple")       # a trigger is never re-cased
 
 
 # ── length limits (Review Focus 6) ───────────────────────────────────────────
@@ -267,7 +305,7 @@ def test_trim_never_drops_user_words_or_base_sound(tmp_path):
     for profile in (MINIMAX, STABLE, None):
         prof = _limit(profile or UNKNOWN, 10)
         t = translate(text, prof, library=lib)
-        assert "a long walk home in the snow" in t.prompt
+        assert "a long walk home in the snow" in t.prompt.lower()     # first letter may be capitalised
         assert "slowcore" in t.prompt.lower()
         assert len(t.prompt) > 10
         assert any("over" in n.lower() and "limit" in n.lower() for n in t.notes)
@@ -277,28 +315,125 @@ def test_result_over_limit_when_user_words_alone_exceed_it_has_a_note(tmp_path):
     lib = _band(tmp_path)
     words = "a very long description of my own " * 10
     t = translate(words + "slowcore", _limit(MINIMAX, 100), library=lib)
-    assert words.strip() in t.prompt and len(t.prompt) > 100
+    assert words.strip()[1:] in t.prompt and len(t.prompt) > 100
     assert any("100-character limit" in n for n in t.notes)
     # unknown text alone over the limit also gets the note
     t2 = translate(words.strip(), _limit(MINIMAX, 50), library=lib)
     assert t2.prompt == words.strip() and any("50-character limit" in n for n in t2.notes)
 
 
-def test_trim_order_drops_avoid_and_texture_first(tmp_path):
+def test_trim_order_drops_avoid_and_texture_first():
+    """Render drops whole clauses from the end of the spec's list: details, texture, mood, production,
+    tempo, instruments, names, layers; the user's words and the base sound never go."""
+    kinds = ["user", "base", "vocal", "names", "instruments", "tempo", "production", "mood", "texture", "detail"]
+    clauses = [D.clause(k, f"{k} words here") for k in kinds]
+    expected = ["detail", "texture", "mood", "production", "tempo", "instruments", "names", "vocal"]
+    for k in range(1, len(expected) + 1):
+        keep = [c for c in clauses if c.kind not in expected[:k]]
+        target = len(D._join(keep, "caption+lyrics"))
+        prompt, notes = render(clauses, "caption+lyrics", target, budget=0)
+        assert prompt == D._join(keep, "caption+lyrics"), (k, prompt)
+        assert notes and "dropped" in notes[0]
+    prompt, notes = render(clauses, "caption+lyrics", 5, budget=0)
+    assert prompt == "user words here. base words here." and any("limit" in n for n in notes)
+
+
+def test_avoid_is_never_in_a_prompt_and_is_listed_in_the_notes(tmp_path):
+    lib = _shipped(tmp_path)
+    avoid = {a for c in lib.cards.values() for a in c.avoid}
+    for text in (EXAMPLE, "make it feel like a rainy Tuesday, Tortoise-like", "post-rock", "instrumental tortoise-like piece"):
+        for profile in (MINIMAX, STABLE, None):
+            t = translate(text, profile, library=lib)
+            for a in avoid:
+                assert a.lower() not in t.prompt.lower(), (a, text, t.dialect)
+    t = translate("post-rock", MINIMAX, library=lib)
+    assert any(n.startswith("Not asked for:") and "short pop hooks" in n for n in t.notes)
+
+
+def test_glue_words_are_left_out_and_named_in_the_notes(tmp_path):
+    t = translate(EXAMPLE, STABLE, library=_shipped(tmp_path))
+    glue_note = next(n for n in t.notes if "not repeated in the prompt" in n)
+    for phrase in ("song", "someone is singing a", "on top"):
+        assert f"'{phrase}'" in glue_note
     lib = _band(tmp_path)
-    text = "slowcore with tape hiss"
-    full = translate(text, _limit(MINIMAX, 5000), library=lib)
-    texture = next(a for a in full.added if "tape hiss" in a)
-    avoid = next(a for a in full.added if "fast drum fills" in a)
-    mood = next(a for a in full.added if "patient" in a.lower())
-    # just enough room once the texture sentence (and its space) is gone
-    t1 = translate(text, _limit(MINIMAX, len(full.prompt) - len(texture) - 1), library=lib)
-    assert texture not in t1.prompt and avoid in t1.prompt and mood in t1.prompt
-    # one character less: avoid goes next, mood stays
-    t2 = translate(text, _limit(MINIMAX, len(full.prompt) - len(texture) - 2), library=lib)
-    assert texture not in t2.prompt and avoid not in t2.prompt and mood in t2.prompt
-    assert len(t2.prompt) <= len(full.prompt) - len(texture) - 2
-    assert any("dropped" in n.lower() for n in t2.notes)
+    t2 = translate("slowcore but very slow, with rain sounds", MINIMAX, library=lib)
+    assert "very slow" in t2.prompt.lower() and "rain sounds" in t2.prompt
+    assert t2.prompt.lower().index("very slow") < t2.prompt.index("rain sounds")
+    assert "rainy" not in D.GLUE_WORDS and "song" in D.GLUE_WORDS
+
+
+def test_rainy_tuesday_carries_no_glue(tmp_path):
+    for profile in (MINIMAX, STABLE, None):
+        t = translate("make it feel like a rainy Tuesday, Tortoise-like", profile, library=_shipped(tmp_path))
+        assert "rainy Tuesday" in t.prompt
+        assert "Tuesday, post-rock" not in t.prompt and "-like" not in t.prompt
+
+
+def test_instrumental_request_is_flagged_and_has_no_vocal_words(tmp_path):
+    lib = _shipped(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate("instrumental tortoise-like piece", profile, library=lib)
+        assert t.instrumental is True and t.lyrics is None
+        assert "instrumental" in t.prompt.lower()
+        assert t.prompt.lower().count("instrumental") == 1
+        for w in ("vocal", "sung", "singing", "voice", "lyric", "piece"):
+            assert w not in t.prompt.lower(), (w, t.dialect)
+    # instrumental with a vocal layer on a singing model: no vocal in the caption
+    t = translate("instrumental tortoise-like piece but a bluegrass song on top", MINIMAX, library=lib)
+    assert "vocal" not in t.prompt.lower() and t.lyrics is None and t.instrumental
+
+
+def test_dedupe_collapses_near_repeats(tmp_path):
+    lib = _lib(tmp_path, _card("dubby", name="Dubby", sound="Echoing drums.",
+                               tags=["dub bass", "echo"], instruments=["dub-style bass", "organ", "echoing drums"],
+                               mood="Heavy, dub-weighted and echoing."))
+    for profile in (STABLE, MINIMAX, None):
+        p = translate("dubby", profile, library=lib).prompt.lower()
+        assert len(re.findall(r"\bdub\b", p)) <= 1, (profile, p)
+        assert p.count("bass") <= 1, p
+    tags = translate("dubby", STABLE, library=lib).prompt
+    assert "organ" in tags and len(re.findall(r"\becho\b", tags)) == 1
+
+
+def test_soft_budget_then_hard_limit(tmp_path):
+    long = "Slow rolling guitar figures repeat and grow over a steady pulse"
+    lib = _lib(tmp_path, _card("big", name="Big", sound="A big, slow sound.", family="rock",
+                               instruments=[f"instrument number {i}" for i in range(40)],
+                               rhythm=long + ".", harmony=long + ".", production=long + ".",
+                               mood="Calm, warm and steady.", tags=[f"tag{i}" for i in range(60)],
+                               tempo_bpm=[60, 90]))
+    budgets = {"caption+lyrics": D.CAPTION_BUDGET, "tags": D.TAGS_BUDGET, "generic": D.GENERIC_BUDGET}
+    for profile in (MINIMAX, STABLE, None):
+        t = translate("my own quiet words, big", profile, library=lib)
+        assert len(t.prompt) <= budgets[t.dialect], (t.dialect, len(t.prompt))
+        assert "my own quiet words" in t.prompt.lower()
+        tight = translate("my own quiet words, big", _limit(profile or UNKNOWN, 120), library=lib)
+        assert len(tight.prompt) <= 120 or any("limit" in n for n in tight.notes)
+        assert "my own quiet words" in tight.prompt.lower()
+
+
+def test_tempo_leans_with_the_mood(tmp_path):
+    lib = _lib(tmp_path,
+               _card("calm", name="Calmcore", sound="Soft.", mood="Patient and unhurried.", tempo_bpm=[60, 120]),
+               _card("fast", name="Fastcore", sound="Loud.", mood="Driving and urgent.", tempo_bpm=[60, 120]),
+               _card("plain", name="Plaincore", sound="Even.", mood="Bright.", tempo_bpm=[60, 120]))
+    bpm = lambda text: int(re.search(r"(\d+) bpm", translate(text, STABLE, library=lib).prompt).group(1))
+    assert bpm("calmcore") < 80 and bpm("fastcore") > 100 and bpm("plaincore") == 90
+    assert bpm("a slow plaincore") < 80
+
+
+def test_label_match_is_word_bounded(tmp_path):
+    lib = _lib(tmp_path, _card("rock", name="Rock", sound="Guitars and drums, rocking hard."))
+    t = translate("rocking chair vibes, rock", MINIMAX, library=lib)
+    assert "Rock: guitars" in t.prompt      # "rocking" (typed or in the sound) does not count as naming the style
+
+
+def test_reload_library_drops_the_cache():
+    import importlib
+    T = importlib.import_module("music_prompts.translate")
+    T._DEFAULT_LIBRARY = "stale"
+    T.reload_library()
+    assert T._DEFAULT_LIBRARY is None or not isinstance(T._DEFAULT_LIBRARY, str)
 
 
 def test_trim_never_cuts_mid_word(tmp_path):
@@ -326,8 +461,10 @@ def test_unknown_limit_uses_1000(tmp_path):
         t = translate("big", profile, library=lib)
         assert len(t.prompt) <= 1000
         assert any("1000-character limit" in n for n in t.notes)
-    roomy = translate("big", _limit(UNKNOWN, 5000), library=lib)
-    assert len(roomy.prompt) > 1000
+    clauses = [D.clause("base", "a base sound"), D.clause("mood", long_mood)]
+    prompt, notes = render(clauses, "generic", None, budget=0)
+    assert prompt == "A base sound." and any("1000-character limit" in n for n in notes)
+    assert len(render(clauses, "generic", 5000, budget=0)[0]) > 1000
 
 
 # ── determinism, smoothing, lyrics ───────────────────────────────────────────
@@ -350,9 +487,11 @@ def test_smooth_runs_only_when_asked_and_never_adds_names(tmp_path):
 
     plain = translate(EXAMPLE, MINIMAX, library=lib, smooth_fn=smoother)
     assert calls == []
-    # the smoother loses the user's own words: rejected, falls back
-    lost = translate(EXAMPLE, MINIMAX, library=lib, smooth=True, smooth_fn=smoother)
-    assert calls and lost.prompt == plain.prompt and lost.notes != plain.notes
+    # the smoother loses the user's own content words: rejected, falls back
+    rainy = "make it feel like a rainy Tuesday, Tortoise-like"
+    kept = translate(rainy, MINIMAX, library=lib)
+    lost = translate(rainy, MINIMAX, library=lib, smooth=True, smooth_fn=smoother)
+    assert calls and lost.prompt == kept.prompt and lost.notes != kept.notes
 
     keep = lambda p: p.replace("Around", "At about")
     good = translate(EXAMPLE, MINIMAX, library=lib, smooth=True, smooth_fn=keep)
@@ -371,6 +510,9 @@ def test_lyrics_fn_none_falls_back_to_a_skeleton_from_lyric_themes(tmp_path):
     assert t.lyrics.startswith("[Verse]\n")
     assert "\n[Chorus]\n" in t.lyrics
     assert "Snow on the roof" in t.lyrics and "An empty station" in t.lyrics
+    chorus = t.lyrics.split("[Chorus]\n")[1].split("\n\n")[0].strip().splitlines()
+    assert len(chorus) == 2 and chorus[0] == "The last train" and chorus[1].startswith("The last train, ")
+    assert any("topic lines" in n for n in t.notes)
     seen = []
 
     def writer(vocal, themes):

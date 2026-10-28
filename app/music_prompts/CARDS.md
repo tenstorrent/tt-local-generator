@@ -32,9 +32,10 @@ Artist cards also require `parent`.
 | `sound` | One to three plain sentences. Never names an artist. Start with an ordinary word: a caption may print it after the style name ("Post-rock: mostly instrumental rock ..."), which lowercases the first letter. |
 | `instruments`, `rhythm`, `harmony`, `mood`, `production` | Short plain descriptions. |
 | `tempo_bpm` | `[low, high]` whole numbers (floats and booleans are rejected), with 0 < low <= high. Styles need it; scenes and instruments may omit it. |
-| `avoid` | Things to leave out. |
+| `avoid` | Things to leave out. Shown in the notes, never written into a prompt. |
 | `lyric_themes` | Topics a sung layer can be about (vocal cards, singing styles). |
 | `vocal` | How the voice sounds, for vocal cards. |
+| `key` | The key, only when it is true of the style (`major key`, `D minor`). Optional; most cards leave it empty. Used in tag and caption prompts; the base card's key wins, else a vocal card's. |
 | `lead_instrument` | Vocal cards: the instrument that carries the melody when the model cannot sing (Stable Audio). Optional; without it the prompt says "plaintive lead line phrased like a <style> vocal". The bluegrass vocal card uses `pedal steel`. |
 | `tags` | Short tag forms for tag-style prompts. |
 | `goes_with`, `clashes_with` | Card ids or family names the wand favours or avoids. An entry that names nothing is logged and kept as a plain family tag. |
@@ -44,7 +45,7 @@ Artist cards also require `parent`.
 | `notes` | Sources (two or more) or the single word `unverified`. |
 
 List fields (`aliases`, `instruments`, `avoid`, `tags` and so on) must be YAML lists of strings; text fields must be strings. A card with a wrong type is skipped with a message.
-`avoid` entries that mention singing, vocals, verses, choruses or lyrics are left out of a prompt that asks for a vocal, so a post-rock base can carry a sung layer.
+`avoid` never goes into a prompt (music models tend to hear "no X" as "X"); the translator lists it in its notes as "Not asked for: ...". Entries that mention singing, vocals, verses, choruses or lyrics are left out of that note when the user asks for a vocal or an instrumental.
 If a card's own text does name an artist or an `inspiration` entry, the translator replaces it with the style name, but write the card so it does not need that.
 An artist card whose `parent` names no card, or a card that is not a style, is kept and a warning is logged. A missing or empty shipped folder logs a warning.
 
