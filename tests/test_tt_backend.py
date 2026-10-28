@@ -287,3 +287,21 @@ def test_stop_rejects_names_that_look_like_options(tmp_path):
     r = tb.stop(["a/b", "--profile"])
     assert not r.ok and "'-'" in r.reason
     assert not [c for c in calls(d) if "stop" in c]
+
+
+def test_serve_with_extra_args_fails_closed_when_the_kind_is_unknown(tmp_path):
+    # The dry-run fails, so the bundle cannot be confirmed: never start unpinned.
+    d = _install(tmp_path, {"serve ns/b --device-id": {"lines": ["ok"]}})
+    res = tb.serve("ns/b", extra_args=["--device-id", "0,1"])
+    assert not res.ok
+    assert "not starting it unpinned" in res.reason
+    assert not [c for c in calls(d) if "--dry-run" not in c and "--version" not in c]
+
+
+def test_serve_uses_a_passed_plan_without_a_dry_run(tmp_path):
+    d = _install(tmp_path, {"serve": {"lines": ["ok"]}})
+    plan = tb.ServePlan("ns/b", "tt-model", (), "p300", None, 2)
+    assert tb.serve("ns/b", extra_args=["--device-id", "0,1"], plan=plan).ok
+    assert not [c for c in calls(d) if "--dry-run" in c]
+    real = [c for c in calls(d) if "--version" not in c]
+    assert real[-1][-3:] == ["--", "--device-id", "0,1"]

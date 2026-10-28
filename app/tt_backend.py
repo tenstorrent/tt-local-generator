@@ -337,7 +337,8 @@ def plan_serve(model: str, *, port: int | None = None,
 def serve(model: str, *, port: int | None = None, device: str | None = None,
           detach: bool = False, on_line: Callable[[str], None] | None = None,
           cancel: Callable[[], bool] | None = None, env: dict | None = None,
-          timeout: float = 3600.0, extra_args: Sequence[str] = ()) -> TtResult:
+          timeout: float = 3600.0, extra_args: Sequence[str] = (),
+          plan: ServePlan | None = None) -> TtResult:
     """Run ``tt serve`` and stream its output to ``on_line``.
 
     ``tt serve --help`` says ``--detach`` is for bundles only ("return once the
@@ -349,9 +350,13 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
     ``extra_args`` are passed through to tt-model after ``--`` (for example
     ``["--device-id", "0,1"]`` to pin a bundle to leased chips: wire notes,
     item 1). Only a tt-model bundle accepts them; a catalog model exits 2 with
-    "Unrecognized arguments", so for a catalog model, or when the kind is
-    unknown, they are left off and a warning is logged. A caller that relies
-    on the pin must check the kind first (``plan_serve(...).backend``).
+    "Unrecognized arguments", so for a KNOWN catalog model they are left off
+    and a warning is logged. When the kind cannot be confirmed (the dry-run
+    failed) serve fails closed and starts nothing: dropping a ``--device-id``
+    pin would start the bundle on chips other than the leased ones.
+
+    ``plan`` is the caller's already-computed ``plan_serve`` result; when it is
+    given, no second dry-run is made.
 
     ``cancel`` and the deadline are checked on every loop pass. On either, the
     process group gets SIGTERM, then SIGKILL after a short grace, and serve()
@@ -365,7 +370,11 @@ def serve(model: str, *, port: int | None = None, device: str | None = None,
     argv = [str(tt), "serve", model] + _serve_args(model, port, device)[2:]
     extra = [str(a) for a in extra_args or ()]
     if detach or extra:
-        plan = plan_serve(model, port=port, device=device)
+        if plan is None:
+            plan = plan_serve(model, port=port, device=device)
+        if extra and plan is None:
+            return TtResult(False, f"could not confirm {model} is a tt-model bundle; "
+                                   "not starting it unpinned")
         is_bundle = plan is not None and plan.backend == "tt-model"
         if detach and is_bundle:
             argv.append("--detach")

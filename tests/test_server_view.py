@@ -210,3 +210,19 @@ def test_saved_entry_uses_label_and_never_copies_token():
                                   "token": "SECRET"}], [], {})
     assert rows[0].name == "Lab box"
     assert "SECRET" not in repr(rows[0])
+
+
+def test_prune_never_drops_an_unreapable_record(tmp_path):
+    r = sv.ServerRecords(tmp_path / "s.json")
+    r.add("lost", None, None, "L1", "t", unreapable=True)
+    r.add("gone", 9000, "c9", "L9", "t")
+    dropped = r.prune(set(), set())
+    assert [d["name"] for d in dropped] == ["gone"]
+    assert [x["name"] for x in r.load()] == ["lost"]
+    assert r.load()[0]["unreapable"] is True
+
+
+def test_add_without_unreapable_writes_no_flag(tmp_path):
+    r = sv.ServerRecords(tmp_path / "s.json")
+    r.add("a", 1, "c1", "L", "t")
+    assert "unreapable" not in r.load()[0]

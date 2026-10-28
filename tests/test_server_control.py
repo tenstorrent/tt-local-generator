@@ -115,6 +115,14 @@ class Env:
         # docker
         self.devices = {}
         self.docker_stop_result = TtResult(True, "")
+        self.port_containers = {}
+        # hooks: run inside gozer.wait / tt.serve, to model a race
+        self.wait_hook = None
+        self.serve_hook = None
+        self.serve_kwargs = []
+        # endpoint probe (for rows whose health is empty / "running")
+        self.probe = lambda url: False
+        self.reset_result = True
 
         env = self
 
@@ -127,11 +135,14 @@ class Env:
             @staticmethod
             def serve(model, *, port=None, extra_args=(), on_line=None, cancel=None, **kw):
                 env.calls.append(("tt.serve", model, tuple(extra_args)))
+                env.serve_kwargs.append(dict(kw, port=port))
                 for ln in env.serve_result.lines:
                     if on_line:
                         on_line(ln)
                 if env.serve_adds is not None:
                     env.view.append(env.serve_adds)
+                if env.serve_hook:
+                    env.serve_hook()
                 return env.serve_result
 
             @staticmethod
@@ -155,6 +166,8 @@ class Env:
             @staticmethod
             def wait(ticket, timeout, cancel=None):
                 env.calls.append(("gozer.wait", ticket))
+                if env.wait_hook:
+                    env.wait_hook()
                 return env.wait_result
 
             @staticmethod
@@ -223,6 +236,18 @@ class Env:
         self.view[:] = [s for s in self.view if s.container_id != cid]
         return self.docker_stop_result
 
+    def docker_container_for_port(self, port):
+        self.calls.append(("docker.container_for_port", port))
+        return self.port_containers.get(port)
+
+    def probe_fn(self, url):
+        self.calls.append(("probe", url))
+        return self.probe(url)
+
+    def reset_fn(self):
+        self.calls.append(("reset",))
+        return self.reset_result
+
     def clock(self):
         return self.t
 
@@ -237,7 +262,9 @@ class Env:
             gozer=self.gozer, records=self.records, boutique=self.boutique,
             status_of=lambda k: self.status_map.get(k, "off"),
             confirm_fn=self.confirm_fn, docker_devices=self.docker_devices,
-            docker_stop=self.docker_stop, clock=self.clock, sleep=self.sleep, **kw)
+            docker_stop=self.docker_stop, clock=self.clock, sleep=self.sleep,
+            docker_container_for_port=self.docker_container_for_port,
+            probe_fn=self.probe_fn, reset_fn=self.reset_fn, **kw)
 
     def names(self):
         return [c[0] for c in self.calls]
@@ -423,7 +450,7 @@ def test_queued_lease_reports_waiting_and_cancel_cleans_up(env):
     env.find_lease_result = Lease("L9", ("0000:03:00.0",))
     ctl = env.control()
     out = ctl.start("ns/bundle", on_progress=env.progress.append, cancel=lambda: True)
-    assert out.kind == "waiting_for_chips"
+    assert out.kind == "cancelled"
     assert any("waiting for chips" in p.lower() for p in env.progress)
     assert env.index(("gozer.wait", "T1")) < env.index(("gozer.cancel_ticket", "T1"))
     assert env.index(("gozer.cancel_ticket", "T1")) < env.index(
@@ -797,3 +824,318 @@ def test_default_docker_stop_uses_a_long_timeout(monkeypatch):
     assert seen["argv"][:2] == ["docker", "stop"] and seen["argv"][-1] == "abc123"
     assert int(seen["argv"][seen["argv"].index("--time") + 1]) >= 60
     assert seen["kw"]["timeout"] > 60
+
+
+# --------------------------------------------------------------------------
+# Fix round 1: races, unreapable records, fail-closed pin, reset, port lookup
+# --------------------------------------------------------------------------
+
+def saved_row(health="unknown", source="saved", cid="cafecafecafe"):
+    return rs("ns/bundle", name="ns/bundle", source=source, health=health,
+              container_id=cid, port=20000)
+
+
+def test_healthy_server_started_elsewhere_during_chip_wait_is_used_not_adopted(env):
+    env.acquire_result = Queued("T1")
+    env.wait_result = Lease("L1", ("0000:03:00.0", "0000:04:00.0"))
+    other = rs("ns/bundle", name="ns/bundle", container_id="ffffffffffff", port=20000)
+    env.wait_hook = lambda: env.view.append(other)
+    out = env.control().start("ns/bundle")
+    assert out.kind == "already_running"
+    assert out.url == other.url
+    assert "tt.serve" not in env.names() and "tt.stop" not in env.names()
+    assert "confirm" not in env.names()
+    assert ("gozer.release", "L1") in env.calls      # our unused lease is given back
+    assert env.records.load() == []                  # never recorded as app-owned
+
+
+def test_booting_server_started_elsewhere_during_chip_wait_is_never_stopped(env):
+    # The reviewer's race: another party boots the model while we queue.
+    env.acquire_result = Queued("T1")
+    env.wait_result = Lease("L1", ("0000:03:00.0", "0000:04:00.0"))
+    env.serve_result = TtResult(False, "tt serve exited 1", ("port in use",))
+    other = rs("ns/bundle", name="ns/bundle", health="starting",
+               container_id="ffffffffffff", port=20000)
+    env.wait_hook = lambda: env.view.append(other)
+    out = env.control(elsewhere_timeout=30).start("ns/bundle")
+    assert out.kind == "failed"
+    assert "elsewhere" in out.message
+    assert "tt.serve" not in env.names()
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+    assert "confirm" not in env.names()
+    assert ("gozer.release", "L1") in env.calls
+    assert env.records.load() == []
+
+
+def test_failed_start_leaves_a_server_listed_before_launch_alone(env):
+    # A row of this model existed before launch (a saved local entry): the
+    # by-name fallback stop would hit it, so nothing is stopped.
+    env.view = [saved_row()]
+    env.serve_result = TtResult(False, "tt serve exited 1", ("boom",))
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert "left alone" in out.message
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+    assert ("gozer.release", "L1") in env.calls      # our own lease only
+    assert env.records.load() == []
+
+
+def test_health_wait_ignores_a_row_that_existed_before_launch(env):
+    env.view = [saved_row()]
+
+    def other_party_brings_it_up():
+        env.view[:] = [saved_row(health="healthy", source="tt")]
+    env.serve_hook = other_party_brings_it_up
+    out = env.control(start_timeout=30).start("ns/bundle")
+    assert out.kind == "failed"
+    assert env.records.load() == []
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+
+
+def test_failed_stop_without_identity_marks_record_unreapable(env):
+    env.serve_result = TtResult(False, "boom", ("boom",))
+    env.stop_result = TtResult(False, "tt model stop exited 1")
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert "L1" in out.message
+    rec = env.records.load()
+    assert len(rec) == 1 and rec[0]["lease_id"] == "L1" and rec[0]["unreapable"] is True
+    ctl = env.control()
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert "gozer.release" not in env.names()
+    assert len(env.records.load()) == 1
+
+
+def test_failed_stop_record_takes_identity_from_the_view(env):
+    env.serve_result = TtResult(False, "boom", ("boom",))
+    env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting",
+                        container_id="dddddddddddd", port=20000)
+    env.stop_result = TtResult(False, "tt model stop exited 1")
+    env.control().start("ns/bundle")
+    rec = env.records.load()[0]
+    assert (rec["container_id"], rec["port"], rec["lease_id"]) == ("dddddddddddd", 20000, "L1")
+    assert not rec.get("unreapable")
+
+
+def test_pinned_serve_passes_its_plan_so_tt_backend_needs_no_second_dry_run(env):
+    env.serve_adds = started_bundle()
+    env.control().start("ns/bundle")
+    assert env.serve_kwargs[0]["plan"] is PLANS["ns/bundle"]
+
+
+def test_accepted_switch_resets_once_without_gozer(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None)]
+    env.confirm_answers = {"switch": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    out = env.control().start("flux")
+    assert out.kind == "started", out.message
+    assert env.names().count("reset") == 1
+    assert (env.index(("boutique.stop", "wan-old")) < env.index(("reset",))
+            < env.index(("boutique.start", "flux")))
+
+
+def test_accepted_switch_never_resets_on_a_gozer_box(env, caplog):
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None)]
+    env.confirm_answers = {"switch": True, "unknown_chips": True}
+    with caplog.at_level(logging.INFO, logger="server_control"):
+        env.control().start("flux")
+    assert "reset" not in env.names()
+    assert any("reset" in r.message.lower() and "gozer" in r.message.lower()
+               for r in caplog.records)
+
+
+def test_declined_switch_never_resets(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None)]
+    assert env.control().start("flux").kind == "declined"
+    assert "reset" not in env.names()
+
+
+def test_failed_reset_starts_nothing(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None)]
+    env.confirm_answers = {"switch": True}
+    env.reset_result = False
+    out = env.control().start("flux")
+    assert out.kind == "failed"
+    assert "boutique.start" not in env.names()
+
+
+def test_script_server_container_found_by_port_is_adopted(env):
+    env.confirm_answers = {"unknown_chips": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    env.port_containers = {8000: "aaaa1111bbbb"}
+    env.devices = {"aaaa1111bbbb": ["/dev/tenstorrent/0"]}
+    env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",))}
+    out = env.control().start("flux")
+    assert out.kind == "started", out.message
+    assert out.lease_id == "A0"
+    assert ("docker.devices", "aaaa1111bbbb") in env.calls
+    # ownership of a script row is by endpoint, so its record keeps no container id
+    rec = env.records.load()[0]
+    assert (rec["name"], rec["port"], rec["container_id"]) == ("flux", 8000, None)
+
+
+def test_script_server_whose_container_is_unknown_is_stopped_with_the_port_named(env):
+    env.confirm_answers = {"unknown_chips": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    out = env.control().start("flux")
+    assert out.kind == "failed"
+    assert "8000" in out.message and "stopped" in out.message
+    assert ("boutique.stop", "flux") in env.calls
+    assert env.records.load() == []
+
+
+def test_switch_prompt_names_an_external_incumbent(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None, uptime_s=120)]
+    env.control().start("flux")
+    text = env.confirms[0][1]
+    assert "not started by tt-local-generator" in text and "2m" in text
+
+
+def test_switch_prompt_for_an_app_owned_incumbent_does_not_call_it_external(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None, owner="app")]
+    env.control().start("flux")
+    assert "not started by tt-local-generator" not in env.confirms[0][1]
+
+
+def test_remote_only_incumbent_is_not_stopped_locally(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="discovered", url="http://10.0.0.9:8000", local=False,
+                   port=8000, container_id=None, owner="unknown")]
+    env.confirm_answers = {"switch": True}
+    out = env.control().start("flux")
+    assert out.kind == "failed"
+    assert "another machine" in out.message
+    assert "boutique.stop" not in env.names() and "boutique.start" not in env.names()
+
+
+def test_own_adopt_refusal_merges_older_leases_of_the_model(env):
+    env.records.add("Cat-7B", 20001, "000000000000", "PREV", 1.0)
+    env.serve_adds = started_cat()
+    env.devices = {"abcdef123456": ["/dev/tenstorrent/2", "/dev/tenstorrent/3"]}
+    ctl = env.control()
+    who = ctl.who_for("Cat-7B")
+    env.adopt_results = {"2": Lease("A2", ("0000:03:00.0",)), "3": AdoptRefused(who)}
+    env.find_lease_result = Lease("OLD", ("0000:04:00.0",))
+    out = ctl.start("Cat-7B")
+    assert out.kind == "started", out.message
+    assert set(out.lease_id.split(",")) == {"A2", "OLD", "PREV"}
+    assert set(env.records.load()[0]["lease_id"].split(",")) == {"A2", "OLD", "PREV"}
+
+
+def test_stop_survives_an_oserror_from_the_script(env):
+    def boom(key):
+        raise OSError("bash missing")
+    env.boutique.stop = staticmethod(boom)
+    srv = rs("flux", source="script", port=8000, container_id=None, owner="app")
+    out = env.control().stop(srv)
+    assert out.kind == "failed" and "bash missing" in out.message
+
+
+def test_restart_survives_an_oserror(env):
+    def boom(key):
+        raise OSError("bash missing")
+    env.boutique.stop = staticmethod(boom)
+    srv = rs("flux", source="script", port=8000, container_id=None, owner="app")
+    out = env.control().restart(srv)
+    assert out.kind == "failed"
+    assert "boutique.start" not in env.names()
+
+
+def test_reap_survives_a_records_error(env, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(env.records, "prune", boom)
+    env.records.add("gone", 9000, "aaaaaaaaaaaa", "L-gone", 1.0)
+    ctl = env.control()
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == []
+
+
+def test_two_concurrent_starts_of_one_key_serve_once(env):
+    import threading
+    env.gozer_available = False
+    entered, go = threading.Event(), threading.Event()
+    calls = []
+
+    def serve_hook():
+        calls.append(1)
+        if len(calls) == 1:
+            entered.set()
+            go.wait(5)
+            env.view.append(started_bundle())
+    env.serve_hook = serve_hook
+    ctl = env.control()
+    outs = []
+    a = threading.Thread(target=lambda: outs.append(ctl.start("ns/bundle")))
+    a.start()
+    assert entered.wait(5)
+    b = threading.Thread(target=lambda: outs.append(ctl.start("ns/bundle")))
+    b.start()
+    b.join(0.3)
+    go.set()
+    a.join(5)
+    b.join(5)
+    assert len(calls) == 1
+    assert sorted(o.kind for o in outs) == ["already_running", "started"]
+
+
+def test_cancel_during_boot_returns_cancelled_and_cleans_up(env):
+    env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting", port=20000)
+    flag = []
+    env.serve_hook = lambda: flag.append(1)
+    out = env.control().start("ns/bundle", cancel=lambda: bool(flag))
+    assert out.kind == "cancelled"
+    assert ("tt.stop", ("ns/bundle",)) in env.calls
+    assert ("gozer.release", "L1") in env.calls
+
+
+def test_running_row_with_empty_health_waits_for_the_endpoint(env):
+    # Real `tt model ps` may report status "running" with no health; merge
+    # then shows health "running".
+    env.view = [rs("ns/bundle", name="ns/bundle", health="running")]
+    answers = iter([False, True])
+    env.probe = lambda url: next(answers, True)
+    out = env.control().start("ns/bundle")
+    assert out.kind == "already_running"
+    assert out.url == "http://127.0.0.1:8011/v1"
+    assert "tt.serve" not in env.names()
+
+
+def test_running_row_that_never_answers_fails_without_stopping_it(env):
+    env.view = [rs("ns/bundle", name="ns/bundle", health="")]
+    out = env.control(elsewhere_timeout=30).start("ns/bundle")
+    assert out.kind == "failed"
+    assert "tt.serve" not in env.names()
+    assert not [n for n in env.names() if n in ("tt.stop", "boutique.stop", "docker.stop")]
+
+
+def test_default_docker_container_for_port(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"], seen["kw"] = argv, kw
+        return subprocess.CompletedProcess(argv, 0, stdout=seen.get("out", "abc123def456\n"),
+                                           stderr="")
+    monkeypatch.setattr(sc_mod.subprocess, "run", fake_run)
+    assert sc_mod.docker_container_for_port(8000) == "abc123def456"
+    assert seen["argv"] == ["docker", "ps", "--filter", "publish=8000", "--format", "{{.ID}}"]
+    assert seen["kw"]["timeout"] and seen["kw"]["stdin"] == subprocess.DEVNULL
+    seen["out"] = "aaa\nbbb\n"
+    assert sc_mod.docker_container_for_port(8000) is None      # ambiguous
+    seen.clear()
+    for bad in (0, 70000, "8000; rm", None, True):
+        assert sc_mod.docker_container_for_port(bad) is None
+    assert "argv" not in seen

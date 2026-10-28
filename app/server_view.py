@@ -112,12 +112,26 @@ class ServerRecords:
                 pass
             raise
 
-    def add(self, name, port, container_id, lease_id, started_at) -> None:
-        """Record a server (replaces any record with the same name)."""
+    def add(self, name, port, container_id, lease_id, started_at,
+            unreapable: bool = False) -> None:
+        """Record a server (replaces any record with the same name).
+
+        ``lease_id`` may hold several ids separated by commas (one adopted
+        lease per board); readers must split it.
+
+        ``unreapable=True`` marks a record whose server could not be identified
+        (no container id, no port: a start whose stop also failed). ``prune``
+        never treats such a record as stale, because releasing its lease resets
+        the chips under a container that may still run; ``gozer reconcile`` or
+        the user releases it. The key is written only when True.
+        """
         with self._locked():
             recs = [r for r in self.load() if r.get("name") != name]
-            recs.append({"name": name, "port": port, "container_id": container_id,
-                         "lease_id": lease_id, "started_at": started_at})
+            rec = {"name": name, "port": port, "container_id": container_id,
+                   "lease_id": lease_id, "started_at": started_at}
+            if unreapable:
+                rec["unreapable"] = True
+            recs.append(rec)
             self._save(recs)
 
     def remove(self, name) -> None:
@@ -139,7 +153,8 @@ class ServerRecords:
         two-poll confirmation (a record must look stale on two consecutive
         polls) belongs to the caller (Task 6), not here.
 
-        A record with a container id is dropped when that id is not live. A
+        A record marked ``unreapable`` is never dropped. A record with a
+        container id is dropped when that id is not live. A
         record with no container id (script-started) is dropped when
         ``(name, port)`` is not in ``live_endpoints``; with
         ``live_endpoints=None`` such records are kept.
@@ -151,7 +166,9 @@ class ServerRecords:
             kept, dropped = [], []
             for r in recs:
                 cid = r.get("container_id")
-                if cid:
+                if r.get("unreapable"):
+                    stale = False
+                elif cid:
                     stale = cid not in live_container_ids
                 elif live_endpoints is None:
                     stale = False
