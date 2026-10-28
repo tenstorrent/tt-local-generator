@@ -69,7 +69,7 @@ STATUS = {"chips": [
 
 
 def rs(key, *, name=None, source="tt", url=None, local=True, port=8011,
-       health="healthy", uptime_s=60, container="c-" + "x", container_id="60e0b238c988",
+       health="healthy", uptime_s=None, container="c-" + "x", container_id="60e0b238c988",
        served_id=None, owner="external"):
     return RunningServer(key=key, name=name or key, source=source,
                          url=url or f"http://127.0.0.1:{port}/v1", host_is_local=local,
@@ -288,8 +288,8 @@ def started_bundle(cid="60e0b238c988"):
     return rs("ns/bundle", name="ns/bundle", container_id=cid, port=20000)
 
 
-def started_cat(cid="abcdef123456"):
-    return rs("Cat-7B", name="Cat-7B", container_id=cid, port=20001)
+def started_cat(cid="abcdef123456", uptime_s=5):
+    return rs("Cat-7B", name="Cat-7B", container_id=cid, port=20001, uptime_s=uptime_s)
 
 
 # --------------------------------------------------------------------------
@@ -509,6 +509,7 @@ def test_server_that_never_gets_healthy_is_stopped_and_its_lease_released(env):
     env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting", port=20000)
     out = env.control(start_timeout=60).start("ns/bundle")
     assert out.kind == "failed"
+    assert "confirm" not in env.names()          # on the leased chips: proven ours
     assert ("tt.stop", ("ns/bundle",)) in env.calls
     assert ("gozer.release", "L1") in env.calls
     assert env.records.load() == []
@@ -589,6 +590,7 @@ def test_adopt_none_is_a_failure_and_stops_the_server(env):
     env.serve_adds = started_cat()
     env.devices = {"abcdef123456": ["/dev/tenstorrent/2"]}
     env.adopt_results = {}               # adopt returns None
+    env.confirm_answers = {"stop_external": True}
     out = env.control().start("Cat-7B")
     assert out.kind == "failed"
     assert ("tt.stop", ("Cat-7B",)) in env.calls
@@ -611,6 +613,7 @@ def test_adopt_refused_for_our_own_lease_is_not_a_conflict(env):
 def test_container_devices_unreadable_stops_the_server(env):
     env.serve_adds = started_cat()
     env.devices = {}                     # docker inspect failed -> None
+    env.confirm_answers = {"stop_external": True}
     out = env.control().start("Cat-7B")
     assert out.kind == "failed"
     assert ("tt.stop", ("Cat-7B",)) in env.calls
@@ -925,6 +928,7 @@ def test_failed_stop_record_takes_identity_from_the_view(env):
     env.serve_result = TtResult(False, "boom", ("boom",))
     env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting",
                         container_id="dddddddddddd", port=20000)
+    env.devices = {"dddddddddddd": ["/dev/tenstorrent/2", "/dev/tenstorrent/3"]}
     env.stop_result = TtResult(False, "tt model stop exited 1")
     env.control().start("ns/bundle")
     rec = env.records.load()[0]
@@ -997,7 +1001,7 @@ def test_script_server_container_found_by_port_is_adopted(env):
 
 
 def test_script_server_whose_container_is_unknown_is_stopped_with_the_port_named(env):
-    env.confirm_answers = {"unknown_chips": True}
+    env.confirm_answers = {"unknown_chips": True, "stop_external": True}
     env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
     out = env.control().start("flux")
     assert out.kind == "failed"
@@ -1238,6 +1242,7 @@ def test_failed_stop_record_does_not_replace_an_older_record_of_the_key(env):
     env.serve_result = TtResult(False, "boom", ("boom",))
     env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting",
                         container_id="dddddddddddd", port=20000)
+    env.devices = {"dddddddddddd": ["/dev/tenstorrent/2", "/dev/tenstorrent/3"]}
     env.stop_result = TtResult(False, "tt model stop exited 1")
     env.control().start("ns/bundle")
     leases = sorted(r["lease_id"] for r in env.records.load())
@@ -1290,7 +1295,7 @@ def test_unreadable_view_at_launch_fails_closed(env):
 
 
 def test_port_lookup_failure_message_follows_the_stop_result(env):
-    env.confirm_answers = {"unknown_chips": True}
+    env.confirm_answers = {"unknown_chips": True, "stop_external": True}
     env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
     env.boutique_stop_rc = 1
     out = env.control().start("flux")
@@ -1311,3 +1316,122 @@ def test_stop_that_raises_during_cleanup_still_records_the_kept_lease(env):
     assert out.kind == "failed"
     assert "gozer.release" not in env.names()
     assert [r["lease_id"] for r in unreapable(env)] == ["L1"]
+
+
+# --------------------------------------------------------------------------
+# Fix round 3: failure cleanup never stops a foreign row unasked
+# --------------------------------------------------------------------------
+
+def test_pinned_failed_serve_with_a_foreign_container_on_other_chips_stops_nothing(env):
+    # Reviewer's scenario: our serve fails while their container appears on
+    # chips 0-1; we leased 2-3.
+    env.serve_result = TtResult(False, "tt serve exited 1", ("boom",))
+    env.serve_adds = theirs("ns/bundle", "ns/bundle", port=20009, health="starting")
+    env.devices = {"eeeeeeeeeeee": ["/dev/tenstorrent/0", "/dev/tenstorrent/1"]}
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert ("confirm", "stop_external") in env.calls
+    assert "eeeeeeeeeeee" in env.confirms[-1][1]
+    assert not [n for n in env.names() if n in ("tt.stop", "docker.stop", "gozer.release")]
+    assert "has been stopped" not in out.message
+    assert "L1" in out.message and "eeeeeeeeeeee" in out.message
+    assert [r["lease_id"] for r in unreapable(env)] == ["L1"]
+
+
+def test_pinned_failed_serve_with_our_own_container_stops_without_asking(env):
+    env.serve_result = TtResult(False, "tt serve exited 1", ("boom",))
+    env.serve_adds = rs("ns/bundle", name="ns/bundle", health="starting", port=20000)
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert "confirm" not in env.names()
+    assert ("tt.stop", ("ns/bundle",)) in env.calls
+    assert ("gozer.release", "L1") in env.calls
+
+
+def test_unpinnable_timeout_with_a_single_foreign_row_asks_and_a_no_stops_nothing(env):
+    env.serve_adds = theirs(health="starting")
+    out = env.control(start_timeout=30).start("Cat-7B")
+    assert out.kind == "failed"
+    assert ("confirm", "stop_external") in env.calls
+    assert "may not be ours" in env.confirms[-1][1]
+    assert not [n for n in env.names() if n in ("tt.stop", "docker.stop")]
+    assert env.records.load() == []
+
+
+def test_unpinnable_timeout_with_a_single_foreign_row_stops_it_on_yes(env):
+    env.serve_adds = theirs(health="starting")
+    env.confirm_answers = {"stop_external": True}
+    out = env.control(start_timeout=30).start("Cat-7B")
+    assert out.kind == "failed"
+    assert ("tt.stop", ("Cat-7B",)) in env.calls
+
+
+def test_adopt_failure_asks_before_stopping_and_a_no_keeps_it(env):
+    env.serve_adds = started_cat()
+    env.devices = {}                     # devices unknown
+    out = env.control().start("Cat-7B")
+    assert out.kind == "failed"
+    assert ("confirm", "stop_external") in env.calls
+    assert "tt.stop" not in env.names()
+
+
+def test_a_row_older_than_our_launch_asks_before_adopting(env):
+    env.serve_adds = started_cat(uptime_s=3600)
+    env.devices = {"abcdef123456": ["/dev/tenstorrent/2"]}
+    env.adopt_results = {"2": Lease("A2", ("0000:03:00.0",))}
+    out = env.control().start("Cat-7B")
+    assert ("confirm", "adopt_unknown") in env.calls
+    assert out.kind == "failed"
+    assert "gozer.adopt" not in env.names()
+    assert not [n for n in env.names() if n in ("tt.stop", "docker.stop")]
+    assert env.records.load() == []
+    # On yes it is adopted as ours.
+    env2 = Env(env.records.path.parent / "y")
+    env2.serve_adds = started_cat(uptime_s=3600)
+    env2.devices = {"abcdef123456": ["/dev/tenstorrent/2"]}
+    env2.adopt_results = {"2": Lease("A2", ("0000:03:00.0",))}
+    env2.confirm_answers = {"adopt_unknown": True}
+    assert env2.control().start("Cat-7B").kind == "started"
+
+
+def test_a_young_row_is_adopted_without_asking(env):
+    env.serve_adds = started_cat(uptime_s=10)
+    env.devices = {"abcdef123456": ["/dev/tenstorrent/2"]}
+    env.adopt_results = {"2": Lease("A2", ("0000:03:00.0",))}
+    assert env.control().start("Cat-7B").kind == "started"
+    assert "confirm" not in env.names()
+
+
+def test_chips_held_no_message_names_the_container_and_warns_about_release(env):
+    env.serve_adds = started_cat()
+    env.devices = {"abcdef123456": ["/dev/tenstorrent/0", "/dev/tenstorrent/2"]}
+    env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",)),
+                         "2": AdoptRefused("claude:someone-else")}
+    out = env.control().start("Cat-7B")
+    assert "abcdef123456" in out.message
+    assert "Do not release A0 while container abcdef123456" in out.message
+
+
+def test_switch_never_releases_a_legacy_unreapable_record_of_the_incumbent(env):
+    env.gozer_available = False
+    env.records.add("wan-old", None, None, "ZOMBIE", 1.0, unreapable=True)
+    env.status_map = {"wan-old": "ready"}
+    env.confirm_answers = {"switch": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    env.control().start("flux")
+    assert ("boutique.stop", "wan-old") in env.calls
+    assert ("gozer.release", "ZOMBIE") not in env.calls
+    assert [r["lease_id"] for r in unreapable(env)] == ["ZOMBIE"]
+
+
+def test_reset_skipped_while_another_local_server_boots(env):
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None),
+                rs("Other-LLM", name="Other-LLM", port=8002, container_id="777777777777",
+                   health="starting")]
+    env.confirm_answers = {"switch": True}
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    out = env.control().start("flux")
+    assert "reset" not in env.names()
+    assert "not reset because Other-LLM" in out.message
