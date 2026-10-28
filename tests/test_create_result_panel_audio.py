@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 try:
     import gi
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gtk
+    from gi.repository import Gtk, GLib
     Gtk.Entry()
 except Exception:  # pragma: no cover
     pytest.skip("no GTK display available", allow_module_level=True)
@@ -97,9 +97,28 @@ def test_swap_result_releases_media_stream(tmp_path):
     p.show_finished(_rec(tmp_path))
     stream = p._result_audio
     assert stream is not None
+    calls = []
+    stream.pause = lambda: calls.append("pause")        # instance attribute shadows the GObject method
+    stream.get_playing = lambda: True
     p.show_error("boom")
     assert p._result_audio is None
-    assert stream.get_file() is None or not stream.get_playing()
+    assert calls == ["pause"], "the playing stream was dropped without being paused"
+
+
+def test_stream_error_present_at_construction_shows_the_note(tmp_path, monkeypatch):
+    """GStreamer can set the error while the MediaFile is built, before notify::error is connected."""
+    real = Gtk.MediaFile.new_for_filename
+
+    def failing(path):
+        s = real(path)
+        s.gerror(GLib.Error.new_literal(GLib.quark_from_string("t"), "no decoder", 0))
+        return s
+
+    monkeypatch.setattr(Gtk.MediaFile, "new_for_filename", staticmethod(failing))
+    w = cv.CreateResultPanel()._build_artifact_widget(_rec(tmp_path))
+    assert not any(isinstance(x, Gtk.MediaControls) and x.get_visible() for x in _walk(w))
+    note = next(x for x in _walk(w) if isinstance(x, Gtk.Label) and "could not play" in x.get_label())
+    assert note.get_visible()
 
 
 def test_recent_chip_for_a_song_is_not_a_bare_question_mark():

@@ -360,3 +360,55 @@ def test_guidance_and_steps_reset_only_when_profile_changes():
     assert p.collect().get("steps") is None              # 20 from Stable Audio is not sent to MiniMax
     p.set_server(_server("stable-audio"))
     assert p._cfg_adj.get_value() == 1.0 and p._steps_adj.get_value() == 8
+
+
+@pytest.mark.parametrize("model_hint", ["stable-audio", "fiona-crapple-merged"])
+def test_music_form_minimum_width_fits_a_narrow_window(model_hint, monkeypatch):
+    """The Music form, as Create lays it out (role zones, Controls expander), must not force a window wider than
+    900 px. A long "name + url" model label made the Controls column 720 px wide and the form 970 px at minimum, so a
+    1300 px window clipped it on the left and the Connect button on the right."""
+    import create_view
+    monkeypatch.setattr(create_view.GLib, "idle_add", lambda fn, *a: fn(*a))
+
+    class _Inline:                      # the health refresh runs inline, as in test_create_view_music
+        def __init__(self, target=None, daemon=None):
+            self._t = target
+
+        def start(self):
+            self._t()
+
+    monkeypatch.setattr(create_view.threading, "Thread", _Inline)
+    music = Medium(id="music", label="Music", icon="M", kind="audio", source="music", generator=None, uses_llm=False)
+    image = Medium(id="image", label="Image", icon="I", kind="image", source="native", generator=None)
+    view = create_view.CreateView(mediums_fn=lambda: [image, music], health_fn=lambda: {})
+    win = Gtk.Window()
+    win.set_child(view)
+    view._chip_buttons["music"].set_active(True)
+    srv = _server(model_hint, url="http://192.168.100.200:20000")
+    srv = mr.MusicServer(url=srv.url, profile=srv.profile, up=True, saved=False, label=srv.profile.label)
+    view.set_music_servers([srv])
+
+    host = None
+
+    def find(w):
+        nonlocal host
+        if "create-panel-host" in w.get_css_classes():
+            host = w
+        c = w.get_first_child()
+        while c is not None:
+            find(c)
+            c = c.get_next_sibling()
+
+    find(view)
+    assert host is not None
+    assert any(isinstance(x, Gtk.DropDown) for x in _descendants(host)), "the Music panel was not the one measured"
+    minimum = host.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+    assert minimum < 800, f"Music form needs {minimum}px at minimum"
+
+
+def _descendants(w):
+    c = w.get_first_child()
+    while c is not None:
+        yield c
+        yield from _descendants(c)
+        c = c.get_next_sibling()

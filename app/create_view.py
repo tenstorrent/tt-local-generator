@@ -4151,6 +4151,7 @@ class CreateResultPanel(Gtk.Box):
 
                 stream.connect("notify::error", _on_error)
                 box.append(controls)
+                _on_error(stream, None)   # an error set while the stream was being built never fires notify
             except Exception:  # noqa: BLE001 - no playback support: the note and the button below still work
                 note.set_visible(True)
         box.append(note)

@@ -88,7 +88,7 @@ def test_worker_records_ended_early_duration(tmp_path):
 
 def test_worker_busy_calls_on_error_with_plain_message(tmp_path):
     with FakeMusicServer(busy=True) as fake:
-        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
+        store, out, _ = _run(fake, _req(), tmp_path)
     assert out["done"] == [] and store.records == []
     assert len(out["err"]) == 1
     assert "busy" in out["err"][0].lower() and "Traceback" not in out["err"][0] and "Exception" not in out["err"][0]
@@ -97,7 +97,7 @@ def test_worker_busy_calls_on_error_with_plain_message(tmp_path):
 def test_worker_server_dies_mid_job_cancels_and_errors(tmp_path):
     """Review focus 3: the server stops answering after accepting the job."""
     with FakeMusicServer(down_after_submit=True) as fake:
-        store, out, _ = _run(fake, _req(lyrics="la"), tmp_path)
+        store, out, _ = _run(fake, _req(), tmp_path)
         assert fake.cancelled, "a DELETE for the abandoned job must have been tried"
     assert out["done"] == [] and store.records == []
     assert len(out["err"]) == 1 and "not reachable" in out["err"][0]
@@ -193,6 +193,7 @@ def test_unplayable_profile_format_fails_cleanly(tmp_path):
     assert not list(tmp_path.rglob("*.mp3"))
 
 
+# These tests use the "music" (MiniMax-style) fake, which rejects empty lyrics, so they pass lyrics="la".
 def test_worker_sets_waveform_thumbnail_at_save_time(tmp_path, monkeypatch):
     import audio_thumb
 

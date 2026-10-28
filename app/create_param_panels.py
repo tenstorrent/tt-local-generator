@@ -3381,7 +3381,7 @@ _LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
 _NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve) "
                 "and it turns on by itself. You can still type lyrics.")
 _NO_SERVER_HELP = ("No music server is running. Start one with tt-model serve, "
-                   "or choose Connect to a model to add its address.")
+                   "or choose Connect to add its address.")
 _LOCAL_HOSTS = ("localhost", "::1")
 
 
@@ -3592,9 +3592,29 @@ class MusicParamPanel(CreateParamPanel):
         row = self._row("server_url")
         self._server_dd = Gtk.DropDown.new_from_strings([])
         self._server_dd.set_hexpand(True)
+        # A DropDown is as wide as its longest entry ("● name  http://host:port" is ~40 characters), which made the whole
+        # form ~720 px at minimum. Ellipsize the entries so the row can shrink; the tooltip-free full text is in the popup.
+        factory = Gtk.SignalListItemFactory()
+
+        def _setup(_f, item):
+            lbl = Gtk.Label(xalign=0.0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(1)
+            lbl.set_width_chars(8)
+            item.set_child(lbl)
+
+        def _bind(_f, item):
+            text = item.get_item().get_string()
+            item.get_child().set_label(text)
+            item.get_child().set_tooltip_text(text)
+
+        factory.connect("setup", _setup)
+        factory.connect("bind", _bind)
+        self._server_dd.set_factory(factory)
         self._server_dd.connect("notify::selected", self._on_server_picked)
         row.append(self._server_dd)
-        connect = Gtk.Button(label="Connect to a model...")
+        connect = Gtk.Button(label="Connect...")
+        connect.set_tooltip_text("Connect to a model: add the address of a music server")
         connect.connect("clicked", self._on_connect_clicked)
         row.append(connect)
         self._server_hint = Gtk.Label(label=_NO_SERVER_HELP, xalign=0.0, wrap=True)
