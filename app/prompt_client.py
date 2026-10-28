@@ -228,13 +228,15 @@ def _generate_music_text(source: str, seed_text: str, max_tokens: int) -> str:
     """generate_prompt() for source 'music' or 'lyrics'. Always non-empty.
 
     With a seed, the LLM expands it; without one it invents.  With no LLM,
-    lyrics return the seed (or a bare tagged skeleton) and music returns a
-    canned style line, so the caller always has something to put in the box.
+    a typed seed is returned as it is (lyrics with no seed get a bare tagged
+    skeleton, music with no seed a canned style line), so the caller always has something to put in the box.
     """
     text = _music_llm_text(source, seed_text.strip())
     if text:
         return text
+    if seed_text.strip():
+        return seed_text.strip()        # keep what the user typed rather than replace it with a canned line
     if source == "lyrics":
-        return seed_text.strip() or _LYRICS_SKELETON
+        return _LYRICS_SKELETON
     import random  # noqa: PLC0415
     return random.choice(_MUSIC_FALLBACK)

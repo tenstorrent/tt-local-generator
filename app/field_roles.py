@@ -55,6 +55,19 @@ def classify_native(field_key: str) -> FieldRole:
     return FieldRole(ROLE_CONTROL, MARK_EXACT)
 
 
+_MUSIC_BRIEF = {"prompt", "lyrics"}
+
+
+def classify_music(field_key: str) -> FieldRole:
+    """Music panel: the style prompt and the lyrics are words the model reads; the duration
+    shapes the piece (direction); everything else is an exact control."""
+    if field_key in _MUSIC_BRIEF:
+        return FieldRole(ROLE_BRIEF, MARK_WORDS)
+    if field_key == "seconds":
+        return FieldRole(ROLE_DIRECTION, MARK_EXACT)
+    return FieldRole(ROLE_CONTROL, MARK_EXACT)
+
+
 def classify_artgen(spec) -> FieldRole:
     dest = getattr(spec, "dest", "")
     kind = getattr(spec, "kind", "str")

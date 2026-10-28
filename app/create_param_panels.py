@@ -2894,6 +2894,11 @@ class ModifierPills(Gtk.Box):
         self._kind = kind
         self._applied: "list" = []  # ordered list[ChipEntry], click order
         self._add_buttons: "dict[int, Gtk.Button]" = {}  # id(entry) -> its add-chip button
+        # Free-text chips ("In the style of ..."): id(entry) -> (Gtk.Entry, add Gtk.Button).
+        self._freetext_widgets: "dict[int, tuple]" = {}
+        # Chips a panel adds for the current model (e.g. a trigger phrase); see set_extra_chips.
+        self._extra_entries: "list" = []
+        self._extra_box: "Optional[Gtk.Widget]" = None
 
         try:
             self._categories = (
@@ -2907,6 +2912,8 @@ class ModifierPills(Gtk.Box):
         self._applied_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self._applied_flow.add_css_class("modifier-pills-applied")
         self.append(self._applied_flow)
+        self._extra_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)   # holds the model's own chips
+        self.append(self._extra_slot)
 
         # One "add" FlowBox per category — built once, never rebuilt.
         for category in self._categories:
@@ -2920,7 +2927,54 @@ class ModifierPills(Gtk.Box):
         """Space-joined `.text` of every applied pill, in click order."""
         return " ".join(entry.text for entry in self._applied)
 
+    def set_extra_chips(self, entries: "list", name: str = "This model") -> None:
+        """Show *entries* (ChipEntry) as one extra category, replacing the previous set.
+
+        A panel whose chips depend on the chosen model (a music model's trigger phrase) calls this when
+        the model changes. Pills already applied from an older set stay applied."""
+        if self._extra_box is not None:
+            self._extra_slot.remove(self._extra_box)
+            self._extra_box = None
+        for old in self._extra_entries:
+            self._add_buttons.pop(id(old), None)
+        self._extra_entries = list(entries)
+        if not self._extra_entries:
+            return
+        from chip_config import ChipCategory
+        self._extra_box = self._build_category_box(ChipCategory(name=name, chips=self._extra_entries))
+        self._extra_slot.append(self._extra_box)
+
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _build_free_text_chip(self, entry) -> Gtk.Widget:
+        """A chip whose text is a template with one "{}" and a value the user types
+        (e.g. "in the style of {}"). An empty value applies nothing."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        field = Gtk.Entry()
+        field.set_placeholder_text(entry.label.rstrip(".\u2026 ") or "Type here")
+        field.set_width_chars(16)
+        btn = Gtk.Button(label=f"+ {entry.label}")
+        btn.add_css_class("create-addchip")
+        if entry.tip:
+            btn.set_tooltip_text(entry.tip)
+            field.set_tooltip_text(entry.tip)
+
+        def _apply(_w=None) -> None:
+            value = field.get_text().strip()
+            if not value:
+                return
+            from chip_config import ChipEntry
+            text = entry.text.replace("{}", value)
+            self._applied.append(ChipEntry(label=text, text=text, tip=entry.tip))
+            field.set_text("")
+            self._render_applied()
+
+        btn.connect("clicked", _apply)
+        field.connect("activate", _apply)
+        self._freetext_widgets[id(entry)] = (field, btn)
+        box.append(field)
+        box.append(btn)
+        return box
 
     def _build_category_box(self, category) -> Gtk.Widget:
         """One collapsible CATEGORY row: an icon + the category name + a short
@@ -2962,6 +3016,9 @@ class ModifierPills(Gtk.Box):
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.add_css_class("modifier-pills-add-row")
         for entry in category.chips:
+            if getattr(entry, "freetext", False):
+                flow.append(self._build_free_text_chip(entry))
+                continue
             btn = Gtk.Button(label=f"+ {entry.label}")
             btn.add_css_class("create-addchip")
             if entry.tip:
@@ -3121,11 +3178,17 @@ class RoleZonePanel(Gtk.Box):
         # ── "Direction" zone ─────────────────────────────────────────────
         self._direction_zone = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._direction_zone.add_css_class("role-zone-direction-body")
-        if getattr(medium, "source", "") == "artgen":
+        if getattr(medium, "source", "") in ("artgen", "music"):
+            # Music keys its bank by its own id, the same way an artgen type does.
             self._modifier_pills = ModifierPills(medium.id, artgen=True)
         else:
             self._modifier_pills = ModifierPills(medium.kind)
         self._direction_zone.append(self._modifier_pills)
+        # A panel with model-specific chips (music trigger phrases) pushes them into the pills.
+        if hasattr(panel, "trigger_chips"):
+            panel.on_triggers_changed = lambda entries: self._modifier_pills.set_extra_chips(
+                entries, "This model")
+            panel.on_triggers_changed(panel.trigger_chips())
         direction_frame = Gtk.Frame(label="Direction")
         direction_frame.add_css_class("role-zone-direction")
         direction_frame.set_child(self._direction_zone)
@@ -3291,3 +3354,582 @@ class RoleZonePanel(Gtk.Box):
                     texts.append(label_widget.get_label())
             child = child.get_next_sibling()
         return texts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MusicParamPanel (music generation, Task 4)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# One panel for every music model. What it shows comes from the chosen server's MusicProfile, and
+# `collect()` returns only what that profile accepts: a control that is hidden is never collected, even
+# if it still holds a value from an earlier model. Logical key names are used here (prompt, lyrics,
+# seconds, ...); `music_runtime.WIRE` maps them to each server's own names.
+#
+# Servers arrive through `servers_changed()`. Discovery blocks on the network, so this panel never
+# calls it on the GTK thread; the owner runs it on a worker thread and hands the result in.
+
+import music_runtime as _mr  # noqa: E402
+from music_runtime import MusicServer, normalize_url, save_server  # noqa: E402
+
+# MiniMax accepting a song with no lyrics is UNCONFIRMED: the client sends INSTRUMENTAL_PLACEHOLDER
+# ("[Instrumental]") and nobody has checked a live server yet. While this is False the Instrumental
+# switch is not shown, and a lyrics model with empty lyrics is refused. Set it to False in one line
+# if the live check shows MiniMax rejects it.
+INSTRUMENTAL_SWITCH_CONFIRMED = True
+
+_LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
+_NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve) "
+                "and it turns on by itself. You can still type lyrics.")
+_NO_SERVER_HELP = ("No music server is running. Start one with tt-model serve, "
+                   "or choose Connect to a model to add its address.")
+_LOCAL_HOSTS = ("localhost", "::1")
+
+
+def _remember_music_server(url: str) -> None:
+    """Save the user's pick so the next start defaults to it. Fail-soft."""
+    try:
+        _settings().set("music_last_server", url)
+    except Exception:
+        pass
+
+
+def _last_music_server() -> str:
+    try:
+        return str(_settings().get("music_last_server") or "")
+    except Exception:
+        return ""
+
+
+def check_connect_address(text: str) -> "tuple[Optional[str], str, str]":
+    """Read the address typed in the Connect dialog: `(url, warning, error)`.
+
+    `url` is the normalised address, or None with a plain `error`. `warning` is non-empty for
+    plain http to a machine other than this one, where the audio and any token cross the network
+    unencrypted."""
+    try:
+        url = normalize_url(text)
+    except ValueError as e:
+        return None, "", str(e)
+    import urllib.parse
+    host = urllib.parse.urlsplit(url).hostname or ""
+    warning = ""
+    if url.startswith("http://") and host not in _LOCAL_HOSTS and not host.startswith("127."):
+        warning = ("This address is not on this computer and is not encrypted, so what you send and any "
+                   "token can be read on the network. Use it only on a network you trust.")
+    return url, warning, ""
+
+
+def _run_in_thread(fn: Callable, done: Callable) -> None:
+    """Run `fn()` off the GTK thread and call `done(result)` on the main thread."""
+    def _work() -> None:
+        try:
+            result = fn()
+        except Exception:
+            result = None
+        GLib.idle_add(lambda: (done(result), False)[1])
+    threading.Thread(target=_work, daemon=True).start()
+
+
+class MusicConnectDialog(Gtk.Window):
+    """Ask for a server address (and an optional token), probe it, save it on success.
+
+    The probe blocks, so it runs on a background thread and reports back through GLib.idle_add."""
+
+    def __init__(self, parent=None, *, probe_fn: "Optional[Callable]" = None,
+                 run_async: "Optional[Callable]" = None, on_connected: "Optional[Callable]" = None) -> None:
+        super().__init__(title="Connect to a music model")
+        if parent is not None:
+            self.set_transient_for(parent)
+            self.set_modal(True)
+        self._probe_fn = probe_fn or _mr._probe
+        self._run_async = run_async or _run_in_thread
+        self._on_connected = on_connected
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(16)
+        box.append(Gtk.Label(label="Address of a running music server, for example http://localhost:8795",
+                             xalign=0.0, wrap=True))
+        self._url_entry = Gtk.Entry()
+        self._url_entry.set_placeholder_text("http://host:port")
+        self._url_entry.connect("changed", self._on_url_changed)
+        box.append(self._url_entry)
+        self._token_entry = Gtk.PasswordEntry()
+        self._token_entry.set_show_peek_icon(True)
+        box.append(Gtk.Label(label="Access token (only if the server asks for one)", xalign=0.0))
+        box.append(self._token_entry)
+        self._warning = Gtk.Label(label="", xalign=0.0, wrap=True)
+        self._warning.add_css_class("image-param-hint")
+        self._warning.set_visible(False)
+        box.append(self._warning)
+        self._status = Gtk.Label(label="", xalign=0.0, wrap=True)
+        box.append(self._status)
+        self._connect_btn = Gtk.Button(label="Connect")
+        self._connect_btn.connect("clicked", self._on_connect_clicked)
+        box.append(self._connect_btn)
+        self.set_child(box)
+
+    def _on_url_changed(self, _entry) -> None:
+        _url, warning, _err = check_connect_address(self._url_entry.get_text()) \
+            if self._url_entry.get_text().strip() else (None, "", "")
+        self._warning.set_label(warning)
+        self._warning.set_visible(bool(warning))
+
+    def _on_connect_clicked(self, _btn) -> None:
+        url, _warning, err = check_connect_address(self._url_entry.get_text())
+        if url is None:
+            self._status.set_label(err)
+            return
+        token = self._token_entry.get_text().strip() or None
+        self._status.set_label("Checking...")
+        self._connect_btn.set_sensitive(False)
+        self._run_async(lambda: self._probe_fn(url, token), lambda profile: self._probed(url, token, profile))
+
+    def _probed(self, url: str, token: "Optional[str]", profile) -> None:
+        self._connect_btn.set_sensitive(True)
+        if profile is None:
+            self._status.set_label(f"No music server answered at {url}. Check the address, the token and that the server is running.")
+            return
+        try:
+            save_server(url, token, profile.label)
+        except ValueError as e:
+            self._status.set_label(str(e))
+            return
+        self._status.set_label(f"Connected to {profile.label}.")
+        if self._on_connected:
+            self._on_connected(MusicServer(url=url, profile=profile, up=True, saved=True, token=token, label=profile.label))
+
+
+class _LyricsSeed:
+    """Gives the Lyrics text view the get_text/set_text surface `attach_inspire_button` expects.
+
+    Empty lyrics read as the style prompt, so the button writes lyrics from the prompt; typed lyrics
+    are polished instead."""
+
+    def __init__(self, panel: "MusicParamPanel") -> None:
+        self._panel = panel
+
+    def get_text(self) -> str:
+        return self._panel._lyrics_text().strip() or self._panel._prompt_entry.get_text().strip()
+
+    def set_text(self, text: str) -> None:
+        self._panel._lyrics_buffer.set_text(text)
+
+
+class MusicParamPanel(CreateParamPanel):
+    """Create-surface panel for the Music medium. See the section comment above."""
+
+    _KEYS = ("prompt", "lyrics", "instrumental", "seconds", "seed", "steps", "cfg_scale", "server_url", "reference_clip")
+    _LABELS = {"prompt": "Music prompt", "lyrics": "Lyrics", "instrumental": "Instrumental", "seconds": "Duration",
+               "seed": "Seed", "steps": "Steps", "cfg_scale": "Guidance", "server_url": "Music model",
+               "reference_clip": "Reference or edit clip"}
+
+    def __init__(self, inspire_fn=None, prompt_type_getter=None, *, llm_available_fn=None) -> None:
+        self._inspire_fn = inspire_fn
+        self._prompt_type_getter = prompt_type_getter
+        self._llm_available_fn = llm_available_fn
+        self._server: "Optional[MusicServer]" = None
+        self._servers: "list[MusicServer]" = []
+        self._rows: "dict[str, Gtk.Widget]" = {}
+        self._reference_path = ""
+        self._llm_ok = True
+        self._suppress_pick = False
+        self.on_triggers_changed: "Optional[Callable[[list], None]]" = None
+        self.on_connect_saved: "Optional[Callable[[MusicServer], None]]" = None
+        self._built = False
+
+    # ── the profile decides what is accepted ────────────────────────────────
+
+    @property
+    def _profile(self):
+        return self._server.profile if self._server is not None else None
+
+    def _instrumental_offered(self) -> bool:
+        p = self._profile
+        return bool(p and p.has_lyrics and INSTRUMENTAL_SWITCH_CONFIRMED)
+
+    def _instrumental_on(self) -> bool:
+        return self._instrumental_offered() and self._built and self._instrumental_switch.get_active()
+
+    def _accepted(self) -> "list[str]":
+        p = self._profile
+        keys = ["prompt"]
+        if p and p.has_lyrics:
+            if self._instrumental_offered():
+                keys.append("instrumental")
+            if not self._instrumental_on():
+                keys.append("lyrics")
+        keys += ["seconds", "seed"]
+        if p and p.steps_max is not None:
+            keys.append("steps")
+        if p and p.cfg_max is not None:
+            keys.append("cfg_scale")
+        if self._server is not None:
+            keys.append("server_url")
+        if p and p.audio_in in ("reference", "edit", "both"):
+            keys.append("reference_clip")
+        return keys
+
+    # ── CreateParamPanel ────────────────────────────────────────────────────
+
+    def field_specs(self) -> "list[FieldSpec]":
+        specs = []
+        kinds = {"prompt": "str", "lyrics": "str", "instrumental": "bool", "seconds": "float", "seed": "int",
+                 "steps": "int", "cfg_scale": "float", "server_url": "str", "reference_clip": "path"}
+        for key in self._KEYS:
+            specs.append(FieldSpec(key=key, label=self._LABELS[key], kind=kinds[key],
+                                   default=False if key == "instrumental" else ("" if kinds[key] in ("str", "path") else None),
+                                   role=field_roles.classify_music(key)))
+        return specs
+
+    def build(self) -> Gtk.Widget:
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.add_css_class("music-param-panel")
+        self._rows = {}
+
+        # Model line: server picker + Connect.
+        row = self._row("server_url")
+        self._server_dd = Gtk.DropDown.new_from_strings([])
+        self._server_dd.set_hexpand(True)
+        self._server_dd.connect("notify::selected", self._on_server_picked)
+        row.append(self._server_dd)
+        connect = Gtk.Button(label="Connect to a model...")
+        connect.connect("clicked", self._on_connect_clicked)
+        row.append(connect)
+        self._server_hint = Gtk.Label(label=_NO_SERVER_HELP, xalign=0.0, wrap=True)
+        self._server_hint.add_css_class("image-param-hint")
+        self._rows["server_url"] = row
+
+        # Prompt.
+        row = self._row("prompt")
+        self._prompt_entry = Gtk.Entry()
+        self._prompt_entry.set_hexpand(True)
+        self._prompt_entry.set_placeholder_text("genre, mood, instruments, tempo")
+        row.append(self._prompt_entry)
+        self._prompt_inspire_btn = None
+        if self._inspire_fn is not None:
+            self._prompt_inspire_btn = attach_inspire_button(
+                self._prompt_entry, lambda: "music", self._inspire_fn,
+                tooltip="Write a music style prompt, or reimagine what you typed.")
+            row.append(self._prompt_inspire_btn)
+        self._rows["prompt"] = row
+
+        # Lyrics: instrumental switch, text box, helper buttons.
+        row = self._row("lyrics")
+        row.set_orientation(Gtk.Orientation.VERTICAL)
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = row.get_first_child()                  # the label stays first: RoleZonePanel relabels it
+        row.remove(label)
+        top.append(label)
+        self._instrumental_switch = Gtk.Switch()
+        self._instrumental_switch.connect("notify::active", lambda *_: self._refresh())
+        self._instrumental_label = Gtk.Label(label="Instrumental")
+        top.append(self._instrumental_label)
+        top.append(self._instrumental_switch)
+        row.append(top)
+        self._lyrics_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._lyrics_view = Gtk.TextView()
+        self._lyrics_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._lyrics_view.set_size_request(-1, 120)
+        self._lyrics_buffer = self._lyrics_view.get_buffer()
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_min_content_height(120)
+        scroller.set_child(self._lyrics_view)
+        self._lyrics_box.append(scroller)
+        tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._tag_menu = Gtk.MenuButton(label="Add tag")
+        pop = Gtk.Popover()
+        tag_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for tag in _LYRICS_TAGS:
+            b = Gtk.Button(label=tag)
+            b.connect("clicked", lambda _b, t=tag: (self.insert_tag(t), pop.popdown()))
+            tag_box.append(b)
+        pop.set_child(tag_box)
+        self._tag_menu.set_popover(pop)
+        tools.append(self._tag_menu)
+        self._lyrics_inspire_btn = None
+        self._lyrics_helper_hint = Gtk.Label(label=_NO_LLM_HINT, xalign=0.0, wrap=True)
+        self._lyrics_helper_hint.add_css_class("image-param-hint")
+        self._lyrics_helper_hint.set_visible(False)
+        if self._inspire_fn is not None:
+            self._lyrics_inspire_btn = attach_inspire_button(
+                _LyricsSeed(self), lambda: "lyrics", self._inspire_fn, label="✨ Write lyrics",
+                tooltip="Write lyrics from the prompt, or polish the lyrics you typed.")
+            tools.append(self._lyrics_inspire_btn)
+        self._lyrics_box.append(tools)
+        self._lyrics_box.append(self._lyrics_helper_hint)
+        row.append(self._lyrics_box)
+        self._rows["lyrics"] = row
+
+        # Duration.
+        row = self._row("seconds")
+        self._seconds_adj = Gtk.Adjustment(value=30, lower=1, upper=60, step_increment=1, page_increment=5)
+        self._seconds_spin = Gtk.SpinButton(adjustment=self._seconds_adj, digits=0)
+        row.append(self._seconds_spin)
+        self._seconds_hint = Gtk.Label(label="", xalign=0.0, wrap=True)
+        self._seconds_hint.add_css_class("image-param-hint")
+        row.append(self._seconds_hint)
+        self._rows["seconds"] = row
+
+        # Seed: empty means random; after a run the owner shows the seed the server used.
+        row = self._row("seed")
+        self._seed_entry = Gtk.Entry()
+        self._seed_entry.set_placeholder_text("random")
+        self._seed_entry.set_width_chars(12)
+        row.append(self._seed_entry)
+        self._rows["seed"] = row
+
+        row = self._row("steps")
+        self._steps_adj = Gtk.Adjustment(value=0, lower=0, upper=100, step_increment=1, page_increment=5)
+        row.append(Gtk.SpinButton(adjustment=self._steps_adj, digits=0))
+        self._steps_hint = Gtk.Label(label="", xalign=0.0)
+        self._steps_hint.add_css_class("image-param-hint")
+        row.append(self._steps_hint)
+        self._rows["steps"] = row
+
+        row = self._row("cfg_scale")
+        self._cfg_adj = Gtk.Adjustment(value=1.0, lower=1.0, upper=20.0, step_increment=0.5, page_increment=1.0)
+        row.append(Gtk.SpinButton(adjustment=self._cfg_adj, digits=1))
+        self._rows["cfg_scale"] = row
+
+        row = self._row("reference_clip")
+        self._reference_label = Gtk.Label(label="none chosen", xalign=0.0)
+        row.append(self._reference_label)
+        pick = Gtk.Button(label="Choose...")
+        pick.connect("clicked", self._on_pick_reference)
+        row.append(pick)
+        self._rows["reference_clip"] = row
+
+        for key in ("prompt", "lyrics", "seconds", "seed", "steps", "cfg_scale", "reference_clip", "server_url"):
+            root.append(self._rows[key])
+        root.append(self._server_hint)
+        self._root = root
+        self._built = True
+        self._refresh()
+        if self._inspire_fn is not None:
+            self._start_llm_check()
+        return root
+
+    def _row(self, key: str) -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("image-param-row")
+        label = Gtk.Label(label=self._LABELS[key])
+        label.add_css_class("image-param-label")
+        label.set_xalign(0.0)
+        label.set_size_request(120, -1)
+        row.append(label)
+        return row
+
+    # ── server handling ─────────────────────────────────────────────────────
+
+    def set_server(self, server: "Optional[MusicServer]") -> None:
+        """Choose the server whose profile decides what is shown. Rebuilds visibility."""
+        self._server = server
+        if self._built:
+            self._refresh()
+        self._notify_triggers()
+
+    def selected_server(self) -> "Optional[MusicServer]":
+        return self._server
+
+    @staticmethod
+    def _label_for(s: MusicServer) -> str:
+        name = s.label or (s.profile.label if s.profile else s.url)
+        return f"● {name}  {s.url}" if s.up else f"○ {name}  {s.url} (down)"
+
+    def _server_labels(self) -> "list[str]":
+        return [self._label_for(s) for s in self._servers]
+
+    def servers_changed(self, servers: "list[MusicServer]") -> None:
+        """Take a fresh server list (from discovery, run off the GTK thread by the owner).
+
+        Keeps the current pick when it is still listed, else the last one used, else the first that is up."""
+        keep = self._server.url if self._server is not None else ""
+        self._servers = list(servers)
+        wanted = next((i for i, s in enumerate(self._servers) if keep and s.url == keep), None)
+        if wanted is None:
+            last = _last_music_server()
+            wanted = next((i for i, s in enumerate(self._servers) if last and s.url == last), None)
+        if wanted is None:
+            wanted = next((i for i, s in enumerate(self._servers) if s.up), 0 if self._servers else None)
+        if self._built:
+            self._suppress_pick = True
+            try:
+                self._server_dd.set_model(Gtk.StringList.new(self._server_labels()))
+                if wanted is not None:
+                    self._server_dd.set_selected(wanted)
+            finally:
+                self._suppress_pick = False
+        self.set_server(self._servers[wanted] if wanted is not None else None)
+
+    def _on_server_picked(self, dd, _pspec) -> None:
+        if self._suppress_pick:
+            return
+        i = dd.get_selected()
+        if 0 <= i < len(self._servers):
+            self.set_server(self._servers[i])
+            _remember_music_server(self._servers[i].url)
+
+    def _on_connect_clicked(self, btn) -> None:
+        dlg = MusicConnectDialog(btn.get_root(), on_connected=self._connected)
+        dlg.present()
+
+    def _connected(self, server: MusicServer) -> None:
+        """A server the user just added: list it now (the owner may also re-run discovery)."""
+        rest = [s for s in self._servers if s.url != server.url]
+        self.servers_changed(rest + [server])
+        if self.on_connect_saved:
+            self.on_connect_saved(server)
+
+    # ── model-dependent chips ───────────────────────────────────────────────
+
+    def trigger_chips(self) -> "list":
+        """The model's trigger phrases as add-chips (ChipEntry), empty when it has none."""
+        from chip_config import ChipEntry
+        p = self._profile
+        return [ChipEntry(label=t, text=t, tip="The phrase this model answers to") for t in (p.triggers if p else ())]
+
+    def _notify_triggers(self) -> None:
+        if self.on_triggers_changed:
+            self.on_triggers_changed(self.trigger_chips())
+
+    # ── visibility ──────────────────────────────────────────────────────────
+
+    def _refresh(self) -> None:
+        p = self._profile
+        accepted = set(self._accepted())
+        for key, row in self._rows.items():
+            row.set_visible(key in accepted or key == "server_url" or (key == "lyrics" and bool(p and p.has_lyrics)))
+        self._rows["server_url"].set_visible(True)
+        self._server_hint.set_visible(self._server is None or not self._server.up)
+        self._instrumental_switch.set_visible(self._instrumental_offered())
+        self._instrumental_label.set_visible(self._instrumental_offered())
+        self._lyrics_box.set_visible("lyrics" in accepted)
+        if p is not None:
+            lo, hi = p.min_seconds, p.max_seconds
+            self._seconds_adj.set_lower(lo)
+            self._seconds_adj.set_upper(hi)
+            if not lo <= self._seconds_adj.get_value() <= hi:
+                self._seconds_adj.set_value(min(max(30, lo), hi))
+            self._seconds_hint.set_label(
+                f"{lo:g} to {hi:g} seconds." + (" A song ends when its lyrics do, so it can be shorter." if p.has_lyrics else ""))
+            if p.steps_max is not None:
+                self._steps_adj.set_upper(p.steps_max)
+                if p.steps_default is not None and self._steps_adj.get_value() == 0:
+                    self._steps_adj.set_value(p.steps_default)
+                self._steps_hint.set_label("0 lets the model choose" if p.steps_default is None else "")
+                self._steps_adj.set_lower(0 if p.steps_default is None else 1)
+            if p.cfg_max is not None:
+                self._cfg_adj.set_lower(p.cfg_min)
+                self._cfg_adj.set_upper(p.cfg_max)
+                self._cfg_adj.set_value(p.cfg_default if p.cfg_default is not None else p.cfg_min)
+        self._apply_llm_state()
+
+    # ── lyrics helpers ──────────────────────────────────────────────────────
+
+    def _lyrics_text(self) -> str:
+        return self._lyrics_buffer.get_text(self._lyrics_buffer.get_start_iter(), self._lyrics_buffer.get_end_iter(), False)
+
+    def insert_tag(self, tag: str) -> None:
+        """Insert a structure tag on its own line at the cursor."""
+        buf = self._lyrics_buffer
+        before = buf.get_text(buf.get_start_iter(), buf.get_iter_at_mark(buf.get_insert()), False)
+        lead = "\n" if before and not before.endswith("\n") else ""
+        buf.insert_at_cursor(f"{lead}{tag}\n")
+
+    def set_llm_available(self, ok: bool) -> None:
+        """Turn the lyrics and prompt helpers on or off; with none reachable the lyrics helper says why."""
+        self._llm_ok = bool(ok)
+        if self._built:
+            self._apply_llm_state()
+
+    def _apply_llm_state(self) -> None:
+        if self._lyrics_inspire_btn is not None:
+            self._lyrics_inspire_btn.set_sensitive(self._llm_ok)
+            self._lyrics_helper_hint.set_visible(not self._llm_ok)
+
+    def _start_llm_check(self) -> None:
+        """Ask in the background whether a chat model is reachable (the check opens sockets)."""
+        fn = self._llm_available_fn
+        if fn is None:
+            import prompt_client
+            fn = prompt_client.music_llm_available
+        _run_in_thread(fn, lambda ok: self.set_llm_available(bool(ok)))
+
+    # ── reference clip ──────────────────────────────────────────────────────
+
+    def _on_pick_reference(self, btn) -> None:
+        dlg = Gtk.FileDialog()
+
+        def _done(d, result):
+            try:
+                gfile = d.open_finish(result)
+            except Exception:
+                return
+            self._reference_path = gfile.get_path() or ""
+            self._reference_label.set_label(Path(self._reference_path).name or "none chosen")
+
+        dlg.open(btn.get_root(), None, _done)
+
+    # ── values ──────────────────────────────────────────────────────────────
+
+    def set_seed(self, seed: "Optional[int]") -> None:
+        """Show the seed the server used, so the clip can be asked for again."""
+        self._seed_entry.set_text("" if seed is None else str(seed))
+
+    def _seed_value(self) -> "tuple[Optional[int], bool]":
+        text = self._seed_entry.get_text().strip()
+        if not text:
+            return None, True
+        try:
+            n = int(text)
+        except ValueError:
+            return None, False
+        return (n, True) if 0 <= n <= _mr.SEED_MAX else (None, False)
+
+    def collect(self) -> dict:
+        """Only the keys the chosen profile accepts. A hidden control is never included."""
+        accepted = self._accepted()
+        out: dict = {}
+        for key in accepted:
+            if key == "prompt":
+                out[key] = self._prompt_entry.get_text().strip()
+            elif key == "lyrics":
+                out[key] = self._lyrics_text()
+            elif key == "instrumental":
+                out[key] = self._instrumental_on()
+            elif key == "seconds":
+                out[key] = float(min(max(self._seconds_adj.get_value(), self._seconds_adj.get_lower()),
+                                     self._seconds_adj.get_upper()))
+            elif key == "seed":
+                seed, ok = self._seed_value()
+                if ok and seed is not None:
+                    out[key] = seed
+            elif key == "steps":
+                n = int(self._steps_adj.get_value())
+                if n > 0:
+                    out[key] = n
+            elif key == "cfg_scale":
+                out[key] = float(self._cfg_adj.get_value())
+            elif key == "server_url":
+                out[key] = self._server.url
+            elif key == "reference_clip":
+                if self._reference_path:
+                    out[key] = self._reference_path
+        return out
+
+    def validate(self, prompt: "Optional[str]" = None) -> "Optional[str]":
+        """A plain message when the request cannot be sent, else None. Runs before any request.
+
+        `prompt` replaces the panel's own prompt box when the caller keeps the prompt elsewhere."""
+        if self._server is None or not self._server.up:
+            return _NO_SERVER_HELP
+        text = (self._prompt_entry.get_text() if prompt is None else prompt).strip()
+        if not text:
+            return "Describe the music first: a genre, a mood, the instruments."
+        p = self._profile
+        if p is not None and p.has_lyrics and not self._instrumental_on() and not self._lyrics_text().strip():
+            more = " or turn on Instrumental" if self._instrumental_offered() else ""
+            return f"{p.label} writes a song from lyrics. Add lyrics{more}."
+        if not self._seed_value()[1]:
+            return f"The seed must be a whole number from 0 to {_mr.SEED_MAX}, or empty for a random one."
+        return None
