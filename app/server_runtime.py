@@ -12,10 +12,11 @@ helpers, so ``tt-ctl`` (Task 7) and the Servers menu (Task 8) cannot drift.
 
 Known limits, on purpose:
 
-* Discovery inputs the GUI has (the artgen port sweep, saved remote entries,
-  music) are not gathered here: they need GTK-side state or are slow sweeps.
-  ``merge`` gets empty lists for them, so a model served by a process that is
-  neither a ``tt model`` container nor one of our scripts is not listed.
+* Discovery inputs the GUI has (the artgen port sweep, music) are not
+  gathered here: they need GTK-side state or are slow sweeps. ``merge`` gets
+  an empty list for them, so a model served by a process that is neither a
+  ``tt model`` container nor one of our scripts is not listed. Saved remote
+  entries are merged only when the caller passes ``saved=`` (the GUI does).
 * When ``tt model ps`` fails or ``tt`` is missing the view holds the script
   servers only. A ``tt``-started container is then invisible to the running
   check, so a start of the same model in that state is not caught as a duplicate.
@@ -83,8 +84,12 @@ def _script_health() -> dict[str, bool]:
 
 def snapshot_detail(records_path: Path | None = None,
                     script_health: dict[str, bool] | None = None,
-                    registry: dict | None = None):
+                    registry: dict | None = None,
+                    saved: list | None = None):
     """``(registry, servers, ps_ok, ps_reason)``. Never raises.
+
+    ``saved``: remembered network servers (dicts with name/url, as the GUI's
+    Connect dialog stores them, minus any token) merged as ``saved`` rows.
 
     ``servers`` is ``server_view.merge`` of ``tt model ps``, the script health
     checks and the ownership records. ``ps_ok`` is False when ``tt`` is missing
@@ -105,7 +110,7 @@ def snapshot_detail(records_path: Path | None = None,
         registry = {}
     try:
         records = ServerRecords(records_path).load()
-        servers = merge(tt_rows, script_health, [], [], records, registry)
+        servers = merge(tt_rows, script_health, [], list(saved or []), records, registry)
     except Exception as exc:
         log.warning("could not merge the running servers: %s", exc)
         servers = []

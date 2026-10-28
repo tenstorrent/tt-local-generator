@@ -59,6 +59,7 @@ from model_status import ModelStatusService, Status
 from nav_state import NavState, Crumb, Context
 from nav_widgets import Breadcrumb, ContextTray
 from servers_control import ServersControl
+from server_menu import ServerMenu
 from worker import (
     AnimateDiffGenerationWorker,
     AnimateGenerationWorker,
@@ -5639,7 +5640,11 @@ class MainWindow(Gtk.ApplicationWindow):
         # `_build_ui()` (which constructs CreateView below), so the service
         # instance exists in time to be injected into CreateView. Stopped in
         # `do_close_request` alongside the other background pollers.
-        self._status_service = ModelStatusService()
+        # extra_ready_fn (Task 8, server control through tt): a server started
+        # from a terminal (`tt serve`, a script, another agent) makes its
+        # SERVERS key READY, read from the Servers menu's latest merged view.
+        self._status_service = ModelStatusService(
+            extra_ready_fn=self._servers_extra_ready_keys)
         self._status_service.start()
 
         # NavState (RN-2 Task 1/2): the single "you are here" model backing
@@ -5748,7 +5753,15 @@ class MainWindow(Gtk.ApplicationWindow):
             on_start=self._on_servers_control_start,
             on_stop=self._on_servers_control_stop,
             on_restart=self._on_servers_control_restart,
+            on_use=self._on_servers_control_use,
+            on_connect=self._open_connect_dialog,
         )
+        # Task 8: the menu's controller. Every ServerControl/tt/gozer call runs
+        # on its worker threads; its confirm bridge shows the questions; its
+        # refresh thread (10 s) feeds ServersControl.set_view and the status
+        # service's extra_ready_fn. Stopped in do_close_request.
+        self._server_menu = self._build_server_menu()
+        self._server_menu.start_refresh()
 
         # ── Loop nav: Create · Curate · Discover · Remix ────────────────────────
         # The new top-level nav (SP-C Task 1 — see docs/superpowers/specs/
@@ -10490,81 +10503,75 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=run, daemon=True).start()
 
-    # ── Standalone ServersControl callbacks (SP-3b Task 2) ─────────────────────
+    # ── Standalone ServersControl callbacks (SP-3b Task 2; Task 8) ─────────────
     #
-    # Wired as ServersControl(on_start=, on_stop=, on_restart=) in _build_ui().
-    # Each callback receives a `server_manager.SERVERS` key directly (the
-    # popover row already knows exactly which service it is — no model_source
-    # -> script -> key resolution needed here, unlike _on_start_server/
-    # _on_stop_server above). They otherwise mirror ControlPanel.
-    # _on_servers_action's worker (same _sm.start/stop/restart(key) calls,
-    # same note_starting/note_stopping hooks, noted only AFTER the real
-    # server_manager call succeeds — same ordering _on_servers_action uses,
-    # so a synchronous `_sm.*` failure never tells the status service a
-    # launch is in progress that never actually started), but:
-    #   - route log/launching feedback to ServersControl instead of
-    #     ControlPanel's now-unmounted popover dots + busy-lock buttons.
-    #   - do NOT run their own "poll until healthy" loop — ServersControl's
-    #     row dots and log-auto-collapse already come from subscribing to
-    #     `self._status_service`, whose own poll thread is what will surface
-    #     READY (see task-1-report.md's "Design decisions" section).
+    # Wired as ServersControl(on_start=, on_stop=, on_restart=, on_use=,
+    # on_connect=) in _build_ui(). Since Task 8 (server control through tt)
+    # every action goes through ServerControl via `self._server_menu`
+    # (app/server_menu.py): ServerControl.start/stop/restart run on a worker
+    # thread, its questions (switch, stop a server the app did not start, ...)
+    # are confirm dialogs answered on the main thread, and the outcome is one
+    # plain-English line in the server log. The legacy start_legacy/
+    # stop_legacy methods are for tt-ctl only and are never called here.
+    # `on_stop` receives a RunningServer from a section row, or a SERVERS key
+    # from an old row (shown only until the first refresh).
+
+    def _build_server_menu(self) -> "ServerMenu":
+        from connect_server_dialog import saved_rows
+        from server_view import ServerRecords
+
+        def script_health():
+            return _sm.status_all(timeout=2.0)
+
+        def probe(url):
+            import server_control
+            return server_control.probe_endpoint(url)
+
+        return ServerMenu(
+            self._servers_control,
+            parent=self,
+            saved_fn=lambda: saved_rows(_settings),
+            records_fn=lambda: ServerRecords().load(),
+            probe_fn=probe,
+            script_health_fn=script_health,
+            status_service=self._status_service,
+            alive_fn=lambda: self._alive,
+        )
+
+    def _servers_extra_ready_keys(self) -> "set[str]":
+        """ModelStatusService's extra_ready_fn (poll thread): SERVERS keys that
+        are healthy in the Servers menu's latest snapshot. Empty until the
+        menu exists and has refreshed once."""
+        menu = getattr(self, "_server_menu", None)
+        return menu.ready_keys() if menu is not None else set()
 
     def _on_servers_control_start(self, key: str) -> None:
-        """Start one managed service by its server_manager key."""
-        self._servers_control.set_server_launching(key, True)
-        self._servers_control.append_server_log(f"Starting {key}…")
+        """Start one model (registry key) through ServerControl."""
+        self._server_menu.start(key)
 
-        def run() -> None:
-            try:
-                _sm.start(key, gui=True)
-                try:
-                    self._status_service.note_starting(key)
-                except Exception:
-                    pass
-            except Exception as e:
-                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
-            finally:
-                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+    def _on_servers_control_stop(self, server) -> None:
+        """Stop a RunningServer (or an old row's SERVERS key) through
+        ServerControl; it asks first when the app did not start it."""
+        self._server_menu.stop(server)
 
-        threading.Thread(target=run, daemon=True).start()
+    def _on_servers_control_restart(self, server) -> None:
+        """Restart through ServerControl (stop asks first when needed)."""
+        self._server_menu.restart(server)
 
-    def _on_servers_control_stop(self, key: str) -> None:
-        """Stop one managed service by its server_manager key."""
-        self._servers_control.set_server_launching(key, True)
-        self._servers_control.append_server_log(f"Stopping {key}…")
+    def _on_servers_control_use(self, server) -> None:
+        self._server_menu.use(server)
 
-        def run() -> None:
-            try:
-                _sm.stop(key)
-                try:
-                    self._status_service.note_stopping(key)
-                except Exception:
-                    pass
-            except Exception as e:
-                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
-            finally:
-                GLib.idle_add(self._servers_control.set_server_launching, key, False)
+    def _open_connect_dialog(self) -> None:
+        """The Servers menu's "Connect..." dialog (remote, use-only servers)."""
+        from connect_server_dialog import ConnectServerDialog
 
-        threading.Thread(target=run, daemon=True).start()
+        def saved(_entries):
+            if self._alive:
+                self._servers_control.append_server_log(
+                    "Saved the remote server; it appears under Remote shortly.")
+                self._server_menu.refresh_now()
 
-    def _on_servers_control_restart(self, key: str) -> None:
-        """Restart one managed service by its server_manager key."""
-        self._servers_control.set_server_launching(key, True)
-        self._servers_control.append_server_log(f"Restarting {key}…")
-
-        def run() -> None:
-            try:
-                _sm.restart(key, gui=True)
-                try:
-                    self._status_service.note_starting(key)
-                except Exception:
-                    pass
-            except Exception as e:
-                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
-            finally:
-                GLib.idle_add(self._servers_control.set_server_launching, key, False)
-
-        threading.Thread(target=run, daemon=True).start()
+        ConnectServerDialog(self, settings=_settings, on_saved=saved).present()
 
     # ── Queue ──────────────────────────────────────────────────────────────────
 
@@ -11242,6 +11249,10 @@ class MainWindow(Gtk.ApplicationWindow):
         # explicitly here so its status_service subscription is always torn
         # down alongside the service it subscribes to.
         self._servers_control.close()
+        # Stops the Servers menu refresh thread and answers any open
+        # ServerControl question "no" so no worker stays blocked.
+        if getattr(self, "_server_menu", None) is not None:
+            self._server_menu.close()
         self._hw_statusbar.stop()
         if self._log_tail_stop:
             self._log_tail_stop.set()

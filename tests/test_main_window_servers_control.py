@@ -131,189 +131,83 @@ def test_servers_control_closed_on_window_close():
     assert "self._status_service.stop()" in body  # still present, unrelated
 
 
-def test_note_ordering_matches_legacy_on_servers_action():
-    """Issue 3: note_starting/note_stopping must be textually AFTER the real
-    _sm.start/stop/restart(key, ...) call inside each callback's body,
-    mirroring ControlPanel._on_servers_action's ordering -- a synchronous
-    _sm.* failure must never have already told the status service a
-    launch/stop began."""
-    for name, sm_call, note_call in (
-        ("_on_servers_control_start", "_sm.start(key, gui=True)", "self._status_service.note_starting(key)"),
-        ("_on_servers_control_stop", "_sm.stop(key)", "self._status_service.note_stopping(key)"),
-        ("_on_servers_control_restart", "_sm.restart(key, gui=True)", "self._status_service.note_starting(key)"),
+def test_servers_menu_actions_go_through_server_control():
+    """Task 8 (server control through tt) supersedes the SP-3b direct
+    `_sm.start/stop/restart(key)` calls: every Servers-menu action now goes
+    through ServerControl via `self._server_menu` (app/server_menu.py), which
+    runs it on a worker, asks first where needed and logs the outcome. The
+    note_starting/note_stopping ordering the old test pinned now lives in
+    ServerMenu (noted on the worker, and cleared again on any outcome that
+    did not start the server)."""
+    for name, call in (
+        ("_on_servers_control_start", "self._server_menu.start(key)"),
+        ("_on_servers_control_stop", "self._server_menu.stop(server)"),
+        ("_on_servers_control_restart", "self._server_menu.restart(server)"),
+        ("_on_servers_control_use", "self._server_menu.use(server)"),
     ):
-        start = _SRC.index(f"def {name}(self, key: str) -> None:")
+        start = _SRC.index(f"def {name}(self, ")
         end = _SRC.index("\n    def ", start + 1)
         body = _SRC[start:end]
-        assert body.index(sm_call) < body.index(note_call), name
+        assert call in body, name
+        assert "_sm.start(" not in body and "_sm.stop(" not in body
+        assert "_sm.restart(" not in body, name
 
 
-def test_single_servers_control_mounted():
-    """SP-3d-5: ControlPanel -- and the servers_btn/server_status_box/
-    srv_log_revealer hide-calls that used to run right after ServersControl
-    was constructed (SP-3b state) -- is deleted entirely. ServersControl is
-    now the ONLY servers control the window builds; there is no ControlPanel
-    duplicate to hide because there is no ControlPanel."""
-    assert "self._controls = ControlPanel(" not in _SRC
-    assert "class ControlPanel(Gtk.Box):" not in _SRC
-    assert "self._controls._servers_btn.set_visible(False)" not in _SRC
-    assert "self._controls._server_status_box.set_visible(False)" not in _SRC
-    assert "self._controls._srv_log_revealer.set_visible(False)" not in _SRC
+def test_server_menu_built_refreshed_and_closed():
+    assert "self._server_menu = self._build_server_menu()" in _SRC
+    assert "self._server_menu.start_refresh()" in _SRC
+    close = _SRC[_SRC.index("def do_close_request(self) -> bool:"):]
+    assert "self._server_menu.close()" in close
+    assert "extra_ready_fn=self._servers_extra_ready_keys" in _SRC
+    start = _SRC.index("self._servers_control = ServersControl(")
+    ctor = _SRC[start:_SRC.index(")", start)]
+    assert "on_use=self._on_servers_control_use" in ctor
+    assert "on_connect=self._open_connect_dialog" in ctor
 
 
-def test_refresh_servers_popover_poll_retired():
-    """SP-3d-5: `ControlPanel._refresh_servers_popover` (and the whole class
-    it lived on) is deleted outright -- superseding the SP-3b-era state where
-    it was merely unreachable (hidden button, method still defined, per this
-    test's earlier version). `ServersControl` (the thing the popover is
-    replaced by) never polls at all -- it only ever renders from
-    `status_service.snapshot()` at construction and `subscribe()`s for
-    updates, so there's no replacement poll introduced either.
-    """
-    assert "def _refresh_servers_popover(self) -> None:" not in _SRC
-    assert "_reconcile_artgen_statuses" not in _SRC
-    # ServersControl has no polling of its own.
-    assert "status_all" not in _SC_SRC
-    assert "subscribe(" in _SC_SRC
-
-
-# ── Behavioral: the callbacks resolve keys + note the service + route logs ──
-#
-# Mirrors test_main_window_status_service.py's `_make_control_panel_double`
-# pattern: bind the REAL unbound methods onto a bare stand-in via `.__get__`
-# rather than constructing the full (heavy) MainWindow/ControlPanel.
-
-class _ImmediateThread:
-    """threading.Thread stand-in that runs its target synchronously on
-    start(), so these tests are deterministic instead of racing a real
-    daemon thread (same helper as test_main_window_status_service.py's)."""
-
-    def __init__(self, target=None, daemon=None):
-        self._target = target
-
-    def start(self):
-        self._target()
-
-
-class _Recorder:
-    """Fake ModelStatusService: records note_starting/note_stopping calls."""
-
+class _FakeMenu:
     def __init__(self):
-        self.starting: list = []
-        self.stopping: list = []
+        self.calls = []
 
-    def note_starting(self, key):
-        self.starting.append(key)
+    def start(self, key):
+        self.calls.append(("start", key))
 
-    def note_stopping(self, key):
-        self.stopping.append(key)
+    def stop(self, s):
+        self.calls.append(("stop", s))
 
+    def restart(self, s):
+        self.calls.append(("restart", s))
 
-class _FakeServersControl:
-    """Records append_server_log/set_server_launching calls; no real GTK."""
+    def use(self, s):
+        self.calls.append(("use", s))
 
-    def __init__(self):
-        self.log_lines: list = []
-        self.launching: list = []
-
-    def append_server_log(self, line):
-        self.log_lines.append(line)
-
-    def set_server_launching(self, key, launching):
-        self.launching.append((key, launching))
+    def ready_keys(self):
+        return {"wan2.2"}
 
 
-def _make_main_window_double(monkeypatch):
-    """Bind the real (unbound) _on_servers_control_* methods from
-    MainWindow onto a bare stand-in, with _sm.start/stop/restart and the
-    threading/idle_add plumbing swapped for synchronous fakes."""
+def test_servers_control_callbacks_delegate_to_the_server_menu():
     import main_window as mw
-
-    monkeypatch.setattr(mw.threading, "Thread", _ImmediateThread)
-    monkeypatch.setattr(mw.GLib, "idle_add", lambda fn, *a: fn(*a))
-    calls = {"start": [], "stop": [], "restart": []}
-    monkeypatch.setattr(mw._sm, "start", lambda key, gui=True: calls["start"].append((key, gui)))
-    monkeypatch.setattr(mw._sm, "stop", lambda key: calls["stop"].append(key))
-    monkeypatch.setattr(mw._sm, "restart", lambda key, gui=True: calls["restart"].append((key, gui)))
 
     class _FakeMainWindow:
         pass
 
     fmw = _FakeMainWindow()
-    fmw._status_service = _Recorder()
-    fmw._servers_control = _FakeServersControl()
-    fmw._on_servers_control_start = mw.MainWindow._on_servers_control_start.__get__(fmw)
-    fmw._on_servers_control_stop = mw.MainWindow._on_servers_control_stop.__get__(fmw)
-    fmw._on_servers_control_restart = mw.MainWindow._on_servers_control_restart.__get__(fmw)
-    return fmw, calls
-
-
-def test_on_servers_control_start_notes_and_starts(monkeypatch):
-    fmw, calls = _make_main_window_double(monkeypatch)
+    fmw._server_menu = _FakeMenu()
+    for name in ("_on_servers_control_start", "_on_servers_control_stop",
+                 "_on_servers_control_restart", "_on_servers_control_use",
+                 "_servers_extra_ready_keys"):
+        setattr(fmw, name, getattr(mw.MainWindow, name).__get__(fmw))
     fmw._on_servers_control_start("wan2.2")
-    assert fmw._status_service.starting == ["wan2.2"]
-    assert fmw._status_service.stopping == []
-    assert calls["start"] == [("wan2.2", True)]
-    # launching set True immediately, then False once the (synchronous, in
-    # this test) worker settles.
-    assert fmw._servers_control.launching == [("wan2.2", True), ("wan2.2", False)]
-    assert any("wan2.2" in line for line in fmw._servers_control.log_lines)
-
-
-def test_on_servers_control_stop_notes_and_stops(monkeypatch):
-    fmw, calls = _make_main_window_double(monkeypatch)
     fmw._on_servers_control_stop("flux")
-    assert fmw._status_service.stopping == ["flux"]
-    assert fmw._status_service.starting == []
-    assert calls["stop"] == ["flux"]
-    assert fmw._servers_control.launching == [("flux", True), ("flux", False)]
-
-
-def test_on_servers_control_restart_notes_starting_and_restarts(monkeypatch):
-    fmw, calls = _make_main_window_double(monkeypatch)
     fmw._on_servers_control_restart("mochi")
-    # Restart -> note_starting (matches ControlPanel._on_servers_action's
-    # restart branch, which also calls note_starting rather than a separate
-    # note_restarting hook).
-    assert fmw._status_service.starting == ["mochi"]
-    assert calls["restart"] == [("mochi", True)]
-    assert fmw._servers_control.launching == [("mochi", True), ("mochi", False)]
-
-
-def test_servers_control_callback_note_failure_does_not_block_start(monkeypatch):
-    """A status_service.note_starting exception must never prevent the real
-    _sm.start(key, gui=True) call, mirroring _on_servers_action's own
-    try/except-around-note_ guard."""
-    fmw, calls = _make_main_window_double(monkeypatch)
-
-    class _BoomRecorder:
-        def note_starting(self, key):
-            raise RuntimeError("boom")
-
-        def note_stopping(self, key):
-            raise RuntimeError("boom")
-
-    fmw._status_service = _BoomRecorder()
-    fmw._on_servers_control_start("wan2.2")
-    assert calls["start"] == [("wan2.2", True)]
-
-
-def test_note_starting_never_fires_when_sm_start_raises(monkeypatch):
-    """Issue 3 behavioral counterpart: if the REAL _sm.start(...) call raises
-    synchronously, note_starting must never have fired -- the status
-    service must not be told a launch began that never actually happened.
-    (Complements test_note_ordering_matches_legacy_on_servers_action, which
-    only checks textual order; this proves the runtime effect.)"""
-    fmw, calls = _make_main_window_double(monkeypatch)
-    import main_window as mw
-
-    def _boom(key, gui=True):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(mw._sm, "start", _boom)
-    fmw._on_servers_control_start("wan2.2")
-    assert fmw._status_service.starting == []
-    assert any("Error" in line for line in fmw._servers_control.log_lines)
+    fmw._on_servers_control_use("srv")
+    assert fmw._server_menu.calls == [("start", "wan2.2"), ("stop", "flux"),
+                                      ("restart", "mochi"), ("use", "srv")]
+    assert fmw._servers_extra_ready_keys() == {"wan2.2"}
+    # Before the menu exists (the status service polls first) it is empty.
+    bare = _FakeMainWindow()
+    bare._servers_extra_ready_keys = mw.MainWindow._servers_extra_ready_keys.__get__(bare)
+    assert bare._servers_extra_ready_keys() == set()
 
 
 # ── Behavioral: ServersControl's three widgets are independently mountable ──
