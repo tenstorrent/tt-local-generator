@@ -3,7 +3,9 @@
 The rule tests use a small fixture library written to a tmp dir, not the
 shipped cards, so a card edit never changes what a rule test means.
 """
+import re
 import time
+from collections import Counter
 
 import pytest
 import yaml
@@ -117,7 +119,7 @@ def test_ambiguous_word_without_cue_does_not_match(tmp_path):
 def test_ambiguous_word_with_cue_or_capital_matches(tmp_path):
     lib = _tortoise(tmp_path)
     for text in ("a Tortoise record", "a tortoise record", "I like Tortoise",
-                 "tortoise-like", "tortoise style", "we saw a Tortoise tonight",
+                 "tortoise-like", "tortoise-style", "we saw a Tortoise tonight",
                  "the tortoise music video", "album by tortoise"):
         p = parse(text, lib)
         assert _ids(p.layers[0]) == ["tortoise"], text
@@ -249,3 +251,136 @@ def test_very_long_input_is_linear_enough(tmp_path):
     p = parse(text, lib)
     assert time.perf_counter() - t < 2.0
     assert len(p.layers) > 100
+
+
+# ---------------------------------------------------------------- fix round 1
+
+def _alnum(s):
+    return [c for c in s.lower() if c.isalnum()]
+
+
+ROUNDTRIP_INPUTS = [
+    "tortoise-like song but someone is singing a bluegrass song on top",
+    "  jazz   but   loud  ",
+    "Tortoise record but",
+    "but loud",
+    "jazz but over loud",
+    "jazz plus",
+    "jazz plus plus parliament",
+    "naïve café Tortoise-ish \u2014 très chic",
+    "(slow) Tortoise-like",
+    "MIXED WITH jazz, Parliament-Funkadelic!",
+    "P-Funk",
+    "on top",
+    "rainy Tuesday, jazz with sticky mornings...",
+    "jazz \u2014 parliament ; funkadelic",
+    "Jazz and   funkadelic meets   Parliament over \u00e9t\u00e9 5/4",
+    "x",
+]
+
+
+@pytest.mark.parametrize("text", ROUNDTRIP_INPUTS)
+def test_roundtrip_every_alphanumeric_character_exactly_once(tmp_path, text):
+    lib = _lib(
+        tmp_path,
+        _card("tortoise", kind="artist", parent="post-rock", name="Tortoise",
+              ambiguous=True, cues=["record"]),
+        _card("p-funk", name="Parliament-Funkadelic", aliases=["P-Funk"]),
+        _card("parliament", name="Parliament"),
+        _card("funkadelic", name="Funkadelic"),
+        _card("jazz", name="Jazz"),
+    )
+    p = parse(text, lib)
+    pieces = list(p.leftover)
+    pieces += [m.text for l in p.layers for m in l.matches]
+    pieces += [l.marker for l in p.layers if l.marker]
+    pieces += list(p.dropped)
+    assert Counter(_alnum("".join(pieces))) == Counter(_alnum(text))
+    assert len(_alnum("".join(pieces))) == len(_alnum(text))
+    # leftover phrases and matches each appear in the text in order
+    cur = 0
+    for ph in p.leftover:
+        cur = text.index(ph, cur) + len(ph)
+    ends = [m.start for l in p.layers for m in l.matches]
+    assert ends == sorted(ends)
+
+
+def test_markers_that_make_no_layer_are_listed_in_dropped(tmp_path):
+    lib = _funk(tmp_path)
+    assert parse("jazz but", lib).dropped == ("but",)
+    assert parse("jazz but over loud", lib).dropped == ("but",)
+    assert parse("jazz plus", lib).dropped == ("plus",)
+    p = parse("tortoise-like song but someone is singing a bluegrass song on top", _tortoise(tmp_path))
+    assert p.dropped == ("on top",)
+    assert parse("jazz but loud", lib).dropped == ()  # that marker made a layer
+    assert parse("but", lib).dropped == ("but",) and parse("but", lib).layers == ()
+    assert Parsed("t", (), ()).dropped == ()
+
+
+def test_em_dash_between_match_and_word_stays_in_leftover(tmp_path):
+    lib = _lib(tmp_path, _card("tortoise", name="Tortoise"))
+    p = parse("naïve café Tortoise-ish \u2014 très chic", lib)
+    assert _ids(p.layers[0]) == ["tortoise"]
+    assert any("\u2014" in ph for ph in p.leftover)
+    # standalone punctuation between two matches is kept too
+    p = parse("jazz \u2014 parliament", _funk(tmp_path))
+    assert "\u2014" in p.leftover
+
+
+def test_layer_text_keeps_leading_punctuation(tmp_path):
+    p = parse("(slow) Tortoise-like", _lib(tmp_path, _card("tortoise", name="Tortoise")))
+    assert p.layers[0].text == "(slow) Tortoise-like"
+    assert p.leftover == ("(slow)",)
+
+
+@pytest.mark.parametrize("text", [
+    "Tortoise\u2013like", "Tortoise\u2011ish", "Tortoise\u2010like", "Tortoise\u2014style",
+    "Tortoise \u2212like", "Tortoise -like", "Tortoise- like", "Tortoise - ish",
+    "Tortoise-like", "Tortoise\u2015style",
+])
+def test_unicode_hyphens_and_loose_spacing_in_form_words(tmp_path, text):
+    for amb in (False, True):
+        lib = _lib(tmp_path, _card("tortoise", name="Tortoise", ambiguous=amb))
+        p = parse(text, lib)
+        assert _ids(p.layers[0]) == ["tortoise"], (text, amb)
+        assert p.leftover == (), (text, amb)
+
+
+def test_unicode_hyphen_inside_an_alias(tmp_path):
+    lib = _lib(tmp_path, _card("pf", name="Parliament-Funkadelic"))
+    assert _ids(parse("Parliament\u2011Funkadelic", lib).layers[0]) == ["pf"]
+
+
+def test_capital_does_not_fire_after_a_sentence_end(tmp_path):
+    lib = _tortoise(tmp_path)
+    assert not parse("A tortoise is slow. Tortoise soup is a dish.", lib).layers[0].matches
+    for text in ("Wait! Tortoise soup", "Really? Tortoise soup", "Hmm\u2026 Tortoise soup",
+                 "line one\nTortoise soup"):
+        assert not any(l.matches for l in parse(text, lib).layers), text
+    assert _ids(parse("the Tortoise crossed the road", lib).layers[0]) == ["tortoise"]
+    assert _ids(parse("I like Tortoise", lib).layers[0]) == ["tortoise"]
+
+
+def test_bare_style_is_not_a_signal_for_an_ambiguous_card(tmp_path):
+    lib = _tortoise(tmp_path)
+    assert not parse("tortoise style shell", lib).layers[0].matches
+    assert _ids(parse("tortoise-style shell", lib).layers[0]) == ["tortoise"]
+    assert _ids(parse("tortoise-like", lib).layers[0]) == ["tortoise"]
+    assert _ids(parse("tortoise-ish", lib).layers[0]) == ["tortoise"]
+    assert _ids(parse("like tortoise", lib).layers[0]) == ["tortoise"]
+    # a non-ambiguous card still takes "X style" and consumes the word
+    plain = parse("tortoise style shell", _lib(tmp_path, _card("tortoise", name="Tortoise")))
+    assert _ids(plain.layers[0]) == ["tortoise"] and plain.leftover == ("shell",)
+
+
+def test_ambiguity_check_is_skipped_for_a_multi_word_alias(tmp_path):
+    lib = _lib(tmp_path, _card("t", name="Tortoise", aliases=["tortoise band"],
+                               ambiguous=True, cues=["record"]))
+    assert _ids(parse("the tortoise band crossed the road", lib).layers[0]) == ["t"]
+    assert not parse("the tortoise crossed the road", lib).layers[0].matches
+
+
+def test_private_helpers_are_unit_testable(tmp_path):
+    from music_prompts import parse as P
+    toks = P._tokenise("Café, a-b")
+    assert [t[2] for t in toks] == ["café", "a", "b"] and toks[0][:2] == (0, 4)
