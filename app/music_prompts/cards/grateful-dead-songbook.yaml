@@ -1,0 +1,24 @@
+id: grateful-dead-songbook
+kind: artist
+name: Grateful Dead songbook
+aliases: [Grateful Dead, the Grateful Dead, Grateful Dead songs, Dead songbook, songbook of the Grateful Dead, the songbook of the Grateful Dead]
+family: jam
+parent: jam-band
+inspiration: [Grateful Dead, Workingman's Dead, American Beauty, Jerry Garcia, Robert Hunter]
+sound: >-
+  Warm, loose country-rock and folk songs stretched into long jams, with two
+  drummers, a wandering melodic bass, fluid noodling lead guitar and ragged
+  three-part vocal harmonies.
+instruments: [clean electric lead guitar, rhythm guitar, melodic electric bass, two drum kits, Hammond organ, piano]
+rhythm: Easy shuffles and two-drummer grooves that loosen into free-flowing jams.
+harmony: Simple folk and country chord changes that open into long modal vamps.
+mood: Warm, rambling, wistful and communal.
+production: Live and roomy, like a soundboard tape of a long concert.
+tempo_bpm: [80, 140]
+avoid: [tight three-minute radio edits, drum machines]
+tags: [americana jam, two drummers, fluid lead guitar, melodic bass, three-part harmony, country rock]
+goes_with: [folk, jazz]
+notes: >-
+  Wikipedia: Grateful Dead (rock, folk, country, bluegrass, blues and jazz; two
+  drummers; Garcia's fluid lines and mixolydian leaning; Lesh's melodic bass;
+  three-part harmonies; Workingman's Dead and American Beauty); Wikipedia: Jam band

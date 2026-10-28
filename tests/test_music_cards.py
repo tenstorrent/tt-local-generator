@@ -35,7 +35,10 @@ def test_load_library_reads_shipped_cards(tmp_path):
     assert lib.card("bluegrass-vocal").lyric_themes
     assert lib.card("nope") is None
     assert "post-rock" in lib.families()
-    assert [c.id for c in lib.of_kind("artist")] == ["tortoise"]
+    # of_kind returns exactly the artist cards (the shipped set grew in Task 5)
+    artists = [c.id for c in lib.of_kind("artist")]
+    assert "tortoise" in artists and "post-rock" not in artists
+    assert sorted(artists) == sorted(c.id for c in lib.cards.values() if c.kind == "artist")
 
 
 def test_validate_card_reports_missing_required_fields():

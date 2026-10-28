@@ -1,0 +1,24 @@
+id: berlin-school
+kind: style
+name: Berlin school
+aliases: [Berlin School electronic, Berlin School of electronic music, kosmische musik, kosmische]
+family: electronic
+inspiration: [Tangerine Dream, Klaus Schulze, Manuel Göttsching]
+sound: >-
+  Long-form electronic music driven by looping analog sequencer patterns, with
+  slowly evolving synth pads and Mellotron choirs rising and falling over the
+  pulse.
+instruments: [analog sequencer, modular synthesizer, Mellotron, string and choir pads, lead synth]
+rhythm: A steady, chugging eighth-note sequencer pulse with few or no drums; patterns shift a step at a time.
+harmony: Static minor and modal drones; change comes from filter sweeps and layered patterns rather than chord changes.
+mood: Hypnotic, cosmic, eerie and patient.
+production: Spacious and reverberant, warm analog tone, long fades between sections.
+tempo_bpm: [100, 130]
+avoid: [pop song structure, drum machine dance beats, short tracks]
+tags: [berlin school, analog sequencer, modular synth, mellotron, cosmic, long form]
+goes_with: [post-rock, psych]
+notes: >-
+  Wikipedia: Tangerine Dream (Phaedra among the first commercial albums built on
+  sequencers; Moog; Mellotron); Wikipedia: Krautrock (kosmische Musik, the Berlin
+  school); Progressive Rock Central and PopMatters on Rubycon via web search
+  (Moog 960 sequencer, chugging eighth-note pattern)

@@ -1,0 +1,23 @@
+id: p-funk
+kind: style
+name: P-funk
+aliases: [P-Funk, Parliament-Funkadelic, Parliament Funkadelic, pfunk, psychedelic funk]
+family: funk
+inspiration: [Parliament, Funkadelic, George Clinton, Bootsy Collins, Bernie Worrell]
+sound: >-
+  Sprawling psychedelic funk, with rubbery bass and squelching synth bass under
+  fuzzy guitars and horns, and a crowd of voices trading chants over a long,
+  loose groove.
+instruments: [electric bass, Moog synth bass, fuzz guitar, horn section, organ, clavinet, drum kit]
+rhythm: Slow-burning, heavy funk grooves on the one that ride for a long time.
+harmony: Vamps on dominant and minor seventh chords with gospel and soul turns.
+mood: Playful, cosmic, rowdy and joyous.
+production: Big, crowded and colourful, with layered voices and synth squelches.
+tempo_bpm: [90, 115]
+avoid: [thin, polite mixes, straight rock beats]
+tags: [p-funk, psychedelic funk, synth bass, group chants, horns, fuzz guitar]
+goes_with: [electronic, jazz]
+notes: >-
+  Wikipedia: Parliament-Funkadelic (the collective; P-funk as a short name for
+  psychedelic funk; Worrell's Moog bass); Wikipedia: Parliament (band);
+  Wikipedia: Funkadelic

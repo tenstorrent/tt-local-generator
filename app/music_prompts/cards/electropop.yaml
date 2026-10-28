@@ -1,0 +1,23 @@
+id: electropop
+kind: style
+name: Electropop
+aliases: [electro-pop, electro pop, robot pop]
+family: electronic
+inspiration: [Kraftwerk, Yellow Magic Orchestra, Gary Numan]
+sound: >-
+  Pop made almost entirely with machines, with synth melodies, drum machines and
+  sequencers in precise, repeating patterns and a cool, plain voice, sometimes
+  through a vocoder.
+instruments: [synthesizers, drum machine, sequencer, vocoder]
+rhythm: Precise, quantised drum-machine patterns with no swing.
+harmony: Simple, catchy minor and major melodies over a few repeating chords.
+mood: Cool, sleek, detached and catchy.
+production: Clean, dry, spacious and exact.
+tempo_bpm: [100, 130]
+avoid: [acoustic instruments, loose live drumming, heavy guitar]
+tags: [electropop, drum machine, sequencer, minimal synth, vocoder, cool]
+goes_with: [pop, funk]
+notes: >-
+  Wikipedia: Electropop (a variant of synth-pop with a hard electronic sound;
+  Kraftwerk, Yellow Magic Orchestra, Gary Numan); Wikipedia: Synth-pop (early
+  work minimalist, cold and robotic)

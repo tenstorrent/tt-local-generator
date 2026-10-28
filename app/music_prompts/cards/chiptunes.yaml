@@ -1,0 +1,24 @@
+id: chiptunes
+kind: style
+name: Chiptunes
+aliases: [chiptune, chip tune, chip tunes, chip music, 8-bit music, 8-bit, 8 bit music]
+family: chip
+inspiration: [Koji Kondo, Hirokazu Tanaka, Rob Hubbard]
+sound: >-
+  Bright, bleepy music from old game-console sound chips, with thin pulse-wave
+  melodies over a triangle-wave bass, very fast arpeggios for chords and hissy
+  noise-burst drums.
+instruments: [pulse wave lead, pulse wave harmony, triangle wave bass, noise channel percussion]
+rhythm: Tight, quantised and busy, often with quick runs and repeated sixteenth notes.
+harmony: Major and minor chords spelled out as very fast arpeggios; changing pulse widths colour the tone.
+mood: Bright, nostalgic, playful and energetic.
+production: Raw chip tones, no room sound, little or no reverb.
+tempo_bpm: [120, 180]
+avoid: [acoustic instruments, real drum kit, lush reverb]
+tags: [chiptune, 8-bit, pulse wave, triangle bass, fast arpeggios, noise drums]
+goes_with: [electronic, pop]
+clashes_with: [scene]
+notes: >-
+  Wikipedia: Chiptune (pulse, triangle and noise generators; duty cycle; fast
+  arpeggios for chords); NES APU references (vgmrips wiki, Battle of the Bits
+  lyceum: two pulse, triangle, noise for percussion)

@@ -1,0 +1,23 @@
+id: funkadelic
+kind: artist
+name: Funkadelic
+aliases: []
+family: funk
+parent: p-funk
+inspiration: [Funkadelic, Maggot Brain, One Nation Under a Groove, Eddie Hazel]
+sound: >-
+  Guitar-heavy psychedelic funk-rock, with fuzz and wah lead guitar wailing over
+  a thick, swaggering groove, raw and loose, with soulful group vocals.
+instruments: [fuzz electric guitar, wah-wah guitar, electric bass, drum kit, organ]
+rhythm: Heavy, swaggering funk-rock grooves, sometimes slowing into long, free guitar passages.
+harmony: Blues and soul chord vamps bent by psychedelic rock.
+mood: Raw, trippy, defiant and loose.
+production: Rough, saturated and loud, with the guitar far out front.
+tempo_bpm: [80, 120]
+avoid: [clean polished pop production, horn-led arrangements]
+tags: [psychedelic funk rock, fuzz guitar, wah guitar, heavy groove, guitar solos]
+goes_with: [psych, post-rock]
+notes: >-
+  Wikipedia: Funkadelic (guitar-driven mix of psychedelic rock, soul and funk;
+  Hendrix and Sly Stone influence); Wikipedia: Parliament-Funkadelic (raw,
+  guitar-based sound, Eddie Hazel's "Maggot Brain")

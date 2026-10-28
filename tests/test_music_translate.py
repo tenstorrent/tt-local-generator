@@ -108,7 +108,7 @@ def test_example_sentence_caption_dialect(tmp_path):
     t = translate(EXAMPLE, MINIMAX, library=_shipped(tmp_path))
     assert isinstance(t, Translation) and t.dialect == "caption+lyrics"
     p = t.prompt.lower()
-    for term in ("vibraphone", "dub", "brushed drums", "crescendo", "warm analog", "post-rock"):
+    for term in ("vibraphone", "dub", "jazz-inflected drums", "crescendo", "warm analog", "post-rock"):
         assert term in p, term
     for term in ("high lonesome", "close harmony", "twang"):
         assert term in p, term
@@ -138,9 +138,9 @@ def test_example_sentence_tags_dialect_turns_the_vocal_into_a_lead_line_with_a_n
     assert t.dialect == "tags" and t.lyrics is None
     p = t.prompt.lower()
     assert "\n" not in t.prompt and p.count(",") >= 5
-    for term in ("post-rock", "vibraphone", "dub", "brushed drums", "bpm"):
+    for term in ("post-rock", "vibraphone", "dub", "jazz-inflected drums", "bpm"):
         assert term in p, term
-    assert "pedal steel" in p
+    assert "dobro" in p                      # bluegrass lead instrument (was pedal steel; corrected in Task 5)
     assert "close harmony" not in p          # the voice description is gone; the lead line replaces it
     for debris in ("singing", "someone", "on top", "song"):
         assert not re.search(r"\b" + debris + r"\b", p), debris
