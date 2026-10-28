@@ -260,6 +260,10 @@ def test_held_leases_block_lists_unreapable_records_with_the_release_hint():
     assert "gozer release L1 L2" in rows[0]["text"]
     assert rows[0]["command"] == "gozer release L1 L2"
     assert "Copy" in rows[0]["buttons"]
+    # A record the reap guard kept says why.
+    w.set_view([], REG, [{"name": "artgen-qwen3-8b", "lease_id": "L7", "unreapable": True,
+                          "note": "chips are in use by another process"}])
+    assert "chips are in use by another process" in w._section_rows("held")[0]["text"]
     # No block when nothing is held.
     w.set_view([], REG, [])
     assert w._section_rows("held") == []
@@ -442,7 +446,9 @@ def test_progress_line_reaches_the_server_log(tmp_path):
     assert ("tt.serve", "Cat-7B", ()) in env.calls
     assert all(th is main for th in seen_threads)
     assert asked == []
-    assert pump(lambda: not w._cancel_btn.get_visible())
+    assert pump(lambda: not w._cancel_btns)
+    # A success may auto-collapse the log as before.
+    assert pump(lambda: not w._log_revealer.get_reveal_child())
 
 
 class _FakeControl:
@@ -481,11 +487,14 @@ def test_cancelled_outcome_is_logged_as_cancelled_not_declined():
 
     w, menu = _menu(_FakeControl(start))
     menu.start("Llama-3.1-8B-Instruct")
-    assert w._cancel_btn.get_visible()
-    w._cancel_btn.emit("clicked")
+    btn = w._cancel_btns["Llama-3.1-8B-Instruct"]
+    assert btn.get_label() == "Cancel start of Llama-3.1-8B-Instruct (stops what was launched)"
+    btn.emit("clicked")
     assert pump(lambda: "Cancelled" in w._log_text())
     assert "eclined" not in w._log_text()
-    assert pump(lambda: not w._cancel_btn.get_visible())
+    assert pump(lambda: not w._cancel_btns)
+    pump(timeout=0.2)
+    assert w._log_revealer.get_reveal_child() is True
 
 
 def test_failed_start_shows_the_server_control_message():
@@ -494,6 +503,74 @@ def test_failed_start_shows_the_server_control_message():
     menu.start("Llama-3.1-8B-Instruct")
     assert pump(lambda: msg in w._log_text())
     assert "Start failed" in w._log_text()
+    # The failure stays readable: launching False does not collapse the log.
+    assert pump(lambda: "Llama-3.1-8B-Instruct" not in w._launching)
+    pump(timeout=0.2)
+    assert w._log_revealer.get_reveal_child() is True
+    # ...until the user hides it.
+    w._hide_log_btn.emit("clicked")
+    assert w._log_revealer.get_reveal_child() is False
+
+
+def test_declined_outcome_keeps_the_log_open():
+    w, menu = _menu(_FakeControl(lambda k, c: StartOutcome("declined", None, "No.", None)))
+    menu.start("Llama-3.1-8B-Instruct")
+    assert pump(lambda: "Declined" in w._log_text())
+    assert pump(lambda: not w._launching)
+    pump(timeout=0.2)
+    assert w._log_revealer.get_reveal_child() is True
+
+
+def test_failed_stop_keeps_the_log_open():
+    ctl = _FakeControl()
+    ctl.stop = lambda s: StopOutcome("failed", "docker stop exited 1.")
+    w, menu = _menu(ctl)
+    menu.stop(rs("Llama-3.1-8B-Instruct", owner="app"))
+    assert pump(lambda: "Stop failed" in w._log_text())
+    assert pump(lambda: not w._launching)
+    pump(timeout=0.2)
+    assert w._log_revealer.get_reveal_child() is True
+
+
+def test_two_concurrent_starts_keep_their_own_cancel():
+    cancels = {}
+    gate = threading.Event()
+
+    def start(key, cancel):
+        cancels[key] = cancel
+        while not cancel() and not gate.is_set():
+            time.sleep(0.01)
+        return StartOutcome("cancelled" if cancel() else "started", "u", "", None)
+
+    w, menu = _menu(_FakeControl(start))
+    menu.start("A")
+    menu.start("B")
+    assert set(w._cancel_btns) == {"A", "B"}
+    w._cancel_btns["A"].emit("clicked")
+    assert pump(lambda: "A" in cancels and cancels["A"]() is True)
+    assert pump(lambda: "B" in cancels) and cancels["B"]() is False
+    gate.set()
+    assert pump(lambda: not w._cancel_btns)
+    assert "A: Cancelled" in w._log_text() and "B: Started" in w._log_text()
+
+
+def test_restart_notes_the_status_service():
+    class _Svc:
+        def __init__(self):
+            self.ev = []
+
+        def note_starting(self, k):
+            self.ev.append(("starting", k))
+
+        def note_stopping(self, k):
+            self.ev.append(("stopping", k))
+
+    svc = _Svc()
+    ctl = _FakeControl()
+    ctl.restart = lambda s, **kw: StartOutcome("failed", None, "x", None)
+    w, menu = _menu(ctl, status_service=svc)
+    menu.restart("flux").join(5)
+    assert svc.ev == [("starting", "flux"), ("stopping", "flux")]
 
 
 def test_every_start_outcome_has_its_own_plain_line():
@@ -728,3 +805,61 @@ def test_connect_dialog_saves_normalised_remote_server_without_duplicates():
     # The app setting exists with an empty default.
     import app_settings
     assert app_settings.DEFAULTS["remote_servers"] == []
+
+
+# --------------------------------------------------------------------------
+# Fix round 1: no rebuild churn, tt-blind starts, remote dot, token note
+# --------------------------------------------------------------------------
+
+def test_views_differing_only_in_uptime_do_not_rebuild():
+    w, _ = widget()
+    w.set_view([rs("Llama-3.1-8B-Instruct", uptime_s=60)], REG)
+    child = w._popover.get_child()
+    w.set_view([rs("Llama-3.1-8B-Instruct", uptime_s=7200)], REG)
+    assert w._popover.get_child() is child
+    row = row_by_key(w, "running", "Llama-3.1-8B-Instruct")
+    assert "up 2h 0m" in row["detail_label"].get_label()
+    # A real change does rebuild.
+    w.set_view([rs("Llama-3.1-8B-Instruct", uptime_s=7200, health="starting")], REG)
+    assert w._popover.get_child() is not child
+
+
+def test_available_expander_stays_open_across_a_rebuild():
+    w, _ = widget()
+    w.set_view([], REG)
+    w._available_expander.set_expanded(True)
+    w.set_view([rs("Llama-3.1-8B-Instruct")], REG)          # a real change
+    assert w._available_expander.get_expanded() is True
+    w._available_expander.set_expanded(False)
+    w.set_view([], REG)
+    assert w._available_expander.get_expanded() is False
+
+
+def test_tt_reason_hides_start_for_tt_entries_and_says_why():
+    w, calls = widget()
+    w.set_view([], REG, [], tt_reason="tt model ps failed: timeout")
+    llama = row_by_key(w, "ready", "Llama-3.1-8B-Instruct")
+    assert llama["buttons"] == {}
+    assert "Start" in row_by_key(w, "ready", "flux")["buttons"]      # script still startable
+    assert row_by_key(w, "available", "Qwen3-32B")["buttons"] == {}
+    assert "cannot be started from here" in w._tt_note_text
+
+
+def test_saved_remote_row_has_no_status_dot():
+    w, _ = widget()
+    saved = rs("lab", source="saved", url="http://10.0.0.5:8000", local=False, port=8000,
+               health="unknown", container_id=None, owner="unknown")
+    w.set_view([saved], REG)
+    assert "glyph" not in w._section_rows("remote")[0]
+
+
+def test_use_on_a_saved_remote_with_a_token_says_the_token_is_not_copied():
+    st = _Settings()
+    csd.save_remote_server(st, "10.0.0.5:8000", "lab", TOKEN)
+    rows = merge([], {}, [], csd.saved_rows(st), [], {})
+    w, _ = widget()
+    menu = smenu.ServerMenu(w, control_factory=lambda _c: _FakeControl(),
+                            confirm=smenu.ConfirmBridge(None),
+                            token_urls_fn=lambda: csd.urls_with_token(st))
+    menu.use(rows[0])
+    assert "token is not copied" in w._log_text() and TOKEN not in w._log_text()

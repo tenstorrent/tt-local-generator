@@ -331,13 +331,16 @@ class ServerMenu:
                  script_health_fn=None, status_service=None,
                  alive_fn: Callable[[], bool] = lambda: True,
                  interval: float = REFRESH_INTERVAL_S,
-                 confirm: ConfirmBridge | None = None) -> None:
+                 confirm: ConfirmBridge | None = None,
+                 token_urls_fn: Callable[[], set] | None = None) -> None:
         self._sc = servers_control
         self._alive_fn = alive_fn
         self.confirm = confirm or ConfirmBridge(parent, alive_fn=alive_fn)
         self._control_factory = control_factory
         self._snapshot_fn = snapshot_fn
         self._saved_fn = saved_fn or (lambda: [])
+        # URLs of saved remote servers that have a bearer token (never the token).
+        self._token_urls_fn = token_urls_fn or (lambda: set())
         self._records_fn = records_fn
         self._probe_fn = probe_fn
         self._script_health_fn = script_health_fn
@@ -405,7 +408,8 @@ class ServerMenu:
         cancel_ev = threading.Event()
         self._sc.set_server_launching(key, True)
         self._sc.append_server_log(f"Starting {name}...")
-        self._sc.set_cancel_action(f"Cancel start of {name}", cancel_ev.set)
+        self._sc.set_cancel_action(key, f"Cancel start of {name} (stops what was launched)",
+                                   cancel_ev.set)
 
         def run():
             self._note("note_starting", key)
@@ -416,14 +420,21 @@ class ServerMenu:
                 log.exception("start of %s raised", key)
                 from server_control import StartOutcome
                 out = StartOutcome("failed", None, f"{exc}.", None)
-            if out.kind not in ("started", "already_running"):
-                self._note("note_stopping", key)
-            self._log(start_outcome_line(name, out))
-            self._post(self._sc.clear_cancel_action)
-            self._post(self._sc.set_server_launching, key, False)
+            self._finish_start(key, name, out)
             self.refresh_now()
 
         return self._spawn(run, f"server-start-{key}")
+
+    def _finish_start(self, key: str, name: str, out) -> None:
+        """Worker side of the end of a start/restart: status hooks, the outcome
+        line, and the log kept open for anything the user must read."""
+        if out.kind not in ("started", "already_running"):
+            self._note("note_stopping", key)
+        self._log(start_outcome_line(name, out))
+        if out.kind not in ("started", "already_running"):
+            self._post(self._sc.keep_log_open)
+        self._post(self._sc.clear_cancel_action, key)
+        self._post(self._sc.set_server_launching, key, False)
 
     def stop(self, server_or_key):
         """Stop a RunningServer (or, from an old SERVERS row, a key) through
@@ -444,9 +455,12 @@ class ServerMenu:
                     if out.kind == "stopped":
                         self._note("note_stopping", key)
                     self._log(stop_outcome_line(srv.name, out))
+                    if out.kind != "stopped":
+                        self._post(self._sc.keep_log_open)
             except Exception as exc:
                 log.exception("stop of %s raised", key)
                 self._log(f"{name}: Stop failed. {exc}.")
+                self._post(self._sc.keep_log_open)
             self._post(self._sc.set_server_launching, key, False)
             self.refresh_now()
 
@@ -458,21 +472,32 @@ class ServerMenu:
         cancel_ev = threading.Event()
         self._sc.set_server_launching(key, True)
         self._sc.append_server_log(f"Restarting {name}...")
-        self._sc.set_cancel_action(f"Cancel start of {name}", cancel_ev.set)
+        self._sc.set_cancel_action(key, f"Cancel start of {name} (stops what was launched)",
+                                   cancel_ev.set)
 
         def run():
+            self._note("note_starting", key)
             try:
                 out = self.control().restart(server_or_key, on_progress=self._log,
                                              cancel=cancel_ev.is_set)
             except Exception as exc:
                 from server_control import StartOutcome
                 out = StartOutcome("failed", None, f"{exc}.", None)
-            self._log(start_outcome_line(name, out))
-            self._post(self._sc.clear_cancel_action)
-            self._post(self._sc.set_server_launching, key, False)
+            self._finish_start(key, name, out)
             self.refresh_now()
 
         return self._spawn(run, f"server-restart-{key}")
+
+    def forget(self, key: str) -> None:
+        """A server was stopped outside ServerControl (the status bar's Stop,
+        the Create switch): drop the app's record of it through
+        ``ServerControl.forget`` (lease released only when gozer shows its
+        chips free). Worker thread only. Never raises."""
+        try:
+            self.control().forget(key)
+        except Exception:
+            log.exception("forget %s failed", key)
+        self.refresh_now()
 
     def use(self, server) -> None:
         """"Use": the app finds local chat servers by itself and has no
@@ -484,10 +509,18 @@ class ServerMenu:
         display = Gdk.Display.get_default()
         if display is not None:
             display.get_clipboard().set(url)
-        self._sc.append_server_log(
-            f"{server.name}: copied {url} to the clipboard. tt-local-generator finds "
-            "chat servers on this machine by itself; paste the URL where a tool asks "
-            "for an endpoint.")
+        line = (f"{server.name}: copied {url} to the clipboard. tt-local-generator finds "
+                "chat servers on this machine by itself; paste the URL where a tool asks "
+                "for an endpoint.")
+        if server.source == "saved" and self._url_has_token(url):
+            line += " The token is not copied; set it where you use the URL."
+        self._sc.append_server_log(line)
+
+    def _url_has_token(self, url: str) -> bool:
+        try:
+            return url in set(self._token_urls_fn() or ())
+        except Exception:
+            return False
 
     def _rows_for(self, server_or_key) -> list:
         """The RunningServer rows a Stop acts on. A key (old SERVERS row)

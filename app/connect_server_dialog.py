@@ -142,6 +142,18 @@ def saved_rows(settings) -> list[dict]:
     return rows
 
 
+def urls_with_token(settings) -> set[str]:
+    """Normalised URLs of saved servers that carry a token (not the tokens)."""
+    out = set()
+    for e in settings.get(SETTINGS_KEY) or []:
+        if isinstance(e, dict) and e.get("url") and str(e.get("token") or "").strip():
+            try:
+                out.add(normalise_url(e["url"]))
+            except ValueError:
+                pass
+    return out
+
+
 def probe_server(url: str, token: str = "", timeout: float = _PROBE_TIMEOUT_S,
                  opener=None) -> tuple[bool, str]:
     """GET ``/v1/models`` then ``/v1/health``. ``(ok, message)``; never raises.

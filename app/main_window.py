@@ -9790,6 +9790,9 @@ class MainWindow(Gtk.ApplicationWindow):
             try:
                 if plan.conflict:
                     _sm.stop(plan.conflict)
+                    # Servers menu record of the stopped server (see forget).
+                    if getattr(self, "_server_menu", None) is not None:
+                        self._server_menu.forget(plan.conflict)
                     try:
                         self._status_service.note_stopping(plan.conflict)
                     except Exception:
@@ -10494,6 +10497,11 @@ class MainWindow(Gtk.ApplicationWindow):
                 for line in output.splitlines():
                     GLib.idle_add(self._servers_control.append_server_log, line)
                 GLib.idle_add(self._set_status, "Server stopped.")
+                # Drop the Servers menu's record for it (lease released only
+                # when gozer shows its chips free). This worker thread is
+                # where ServerControl may block.
+                if server_key and getattr(self, "_server_menu", None) is not None:
+                    self._server_menu.forget(server_key)
             except Exception as e:
                 GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
                 GLib.idle_add(self._set_status, f"Server stop error: {e}")
@@ -10517,7 +10525,7 @@ class MainWindow(Gtk.ApplicationWindow):
     # from an old row (shown only until the first refresh).
 
     def _build_server_menu(self) -> "ServerMenu":
-        from connect_server_dialog import saved_rows
+        from connect_server_dialog import saved_rows, urls_with_token
         from server_view import ServerRecords
 
         def script_health():
@@ -10531,6 +10539,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._servers_control,
             parent=self,
             saved_fn=lambda: saved_rows(_settings),
+            token_urls_fn=lambda: urls_with_token(_settings),
             records_fn=lambda: ServerRecords().load(),
             probe_fn=probe,
             script_health_fn=script_health,

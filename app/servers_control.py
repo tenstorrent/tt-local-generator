@@ -155,6 +155,15 @@ def _is_remote_row(s) -> bool:
     return s.source == "saved" or not s.host_is_local
 
 
+def _without_uptime(s):
+    """A RunningServer with its uptime blanked (for the rebuild signature)."""
+    import dataclasses
+    try:
+        return dataclasses.replace(s, uptime_s=None)
+    except Exception:
+        return s
+
+
 def _health_status(s):
     """(Status, word) for a RunningServer's dot and detail line."""
     if s.source == "saved":
@@ -540,17 +549,24 @@ class ServersControl(Gtk.Box):
         self._log_scroll = scroll
 
         # Task 8: a Cancel affordance for a start in progress (a chip queue
-        # wait or a long boot). Hidden until set_cancel_action() shows it.
-        self._cancel_btn = Gtk.Button(label="Cancel start")
-        self._cancel_btn.add_css_class("servers-popover-btn")
-        self._cancel_btn.add_css_class("servers-log-cancel")
-        self._cancel_btn.set_halign(Gtk.Align.START)
-        self._cancel_btn.set_visible(False)
-        self._cancel_cb = None
-        self._cancel_btn.connect("clicked", self._on_cancel_clicked)
+        # wait or a long boot): one button per running start, keyed by model
+        # key, so two concurrent starts never share a callback. Plus a "Hide
+        # log" button: an outcome that is not a success keeps the log open
+        # (keep_log_open) until the user hides it.
+        self._cancel_btns: "dict[str, Gtk.Button]" = {}
+        self._log_pinned = False
+        self._cancel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._cancel_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._cancel_box.set_hexpand(True)
+        self._cancel_row.append(self._cancel_box)
+        self._hide_log_btn = Gtk.Button(label="Hide log")
+        self._hide_log_btn.add_css_class("servers-popover-btn")
+        self._hide_log_btn.add_css_class("servers-log-cancel")
+        self._hide_log_btn.connect("clicked", lambda _b: self.hide_log())
+        self._cancel_row.append(self._hide_log_btn)
 
         log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        log_box.append(self._cancel_btn)
+        log_box.append(self._cancel_row)
         log_box.append(scroll)
         revealer.set_child(log_box)
         return revealer
@@ -634,7 +650,7 @@ class ServersControl(Gtk.Box):
         done = {k for k in self._launching if self._snapshot.get(k) == Status.READY}
         if done:
             self._launching -= done
-        if not self._launching:
+        if not self._launching and not self._log_pinned:
             self._log_revealer.set_reveal_child(False)
 
     # ------------------------------------------------------------------
@@ -686,7 +702,7 @@ class ServersControl(Gtk.Box):
             self._log_revealer.set_reveal_child(True)
         else:
             self._launching.discard(key)
-            if not self._launching:
+            if not self._launching and not self._log_pinned:
                 self._log_revealer.set_reveal_child(False)
 
     def set_status_segments(self, *, queue=None, disk=None, chip=None) -> None:
@@ -754,12 +770,24 @@ class ServersControl(Gtk.Box):
         running = list(running or [])
         registry = dict(registry or {})
         held = [dict(h) for h in (held or []) if isinstance(h, dict)]
-        sig = (tuple(running), tuple(sorted(registry.items())),
+        # Uptime is left out of the signature: it changes on every refresh,
+        # and a rebuild under an open popover resets its scroll, collapses the
+        # Available expander and can swap a widget the user is clicking. When
+        # only uptimes differ, the detail lines are updated in place.
+        sig = (tuple(_without_uptime(x) for x in running), tuple(sorted(registry.items())),
                tuple(tuple(sorted((k, str(v)) for k, v in h.items())) for h in held),
                tt_reason or "")
         if sig == self._view_sig:
+            self._update_uptimes(running)
             return GLib.SOURCE_REMOVE
         self._view_sig = sig
+        # Keep what the user set on the old popover: the Available expander's
+        # open/closed state and the scroll position.
+        old_exp = getattr(self, "_available_expander", None)
+        keep_expanded = bool(old_exp is not None and old_exp.get_expanded())
+        self._available_expander = None
+        old_scroll = getattr(self, "_sections_scroll", None)
+        keep_scroll = old_scroll.get_vadjustment().get_value() if old_scroll is not None else 0.0
         # The SERVERS-based rows are no longer shown: drop their refs so the
         # status-snapshot repaint does not touch detached widgets.
         self._row_dots.clear()
@@ -793,7 +821,10 @@ class ServersControl(Gtk.Box):
 
         if tt_reason:
             self._tt_note_text = (f"Servers started with tt are not listed: {tt_reason}. "
-                                  "Script servers are still shown.")
+                                  "Script servers are still shown. Models started "
+                                  "through tt cannot be started from here until this "
+                                  "works again, because a copy that is already running "
+                                  "would not be seen.")
             note = Gtk.Label(label=self._tt_note_text)
             note.add_css_class("servers-tt-note")
             note.set_xalign(0)
@@ -820,7 +851,7 @@ class ServersControl(Gtk.Box):
         if not ready:
             outer.append(self._empty_line("Every installed model is running."))
         for e in ready:
-            outer.append(self._entry_row(e, "ready", "Start"))
+            outer.append(self._entry_row(e, "ready", "Start", tt_blind=bool(tt_reason)))
 
         # ── Available ── (catalog models not installed), collapsed
         avail = [e for e in registry.values()
@@ -829,13 +860,15 @@ class ServersControl(Gtk.Box):
         if avail:
             exp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             for e in avail:
-                exp_box.append(self._entry_row(e, "available", "Get and start"))
+                exp_box.append(self._entry_row(e, "available", "Get and start",
+                                               tt_blind=bool(tt_reason)))
             exp = Gtk.Expander()
             # The header style goes on the label only: a class on the
             # Expander itself is inherited by every row inside it.
             exp.set_label_widget(self._section_header(
                 f"Available to download ({len(avail)})"))
             exp.set_child(exp_box)
+            exp.set_expanded(keep_expanded)
             self._available_expander = exp
             outer.append(exp)
 
@@ -860,7 +893,27 @@ class ServersControl(Gtk.Box):
         scroll.set_child(outer)
         self._popover.set_child(scroll)
         self._sections_box = outer
+        self._sections_scroll = scroll
+        if keep_scroll > 0:
+            def restore():
+                adj = scroll.get_vadjustment()
+                adj.set_value(min(keep_scroll, max(0.0, adj.get_upper() - adj.get_page_size())))
+                return GLib.SOURCE_REMOVE
+            GLib.idle_add(restore)
         return GLib.SOURCE_REMOVE
+
+    def _update_uptimes(self, running) -> None:
+        """Same view apart from uptimes: refresh the detail lines in place."""
+        by_ident = {_without_uptime(x): x for x in running}
+        for section in ("running", "remote"):
+            for rec in self._view_rows.get(section, []):
+                old = rec.get("server")
+                new = by_ident.get(_without_uptime(old)) if old is not None else None
+                lbl = rec.get("detail_label")
+                if new is None or lbl is None:
+                    continue
+                rec["server"] = new
+                lbl.set_label(self._running_detail(new, section))
 
     # -- row builders --------------------------------------------------
     @staticmethod
@@ -923,6 +976,7 @@ class ServersControl(Gtk.Box):
             det.set_max_width_chars(48)
             col.append(det)
             texts.append(detail)
+            record["detail_label"] = det
         row.append(col)
 
         record["buttons"] = {}
@@ -954,15 +1008,6 @@ class ServersControl(Gtk.Box):
             tags.append(("remote", "servers-row-tag-remote"))
         elif s.owner != "app":
             tags.append(("not started here", "servers-row-tag-external"))
-        bits = []
-        if s.port is not None:
-            bits.append(f"port {s.port}")
-        bits.append(health_word)
-        up = _fmt_uptime(s.uptime_s)
-        if up:
-            bits.append(f"up {up}")
-        if section == "remote" and s.url:
-            bits.append(_safe_url(s.url))
         buttons = []
         if self._on_use is not None:
             buttons.append(("Use", f"Use {title}", lambda srv=s: self._on_use(srv), None))
@@ -976,15 +1021,37 @@ class ServersControl(Gtk.Box):
                 buttons.append(("Stop...", f"{title} was not started by tt-local-generator; "
                                 "you will be asked before it is stopped",
                                 lambda srv=s: self._on_stop(srv), "servers-popover-btn-stop"))
-        return self._make_row(section, status=status, title=title, tags=tags,
-                              detail=" · ".join(bits), buttons=buttons,
+        # A saved remote server is not probed: no dot (it would say nothing).
+        return self._make_row(section, status=None if s.source == "saved" else status,
+                              title=title, tags=tags,
+                              detail=self._running_detail(s, section), buttons=buttons,
                               record={"server": s, "key": s.key})
 
-    def _entry_row(self, e, section: str, verb: str) -> Gtk.Box:
+    @staticmethod
+    def _running_detail(s, section: str) -> str:
+        _status, health_word = _health_status(s)
+        bits = []
+        if s.port is not None:
+            bits.append(f"port {s.port}")
+        bits.append(health_word)
+        up = _fmt_uptime(s.uptime_s)
+        if up:
+            bits.append(f"up {up}")
+        if section == "remote" and s.url:
+            bits.append(_safe_url(s.url))
+        return " · ".join(bits)
+
+    def _entry_row(self, e, section: str, verb: str, tt_blind: bool = False) -> Gtk.Box:
         title = _entry_title(e)
         tags = [("script" if e.backend == "boutique" else "tt", None)]
         detail = _entry_benefit(e)
-        buttons = [(verb, f"{verb} {title}", lambda k=e.key: self._on_start(k), None)]
+        # tt_blind: `tt model ps` failed, so ServerControl could not see a copy
+        # of a tt model that is already running: no Start for tt entries.
+        if tt_blind and e.backend == "tt":
+            buttons = []
+            detail = (detail + " " if detail else "") + "(cannot be started while tt data is missing)"
+        else:
+            buttons = [(verb, f"{verb} {title}", lambda k=e.key: self._on_start(k), None)]
         # No status dot: a model that is not running has no state to show
         # (the OFF glyph is near-invisible on the popover and says nothing).
         return self._make_row(section, status=None, title=title, tags=tags,
@@ -1000,6 +1067,9 @@ class ServersControl(Gtk.Box):
         else:
             why = ("Kept after a stop that failed. It is released at a later refresh once "
                    "its server is gone, or by hand:")
+        if h.get("note"):
+            why = (f"Kept because the {h.get('note')}. Release it by hand once that "
+                   "process has finished:")
         model = name.split("#", 1)[0]
         buttons = []
         if cmd:
@@ -1027,25 +1097,39 @@ class ServersControl(Gtk.Box):
             display.get_clipboard().set(text)
 
     # -- cancel affordance ---------------------------------------------
-    def set_cancel_action(self, label: str, callback) -> None:
-        """Show a Cancel button above the server log that calls ``callback``
-        once. Main thread only."""
-        self._cancel_cb = callback
-        self._cancel_btn.set_label(label)
-        self._cancel_btn.set_sensitive(True)
-        self._cancel_btn.set_visible(True)
+    def set_cancel_action(self, key: str, label: str, callback) -> None:
+        """Show a Cancel button for the start of ``key`` above the server log;
+        it calls ``callback`` once. Main thread only."""
+        self.clear_cancel_action(key)
+        btn = Gtk.Button(label=label)
+        btn.add_css_class("servers-popover-btn")
+        btn.add_css_class("servers-log-cancel")
+        btn.set_halign(Gtk.Align.START)
+
+        def clicked(b, cb=callback):
+            b.set_sensitive(False)
+            cb()
+
+        btn.connect("clicked", clicked)
+        self._cancel_btns[key] = btn
+        self._cancel_box.append(btn)
         self._log_revealer.set_reveal_child(True)
 
-    def clear_cancel_action(self) -> None:
-        """Hide the Cancel button. Main thread only."""
-        self._cancel_cb = None
-        self._cancel_btn.set_visible(False)
+    def clear_cancel_action(self, key: str) -> None:
+        """Remove the Cancel button of ``key``'s start. Main thread only."""
+        btn = self._cancel_btns.pop(key, None)
+        if btn is not None:
+            self._cancel_box.remove(btn)
 
-    def _on_cancel_clicked(self, _btn) -> None:
-        cb, self._cancel_cb = self._cancel_cb, None
-        self._cancel_btn.set_sensitive(False)
-        if cb is not None:
-            cb()
+    def keep_log_open(self) -> None:
+        """Keep the log revealed (an outcome the user must read) until
+        hide_log(). Main thread only."""
+        self._log_pinned = True
+        self._log_revealer.set_reveal_child(True)
+
+    def hide_log(self) -> None:
+        self._log_pinned = False
+        self._log_revealer.set_reveal_child(False)
 
     # ------------------------------------------------------------------
     # Test-helper accessors (per task-1-brief.md)

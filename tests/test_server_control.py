@@ -1533,3 +1533,91 @@ def test_stop_legacy_notes_once_on_stderr_when_a_recorded_release_fails(env, cap
     ctl.stop_legacy("flux", names=["flux"])
     cap = capsys.readouterr()
     assert cap.out == "" and cap.err.count("note:") == 1 and "L9" in cap.err
+
+
+# --------------------------------------------------------------------------
+# Task 8 fix round 1: reaping never releases a lease whose chips are in use
+# --------------------------------------------------------------------------
+
+import json as _json
+
+_FIXTURE_STATUS = _json.loads(
+    (Path(__file__).parent / "fixtures" / "gozer" / "status.json").read_text())
+
+
+def _status_with_who(who, *, held):
+    """The real status fixture, with chips 2 and 3 leased by ``who``; held=True
+    gives them a holder process (HELD-FOREIGN + pids), else CLAIMED/no pids."""
+    st = _json.loads(_json.dumps(_FIXTURE_STATUS))
+    for row in st["chips"][2:]:
+        row["who"] = who
+        row["state"] = "HELD-FOREIGN" if held else "CLAIMED"
+        row["pids_holding"] = [4242] if held else []
+    return st
+
+
+def test_reap_skips_a_lease_whose_chips_are_held(env):
+    env.records.add("Cat-7B", 20001, "aaaaaaaaaaaa", "L-cat", 1.0)
+    env.status = _status_with_who("tt-local-generator:Cat-7B", held=True)
+    ctl = env.control()
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert "gozer.release" not in env.names()
+    rec = env.records.load()
+    assert len(rec) == 1 and rec[0]["unreapable"] is True
+    assert rec[0]["note"] == "chips are in use by another process"
+
+
+def test_reap_fails_closed_when_gozer_status_fails(env):
+    env.records.add("Cat-7B", 20001, "aaaaaaaaaaaa", "L-cat", 1.0)
+    env.status = {}
+    ctl = env.control()
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert "gozer.release" not in env.names()
+    rec = env.records.load()
+    assert len(rec) == 1 and not rec[0].get("unreapable")
+    # gozer readable again and the chips free: released on that cycle.
+    env.status = _status_with_who("tt-local-generator:Cat-7B", held=False)
+    assert ctl.reap_stale_leases(set(), set()) == ["L-cat"]
+
+
+def test_reap_still_releases_when_gozer_shows_the_chips_free(env):
+    env.records.add("Cat-7B", 20001, "aaaaaaaaaaaa", "L-cat", 1.0)
+    env.status = _status_with_who("tt-local-generator:Cat-7B", held=False)
+    ctl = env.control()
+    assert ctl.reap_stale_leases(set(), set()) == []
+    assert ctl.reap_stale_leases(set(), set()) == ["L-cat"]
+    assert env.records.load() == []
+
+
+def test_switch_outside_server_control_never_resets_chips_under_the_new_server(env):
+    """artgen leased chips 2,3 through the app; the Create gate stopped it with
+    its script and started Wan2.2 on the same chips. The artgen record's
+    container is gone, Wan2.2's process holds the chips: nothing is released."""
+    env.records.add("artgen-qwen3-8b", 8002, "aaaaaaaaaaaa", "L-artgen", 1.0)
+    env.status = _status_with_who("tt-local-generator:artgen-qwen3-8b", held=True)
+    ctl = env.control()
+    wan_live = {"cccccccccccc"}
+    for _ in range(3):
+        assert ctl.reap_stale_leases(wan_live, {("wan2.2", 8000)}) == []
+    assert "gozer.release" not in env.names()
+
+
+def test_forget_releases_only_when_the_chips_are_free(env):
+    env.records.add("flux", 8000, None, "L-flux", 1.0)
+    env.status = _status_with_who("tt-local-generator:flux", held=True)
+    ctl = env.control()
+    assert ctl.forget("flux") == "kept"
+    assert "gozer.release" not in env.names()
+    assert env.records.load()[0]["unreapable"] is True
+    env.records.add("mochi", 8000, None, "L-mochi", 1.0)
+    env.status = {}
+    assert ctl.forget("mochi") == "kept"
+    assert "gozer.release" not in env.names()
+    env.status = _status_with_who("tt-local-generator:mochi", held=False)
+    assert ctl.forget("mochi") == "released"
+    assert ("gozer.release", "L-mochi") in env.calls
+    assert [r["name"] for r in env.records.load()] == ["flux"]
+    assert ctl.forget("nothing") == "none"

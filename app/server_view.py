@@ -113,7 +113,7 @@ class ServerRecords:
             raise
 
     def add(self, name, port, container_id, lease_id, started_at,
-            unreapable: bool = False) -> None:
+            unreapable: bool = False, note: str | None = None) -> None:
         """Record a server (replaces any record with the same name).
 
         ``lease_id`` may hold several ids separated by commas (one adopted
@@ -124,6 +124,7 @@ class ServerRecords:
         never treats such a record as stale, because releasing its lease resets
         the chips under a container that may still run; ``gozer reconcile`` or
         the user releases it. The key is written only when True.
+        ``note`` (optional) says why, for the Servers menu.
         """
         with self._locked():
             recs = [r for r in self.load() if r.get("name") != name]
@@ -131,6 +132,8 @@ class ServerRecords:
                    "lease_id": lease_id, "started_at": started_at}
             if unreapable:
                 rec["unreapable"] = True
+            if note:
+                rec["note"] = str(note)
             recs.append(rec)
             self._save(recs)
 

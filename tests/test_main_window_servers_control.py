@@ -210,6 +210,256 @@ def test_servers_control_callbacks_delegate_to_the_server_menu():
     assert bare._servers_extra_ready_keys() == set()
 
 
+def test_single_servers_control_mounted():
+    """SP-3d-5: ControlPanel -- and the servers_btn/server_status_box/
+    srv_log_revealer hide-calls that used to run right after ServersControl
+    was constructed (SP-3b state) -- is deleted entirely. ServersControl is
+    now the ONLY servers control the window builds; there is no ControlPanel
+    duplicate to hide because there is no ControlPanel."""
+    assert "self._controls = ControlPanel(" not in _SRC
+    assert "class ControlPanel(Gtk.Box):" not in _SRC
+    assert "self._controls._servers_btn.set_visible(False)" not in _SRC
+    assert "self._controls._server_status_box.set_visible(False)" not in _SRC
+    assert "self._controls._srv_log_revealer.set_visible(False)" not in _SRC
+
+
+def test_refresh_servers_popover_poll_retired():
+    """SP-3d-5: `ControlPanel._refresh_servers_popover` (and the whole class
+    it lived on) is deleted outright -- superseding the SP-3b-era state where
+    it was merely unreachable (hidden button, method still defined, per this
+    test's earlier version). `ServersControl` (the thing the popover is
+    replaced by) never polls at all -- it only ever renders from
+    `status_service.snapshot()` at construction and `subscribe()`s for
+    updates, so there's no replacement poll introduced either.
+    """
+    assert "def _refresh_servers_popover(self) -> None:" not in _SRC
+    assert "_reconcile_artgen_statuses" not in _SRC
+    # ServersControl has no polling of its own.
+    assert "status_all" not in _SC_SRC
+    assert "subscribe(" in _SC_SRC
+
+
+# ── Behavioral: the callbacks resolve keys + note the service + route logs ──
+#
+# Mirrors test_main_window_status_service.py's `_make_control_panel_double`
+# pattern: bind the REAL unbound methods onto a bare stand-in via `.__get__`
+# rather than constructing the full (heavy) MainWindow/ControlPanel.
+
+class _ImmediateThread:
+    """threading.Thread stand-in that runs its target synchronously on
+    start(), so these tests are deterministic instead of racing a real
+    daemon thread (same helper as test_main_window_status_service.py's)."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+class _Recorder:
+    """Fake ModelStatusService: records note_starting/note_stopping calls."""
+
+    def __init__(self):
+        self.starting: list = []
+        self.stopping: list = []
+
+    def note_starting(self, key):
+        self.starting.append(key)
+
+    def note_stopping(self, key):
+        self.stopping.append(key)
+
+
+class _FakeServersControl:
+    """Records append_server_log/set_server_launching calls; no real GTK."""
+
+    def __init__(self):
+        self.log_lines: list = []
+        self.launching: list = []
+
+    def append_server_log(self, line):
+        self.log_lines.append(line)
+
+    def set_server_launching(self, key, launching):
+        self.launching.append((key, launching))
+
+
+# ── Behavioral: ServerMenu (the callbacks' target) notes + launching ────────
+#
+# The old tests here bound MainWindow's callbacks and asserted `_sm.start(key)`
+# plus note_starting/note_stopping and the launching indicator. Since Task 8
+# the callbacks hand off to ServerMenu (asserted above); the same properties
+# are asserted on ServerMenu with a real worker thread and the real GLib loop.
+
+import threading as _threading
+import time as _time
+
+
+def _pump(until, timeout=5.0):
+    from gi.repository import GLib
+    ctx = GLib.MainContext.default()
+    end = _time.monotonic() + timeout
+    while _time.monotonic() < end:
+        while ctx.pending():
+            ctx.iteration(False)
+        if until():
+            return True
+        _time.sleep(0.01)
+    return until()
+
+
+class _Events:
+    """One ordered list shared by the fake service, control and widget."""
+
+    def __init__(self):
+        self.ev = []
+
+
+class _RecSvc:
+    def __init__(self, events, boom=False):
+        self.events, self.boom = events, boom
+
+    def note_starting(self, key):
+        self.events.ev.append(("note_starting", key))
+        if self.boom:
+            raise RuntimeError("boom")
+
+    def note_stopping(self, key):
+        self.events.ev.append(("note_stopping", key))
+        if self.boom:
+            raise RuntimeError("boom")
+
+
+class _RecWidget:
+    def __init__(self, events):
+        self.events = events
+        self.log_lines = []
+        self.launching = []
+
+    def append_server_log(self, line):
+        self.log_lines.append(line)
+
+    def set_server_launching(self, key, on):
+        self.launching.append((key, on))
+        self.events.ev.append(("launching", key, on))
+
+    def set_cancel_action(self, key, label, cb):
+        pass
+
+    def clear_cancel_action(self, key):
+        pass
+
+    def keep_log_open(self):
+        pass
+
+
+class _RecControl:
+    def __init__(self, events, kind="started", raises=False):
+        self.events, self.kind, self.raises = events, kind, raises
+
+    def start(self, key, **kw):
+        self.events.ev.append(("control.start", key))
+        if self.raises:
+            raise RuntimeError("tt exploded")
+        from server_control import StartOutcome
+        return StartOutcome(self.kind, "http://127.0.0.1:8000", "msg.", None)
+
+    def stop(self, server):
+        self.events.ev.append(("control.stop", server.key))
+        from server_control import StopOutcome
+        return StopOutcome("stopped", "stopped.")
+
+    def restart(self, s, **kw):
+        self.events.ev.append(("control.restart", s))
+        from server_control import StartOutcome
+        return StartOutcome("started", "u", "", None)
+
+
+def _menu(kind="started", raises=False, boom=False):
+    import server_menu
+    events = _Events()
+    w = _RecWidget(events)
+    ctl = _RecControl(events, kind, raises)
+    m = server_menu.ServerMenu(w, control_factory=lambda _c: ctl,
+                               status_service=_RecSvc(events, boom),
+                               confirm=server_menu.ConfirmBridge(None))
+    return m, w, events
+
+
+def _rs(key):
+    from server_view import RunningServer
+    return RunningServer(key=key, name=key, source="script", url="http://127.0.0.1:8000",
+                         host_is_local=True, port=8000, health="healthy", uptime_s=None,
+                         container=None, container_id=None, served_id=None, owner="app")
+
+
+def test_start_notes_before_server_control_and_lights_launching():
+    m, w, e = _menu()
+    m.start("wan2.2").join(5)
+    assert _pump(lambda: ("launching", "wan2.2", False) in e.ev)
+    assert e.ev.index(("launching", "wan2.2", True)) < e.ev.index(("note_starting", "wan2.2"))
+    assert e.ev.index(("note_starting", "wan2.2")) < e.ev.index(("control.start", "wan2.2"))
+    assert ("note_stopping", "wan2.2") not in e.ev
+    assert w.launching == [("wan2.2", True), ("wan2.2", False)]
+    assert any("wan2.2" in ln for ln in w.log_lines)
+
+
+def test_unsuccessful_start_clears_starting_after_the_outcome():
+    for kind in ("failed", "declined", "cancelled", "chips_held", "waiting_for_chips"):
+        m, w, e = _menu(kind=kind)
+        m.start("flux").join(5)
+        assert _pump(lambda: ("launching", "flux", False) in e.ev)
+        assert e.ev.index(("control.start", "flux")) < e.ev.index(("note_stopping", "flux")), kind
+    m, w, e = _menu(kind="already_running")
+    m.start("flux").join(5)
+    assert ("note_stopping", "flux") not in e.ev
+
+
+def test_raising_start_is_a_failure_and_clears_starting():
+    m, w, e = _menu(raises=True)
+    m.start("wan2.2").join(5)
+    assert _pump(lambda: any("Start failed" in ln for ln in w.log_lines))
+    assert ("note_stopping", "wan2.2") in e.ev
+    assert w.launching == [("wan2.2", True), ("wan2.2", False)]
+
+
+def test_note_failure_does_not_block_start():
+    m, w, e = _menu(boom=True)
+    m.start("wan2.2").join(5)
+    assert ("control.start", "wan2.2") in e.ev
+
+
+def test_stop_notes_stopping_after_a_stop_and_lights_launching():
+    m, w, e = _menu()
+    m.stop(_rs("flux")).join(5)
+    assert _pump(lambda: ("launching", "flux", False) in e.ev)
+    assert e.ev.index(("control.stop", "flux")) < e.ev.index(("note_stopping", "flux"))
+    assert w.launching == [("flux", True), ("flux", False)]
+
+
+def test_restart_notes_starting_and_restarts():
+    m, w, e = _menu()
+    m.restart("mochi").join(5)
+    assert _pump(lambda: ("launching", "mochi", False) in e.ev)
+    assert e.ev.index(("note_starting", "mochi")) < e.ev.index(("control.restart", "mochi"))
+    assert w.launching == [("mochi", True), ("mochi", False)]
+
+
+def test_direct_stop_paths_forget_the_record_on_their_worker():
+    """The status bar's Stop and the Create switch stop servers outside
+    ServerControl: both drop the menu's record (ServerControl.forget)."""
+    stop_body = _SRC[_SRC.index("def _on_stop_server(self) -> None:"):]
+    stop_body = stop_body[:stop_body.index("\n    def ")]
+    run = stop_body[stop_body.index("def run():"):]
+    assert "self._server_menu.forget(server_key)" in run
+    sw = _SRC[_SRC.index("def _perform_switch_then(self, plan, proceed) -> None:"):]
+    sw = sw[:sw.index("\n    def ")]
+    run2 = sw[sw.index("def run() -> None:"):]
+    assert run2.index("_sm.stop(plan.conflict)") < run2.index(
+        "self._server_menu.forget(plan.conflict)")
+
+
 # ── Behavioral: ServersControl's three widgets are independently mountable ──
 
 def test_servers_control_widgets_unparented_at_construction():

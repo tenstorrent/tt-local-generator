@@ -131,6 +131,11 @@ Notes for callers (Tasks 7 and 8):
   ``lease_id``. Anything reading records must split it.
 * ``reap_stale_leases`` must be passed the 12-char short container ids that
   ``tt model ps`` reports, and None when ``ps`` failed.
+  It never releases a lease whose chips gozer shows held by a process (a
+  server stopped outside ServerControl may have left its record while a new
+  server boots on those chips), and releases nothing when ``gozer status``
+  cannot be read. ``forget(key)`` drops the record of a server stopped by such
+  an outside path, under the same guard.
 * ``view_fn`` must refresh on each call (not a value cached for a whole poll
   interval), or the health waits slow down to that interval.
 * ``reset_fn`` is MainWindow's existing reset (``pipeline_engine._tt_smi_reset``);
@@ -194,6 +199,9 @@ _DOCKER_STOP_GRACE_S = 120
 _PROBE_TIMEOUT_S = 3.0
 # A row up longer than (now - our launch + slack) predates our launch.
 _UPTIME_SLACK_S = 30.0
+# gozer chip states that mean a process holds the chip.
+_HELD_STATES = frozenset({"HELD", "HELD-FOREIGN"})
+_CHIPS_IN_USE_NOTE = "chips are in use by another process"
 
 
 # --------------------------------------------------------------------------
@@ -1435,7 +1443,11 @@ class ServerControl:
         dropped only when it looks stale on two consecutive calls (the one
         confirming poll); the first miss only marks it. A record marked
         ``unreapable`` is never dropped. Only leases held in records are
-        released. Returns the released lease ids.
+        released. Before a release, ``gozer.status()`` is read: when a chip of
+        the lease shows a holder process (HELD, HELD-FOREIGN or a pid) the
+        lease is kept and the record marked unreapable ("chips are in use by
+        another process"); when the status cannot be read nothing is released
+        and the record stays for the next cycle. Returns the released lease ids.
         """
         if live_container_ids is None:
             return []
@@ -1450,6 +1462,7 @@ class ServerControl:
         live_ids = set(live_container_ids)
         eps = None if live_endpoints is None else set(live_endpoints)
         stale_now: set[tuple] = set()
+        stale_recs: dict[tuple, dict] = {}
         for r in self._records.load():
             if r.get("unreapable"):
                 continue
@@ -1461,11 +1474,40 @@ class ServerControl:
             else:
                 stale = (r.get("name"), r.get("port")) not in eps
             if stale:
-                stale_now.add(self._rec_ident(r))
+                ident = self._rec_ident(r)
+                stale_now.add(ident)
+                stale_recs[ident] = r
         first_miss = stale_now - self._suspects
         self._suspects = set(first_miss)
-        # Shield first-time misses from prune by presenting them as live.
-        for ident in first_miss:
+        shield = set(first_miss)
+        # Second miss: before a lease is released (which resets its chips),
+        # ask gozer whether a process holds them. A server stopped outside
+        # ServerControl (the status bar's Stop, the Create switch) leaves its
+        # record behind while a new server may already be booting on those
+        # chips. Held: keep the lease, mark the record unreapable. Status
+        # unreadable: release nothing this cycle (fail closed).
+        status = None
+        for ident in stale_now - first_miss:
+            r = stale_recs[ident]
+            if not _lease_ids(r.get("lease_id")):
+                continue
+            if status is None:
+                status = self._gozer_status()
+            verdict = self._lease_chips_in_use(r, status)
+            if verdict is None:
+                shield.add(ident)
+                self._suspects.add(ident)     # still stale: check again next cycle
+            elif verdict:
+                shield.add(ident)
+                self._suspects.discard(ident)
+                self._records.add(r.get("name"), r.get("port"), r.get("container_id"),
+                                  r.get("lease_id"), r.get("started_at"), unreapable=True,
+                                  note=_CHIPS_IN_USE_NOTE)
+                log.warning("lease %s of %s not released: %s", r.get("lease_id"),
+                            r.get("name"), _CHIPS_IN_USE_NOTE)
+        # Shield first-time misses (and the guarded records) from prune by
+        # presenting them as live.
+        for ident in shield:
             if ident[0] == "cid":
                 live_ids.add(ident[1])
             elif eps is not None:
@@ -1479,3 +1521,65 @@ class ServerControl:
                     log.warning("could not release stale lease %s of %s; gozer reconcile "
                                 "is the backstop", lid, r.get("name"))
         return released
+
+    def _gozer_status(self) -> dict:
+        try:
+            st = self._gozer.status()
+        except Exception:
+            log.exception("gozer status failed")
+            return {}
+        return st if isinstance(st, dict) else {}
+
+    def _lease_chips_in_use(self, rec: dict, status: dict) -> bool | None:
+        """True when a chip of this record's lease has a holder process, False
+        when none does, None when gozer's status cannot be read (fail closed).
+
+        ``gozer status`` does not print lease ids; a lease's chips are the rows
+        whose ``who`` is ours for this model (``who_for(<key>)``). No such row
+        means gozer no longer has the lease: releasing it resets nothing."""
+        chips = status.get("chips") if isinstance(status, dict) else None
+        if not isinstance(chips, list) or not chips:
+            return None
+        who = self.who_for(str(rec.get("name") or "").split("#", 1)[0])
+        for row in chips:
+            if not isinstance(row, dict) or row.get("who") != who:
+                continue
+            if str(row.get("state") or "").upper() in _HELD_STATES:
+                return True
+            if row.get("pids_holding") or row.get("pids"):
+                return True
+        return False
+
+    def forget(self, key: str) -> str:
+        """Drop the app's record for ``key`` after the server was stopped by a
+        path outside ServerControl. Its lease is released only when gozer shows
+        no process on the lease's chips; when they are held the record is kept
+        and marked unreapable; when gozer cannot be read the record is kept for
+        the next reap. Blocks (gozer); call off the GTK thread. Never raises.
+        Returns "none", "released", "kept" or "error"."""
+        try:
+            rec = next((r for r in self._records.load() if r.get("name") == key), None)
+            if rec is None:
+                return "none"
+            ids = _lease_ids(rec.get("lease_id"))
+            if not ids:
+                self._records.remove(key)
+                return "released"
+            verdict = self._lease_chips_in_use(rec, self._gozer_status())
+            if verdict is None:
+                log.warning("forget %s: gozer status unreadable; record kept", key)
+                return "kept"
+            if verdict:
+                self._records.add(rec.get("name"), rec.get("port"), rec.get("container_id"),
+                                  rec.get("lease_id"), rec.get("started_at"),
+                                  unreapable=True, note=_CHIPS_IN_USE_NOTE)
+                log.warning("forget %s: %s; lease kept", key, _CHIPS_IN_USE_NOTE)
+                return "kept"
+            for lid in ids:
+                if not self._gozer.release(lid):
+                    log.warning("forget %s: release of lease %s failed", key, lid)
+            self._records.remove(key)
+            return "released"
+        except Exception:
+            log.exception("forget %s failed", key)
+            return "error"
