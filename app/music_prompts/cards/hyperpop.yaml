@@ -1,0 +1,26 @@
+id: hyperpop
+kind: style
+name: Hyperpop
+aliases: [hyper pop, hyper-pop, bubblegum bass]
+family: pop
+inspiration: [SOPHIE, A. G. Cook, 100 gecs, Charli XCX]
+sound: >-
+  Maximalist, sugary electronic pop pushed to extremes, with blown-out bass,
+  glittering synths, clipped digital distortion and sudden switches between
+  genres.
+instruments: [distorted 808 bass, bright supersaw synths, glitchy drum programming, metallic synth hits]
+rhythm: Fast, frantic and hard-hitting, lurching between sections.
+harmony: Sweet, simple pop chords and hooks under harsh sound design.
+mood: Euphoric, chaotic, playful and overloaded.
+production: Loud, clipped and hyper-compressed, every sound pushed into the red.
+tempo_bpm: [130, 180]
+avoid: [gentle acoustic arrangements, soft dynamics]
+vocal: pitched-up, heavily auto-tuned vocals that sound almost cartoonish
+tags: [hyperpop, distorted 808, glitchy, maximalist, bubblegum synths, hyper-compressed]
+goes_with: [chip, electronic, dance]
+clashes_with: [ambient, scene, harp]
+notes: >-
+  Wikipedia: Hyperpop (PC Music, maximalist pop, the 2019 Spotify playlist,
+  search summary); MusicRadar: Exploring the vibrant components of hyperpop
+  (search summary); Soundtrap: What is hyperpop (pitched-up vocals, distorted
+  808s, search summary)

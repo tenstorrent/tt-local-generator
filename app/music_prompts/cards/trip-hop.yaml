@@ -1,0 +1,25 @@
+id: trip-hop
+kind: style
+name: Trip hop
+aliases: [trip-hop music, triphop, bristol sound]
+family: downtempo
+inspiration: [Massive Attack, Portishead, Blue Lines]
+sound: >-
+  Slow, smoky breakbeats with deep dub bass, dusty jazz and soul samples,
+  turntable scratches and cinematic strings, in a dark, late-night haze.
+instruments: [sampled breakbeats, deep bass, turntable scratches, electric piano, string samples, vinyl crackle]
+rhythm: Slow, heavy hip hop breakbeats that sit back behind the beat.
+harmony: Minor-key loops, jazzy chords and spy-film strings.
+mood: Dark, sensual, brooding and melancholy.
+production: Dusty samples, vinyl crackle, dub-style echo and a warm low end.
+tempo_bpm: [70, 100]
+avoid: [bright pop production, fast dance tempos]
+vocal: a breathy, intimate, mournful lead voice, or a low, half-whispered rap
+tags: [trip hop, slow breakbeats, dub bass, dusty samples, cinematic strings, scratches]
+goes_with: [reggae, jazz, post-rock, electronic]
+notes: >-
+  Wikipedia: Trip hop (Bristol in the early 1990s, slow tempos, hip hop and
+  electronica drawing on jazz, soul and dub, sampled drum loops with strings,
+  search summary); MasterClass: Trip hop music guide (search summary);
+  MusicTech: How trip-hop went from obscurity to chart domination (search
+  summary)

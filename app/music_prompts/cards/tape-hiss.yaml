@@ -1,0 +1,20 @@
+id: tape-hiss
+kind: texture
+name: Tape hiss
+aliases: [cassette hiss, tape noise, cassette tape sound, worn cassette, tape wobble]
+family: texture
+inspiration: []
+sound: >-
+  A soft bed of cassette tape hiss with gentle wow and flutter, a little
+  saturation and rolled-off highs, like a well-worn tape.
+instruments: [cassette tape, tape saturation]
+mood: Warm, nostalgic, intimate and hazy.
+production: Low fidelity, a slightly wobbly pitch and hiss under everything.
+avoid: [crisp digital clarity, a pristine high end]
+tags: [tape hiss, cassette, wow and flutter, lo-fi, saturation, warm]
+goes_with: [downtempo, folk, post-rock, ambient, pop]
+notes: >-
+  Splice: How tape machines shape the lo-fi sound (search summary); Abbey Road:
+  Adding a lo-fi vintage vibe to your track, with Waves Audio (a little
+  saturation and tape distortion, search summary); Wave Alchemy: Tapewave (wow
+  and flutter as random fluctuation, search summary)

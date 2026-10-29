@@ -1,0 +1,30 @@
+id: gospel-choir
+kind: vocal
+name: Gospel vocal
+aliases: [gospel choir, gospel, gospel singing, gospel song, black gospel, church choir]
+family: gospel
+inspiration: [Mahalia Jackson, The Edwin Hawkins Singers, Kirk Franklin]
+sound: >-
+  A soaring lead voice answered by a full gospel choir in call and response,
+  with rich harmony, handclaps on the backbeat and a Hammond organ swelling
+  underneath.
+instruments: [Hammond organ, piano, bass guitar, drum kit, tambourine, handclaps]
+rhythm: Handclaps on two and four, from slow, testifying ballads to fast shouts.
+harmony: Rich major-key church harmony with blue notes and gospel piano runs.
+mood: Joyful, uplifting, fervent and warm.
+production: A big, live church room sound.
+tempo_bpm: [70, 140]
+avoid: [robotic vocal effects, deadpan delivery]
+lyric_themes: [rising up in the morning, a light that leads me home, carrying each other through, a river to cross, joy after the storm]
+vocal: a powerful soloist with long, melismatic runs, answered by a full choir in call and response
+lead_instrument: Hammond organ
+key: major key
+tags: [gospel choir, call and response, hammond organ, handclaps, soaring lead, uplifting]
+goes_with: [funk, jazz, pop, americana, reggae]
+ambiguous: true
+cues: [choir, church, song, singing, singer, music, style, organ, praise, hymn, vocal, vocals, record]
+notes: >-
+  Carnegie Hall: Timeline of African American music, gospel choir (search
+  summary); Fiveable: Gospel's musical characteristics and performance styles
+  (call and response between soloist and choir, handclaps on the backbeat,
+  Hammond organ, search summary)

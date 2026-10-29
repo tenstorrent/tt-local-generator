@@ -1,0 +1,105 @@
+# Style cards
+
+A style card describes how something sounds, in plain words. The music prompt
+library uses cards to turn a name ("Tortoise-like") into a description a music
+model can use. Artist names stay out of rendered prompts unless the caller asks
+for them.
+
+## Where cards live
+
+- Shipped cards: `app/music_prompts/cards/*.yaml`.
+- User cards: `~/.config/tt-local-generator/music_styles/*.yaml`. The folder may
+  be absent. A user card with the same `id` as a shipped card replaces it.
+
+One file holds one card (a mapping) or several (a list of mappings). A file that
+is not valid YAML is logged and skipped. A card that fails validation is logged
+and skipped; the other cards still load. If two cards in the same folder share
+an `id`, the first (by file name) is kept and the repeat is logged.
+
+## Fields
+
+Required for every card: `id`, `kind`, `name`, `family`, `sound`.
+Artist cards also require `parent`.
+
+| Field | Meaning |
+|---|---|
+| `id` | Unique key, lowercase with hyphens (`post-rock`). |
+| `kind` | `style`, `artist`, `scene`, `instrument`, `vocal`, `texture` or `era`. |
+| `name` | Display name. It is also matched as an alias. |
+| `aliases` | Other names and phrases that should find this card. |
+| `family` | Cluster tag the wand uses to mix different families. The shipped set uses `post-rock`, `jazz`, `funk`, `electronic`, `psych`, `jam`, `chip`, `folk`, `pop`, `scene`, `reggae`, `rock`, `world`, `latin`, `soundtrack`, `americana`, `ambient`, `downtempo`, `dance`, `gospel`, `chamber` and `texture`. The wand never pairs two main picks of one family, so a new card in an existing family mixes less often. An artist card uses its parent style's family. |
+| `inspiration` | Artists and records the card draws on. Shown in the UI, never put in a prompt by default. |
+| `sound` | One to three plain sentences. Never names an artist. Start with an ordinary word: a caption may print it after the style name ("Post-rock: mostly instrumental rock ..."), which lowercases the first letter. |
+| `instruments`, `rhythm`, `harmony`, `mood`, `production` | Short plain descriptions. |
+| `tempo_bpm` | `[low, high]` whole numbers (floats and booleans are rejected), with 0 < low <= high. Styles need it; scenes and instruments may omit it. |
+| `avoid` | Things to leave out. Shown in the notes, never written into a prompt. |
+| `lyric_themes` | Topics a sung layer can be about (vocal cards, singing styles). |
+| `vocal` | How the voice sounds. On a vocal card it is the vocal layer. On a style or artist card whose voice defines it (Kraftwerk, P-funk) it is written only when the prompt sings, as its own clause after the sound; an instrumental prompt never shows it. |
+| `key` | The key, only when it is true of the style (`major key`, `D minor`). Optional; most cards leave it empty. Used in tag and caption prompts; the base card's key wins, else a vocal card's. |
+| `lead_instrument` | Vocal cards: the instrument that carries the melody when the model cannot sing (Stable Audio). Optional; the prompt says "plaintive <lead_instrument> lead line carrying a <style> melody", or "plaintive lead line carrying a <style> melody" without one. The bluegrass vocal card uses `dobro` (the resonator guitar of bluegrass; pedal steel is a country instrument). |
+| `tags` | Short tag forms for tag-style prompts. |
+| `goes_with`, `clashes_with` | Card ids or family names the wand favours or avoids. An entry that names nothing is logged and kept as a plain family tag. |
+| `ambiguous` | True when the name is also an ordinary word (Tortoise). In a sentence the parser then needs a cue word, a form word or a capital letter. The name typed on its own ("Tortoise", "Tortoise style") or next to another matched card still matches. |
+| `cues` | Words that confirm an ambiguous card when they appear within five words. |
+| `parent` | For `artist` cards, the `id` of the style card it points to. |
+| `notes` | Sources (two or more) or the single word `unverified`. |
+
+List fields (`aliases`, `instruments`, `avoid`, `tags` and so on) must be YAML lists of strings; text fields must be strings. A card with a wrong type is skipped with a message.
+`avoid` never goes into a prompt (music models tend to hear "no X" as "X"); the translator lists it in its notes as "Not asked for: ...". Entries that mention singing, vocals, verses, choruses or lyrics are left out of that note when the user asks for a vocal or an instrumental.
+If a card's own text does name an artist or an `inspiration` entry, the translator replaces it with the style name, but write the card so it does not need that.
+An artist card whose `parent` names no card, or a card that is not a style, is kept and a warning is logged. A missing or empty shipped folder logs a warning.
+
+If two cards share a normalised alias, `by_alias[key]` holds every id, in card order: shipped cards first (by file name), then new user ids. A user card that overrides a shipped id keeps the original position.
+
+`by_alias` normalises names: lowercase, hyphens and underscores read as spaces,
+runs of spaces collapsed. "Post-Rock", "post_rock" and "post  rock" are one key.
+
+## Adding a card
+
+1. Copy a shipped card of the same `kind` and change every field.
+2. Write `sound` fresh in your own words. Do not copy text from a source and do
+   not name an artist in it.
+3. For an artist card, put the artist in `name` and `inspiration`, set `parent`
+   to a style card id, and describe the artist's sound in `sound` with
+   instruments, rhythm and production.
+4. Record at least two sources in `notes`, or write `unverified`.
+5. For a shipped card, run `/usr/bin/python3 -m pytest tests/test_music_cards.py -q`.
+   For a user card, drop the file in the user folder and restart the app; check
+   the log for "music card ... skipped" lines if it does not show up.
+
+## Writing `sound` so it renders well
+
+- Keep it to about 200 characters. A caption shows the base card's whole
+  `sound` and each layer's whole `sound` within a 450-character budget, so a
+  long `sound` pushes the other layers out of a wand pick.
+- The generic dialect uses only the first sentence: make that sentence carry the
+  style on its own.
+- A caption prints `Style name: <sound>`, so do not start `sound` with a label
+  and a colon of its own. When `sound` already contains the card's name (the
+  scene cards do), the label is not repeated.
+- Keep `sound`, `tags` and `instruments` about the instrumental sound. A voice
+  that defines the style (P-funk chants, Kraftwerk's deadpan vocals) goes in
+  `vocal`, which is shown only when the prompt sings.
+  `tests/test_music_shipped_cards.py` scans every instrumental prompt for voice
+  words (vocal, voice, singing, choir, chant, vocoder, spoken, lyrics). Never
+  write "instrumental": the request or the dialect decides that.
+- `avoid` entries are matched as plain text by tests. Make them specific, such
+  as "a full rock drum kit"; a bare "drums" collides with words other cards use.
+
+## Review checklist (for each new or changed card)
+
+1. `parse` finds the card for its name and for each alias, and a longer alias
+   that contains it (Parliament-Funkadelic) still wins.
+2. `sound` names no artist and no `inspiration` entry, and says nothing about
+   being instrumental.
+3. Instruments, era and tempo range are right for the style; anything you are
+   unsure of is listed in the review sheet.
+4. `notes` names two sources you actually read, or says `unverified`.
+5. `notes` sources each read "Publisher: title" (or are a URL), separated by
+   semicolons, with at least two different publishers. Keep semicolons out of
+   the parenthetical remarks.
+6. `goes_with` and `clashes_with` name ids or families that exist (the loader
+   logs a warning otherwise, and `tests/test_music_shipped_cards.py` fails).
+7. Render `"<name>-like song"` in all three dialects and read every output:
+   no repeated words, no debris, no artist name.
+8. Run `/usr/bin/python3 -m pytest tests/test_music_cards.py tests/test_music_shipped_cards.py -q`.

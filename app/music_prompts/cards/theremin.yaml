@@ -1,0 +1,23 @@
+id: theremin
+kind: instrument
+name: Theremin
+aliases: [thereminvox, theremin melody, theremin lead]
+family: soundtrack
+inspiration: [Clara Rockmore, Samuel Hoffman, The Day the Earth Stood Still]
+sound: >-
+  An eerie, wavering electronic tone that glides between notes with a wide
+  vibrato, straight out of a 1950s science fiction film score.
+instruments: [theremin]
+rhythm: Free, rubato phrasing with long gliding notes.
+harmony: A single melodic line sliding between pitches.
+mood: Eerie, otherworldly, haunting and playful.
+production: Up front, with spring reverb.
+avoid: [crisp synth arpeggios, a staccato attack]
+tags: [theremin, eerie glissando, wide vibrato, 1950s sci-fi, otherworldly]
+goes_with: [post-rock, electronic, rock, psych, chamber]
+notes: >-
+  Reverb: The sound of early sci-fi, Samuel Hoffman's theremin (the 1951 score
+  that made it the sound of outer space, search summary); Mental Floss: Audio
+  invasion, how the theremin went from Soviet labs to Hollywood (search
+  summary); HuffPost: From Russia with love, the theremin (the spooked warble,
+  search summary)

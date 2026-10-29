@@ -71,14 +71,14 @@ def test_prompt_ready_does_not_mask_a_starting_video_server():
 # ── Per-segment resolution ───────────────────────────────────────────────────
 
 def test_every_segment_key_is_always_present():
-    """All four segments resolve on an empty snapshot — the bar never reflows."""
+    """All five segments resolve on an empty snapshot — the bar never reflows."""
     states = _states({})
     assert set(states) == set(ss.SEGMENT_KEYS)
     assert all(v == Status.OFF for v in states.values())
 
 
-def test_segment_order_is_prompt_image_video_artgen():
-    assert ss.SEGMENT_KEYS == ("prompt", "image", "video", "artgen")
+def test_segment_order_is_prompt_image_video_artgen_music():
+    assert ss.SEGMENT_KEYS == ("prompt", "image", "video", "artgen", "music")
 
 
 def test_ready_wins_over_starting_within_one_segment():

@@ -1,0 +1,26 @@
+id: spaghetti-western
+kind: style
+name: Spaghetti western score
+aliases: [spaghetti western, spaghetti western soundtrack, spaghetti western music, western film score, italian western score]
+family: soundtrack
+inspiration: [Ennio Morricone, A Fistful of Dollars, The Good the Bad and the Ugly]
+sound: >-
+  Sparse, dramatic film music for a dusty showdown, with twangy electric guitar,
+  lonely whistling, harmonica, a ringing trumpet and big, slow-building
+  orchestral climaxes.
+instruments: [twangy electric guitar, whistling, harmonica, trumpet, orchestra, bells, timpani]
+rhythm: Slow and suspenseful, then galloping, with long held pauses before a big entrance.
+harmony: Minor-key themes and bold, simple chords that swell into grand climaxes.
+mood: Tense, lonely, epic and wry.
+production: Dry close-up solo instruments against a huge echoing orchestra.
+tempo_bpm: [60, 120]
+avoid: [modern trap drums, glossy synth pads]
+vocal: a wordless choir and lone, wailing voices rising in the climaxes
+tags: [spaghetti western, twangy guitar, whistling, harmonica, trumpet, epic orchestra]
+goes_with: [rock, folk, scene, post-rock]
+notes: >-
+  Wikipedia: Spaghetti Western (unusual sounds and instruments in the first
+  Dollars score, sacral drama for the showdowns); Reverb: Why is spaghetti
+  western music so cool (twangy, electric-guitar-heavy scores on small budgets,
+  search summary); TV Tropes: Ennio Morricone (harmonica and whistling for a
+  lone hero, search summary)

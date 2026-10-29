@@ -57,6 +57,12 @@ def test_sort_mediums_visual_first_is_stable_and_safe():
     assert [m.id for m in out] == ["video", "image", "mystery"]
 
 
+def _no_music(mediums):
+    """These tests are about native and artgen chips. Music is always appended last (see test_music_worker.py)."""
+    assert mediums[-1].id == "music"
+    return mediums[:-1]
+
+
 def test_discover_mediums_filters_animatediff_name():
     ms = cm.discover_mediums(artgen_names=["verse", "animatediff", "ansi"])
     ids = [m.id for m in ms]
@@ -68,12 +74,12 @@ def test_discover_mediums_filters_animatediff_name():
 # ── Native mediums: always present, always first, deterministic order ────────
 
 def test_native_mediums_present_first_and_in_order():
-    mediums = cm.discover_mediums(artgen_names=[])
+    mediums = _no_music(cm.discover_mediums(artgen_names=[]))
     assert [m.id for m in mediums] == ["image", "video"]
 
 
 def test_native_mediums_have_expected_kind_and_source():
-    mediums = {m.id: m for m in cm.discover_mediums(artgen_names=[])}
+    mediums = {m.id: m for m in _no_music(cm.discover_mediums(artgen_names=[]))}
     assert mediums["image"].kind == "image"
     assert mediums["video"].kind == "video"
     for m in mediums.values():
@@ -84,7 +90,7 @@ def test_native_mediums_have_expected_kind_and_source():
 
 
 def test_empty_artgen_names_returns_only_native():
-    mediums = cm.discover_mediums(artgen_names=[])
+    mediums = _no_music(cm.discover_mediums(artgen_names=[]))
     assert len(mediums) == 2
     assert all(m.source == "native" for m in mediums)
 
@@ -103,7 +109,7 @@ def test_one_medium_per_artgen_generator_name():
 
 def test_artgen_mediums_follow_native_and_preserve_given_order():
     names = ["ansi", "verse", "palette"]
-    mediums = cm.discover_mediums(artgen_names=names)
+    mediums = _no_music(cm.discover_mediums(artgen_names=names))
     assert [m.id for m in mediums] == ["image", "video", "ansi", "verse", "palette"]
 
 
@@ -158,12 +164,12 @@ def test_raising_artgen_names_falls_back_to_native_only():
         def __iter__(self):
             raise RuntimeError("plugin registry unavailable")
 
-    mediums = cm.discover_mediums(artgen_names=_Boom())
+    mediums = _no_music(cm.discover_mediums(artgen_names=_Boom()))
     assert [m.id for m in mediums] == ["image", "video"]
 
 
 def test_none_artgen_names_falls_back_to_native_only():
-    mediums = cm.discover_mediums(artgen_names=None)
+    mediums = _no_music(cm.discover_mediums(artgen_names=None))
     assert [m.id for m in mediums] == ["image", "video"]
 
 
@@ -181,7 +187,7 @@ def test_one_bad_generator_name_does_not_take_down_the_rest():
 def test_native_override_replaces_default_native_list():
     custom = [cm.Medium(id="widget", label="Widget", icon="⚙", kind="image",
                          source="native", generator=None)]
-    mediums = cm.discover_mediums(artgen_names=[], native=custom)
+    mediums = _no_music(cm.discover_mediums(artgen_names=[], native=custom))
     assert [m.id for m in mediums] == ["widget"]
 
 
@@ -190,7 +196,7 @@ def test_native_override_replaces_default_native_list():
 def test_default_mediums_wraps_artgen_all_names(monkeypatch):
     import artgen
     monkeypatch.setattr(artgen, "all_names", lambda: ["verse", "ansi"])
-    mediums = cm.default_mediums()
+    mediums = _no_music(cm.default_mediums())
     assert [m.id for m in mediums] == ["image", "video", "verse", "ansi"]
 
 
@@ -204,7 +210,7 @@ def test_default_mediums_never_crashes_if_artgen_import_fails(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
-    mediums = cm.default_mediums()
+    mediums = _no_music(cm.default_mediums())
     assert [m.id for m in mediums] == ["image", "video"]
 
 
@@ -258,9 +264,9 @@ def test_discover_mediums_uses_llm_for_default_true_when_not_provided():
 def test_discover_mediums_native_mediums_always_uses_llm_true():
     """Native mediums have no generator at all -- `uses_llm` is unused for
     them and must stay the True default regardless of `uses_llm_for`."""
-    mediums = cm.discover_mediums(
+    mediums = _no_music(cm.discover_mediums(
         artgen_names=[], uses_llm_for=lambda name: False
-    )
+    ))
     assert all(m.uses_llm is True for m in mediums)
 
 

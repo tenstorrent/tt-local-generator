@@ -1,0 +1,23 @@
+id: math-rock
+kind: style
+name: Math rock
+aliases: [mathrock, math-rock music]
+family: rock
+inspiration: [Slint, Don Caballero]
+sound: >-
+  Intricate, restless rock in odd and shifting meters, with clean, tapped
+  guitar figures that interlock and stop on a dime over busy, precise drumming.
+instruments: [clean electric guitars, two-hand tapping, bass guitar, drum kit, loop pedal]
+rhythm: Odd meters such as 5/4 and 7/8 that change mid-song, with sudden stops and syncopation.
+harmony: Bright, angular guitar lines and open, extended chords over repeating riffs.
+mood: Nervy, playful, precise and bright.
+production: Dry and close, every guitar note clear.
+tempo_bpm: [110, 170]
+avoid: [a straight four-four pop groove, walls of distortion]
+tags: [math rock, odd time signatures, tapped guitar, clean guitar, angular, polyrhythm]
+goes_with: [post-rock, jazz, electronic]
+notes: >-
+  Wikipedia: Math rock (odd meters such as 5/4, 7/8 and 11/8, clean tones,
+  tapping, roots in progressive rock and post-rock, search summary); Riffhard:
+  How to play math rock on the guitar (tapping, loop pedals, string skipping,
+  search summary)

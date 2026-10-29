@@ -1,0 +1,33 @@
+id: bluegrass-vocal
+kind: vocal
+name: Bluegrass vocal
+aliases: [bluegrass, bluegrass song, bluegrass singing, bluegrass singer]
+family: folk
+inspiration: [Bill Monroe, Ralph Stanley, Alison Krauss]
+sound: >-
+  A high lonesome lead voice with tight close harmony behind it, singing
+  plain-spoken stories with a little twang. The voice is dry and sits forward in
+  the mix.
+instruments: [acoustic guitar, banjo, fiddle, mandolin, upright bass, dobro]
+rhythm: Driving, even acoustic strumming with the mandolin chopping on beats two and four.
+harmony: Major-key and modal folk chords with two or three part vocal harmony on the chorus, the tenor above the lead.
+mood: Earnest, lonesome, rural and warm.
+production: Dry, close and acoustic; voices and instruments forward with little reverb.
+tempo_bpm: [100, 160]
+avoid: [electronic drums, heavy distortion, auto-tune effects]
+lyric_themes: [a long road home, a river and the hills, a lost love, hard work and small wages, a hometown left behind]
+vocal: high lonesome lead with tight close harmony, plain-spoken, a little twang, dry and forward
+lead_instrument: dobro
+key: major key
+tags: [bluegrass, high lonesome, close harmony, acoustic, banjo, twang]
+goes_with: [folk, post-rock, jam]
+# "bluegrass" alone names the music as much as the voice ("a bluegrass band instrumental jam"), so in a
+# sentence the bare word needs a vocal cue; the longer aliases ("bluegrass song") need none.
+ambiguous: true
+cues: [singing, sing, sings, sang, sung, singer, singers, vocal, vocals, voice, voices, lyrics, harmonies]
+notes: >-
+  Wikipedia: Bluegrass music (core instruments, often joined by the resonator
+  guitar or dobro, high lonesome sound, lead with tenor above and baritone
+  below); New World Encyclopedia: Bluegrass music (search summary); Fiveable:
+  Bluegrass music study guide (mandolin chop on beats two and four, search
+  summary)

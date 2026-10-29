@@ -1,0 +1,27 @@
+id: tortoise
+kind: artist
+name: Tortoise
+aliases: []
+family: post-rock
+parent: post-rock
+inspiration: [Tortoise, Millions Now Living Will Never Die, TNT]
+sound: >-
+  Interlocking clean guitars, vibraphone and marimba over dub-weighted bass and
+  loose, jazz-inflected drums. Slow-building crescendos with a warm analog room
+  sound, in the Chicago post-rock tradition.
+instruments: [clean electric guitars, vibraphone, marimba, dub-style bass, jazz-inflected drums, extra percussion, analog synth]
+rhythm: Loose, swung and interlocking; percussion that shifts feel between sections.
+harmony: Jazz-touched chords over repeating bass figures, with long modal stretches.
+mood: Cool, wistful, curious and unhurried.
+production: Warm analog room sound, careful studio edits and a dub-influenced low end.
+tempo_bpm: [80, 125]
+avoid: [distorted guitar walls, glossy modern pop polish]
+tags: [chicago post-rock, vibraphone, dub bass, jazz-inflected drums, marimba, warm analog]
+goes_with: [jazz, electronic]
+ambiguous: true
+cues: [band, album, record, song, music video, post-rock, vibraphone]
+notes: >-
+  Wikipedia: Tortoise (band) (three percussionists switching between drums,
+  vibraphone and marimba, with krautrock, dub, minimalism, electronica and
+  jazz); RNZ: Post-rockers Tortoise can still surprise 35 years into their
+  career (search summary); Treble: Tortoise, Touch review (search summary)

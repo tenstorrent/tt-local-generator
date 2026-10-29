@@ -1,0 +1,27 @@
+id: big-band-swing
+kind: style
+name: Big band swing
+aliases: [big band, big band jazz, swing band, swing era, swing music, swing]
+family: jazz
+inspiration: [Count Basie, Duke Ellington, Benny Goodman, One O'Clock Jump]
+sound: >-
+  Swing-era dance jazz from a big band, with sections of saxophones, trumpets
+  and trombones trading punchy riffs over a walking bass and a light, swinging
+  rhythm section.
+instruments: [saxophone section, trumpet section, trombone section, piano, rhythm guitar, upright bass, drum kit]
+rhythm: A relaxed but driving swing in four, the bass walking and the guitar comping on every beat.
+harmony: Blues and popular-song chord changes voiced in full section chords.
+mood: Joyful, brassy, elegant and buoyant.
+production: Warm, roomy and live, like a dance hall.
+tempo_bpm: [120, 200]
+avoid: [rock drum beats, synthesizers]
+tags: [big band, swing, horn sections, riffs, walking bass, 1930s]
+goes_with: [funk, pop, scene, soundtrack]
+ambiguous: true
+cues: [band, era, orchestra, dance, dancing, jazz, horns, music, style, song, tune, record]
+notes: >-
+  Encyclopedia.com: Basie, Count (brass and reed sections playing riff-based
+  call and response over the rhythm section, search summary); Jazz in America:
+  The swing era lesson plan (section writing and riffs, search summary);
+  Fiveable: Swing era big bands study guide (walking bass on all four beats,
+  search summary)

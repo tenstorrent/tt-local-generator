@@ -1,0 +1,28 @@
+id: kraftwerk
+kind: artist
+name: Kraftwerk
+aliases: []
+family: electronic
+parent: electropop
+inspiration: [Kraftwerk, Trans-Europe Express, The Man-Machine, Computer World]
+sound: >-
+  Precise, machine-made electronic pop, with exact drum machine patterns, simple
+  repeating synth melodies and a pulsing sequencer bass.
+instruments: [synthesizers, drum machine, electronic percussion, sequencer]
+rhythm: Exact, mechanical patterns that repeat with no swing.
+harmony: Spare, catchy melodies and countermelodies over a few chords.
+mood: Cool, deadpan, futuristic and quietly playful.
+production: Clean, sparse and spacious.
+tempo_bpm: [100, 130]
+avoid: [rock guitar riffs, acoustic drum kit, emotive vocal runs]
+vocal: >-
+  plain, deadpan vocals, half spoken and half sung, with vocoder voices singing
+  about travel, machines and modern life
+tags: [robot pop, electronic percussion, minimal synth melodies, sequencer, precise, drum machine]
+goes_with: [pop, funk]
+notes: >-
+  Wikipedia: Kraftwerk (robot pop, sparse arrangements, repetitive rhythms,
+  vocoder, drum machines, home-made electronic percussion); Audioxide:
+  Kraftwerk, The Man-Machine review (vocoder-lined vocals, sparse arrangements,
+  search summary); Rolling Stone: The Man-Machine review, 1978 (spare melodies
+  repeated, search summary)

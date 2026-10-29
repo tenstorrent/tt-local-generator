@@ -1,0 +1,23 @@
+id: krautrock
+kind: style
+name: Krautrock
+aliases: [kraut rock, kraut-rock, motorik, motorik beat]
+family: psych
+inspiration: [Neu!, Faust, Amon Düül II, Ash Ra Tempel]
+sound: >-
+  Hypnotic, repetitive rock from early-1970s West Germany, riding a steady
+  motorik beat or a free-form jam on one groove, with fuzzy, echoing guitars,
+  droning organ and early electronics.
+instruments: [electric guitar, bass guitar, drum kit, organ, early synthesizers, tape echo]
+rhythm: A steady, kick-heavy motorik pulse in four, or loose free-form jamming over one groove.
+harmony: One-chord drones and modal vamps with very few chord changes.
+mood: Hypnotic, forward-moving, exploratory and strange.
+production: Raw and roomy, with tape echo, studio effects and long edits.
+tempo_bpm: [110, 150]
+avoid: [verse-chorus pop hooks, glossy modern production]
+tags: [krautrock, motorik beat, hypnotic repetition, fuzz guitar, tape echo, drone]
+goes_with: [electronic, post-rock]
+notes: >-
+  Wikipedia: Krautrock (motorik beat, long-form repetition, improvisation,
+  electronics, West Germany late 1960s to early 1970s); Wikipedia: Motorik; The
+  Quietus: How Motorik Infected The Mainstream, by David Stubbs (search summary)

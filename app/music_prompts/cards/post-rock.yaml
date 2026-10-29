@@ -1,0 +1,25 @@
+id: post-rock
+kind: style
+name: Post-rock
+aliases: [post rock, postrock]
+family: post-rock
+inspiration: [Slint, Mogwai, Godspeed You! Black Emperor, Tortoise]
+sound: >-
+  Rock played for texture and atmosphere, with clean, interlocking guitars and a
+  patient rhythm section building slowly from quiet, repeating figures to loud
+  crescendos.
+instruments: [clean electric guitars, bass guitar, drum kit, vibraphone, piano, subtle synth pads]
+rhythm: Steady, often loose or odd-metre drumming that holds a groove for a long time before it builds.
+harmony: Simple repeating chord loops, open fifths and modal colours; tension comes from layering rather than from chord changes.
+mood: Wistful, patient, cinematic, sometimes tense.
+production: Roomy, natural and unhurried; wide dynamics with long quiet passages and no heavy compression.
+tempo_bpm: [70, 130]
+avoid: [verse-chorus song structure, short pop hooks, glossy radio polish]
+tags: [post-rock, atmospheric, slow build, clean guitars, crescendo, dynamic]
+goes_with: [jazz, electronic, folk]
+clashes_with: [chip]
+notes: >-
+  Wikipedia: Post-rock (texture over riffs, vocals often absent or used as
+  texture, gradual builds); RNZ: Post-rockers Tortoise can still surprise 35
+  years into their career (search summary); Treble: Tortoise, Touch review
+  (search summary)

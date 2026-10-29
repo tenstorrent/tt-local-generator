@@ -27,6 +27,8 @@ class ChipEntry:
     text: str           # text appended to prompt on click
     tip: str = ""       # tooltip (empty string if omitted)
     surprise: bool = False  # if True, text is auto-generated; omit text in YAML
+    freetext: bool = False  # if True, the user types a value; `text` is a template
+                            # with one "{}" (e.g. "in the style of {}")
 
 
 @dataclass
@@ -90,6 +92,7 @@ def load_chips(tab: str, config_path: Path | None = None) -> list[ChipCategory]:
                     text=text if text is not None else "",
                     tip=chip_raw.get("tip", ""),
                     surprise=is_surprise,
+                    freetext=bool(chip_raw.get("freetext", False)),
                 ))
 
         if matched:

@@ -1,0 +1,24 @@
+id: jam-band
+kind: style
+name: Jam band
+aliases: [jamband, jam rock, jam band music]
+family: jam
+inspiration: [Grateful Dead, Allman Brothers Band, Phish, Widespread Panic]
+sound: >-
+  Loose, warm rock that blends country, folk, blues and jazz, with songs
+  stretched into long improvised jams where the players listen and react to each
+  other.
+instruments: [electric lead guitar, rhythm guitar, electric bass, drum kit, organ, piano]
+rhythm: Relaxed shuffles and grooves that can stretch, speed up or drift during a jam.
+harmony: Simple country and folk chord changes, opened up into long modal vamps for soloing.
+mood: Friendly, loose, exploratory and communal.
+production: Live, roomy and natural, like a concert recording.
+tempo_bpm: [85, 140]
+avoid: [tight radio edits, drum machines]
+tags: [jam band, extended improvisation, noodling guitar, americana rock, loose groove, live feel]
+goes_with: [folk, jazz, post-rock]
+notes: >-
+  Wikipedia: Jam band (extended improvisation over songs, genre blending, live
+  shows, Grateful Dead and Allman Brothers Band as models); Wikipedia: Grateful
+  Dead; Saving Country Music: Vintage Album Review, Workingman's Dead (search
+  summary, about the Grateful Dead only)

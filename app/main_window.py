@@ -48,6 +48,7 @@ from app_settings import settings as _settings
 from chip_config import load_chips as _load_chips
 from animate_picker import InputWidget, PickerPopover
 from artgen_gallery import ArtgenGallery
+from audio_gallery import AudioGallery, AudioDetail
 from artgen_detail import ArtgenDetail
 from artgen_render import AnimatedGifWidget
 import artgen_kind
@@ -64,6 +65,8 @@ from worker import (
     AnimateGenerationWorker,
     GenerationWorker,
     ImageGenerationWorker,
+    MusicGenerationWorker,
+    scrub_token as worker_scrub,
 )
 import attractor
 import prompt_client
@@ -1561,6 +1564,7 @@ popover.picker-popover > contents {
 .poss-grad-video { background-image: linear-gradient(135deg, #123f4a, #e0a24a); }
 .poss-grad-gif   { background-image: linear-gradient(135deg, #1a2b4a, #7d3a8f); }
 .poss-grad-text  { background-image: linear-gradient(135deg, #0b1f28, #2b6373); }
+.poss-grad-audio { background-image: linear-gradient(135deg, #1b2a3f, #c2566b); }
 """
 
 # ── Prompt component chips ────────────────────────────────────────────────────
@@ -1718,6 +1722,10 @@ _VIDEO_MODEL_ID_TO_KEY: dict = {v: k for k, v in _VIDEO_MODEL_IDS.items()}
 # "animatediff"`, `self._image_model = "flux"` in `ControlPanel.__init__`) so
 # a caller that omits model selection entirely still behaves the way it did
 # before `_on_generate` read those defaults off `self._controls`.
+# How often a music job asks its server for progress, and how often the Music server list is refreshed (seconds).
+_MUSIC_POLL_S = 2.0
+_MUSIC_DISCOVERY_INTERVAL_S = 10
+
 _DEFAULT_VIDEO_KEY = "animatediff"
 _DEFAULT_IMAGE_KEY = "flux"
 
@@ -1939,6 +1947,11 @@ def _make_scalable_thumb(path: str, min_width: int, min_height: int,
     lbl = Gtk.Label(label=placeholder)
     lbl.add_css_class("muted")
     return lbl
+
+
+def _gallery_page_for_source(source: str) -> str:
+    """The `_gallery_stack` page that shows a medium/source: songs have their own Audio page."""
+    return "audio" if source in ("music", "audio") else source
 
 
 # ── Queue item ─────────────────────────────────────────────────────────────────
@@ -4517,6 +4530,7 @@ class _StatusBar(Gtk.Box):
         # a video is being made is exactly the kind of true-but-misleading the
         # by-function bar exists to remove.
         self._seg_busy: dict = {}
+        self._seg_detail: dict = {}  # segment key -> tooltip text used while READY (Music: its servers)
 
         for _seg_key, _seg_label, _caps in _status_segments.SEGMENTS:
             holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -4673,7 +4687,8 @@ class _StatusBar(Gtk.Box):
             self._seg_names[seg_key].set_tooltip_text(f"{label}: {busy} generating")
             return
         if state == Status.READY:
-            tip = f"{label}: ready"
+            # A segment may carry a more specific line (Music names its servers).
+            tip = self._seg_detail.get(seg_key) or f"{label}: ready"
         elif state == Status.STARTING:
             tip = f"{label}: {self._seg_phase[seg_key]}… {self._elapsed_str(seg_key)}"
         elif state == Status.ERROR:
@@ -4728,6 +4743,13 @@ class _StatusBar(Gtk.Box):
         self._seg_state[seg_key] = state
         self._paint_segment(seg_key)
         self._sync_segment_timer()
+
+    def set_segment_detail(self, seg_key: str, text: str) -> None:
+        """Set the tooltip a READY segment shows (empty clears it). Main thread only."""
+        if seg_key not in self._seg_state:
+            return
+        self._seg_detail[seg_key] = text or ""
+        self._apply_segment_tooltip(seg_key)
 
     def update_segments(self, states: dict) -> None:
         """Repaint every segment from a `status_segments.segment_states()` map.
@@ -5905,6 +5927,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._gallery_stack.add_named(self._animate_gallery, "animate")
         self._gallery_stack.add_named(self._image_gallery, "image")
         self._gallery_stack.add_named(self._artgen_gallery, "artgen")
+        # Songs (media_type="audio"): own page and own right-pane detail, wired like the artgen pair.
+        self._audio_gallery = AudioGallery()
+        self._audio_gallery.on_card_activated = self._on_audio_card_selected
+        self._audio_gallery.on_card_deleted = self._on_audio_card_deleted
+        self._audio_gallery.on_card_starred = self._on_audio_card_starred
+        self._gallery_stack.add_named(self._audio_gallery, "audio")
+        GLib.idle_add(self._audio_gallery.refresh)
         # Defer the initial artgen gallery load (ArtgenPanel used to do the
         # same in its own _build()) so it runs after the window paints —
         # _rebuild_grid() with 100+ artgen records takes ~250 ms synchronously.
@@ -5959,6 +5988,10 @@ class MainWindow(Gtk.ApplicationWindow):
             on_create=self._on_create_generate,
             status_service=self._status_service,
             inspire_fn=self._create_inspire_fn,
+            # Music: discovery blocks, so it is asked for here and run on a thread (`_refresh_music_servers`).
+            on_music_selected=self._refresh_music_servers,
+            on_music_connected=self._on_music_connected,
+            on_music_rescan=self._refresh_music_servers,
             # SP-3d-1: Theme Set migrated into Create (see `_on_create_theme_set`
             # below) — reuses `generate_theme.generate_theme()`, the SAME
             # theme-expansion backend ControlPanel's now-legacy "🎬 Theme Set"
@@ -5970,6 +6003,8 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         # Apply the persisted Monitor-HW preference now that CreateView exists.
         self._apply_hw_monitor_startup()
+        # Music servers: once now, then every few seconds (a server can come and go while the app is open).
+        self._start_music_discovery_timer()
         # SP-3c-4: `_restore_queue()` (called earlier in `__init__`, before
         # `self._create_view` existed) may already have repopulated
         # `self._queue` from a crash/restart — `_refresh_create_queue_display`
@@ -6085,6 +6120,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._right_stack = Gtk.Stack()
         self._right_stack.add_named(self._detail, "native")
         self._right_stack.add_named(self._artgen_detail, "artgen")
+        self._audio_detail = AudioDetail()
+        self._audio_detail.on_back = lambda: self._set_detail_pane_visible(False)
+        self._audio_detail.on_deleted = self._on_audio_detail_deleted
+        self._audio_detail.on_starred = self._on_audio_detail_starred
+        self._right_stack.add_named(self._audio_detail, "audio")
         self._right_stack.set_visible_child_name("native")
 
         # Queue display lives below the detail/preview panel on the right side.
@@ -6418,6 +6458,7 @@ class MainWindow(Gtk.ApplicationWindow):
             "animate": "\U0001f483 Animate",
             "image":   "\U0001f5bc️ Image",
             "artgen":  "\U0001f3a8 Art",
+            "music":   "\U0001f3b5 Music",
         }
         title = _TITLES.get(source, "\U0001f3a5 Video")
 
@@ -6732,6 +6773,9 @@ class MainWindow(Gtk.ApplicationWindow):
             artgen_detail = getattr(self, "_artgen_detail", None)
             if artgen_detail is not None:
                 artgen_detail.pause_animation()
+            audio_detail = getattr(self, "_audio_detail", None)
+            if audio_detail is not None:
+                audio_detail.pause()   # a hidden pane must not keep playing a song
 
     def _on_toggle_detail(self, action: Gio.SimpleAction, _param) -> None:
         self._set_detail_pane_visible(not self._detail_visible)
@@ -6840,6 +6884,9 @@ class MainWindow(Gtk.ApplicationWindow):
         artgen_gallery = getattr(self, "_artgen_gallery", None)
         if artgen_gallery is not None:
             artgen_gallery.set_tile_size(card_w, card_h)
+        audio_gallery = getattr(self, "_audio_gallery", None)
+        if audio_gallery is not None:
+            audio_gallery.set_tile_size(card_w, card_h)
 
     # _on_art_autogen_action / _on_art_autogen_delay_action removed SP-3d-5
     # alongside ArtgenPanel (the only thing that implemented toggle_auto_gen/
@@ -7136,8 +7183,13 @@ class MainWindow(Gtk.ApplicationWindow):
         any other medium gallery, so it no longer needs extra width.
         """
         self._uncheck_pipelines_toggle_if_active()
-        self._gallery_stack.set_visible_child_name(source)
-        self._rebuild_context_menu(source)
+        # Music shows the Audio page. A source with no gallery page at all shows the video page rather than
+        # leaving the stack on whatever it showed before.
+        page = _gallery_page_for_source(source)
+        if self._gallery_stack.get_child_by_name(page) is None:
+            page = source = "video"
+        self._gallery_stack.set_visible_child_name(page)
+        self._rebuild_context_menu("music" if page == "audio" else source)
         # Re-establish a deterministic gallery|detail split on every switch so
         # the left column doesn't jitter narrower/wider by click order.
         self._reset_detail_split()
@@ -7241,7 +7293,8 @@ class MainWindow(Gtk.ApplicationWindow):
             ("video", "Video", "source-btn-left"),
             ("image", "Image", "source-btn-mid"),
             ("animate", "Animate", "source-btn-mid"),
-            ("artgen", "Artgen", "source-btn-right"),
+            ("artgen", "Artgen", "source-btn-mid"),
+            ("audio", "Audio", "source-btn-right"),
         ]
 
         buttons: "dict[str, Gtk.ToggleButton]" = {}
@@ -7328,7 +7381,7 @@ class MainWindow(Gtk.ApplicationWindow):
         row = getattr(self, "_discover_type_row", None)
         if row is not None:
             row.set_visible(True)
-        btn = getattr(self, "_discover_type_buttons", {}).get(source)
+        btn = getattr(self, "_discover_type_buttons", {}).get(_gallery_page_for_source(source))
         if btn is not None and not btn.get_active():
             # Triggers "toggled" -> _sync_gallery_to_source(source) again;
             # harmless repeat of the call two lines above, but also correctly
@@ -7933,6 +7986,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # child realized, so an un-paused timer would otherwise keep firing
         # forever (see ArtgenDetail.pause_animation's docstring).
         self._artgen_detail.pause_animation()
+        self._pause_audio_detail()
         self._right_stack.set_visible_child_name("native")
         gallery = self._gallery_for_type(record.media_type)
         # Use all_cards() so prev/next navigation crosses page boundaries.
@@ -7955,6 +8009,7 @@ class MainWindow(Gtk.ApplicationWindow):
         # Never force the pane open if the user collapsed it -- matches
         # _on_card_selected above, which also never calls
         # _set_detail_pane_visible(True).
+        self._pause_audio_detail()
         self._right_stack.set_visible_child_name("artgen")
         records = self._artgen_gallery._filtered_records()
         self._artgen_detail.show_record(media_id, records)
@@ -7995,6 +8050,45 @@ class MainWindow(Gtk.ApplicationWindow):
                 r.starred = int(starred)
                 break
         self._artgen_gallery._rebuild_chips()
+
+    # ── Audio card selection (shared right pane) ────────────────────────────────
+
+    def _pause_audio_detail(self) -> None:
+        """Stop a song playing in the hidden Audio detail when another detail takes the pane."""
+        detail = getattr(self, "_audio_detail", None)
+        if detail is not None:
+            detail.pause()
+
+    def _on_audio_card_selected(self, media_id: str) -> None:
+        """A song card was clicked: show it in the shared right pane (never forcing a collapsed pane open)."""
+        self._artgen_detail.pause_animation()
+        self._right_stack.set_visible_child_name("audio")
+        records = self._audio_gallery.records()
+        self._audio_detail.show_record(media_id, records)
+        rec = next((r for r in records if r.id == media_id), None)
+        self._set_crumbs([Crumb("🗂 Library", "library"),
+                          Crumb(_short_title(getattr(rec, "prompt", "") if rec is not None else ""))])
+
+    def _on_audio_card_deleted(self, media_id: str) -> None:
+        """The grid's own hover-delete already removed the record: clear the pane if it shows that song."""
+        if self._right_stack.get_visible_child_name() != "audio":
+            return
+        if self._audio_detail.current_id() == media_id:
+            self._audio_detail.pause()
+            self._set_detail_pane_visible(False)
+
+    def _on_audio_card_starred(self, media_id: str, starred: bool) -> None:
+        pass  # the card already persisted it; the detail re-reads the record's flag when it is next shown
+
+    def _on_audio_detail_deleted(self, media_id: str) -> None:
+        """The detail's own delete removed a record the grid still lists."""
+        self._audio_gallery.remove_record(media_id)
+
+    def _on_audio_detail_starred(self, media_id: str, starred: bool) -> None:
+        for r in self._audio_gallery._records:
+            if r.id == media_id:
+                r.starred = int(starred)
+                break
 
     # ── Remix routing ──────────────────────────────────────────────────────────
     #
@@ -8389,8 +8483,14 @@ class MainWindow(Gtk.ApplicationWindow):
         # independently. There is deliberately no aggregate any more — see
         # `status_segments.py`'s module docstring for why the old one lied.
         self._hw_statusbar.update_segments(
-            _status_segments.segment_states(snap, artgen_model=artgen_model)
+            _status_segments.segment_states(
+                snap, artgen_model=artgen_model,
+                # The list the background discovery refresh last delivered (`_apply_music_servers`).
+                music_servers=getattr(self, "_music_servers", ()),
+            )
         )
+        self._hw_statusbar.set_segment_detail(
+            "music", _status_segments.music_tooltip(getattr(self, "_music_servers", ())))
 
         # Recover Jobs (File menu): enabled iff a media server (video/image/
         # animate — NOT artgen/prompt, which _on_recover has nothing to do
@@ -8666,6 +8766,82 @@ class MainWindow(Gtk.ApplicationWindow):
     # (`prompt_client.generate_prompt` / `generate_theme.generate_theme`)
     # rather than fork them, so nothing about prompt generation or theme
     # batches is lost — only the ControlPanel-only launch UI is gone.
+
+    # ── Music servers (discovery blocks, so it never runs on the GTK thread) ───────────────────────
+
+    def _discover_music_servers(self, saved: list) -> list:
+        """The blocking half of discovery. A method so tests can replace it; never call it on the GTK thread."""
+        import music_runtime
+        return music_runtime.discover_music_servers(saved)
+
+    def _start_music_discovery_timer(self) -> None:
+        self._music_servers = []
+        self._music_discovering = False
+        self._refresh_music_servers()
+        try:
+            GLib.timeout_add_seconds(_MUSIC_DISCOVERY_INTERVAL_S, self._music_discovery_tick)
+        except Exception:  # noqa: BLE001 - no timer means no refresh, never a failed startup
+            pass
+
+    def _on_music_connected(self, server) -> None:
+        """Main thread: the Connect dialog saved `server`. List it now, so a Create click does not say "No music
+        server is running" until the next discovery, then refresh to confirm it."""
+        rest = [s for s in getattr(self, "_music_servers", []) if s.url != server.url]
+        self._music_servers = rest + [server]
+        self._paint_music_segment()
+        self._refresh_music_servers()
+
+    def _music_discovery_tick(self) -> bool:
+        """GLib timer: refresh while the window is alive."""
+        if not getattr(self, "_alive", True):
+            return GLib.SOURCE_REMOVE
+        self._refresh_music_servers()
+        return GLib.SOURCE_CONTINUE
+
+    def _refresh_music_servers(self) -> None:
+        """Run discovery on a background thread and hand the result to the Create panel on the main thread.
+        One run at a time: a slow probe must not pile up behind the timer."""
+        if getattr(self, "_music_discovering", False):
+            return
+        self._music_discovering = True
+        saved = list(_settings.get("music_servers") or [])      # read on the GTK thread; the thread gets a copy
+
+        def run():
+            try:
+                servers = self._discover_music_servers(saved)
+            except Exception:  # noqa: BLE001 - keep the last list rather than blank the dropdown
+                servers = None
+            GLib.idle_add(self._apply_music_servers, servers)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _apply_music_servers(self, servers) -> bool:
+        """Main thread: take a discovery result (None = it failed, keep what is shown)."""
+        self._music_discovering = False
+        if servers is not None and getattr(self, "_alive", True):
+            self._music_servers = list(servers)
+            view = getattr(self, "_create_view", None)
+            if view is not None:
+                try:
+                    view.set_music_servers(self._music_servers)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._paint_music_segment()
+        return GLib.SOURCE_REMOVE
+
+    def _paint_music_segment(self) -> None:
+        """Main thread: repaint the Music status segment from the same list the Create panel received.
+        No second discovery: this reuses `self._music_servers`."""
+        bar = getattr(self, "_hw_statusbar", None)
+        if bar is None:
+            return
+        try:
+            servers = getattr(self, "_music_servers", ())
+            state = _status_segments.segment_states({}, music_servers=servers)["music"]
+            bar.update_segments({"music": state})
+            bar.set_segment_detail("music", _status_segments.music_tooltip(servers))
+        except Exception:  # noqa: BLE001 - a status-bar problem must not break discovery
+            pass
 
     def _create_inspire_fn(self, prompt_type, seed_text, on_result, on_error) -> None:
         # (prompt_type: str, seed_text: str, on_result: Callable[[str], None], on_error: Callable[[str], None]) -> None
@@ -9027,6 +9203,8 @@ class MainWindow(Gtk.ApplicationWindow):
         # (AnimateDiff runs locally, no server needed), exactly as before.
         if self._active_medium_is_animatediff():
             current_source = "animatediff"
+        elif current_source == "music":
+            current_source = "video"    # TT-TV only makes pictures; with Music selected it runs on the video model
 
         try:
             win = attractor.AttractorWindow(
@@ -9669,6 +9847,11 @@ class MainWindow(Gtk.ApplicationWindow):
                     f"{medium.label} can't be queued yet; try again once it finishes."
                 )
             return
+        if medium.source == "music":
+            # The app never starts music servers (the user does, with tt-model), so there is no server to ready
+            # or switch to: the gate would only be asked about something it cannot act on.
+            self._launch_create_job(medium, params)
+            return
         # RN-S: make sure the server this job needs is ready first. If it is
         # (or there's nothing to start), launch now; otherwise a confirm dialog
         # starts it (stopping + resetting a conflicting server) and launches
@@ -9689,6 +9872,9 @@ class MainWindow(Gtk.ApplicationWindow):
             elif medium.source == "artgen":
                 self._begin_create_job(medium, params)
                 self._create_generate_artgen(medium, params)
+            elif medium.source == "music":
+                self._begin_create_job(medium, params)
+                self._create_generate_music(medium, params)
             else:
                 self._set_status(f"Don't know how to generate a {medium.label} yet.")
         except Exception as exc:
@@ -10223,6 +10409,99 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _create_generate_music(self, medium, params: dict) -> None:
+        """Music: build a `MusicGenerationWorker` for the server the panel chose and run it on a thread.
+
+        No server gate (see `_on_create_generate`). Every terminal path ends in `_on_create_music_finished` or
+        `_on_create_music_error`, and the error one calls `_fail_create_job`, so the result panel never stays on
+        "pending". The token travels only inside the worker's client; nothing here logs or stores it."""
+        import music_runtime as mr
+        from media_store import STORAGE_DIR
+        from media_store import media_store as _ms
+
+        def _fail(msg: str) -> None:
+            self._set_status(msg)
+            self._fail_create_job(msg)
+
+        url = params.get("server_url") or ""
+        server = next((s for s in getattr(self, "_music_servers", []) if s.url == url), None)
+        if server is None or not server.up or server.profile is None:
+            _fail("No music server is running at the chosen address. Start one with tt-model serve, or pick another.")
+            return
+        try:
+            request = mr.MusicRequest(
+                prompt=params.get("prompt", ""), lyrics=params.get("lyrics"), seconds=float(params.get("seconds", 0)),
+                seed=params.get("seed"), steps=params.get("steps"), cfg_scale=params.get("cfg_scale"),
+                instrumental=bool(params.get("instrumental", False)))
+        except (TypeError, ValueError) as exc:
+            _fail(f"The music settings are not valid: {exc}")
+            return
+        try:
+            _settings.set("music_last_server", server.url)          # the panel preselects it next time
+        except Exception:  # noqa: BLE001 - a settings write must not stop a song
+            pass
+
+        worker = MusicGenerationWorker(_ms, server, request, STORAGE_DIR / "music", token=server.token,
+                                       poll_s=_MUSIC_POLL_S)
+        self._music_worker = worker
+        self._set_status(f"Generating {medium.label}…")
+
+        def run():
+            try:
+                worker.run_with_callbacks(
+                    on_progress=lambda msg: GLib.idle_add(self._on_create_music_progress, msg),
+                    on_finished=lambda rec: GLib.idle_add(self._on_create_music_finished, rec),
+                    on_error=lambda msg: GLib.idle_add(self._on_create_music_error, medium, msg),
+                )
+            except Exception as exc:  # noqa: BLE001 - the worker reports its own errors; this is the last resort
+                GLib.idle_add(self._on_create_music_error, medium, worker_scrub(f"Music generation failed: {exc}", server.token))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_create_music_progress(self, msg: str) -> bool:
+        """Main thread: forward a progress line to the Create result panel (a no-op once the job is over)."""
+        if not self._alive:
+            return False
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_music_finished(self, record) -> bool:
+        """Main thread: show the finished song and clear the Create-job flag."""
+        if not self._alive:
+            return False
+        try:
+            from media_store import media_store as _ms
+            _ms.ensure_auto_playlists()
+        except Exception:  # noqa: BLE001
+            pass
+        self._music_worker = None
+        try:
+            self._audio_gallery.refresh()
+        except Exception:  # noqa: BLE001 - a refresh failure must not break the result panel
+            pass
+        self._set_status("Music ready.")
+        if self._create_job_active:
+            try:
+                self._create_view._result_panel.show_finished(record)
+            except Exception:  # noqa: BLE001
+                pass
+            self._create_job_active = False
+        self._clear_local_busy()
+        return GLib.SOURCE_REMOVE
+
+    def _on_create_music_error(self, medium, msg: str) -> bool:
+        """Main thread: a failed or cancelled song. `_fail_create_job` moves the panel off "pending"."""
+        if not self._alive:
+            return False
+        self._music_worker = None
+        self._set_status(f"Couldn't generate {medium.label}: {msg}")
+        self._fail_create_job(msg)
+        return GLib.SOURCE_REMOVE
+
     def _on_create_artgen_done(self, medium) -> bool:
         """Main-thread completion callback for `_create_generate_artgen`."""
         self._set_status(f"{medium.label} ready.")
@@ -10278,6 +10557,11 @@ class MainWindow(Gtk.ApplicationWindow):
         `_SERVER_KEY_TO_SOURCE_MODEL`) instead of
         `self._controls.get_video_model()`/`get_image_model()`.
         """
+        if model_source == "music":
+            # The default below is the Wan2.2 script: a Music "start" must never launch that. The app does not start
+            # music servers.
+            self._set_status("Music servers are started outside the app: tt-model serve <model>.")
+            return
         model_key = self._current_medium_model_key(model_source)
 
         script_name, label = _SERVER_SCRIPTS.get(

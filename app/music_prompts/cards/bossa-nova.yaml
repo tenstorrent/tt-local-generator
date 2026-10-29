@@ -1,0 +1,26 @@
+id: bossa-nova
+kind: style
+name: Bossa nova
+aliases: [bossa, bossa nova music, bossanova]
+family: latin
+inspiration: [João Gilberto, Antônio Carlos Jobim, Chega de Saudade]
+sound: >-
+  Gentle Brazilian music from the late 1950s, with a nylon-string guitar
+  playing a soft, syncopated samba pattern under jazz-touched chords and a
+  light, brushed rhythm.
+instruments: [nylon-string guitar, upright bass, brushed drums, piano, flute, soft strings]
+rhythm: A relaxed, syncopated pattern drawn from samba and slowed down, quiet and steady.
+harmony: Rich seventh and ninth chords with smooth chromatic movement.
+mood: Cool, intimate, breezy and gently melancholy.
+production: Quiet, close and warm, with soft dynamics.
+tempo_bpm: [100, 140]
+avoid: [loud rock drums, electric guitar distortion]
+vocal: a soft, hushed, almost conversational vocal close to the microphone
+tags: [bossa nova, nylon guitar, samba rhythm, jazz chords, soft, brazilian]
+goes_with: [jazz, post-rock, downtempo, scene]
+notes: >-
+  Wikipedia: Bossa nova (a relaxed samba rhythm, nylon-string classical guitar
+  played with the fingers, Rio de Janeiro in the late 1950s, search summary);
+  Indiana Public Media: João Gilberto, a memorial (the stammering guitar that
+  imitates a samba rhythm section, a slowed samba shuffle, hushed vocal tone,
+  jazz harmonies)

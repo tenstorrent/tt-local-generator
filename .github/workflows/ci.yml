@@ -24,8 +24,10 @@ jobs:
             python3-requests \
             python3-yaml \
             python3-pil \
+            ffmpeg \
             gir1.2-gtk-4.0 \
             xvfb
+          # ffmpeg: the audio waveform thumbnail tests decode a generated tone with it.
           # python3-pil (Pillow): gallery/ansi-image/showcase tests build image
           #   fixtures with PIL.Image; without it ~12 tests error on `import PIL`.
           # WebKit (gir1.2-webkit-6.0) is deliberately NOT installed — the app

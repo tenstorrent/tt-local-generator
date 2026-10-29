@@ -122,6 +122,7 @@ from create_param_panels import (  # noqa: E402
     AnimateParamPanel,
     ArtgenParamPanel,
     ImageParamPanel,
+    MusicParamPanel,
     RoleZonePanel,
     VideoParamPanel,
     build_mode_toggle_row,
@@ -129,6 +130,7 @@ from create_param_panels import (  # noqa: E402
 )
 from model_status import Status  # noqa: E402
 from possibilities import PossibilitiesWall  # noqa: E402
+from audio_gallery import build_audio_widget, open_externally as _open_externally  # noqa: E402,F401
 
 # Video-only alias: server_manager's key for the Wan2.2 text-to-video service
 # is "wan2.2", but VideoParamPanel's own internal short key (and therefore
@@ -197,6 +199,8 @@ _INSPIRE_PROMPT_TYPE: "dict[str, str]" = {
     "image": "image",
     "video": "video",
     "animate": "animate",
+    # The top prompt box of the Music medium holds a music style prompt (the lyrics button asks for "lyrics" itself).
+    "music": "music",
 }
 _INSPIRE_PROMPT_TYPE_DEFAULT = "video"
 
@@ -393,6 +397,40 @@ _CSS = b"""
 .image-param-hint {
     color: #607D8B;
     font-size: 11px;
+}
+.music-start-card {
+    background-color: #1A3C47;
+    border: 1px solid #2D5566;
+    border-radius: 6px;
+    padding: 10px;
+}
+.music-styles-group {
+    color: #4FD1C5;
+    font-weight: bold;
+    margin-top: 6px;
+}
+.music-prompt-result {
+    margin-bottom: 4px;
+}
+.music-start-title {
+    color: #4FD1C5;
+    font-weight: bold;
+}
+.music-start-text {
+    color: #E8F0F2;
+    font-size: 12px;
+}
+.music-start-note {
+    color: #9FB8BF;
+    font-size: 11px;
+}
+.music-start-cmd {
+    color: #4FD1C5;
+    background-color: #0F2A35;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-family: monospace;
+    font-size: 12px;
 }
 
 /* -- SeedImageWell (SP-3c-1) -- shared by ImageParamPanel + VideoParamPanel;
@@ -1114,9 +1152,20 @@ class CreateView(Gtk.Box):
         inspire_fn: "Optional[Callable[[str, str, Callable[[str], None], Callable[[str], None]], None]]" = None,
         on_theme_set: Optional[Callable[[Medium, dict], None]] = None,
         on_hw_monitor_close: Optional[Callable[[], None]] = None,
+        on_music_selected: Optional[Callable[[], None]] = None,
+        on_music_connected: "Optional[Callable[[object], None]]" = None,
+        on_music_rescan: "Optional[Callable[[], None]]" = None,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         _apply_css()
+        # Music servers are found by discovery, which blocks, so MainWindow runs it off the GTK thread and hands
+        # the result to `set_music_servers`. `on_music_selected` asks it to (re)run discovery when Music is chosen.
+        self._on_music_selected = on_music_selected
+        # A server the user just added with Connect: the owner lists it at once instead of waiting for discovery.
+        self._on_music_connected = on_music_connected
+        # The "Check again" button on the start-a-model card: the same refresh the 10 s timer runs.
+        self._on_music_rescan = on_music_rescan
+        self._music_servers: "list" = []
         self.add_css_class("create-view")
 
         # RAW order (native-first). The visual→textual sort is applied only at
@@ -1311,6 +1360,7 @@ class CreateView(Gtk.Box):
         content.append(self._build_model_door_row())
         content.append(self._build_chip_row())  # fires _select_medium synchronously
         content.append(self._build_model_dropdown_row())
+        self._sync_model_row_visibility()
         # Mounted directly under the model row, like `_prompt_entry` — CreateView
         # chrome, not part of the wrapped RoleZonePanel (see `_AnimateExtras`'s
         # docstring). Visibility toggled by `_update_animate_extras_visibility`.
@@ -1330,6 +1380,7 @@ class CreateView(Gtk.Box):
         # changes — this replaces and obsoletes the old two-pane MaxWidthBin/
         # prompt-width caps.
         self._result_panel = CreateResultPanel()
+        self._result_panel.on_use_seed = self._use_music_seed
         self.set_vexpand(True)
 
         form_scroll = Gtk.ScrolledWindow()
@@ -2057,6 +2108,22 @@ class CreateView(Gtk.Box):
             child = nxt
 
         self._populate_model_dropdown(medium)
+        self._sync_model_row_visibility()
+
+        if medium.source == "music":
+            panel = MusicParamPanel(inspire_fn=self._inspire_fn, prompt_type_getter=self._inspire_prompt_type)
+            zoned = RoleZonePanel(panel, medium)
+            # The top prompt box owns the prompt (the panel's own box is hidden by RoleZonePanel).
+            panel.set_prompt_getter(lambda: self._prompt_entry.get_text())
+            # The wand and Write the prompt write back into the same entry.
+            panel.set_prompt_setter(self._prompt_entry.set_text)
+            panel.on_connect_saved = self._music_server_connected
+            panel.on_rescan = self._music_rescan
+            self._panel_host.append(zoned)
+            self._active_panel = zoned
+            panel.servers_changed(self._music_servers)
+            self._ask_for_music_discovery()
+            return
 
         if medium.source == "native" and medium.id in _NATIVE_PANEL_CLASSES:
             panel = _NATIVE_PANEL_CLASSES[medium.id]()
@@ -2095,6 +2162,55 @@ class CreateView(Gtk.Box):
         label.set_xalign(0.0)
         stub.append(label)
         self._panel_host.append(stub)
+
+    # ── Music servers ───────────────────────────────────────────────────────
+
+    def _music_server_connected(self, server) -> None:
+        """The Connect dialog saved `server`: tell the owner so a Create click finds it, then ask for discovery."""
+        if self._on_music_connected is not None:
+            try:
+                self._on_music_connected(server)
+            except Exception:  # noqa: BLE001
+                _log.debug("music connect hand-off failed", exc_info=True)
+        self._ask_for_music_discovery()
+
+    def _music_rescan(self) -> None:
+        """"Check again" on the start-a-model card: run discovery now (falls back to the Music-chosen hook)."""
+        cb = self._on_music_rescan or self._on_music_selected
+        if cb is not None:
+            try:
+                cb()
+            except Exception:  # noqa: BLE001
+                _log.debug("music rescan request failed", exc_info=True)
+
+    def _use_music_seed(self, seed: int) -> None:
+        """A result's "Use this seed": pin it in the Music panel so the clip can be asked for again.
+        Does nothing when Music is not the medium on screen."""
+        panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
+        if isinstance(panel, MusicParamPanel):
+            panel.set_seed(seed)
+
+    def _ask_for_music_discovery(self) -> None:
+        """Ask the owner to run music server discovery (it blocks, so the owner does it off the GTK thread)."""
+        if self._on_music_selected is not None:
+            try:
+                self._on_music_selected()
+            except Exception:  # noqa: BLE001 - discovery must never break Create
+                _log.debug("music discovery request failed", exc_info=True)
+
+    def set_music_servers(self, servers: "list") -> None:
+        """A fresh discovery result (main thread). Remembered for the next time Music is chosen, and given to the
+        Music panel when it is the one on screen."""
+        servers = list(servers)
+        panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
+        unchanged = servers == self._music_servers
+        self._music_servers = servers
+        if isinstance(panel, MusicParamPanel):
+            if not (unchanged and panel.servers() == servers):
+                # Skipped when nothing changed: the timer runs every 10 s, and re-setting the dropdown's model
+                # would close a list the user has open.
+                panel.servers_changed(servers)
+            panel.rescan_done()             # a "Looking..." button returns even when the list did not change
 
     # ── Scoped model dropdown (Task 6 — replaces the retired model strip) ───
 
@@ -2154,7 +2270,17 @@ class CreateView(Gtk.Box):
 
         self._model_dropdown.set_hexpand(True)
         row.append(self._model_dropdown)
+        self._model_dropdown_row = row
         return row
+
+    def _sync_model_row_visibility(self) -> None:
+        """The scoped "Model" dropdown lists `server_manager` models. Music has its own server dropdown inside its
+        panel (music servers are not `ServerDef`s), so for Music this row is hidden rather than showing
+        "No models available"."""
+        row = getattr(self, "_model_dropdown_row", None)
+        if row is not None:
+            medium = getattr(self, "_active_medium", None)
+            row.set_visible(not (medium is not None and medium.source == "music"))
 
     def _scoped_model_keys(self, medium: Optional[Medium] = None) -> "list[str]":
         """`server_manager` keys whose `capabilities` match *medium* (default:
@@ -2197,6 +2323,8 @@ class CreateView(Gtk.Box):
         medium = medium if medium is not None else self._active_medium
         if medium is None:
             return []
+        if medium.source == "music":
+            return []  # music servers pick themselves in the panel; none is a `server_manager` key
         if medium.source == "artgen" and not medium.uses_llm:
             return [medium.id]
         cap = "artgen" if medium.source == "artgen" else medium.id
@@ -2831,7 +2959,24 @@ class CreateView(Gtk.Box):
     def _on_cta_clicked(self, _btn: Gtk.Button) -> None:
         if self._on_create is None or self._active_medium is None:
             return
-        self._on_create(self._active_medium, self._collect_params())
+        params = self._collect_params()
+        if self._active_medium.source == "music":
+            # Say what is missing before anything is queued or any request is made.
+            problem = self._music_problem(params)
+            if problem:
+                self._result_panel.show_error(problem)
+                return
+        self._on_create(self._active_medium, params)
+
+    def _music_problem(self, params: dict) -> "Optional[str]":
+        """A plain message when the Music request cannot be sent (no server, empty prompt, no lyrics), else None."""
+        panel = getattr(getattr(self, "_active_panel", None), "_panel", None)
+        if not isinstance(panel, MusicParamPanel):
+            return None
+        try:
+            return panel.validate(prompt=params.get("prompt", ""))
+        except Exception:  # noqa: BLE001 - a validation bug must not block the click
+            return None
 
     # ── Theme Set (SP-3d-1) ────────────────────────────────────────────────
 
@@ -2995,6 +3140,14 @@ class CreateView(Gtk.Box):
 
         if modifier_text:
             combined = f"{prompt_text} {modifier_text}".strip()
+            # A panel may join its own way (Music: a tags model's prompt is comma-separated).
+            inner = getattr(self._active_panel, "_panel", None)
+            join = getattr(inner, "join_modifier_text", None)
+            if callable(join):
+                try:
+                    combined = join(prompt_text, modifier_text)
+                except Exception:
+                    pass
         else:
             combined = prompt_text
 
@@ -3043,6 +3196,8 @@ _CHIP_LINE_RE = chip_progress.CHIP_LINE_RE
 # perfectly valid, existing file.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 _VIDEO_EXTS = {".mp4"}
+#: Music results (MusicGenerationWorker writes FLAC; a server may send WAV).
+_AUDIO_EXTS = {".flac", ".wav"}
 #: Height of the inline result player. Wide-open on width (it expands to the
 #: result column) but capped vertically so a tall video can't push the recents
 #: strip off-screen.
@@ -3081,8 +3236,8 @@ _TEXT_EXTS = {".txt", ".md"}
 def _artifact_kind(path: str, generator_type: "Optional[str]" = None) -> str:
     """Classify an artifact path's rendering kind.
 
-    Returns one of "image" | "video" | "gif" | "svg" | "ansi" | "palette" |
-    "code" | "text" | "unknown". Never raises — an empty path maps straight
+    Returns one of "image" | "video" | "audio" | "gif" | "svg" | "ansi" |
+    "palette" | "code" | "text" | "unknown". Never raises — an empty path maps straight
     to "unknown".
 
     Extension is the PRIMARY signal (it never lies about what format the
@@ -3104,6 +3259,8 @@ def _artifact_kind(path: str, generator_type: "Optional[str]" = None) -> str:
         return "image"
     if ext in _VIDEO_EXTS:
         return "video"
+    if ext in _AUDIO_EXTS:
+        return "audio"
     if ext in _GIF_EXTS:
         return "gif"
     if ext in _SVG_EXTS:
@@ -3186,6 +3343,7 @@ _CHIP_LABELS: dict[str, str] = {
     "palette": "Palette",
     "code": "Code",
     "text": "TXT",
+    "audio": "MUSIC",
 }
 
 
@@ -3224,6 +3382,8 @@ class CreateResultPanel(Gtk.Box):
         self.add_css_class("create-result-panel")
 
         self._state = "empty"
+        # Set by CreateView: called with a song's seed when the user chooses "Use this seed".
+        self.on_use_seed: "Optional[Callable[[int], None]]" = None
         self._timer_id: Optional[int] = None
         self._pending_start: float = 0.0
         # A generation can be IN FLIGHT while the current-result area shows
@@ -3464,6 +3624,15 @@ class CreateResultPanel(Gtk.Box):
             except Exception:
                 pass
         self._result_video = None
+
+        audio = getattr(self, "_result_audio", None)
+        if audio is not None:
+            try:
+                if audio.get_playing():
+                    audio.pause()
+            except Exception:
+                pass
+        self._result_audio = None
 
         gst = getattr(self, "_result_gst", None)
         if gst is not None:
@@ -3956,6 +4125,11 @@ class CreateResultPanel(Gtk.Box):
             label.add_css_class("create-result-placeholder")
             return label
 
+        if kind == "audio":
+            # Built even when the file is gone: the song's lyrics and credit are still worth showing, with an
+            # honest "not found" in place of the player.
+            return self._build_audio_widget(record, path, exists)
+
         if kind in ("ansi", "palette", "code", "text") and exists:
             # Every "reading" kind renders through `artgen_render`'s themed
             # HTML builders in a WebKit reading view — mirrors
@@ -4002,6 +4176,17 @@ class CreateResultPanel(Gtk.Box):
         label = Gtk.Label(label=msg)
         label.add_css_class("create-result-placeholder")
         return label
+
+    def _use_seed(self, seed: int) -> None:
+        if self.on_use_seed is not None:
+            self.on_use_seed(seed)
+
+    def _build_audio_widget(self, record, path: str, exists: bool = True) -> Gtk.Widget:
+        """A finished song. The block itself lives in `audio_gallery.build_audio_widget`, shared with the Library
+        detail; this keeps the stream so `_release_video` can pause it."""
+        box = build_audio_widget(record, path, exists, on_use_seed=self._use_seed)
+        self._result_audio = getattr(box, "audio_stream", None)
+        return box
 
     # ── Pending-queue display (SP-3c-4) ─────────────────────────────────────
 
@@ -4095,7 +4280,7 @@ class CreateResultPanel(Gtk.Box):
         if not thumb_path and kind in ("image", "svg"):
             thumb_path = media_path  # image/svg have no separate thumbnail file
 
-        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif", "svg"):
+        if thumb_path and Path(thumb_path).exists() and kind in ("image", "video", "gif", "svg", "audio"):
             try:
                 pic = Gtk.Picture.new_for_filename(thumb_path)
                 pic.set_can_shrink(True)

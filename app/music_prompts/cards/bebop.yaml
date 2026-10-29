@@ -1,0 +1,24 @@
+id: bebop
+kind: style
+name: Bebop
+aliases: [be-bop, bebop jazz, bop jazz]
+family: jazz
+inspiration: [Charlie Parker, Dizzy Gillespie, Bud Powell, Thelonious Monk, Max Roach]
+sound: >-
+  Fast small-combo jazz in which trumpet and alto sax play a tricky melody in
+  unison, then trade quick improvised solos over rapidly changing chords, with
+  walking bass and a swinging ride cymbal.
+instruments: [trumpet, alto saxophone, piano, upright bass, drum kit]
+rhythm: Hard swing at fast tempos; walking bass in four, time kept on the ride cymbal, kick drum used for accents.
+harmony: Dense, fast-moving chord changes with extended and altered chords and substitutions, often over blues and rhythm-changes forms.
+mood: Quick, restless, virtuosic and playful.
+production: Live small-group sound, acoustic and close, like a 1940s or 1950s jazz session.
+tempo_bpm: [160, 280]
+avoid: [electric instruments, drum machines, smooth jazz polish]
+tags: [bebop, small combo jazz, fast swing, walking bass, ride cymbal, alto sax, trumpet]
+goes_with: [funk, post-rock]
+notes: >-
+  Wikipedia: Bebop (fast tempos, complex changes, head-solos-head, small combo,
+  walking bass, ride cymbal with bass-drum bombs); uDiscoverMusic: What Is
+  Bebop? (search summary); Carnegie Hall: Timeline of African American Music,
+  Bebop (search summary)

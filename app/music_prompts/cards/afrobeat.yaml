@@ -1,0 +1,26 @@
+id: afrobeat
+kind: style
+name: Afrobeat
+aliases: [afro-beat, afro beat, afrobeat music]
+family: world
+inspiration: [Fela Kuti, Tony Allen, Africa 70]
+sound: >-
+  Long, hypnotic West African dance grooves built from interlocking guitars, a
+  repeating bass line, punchy horn riffs and intricate polyrhythmic drumming
+  that keeps building.
+instruments: [interlocking electric guitars, electric bass, drum kit, horn section, baritone sax, organ, shekere, congas]
+rhythm: Busy, polyrhythmic drumming with every limb on its own pattern, locked to a steady dance pulse.
+harmony: One or two chords vamped for minutes, with horn riffs and solos over the top.
+mood: Driving, defiant, joyful and hypnotic.
+production: Warm and loud, a big live band in one room, with long build-ups.
+tempo_bpm: [100, 130]
+avoid: [short radio-length songs, programmed drums]
+vocal: a commanding lead voice trading call and response with the band's chorus
+tags: [afrobeat, horn riffs, interlocking guitars, polyrhythmic drums, long groove, west african funk]
+goes_with: [funk, jazz, psych, reggae]
+notes: >-
+  Rolling Stone: Afrobeat pioneer Tony Allen, 9 tracks that show his drumming
+  genius (polyrhythms with all four limbs, search summary); Bandcamp Daily: The
+  beat behind Afrobeat, a guide to the music of Tony Allen (interlocking rhythm
+  guitar, repeated bass, horn riffs, long forms, search summary); NPR: Tony
+  Allen, Afrobeat's foundational drummer, has died at 79 (search summary)

@@ -42,10 +42,10 @@ def bar(monkeypatch):
 
 # ── Structure ────────────────────────────────────────────────────────────────
 
-def test_all_four_segments_are_built(bar):
+def test_all_five_segments_are_built(bar):
     assert list(bar._seg_dots) == list(ss.SEGMENT_KEYS)
     assert [bar._seg_labels[k] for k in ss.SEGMENT_KEYS] == [
-        "Prompt", "Image", "Video", "Art LLM"
+        "Prompt", "Image", "Video", "Art LLM", "Music"
     ]
 
 
@@ -326,3 +326,37 @@ def test_busy_does_not_start_the_elapsed_timer(bar):
     bar.set_segment_busy("video", True, "AnimateDiff")
     assert bar._timer_id is None
     assert bar._seg_names["video"].get_label() == "Video"
+
+
+# ── Music segment wiring ─────────────────────────────────────────────────────
+
+class _Srv:
+    def __init__(self, url, up, label="", token="sekrit"):
+        self.url, self.up, self.label, self.token = url, up, label, token
+
+
+def _window_stub(bar, servers):
+    """Just enough of MainWindow for `_apply_music_servers`/`_paint_music_segment`."""
+    class _W:
+        _alive = True
+        _music_discovering = True
+        _create_view = None
+    w = _W()
+    w._hw_statusbar = bar
+    w._music_servers = []
+    w._apply_music_servers = mw.MainWindow._apply_music_servers.__get__(w)
+    w._paint_music_segment = mw.MainWindow._paint_music_segment.__get__(w)
+    return w
+
+
+def test_discovery_result_lights_only_the_music_segment(bar):
+    w = _window_stub(bar, None)
+    w._apply_music_servers([_Srv("http://127.0.0.1:20001", True, label="ACE-Step")])
+    assert bar._seg_state["music"] == Status.READY
+    assert bar._seg_dots["music"].get_label() == "●"
+    assert all(bar._seg_state[k] == Status.OFF for k in ("prompt", "image", "video", "artgen"))
+    tip = bar._seg_dots["music"].get_tooltip_text()
+    assert "ACE-Step" in tip and "sekrit" not in tip
+    w._apply_music_servers([_Srv("http://127.0.0.1:20001", False)])
+    assert bar._seg_state["music"] == Status.OFF
+    assert bar._seg_dots["music"].get_tooltip_text() == "Music: off"

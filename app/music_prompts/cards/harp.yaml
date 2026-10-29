@@ -1,0 +1,22 @@
+id: harp
+kind: instrument
+name: Harp
+aliases: [concert harp, pedal harp, celtic harp, lever harp, harp glissando]
+family: chamber
+inspiration: [Dorothy Ashby, Alice Coltrane]
+sound: >-
+  Plucked harp strings rippling in arpeggios and sweeping glissandos, clear and
+  chiming up high, warm and round in the low register.
+instruments: [concert harp]
+rhythm: Flowing arpeggios and rolled chords.
+harmony: Lush, open chords spread across the strings, rich in ringing overtones.
+mood: Graceful, dreamy, serene and luminous.
+production: Clear and close, with a soft hall reverb.
+avoid: [strummed rock guitar, a pounding drum kit]
+tags: [harp, glissando, arpeggios, plucked strings, rippling, luminous]
+goes_with: [folk, ambient, jazz, post-rock, scene]
+notes: >-
+  Wikipedia: Harp (strings plucked with the fingers, folk and lever harps,
+  standard in the orchestra from the Romantic era); Wikipedia: Pedal harp (the
+  tone depends on where the string is plucked); Harp Column: Finding the harp
+  (lever and pedal harps compared, search summary)

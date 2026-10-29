@@ -1,0 +1,23 @@
+id: funk
+kind: style
+name: Funk
+aliases: [funky, funk music, funk groove]
+family: funk
+inspiration: [James Brown, Sly and the Family Stone, The Meters]
+sound: >-
+  Tight, syncopated dance music locked onto the one, with a popping bass line,
+  choppy muted rhythm guitar, crisp drums and short, punchy horn stabs.
+instruments: [electric bass, rhythm guitar, drum kit, horn section, clavinet, organ]
+rhythm: Sixteenth-note grooves with heavy weight on the one, ghost notes on the snare and space between the notes.
+harmony: One- or two-chord vamps on minor seventh, ninth and dominant chords.
+mood: Groovy, confident, sweaty and joyful.
+production: Dry, tight and punchy, with the bass and drums up front.
+tempo_bpm: [90, 120]
+avoid: [straight rock beats, washy reverb, slow ballad tempo]
+tags: [funk, syncopated groove, slap bass, chicken-scratch guitar, horn stabs, clavinet]
+goes_with: [jazz, electronic]
+notes: >-
+  Wikipedia: Funk (the one, sixteenth-note grooves, slap bass, chicken-scratch
+  guitar, horn stabs, clavinet, one-chord vamps); eMastered: What is funk music
+  (syncopation, strong downbeats, seventh chords, bass-driven grooves, search
+  summary); MasterClass: Funk music guide (search summary)

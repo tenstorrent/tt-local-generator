@@ -1,0 +1,22 @@
+id: ratcheting-synths
+kind: texture
+name: Ratcheting synths
+aliases: [ratcheting synthesizers, ratcheting synth, ratcheting synthesizer, ratchet sequencing, ratcheting sequencer, ratcheted arpeggios, ratcheting arpeggios]
+family: texture
+inspiration: [Tangerine Dream, Stratosfear]
+sound: >-
+  Fast sequencer arpeggios in which some steps fire two, three or four quick
+  repeats, so the line stutters and rolls with a mechanical, skittering pulse.
+instruments: [analog synthesizer, step sequencer]
+rhythm: Sixteenth notes and faster, with bursts of repeated triggers inside single steps.
+harmony: Arpeggiated minor and modal patterns.
+mood: Mechanical, restless and glittering.
+production: Tight, dry synth tone with a short decay so every repeat is heard.
+avoid: [long sustained pads in place of the pattern]
+tags: [ratcheting sequencer, stuttering arpeggio, step sequencer, gated synth]
+goes_with: [electronic, post-rock, pop]
+notes: >-
+  Sweetwater InSync: How to ratchet notes in a step sequencer (search summary);
+  Doepfer: A-155-3 manual (per-step x2, x3 and x4 triggers, search summary);
+  Synthtopia: ratcheting sequencer articles (search summary); zaqaudio forums:
+  Ratcheting like Tangerine Dream music (search summary)

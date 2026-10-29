@@ -9,7 +9,7 @@ aggregate read "ready" forever — while Video was off, while Image was mid-load
 while anything at all was happening.  It also stomped the elapsed "starting…"
 timer, because the very next poll folded prompt-server's READY back over it.
 
-Four independent segments have nothing to aggregate, so no segment can ever
+Five independent segments have nothing to aggregate, so no segment can ever
 speak for another one.  This module is the GTK-free half: the segment table and
 the pure state resolver.  ``main_window._StatusBar`` owns the widgets.
 
@@ -44,6 +44,9 @@ SEGMENTS: tuple = (
     ("image",  "Image",   ("image",)),
     ("video",  "Video",   ("video", "animate")),
     ("artgen", "Art LLM", ("artgen",)),
+    # Music reads no SERVERS entry (a music server is found by discovery, not started by the app), so it
+    # folds no capabilities; `segment_states` resolves it from `music_servers`.
+    ("music",  "Music",   ()),
 )
 
 #: Segment keys in display order — the order they appear left-to-right.
@@ -137,6 +140,7 @@ def segment_states(
     *,
     artgen_model=None,
     servers_for_capability=None,
+    music_servers=(),
 ) -> dict:
     """Resolve one :class:`~model_status.Status` per segment.
 
@@ -151,12 +155,15 @@ def segment_states(
             segment would under-report it; but the prompt-gen fallback must NOT
             light it.  CreateView surfaces the genuine case as a selectable
             "(detected)" entry; the bar must agree with that and nothing else.
+        music_servers: the discovered/saved music servers (``music_runtime.MusicServer``-likes with ``.up``).
+            The "music" segment is READY when any is up, else OFF; it reads nothing else, and no other
+            segment reads it.
         servers_for_capability: injection seam for tests; defaults to
             ``server_manager.servers_for_capability``.
 
     Returns:
         ``{segment key: Status}`` with an entry for every key in
-        :data:`SEGMENT_KEYS` — always all four, so the bar never has to hide or
+        :data:`SEGMENT_KEYS` — always all five, so the bar never has to hide or
         reflow a segment.
     """
     lookup = servers_for_capability or _sm.servers_for_capability
@@ -164,6 +171,9 @@ def segment_states(
 
     out: dict = {}
     for key, _label, caps in SEGMENTS:
+        if key == "music":
+            out[key] = Status.READY if any(getattr(s, "up", False) for s in (music_servers or ())) else Status.OFF
+            continue
         statuses = [
             snap.get(sdef.key, Status.OFF)
             for cap in caps
@@ -178,6 +188,17 @@ def segment_states(
             state = Status.READY
         out[key] = state
     return out
+
+
+def music_tooltip(music_servers) -> str:
+    """Tooltip text for the Music segment: the servers that are up, by label or URL. Never a token."""
+    names = []
+    for s in music_servers or ():
+        if getattr(s, "up", False):
+            names.append(getattr(s, "label", "") or getattr(s, "url", "") or "music server")
+    if not names:
+        return "Music: no music server found"
+    return "Music: ready (" + ", ".join(names) + ")"
 
 
 def glyph_for(state: "Status") -> str:

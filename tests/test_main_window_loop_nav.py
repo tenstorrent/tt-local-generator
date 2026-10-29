@@ -333,7 +333,7 @@ def test_build_discover_type_row_exposes_keyed_buttons(tmp_path, monkeypatch):
     row = obj._build_discover_type_row()
 
     assert isinstance(row, Gtk.Widget)
-    assert set(obj._discover_type_buttons.keys()) == {"video", "image", "animate", "artgen"}
+    assert set(obj._discover_type_buttons.keys()) == {"video", "image", "animate", "artgen", "audio"}
     for btn in obj._discover_type_buttons.values():
         assert isinstance(btn, Gtk.ToggleButton)
 

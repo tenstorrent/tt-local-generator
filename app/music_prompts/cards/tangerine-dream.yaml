@@ -1,0 +1,25 @@
+id: tangerine-dream
+kind: artist
+name: Tangerine Dream
+aliases: []
+family: electronic
+parent: berlin-school
+inspiration: [Tangerine Dream, Phaedra, Rubycon, Stratosfear, Edgar Froese]
+sound: >-
+  Pulsing analog sequencer lines under washes of Mellotron strings and long,
+  gliding synth leads, drifting from eerie, beatless passages into hypnotic,
+  driving sequences.
+instruments: [Moog sequencer, modular synthesizer, Mellotron, organ, lead synth, occasional electric guitar]
+rhythm: Interlocking eighth- and sixteenth-note sequencer patterns that enter partway through and run for minutes.
+harmony: Minor-key and modal drones with slow shifts of the bass note.
+mood: Cosmic, eerie, hypnotic and cinematic.
+production: Deep, wide and reverberant; warm analog hiss and long crossfades.
+tempo_bpm: [100, 130]
+avoid: [vocals up front, pop song structure, acoustic drum kit]
+tags: [sequencer pulse, mellotron, moog, cosmic synth, side-long pieces, eerie]
+goes_with: [post-rock, psych]
+notes: >-
+  Wikipedia: Tangerine Dream; Wikipedia: Phaedra (album) and Rubycon (album);
+  PopMatters: Tangerine Dream, Rubycon 50th anniversary (sequencer enters around
+  the seven-minute mark, search summary); Progressive Rock Central: Rubycon,
+  Berlin School Mastery (search summary)

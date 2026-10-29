@@ -47,6 +47,7 @@ SkyReels-I2V (an image-to-video model that needs a conditioning image).
 from __future__ import annotations
 
 import argparse
+import logging
 import random
 import sys
 import threading
@@ -65,6 +66,8 @@ import field_roles
 import gtk_layout
 from animatediff_runtime import SERVED_PACKAGE as _ANIMATEDIFF_SERVED_PACKAGE
 from app_settings import settings as _settings
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -2859,6 +2862,18 @@ def _category_hint(category, n: int = 4) -> str:
     return hint
 
 
+_PILL_LABEL_CHARS = 48
+
+
+def _short_pill_label(text: str) -> str:
+    """`text` cut at a word boundary to fit a pill, with "..." when it was cut."""
+    text = " ".join(text.split())
+    if len(text) <= _PILL_LABEL_CHARS:
+        return text
+    cut = text[:_PILL_LABEL_CHARS].rsplit(" ", 1)[0].rstrip(",;:.")
+    return f"{cut}..."
+
+
 class ModifierPills(Gtk.Box):
     """Category-grouped "add" chips that turn into removable pills.
 
@@ -2894,6 +2909,14 @@ class ModifierPills(Gtk.Box):
         self._kind = kind
         self._applied: "list" = []  # ordered list[ChipEntry], click order
         self._add_buttons: "dict[int, Gtk.Button]" = {}  # id(entry) -> its add-chip button
+        # Free-text chips ("In the style of ..."): id(entry) -> (Gtk.Entry, add Gtk.Button).
+        self._freetext_widgets: "dict[int, tuple]" = {}
+        # Turns an "In the style of" value into a sound description (None: no card matched, keep the
+        # literal text). Set by RoleZonePanel for the Music medium; None everywhere else.
+        self.style_of_fn: "Optional[Callable[[str], Optional[str]]]" = None
+        # Chips a panel adds for the current model (e.g. a trigger phrase); see set_extra_chips.
+        self._extra_entries: "list" = []
+        self._extra_box: "Optional[Gtk.Widget]" = None
 
         try:
             self._categories = (
@@ -2907,6 +2930,8 @@ class ModifierPills(Gtk.Box):
         self._applied_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self._applied_flow.add_css_class("modifier-pills-applied")
         self.append(self._applied_flow)
+        self._extra_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)   # holds the model's own chips
+        self.append(self._extra_slot)
 
         # One "add" FlowBox per category — built once, never rebuilt.
         for category in self._categories:
@@ -2920,7 +2945,66 @@ class ModifierPills(Gtk.Box):
         """Space-joined `.text` of every applied pill, in click order."""
         return " ".join(entry.text for entry in self._applied)
 
+    def set_extra_chips(self, entries: "list", name: str = "This model") -> None:
+        """Show *entries* (ChipEntry) as one extra category, replacing the previous set.
+
+        A panel whose chips depend on the chosen model (a music model's trigger phrase) calls this when
+        the model changes. Pills already applied from an older set stay applied."""
+        if self._extra_box is not None:
+            self._extra_slot.remove(self._extra_box)
+            self._extra_box = None
+        for old in self._extra_entries:
+            self._add_buttons.pop(id(old), None)
+        self._extra_entries = list(entries)
+        if not self._extra_entries:
+            return
+        from chip_config import ChipCategory
+        self._extra_box = self._build_category_box(ChipCategory(name=name, chips=self._extra_entries))
+        self._extra_slot.append(self._extra_box)
+
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _build_free_text_chip(self, entry) -> Gtk.Widget:
+        """A chip whose text is a template with one "{}" and a value the user types
+        (e.g. "in the style of {}"). An empty value applies nothing."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        field = Gtk.Entry()
+        field.set_placeholder_text(entry.label.rstrip(".\u2026 ") or "Type here")
+        field.set_width_chars(16)
+        btn = Gtk.Button(label=f"+ {entry.label}")
+        btn.add_css_class("create-addchip")
+        if entry.tip:
+            btn.set_tooltip_text(entry.tip)
+            field.set_tooltip_text(entry.tip)
+
+        def _apply(_w=None) -> None:
+            value = field.get_text().strip()
+            if not value:
+                return
+            from chip_config import ChipEntry
+            described = None
+            if self.style_of_fn is not None:
+                try:
+                    described = self.style_of_fn(value)
+                except Exception:  # noqa: BLE001 - a chip never breaks the panel; fall back to the literal text
+                    _log.debug("style-of translation failed", exc_info=True)
+            if described:
+                # The pill shows the sound description (shortened; the tooltip has all of it), and the
+                # description is what is added to the prompt. The typed name is not.
+                self._applied.append(ChipEntry(label=_short_pill_label(described), text=described,
+                                               tip=f"{value}: {described}"))
+            else:
+                text = entry.text.replace("{}", value)
+                self._applied.append(ChipEntry(label=text, text=text, tip=entry.tip))
+            field.set_text("")
+            self._render_applied()
+
+        btn.connect("clicked", _apply)
+        field.connect("activate", _apply)
+        self._freetext_widgets[id(entry)] = (field, btn)
+        box.append(field)
+        box.append(btn)
+        return box
 
     def _build_category_box(self, category) -> Gtk.Widget:
         """One collapsible CATEGORY row: an icon + the category name + a short
@@ -2962,6 +3046,9 @@ class ModifierPills(Gtk.Box):
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.add_css_class("modifier-pills-add-row")
         for entry in category.chips:
+            if getattr(entry, "freetext", False):
+                flow.append(self._build_free_text_chip(entry))
+                continue
             btn = Gtk.Button(label=f"+ {entry.label}")
             btn.add_css_class("create-addchip")
             if entry.tip:
@@ -3121,11 +3208,20 @@ class RoleZonePanel(Gtk.Box):
         # ── "Direction" zone ─────────────────────────────────────────────
         self._direction_zone = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._direction_zone.add_css_class("role-zone-direction-body")
-        if getattr(medium, "source", "") == "artgen":
+        if getattr(medium, "source", "") in ("artgen", "music"):
+            # Music keys its bank by its own id, the same way an artgen type does.
             self._modifier_pills = ModifierPills(medium.id, artgen=True)
         else:
             self._modifier_pills = ModifierPills(medium.kind)
         self._direction_zone.append(self._modifier_pills)
+        # A panel with model-specific chips (music trigger phrases) pushes them into the pills.
+        if hasattr(panel, "trigger_chips"):
+            panel.on_triggers_changed = lambda entries: self._modifier_pills.set_extra_chips(
+                entries, "This model")
+            panel.on_triggers_changed(panel.trigger_chips())
+        # A panel that can describe a style (Music) translates the "In the style of" chip's value.
+        if callable(getattr(panel, "style_of_text", None)):
+            self._modifier_pills.style_of_fn = panel.style_of_text
         direction_frame = Gtk.Frame(label="Direction")
         direction_frame.add_css_class("role-zone-direction")
         direction_frame.set_child(self._direction_zone)
@@ -3230,6 +3326,11 @@ class RoleZonePanel(Gtk.Box):
         # side). ~940px keeps each column ~460 — roomy for chips/controls
         # without sprawling — while the possibilities wall / prompt / chip row
         # above still use the full form width.
+        # A panel may have status widgets that belong above the zones (Music's start-a-model card).
+        header = getattr(panel, "header_widgets", None)
+        if callable(header):
+            for w in header():
+                self.append(w)
         self.append(gtk_layout.wrap_centered(columns, max_width=940, align="start"))
 
     # ── Public API ───────────────────────────────────────────────────────────
@@ -3291,3 +3392,1288 @@ class RoleZonePanel(Gtk.Box):
                     texts.append(label_widget.get_label())
             child = child.get_next_sibling()
         return texts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MusicParamPanel (music generation, Task 4)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# One panel for every music model. What it shows comes from the chosen server's MusicProfile, and
+# `collect()` returns only what that profile accepts: a control that is hidden is never collected, even
+# if it still holds a value from an earlier model. Logical key names are used here (prompt, lyrics,
+# seconds, ...); `music_runtime.WIRE` maps them to each server's own names.
+#
+# Servers arrive through `servers_changed()`. Discovery blocks on the network, so this panel never
+# calls it on the GTK thread; the owner runs it on a worker thread and hands the result in.
+
+import music_runtime as _mr  # noqa: E402
+from music_runtime import MusicServer, normalize_url, save_server  # noqa: E402
+
+# MiniMax accepting a song with no lyrics is UNCONFIRMED: the client sends INSTRUMENTAL_PLACEHOLDER
+# ("[Instrumental]") and nobody has checked a live server yet. The switch therefore ships OFF (hidden)
+# and a lyrics model with empty lyrics is refused. Set this to True only after a live MiniMax check
+# shows the placeholder is accepted.
+INSTRUMENTAL_SWITCH_CONFIRMED = False
+
+_LYRICS_TAGS = ("[Verse]", "[Chorus]", "[Bridge]", "[Intro]", "[Outro]")
+_NO_LLM_HINT = ("The lyrics helper needs a chat model. Start one (for example with tt-model serve), "
+                "then pick Music again. You can still type lyrics.")
+_NO_SERVER_HELP = ("No music server is running. Start one (the Music panel shows how), "
+                   "or choose Connect to add its address.")
+_SERVER_DOWN_HINT = "Server is down"
+_LOCAL_HOSTS = ("localhost", "::1")
+
+# ── Prompt tools (the style card library, app/music_prompts) ────────────────
+#
+# The wand, Write the prompt, Smooth with AI, Styles and Undo sit under the prompt. The library is GTK-free
+# and fast, so it runs on the GTK thread unless Smooth with AI or a lyrics writer is on; those ask a chat
+# model, so the call goes to a worker thread and the result comes back through GLib.idle_add.
+#
+# Names never reach the prompt: translate() is called with include_names=False, and the names it matched
+# are shown only in the result strip ("Inspired by: ..."). The lyrics box is filled only when it is empty
+# or the user agrees to replace it; Undo restores the prompt (and the lyrics, when they were replaced).
+import music_prompts  # noqa: E402 - GTK-free card library
+
+_NO_PROFILE_NOTE = "Pick a server to tune the prompt for a model."
+_SMOOTH_TIP = ("Ask a chat model to make the written prompt read smoothly. "
+               "Your own words and the style descriptions are kept.")
+_NO_SMOOTH_TIP = ("Smooth with AI needs a chat model. Start one (for example with tt-model serve), "
+                  "then pick Music again.")
+_REPLACE_LYRICS_MSG = "Replace the lyrics you typed with the lyrics written for this prompt?"
+_PROMPT_CHANGED_NOTE = "The prompt changed while it was being written, so the result was not used."
+_MODEL_CHANGED_NOTE = "The music model changed while the prompt was being written, so the result was not used."
+
+
+def style_of_text(value: str, profile) -> "Optional[str]":
+    """The sound description for an "In the style of" value, for `profile`'s model.
+
+    Only the named cards' sound (their tags for a tags model): no tempo, key or mood, because the pill
+    is added to a prompt that may carry its own. None when no style card matches, so the caller keeps
+    its literal text. Fail-soft."""
+    try:
+        d = music_prompts.style_description(value, profile)
+    except Exception:  # noqa: BLE001 - a broken card library must not break a chip
+        _log.debug("style-of translation failed", exc_info=True)
+        return None
+    return d if d and d.strip() else None
+
+
+def _append_pick(current: str, label: str) -> str:
+    """The prompt text with a Styles pick added: "Rainy day." + Tortoise gives "Rainy day, Tortoise".
+
+    End punctuation is dropped so the pick reads as part of the same request (after a full stop a
+    capitalised ambiguous name would read as a sentence start and not match)."""
+    cur = (current or "").rstrip(" \t\n,;.!?")
+    return f"{cur}, {label}" if cur else label
+
+
+# What Write the prompt shows when a lyrics model has no lyrics to send (the instrumental switch is off).
+_ADD_LYRICS_NOTE = "MiniMax writes a song from lyrics. Add lyrics to send this prompt."
+_NO_SMOOTHER_TIP = "Smooth with AI is not connected yet in this version."
+
+
+def _remember_music_server(url: str) -> None:
+    """Save the user's pick so the next start defaults to it. Fail-soft."""
+    try:
+        _settings.set("music_last_server", url)
+    except Exception:  # noqa: BLE001 - only the settings write is guarded; a typo above would surface
+        _log.debug("could not save the last music server", exc_info=True)
+
+
+def _last_music_server() -> str:
+    try:
+        return str(_settings.get("music_last_server") or "")
+    except Exception:  # noqa: BLE001
+        _log.debug("could not read the last music server", exc_info=True)
+        return ""
+
+
+def check_connect_address(text: str) -> "tuple[Optional[str], str, str]":
+    """Read the address typed in the Connect dialog: `(url, warning, error)`.
+
+    `url` is the normalised address, or None with a plain `error`. `warning` is non-empty for
+    plain http to a machine other than this one, where the audio and any token cross the network
+    unencrypted."""
+    try:
+        url = normalize_url(text)
+    except ValueError as e:
+        return None, "", str(e)
+    import urllib.parse
+    host = urllib.parse.urlsplit(url).hostname or ""
+    warning = ""
+    if url.startswith("http://") and host not in _LOCAL_HOSTS and not host.startswith("127."):
+        warning = ("This address is not on this computer and is not encrypted, so what you send and any "
+                   "token can be read on the network. Use it only on a network you trust.")
+    return url, warning, ""
+
+
+def _run_in_thread(fn: Callable, done: Callable) -> None:
+    """Run `fn()` off the GTK thread and call `done(result)` on the main thread."""
+    def _work() -> None:
+        try:
+            result = fn()
+        except Exception:
+            result = None
+        GLib.idle_add(lambda: (done(result), False)[1])
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def _set_clipboard(text: str) -> None:
+    """Put `text` on the clipboard (main thread). A seam: tests replace it."""
+    display = Gdk.Display.get_default()
+    if display is not None:
+        display.get_clipboard().set(text)
+
+
+class MusicStartCard(Gtk.Box):
+    """"Start a music model": what to run when no music server is listed. Shows and copies commands; it never runs one.
+
+    Rows come from `music_runtime.KNOWN_MODELS`, so the commands have one source."""
+
+    _COPIED_MS = 2000
+    _LOOK_TIMEOUT_S = 15
+
+    def __init__(self, on_rescan: "Callable[[], None]", on_connect: "Callable[[Gtk.Widget], None]") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add_css_class("music-start-card")
+        self._on_rescan = on_rescan
+        self._copy_buttons: "list[Gtk.Button]" = []
+        self._copy_timer = 0
+        self._look_timer = 0
+
+        title = Gtk.Label(label="Start a music model", xalign=0.0)
+        title.add_css_class("music-start-title")
+        self.append(title)
+        intro = Gtk.Label(label="No music server was found. Run one of these in a terminal, then press Check again.",
+                          xalign=0.0, wrap=True)
+        intro.add_css_class("music-start-text")
+        self.append(intro)
+
+        for m in _mr.KNOWN_MODELS:
+            self.append(self._model_row(m))
+
+        ports = ", ".join(str(p) for p in _mr.scan_ports())
+        scanned = Gtk.Label(label=f"Looking on ports {ports}. Not on these ports? Use Connect...", xalign=0.0, wrap=True)
+        scanned.add_css_class("music-start-note")
+        self.append(scanned)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._check_btn = Gtk.Button(label="Check again")
+        self._check_btn.connect("clicked", self._on_check)
+        buttons.append(self._check_btn)
+        connect = Gtk.Button(label="Connect...")
+        connect.set_tooltip_text("Connect to a model: add the address of a music server")
+        connect.connect("clicked", lambda b: on_connect(b))
+        buttons.append(connect)
+        self.append(buttons)
+        self.connect("unrealize", lambda *_: self._cancel_timers())
+
+    def _model_row(self, m) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        name = Gtk.Label(label=m.label, xalign=0.0, wrap=True)
+        name.add_css_class("music-start-title")
+        box.append(name)
+        for text, css in ((m.blurb, "music-start-text"), (m.listens, "music-start-text"), (m.note, "music-start-note")):
+            if text:
+                lbl = Gtk.Label(label=text, xalign=0.0, wrap=True)
+                lbl.add_css_class(css)
+                box.append(lbl)
+        shown = m.command or m.path
+        if shown:
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            cmd = Gtk.Label(label=shown, xalign=0.0, wrap=True, selectable=True)
+            cmd.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            cmd.set_hexpand(True)
+            cmd.set_tooltip_text(shown)
+            cmd.add_css_class("music-start-cmd")
+            line.append(cmd)
+            if m.command:
+                btn = Gtk.Button(label="Copy")
+                btn.set_valign(Gtk.Align.START)
+                btn.connect("clicked", self._on_copy, m.command)
+                self._copy_buttons.append(btn)
+                line.append(btn)
+            box.append(line)
+        return box
+
+    # Copy: the button reads "Copied" for a moment.
+    def _on_copy(self, btn, command: str) -> None:
+        try:
+            _set_clipboard(command)
+        except Exception:  # noqa: BLE001 - a clipboard problem must not break Create
+            _log.debug("could not copy to the clipboard", exc_info=True)
+            return
+        self._reset_copy_labels()
+        btn.set_label("Copied")
+        if self._copy_timer:
+            GLib.source_remove(self._copy_timer)
+        self._copy_timer = GLib.timeout_add(self._COPIED_MS, self._copy_timeout)
+
+    def _copy_timeout(self) -> bool:
+        self._copy_timer = 0
+        self._reset_copy_labels()
+        return GLib.SOURCE_REMOVE
+
+    def _reset_copy_labels(self) -> None:
+        for b in self._copy_buttons:
+            b.set_label("Copy")
+
+    # Check again: "Looking..." until the next result arrives (or a safety timeout).
+    def _on_check(self, _btn) -> None:
+        if self._on_rescan is None:
+            return
+        self._check_btn.set_label("Looking...")
+        self._check_btn.set_sensitive(False)
+        if self._look_timer:
+            GLib.source_remove(self._look_timer)
+        self._look_timer = GLib.timeout_add_seconds(self._LOOK_TIMEOUT_S, self._look_timeout)
+        try:
+            asked = self._on_rescan()
+        except Exception:  # noqa: BLE001
+            _log.debug("music rescan failed", exc_info=True)
+            asked = False
+        if asked is False:
+            self.scan_done()
+
+    def _look_timeout(self) -> bool:
+        self._look_timer = 0
+        self.scan_done()
+        return GLib.SOURCE_REMOVE
+
+    def scan_done(self) -> None:
+        if self._look_timer:
+            GLib.source_remove(self._look_timer)
+            self._look_timer = 0
+        self._check_btn.set_label("Check again")
+        self._check_btn.set_sensitive(True)
+
+    def _cancel_timers(self) -> None:
+        for attr in ("_copy_timer", "_look_timer"):
+            if getattr(self, attr):
+                GLib.source_remove(getattr(self, attr))
+                setattr(self, attr, 0)
+
+
+class MusicConnectDialog(Gtk.Window):
+    """Ask for a server address (and an optional token), probe it, save it on success.
+
+    The probe blocks, so it runs on a background thread and reports back through GLib.idle_add."""
+
+    def __init__(self, parent=None, *, probe_fn: "Optional[Callable]" = None,
+                 run_async: "Optional[Callable]" = None, on_connected: "Optional[Callable]" = None) -> None:
+        super().__init__(title="Connect to a music model")
+        if parent is not None:
+            self.set_transient_for(parent)
+            self.set_modal(True)
+        self._probe_fn = probe_fn or _mr._probe
+        self._run_async = run_async or _run_in_thread
+        self._on_connected = on_connected
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(16)
+        box.append(Gtk.Label(label="Address of a running music server, for example http://localhost:8795",
+                             xalign=0.0, wrap=True))
+        self._url_entry = Gtk.Entry()
+        self._url_entry.set_placeholder_text("http://host:port")
+        self._url_entry.connect("changed", self._on_url_changed)
+        box.append(self._url_entry)
+        self._token_entry = Gtk.PasswordEntry()
+        self._token_entry.set_show_peek_icon(True)
+        box.append(Gtk.Label(label="Access token (only if the server asks for one)", xalign=0.0))
+        box.append(self._token_entry)
+        box.append(Gtk.Label(label="The token is stored as plain text in the app settings file.",
+                             xalign=0.0, wrap=True))
+        self._warning = Gtk.Label(label="", xalign=0.0, wrap=True)
+        self._warning.add_css_class("image-param-hint")
+        self._warning.set_visible(False)
+        box.append(self._warning)
+        self._status = Gtk.Label(label="", xalign=0.0, wrap=True)
+        box.append(self._status)
+        self._connect_btn = Gtk.Button(label="Connect")
+        self._connect_btn.connect("clicked", self._on_connect_clicked)
+        box.append(self._connect_btn)
+        self.set_child(box)
+
+    def _on_url_changed(self, _entry) -> None:
+        _url, warning, _err = check_connect_address(self._url_entry.get_text()) \
+            if self._url_entry.get_text().strip() else (None, "", "")
+        self._warning.set_label(warning)
+        self._warning.set_visible(bool(warning))
+
+    def _on_connect_clicked(self, _btn) -> None:
+        url, _warning, err = check_connect_address(self._url_entry.get_text())
+        if url is None:
+            self._status.set_label(err)
+            return
+        token = self._token_entry.get_text().strip() or None
+        self._status.set_label("Checking...")
+        self._connect_btn.set_sensitive(False)
+        self._run_async(lambda: self._probe_fn(url, token), lambda profile: self._probed(url, token, profile))
+
+    def _probed(self, url: str, token: "Optional[str]", profile) -> None:
+        self._connect_btn.set_sensitive(True)
+        if profile is None:
+            self._status.set_label(f"No music server answered at {url}. Check the address, the token and that the server is running.")
+            return
+        try:
+            save_server(url, token, profile.label)
+        except ValueError as e:
+            self._status.set_label(str(e))
+            return
+        self._status.set_label(f"Connected to {profile.label}.")
+        if self._on_connected:
+            self._on_connected(MusicServer(url=url, profile=profile, up=True, saved=True, token=token, label=profile.label))
+
+
+class _LyricsSeed:
+    """Gives the Lyrics text view the get_text/set_text surface `attach_inspire_button` expects.
+
+    Empty lyrics read as the style prompt, so the button writes lyrics from the prompt; typed lyrics
+    are polished instead."""
+
+    def __init__(self, panel: "MusicParamPanel") -> None:
+        self._panel = panel
+
+    def get_text(self) -> str:
+        return self._panel._lyrics_text().strip() or self._panel._prompt_text()
+
+    def set_text(self, text: str) -> None:
+        self._panel._lyrics_buffer.set_text(text)
+
+
+class MusicParamPanel(CreateParamPanel):
+    """Create-surface panel for the Music medium. See the section comment above."""
+
+    _KEYS = ("prompt", "lyrics", "instrumental", "seconds", "seed", "steps", "cfg_scale", "server_url", "reference_clip")
+    _LABELS = {"prompt": "Music prompt", "lyrics": "Lyrics", "instrumental": "Instrumental", "seconds": "Duration",
+               "seed": "Seed", "steps": "Steps", "cfg_scale": "Guidance", "server_url": "Music model",
+               "reference_clip": "Reference or edit clip"}
+
+    def __init__(self, inspire_fn=None, prompt_type_getter=None, *, llm_available_fn=None) -> None:
+        self._inspire_fn = inspire_fn
+        self._prompt_type_getter = prompt_type_getter
+        self._llm_available_fn = llm_available_fn
+        self._server: "Optional[MusicServer]" = None
+        self._servers: "list[MusicServer]" = []
+        self._rows: "dict[str, Gtk.Widget]" = {}
+        self._reference_path = ""
+        self._llm_ok = True
+        self._prompt_getter: "Optional[Callable[[], str]]" = None
+        self._prompt_setter: "Optional[Callable[[str], None]]" = None
+        # Prompt-tool seams. Task 8 sets smooth_fn (the LLM smoother) and lyrics_fn (the LLM lyrics writer);
+        # with them None, Smooth adds a note and the lyrics are a skeleton from the card's themes.
+        self._smooth_fn: "Optional[Callable[[str], Optional[str]]]" = None
+        self.lyrics_fn: "Optional[Callable[[str, tuple], Optional[str]]]" = None
+        # Asked before typed lyrics are replaced: a callable(message) -> bool for tests and embedders.
+        # Only the literal True counts as yes. None shows a dialog.
+        self.confirm_replace_lyrics: "Optional[Callable[[str], bool]]" = None
+        self._smooth_ok = False              # becomes True only when the chat-model check says so
+        self._undo: "Optional[dict]" = None  # {"prompt": text before, "lyrics": text before (when replaced)}
+        self._last_translation = None        # the music_prompts.Translation shown in the result strip
+        self._last_filled = ""               # the prompt text the last wand or Write the prompt put in
+        # What the library wrote `_last_filled` from, so a recognised written prompt is not parsed as a request.
+        # Both are tuples of parts, each parsed on its own (`music_prompts.translate_parts`): `_fill_typed` is
+        # the user's own typed text (plus Styles picks added since), () when the wand chose every card;
+        # `_fill_source` names the same cards (the typed parts plus a part with the wand's cards).
+        # `_fill_picked` is True when a Styles pick was added to the written prompt since it was written.
+        # `_fill_ctx` is what it was written for: the model, Smooth on or off, a lyrics writer or not
+        # (`_write_context`). Write re-renders when any of them changed.
+        self._fill_typed: tuple = ()
+        self._fill_source: tuple = ()
+        self._fill_picked = False
+        self._fill_ctx: tuple = ()
+        self._applied_model_id: "Optional[str]" = None      # the profile the numeric controls were last set for
+        self._suppress_pick = False
+        self.on_triggers_changed: "Optional[Callable[[list], None]]" = None
+        self.on_connect_saved: "Optional[Callable[[MusicServer], None]]" = None
+        self.on_rescan: "Optional[Callable[[], None]]" = None     # "Check again" on the start-a-model card
+        self._built = False
+
+    @property
+    def smooth_fn(self) -> "Optional[Callable[[str], Optional[str]]]":
+        """The LLM smoother. Smooth with AI is usable only when this is set and a chat model answers."""
+        return self._smooth_fn
+
+    @smooth_fn.setter
+    def smooth_fn(self, fn: "Optional[Callable[[str], Optional[str]]]") -> None:
+        self._smooth_fn = fn
+        if self._built:
+            self._apply_smooth_state()
+
+    # ── the profile decides what is accepted ────────────────────────────────
+
+    @property
+    def _profile(self):
+        return self._server.profile if self._server is not None else None
+
+    def _instrumental_offered(self) -> bool:
+        p = self._profile
+        return bool(p and p.has_lyrics and INSTRUMENTAL_SWITCH_CONFIRMED)
+
+    def _instrumental_on(self) -> bool:
+        return self._instrumental_offered() and self._built and self._instrumental_switch.get_active()
+
+    def _accepted(self) -> "list[str]":
+        p = self._profile
+        keys = ["prompt"]
+        if p and p.has_lyrics:
+            if self._instrumental_offered():
+                keys.append("instrumental")
+            if not self._instrumental_on():
+                keys.append("lyrics")
+        keys += ["seconds", "seed"]
+        if p and p.steps_max is not None:
+            keys.append("steps")
+        if p and p.cfg_max is not None:
+            keys.append("cfg_scale")
+        if self._server is not None:
+            keys.append("server_url")
+        if p and p.audio_in in ("reference", "edit", "both"):
+            keys.append("reference_clip")
+        return keys
+
+    # ── CreateParamPanel ────────────────────────────────────────────────────
+
+    def field_specs(self) -> "list[FieldSpec]":
+        specs = []
+        kinds = {"prompt": "str", "lyrics": "str", "instrumental": "bool", "seconds": "float", "seed": "int",
+                 "steps": "int", "cfg_scale": "float", "server_url": "str", "reference_clip": "path"}
+        for key in self._KEYS:
+            specs.append(FieldSpec(key=key, label=self._LABELS[key], kind=kinds[key],
+                                   default=False if key == "instrumental" else ("" if kinds[key] in ("str", "path") else None),
+                                   role=field_roles.classify_music(key)))
+        return specs
+
+    def build(self) -> Gtk.Widget:
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.add_css_class("music-param-panel")
+        self._rows = {}
+
+        # Model line: server picker + Connect.
+        row = self._row("server_url")
+        self._server_dd = Gtk.DropDown.new_from_strings([])
+        self._server_dd.set_hexpand(True)
+        # A DropDown is as wide as its longest entry ("● name  http://host:port" is ~40 characters), which made the whole
+        # form ~720 px at minimum. Ellipsize the entries so the row can shrink; the tooltip-free full text is in the popup.
+        factory = Gtk.SignalListItemFactory()
+
+        def _setup(_f, item):
+            lbl = Gtk.Label(xalign=0.0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(1)
+            lbl.set_width_chars(8)
+            item.set_child(lbl)
+
+        def _bind(_f, item):
+            text = item.get_item().get_string()
+            item.get_child().set_label(text)
+            item.get_child().set_tooltip_text(text)
+
+        factory.connect("setup", _setup)
+        factory.connect("bind", _bind)
+        self._server_dd.set_factory(factory)
+        self._server_dd.connect("notify::selected", self._on_server_picked)
+        row.append(self._server_dd)
+        connect = Gtk.Button(label="Connect...")
+        connect.set_tooltip_text("Connect to a model: add the address of a music server")
+        connect.connect("clicked", self._on_connect_clicked)
+        row.append(connect)
+        self._server_hint = Gtk.Label(label=_SERVER_DOWN_HINT, xalign=0.0, wrap=True)
+        self._server_hint.add_css_class("image-param-hint")
+        self._start_card = MusicStartCard(on_rescan=self._do_rescan,
+                                          on_connect=self._on_connect_clicked)
+        self._rows["server_url"] = row
+
+        # Prompt.
+        row = self._row("prompt")
+        self._prompt_entry = Gtk.Entry()
+        self._prompt_entry.set_hexpand(True)
+        self._prompt_entry.set_placeholder_text("genre, mood, instruments, tempo")
+        row.append(self._prompt_entry)
+        self._prompt_inspire_btn = None
+        if self._inspire_fn is not None:
+            self._prompt_inspire_btn = attach_inspire_button(
+                self._prompt_entry, lambda: "music", self._inspire_fn,
+                tooltip="Write a music style prompt, or reimagine what you typed.")
+            row.append(self._prompt_inspire_btn)
+        self._rows["prompt"] = row
+        self._prompt_tools = self._build_prompt_tools()
+
+        # Lyrics: instrumental switch, text box, helper buttons.
+        row = self._row("lyrics")
+        row.set_orientation(Gtk.Orientation.VERTICAL)
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = row.get_first_child()                  # the label stays first: RoleZonePanel relabels it
+        row.remove(label)
+        top.append(label)
+        self._instrumental_switch = Gtk.Switch()
+        self._instrumental_switch.connect("notify::active", lambda *_: self._refresh())
+        self._instrumental_label = Gtk.Label(label="Instrumental")
+        top.append(self._instrumental_label)
+        top.append(self._instrumental_switch)
+        row.append(top)
+        self._lyrics_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._lyrics_view = Gtk.TextView()
+        self._lyrics_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._lyrics_view.set_size_request(-1, 120)
+        self._lyrics_buffer = self._lyrics_view.get_buffer()
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_min_content_height(120)
+        scroller.set_child(self._lyrics_view)
+        self._lyrics_box.append(scroller)
+        tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._tag_menu = Gtk.MenuButton(label="Add tag")
+        pop = Gtk.Popover()
+        tag_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for tag in _LYRICS_TAGS:
+            b = Gtk.Button(label=tag)
+            b.connect("clicked", lambda _b, t=tag: (self.insert_tag(t), pop.popdown()))
+            tag_box.append(b)
+        pop.set_child(tag_box)
+        self._tag_menu.set_popover(pop)
+        tools.append(self._tag_menu)
+        self._lyrics_inspire_btn = None
+        self._lyrics_helper_hint = Gtk.Label(label=_NO_LLM_HINT, xalign=0.0, wrap=True)
+        self._lyrics_helper_hint.add_css_class("image-param-hint")
+        self._lyrics_helper_hint.set_visible(False)
+        if self._inspire_fn is not None:
+            self._lyrics_inspire_btn = attach_inspire_button(
+                _LyricsSeed(self), lambda: "lyrics", self._lyrics_inspire, label="✨ Write lyrics",
+                tooltip="Write lyrics from the prompt, or polish the lyrics you typed.")
+            tools.append(self._lyrics_inspire_btn)
+        self._lyrics_box.append(tools)
+        self._lyrics_box.append(self._lyrics_helper_hint)
+        row.append(self._lyrics_box)
+        self._rows["lyrics"] = row
+
+        # Duration.
+        row = self._row("seconds")
+        self._seconds_adj = Gtk.Adjustment(value=30, lower=1, upper=60, step_increment=1, page_increment=5)
+        self._seconds_spin = Gtk.SpinButton(adjustment=self._seconds_adj, digits=0)
+        row.append(self._seconds_spin)
+        self._seconds_hint = Gtk.Label(label="", xalign=0.0, wrap=True)
+        self._seconds_hint.add_css_class("image-param-hint")
+        row.append(self._seconds_hint)
+        self._rows["seconds"] = row
+
+        # Seed: empty means random; after a run the owner shows the seed the server used.
+        row = self._row("seed")
+        self._seed_entry = Gtk.Entry()
+        self._seed_entry.set_placeholder_text("random")
+        self._seed_entry.set_width_chars(12)
+        row.append(self._seed_entry)
+        self._rows["seed"] = row
+
+        row = self._row("steps")
+        self._steps_adj = Gtk.Adjustment(value=0, lower=0, upper=100, step_increment=1, page_increment=5)
+        row.append(Gtk.SpinButton(adjustment=self._steps_adj, digits=0))
+        self._steps_hint = Gtk.Label(label="", xalign=0.0)
+        self._steps_hint.add_css_class("image-param-hint")
+        row.append(self._steps_hint)
+        self._rows["steps"] = row
+
+        row = self._row("cfg_scale")
+        self._cfg_adj = Gtk.Adjustment(value=1.0, lower=1.0, upper=20.0, step_increment=0.5, page_increment=1.0)
+        row.append(Gtk.SpinButton(adjustment=self._cfg_adj, digits=1))
+        self._rows["cfg_scale"] = row
+
+        row = self._row("reference_clip")
+        self._reference_label = Gtk.Label(label="none chosen", xalign=0.0)
+        row.append(self._reference_label)
+        pick = Gtk.Button(label="Choose...")
+        pick.connect("clicked", self._on_pick_reference)
+        row.append(pick)
+        self._rows["reference_clip"] = row
+
+        for key in ("prompt", "lyrics", "seconds", "seed", "steps", "cfg_scale", "reference_clip", "server_url"):
+            root.append(self._rows[key])
+            if key == "prompt":
+                root.append(self._prompt_tools)
+        root.append(self._server_hint)
+        self._root = root
+        self._built = True
+        self._refresh()
+        # The check opens sockets, so it runs only when the owner wants LLM helpers (the app passes
+        # inspire_fn) or injects its own check. Without it Smooth with AI stays off.
+        if self._inspire_fn is not None or self._llm_available_fn is not None:
+            self._start_llm_check()
+        return root
+
+    # ── prompt tools ────────────────────────────────────────────────────────
+
+    def _build_prompt_tools(self) -> Gtk.Widget:
+        """The wand, Write the prompt, Smooth with AI, Styles and Undo, with the result strip under them."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.add_css_class("music-prompt-tools")
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        self._wand_btn = Gtk.Button(label="\U0001FA84 Surprise")
+        self._wand_btn.set_tooltip_text("Surprise me")
+        self._wand_btn.connect("clicked", self._on_wand)
+        bar.append(self._wand_btn)
+
+        self._write_btn = Gtk.Button(label="Write the prompt")
+        self._write_btn.set_tooltip_text(
+            "Turn the names and styles you typed into a description of their sound. Your own words stay.")
+        self._write_btn.connect("clicked", self._on_write)
+        bar.append(self._write_btn)
+
+        self._styles_btn = Gtk.MenuButton(label="Styles")
+        self._styles_btn.set_tooltip_text("Add a style, scene or instrument from the library to the prompt")
+        pop = Gtk.Popover()
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_min_content_height(320)
+        scroller.set_max_content_height(420)
+        scroller.set_propagate_natural_width(True)
+        self._styles_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._fill_styles_menu(pop)
+        scroller.set_child(self._styles_box)
+        pop.set_child(scroller)
+        self._styles_btn.set_popover(pop)
+        bar.append(self._styles_btn)
+
+        self._undo_btn = Gtk.Button(label="Undo")
+        self._undo_btn.set_tooltip_text("Put back the prompt from before the last Surprise or Write the prompt")
+        self._undo_btn.set_sensitive(False)
+        self._undo_btn.connect("clicked", self._on_undo)
+        bar.append(self._undo_btn)
+
+        self._smooth_check = Gtk.CheckButton(label="Smooth with AI")
+        self._smooth_check.set_active(False)
+        bar.append(self._smooth_check)
+        self._apply_smooth_state()
+        box.append(bar)
+
+        self._result_label = Gtk.Label(xalign=0.0, wrap=True)
+        self._result_label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self._result_label.set_max_width_chars(90)
+        self._result_label.add_css_class("image-param-hint")
+        self._result_label.add_css_class("music-prompt-result")
+        self._result_label.set_visible(False)
+        box.append(self._result_label)
+        return box
+
+    def _fill_styles_menu(self, pop: Gtk.Popover) -> None:
+        """One bold title per menu_tree() group, a button per card; artist entries are indented under
+        their style. A broken library leaves a one-line message in place of the menu."""
+        try:
+            groups = music_prompts.menu_tree()
+        except Exception:  # noqa: BLE001 - the menu is optional; the panel must still build
+            _log.warning("could not load the music style library", exc_info=True)
+            groups = []
+        if not groups:
+            self._styles_box.append(Gtk.Label(label="No styles were found.", xalign=0.0))
+            return
+        for group in groups:
+            title = Gtk.Label(label=group.title, xalign=0.0)
+            title.add_css_class("music-styles-group")
+            self._styles_box.append(title)
+            for item in group.items:
+                btn = Gtk.Button(label=f"inspired by {item.label}" if item.parent_id else item.label)
+                btn.add_css_class("flat")
+                btn.get_child().set_xalign(0.0)
+                if item.parent_id:
+                    btn.set_margin_start(16)
+                if item.tip:
+                    btn.set_tooltip_text(item.tip)
+                btn.connect("clicked", lambda _b, it=item: (self.pick_style(it), pop.popdown()))
+                self._styles_box.append(btn)
+
+    def pick_style(self, item) -> None:
+        """Add a Styles menu item's name to the prompt text; Write the prompt then expands it.
+
+        Added to an unchanged written prompt, the pick becomes a part of the text that prompt was written
+        from, so the next Write renders "typed text, pick" and does not parse the written prompt. Added
+        after words the user put after a written prompt, it is part of those added words, which the next
+        Write renders as their own part (see `_library_edit`), so it needs no record of its own."""
+        new = _append_pick(self._raw_prompt(), item.label)
+        if self._library_edit() == ("", ""):
+            self._fill_typed += (item.label,)
+            self._fill_source += (item.label,)
+            self._fill_picked = True
+            self._last_filled = new
+        self._set_prompt_text(new)
+
+    def _library_edit(self) -> "Optional[tuple]":
+        """How the prompt differs from what the library last wrote (plus Styles picks it recorded).
+
+        `(before, after)`: the words the user added before and after the written text. ("", "") when the
+        prompt is exactly the written text. The written text is recognised only as the whole prompt, as its
+        start followed by a separator (", ", ";" or a space: "<written>, slower"), or as its end preceded by
+        one ("faster, <written>"). None otherwise: the written text inside other words, twice, or inside a
+        longer word ("rain" in "rainy") means the prompt is the user's own and is translated as typed. So does
+        any change to a prompt the library wrote unchanged (the written text equals its source)."""
+        written = self._last_filled.strip()
+        text = self._prompt_text()
+        if not written:
+            return None
+        if text == written:
+            return ("", "")
+        # Words added to a prompt the last Write left unchanged (nothing matched) belong to the same sentence:
+        # split into parts, "about parliament" would lose its context and match on its own. Read it as typed.
+        if written == ", ".join(self._fill_source).strip():
+            return None
+        if text.count(written) != 1:
+            return None
+        seps = (",", ";", " ")
+        if text.startswith(written) and text[len(written)].startswith(seps):
+            return ("", text[len(written):].strip(" \t\n,;"))
+        if text.endswith(written) and text[-len(written) - 1].startswith(seps):
+            return (text[:-len(written)].strip(" \t\n,;"), "")
+        return None
+
+    def _write_context(self) -> tuple:
+        """What a written prompt depends on besides its text: the model, Smooth with AI, a lyrics writer."""
+        return (self._profile_key(), self._smooth_on(), self.lyrics_fn is not None)
+
+    def set_prompt_setter(self, fn: "Optional[Callable[[str], None]]") -> None:
+        """Write the prompt through `fn` instead of this panel's own box (the counterpart of
+        set_prompt_getter: CreateView passes its top entry's set_text)."""
+        self._prompt_setter = fn
+
+    def _raw_prompt(self) -> str:
+        """The prompt text exactly as it stands (not stripped), for Undo."""
+        if self._prompt_getter is not None:
+            return self._prompt_getter() or ""
+        return self._prompt_entry.get_text() if self._built else ""
+
+    def _set_prompt_text(self, text: str) -> None:
+        if self._prompt_setter is not None:
+            self._prompt_setter(text)
+        elif self._built:
+            self._prompt_entry.set_text(text)
+
+    def _smooth_on(self) -> bool:
+        return self._smooth_ok and self._smooth_fn is not None and self._smooth_check.get_active()
+
+    def _library_kwargs(self) -> dict:
+        smooth = self._smooth_on()
+        return dict(smooth=smooth, smooth_fn=self.smooth_fn if smooth else None, lyrics_fn=self.lyrics_fn)
+
+    def _on_wand(self, _btn=None) -> None:
+        """A surprise prompt. Text the user typed is kept, and the wand adds one layer to it; on a prompt the
+        library wrote, the text it was written from is used (never the written prompt); with neither, the
+        wand starts fresh."""
+        typed = self._prompt_text()
+        edit = self._library_edit()
+        if edit is None:
+            base = (typed,) if typed else ()
+        else:                       # a written prompt (perhaps with words added): its source, never its text
+            base = self._with_edit(self._fill_typed, edit)
+        profile, kw = self._profile, self._library_kwargs()
+        self._run_library(lambda: music_prompts.wand(profile, base=base or None, **kw),
+                          sources=lambda t: (base, music_prompts.wand_source(t, base or None)))
+
+    @staticmethod
+    def _with_edit(parts: tuple, edit: tuple) -> tuple:
+        """`parts` with the user's added words around them, each added run its own part."""
+        before, after = edit
+        return tuple(p for p in ((before,) + tuple(parts) + (after,)) if p and p.strip())
+
+    def _on_write(self, _btn=None) -> None:
+        """Translate the typed prompt: names and styles become sound descriptions, the user's words stay.
+
+        Write is idempotent. On an unchanged written prompt for the same model, Smooth setting and lyrics
+        writer it changes nothing. When any of those changed, or Styles picks or words were added after the
+        written text, it renders the text the prompt was written from plus the additions. A written prompt
+        whose text can still be found is not parsed again: its card text holds aliases and marker words that
+        would be read as a request. A written prompt edited inside is translated as typed (known gap)."""
+        typed = self._prompt_text()
+        edit = self._library_edit()
+        if edit is None:
+            source = (typed,) if typed else ()
+            sources = (source, source)
+        else:
+            if edit == ("", "") and not self._fill_picked and self._fill_ctx == self._write_context():
+                if self._last_translation is not None:
+                    self._show_result(self._last_translation)
+                return
+            # The source and the added words are parsed as separate parts, so a name that matched alone
+            # ("Tortoise") still matches with words added after it.
+            source = self._with_edit(self._fill_source, edit)
+            sources = (self._with_edit(self._fill_typed, edit), source)
+        profile, kw = self._profile, self._library_kwargs()
+        if len(source) <= 1:
+            text = source[0] if source else ""
+            job = lambda: music_prompts.translate(text, profile, include_names=False, **kw)  # noqa: E731
+        else:
+            job = lambda: music_prompts.translate_parts(source, profile, include_names=False, **kw)  # noqa: E731
+        self._run_library(job, sources=sources)
+
+    def _fill_state(self) -> tuple:
+        return (self._last_filled, self._fill_typed, self._fill_source, self._fill_picked, self._fill_ctx)
+
+    def _set_fill_state(self, state: tuple) -> None:
+        self._last_filled, self._fill_typed, self._fill_source, self._fill_picked, self._fill_ctx = state
+
+    def _run_library(self, job: "Callable[[], object]", sources=((), ())) -> None:
+        """Run a library call and show its result. On the GTK thread when it is pure library work (fast);
+        on a worker thread when Smooth with AI or a lyrics writer is on, back through GLib.idle_add."""
+        # What the result is checked against when it arrives: the prompt text and the model it was written for,
+        # and the context it was asked for (recorded now: Smooth may be unticked while a smoothed run is out).
+        snapshot = (self._raw_prompt(), self._profile_key(), self._write_context())
+        if not (self._smooth_on() or self.lyrics_fn is not None):
+            try:
+                t = job()
+            except Exception:  # noqa: BLE001 - a library bug must never cost the user their prompt
+                _log.warning("music prompt library failed", exc_info=True)
+                t = None
+            self._library_done(t, snapshot, sources)
+            return
+        self._set_tools_busy(True)
+
+        def _done(t) -> None:            # main thread (`_run_in_thread` posts it with GLib.idle_add)
+            self._set_tools_busy(False)
+            self._library_done(t, snapshot, sources)
+
+        _run_in_thread(job, _done)
+
+    def _set_tools_busy(self, busy: bool) -> None:
+        for w in (self._wand_btn, self._write_btn):
+            w.set_sensitive(not busy)
+        self._undo_btn.set_sensitive(not busy and bool(self._undo))
+        if busy:
+            self._show_strip(["Writing the prompt..."])
+
+    def _profile_key(self):
+        p = self._profile
+        return None if p is None else p.model_id
+
+    def _library_done(self, t, snapshot: tuple, sources=((), ())) -> None:
+        prompt_before, profile_before, ctx = snapshot
+        if t is None:
+            self._show_strip(["The style library could not write a prompt. Your text is unchanged."])
+            return
+        if self._raw_prompt() != prompt_before:
+            self._show_strip([_PROMPT_CHANGED_NOTE])
+            return
+        if self._profile_key() != profile_before:
+            self._show_strip([_MODEL_CHANGED_NOTE])
+            return
+        self._last_translation = t
+        writes_prompt = bool(t.prompt.strip())
+        writes_lyrics = bool(t.lyrics and t.lyrics.strip() and "lyrics" in self._accepted())
+        if writes_prompt or writes_lyrics:
+            # A fresh undo record for every action that may write something, so a lyrics-only result never
+            # lands in (or is refused because of) an earlier action's record.
+            # The undo record keeps what the library had written before, so Undo also restores what
+            # the restored text was written from.
+            self._undo = {"prompt": prompt_before, "fill": self._fill_state()} if writes_prompt else {}
+            self._undo_btn.set_sensitive(writes_prompt)
+        if writes_prompt:
+            try:
+                typed, source = sources(t) if callable(sources) else sources
+            except Exception:  # noqa: BLE001 - a lost source only means the next Write parses the prompt
+                _log.debug("could not record the source of a written prompt", exc_info=True)
+                typed = source = ()
+            self._set_prompt_text(t.prompt)
+            self._set_fill_state((t.prompt, tuple(typed or ()), tuple(source or ()), False, ctx))
+        self._show_result(t)
+        if writes_lyrics:
+            self._offer_lyrics(t.lyrics, self._undo)
+
+    def _offer_lyrics(self, lyrics: str, undo: "Optional[dict]") -> None:
+        """Fill an empty lyrics box; ask before replacing lyrics the user typed."""
+        if not self._lyrics_text().strip():
+            self._replace_lyrics(lyrics, undo)
+            return
+        fn = self.confirm_replace_lyrics
+        if fn is not None:
+            try:
+                yes = fn(_REPLACE_LYRICS_MSG) is True
+            except Exception:  # noqa: BLE001 - a failed question is a no
+                yes = False
+            self._lyrics_answer(yes, lyrics, undo)
+            return
+        dialog = Gtk.AlertDialog()
+        dialog.set_message("Replace your lyrics?")
+        dialog.set_detail(_REPLACE_LYRICS_MSG)
+        dialog.set_buttons(["Keep mine", "Replace"])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(0)
+
+        def _chosen(d, result) -> None:
+            try:
+                idx = d.choose_finish(result)
+            except Exception:  # noqa: BLE001 - dismissed
+                idx = 0
+            self._lyrics_answer(idx == 1, lyrics, undo)
+
+        parent = self._prompt_tools.get_root()
+        dialog.choose(parent if isinstance(parent, Gtk.Window) else None, None, _chosen)
+
+    def _lyrics_answer(self, yes: bool, lyrics: str, undo: "Optional[dict]") -> None:
+        # A later Surprise or Write the prompt (or an Undo) since the question makes the answer stale.
+        if yes and undo is not None and undo is self._undo:
+            self._replace_lyrics(lyrics, undo)
+        else:
+            self._append_strip("Your lyrics were kept; the written lyrics were not used.")
+
+    def _replace_lyrics(self, lyrics: str, undo: "Optional[dict]") -> None:
+        if undo is not None:
+            undo["lyrics"] = self._lyrics_text()
+            self._undo_btn.set_sensitive(True)
+        self._lyrics_buffer.set_text(lyrics)
+
+    def _on_undo(self, _btn=None) -> None:
+        u = self._undo
+        if not u:
+            return
+        self._undo = None
+        self._set_fill_state(u.get("fill") or ("", (), (), False, ()))
+        if "prompt" in u:
+            self._set_prompt_text(u["prompt"])
+        if "lyrics" in u:
+            self._lyrics_buffer.set_text(u["lyrics"])
+        self._undo_btn.set_sensitive(False)
+        self._show_strip([])
+
+    def _show_result(self, t) -> None:
+        """The result strip: the phrases the cards added, the notes, and the names (only here)."""
+        lines = []
+        if self._profile is None:
+            lines.append(_NO_PROFILE_NOTE)
+        if t.added:
+            # Card phrases may be whole sentences; drop their end punctuation so "; " joins them cleanly.
+            lines.append("Added: " + "; ".join(a.strip().rstrip(".;") for a in t.added if a.strip()))
+        notes = list(t.notes)
+        p = self._profile
+        if p is not None and p.has_lyrics and not self._instrumental_offered() and not (t.lyrics or "").strip() \
+                and not self._lyrics_text().strip():
+            # The server refuses a song with no lyrics while the instrumental switch is off, so the
+            # translator's "the piece is instrumental" would be untrue: say what is needed instead.
+            notes = [n for n in notes if "instrumental" not in n.lower()] + [_ADD_LYRICS_NOTE]
+        lines.extend(notes)
+        if t.inspired_by:
+            lines.append("Inspired by: " + ", ".join(t.inspired_by))
+        self._show_strip(lines)
+
+    def _show_strip(self, lines: "list[str]") -> None:
+        self._result_label.set_label("\n".join(lines))
+        self._result_label.set_visible(bool(lines))
+
+    def _append_strip(self, line: str) -> None:
+        text = self._result_label.get_label()
+        self._show_strip(([text] if text else []) + [line])
+
+    def style_of_text(self, value: str) -> "Optional[str]":
+        """The "In the style of" chip's translator, for the model chosen now (RoleZonePanel wires it)."""
+        return style_of_text(value, self._profile)
+
+    def join_modifier_text(self, prompt: str, modifier: str) -> str:
+        """The prompt with the Direction pills' text added (CreateView calls this). A tags model's prompt is
+        comma-separated tags, so the pills join with ", "; other models keep the plain space join."""
+        prompt, modifier = (prompt or "").strip(), (modifier or "").strip()
+        if not prompt or not modifier:
+            return prompt or modifier
+        if music_prompts.dialect_for(self._profile) == "tags":
+            return f"{prompt.rstrip(' ,;')}, {modifier}"
+        return f"{prompt} {modifier}"
+
+    def set_prompt_getter(self, fn: "Optional[Callable[[], str]]") -> None:
+        """Read the prompt from `fn` instead of this panel's own box. RoleZonePanel hides that box
+        (CreateView's top entry owns the prompt), so CreateView passes a getter for its entry here."""
+        self._prompt_getter = fn
+
+    def _prompt_text(self) -> str:
+        if self._prompt_getter is not None:
+            return (self._prompt_getter() or "").strip()
+        return self._prompt_entry.get_text().strip() if self._built else ""
+
+    def _row(self, key: str) -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.add_css_class("image-param-row")
+        label = Gtk.Label(label=self._LABELS[key])
+        label.add_css_class("image-param-label")
+        label.set_xalign(0.0)
+        label.set_size_request(88, -1)
+        row.append(label)
+        return row
+
+    # ── server handling ─────────────────────────────────────────────────────
+
+    def set_server(self, server: "Optional[MusicServer]") -> None:
+        """Choose the server whose profile decides what is shown. Rebuilds visibility."""
+        self._server = server
+        if self._built:
+            self._refresh()
+        self._notify_triggers()
+
+    def _do_rescan(self) -> bool:
+        """The card's "Check again". False when nobody is listening, so the button does not wait for a reply."""
+        if self.on_rescan is None:
+            return False
+        self.on_rescan()
+        return True
+
+    def header_widgets(self) -> "list[Gtk.Widget]":
+        """Widgets a wrapper shows above the form: the prompt tools (the panel's own prompt row is hidden
+        there, and CreateView's prompt entry sits just above), the start-a-model card and the server-is-down
+        hint."""
+        # build() parented these to the panel's own root, which a wrapper never mounts; free them first.
+        widgets = [self._prompt_tools, self._start_card, self._server_hint]
+        root = getattr(self, "_root", None)
+        for w in widgets:
+            if root is not None and w.get_parent() is root:
+                root.remove(w)
+        return widgets
+
+    def rescan_done(self) -> None:
+        """A discovery result arrived (changed or not): "Check again" stops saying "Looking..."."""
+        if self._built:
+            self._start_card.scan_done()
+
+    def servers(self) -> "list[MusicServer]":
+        """The servers the dropdown currently lists."""
+        return list(self._servers)
+
+    def selected_server(self) -> "Optional[MusicServer]":
+        return self._server
+
+    @staticmethod
+    def _label_for(s: MusicServer) -> str:
+        name = s.label or (s.profile.label if s.profile else s.url)
+        return f"● {name}  {s.url}" if s.up else f"○ {name}  {s.url} (down)"
+
+    def _server_labels(self) -> "list[str]":
+        return [self._label_for(s) for s in self._servers]
+
+    def servers_changed(self, servers: "list[MusicServer]") -> None:
+        """Take a fresh server list (from discovery, run off the GTK thread by the owner).
+
+        Keeps the current pick when it is still listed, else the last one used, else the first that is up."""
+        keep = self._server.url if self._server is not None else ""
+        self._servers = list(servers)
+        wanted = next((i for i, s in enumerate(self._servers) if keep and s.url == keep), None)
+        if wanted is None:
+            last = _last_music_server()
+            wanted = next((i for i, s in enumerate(self._servers) if last and s.url == last), None)
+        if wanted is None:
+            wanted = next((i for i, s in enumerate(self._servers) if s.up), 0 if self._servers else None)
+        if self._built:
+            self._suppress_pick = True
+            try:
+                self._server_dd.set_model(Gtk.StringList.new(self._server_labels()))
+                if wanted is not None:
+                    self._server_dd.set_selected(wanted)
+            finally:
+                self._suppress_pick = False
+        self.set_server(self._servers[wanted] if wanted is not None else None)
+        self.rescan_done()
+
+    def _on_server_picked(self, dd, _pspec) -> None:
+        if self._suppress_pick:
+            return
+        i = dd.get_selected()
+        if 0 <= i < len(self._servers):
+            self.set_server(self._servers[i])
+            _remember_music_server(self._servers[i].url)
+
+    def _on_connect_clicked(self, btn) -> None:
+        dlg = MusicConnectDialog(btn.get_root(), on_connected=self._connected)
+        dlg.present()
+
+    def _connected(self, server: MusicServer) -> None:
+        """A server the user just added: list it now (the owner may also re-run discovery)."""
+        rest = [s for s in self._servers if s.url != server.url]
+        self.servers_changed(rest + [server])
+        if self.on_connect_saved:
+            self.on_connect_saved(server)
+
+    # ── model-dependent chips ───────────────────────────────────────────────
+
+    def trigger_chips(self) -> "list":
+        """The model's trigger phrases as add-chips (ChipEntry), empty when it has none."""
+        from chip_config import ChipEntry
+        p = self._profile
+        return [ChipEntry(label=t, text=t, tip="The phrase this model answers to") for t in (p.triggers if p else ())]
+
+    def _notify_triggers(self) -> None:
+        if self.on_triggers_changed:
+            self.on_triggers_changed(self.trigger_chips())
+
+    # ── visibility ──────────────────────────────────────────────────────────
+
+    def _refresh(self) -> None:
+        p = self._profile
+        accepted = set(self._accepted())
+        for key, row in self._rows.items():
+            row.set_visible(key in accepted or key == "server_url" or (key == "lyrics" and bool(p and p.has_lyrics)))
+        # With nothing listed the start-a-model card replaces the empty dropdown; a down server keeps the dropdown.
+        self._rows["server_url"].set_visible(bool(self._servers))
+        self._start_card.set_visible(not self._servers)
+        self._server_hint.set_visible(bool(self._servers) and (self._server is None or not self._server.up))
+        self._instrumental_switch.set_visible(self._instrumental_offered())
+        self._instrumental_label.set_visible(self._instrumental_offered())
+        self._lyrics_box.set_visible("lyrics" in accepted)
+        if p is not None:
+            lo, hi = p.min_seconds, p.max_seconds
+            self._seconds_adj.set_lower(lo)
+            self._seconds_adj.set_upper(hi)
+            if not lo <= self._seconds_adj.get_value() <= hi:
+                self._seconds_adj.set_value(min(max(30, lo), hi))
+            self._seconds_hint.set_label(
+                f"{lo:g} to {hi:g} seconds." + (" A song ends when its lyrics do, so it can be shorter." if p.has_lyrics else ""))
+            # Defaults are applied when the model changes (or a value falls outside the new range), so a
+            # discovery refresh or Connect never resets what the user set.
+            changed = p.model_id != self._applied_model_id
+            self._applied_model_id = p.model_id
+            if p.steps_max is not None:
+                self._steps_adj.set_upper(p.steps_max)
+                self._steps_adj.set_lower(0 if p.steps_default is None else 1)
+                if changed or not self._steps_adj.get_lower() <= self._steps_adj.get_value() <= p.steps_max:
+                    self._steps_adj.set_value(p.steps_default or 0)
+                self._steps_hint.set_label("0 lets the model choose" if p.steps_default is None else "")
+            if p.cfg_max is not None:
+                self._cfg_adj.set_lower(p.cfg_min)
+                self._cfg_adj.set_upper(p.cfg_max)
+                if changed or not p.cfg_min <= self._cfg_adj.get_value() <= p.cfg_max:
+                    self._cfg_adj.set_value(p.cfg_default if p.cfg_default is not None else p.cfg_min)
+        self._apply_llm_state()
+
+    # ── lyrics helpers ──────────────────────────────────────────────────────
+
+    def _lyrics_text(self) -> str:
+        return self._lyrics_buffer.get_text(self._lyrics_buffer.get_start_iter(), self._lyrics_buffer.get_end_iter(), False)
+
+    def insert_tag(self, tag: str) -> None:
+        """Insert a structure tag on its own line at the cursor."""
+        buf = self._lyrics_buffer
+        before = buf.get_text(buf.get_start_iter(), buf.get_iter_at_mark(buf.get_insert()), False)
+        lead = "\n" if before and not before.endswith("\n") else ""
+        buf.insert_at_cursor(f"{lead}{tag}\n")
+
+    def set_llm_available(self, ok: bool) -> None:
+        """Turn the lyrics and prompt helpers on or off; with none reachable the lyrics helper says why."""
+        self._llm_ok = bool(ok)
+        self._smooth_ok = bool(ok)
+        if self._built:
+            self._apply_llm_state()
+
+    def _apply_smooth_state(self) -> None:
+        """Smooth with AI is usable only with a chat model and a smoother; without either it is off and says why."""
+        usable = self._smooth_ok and self._smooth_fn is not None
+        self._smooth_check.set_sensitive(usable)
+        if not usable:
+            self._smooth_check.set_active(False)
+        if self._smooth_fn is None:
+            tip = _NO_SMOOTHER_TIP
+        else:
+            tip = _SMOOTH_TIP if self._smooth_ok else _NO_SMOOTH_TIP
+        self._smooth_check.set_tooltip_text(tip)
+
+    def _apply_llm_state(self) -> None:
+        self._apply_smooth_state()
+        if self._lyrics_inspire_btn is not None:
+            self._lyrics_inspire_btn.set_sensitive(self._llm_ok)
+            self._lyrics_helper_hint.set_visible(not self._llm_ok)
+
+    def _lyrics_inspire(self, prompt_type, seed_text, on_result, on_error) -> None:
+        """The lyrics button's seam. With no chat model answering, `generate_prompt` hands the seed back, and
+        when the lyrics box was empty the seed is the STYLE prompt: writing it into the lyrics box would be wrong.
+        An answer that only repeats the style prompt is therefore dropped and the no-model hint is shown."""
+        from_prompt = not self._lyrics_text().strip()
+        prompt = self._prompt_text().strip()
+
+        def _result(text: str) -> None:
+            if from_prompt and prompt and (text or "").strip() == prompt:
+                on_error("No chat model answered, so no lyrics were written.")
+                # After on_error's own idle callback, which re-enables the button.
+                GLib.idle_add(lambda: (self.set_llm_available(False), False)[1])
+                return
+            on_result(text)
+
+        self._inspire_fn(prompt_type, seed_text, _result, on_error)
+
+    def _start_llm_check(self) -> None:
+        """Ask in the background whether a chat model is reachable (the check opens sockets)."""
+        fn = self._llm_available_fn
+        if fn is None:
+            import prompt_client
+            fn = prompt_client.music_llm_available
+        _run_in_thread(fn, lambda ok: self.set_llm_available(bool(ok)))
+
+    # ── reference clip ──────────────────────────────────────────────────────
+
+    def _on_pick_reference(self, btn) -> None:
+        dlg = Gtk.FileDialog()
+
+        def _done(d, result):
+            try:
+                gfile = d.open_finish(result)
+            except Exception:
+                return
+            self._reference_path = gfile.get_path() or ""
+            self._reference_label.set_label(Path(self._reference_path).name or "none chosen")
+
+        dlg.open(btn.get_root(), None, _done)
+
+    # ── values ──────────────────────────────────────────────────────────────
+
+    def set_seed(self, seed: "Optional[int]") -> None:
+        """Pin a seed (the result's "Use this seed" button calls this), so the clip can be asked for again.
+
+        Never called on its own after a run: a blank seed field means "random", and filling it would make
+        the next song identical to the last."""
+        self._seed_entry.set_text("" if seed is None else str(seed))
+
+    def _seed_value(self) -> "tuple[Optional[int], bool]":
+        text = self._seed_entry.get_text().strip()
+        if not text:
+            return None, True
+        try:
+            n = int(text)
+        except ValueError:
+            return None, False
+        return (n, True) if 0 <= n <= _mr.SEED_MAX else (None, False)
+
+    def collect(self) -> dict:
+        """Only the keys the chosen profile accepts. A hidden control is never included."""
+        if not self._built:
+            return {}
+        accepted = self._accepted()
+        out: dict = {}
+        for key in accepted:
+            if key == "prompt":
+                out[key] = self._prompt_text()
+            elif key == "lyrics":
+                out[key] = self._lyrics_text()
+            elif key == "instrumental":
+                out[key] = self._instrumental_on()
+            elif key == "seconds":
+                out[key] = float(min(max(self._seconds_adj.get_value(), self._seconds_adj.get_lower()),
+                                     self._seconds_adj.get_upper()))
+            elif key == "seed":
+                seed, ok = self._seed_value()
+                if ok and seed is not None:
+                    out[key] = seed
+            elif key == "steps":
+                n = int(self._steps_adj.get_value())
+                if n > 0:
+                    out[key] = n
+            elif key == "cfg_scale":
+                out[key] = float(self._cfg_adj.get_value())
+            elif key == "server_url":
+                out[key] = self._server.url
+            elif key == "reference_clip":
+                if self._reference_path:
+                    out[key] = self._reference_path
+        return out
+
+    def validate(self, prompt: "Optional[str]" = None) -> "Optional[str]":
+        """A plain message when the request cannot be sent, else None. Runs before any request.
+
+        `prompt` replaces the panel's own prompt box when the caller keeps the prompt elsewhere."""
+        if self._server is None or not self._server.up:
+            return _NO_SERVER_HELP
+        text = (self._prompt_text() if prompt is None else prompt).strip()
+        if not text:
+            return "Describe the music first: a genre, a mood, the instruments."
+        p = self._profile
+        if p is not None and p.has_lyrics and not self._instrumental_on() and not self._lyrics_text().strip():
+            more = " or turn on Instrumental" if self._instrumental_offered() else ""
+            return f"{p.label} writes a song from lyrics. Add lyrics{more}."
+        if not self._seed_value()[1]:
+            return f"The seed must be a whole number from 0 to {_mr.SEED_MAX}, or empty for a random one."
+        return None
