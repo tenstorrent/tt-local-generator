@@ -324,3 +324,12 @@ def test_sung_topics_beyond_english_leads(tmp_path, text, topic):
     t = translate(text, MINIMAX, library=_shipped(tmp_path))
     assert t.lyrics and topic in t.lyrics.lower(), (text, t.lyrics)
     assert "softly" not in t.lyrics.lower()
+
+
+def test_an_ly_word_before_a_topic_lead_is_a_direction(tmp_path):
+    lib = _shipped(tmp_path)
+    for adverb in ("beautifully", "softly"):
+        t = translate(f"post-rock and someone is singing {adverb} about the sea", MINIMAX, library=lib)
+        assert t.lyrics and t.lyrics.splitlines()[1] == "The sea", t.lyrics
+    t = translate("post-rock and someone is singing lonely songs of the night", MINIMAX, library=lib)
+    assert t.lyrics.splitlines()[1] == "Lonely songs of the night"

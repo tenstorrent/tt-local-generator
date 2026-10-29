@@ -58,8 +58,10 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   in the Undo record too. Write on an unchanged written prompt with the same context does nothing. When the context changed
   (another model, Smooth toggled), it renders `_fill_source` again, so a declined lyrics offer can come back. The context is
   recorded when the Write or Surprise is asked for, so unticking Smooth during a smoothed run still counts as a change.
-  The written text is recognised only as the whole prompt, as its start followed by ", ", ";" or a space ("<written>,
-  slower"), or as its end after one ("faster, <written>"). Then Write renders the source and the added words as separate
+  The written text is recognised only when the last Write actually rewrote the text (written text differs from its
+  source), and only as the whole prompt, as its start followed by ", ", ";" or a space ("<written>, slower"), or as its
+  end after one ("faster, <written>"). When the last Write left the text unchanged (nothing matched), any change makes
+  the whole prompt one typed text, so added words keep their sentence ("a folk protest song about parliament"). Then Write renders the source and the added words as separate
   parts (`translate_parts`: each part parsed on its own), so a name that matched alone ("Tortoise") still matches with
   words added after it, and Surprise uses the user's typed parts plus the added words as its base. A Styles pick after
   added words is part of those words. Anything else (the written text inside other words, twice, inside a longer word
@@ -115,6 +117,9 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   the common-word stoplist let 17 real names leak in lower case (it was inverted into a pinned exception list); the
   context was recorded when the result arrived; `_sung_topic` dropped non-English and noun-phrase topics and treated
   "lonely", "holy" and "fly" as direction words.
+- Fourth round: after a Write that changed nothing, added words were split off as their own part and lost their
+  sentence ("a folk protest song" + " about parliament" became "about p-funk"); "singing beautifully about the sea" lost
+  its topic.
 - The "In the style of" pill inserted a whole rendered prompt (tempo, key, mood), giving two tempos.
 - "parliament" was unambiguous ("a folk protest song about parliament" became p-funk); "bluegrass band" matched the vocal card;
   a tags-dialect mood kept a full stop inside a tag; `--wand --include-names` and `--seed` without `--wand` were silently
@@ -156,6 +161,11 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - Inspire: `is_library_prompt` detects caption and generic prompts only (a card's sound text); a tags-dialect prompt is not
   detected and would be translated again.
 - "In the style of" pills are space-joined among themselves; only the join to a tags prompt uses ", ".
+- A sung topic keeps a topic lead that is not its first word: "singing 🌊 about the sea" and "singing in Spanish about
+  love" give the lyric lines "🌊 about the sea" and "In Spanish about love".
+- In the generic dialect a Styles pick can be trimmed away by the length budget (a note names it).
+- A name typed before an unchanged written prompt is read with the rest as one typed text, like any typed text: an
+  ambiguous one-word name at the start with no cue ("Parliament, a rainy afternoon") passes through with the name.
 - Ruling (final review): the "In the style of" chip inserts only the named cards' sound (tags for a tags model), with no
   tempo, key or mood; spec section 10 "Chips" says so. A name listed only as inspiration ("Massive Attack", "alison krauss")
   uses the sound of the card that lists it. A common-word name typed in lower case ("massive attack") matches nothing and

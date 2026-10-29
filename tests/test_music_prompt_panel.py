@@ -679,3 +679,24 @@ def test_context_is_recorded_when_the_write_is_asked_for(monkeypatch):
     assert calls == [True]
     p._write_btn.emit("clicked")                    # written with Smooth on, now off: render again
     assert calls == [True, False]
+
+
+# ── fix wave 4 ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio", None])
+@pytest.mark.parametrize("base, added", [
+    ("a folk protest song", " about parliament"),
+    ("rain on the window", " with dub"),
+    ("rain on the window", " tortoise"),
+    ("rain on the window", " gospel"),
+])
+def test_unchanged_write_then_more_words_is_one_typed_text(model_hint, base, added):
+    p, top = _panel(model_hint, text=base)
+    p.confirm_replace_lyrics = lambda m: False
+    p._write_btn.emit("clicked")
+    assert top.text == base                         # nothing matched: the text is unchanged
+    top.text = base + added
+    p._write_btn.emit("clicked")
+    profile = _server(model_hint).profile if model_hint else None
+    assert top.text == music_prompts.translate(base + added, profile).prompt

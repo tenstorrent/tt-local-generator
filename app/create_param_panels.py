@@ -4102,13 +4102,18 @@ class MusicParamPanel(CreateParamPanel):
         prompt is exactly the written text. The written text is recognised only as the whole prompt, as its
         start followed by a separator (", ", ";" or a space: "<written>, slower"), or as its end preceded by
         one ("faster, <written>"). None otherwise: the written text inside other words, twice, or inside a
-        longer word ("rain" in "rainy") means the prompt is the user's own and is translated as typed."""
+        longer word ("rain" in "rainy") means the prompt is the user's own and is translated as typed. So does
+        any change to a prompt the library wrote unchanged (the written text equals its source)."""
         written = self._last_filled.strip()
         text = self._prompt_text()
         if not written:
             return None
         if text == written:
             return ("", "")
+        # Words added to a prompt the last Write left unchanged (nothing matched) belong to the same sentence:
+        # split into parts, "about parliament" would lose its context and match on its own. Read it as typed.
+        if written == ", ".join(self._fill_source).strip():
+            return None
         if text.count(written) != 1:
             return None
         seps = (",", ";", " ")

@@ -280,13 +280,21 @@ _TOPIC_WORDS = frozenset("about of on for to like".split())
 def _sung_topic(phrase: str) -> str:
     """What is sung in a phrase after "singing": "softly about the sea" -> "the sea", "über die Liebe" -> itself.
 
-    Leading direction words (`_DIRECTION_WORDS`) describe the voice. Whatever follows them is the topic, with a
+    Leading direction words (`_DIRECTION_WORDS`, or any -ly word right before a topic lead) describe the voice. Whatever follows them is the topic, with a
     leading English topic lead (about, of, on, for, to, like) dropped: a noun phrase ("lonely songs of the
     night"), another language ("sobre el mar"), a preposition ("in Spanish about love") or an emoji all count.
     Only direction words ("very slow") leave no topic: ""."""
     words = phrase.strip(" ,;:.").split()
     i = 0
-    while i < len(words) and words[i].lower().strip(",;:.") in _DIRECTION_WORDS:
+    def is_direction(k: int) -> bool:
+        w = words[k].lower().strip(",;:.")
+        if w in _DIRECTION_WORDS:
+            return True
+        # Another -ly adverb counts only right before a topic lead ("beautifully about the sea");
+        # "lonely songs" and "holy holy holy" are topics.
+        return w.endswith("ly") and k + 1 < len(words) and words[k + 1].lower() in _TOPIC_WORDS
+
+    while i < len(words) and is_direction(i):
         i += 1
     rest = words[i:]
     if rest and rest[0].lower() in _TOPIC_WORDS:
