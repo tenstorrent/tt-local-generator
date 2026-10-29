@@ -2,7 +2,7 @@ id: ratcheting-synths
 kind: texture
 name: Ratcheting synths
 aliases: [ratcheting synthesizers, ratcheting synth, ratcheting synthesizer, ratchet sequencing, ratcheting sequencer, ratcheted arpeggios, ratcheting arpeggios]
-family: electronic
+family: texture
 inspiration: [Tangerine Dream, Stratosfear]
 sound: >-
   Fast sequencer arpeggios in which some steps fire two, three or four quick

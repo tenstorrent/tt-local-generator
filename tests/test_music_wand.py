@@ -211,18 +211,20 @@ def test_wand_on_the_shipped_library_returns_a_prompt_for_every_dialect(tmp_path
 
 
 def test_wand_goes_with_raises_the_pairing_probability(tmp_path):
+    # Card names are real words: a card whose only text is "a" (a stopword) renders nothing in the tags
+    # dialect, and a card that renders nothing is not reported as used.
     lib = _lib(
         tmp_path,
-        _card("a", family="fa", goes_with=["b"]),
-        _card("b", family="fb"),
-        _card("c", family="fc"),
-        _card("d", family="fd"),
-        _card("e", family="fe"),
+        _card("alpha", family="fa", goes_with=["beta"]),
+        _card("beta", family="fb"),
+        _card("gamma", family="fc"),
+        _card("delta", family="fd"),
+        _card("epsilon", family="fe"),
     )
     pair = lambda t, x, y: {x, y} <= set(t.used_cards)             # noqa: E731
     runs = [wand(STABLE, seed=s, library=lib) for s in range(300)]
-    linked = sum(pair(t, "a", "b") for t in runs)
-    neutral = sum(pair(t, "a", "c") for t in runs)
+    linked = sum(pair(t, "alpha", "beta") for t in runs)
+    neutral = sum(pair(t, "alpha", "gamma") for t in runs)
     assert linked > neutral * 1.3, (linked, neutral)
     assert neutral > 0                                              # never required, never exclusive
 

@@ -77,6 +77,10 @@ MORE_ALIASES = {
 }
 # Card kinds that may leave out a tempo (spec 4.2: scenes and instruments may omit it).
 TEMPO_OPTIONAL_KINDS = {"scene", "instrument", "texture", "vocal"}
+# Styles with no pulse at all. A tempo would contradict the card ("around 43 bpm" beside "no beat at
+# all") and, in a mix, would set the tempo for a groove that has one. They carry no `tempo_bpm` and
+# say so with a "beatless" tag; the translator then takes the tempo from the next card or leaves it out.
+BEATLESS_STYLES = {"ambient-drone"}
 # Cards that are instrumental forms by definition. None of the first set is:
 # "instrumental" comes from the user's request or the dialect, never from a card.
 INSTRUMENTAL_FORMS: set[str] = set()
@@ -189,7 +193,9 @@ def test_every_card_has_tags_and_tempo_or_a_scene_reason(lib):
     for c in lib.cards.values():
         assert len(c.tags) >= 3, c.id
         assert c.instruments and c.mood and c.avoid, c.id
-        if c.kind not in TEMPO_OPTIONAL_KINDS:
+        if c.id in BEATLESS_STYLES:
+            assert c.tempo_bpm is None and "beatless" in c.tags, (c.id, "a beatless style has no tempo")
+        elif c.kind not in TEMPO_OPTIONAL_KINDS:
             assert c.tempo_bpm is not None, c.id
         if c.tempo_bpm:
             lo, hi = c.tempo_bpm

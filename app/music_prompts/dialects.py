@@ -58,7 +58,7 @@ first (spec 10 and the plan's Global Constraints; `avoid` is no longer in the
 prompt): the user's content words and the base sound (never dropped: when they
 alone exceed the hard limit the prompt is returned over it with a note), the
 layers (vocal or other), a style card's own voice and the inspiration names,
-instruments, tempo and key, mood, texture (in the tags dialect a texture card in
+instruments, tempo and key, mood, texture (in every dialect a texture card in
 a layer counts as a layer), and last the spare details, which go first: the caption's rhythm,
 harmony and production sentences, and in the tags dialect the card tags after
 the first few. The spec's list puts production above mood; here production is
@@ -79,6 +79,7 @@ DEFAULT_LIMIT = 1000
 # Soft length targets (characters), applied after the hard limit.
 CAPTION_BUDGET = 450
 TAGS_BUDGET = 250
+TAGS_CAP = 12           # tags dialect: at most this many tags (see _cap_tags); each card keeps its first
 GENERIC_BUDGET = 300
 _BUDGETS = {CAPTION: CAPTION_BUDGET, TAGS: TAGS_BUDGET, GENERIC: GENERIC_BUDGET}
 
@@ -107,6 +108,9 @@ _KIND_WORDS = {
     "mood": "the mood", "texture": "the texture",
     "detail": "rhythm, harmony and production details",
 }
+
+# Clause kinds that belong to one card: when the last of a card's clauses goes, the note names the card.
+_CARD_KINDS = frozenset({"vocal", "layer", "voice", "texture", "detail", "base"})
 
 CANNOT_SING = "This model cannot sing; the vocal became a lead line."
 
@@ -138,10 +142,18 @@ class Clause:
     kind: str
     text: str
     priority: int
+    # The cards this clause describes (ids) and their display names. Empty for the user's words
+    # and for shared clauses (instruments, mood, tempo). Trimming uses them to say which cards
+    # were left out, and translate reports only cards with at least one clause kept.
+    cards: tuple[str, ...] = ()
+    card_names: tuple[str, ...] = ()
 
 
-def clause(kind: str, text: str) -> Clause:
-    return Clause(kind, text, PRIORITY[kind])
+def clause(kind: str, text: str, part=None) -> Clause:
+    """A clause; `part` (a Part, or a list of them) marks the card(s) it describes."""
+    ps = [q for q in (part if isinstance(part, (list, tuple)) else [part]) if q is not None and q.card_id]
+    return Clause(kind, text, PRIORITY[kind], tuple(dict.fromkeys(q.card_id for q in ps)),
+                  tuple(dict.fromkeys(q.card_name or q.label for q in ps)))
 
 
 def dialect_for(profile) -> str:
@@ -259,23 +271,43 @@ def _phrases(text: str) -> list[str]:
     return [b for b in re.split(r"\s*(?:[,;]|\band\b)\s*", text.strip().rstrip(".")) if b]
 
 
-# A list item that starts with one of these words modifies the list ("..., with the guitar
-# far out front"); it is not one more item, so it never takes the "and".
+# A list item that starts with one of these words opens a modifier phrase ("..., with the guitar
+# far out front"). The phrase runs to the end of the field and is kept or dropped as a whole.
 _LINKERS = frozenset("with without in on at from under over through for of like to as by into "
                      "behind beneath against".split())
+_LIST_SEP = re.compile(r"\s*(?:[,;]|\band\b)\s*")
 
 
 def _filter_list(text: str, kept: set) -> str:
     """The items of a list field that add something new, rejoined ("" when none do).
 
-    The sentence is rebuilt after filtering: plain items are joined with commas and a final
-    "and", and a trailing modifier ("with the guitar far out front") follows after a comma.
-    Joining the survivors blindly would write "rough, loud and with the guitar far out front".
+    Items before the first modifier phrase ("with ...") are filtered one by one; the modifier
+    phrase is one unit and stays where it was written, after the list. When nothing is filtered the
+    field comes back exactly as written (first letter lowercased, final full stop removed). When an
+    item is filtered the list is rebuilt: commas and a final "and" for the plain items, then
+    ", " and the modifier phrase ("rough and loud, with the guitar far out front").
     """
-    items = [_lc_first(p) for p in _phrases(text) if not redundant(p, kept)]
-    plain = [i for i in items if i.split()[0].lower() not in _LINKERS]
-    tails = [i for i in items if i.split()[0].lower() in _LINKERS]
-    return ", ".join(x for x in (_and(plain), *tails) if x)
+    body = text.strip().rstrip(".")
+    spans, pos = [], 0
+    for m in _LIST_SEP.finditer(body):
+        if m.start() > pos:
+            spans.append((pos, m.start()))
+        pos = m.end()
+    if pos < len(body):
+        spans.append((pos, len(body)))
+    head, tail = [], ""
+    for a, b in spans:
+        item = body[a:b]
+        if item.split()[0].lower() in _LINKERS:
+            tail = body[a:]
+            break
+        head.append(item)
+    kept_head = [i for i in head if not redundant(i, kept)]
+    keep_tail = bool(tail) and not redundant(tail, kept)
+    if len(kept_head) == len(head) and keep_tail == bool(tail):
+        return _lc_first(body) if body else ""
+    return ", ".join(x for x in (_and([_lc_first(i) for i in kept_head]),
+                                 _lc_first(tail) if keep_tail else "") if x)
 
 
 def _contains(longer: list[str], shorter: list[str]) -> bool:
@@ -322,17 +354,25 @@ def _drop_to(kept: list, dialect: str, target: int) -> tuple[list, list[str], bo
         if not cands:
             return kept, dropped, False
         i = max(cands, key=lambda k: (kept[k].priority, k))
-        word = _KIND_WORDS.get(kept[i].kind, kept[i].kind)
-        kept.pop(i)
-        if word not in dropped:
-            dropped.append(word)
+        c = kept.pop(i)
+        # A clause that describes a card is named by that card, once the card has no clause left.
+        if c.cards and c.kind in _CARD_KINDS:
+            gone = [_lc_first(n) for cid, n in zip(c.cards, c.card_names) if not any(cid in k.cards for k in kept)]
+            words = gone or [_KIND_WORDS.get(c.kind, c.kind)]
+        else:
+            words = [_KIND_WORDS.get(c.kind, c.kind)]
+        for word in words:
+            if word not in dropped:
+                dropped.append(word)
     return kept, dropped, True
 
 
-def trim(clauses, dialect: str, max_chars, budget=None) -> tuple[list[Clause], tuple[str, ...]]:
+def trim(clauses, dialect: str, max_chars, budget=None, left_out=()) -> tuple[list[Clause], tuple[str, ...]]:
     """Trim to the hard limit (with notes), then to the soft budget (silently).
 
-    `budget` None means the dialect's soft budget; 0 means no soft budget.
+    `budget` None means the dialect's soft budget; 0 means no soft budget. `left_out` names
+    cards a caller already removed to fit (translate re-renders without a trimmed card); they
+    open the "Left out to fit the length" note.
     """
     limit = limit_of(max_chars)
     kept, dropped, fits = _drop_to(list(clauses), dialect, limit)
@@ -343,11 +383,71 @@ def trim(clauses, dialect: str, max_chars, budget=None) -> tuple[list[Clause], t
         notes.append(over_limit_note(len(_join(kept, dialect)), limit))
         return kept, tuple(notes)
     soft = _BUDGETS.get(dialect, DEFAULT_LIMIT) if budget is None else budget
+    soft_dropped: list[str] = list(left_out)
     if soft and soft < limit:
-        kept, soft_dropped, _ = _drop_to(kept, dialect, soft)
-        if soft_dropped:
-            notes.append(SOFT_DROP_NOTE.format(_and(soft_dropped)))
+        kept, more, _ = _drop_to(kept, dialect, soft)
+        soft_dropped += [w for w in more if w not in soft_dropped]
+    if dialect == TAGS and soft:
+        kept, more = _cap_tags(kept, TAGS_CAP)
+        soft_dropped += [w for w in more if w not in soft_dropped]
+    if soft_dropped:
+        notes.append(SOFT_DROP_NOTE.format(_and(soft_dropped)))
     return kept, tuple(notes)
+
+
+def _ntags(c: Clause) -> int:
+    return len([t for t in c.text.split(", ") if t.strip()])
+
+
+# The order in which the tags cap takes tags away: spare card details, mood words, the
+# instrument list, then the tempo. One "bpm" tag tells a tag model more than a fifth
+# instrument, so the tempo outlasts the instruments here (unlike whole-clause trimming).
+_CAP_ORDER = ("detail", "texture", "mood", "instruments", "tempo", "names")
+
+
+def _cap_tags(kept: list, cap: int) -> tuple[list, list[str]]:
+    """Tags dialect: at most `cap` tags, without losing a card.
+
+    Tags go one at a time from the end of a clause: first the shared kinds in _CAP_ORDER, then a
+    card's extra clause (its voice) while the card has another clause, then card clauses lose their
+    last tags, the last card first, down to their first tag. The user's words and the base are never
+    touched. Returns the kept clauses and the words for the note.
+    """
+    kept, dropped = list(kept), []
+    count = lambda: sum(_ntags(c) for c in kept)            # noqa: E731
+
+    def shorten(i: int):
+        c = kept[i]
+        word = "some tags" if c.cards else _KIND_WORDS.get(c.kind, c.kind)
+        tags = c.text.split(", ")
+        if len(tags) > 1:
+            kept[i] = Clause(c.kind, ", ".join(tags[:-1]), c.priority, c.cards, c.card_names)
+        else:
+            kept.pop(i)
+            if word not in dropped:
+                dropped.append(word)
+
+    while count() > cap:
+        shared = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and not c.cards and c.kind in _CAP_ORDER]
+        if shared:
+            shorten(max(shared, key=lambda k: (-_CAP_ORDER.index(kept[k].kind), k)))
+            continue
+        extra = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and c.cards and all(
+            any(cid in k.cards for j, k in enumerate(kept) if j != i) for cid in c.cards)]
+        if extra:
+            i = max(extra, key=lambda k: (kept[k].priority, k))
+            word = _KIND_WORDS.get(kept[i].kind, kept[i].kind)
+            kept.pop(i)
+            if word not in dropped:
+                dropped.append(word)
+            continue
+        longer = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and _ntags(c) > 1]
+        if not longer:
+            break
+        shorten(longer[-1])
+        if "some tags" not in dropped:
+            dropped.append("some tags")
+    return kept, dropped
 
 
 def render(clauses, dialect: str, max_chars, budget=None) -> tuple[str, tuple[str, ...]]:
@@ -368,6 +468,8 @@ class Part:
     vocal: str = ""           # vocal cards: how the voice sounds; no card: the user's words ("a vocal singing about the sea")
     lead_instrument: str = ""  # vocal cards: melody instrument when the model cannot sing
     sung: str = ""            # no card: what the user said is sung about ("about the sea")
+    card_id: str = ""         # the card this part comes from ("" for a vocal from the user's words)
+    card_name: str = ""       # that card's own name, for notes ("Tape hiss")
 
 
 @dataclass(frozen=True)
@@ -459,8 +561,9 @@ def _compose_caption(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
     kept = _Kept()
     if plan.user_words:
         out.append(clause("user", kept.add(", ".join(plan.user_words))))
-    base = []
+    base, base_parts = [], []
     for _, p in _parts(plan, "base"):
+        base_parts.append(p)
         if p.kind == "vocal":
             base.append(f"A {vocal_style(p.label)} vocal: {p.vocal or _lc_first(p.sound)}")
         elif p.kind == "texture" or _names_style(p, plan):
@@ -468,24 +571,26 @@ def _compose_caption(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         else:
             base.append(f"{_cap(p.label)}: {_lc_first(p.sound)}")
     if base:
-        out.append(clause("base", kept.add(" ".join(_sentence(b) for b in base))))
+        out.append(clause("base", kept.add(" ".join(_sentence(b) for b in base)), base_parts))
     for _, p in _parts(plan, "base"):
         if _voice(p, plan):
-            out.append(clause("voice", kept.add(_sentence(_cap(p.vocal)))))
+            out.append(clause("voice", kept.add(_sentence(_cap(p.vocal))), p))
     for marker, p in _parts(plan, "layers"):
         if p.kind == "vocal" and not p.label:
-            out.append(clause("vocal", kept.add(f"{_intro(marker)}, {p.vocal}.")))
+            out.append(clause("vocal", kept.add(f"{_intro(marker)}, {p.vocal}."), p))
         elif p.kind == "vocal":
             out.append(clause("vocal", kept.add(f"{_intro(marker)}, a {vocal_style(p.label)} vocal: "
-                                                f"{p.vocal or _lc_first(p.sound)}")))
+                                                f"{p.vocal or _lc_first(p.sound)}"), p))
         elif p.kind == "texture":
-            out.append(clause("texture", kept.add(p.sound)))
+            # A texture card chosen as a layer is a layer card, as in the tags dialect: trimming
+            # it before the mood words would drop a card the user (or the wand) chose.
+            out.append(clause("layer", kept.add(p.sound), p))
         elif _names_style(p, plan):
-            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.sound)}")))
+            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.sound)}"), p))
         else:
-            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.label)}: {_lc_first(p.sound)}")))
+            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.label)}: {_lc_first(p.sound)}"), p))
         if _voice(p, plan):
-            out.append(clause("voice", kept.add(_sentence(_cap(p.vocal)))))
+            out.append(clause("voice", kept.add(_sentence(_cap(p.vocal))), p))
     if plan.names:
         out.append(clause("names", kept.add(f"Inspired by {_and(plan.names)}.")))
     extra: list[str] = []
@@ -509,9 +614,10 @@ def _compose_caption(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
 
 
 def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
-    items: list[list] = []          # [kind, text, group], in display order
+    items: list[list] = []          # [kind, text, group, part], in display order
     notes: list[str] = []
     group = [0]                     # the current group: one per layer card, 0 for everything else
+    cur = [None]                    # the Part whose tags are being added (None: shared items)
 
     def add(kind: str, tag: str):
         tag = tag.strip().rstrip(".")
@@ -528,7 +634,7 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
                 return
         if kind != "user" and redundant(tag, {w for it in items for w in stems(it[1])}):
             return
-        items.append([kind, tag, group[0]])
+        items.append([kind, tag, group[0], cur[0]])
 
     def vocal(kind: str, p: Part, cap: int | None):
         if plan.can_sing and not p.label:
@@ -554,6 +660,7 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
             if k != "base":
                 group[0] += 1
             cap = None if k == "base" else _LAYER_TAGS
+            cur[0] = p
             if p.kind == "vocal":
                 vocal(k, p, cap)
             elif p.kind == "texture":
@@ -564,14 +671,17 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
                     # In the base, the label and the first _BASE_TAGS card tags are the protected
                     # base sound; further tags are spare details, shown after the layers, trimmed first.
                     if k == "base" and i > _BASE_TAGS:
-                        spare.append(t)
+                        spare.append((t, p))
                     else:
                         add(k, t)
             if _voice(p, plan):
                 add("voice", p.vocal)
+            cur[0] = None
     group[0] = 0
-    for t in spare:
+    for t, part in spare:
+        cur[0] = part
         add("detail", t)
+    cur[0] = None
     for n in plan.names:
         add("names", n)
     for i in plan.instruments:
@@ -579,7 +689,7 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
     for m in _phrases(plan.mood):
         add("mood", m.lower())
     if plan.bpm:
-        items.append(["tempo", f"{plan.bpm} bpm", 0])
+        items.append(["tempo", f"{plan.bpm} bpm", 0, None])
     if plan.key:
         add("tempo", plan.key)
     sings = plan.can_sing and any(p.kind == "vocal" for g in ("base", "layers") for _, p in _parts(plan, g))
@@ -588,12 +698,15 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
     # Consecutive items of one kind and one group form one clause, so trimming drops a whole
     # group: one layer card at a time, or all the instruments, or all the mood words.
     out: list[Clause] = []
+    owners: list[list] = []         # the parts behind each clause
     last = None
-    for kind, text, grp in items:
+    for kind, text, grp, part in items:
         if out and last == (kind, grp):
-            out[-1] = clause(kind, out[-1].text + ", " + text)
+            owners[-1] += [part] if part is not None else []
+            out[-1] = clause(kind, out[-1].text + ", " + text, owners[-1])
         else:
-            out.append(clause(kind, text))
+            owners.append([part] if part is not None else [])
+            out.append(clause(kind, text, owners[-1]))
         last = (kind, grp)
     return out, tuple(notes)
 
@@ -603,8 +716,9 @@ def _compose_generic(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
     kept = _Kept()
     if plan.user_words:
         out.append(clause("user", kept.add(", ".join(plan.user_words))))
-    base = []
+    base, base_parts = [], []
     for _, p in _parts(plan, "base"):
+        base_parts.append(p)
         first = _lc_first(_first_sentence(p.sound))
         if p.kind == "vocal":
             base.append(f"a {vocal_style(p.label)} vocal, {p.vocal or first}")
@@ -613,25 +727,25 @@ def _compose_generic(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         else:
             base.append(f"{_lc_first(p.label)}, {first}")
     if base:
-        out.append(clause("base", kept.add("; ".join(base))))
+        out.append(clause("base", kept.add("; ".join(base)), base_parts))
     for _, p in _parts(plan, "base"):
         if _voice(p, plan):
-            out.append(clause("voice", kept.add(_lc_first(p.vocal))))
+            out.append(clause("voice", kept.add(_lc_first(p.vocal)), p))
     for marker, p in _parts(plan, "layers"):
         first = _lc_first(_first_sentence(p.sound))
         where = "alongside" if marker in _ALONGSIDE else "on top"
         if p.kind == "vocal" and not p.label:
-            out.append(clause("vocal", kept.add(f"with {p.vocal} {where}")))
+            out.append(clause("vocal", kept.add(f"with {p.vocal} {where}"), p))
         elif p.kind == "vocal":
-            out.append(clause("vocal", kept.add(f"with a {vocal_style(p.label)} vocal {where}, {p.vocal or first}")))
+            out.append(clause("vocal", kept.add(f"with a {vocal_style(p.label)} vocal {where}, {p.vocal or first}"), p))
         elif p.kind == "texture":
-            out.append(clause("texture", kept.add(first)))
+            out.append(clause("layer", kept.add(first), p))          # a chosen texture is a layer card
         elif _names_style(p, plan):
-            out.append(clause("layer", kept.add(f"layered in, {first}")))
+            out.append(clause("layer", kept.add(f"layered in, {first}"), p))
         else:
-            out.append(clause("layer", kept.add(f"with {_lc_first(p.label)} layered in, {first}")))
+            out.append(clause("layer", kept.add(f"with {_lc_first(p.label)} layered in, {first}"), p))
         if _voice(p, plan):
-            out.append(clause("voice", kept.add(_lc_first(p.vocal))))
+            out.append(clause("voice", kept.add(_lc_first(p.vocal)), p))
     if plan.names:
         out.append(clause("names", kept.add(f"inspired by {_and(plan.names)}")))
     mood = _filter_list(plan.mood, kept.stems) if plan.mood else ""

@@ -364,9 +364,12 @@ def _sung_part(words: _Words, is_glue) -> tuple[D.Part, list[str], str]:
 
 def _part(card: StyleCard, lib: Library, scrub) -> D.Part:
     kind = {"vocal": "vocal", "texture": "texture"}.get(card.kind, "sound")
-    return D.Part(kind=kind, label=scrub(_label(card, lib)), sound=scrub(card.sound),
+    label = scrub(_label(card, lib))
+    return D.Part(kind=kind, label=label, sound=scrub(card.sound),
                   tags=tuple(scrub(t) for t in card.tags), vocal=scrub(card.vocal),
-                  lead_instrument=scrub(card.lead_instrument))
+                  lead_instrument=scrub(card.lead_instrument), card_id=card.id,
+                  # an artist card is named by its style in notes, like everywhere else
+                  card_name=label if card.kind == "artist" else card.name)
 
 
 def _bpm(cards, extra_text: str) -> int | None:
@@ -538,85 +541,118 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
         content.append("instrumental")
     glue_all = list(dict.fromkeys(glue + list(parsed.dropped)))
 
-    plan_layers = []
-    if 0 in sung:                                    # singing typed in the base sits on top of it
-        plan_layers.append((None, (sung[0][0],)))
-    for i in range(1, len(layers)):
-        parts = [_part(c, lib, scrub) for c in layer_cards[i]]
-        if i in sung:
-            parts.append(sung[i][0])
-        if parts:
-            plan_layers.append((layers[i].marker, tuple(parts)))
     if glue_all:
         what = "the layout of the request (a vocal layer)" if has_vocal else "the layout of the request"
         quoted = D._and([f"'{g}'" for g in glue_all])
         verb = "was" if len(glue_all) == 1 else "were"
         notes.append(f"{quoted} {verb} read as {what} and not repeated in the prompt.")
 
-    sound_cards = [c for c in used if c.kind != "vocal"]
-    primary = [c for c in base_cards if c.kind not in ("vocal", "texture")]
-    if not primary:
-        primary = next(([c for c in cs if c.kind not in ("vocal", "texture")] for cs in layer_cards[1:]
-                        if any(c.kind not in ("vocal", "texture") for c in cs)), [])
-    tempo_cards = primary + [c for c in used if c not in primary]
-    key = next((c.key for c in primary if c.key), "") or next((c.key for c in vocal_cards if c.key), "") \
-        or next((c.key for c in used if c.key), "")
+    all_used, all_layer_cards, all_vocal_cards = list(used), layer_cards, vocal_cards
 
-    avoid: list[str] = []
-    for c in used:
-        for a in c.avoid:
-            if (has_vocal or instrumental_asked) and _VOICE_WORDS.search(a):
-                continue
-            if a not in avoid:
-                avoid.append(scrub(a))
-    if avoid:
-        notes.append(f"Not asked for: {D._and(avoid)}. These stay out of the prompt, because music models "
-                     "tend to hear a 'no X' as 'X'.")
-    instruments: list[str] = []
-    for c in sound_cards:
-        for i in c.instruments:
-            if i not in instruments:
-                instruments.append(i)
+    def render_once(excluded: set, left_out: list):
+        """Compose and trim without the `excluded` cards (ones an earlier pass trimmed away)."""
+        nonlocal used, vocal_cards, has_vocal
+        used = [c for c in all_used if c.id not in excluded]
+        vocal_cards = [c for c in all_vocal_cards if c.id not in excluded]
+        has_vocal = bool(vocal_cards) or bool(sung)
+        plan_layers = []
+        if 0 in sung:                                # singing typed in the base sits on top of it
+            plan_layers.append((None, (sung[0][0],)))
+        for i in range(1, len(layers)):
+            parts = [_part(c, lib, scrub) for c in all_layer_cards[i] if c.id not in excluded]
+            if i in sung:
+                parts.append(sung[i][0])
+            if parts:
+                plan_layers.append((layers[i].marker, tuple(parts)))
+        sound_cards = [c for c in used if c.kind != "vocal"]
+        primary = [c for c in base_cards if c.kind not in ("vocal", "texture")]
+        if not primary:
+            primary = next(([c for c in cs if c.kind not in ("vocal", "texture")] for cs in layer_cards[1:]
+                            if any(c.kind not in ("vocal", "texture") for c in cs)), [])
+        tempo_cards = primary + [c for c in used if c not in primary]
+        key = next((c.key for c in primary if c.key), "") or next((c.key for c in vocal_cards if c.key), "") \
+            or next((c.key for c in used if c.key), "")
 
-    inspired: list[str] = []
-    for c in used:
-        for n in ((c.name,) if c.kind == "artist" else ()) + c.inspiration:
-            if n not in inspired:
-                inspired.append(n)
+        pass_notes: list[str] = []
+        avoid: list[str] = []
+        for c in used:
+            for a in c.avoid:
+                if (has_vocal or instrumental_asked) and _VOICE_WORDS.search(a):
+                    continue
+                if a not in avoid:
+                    avoid.append(scrub(a))
+        if avoid:
+            pass_notes.append(f"Not asked for: {D._and(avoid)}. These stay out of the prompt, because music models "
+                         "tend to hear a 'no X' as 'X'.")
+        instruments: list[str] = []
+        for c in sound_cards:
+            for i in c.instruments:
+                if i not in instruments:
+                    instruments.append(i)
 
-    can_sing = bool(getattr(profile, "has_lyrics", False))
-    # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
-    # or the vocal became a lead line (tags for a model that cannot sing). A card's own voice
-    # (`vocal` on a style or artist card) is described only when the prompt sings.
-    instrumental = instrumental_asked or not has_vocal or (dialect == D.TAGS and not can_sing)
-    plan = D.Plan(
-        user_words=tuple(content),
-        # the style's sound first, a vocal card in the base after it
-        base=tuple(_part(c, lib, scrub) for c in sorted(base_cards, key=lambda c: c.kind == "vocal")),
-        layers=tuple(plan_layers),
-        names=tuple(inspired) if include_names else (),
-        instruments=tuple(scrub(i) for i in instruments),
-        rhythm=scrub(_join_field(primary, "rhythm")),
-        harmony=scrub(_join_field(primary, "harmony")),
-        production=scrub(_join_field(primary, "production")),
-        mood=scrub(_join_field(primary, "mood")),
-        bpm=_bpm(tempo_cards, " ".join(content)),
-        key=scrub(key),
-        can_sing=can_sing,
-        instrumental=instrumental_asked,
-        voices=not instrumental,
-    )
-    clauses, compose_notes = D.compose(plan, dialect)
-    kept, trim_notes = D.trim(clauses, dialect, limit)
-    prompt = D._join(kept, dialect)
-    # The prompt's first character is capitalised even when it is the user's (only that one
-    # character), except when the user's words open with the profile's trigger phrase, which
-    # must reach the model exactly as typed. Tags stay lowercase.
-    triggers = tuple(getattr(profile, "triggers", ()) or ())
-    if dialect != D.TAGS and kept and kept[0].kind == "user" and not any(
-            prompt.lower().startswith(t.lower()) for t in triggers if t):
-        prompt = prompt[:1].upper() + prompt[1:]
-    notes += list(compose_notes) + list(trim_notes)
+        inspired: list[str] = []
+        for c in used:
+            for n in ((c.name,) if c.kind == "artist" else ()) + c.inspiration:
+                if n not in inspired:
+                    inspired.append(n)
+
+        can_sing = bool(getattr(profile, "has_lyrics", False))
+        # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
+        # or the vocal became a lead line (tags for a model that cannot sing). A card's own voice
+        # (`vocal` on a style or artist card) is described only when the prompt sings.
+        instrumental = instrumental_asked or not has_vocal or (dialect == D.TAGS and not can_sing)
+        plan = D.Plan(
+            user_words=tuple(content),
+            # the style's sound first, a vocal card in the base after it
+            base=tuple(_part(c, lib, scrub) for c in sorted(base_cards, key=lambda c: c.kind == "vocal")),
+            layers=tuple(plan_layers),
+            names=tuple(inspired) if include_names else (),
+            instruments=tuple(scrub(i) for i in instruments),
+            rhythm=scrub(_join_field(primary, "rhythm")),
+            harmony=scrub(_join_field(primary, "harmony")),
+            production=scrub(_join_field(primary, "production")),
+            mood=scrub(_join_field(primary, "mood")),
+            bpm=_bpm(tempo_cards, " ".join(content)),
+            key=scrub(key),
+            can_sing=can_sing,
+            instrumental=instrumental_asked,
+            voices=not instrumental,
+        )
+        clauses, compose_notes = D.compose(plan, dialect)
+        kept, trim_notes = D.trim(clauses, dialect, limit, left_out=left_out)
+        prompt = D._join(kept, dialect)
+        # The prompt's first character is capitalised even when it is the user's (only that one
+        # character), except when the user's words open with the profile's trigger phrase, which
+        # must reach the model exactly as typed. Tags stay lowercase.
+        triggers = tuple(getattr(profile, "triggers", ()) or ())
+        if dialect != D.TAGS and kept and kept[0].kind == "user" and not any(
+                prompt.lower().startswith(t.lower()) for t in triggers if t):
+            prompt = prompt[:1].upper() + prompt[1:]
+        return locals()
+
+    # Truthful reporting: a card counts as used only when at least one of its clauses is in the
+    # prompt. A card that trimming removed completely is taken out and the prompt is rendered
+    # again without it, so none of its instruments, tempo or names linger; the note names it.
+    excluded: set = set()
+    left_out: list = []
+    for _ in range(len(all_used) + 1):
+        r = render_once(excluded, left_out)
+        kept_ids = {cid for c in r["kept"] for cid in c.cards}
+        composed = {cid: n for c in r["clauses"] for cid, n in zip(c.cards, c.card_names)}
+        gone = [cid for cid in composed if cid not in kept_ids and cid not in excluded]
+        if not gone:
+            break
+        excluded |= set(gone)
+        left_out += [n for n in (D._lc_first(composed[cid]) for cid in gone) if n not in left_out]
+    kept, prompt = r["kept"], r["prompt"]
+    instrumental, can_sing = r["instrumental"], r["can_sing"]
+    # Only cards the prompt describes: a kept clause of their own, or the user's own words that
+    # stay in the prompt and name them ("rainy Tuesday slowcore" keeps "slowcore" as typed).
+    user_text = " ".join(c.text for c in kept if c.kind == "user").lower()
+    typed_in = {m.card_id for m in matches if m.text.strip() and m.text.lower() in user_text}
+    used = [c for c in used if c.id in kept_ids or c.id in typed_in]
+    inspired = list(dict.fromkeys(n for c in used for n in ((c.name,) if c.kind == "artist" else ()) + c.inspiration))
+    notes += r["pass_notes"] + list(r["compose_notes"]) + list(r["trim_notes"])
     added = tuple(c.text for c in kept if c.kind != "user")
 
     if smooth:

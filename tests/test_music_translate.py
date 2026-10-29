@@ -801,7 +801,9 @@ def test_tags_keep_each_layer_card_as_its_own_clause(tmp_path):
     t = translate("basecore with layer1core with layer2core with layer3core", STABLE, library=lib)
     for k in (1, 2, 3):
         assert f"layer{k}core" in t.prompt, (k, t.prompt)
-        assert f"l{k}tag2" in t.prompt and f"l{k}tag3" not in t.prompt      # a layer card keeps its first 3 tags
+        assert f"l{k}tag3" not in t.prompt                                   # a layer card brings at most 3 tags
+    # Task 6 fix round 1: the 12-tag cap shortens the last layer cards first; none disappears
+    assert "l1tag2" in t.prompt and len(t.prompt.split(", ")) <= D.TAGS_CAP
     # trimming drops the last layer first
     clauses, _ = D.compose(D.Plan(user_words=(), base=(D.Part("sound", "Basecore", "x", tags=("b1", "b2")),),
                                   layers=tuple((None, (D.Part("sound", f"L{k}", "x", tags=(f"t{k}a", f"t{k}b")),))
@@ -881,3 +883,93 @@ def test_a_filtered_list_is_rebuilt_without_and_with_debris():
 def test_funkadelic_production_reads_as_a_sentence(tmp_path):
     p = translate("Funkadelic-like song", MINIMAX, library=_shipped(tmp_path)).prompt
     assert "and with" not in p and "loud, with the guitar far out front" in p, p
+
+
+# ── Task 6 fix round 1: lists keep their "with ..." phrase in place ──────────
+
+_PRODUCTION = {
+    "p-funk": "Big, crowded and colourful, with stacked horns and synth squelches.",
+    "funk": "Dry, tight and punchy, with the bass and drums up front.",
+    "bagpipes": "Outdoors and open, heard from a natural distance, with soft waves and wind beneath the pipes.",
+    "krautrock": "Raw and roomy, with tape echo, studio effects and long edits.",
+    "funkadelic": "Rough, saturated and loud, with the guitar far out front.",
+}
+
+
+def test_list_fields_come_back_exactly_as_written_when_nothing_is_filtered():
+    for text in _PRODUCTION.values():
+        assert D._filter_list(text, set()) == text[0].lower() + text[1:-1], text
+
+
+def test_a_filtered_list_keeps_its_with_phrase_whole_and_in_place():
+    cases = {
+        "p-funk": ("crowded", "big and colourful, with stacked horns and synth squelches"),
+        "funk": ("tight", "dry and punchy, with the bass and drums up front"),
+        "bagpipes": ("open", "outdoors and heard from a natural distance, with soft waves and wind beneath the pipes"),
+        "krautrock": ("roomy", "raw, with tape echo, studio effects and long edits"),
+        "funkadelic": ("saturated", "rough and loud, with the guitar far out front"),
+    }
+    for key, (drop, want) in cases.items():
+        assert D._filter_list(_PRODUCTION[key], set(D.stems(drop))) == want, key
+
+
+# ── Task 6 fix round 1: used cards match what is rendered ───────────────────
+
+TRIMMED = "bebop but afrobeat with rain on a tin roof"
+
+
+def test_a_trimmed_layer_card_is_not_reported_and_the_note_names_it(tmp_path):
+    lib = _shipped(tmp_path)
+    t = translate(TRIMMED, MINIMAX, library=lib)
+    assert t.used_cards == ("bebop", "afrobeat"), t.used_cards
+    assert "tin roof" not in t.prompt.lower() and "gutter" not in t.prompt.lower()
+    assert not any("tin roof" in a.lower() for a in t.added)
+    note = next(n for n in t.notes if n.startswith("Left out to fit the length:"))
+    assert "rain on a tin roof" in note, note
+    # Stable Audio has room for all three: all three are reported
+    assert translate(TRIMMED, STABLE, library=lib).used_cards == ("bebop", "afrobeat", "rain-on-a-tin-roof")
+    # the generic budget keeps only bebop: afrobeat and its inspiration names are gone
+    g = translate(TRIMMED, None, library=lib)
+    assert g.used_cards == ("bebop",) and "Fela Kuti" not in g.inspired_by and "Charlie Parker" in g.inspired_by
+    assert "afrobeat and rain on a tin roof" in next(n for n in g.notes if n.startswith("Left out"))
+    assert "polyrhythmic" not in g.prompt and "shekere" not in g.prompt
+
+
+def test_a_card_typed_in_the_users_own_kept_words_is_still_reported(tmp_path):
+    lib = _shipped(tmp_path)
+    t = translate("make it feel like a rainy Tuesday, Tortoise-like", MINIMAX, library=lib)
+    assert t.used_cards == ("tortoise",)
+
+
+def test_clauses_carry_the_card_they_describe(tmp_path):
+    lib = _shipped(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate(TRIMMED, profile, library=lib)
+        assert t.used_cards and t.used_cards[0] == "bebop"
+    c = D.clause("layer", "x", D.Part(kind="sound", label="Funk", sound="s", card_id="funk", card_name="Funk"))
+    assert c.cards == ("funk",) and c.card_names == ("Funk",)
+    assert D.clause("mood", "y").cards == ()
+
+
+# ── Task 6 fix round 1: beatless cards have no tempo ─────────────────────────
+
+def test_a_beatless_style_renders_no_tempo_and_takes_a_partners(tmp_path):
+    lib = _shipped(tmp_path)
+    for profile in (MINIMAX, STABLE, None):
+        t = translate("ambient drone", profile, library=lib)
+        assert t.used_cards == ("ambient-drone",)
+        assert "bpm" not in t.prompt, t.prompt
+        mix = translate("ambient drone with afrobeat", profile, library=lib)
+        bpms = [int(b) for b in re.findall(r"(\d+) bpm", mix.prompt)]
+        assert all(100 <= b <= 130 for b in bpms), (profile, mix.prompt)        # afrobeat's 100-130
+    assert re.findall(r"(\d+) bpm", translate("ambient drone with afrobeat", STABLE, library=lib).prompt)
+
+
+# ── Task 6 fix round 1: Stable Audio tags are capped ─────────────────────────
+
+def test_tags_are_capped_without_losing_a_card(tmp_path):
+    lib = _shipped(tmp_path)
+    t = translate("p-funk with krautrock with surf rock with bagpipes on the beach", STABLE, library=lib)
+    tags = [x for x in t.prompt.split(", ") if x]
+    assert len(tags) <= D.TAGS_CAP, tags
+    assert set(t.used_cards) == {"p-funk", "krautrock", "surf-rock", "bagpipes-on-the-beach-at-sunset"}, t.used_cards

@@ -147,7 +147,9 @@ def test_every_card_is_reachable_by_a_typed_alias_and_translates_in_all_dialects
             p = parse(alias, lib)
             matches = [m for layer in p.layers for m in layer.matches]
             assert any(m.card_id == c.id or c.id in m.alternatives for m in matches), (c.id, alias, matches)
-            for text in (alias, f"{alias}-like song"):
+            # an ambiguous one-word alias needs a signal in a sentence: a capital letter is one
+            mid = alias.capitalize() if c.ambiguous and len(alias.split()) == 1 else alias
+            for text in (alias, f"{alias}-like song", f"instrumental {mid} piece"):
                 for dialect, profile in PROFILES:
                     t = translate(text, profile, library=lib)
                     assert t.prompt.strip() and t.used_cards, (c.id, text, dialect)
@@ -180,3 +182,61 @@ def test_ambiguous_aliases_need_a_signal_in_a_sentence(lib):
                        ("a gospel choir", "gospel-choir"), ("celtic fiddle tunes", "celtic-folk"),
                        ("steelpan", "steel-drums"), ("bossa nova", "bossa-nova"), ("Mellotron", "mellotron-strings")):
         assert translate(text, MINIMAX, library=lib).used_cards[:1] == (want,), text
+
+
+# ── fix round 1: the mix described is the mix delivered ─────────────────────
+
+def _opening(text, n=5):
+    return " ".join(text.lower().split()[:n]).rstrip(",.;")
+
+
+@pytest.mark.parametrize("profile", [MINIMAX, STABLE, None], ids=["minimax", "stable-audio", "generic"])
+def test_wand_reports_exactly_the_cards_it_renders(lib, profile):
+    for s in range(1, 61):
+        t = wand(profile, seed=s, library=lib)
+        if profile is not None:     # the generic 300-character budget often fits only the base card
+            assert len(t.used_cards) >= 2, (s, t.used_cards, t.notes)
+        for cid in t.used_cards:
+            card = lib.card(cid)
+            if profile is STABLE:
+                assert _shows(card, t.prompt, lib), (s, cid, t.prompt)
+            else:
+                # caption: the whole sound; generic: its first sentence. Five opening words are distinctive.
+                text = card.vocal if card.kind == "vocal" and card.vocal else card.sound   # a vocal card prints its voice
+                assert _opening(text) in t.prompt.lower(), (s, cid, t.prompt)
+        if profile is not STABLE:                   # and nothing rendered goes unreported
+            for c in lib.cards.values():
+                if c.id not in t.used_cards and c.kind != "vocal":
+                    assert _opening(c.sound) not in t.prompt.lower(), (s, c.id, t.prompt)
+        assert not any(n.startswith("Left out to fit the length:") and any(
+            lib.card(cid).name.lower() in n.lower() for cid in t.used_cards) for n in t.notes), (s, t.notes)
+
+
+def test_wand_is_deterministic_per_seed(lib):
+    for profile in (MINIMAX, STABLE, None):
+        for s in (1, 7, 42, 99):
+            a, b = wand(profile, seed=s, library=lib), wand(profile, seed=s, library=lib)
+            assert (a.prompt, a.used_cards, a.notes, a.lyrics) == (b.prompt, b.used_cards, b.notes, b.lyrics)
+
+
+def test_stable_audio_wand_keeps_at_most_twelve_tags(lib):
+    from music_prompts.dialects import TAGS_CAP
+    for s in range(1, 61):
+        t = wand(STABLE, seed=s, library=lib)
+        assert len([x for x in t.prompt.split(", ") if x]) <= TAGS_CAP, (s, t.prompt)
+
+
+@pytest.mark.parametrize("profile", [MINIMAX, STABLE], ids=["minimax", "stable-audio"])
+def test_no_single_card_dominates_the_wand(lib, profile):
+    """A card (the bagpipes scene was a worry) appears in at most a quarter of 60 wand prompts."""
+    from collections import Counter
+    seen = Counter(cid for s in range(1, 61) for cid in wand(profile, seed=s, library=lib).used_cards)
+    assert max(seen.values()) <= 15, seen.most_common(5)
+
+
+def test_beatless_drone_never_meets_a_groove_in_the_wand(lib):
+    groove = {"afrobeat", "italo-disco", "funk", "p-funk", "parliament", "funkadelic", "big-band-swing",
+              "hyperpop", "chiptunes"}
+    for s in range(1, 401):
+        used = set(wand(MINIMAX, seed=s, library=lib).used_cards)
+        assert not ("ambient-drone" in used and used & groove), (s, used)

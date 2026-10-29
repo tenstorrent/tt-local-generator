@@ -26,6 +26,12 @@ Scoring (no embeddings; only the cards' own data):
   when the library has one. At most one vocal. A model that cannot sing (no
   lyrics and not the caption+lyrics dialect) never gets a vocal card.
 * Tempo and the production note come from the base card through `translate`.
+* Delivered mix. `translate` reports in `used_cards` only cards with a clause in the
+  prompt. When a pick was trimmed to fit the length budget, the wand drops its last
+  pick and renders again (at most MAX_RETRIES times, never below two cards), so the
+  cards it reports are the cards the prompt describes. If only the base is left (its
+  partner did not fit beside it), up to MAX_PARTNER_TRIES other compatible partners
+  are tried in a seeded order, keeping the two-card floor where the budget allows.
 
 Repeatable: every random choice uses a private `random.Random(seed)`; the global
 random state is never touched. With `seed=None` a fresh seed is drawn and the
@@ -47,6 +53,8 @@ from .parse import parse
 from .translate import EMPTY_NOTE, Translation, _default_library, translate_cards
 
 GOES_WITH_BOOST = 3.0
+MAX_RETRIES = 2         # re-renders after dropping a pick that did not fit (see wand())
+MAX_PARTNER_TRIES = 8   # other partners tried when the base and its partner do not fit together
 BASE_KINDS = ("style", "artist", "era")
 MAIN_KINDS = ("style", "instrument", "vocal")
 COLOUR_KINDS = ("scene", "texture")
@@ -156,7 +164,28 @@ def wand(profile, *, seed: int | None = None, base: str | None = None, library: 
     built = _build(rng, lib, can_sing)
     if built is not None:
         head, rest = built
-        return done(translate_cards((head.id,), _layers(rest), "", profile, **kw))
+        t = translate_cards((head.id,), _layers(rest), "", profile, **kw)
+        # The mix described is the mix delivered. translate reports only cards it rendered; when a
+        # pick did not fit the length budget, drop the last pick and render again, so the notes do
+        # not announce a card the user was never shown. Keep at least two cards, retry at most twice.
+        for _ in range(MAX_RETRIES):
+            if set(c.id for c in [head, *rest]) <= set(t.used_cards) or len(rest) <= 1:
+                break
+            rest = rest[:-1]
+            t = translate_cards((head.id,), _layers(rest), "", profile, **kw)
+        # Still one card: the partner did not fit beside the base. Try other compatible partners
+        # (in a seeded order) so the wand keeps its two-card floor when the library allows.
+        if len(t.used_cards) < 2:
+            pool = sorted((c for c in lib.cards.values() if c.kind in MAIN_KINDS + COLOUR_KINDS
+                           and c.id != head.id and (can_sing or c.kind != "vocal")
+                           and _compatible(c, [head], new_family=c.kind in MAIN_KINDS)), key=lambda c: c.id)
+            rng.shuffle(pool)
+            for c in pool[:MAX_PARTNER_TRIES]:
+                alt = translate_cards((head.id,), _layers([c]), "", profile, **kw)
+                if len(alt.used_cards) >= 2:
+                    t = alt
+                    break
+        return done(t)
 
     # One card (or no compatible pair): fall back to a single card, with a note.
     singles = sorted((c for c in lib.cards.values() if c.kind in BASE_KINDS + COLOUR_KINDS), key=lambda c: c.id)
