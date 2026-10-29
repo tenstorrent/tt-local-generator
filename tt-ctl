@@ -30,6 +30,9 @@ Usage:
     tt-ctl seed-demo                Load the bundled demo collection into the library
                                     (idempotent) as a "Welcome to tt-local-generator" playlist.
                                     Flags: --db PATH  --collection-dir PATH  --force
+    tt-ctl music-prompt "text"      Turn a description into a music prompt (style library)
+                                    Flags: --model ID  --dialect D  --wand  --seed N
+                                           --include-names  --json
     tt-ctl run "prompt"             Run one generation right now (blocking)
                                     Flags: --steps N  --model wan2|mochi|flux
                                            --server URL  --neg "negative prompt"
@@ -985,6 +988,39 @@ def cmd_convert_library(args):
             print(yellow(f"  {report['thumbs_failed']} thumbnail(s) failed to render — left as-is."))
 
 
+# ── music-prompt ─────────────────────────────────────────────────────────────
+
+def cmd_music_prompt(args):
+    """Turn a plain description (or a wand pick) into a music prompt using the style library."""
+    import dataclasses  # lazy: the library is only paid for when this runs
+    import music_prompts
+    import music_runtime
+
+    text = (getattr(args, "text", None) or "").strip()
+    if not text and not args.wand:
+        print("usage: tt-ctl music-prompt \"<text>\" [--model ID] [--dialect caption+lyrics|tags|generic] "
+              "[--wand] [--seed N] [--include-names] [--json]", file=sys.stderr)
+        sys.exit(2)
+    profile = music_runtime.profile_for({"model": args.model or ""})
+    if args.dialect:
+        profile = dataclasses.replace(profile, dialect=args.dialect)
+    if args.wand:
+        t = music_prompts.wand(profile, seed=args.seed, base=text or None)
+    else:
+        t = music_prompts.translate(text, profile, include_names=args.include_names)
+    if args.json:
+        print(json.dumps(dataclasses.asdict(t), indent=2))
+        return
+    print(t.prompt)
+    if t.lyrics:
+        print("\nlyrics:")
+        print(t.lyrics)
+    if t.notes:
+        print("\nnotes:")
+        for n in t.notes:
+            print(f"  - {n}")
+
+
 # ── seed-demo ────────────────────────────────────────────────────────────────
 
 def cmd_seed_demo(args):
@@ -1231,6 +1267,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sd.add_argument("--force", action="store_true",
                     help="Re-seed records even if their id already exists")
 
+    # music-prompt
+    mp = sub.add_parser("music-prompt", help="Turn a description into a music prompt with the style library")
+    mp.add_argument("text", nargs="?", default=None, help="what you want to hear, in your own words")
+    mp.add_argument("--model", default=None, help="music model id (picks the prompt dialect); default generic")
+    mp.add_argument("--dialect", default=None, choices=["caption+lyrics", "tags", "generic"],
+                    help="override the prompt dialect")
+    mp.add_argument("--wand", action="store_true", help="surprise me: add styles you did not name")
+    mp.add_argument("--seed", type=int, default=None, help="make a --wand pick repeatable")
+    mp.add_argument("--include-names", action="store_true", dest="include_names",
+                    help="keep artist names in the prompt text")
+    mp.add_argument("--json", action="store_true", help="print the full result as JSON")
+
     # artgen
     _build_artgen_parser(sub)
 
@@ -1336,6 +1384,7 @@ def main():
         "recover":          cmd_recover,
         "convert-library":  cmd_convert_library,
         "seed-demo":        cmd_seed_demo,
+        "music-prompt":     cmd_music_prompt,
         "run":              cmd_run,
         "generate":         cmd_generate,
         "serve-inventory":  cmd_serve_inventory,

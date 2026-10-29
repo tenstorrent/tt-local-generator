@@ -224,6 +224,23 @@ def _music_llm_text(source: str, seed_text: str) -> "str | None":
     return text or None
 
 
+def _music_library_text(seed_text: str) -> "str | None":
+    """The music prompt library's answer for Inspire, or None to let the LLM try.
+
+    Text the library recognises (any style card used) becomes a dialect-less prompt with no artist
+    names; empty text becomes a wand prompt. Never raises: any failure means "no answer".
+    """
+    try:
+        import music_prompts  # noqa: PLC0415
+        text = (seed_text or "").strip()
+        if not text:
+            return music_prompts.wand(None).prompt or None
+        t = music_prompts.translate(text, None)
+        return t.prompt if t.used_cards and t.prompt else None
+    except Exception:
+        return None
+
+
 def _generate_music_text(source: str, seed_text: str, max_tokens: int) -> str:
     """generate_prompt() for source 'music' or 'lyrics'. Always non-empty.
 
@@ -231,6 +248,10 @@ def _generate_music_text(source: str, seed_text: str, max_tokens: int) -> str:
     a typed seed is returned as it is (lyrics with no seed get a bare tagged
     skeleton, music with no seed a canned style line), so the caller always has something to put in the box.
     """
+    if source == "music":
+        lib_text = _music_library_text(seed_text)
+        if lib_text:
+            return lib_text
     text = _music_llm_text(source, seed_text.strip())
     if text:
         return text
