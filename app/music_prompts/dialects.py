@@ -56,10 +56,11 @@ note naming what was dropped; then down to the dialect's soft budget, with a
 "Left out to fit the length" note naming what that pass dropped. Priority, from kept longest to dropped
 first (spec 10 and the plan's Global Constraints; `avoid` is no longer in the
 prompt): the user's content words and the base sound (never dropped: when they
-alone exceed the hard limit the prompt is returned over it with a note), the
-layers (vocal or other), a style card's own voice and the inspiration names,
-instruments, tempo and key, mood, texture (in every dialect a texture card in
-a layer counts as a layer), and last the spare details, which go first: the caption's rhythm,
+alone exceed the hard limit the prompt is returned over it with a note), a
+scene or texture card chosen as a layer (its sound is the content: it goes last
+among the layers, and is first shortened to its first sentence), the other
+layers (vocal or style), a style card's own voice and the inspiration names,
+instruments, tempo and key, mood, texture, and last the spare details, which go first: the caption's rhythm,
 harmony and production sentences, and in the tags dialect the card tags after
 the first few. The spec's list puts production above mood; here production is
 a spare detail (the review of Task 3 ruled the caption carries it only while
@@ -86,6 +87,9 @@ _BUDGETS = {CAPTION: CAPTION_BUDGET, TAGS: TAGS_BUDGET, GENERIC: GENERIC_BUDGET}
 # Lower number = kept longer. Priorities 0 and 1 are never dropped.
 PRIORITY = {
     "user": 0, "base": 1,
+    # A scene or texture card chosen as a layer: its sound is the content (the moonlit accordion,
+    # the beach at sunset), so among layers it goes last, shortened to its first sentence first.
+    "scene": 1.5,
     "vocal": 2, "layer": 2,
     "voice": 3,             # a style card's own voice: after the vocal the user asked for
     "names": 3,
@@ -102,7 +106,7 @@ SOFT_DROP_NOTE = "Left out to fit the length: {}."
 
 # How a dropped clause is named in the note.
 _KIND_WORDS = {
-    "vocal": "the vocal layer", "layer": "a layer", "voice": "the style's voice",
+    "vocal": "the vocal layer", "layer": "a layer", "scene": "the scene", "voice": "the style's voice",
     "names": "the inspiration names",
     "instruments": "the instrument list", "tempo": "the tempo and key",
     "mood": "the mood", "texture": "the texture",
@@ -110,7 +114,7 @@ _KIND_WORDS = {
 }
 
 # Clause kinds that belong to one card: when the last of a card's clauses goes, the note names the card.
-_CARD_KINDS = frozenset({"vocal", "layer", "voice", "texture", "detail", "base"})
+_CARD_KINDS = frozenset({"vocal", "layer", "scene", "voice", "texture", "detail", "base"})
 
 CANNOT_SING = "This model cannot sing; the vocal became a lead line."
 
@@ -354,6 +358,11 @@ def _drop_to(kept: list, dialect: str, target: int) -> tuple[list, list[str], bo
         if not cands:
             return kept, dropped, False
         i = max(cands, key=lambda k: (kept[k].priority, k))
+        first = _first_sentence(kept[i].text)
+        if kept[i].kind == "scene" and first and _sentence(first) != kept[i].text.strip():
+            c = kept[i]                         # a scene is shortened to its first sentence before it goes
+            kept[i] = Clause(c.kind, _sentence(first), c.priority, c.cards, c.card_names)
+            continue
         c = kept.pop(i)
         # A clause that describes a card is named by that card, once the card has no clause left.
         if c.cards and c.kind in _CARD_KINDS:
@@ -399,16 +408,16 @@ def _ntags(c: Clause) -> int:
     return len([t for t in c.text.split(", ") if t.strip()])
 
 
-# The order in which the tags cap takes tags away: spare card details, mood words, the
-# instrument list, then the tempo. One "bpm" tag tells a tag model more than a fifth
-# instrument, so the tempo outlasts the instruments here (unlike whole-clause trimming).
-_CAP_ORDER = ("detail", "texture", "mood", "instruments", "tempo", "names")
+# The tags cap takes shared tags away in the plain trimming order: the highest priority number
+# first (spare details, texture, mood, tempo and key, then the instrument list).
+_CAP_KINDS = ("detail", "texture", "mood", "tempo", "instruments", "names")
 
 
 def _cap_tags(kept: list, cap: int) -> tuple[list, list[str]]:
     """Tags dialect: at most `cap` tags, without losing a card.
 
-    Tags go one at a time from the end of a clause: first the shared kinds in _CAP_ORDER, then a
+    Tags go one at a time from the end of a clause: first the shared kinds, highest priority number
+    first (the plain trimming order), then a
     card's extra clause (its voice) while the card has another clause, then card clauses lose their
     last tags, the last card first, down to their first tag. The user's words and the base are never
     touched. Returns the kept clauses and the words for the note.
@@ -428,9 +437,9 @@ def _cap_tags(kept: list, cap: int) -> tuple[list, list[str]]:
                 dropped.append(word)
 
     while count() > cap:
-        shared = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and not c.cards and c.kind in _CAP_ORDER]
+        shared = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and not c.cards and c.kind in _CAP_KINDS]
         if shared:
-            shorten(max(shared, key=lambda k: (-_CAP_ORDER.index(kept[k].kind), k)))
+            shorten(max(shared, key=lambda k: (kept[k].priority, k)))
             continue
         extra = [i for i, c in enumerate(kept) if c.priority > _PROTECTED and c.cards and all(
             any(cid in k.cards for j, k in enumerate(kept) if j != i) for cid in c.cards)]
@@ -470,6 +479,7 @@ class Part:
     sung: str = ""            # no card: what the user said is sung about ("about the sea")
     card_id: str = ""         # the card this part comes from ("" for a vocal from the user's words)
     card_name: str = ""       # that card's own name, for notes ("Tape hiss")
+    card_kind: str = ""       # that card's kind ("scene", "style", ...): a scene layer is trimmed last among layers
 
 
 @dataclass(frozen=True)
@@ -533,6 +543,11 @@ def _voice(p: Part, plan: Plan) -> bool:
     return p.kind == "sound" and bool(p.vocal.strip()) and plan.voices and not plan.instrumental
 
 
+def _layer_kind(p: Part) -> str:
+    """The clause kind of a layer card: "scene" for a scene or texture card, else "layer"."""
+    return "scene" if p.kind == "texture" or p.card_kind in ("scene", "texture") else "layer"
+
+
 def _tempo_bits(plan: Plan) -> list[str]:
     return ([f"around {plan.bpm} bpm"] if plan.bpm else []) + ([plan.key] if plan.key else [])
 
@@ -582,13 +597,13 @@ def _compose_caption(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
             out.append(clause("vocal", kept.add(f"{_intro(marker)}, a {vocal_style(p.label)} vocal: "
                                                 f"{p.vocal or _lc_first(p.sound)}"), p))
         elif p.kind == "texture":
-            # A texture card chosen as a layer is a layer card, as in the tags dialect: trimming
-            # it before the mood words would drop a card the user (or the wand) chose.
-            out.append(clause("layer", kept.add(p.sound), p))
+            # A texture card chosen as a layer is a chosen card: it is trimmed like a scene, last
+            # among the layers, and never before the mood words.
+            out.append(clause("scene", kept.add(p.sound), p))
         elif _names_style(p, plan):
-            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.sound)}"), p))
+            out.append(clause(_layer_kind(p), kept.add(f"{_intro(marker)}, {_lc_first(p.sound)}"), p))
         else:
-            out.append(clause("layer", kept.add(f"{_intro(marker)}, {_lc_first(p.label)}: {_lc_first(p.sound)}"), p))
+            out.append(clause(_layer_kind(p), kept.add(f"{_intro(marker)}, {_lc_first(p.label)}: {_lc_first(p.sound)}"), p))
         if _voice(p, plan):
             out.append(clause("voice", kept.add(_sentence(_cap(p.vocal))), p))
     if plan.names:
@@ -654,7 +669,7 @@ def _compose_tags(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         for _, p in _parts(plan, which):
             # A texture card in a layer is a layer card here: its tags name the card, and a tag
             # line that dropped it before the mood words would lose a card the user chose.
-            k = kind or {"vocal": "vocal"}.get(p.kind, "layer")
+            k = kind or ("vocal" if p.kind == "vocal" else _layer_kind(p))
             # Each layer card is a group of its own, so it is one clause and trimming drops whole
             # layer cards, the last first. A layer card brings its label and first _LAYER_TAGS tags.
             if k != "base":
@@ -739,11 +754,11 @@ def _compose_generic(plan: Plan) -> tuple[list[Clause], tuple[str, ...]]:
         elif p.kind == "vocal":
             out.append(clause("vocal", kept.add(f"with a {vocal_style(p.label)} vocal {where}, {p.vocal or first}"), p))
         elif p.kind == "texture":
-            out.append(clause("layer", kept.add(first), p))          # a chosen texture is a layer card
+            out.append(clause("scene", kept.add(first), p))          # a chosen texture is trimmed like a scene
         elif _names_style(p, plan):
-            out.append(clause("layer", kept.add(f"layered in, {first}"), p))
+            out.append(clause(_layer_kind(p), kept.add(f"layered in, {first}"), p))
         else:
-            out.append(clause("layer", kept.add(f"with {_lc_first(p.label)} layered in, {first}"), p))
+            out.append(clause(_layer_kind(p), kept.add(f"with {_lc_first(p.label)} layered in, {first}"), p))
         if _voice(p, plan):
             out.append(clause("voice", kept.add(_lc_first(p.vocal)), p))
     if plan.names:

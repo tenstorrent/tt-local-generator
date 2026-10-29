@@ -249,8 +249,11 @@ Clashes added (kept rare):
 What the wand does with the length budget (fix round 1):
 - **The wand reports only the cards it renders.** Each `sound` is 120-200 characters, so on MiniMax the base and one layer fill most of
   the 450-character caption budget. A third card that does not fit is dropped before the prompt is shown, and `used_cards`, the
-  "Inspired by" names and the notes describe the mix that was rendered. On MiniMax most wand prompts now have two cards; Stable Audio keeps
-  three or four.
+  "Inspired by" names and the notes describe the mix that was rendered.
+- **Scenes and textures are real wand picks (fix round 2).** The wand's layer card is drawn by kind: another style 45%, scene 25%,
+  instrument 15%, texture 10%, vocal 5% (vocal only for a model that sings; otherwise style gets its share). A second layer is added about
+  a third of the time. A scene or texture layer is trimmed last among the layers, shortened to its first sentence first, so it outlasts a
+  second style. Over seeds 1..60 a scene or texture is in 20 MiniMax and 25 Stable Audio wand prompts.
 
 ## Changes since the second-batch sheet (fix round 1)
 
@@ -266,3 +269,9 @@ What the wand does with the length budget (fix round 1):
   a layer in every dialect. Stable Audio prompts keep at most 12 tags; each card keeps its first tag. A list with a "with ..." phrase
   ("Big, crowded and colourful, with stacked horns and synth squelches") renders exactly as written.
 - No other card text changed.
+
+## Changes since fix round 1 (fix round 2)
+
+- No card text, family or tempo changed.
+- The wand draws its layer card by kind (above), so the scene cards appear in wand prompts on MiniMax as well as on Stable Audio.
+- Stable Audio's 12-tag cap now drops tempo and key tags before instrument tags, following the plain trimming order.

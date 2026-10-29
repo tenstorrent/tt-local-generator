@@ -85,8 +85,9 @@ def test_wand_picks_at_least_two_families(tmp_path):
     lib = _fixture(tmp_path)
     for seed in range(100):
         t = wand(MINIMAX, seed=seed, library=lib)
-        main = [lib.cards[i] for i in t.used_cards if lib.cards[i].kind in ("style", "artist", "era", "instrument", "vocal")]
-        assert len(main) >= 2 and len({c.family for c in main}) == len(main), (seed, t.used_cards)
+        # Fix round 2 of Task 6: the layer may be a scene or texture card; every pick is still from its own family
+        picks = [lib.cards[i] for i in t.used_cards]
+        assert len(picks) >= 2 and len({c.family for c in picks}) == len(picks), (seed, t.used_cards)
 
 
 def test_wand_never_picks_a_clashes_with_pair(tmp_path):

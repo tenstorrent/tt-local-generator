@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from music_prompts import cards as C
 from music_prompts import translate, wand
+wand_module = sys.modules["music_prompts.wand"]
 from music_prompts.parse import parse
 from test_music_shipped_cards import (MINIMAX, PROFILES, STABLE, VOICE_WORDS, _all_names, _contains_name,
                                       _publishers, _shows)
@@ -99,9 +100,14 @@ def test_wand_produces_thirty_distinct_prompts_in_fifty_seeds(lib, profile):
 
 
 def test_no_two_adjacent_wand_seeds_share_the_same_family_set(lib):
-    fams = [_families(lib, wand(MINIMAX, seed=s, library=lib)) for s in range(1, 41)]
+    # Fix round 2: every scene card is in the one "scene" family, and a scene is now the layer about a
+    # quarter of the time, so two neighbouring seeds can both be "<family> + a scene". The spot check
+    # allows two such pairs in 39, and two neighbours never pick the same cards.
+    runs = [wand(MINIMAX, seed=s, library=lib) for s in range(1, 41)]
+    fams = [_families(lib, t) for t in runs]
     same = [(s, sorted(a)) for s, (a, b) in enumerate(zip(fams, fams[1:]), start=1) if a == b]
-    assert not same, same
+    assert len(same) <= 2, same
+    assert not any(set(a.used_cards) == set(b.used_cards) for a, b in zip(runs, runs[1:]))
 
 
 def test_no_artist_name_in_any_wand_output_across_200_seeds_and_all_dialects(lib):
@@ -240,3 +246,43 @@ def test_beatless_drone_never_meets_a_groove_in_the_wand(lib):
     for s in range(1, 401):
         used = set(wand(MINIMAX, seed=s, library=lib).used_cards)
         assert not ("ambient-drone" in used and used & groove), (s, used)
+
+
+# ── fix round 2: scenes and textures are real wand picks ────────────────────
+
+COLOUR = {"scene", "texture"}
+# Expected share: the layer is a scene 25% or a texture 10% of the time, and an optional third card
+# (about 35% of picks) adds more, so about 21-25 of 60 prompts. 15 leaves room for seed noise.
+MIN_COLOUR_PROMPTS = 15
+
+
+@pytest.mark.parametrize("profile", [MINIMAX, STABLE], ids=["minimax", "stable-audio"])
+def test_scenes_and_textures_appear_in_wand_prompts(lib, profile):
+    n = sum(any(lib.card(c).kind in COLOUR for c in wand(profile, seed=s, library=lib).used_cards)
+            for s in range(1, 61))
+    assert n >= MIN_COLOUR_PROMPTS, n
+
+
+def test_wand_draws_the_layer_by_kind_weights():
+    w = wand_module.layer_kind_weights(can_sing=True, available={"style", "scene", "instrument", "texture", "vocal"})
+    assert w == {"style": 45, "scene": 25, "instrument": 15, "texture": 10, "vocal": 5}
+    w = wand_module.layer_kind_weights(can_sing=False, available={"style", "scene", "instrument", "texture", "vocal"})
+    assert w == {"style": 50, "scene": 25, "instrument": 15, "texture": 10}
+    assert wand_module.layer_kind_weights(can_sing=True, available={"style", "scene"}) == {"style": 45, "scene": 25}
+
+
+def test_a_scene_layer_outlasts_a_second_style_layer_when_trimming():
+    from music_prompts import dialects as D
+    style = D.Part("sound", "Funk", "Tight funk. More words here.", card_id="funk", card_name="Funk", card_kind="style")
+    scene = D.Part("sound", "Rain on a roof", "Rain on a roof, pinging. A second sentence about gutters.",
+                   card_id="rain", card_name="Rain on a roof", card_kind="scene")
+    plan = D.Plan(user_words=(), base=(D.Part("sound", "Bebop", "Fast jazz.", card_id="bebop", card_name="Bebop"),),
+                  layers=(("with", (style,)), ("with", (scene,))))   # the scene is shown last
+    clauses, _ = D.compose(plan, D.CAPTION)
+    full = D._join(clauses, D.CAPTION)
+    kept, notes = D.trim(clauses, D.CAPTION, 1000, budget=len(full) - 10)
+    out = D._join(kept, D.CAPTION)
+    assert "pinging" in out and "Tight funk" not in out, out            # the style layer went first
+    kept, notes = D.trim(clauses, D.CAPTION, 1000, budget=len("Bebop: fast jazz. Alongside it, rain on a roof, pinging.") + 2)
+    out = D._join(kept, D.CAPTION)
+    assert "pinging" in out and "gutters" not in out, out               # shortened to its first sentence first

@@ -369,7 +369,7 @@ def _part(card: StyleCard, lib: Library, scrub) -> D.Part:
                   tags=tuple(scrub(t) for t in card.tags), vocal=scrub(card.vocal),
                   lead_instrument=scrub(card.lead_instrument), card_id=card.id,
                   # an artist card is named by its style in notes, like everywhere else
-                  card_name=label if card.kind == "artist" else card.name)
+                  card_name=label if card.kind == "artist" else card.name, card_kind=card.kind)
 
 
 def _bpm(cards, extra_text: str) -> int | None:

@@ -21,10 +21,12 @@ Scoring (no embeddings; only the cards' own data):
 * `goes_with`. A candidate whose id or family is named by a card already chosen
   (or that names one of them) weighs `1 + GOES_WITH_BOOST`, otherwise 1. It makes
   a pairing likelier and is never required.
-* Kinds. The base is a style, artist or era card. The other main picks (one or
-  two) are style, instrument or vocal cards. One scene or texture card is added
-  when the library has one. At most one vocal. A model that cannot sing (no
-  lyrics and not the caption+lyrics dialect) never gets a vocal card.
+* Kinds. The base is a style, artist or era card. The layer card's kind is drawn
+  by weight: another style 45, scene 25, instrument 15, texture 10, vocal 5
+  (LAYER_KIND_WEIGHTS), among the kinds that have a compatible card. A second
+  layer is added with probability THIRD_CARD_P, drawn the same way. At most one
+  vocal. A model that cannot sing (no lyrics and not the caption+lyrics dialect)
+  never gets a vocal card; the vocal weight goes to style.
 * Tempo and the production note come from the base card through `translate`.
 * Delivered mix. `translate` reports in `used_cards` only cards with a clause in the
   prompt. When a pick was trimmed to fit the length budget, the wand drops its last
@@ -53,6 +55,10 @@ from .parse import parse
 from .translate import EMPTY_NOTE, Translation, _default_library, translate_cards
 
 GOES_WITH_BOOST = 3.0
+# The kind of a layer card (fix round 2 of Task 6): scenes and textures are real picks.
+LAYER_KIND_WEIGHTS = (("style", 45), ("scene", 25), ("instrument", 15), ("texture", 10), ("vocal", 5))
+LAYER_KINDS = tuple(k for k, _ in LAYER_KIND_WEIGHTS)
+THIRD_CARD_P = 0.35     # chance of a second layer card, drawn the same way; it is the first to go if it does not fit
 MAX_RETRIES = 2         # re-renders after dropping a pick that did not fit (see wand())
 MAX_PARTNER_TRIES = 8   # other partners tried when the base and its partner do not fit together
 BASE_KINDS = ("style", "artist", "era")
@@ -100,29 +106,63 @@ def _compatible(c: StyleCard, chosen: list[StyleCard], *, new_family: bool) -> b
     return not any(clashes(c, o) or (new_family and c.family == o.family) for o in chosen)
 
 
+def layer_kind_weights(*, can_sing: bool, available) -> dict[str, int]:
+    """The weights (percent) for the kind of a layer card, limited to the kinds in `available`.
+
+    A model that cannot sing gets no vocal; the vocal weight goes to style.
+    """
+    w = dict(LAYER_KIND_WEIGHTS)
+    if not can_sing:
+        w["style"] += w.pop("vocal")
+    return {k: v for k, v in w.items() if k in available}
+
+
+def _pick_layer(rng: random.Random, cards: list[StyleCard], chosen: list[StyleCard], can_sing: bool):
+    """One layer card: its kind by LAYER_KIND_WEIGHTS, then a card of that kind by goes_with weight.
+
+    Only kinds with a compatible candidate count (a family new to the pick, no clash, at most one vocal).
+    """
+    has_vocal = any(c.kind == "vocal" for c in chosen)
+    by_kind: dict[str, list[StyleCard]] = {}
+    for c in cards:
+        if c.kind in LAYER_KINDS and c not in chosen and not (c.kind == "vocal" and has_vocal) \
+                and _compatible(c, chosen, new_family=True):
+            by_kind.setdefault(c.kind, []).append(c)
+    weights = layer_kind_weights(can_sing=can_sing, available=set(by_kind))
+    if not weights:
+        return None
+    kinds = [k for k, _ in LAYER_KIND_WEIGHTS if k in weights]
+    x = rng.random() * sum(weights.values())
+    kind = kinds[-1]
+    for k in kinds:
+        x -= weights[k]
+        if x < 0:
+            kind = k
+            break
+    return _pick(rng, by_kind[kind], chosen)
+
+
 def _build(rng: random.Random, lib: Library, can_sing: bool):
-    """Pick (base, layers) card lists, or None when no pairing exists."""
+    """Pick (base, layers) card lists, or None when no pairing exists.
+
+    The base is a style, artist or era card. The first layer is drawn by kind (LAYER_KIND_WEIGHTS);
+    with probability THIRD_CARD_P a second layer is drawn the same way. Every layer comes from a
+    family not yet in the pick and clashes with nothing in it; goes_with makes a card likelier.
+    """
     cards = sorted(lib.cards.values(), key=lambda c: c.id)
     bases = [c for c in cards if c.kind in BASE_KINDS]
     rng.shuffle(bases)
     for base in bases:
         chosen = [base]
-        main: list[StyleCard] = []
-        for _ in range(rng.choice((1, 2))):
-            cands = [c for c in cards if c.kind in MAIN_KINDS and c not in chosen
-                     and (can_sing or c.kind != "vocal")
-                     and not (c.kind == "vocal" and any(m.kind == "vocal" for m in main))
-                     and _compatible(c, chosen, new_family=True)]
-            pick = _pick(rng, cands, chosen)
-            if pick is None:
-                break
-            main.append(pick)
-            chosen.append(pick)
-        if not main:
+        first = _pick_layer(rng, cards, chosen, can_sing)
+        if first is None:
             continue
-        colour = _pick(rng, [c for c in cards if c.kind in COLOUR_KINDS and _compatible(c, chosen, new_family=False)],
-                       chosen)
-        return base, main + ([colour] if colour else [])
+        chosen.append(first)
+        if rng.random() < THIRD_CARD_P:
+            third = _pick_layer(rng, cards, chosen, can_sing)
+            if third is not None:
+                chosen.append(third)
+        return base, chosen[1:]
     return None
 
 

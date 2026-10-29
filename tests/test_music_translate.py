@@ -921,11 +921,12 @@ TRIMMED = "bebop but afrobeat with rain on a tin roof"
 def test_a_trimmed_layer_card_is_not_reported_and_the_note_names_it(tmp_path):
     lib = _shipped(tmp_path)
     t = translate(TRIMMED, MINIMAX, library=lib)
-    assert t.used_cards == ("bebop", "afrobeat"), t.used_cards
-    assert "tin roof" not in t.prompt.lower() and "gutter" not in t.prompt.lower()
-    assert not any("tin roof" in a.lower() for a in t.added)
+    # Fix round 2: a scene layer outlasts a second style layer, so afrobeat is the card left out
+    assert t.used_cards == ("bebop", "rain-on-a-tin-roof"), t.used_cards
+    assert "polyrhythmic" not in t.prompt.lower() and "shekere" not in t.prompt.lower()
+    assert not any("afrobeat" in a.lower() for a in t.added) and "Fela Kuti" not in t.inspired_by
     note = next(n for n in t.notes if n.startswith("Left out to fit the length:"))
-    assert "rain on a tin roof" in note, note
+    assert "afrobeat" in note, note
     # Stable Audio has room for all three: all three are reported
     assert translate(TRIMMED, STABLE, library=lib).used_cards == ("bebop", "afrobeat", "rain-on-a-tin-roof")
     # the generic budget keeps only bebop: afrobeat and its inspiration names are gone
@@ -962,7 +963,10 @@ def test_a_beatless_style_renders_no_tempo_and_takes_a_partners(tmp_path):
         mix = translate("ambient drone with afrobeat", profile, library=lib)
         bpms = [int(b) for b in re.findall(r"(\d+) bpm", mix.prompt)]
         assert all(100 <= b <= 130 for b in bpms), (profile, mix.prompt)        # afrobeat's 100-130
-    assert re.findall(r"(\d+) bpm", translate("ambient drone with afrobeat", STABLE, library=lib).prompt)
+    # The tempo the translator picks for the mix is afrobeat's (a prompt may trim it to fit the budget)
+    from music_prompts.translate import _bpm
+    drone, afro = lib.card("ambient-drone"), lib.card("afrobeat")
+    assert _bpm([drone], "") is None and 100 <= _bpm([drone, afro], "") <= 130
 
 
 # ── Task 6 fix round 1: Stable Audio tags are capped ─────────────────────────
@@ -973,3 +977,12 @@ def test_tags_are_capped_without_losing_a_card(tmp_path):
     tags = [x for x in t.prompt.split(", ") if x]
     assert len(tags) <= D.TAGS_CAP, tags
     assert set(t.used_cards) == {"p-funk", "krautrock", "surf-rock", "bagpipes-on-the-beach-at-sunset"}, t.used_cards
+
+
+def test_the_tag_cap_follows_the_plain_trimming_order():
+    """Fix round 2: tempo and key tags go before instrument tags (spec: instruments outlast tempo)."""
+    cl = [D.clause("base", "bebop, swing"), D.clause("instruments", "sax, trumpet, bass, drums, piano"),
+          D.clause("tempo", "200 bpm, major key"), D.clause("mood", "fast, bright")]
+    kept, notes = D._cap_tags(cl, 7)
+    out = D._join(kept, D.TAGS)
+    assert out == "bebop, swing, sax, trumpet, bass, drums, piano", out
