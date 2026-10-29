@@ -3,6 +3,7 @@ strip, and the "In the style of" chip that now translates its value.
 
 Everything runs against the shipped card library with no network: the LLM check is answered by an injected
 callable, and Smooth uses an injected smoother. Run under xvfb with GDK_BACKEND=x11."""
+import re
 import sys
 import threading
 import time
@@ -191,12 +192,13 @@ def test_lyrics_only_write_is_undoable_without_touching_an_earlier_prompt(monkey
     p._lyrics_buffer.set_text("mine")
     monkeypatch.setattr(music_prompts, "translate", lambda *a, **k: _fake(prompt="", lyrics="[Verse]\nnew"))
     p.confirm_replace_lyrics = lambda msg: True
+    top.text = "my own edit"                       # an unchanged written prompt would make Write a no-op
     p._write_btn.emit("clicked")
     assert p._lyrics_text() == "[Verse]\nnew"
     assert p._undo_btn.get_sensitive()
     p._undo_btn.emit("clicked")
     assert p._lyrics_text() == "mine"
-    assert top.text == written                     # the earlier Write is not undone with it
+    assert top.text == "my own edit"               # the earlier Write is not undone with it
 
 
 def test_result_dropped_when_the_model_changed_during_the_run():
@@ -272,10 +274,12 @@ def test_style_buttons_insert_through_a_click():
 def test_smooth_checkbox_disabled_without_an_llm(monkeypatch):
     monkeypatch.setattr(cpp, "_run_in_thread", lambda fn, done: done(fn()))
     p, _top = _panel("stable-audio", llm_available_fn=lambda: False)
+    p.smooth_fn = lambda text: text
     assert not p._smooth_check.get_active()
     assert not p._smooth_check.get_sensitive()
     assert "chat model" in (p._smooth_check.get_tooltip_text() or "")
     q, _top = _panel("stable-audio", llm_available_fn=lambda: True)
+    q.smooth_fn = lambda text: text
     assert q._smooth_check.get_sensitive() and not q._smooth_check.get_active()
 
 
@@ -419,3 +423,155 @@ def test_create_view_wires_the_prompt_setter_to_the_top_entry(monkeypatch):
     view._prompt_entry.set_text("Tortoise")
     panel._write_btn.emit("clicked")
     assert "vibraphone" in view._prompt_entry.get_text()
+
+
+# ── final review fix wave ──────────────────────────────────────────────────
+
+EXAMPLE = "tortoise-like song but someone is singing a bluegrass song on top"
+
+
+def _item(card_id):
+    return next(i for g in music_prompts.menu_tree() for i in g.items if i.card_id == card_id)
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio", None])
+def test_write_twice_changes_nothing(model_hint):
+    p, top = _panel(model_hint, text=EXAMPLE)
+    p.confirm_replace_lyrics = lambda msg: False
+    p._write_btn.emit("clicked")
+    written = top.text
+    assert written != EXAMPLE
+    p._write_btn.emit("clicked")
+    assert top.text == written
+    p._undo_btn.emit("clicked")
+    assert top.text == EXAMPLE
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio"])
+def test_write_after_surprise_keeps_the_surprise(model_hint):
+    p, top = _panel(model_hint)
+    p.confirm_replace_lyrics = lambda msg: False
+    for _ in range(5):
+        p._wand_btn.emit("clicked")
+        surprise = top.text
+        p._write_btn.emit("clicked")
+        assert top.text == surprise
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio"])
+def test_write_after_a_styles_pick_rerenders_from_the_typed_text(model_hint):
+    p, top = _panel(model_hint, text="a rainy afternoon with surf rock")
+    p.confirm_replace_lyrics = lambda msg: False
+    p._write_btn.emit("clicked")
+    p.pick_style(_item("tortoise"))
+    p._write_btn.emit("clicked")
+    want = music_prompts.translate("a rainy afternoon with surf rock, Tortoise", _server(model_hint).profile)
+    assert top.text == want.prompt
+    assert "tortoise" not in top.text.lower()
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio"])
+def test_write_after_surprise_and_a_pick_keeps_the_surprise_cards(model_hint):
+    p, top = _panel(model_hint)
+    p.confirm_replace_lyrics = lambda msg: False
+    p._wand_btn.emit("clicked")
+    surprise = p._last_translation
+    p.pick_style(_item("tortoise"))
+    p._write_btn.emit("clicked")
+    # The surprise's cards plus the pick, rendered from names: the written prompt is not parsed.
+    want = music_prompts.translate(music_prompts.wand_source(surprise) + ", Tortoise", _server(model_hint).profile)
+    assert top.text == want.prompt
+    assert set(surprise.used_cards) <= set(p._last_translation.used_cards)
+
+
+def test_surprise_on_a_written_prompt_uses_the_typed_text(monkeypatch):
+    p, top = _panel("stable-audio", text="a rainy afternoon")
+    p._write_btn.emit("clicked")
+    seen = []
+    real = music_prompts.wand
+    monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: (seen.append(k.get("base")), real(*a, **k))[1])
+    p._wand_btn.emit("clicked")
+    assert seen == ["a rainy afternoon"]
+
+
+def test_write_translates_text_the_user_changed():
+    p, top = _panel("stable-audio", text="a rainy afternoon")
+    p._write_btn.emit("clicked")
+    top.text = "dub"
+    p._write_btn.emit("clicked")
+    assert top.text == music_prompts.translate("dub", _server("stable-audio").profile).prompt
+
+
+def _name_patterns():
+    tr = sys.modules["music_prompts.translate"]
+    out = []
+    for n in tr._names(music_prompts.load_library()):
+        body = r"\W+".join(re.escape(w) for w in n.words)
+        flags = re.I if len(n.words) > 1 else 0
+        out.append((n.text, re.compile(r"(?<![^\W_])" + body + r"(?![^\W_])", flags)))
+    return out
+
+
+def test_no_artist_name_after_any_pick_with_any_prefix():
+    names = _name_patterns()
+    items = [i for g in music_prompts.menu_tree() for i in g.items]
+    bad = []
+    for hint in ("fiona-crapple", "stable-audio", None):
+        profile = _server(hint).profile if hint else None
+        for prefix in ("", "Rainy day.", "slow and sad!", "jazz,"):
+            for item in items:
+                text = cpp._append_pick(prefix, item.label)
+                prompt = music_prompts.translate(text, profile).prompt
+                bad += [(hint, prefix, item.label, n) for n, rx in names if rx.search(prompt)]
+    assert not bad, bad[:10]
+
+
+def test_append_pick_strips_end_punctuation():
+    assert cpp._append_pick("Rainy day. ", "Tortoise") == "Rainy day, Tortoise"
+    assert cpp._append_pick("slow and sad!", "Dub") == "slow and sad, Dub"
+    assert cpp._append_pick("", "Dub") == "Dub"
+
+
+def test_minimax_with_no_lyrics_asks_for_lyrics(monkeypatch):
+    monkeypatch.setattr(cpp, "INSTRUMENTAL_SWITCH_CONFIRMED", False)
+    p, top = _panel("fiona-crapple", text="post-rock")
+    p._write_btn.emit("clicked")
+    strip = _strip(p)
+    assert "MiniMax writes a song from lyrics. Add lyrics to send this prompt." in strip
+    assert "the piece is instrumental" not in strip
+    # Lyrics already in the box: nothing to ask for.
+    p._lyrics_buffer.set_text("[Verse]\nla la")
+    top.text = "dub"
+    p._write_btn.emit("clicked")
+    assert "Add lyrics" not in _strip(p)
+
+
+def test_minimax_surprise_without_lyrics_says_so(monkeypatch):
+    monkeypatch.setattr(cpp, "INSTRUMENTAL_SWITCH_CONFIRMED", False)
+    p, top = _panel("fiona-crapple")
+    for _ in range(8):
+        p._lyrics_buffer.set_text("")
+        p._wand_btn.emit("clicked")
+        t = p._last_translation
+        if not t.lyrics:
+            assert "Add lyrics to send this prompt" in _strip(p)
+            assert "the piece is instrumental" not in _strip(p)
+
+
+def test_smooth_needs_a_smoother_as_well_as_a_chat_model():
+    p, _top = _panel("stable-audio", llm_available_fn=lambda: True)
+    p.set_llm_available(True)
+    assert not p._smooth_check.get_sensitive()
+    assert "not connected" in (p._smooth_check.get_tooltip_text() or "")
+    p.smooth_fn = lambda text: text
+    assert p._smooth_check.get_sensitive()
+    p.smooth_fn = None
+    assert not p._smooth_check.get_sensitive() and not p._smooth_check.get_active()
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio", None])
+def test_style_of_text_has_no_tempo_or_mood(model_hint):
+    profile = _server(model_hint).profile if model_hint else None
+    d = cpp.style_of_text("Tortoise", profile)
+    assert d and "bpm" not in d and "mood" not in d.lower() and "tortoise" not in d.lower()
+    assert cpp.style_of_text("Zorblax Q", profile) is None

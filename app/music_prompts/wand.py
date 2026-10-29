@@ -4,7 +4,10 @@
 
 Public API:
     wand(profile, *, seed=None, base=None, library=None, smooth=False,
-         smooth_fn=None, lyrics_fn=None) -> Translation
+         smooth_fn=None, lyrics_fn=None, include_names=False) -> Translation
+    (`include_names` is passed to the translator: the picked cards' names stay in the prompt.)
+    wand_source(t, base=None, library=None) -> str
+        Typed text naming the same cards as a wand result, for re-rendering it after an edit.
 
 Standard library only (plus this package); no GTK, no LLM unless one is injected.
 
@@ -171,12 +174,12 @@ def _layers(cards: list[StyleCard]):
 
 
 def wand(profile, *, seed: int | None = None, base: str | None = None, library: Library | None = None,
-         smooth: bool = False, smooth_fn=None, lyrics_fn=None) -> Translation:
+         smooth: bool = False, smooth_fn=None, lyrics_fn=None, include_names: bool = False) -> Translation:
     lib = library if library is not None else _default_library()
     seed_used = seed if seed is not None else random.SystemRandom().randrange(2 ** 32)
     rng = random.Random(seed_used)
     can_sing = _can_sing(profile)
-    kw = dict(library=lib, smooth=smooth, smooth_fn=smooth_fn, lyrics_fn=lyrics_fn)
+    kw = dict(library=lib, smooth=smooth, smooth_fn=smooth_fn, lyrics_fn=lyrics_fn, include_names=include_names)
 
     def done(t: Translation, *notes: str) -> Translation:
         return dataclasses.replace(t, seed_used=seed_used, notes=tuple(dict.fromkeys(t.notes + notes)))
@@ -236,3 +239,28 @@ def wand(profile, *, seed: int | None = None, base: str | None = None, library: 
             return done(Translation("", None, (EMPTY_NOTE,), (), (), D.dialect_for(profile), (), True))
     only = len(lib.cards) == 1
     return done(translate_cards((single.id,), (), "", profile, **kw), ONLY_ONE_NOTE if only else NO_PARTNER_NOTE)
+
+
+def wand_source(t: Translation, base: str | None = None, library: Library | None = None) -> str:
+    """Text that, translated, names the same cards as the wand result `t`.
+
+    The wand renders its cards through `translate_cards`, which builds "Base with Layer" (or
+    "and someone is singing Vocal") from card names. This rebuilds that text from `t.used_cards`:
+    `base` (the typed text the wand added to) first, then each card the base text does not
+    already name. A caller that lets the user add to a written prompt (the panel's Styles menu)
+    translates this text plus the additions, so the written prompt is never parsed as a request.
+    """
+    lib = library if library is not None else _default_library()
+    text = (base or "").strip()
+    present = set()
+    if text:
+        present = {m.card_id for l in parse(text, lib).layers for m in l.matches}
+    for cid in t.used_cards:
+        c = lib.cards.get(cid)
+        if c is None or cid in present:
+            continue
+        if text:
+            text += f" {VOCAL_MARKER if c.kind == 'vocal' else 'with'} {c.name}"
+        else:
+            text = c.name
+    return text

@@ -21,6 +21,10 @@ lead_instrument: dobro
 key: major key
 tags: [bluegrass, high lonesome, close harmony, acoustic, banjo, twang]
 goes_with: [folk, post-rock, jam]
+# "bluegrass" alone names the music as much as the voice ("a bluegrass band instrumental jam"), so in a
+# sentence the bare word needs a vocal cue; the longer aliases ("bluegrass song") need none.
+ambiguous: true
+cues: [singing, sing, sings, sang, sung, singer, singers, vocal, vocals, voice, voices, lyrics, harmonies]
 notes: >-
   Wikipedia: Bluegrass music (core instruments, often joined by the resonator
   guitar or dobro, high lonesome sound, lead with tenor above and baritone

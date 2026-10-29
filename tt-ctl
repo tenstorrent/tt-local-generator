@@ -1001,11 +1001,14 @@ def cmd_music_prompt(args):
         print("usage: tt-ctl music-prompt \"<text>\" [--model ID] [--dialect caption+lyrics|tags|generic] "
               "[--wand] [--seed N] [--include-names] [--json]", file=sys.stderr)
         sys.exit(2)
+    if args.seed is not None and not args.wand:
+        print("--seed only applies to --wand (it makes a surprise repeatable).", file=sys.stderr)
+        sys.exit(2)
     profile = music_runtime.profile_for({"model": args.model or ""})
     if args.dialect:
         profile = dataclasses.replace(profile, dialect=args.dialect)
     if args.wand:
-        t = music_prompts.wand(profile, seed=args.seed, base=text or None)
+        t = music_prompts.wand(profile, seed=args.seed, base=text or None, include_names=args.include_names)
     else:
         t = music_prompts.translate(text, profile, include_names=args.include_names)
     if args.json:

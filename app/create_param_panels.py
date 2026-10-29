@@ -3447,13 +3447,29 @@ _MODEL_CHANGED_NOTE = "The music model changed while the prompt was being writte
 def style_of_text(value: str, profile) -> "Optional[str]":
     """The sound description for an "In the style of" value, for `profile`'s model.
 
-    None when no style card matches, so the caller keeps its literal text. Fail-soft."""
+    Only the named cards' sound (their tags for a tags model): no tempo, key or mood, because the pill
+    is added to a prompt that may carry its own. None when no style card matches, so the caller keeps
+    its literal text. Fail-soft."""
     try:
-        t = music_prompts.translate(value, profile, include_names=False)
+        d = music_prompts.style_description(value, profile)
     except Exception:  # noqa: BLE001 - a broken card library must not break a chip
         _log.debug("style-of translation failed", exc_info=True)
         return None
-    return t.prompt if t.used_cards and t.prompt.strip() else None
+    return d if d and d.strip() else None
+
+
+def _append_pick(current: str, label: str) -> str:
+    """The prompt text with a Styles pick added: "Rainy day." + Tortoise gives "Rainy day, Tortoise".
+
+    End punctuation is dropped so the pick reads as part of the same request (after a full stop a
+    capitalised ambiguous name would read as a sentence start and not match)."""
+    cur = (current or "").rstrip(" \t\n,;.!?")
+    return f"{cur}, {label}" if cur else label
+
+
+# What Write the prompt shows when a lyrics model has no lyrics to send (the instrumental switch is off).
+_ADD_LYRICS_NOTE = "MiniMax writes a song from lyrics. Add lyrics to send this prompt."
+_NO_SMOOTHER_TIP = "Smooth with AI is not connected yet in this version."
 
 
 def _remember_music_server(url: str) -> None:
@@ -3746,7 +3762,7 @@ class MusicParamPanel(CreateParamPanel):
         self._prompt_setter: "Optional[Callable[[str], None]]" = None
         # Prompt-tool seams. Task 8 sets smooth_fn (the LLM smoother) and lyrics_fn (the LLM lyrics writer);
         # with them None, Smooth adds a note and the lyrics are a skeleton from the card's themes.
-        self.smooth_fn: "Optional[Callable[[str], Optional[str]]]" = None
+        self._smooth_fn: "Optional[Callable[[str], Optional[str]]]" = None
         self.lyrics_fn: "Optional[Callable[[str, tuple], Optional[str]]]" = None
         # Asked before typed lyrics are replaced: a callable(message) -> bool for tests and embedders.
         # Only the literal True counts as yes. None shows a dialog.
@@ -3755,12 +3771,30 @@ class MusicParamPanel(CreateParamPanel):
         self._undo: "Optional[dict]" = None  # {"prompt": text before, "lyrics": text before (when replaced)}
         self._last_translation = None        # the music_prompts.Translation shown in the result strip
         self._last_filled = ""               # the prompt text the last wand or Write the prompt put in
+        # What the library wrote `_last_filled` from, so a written prompt is never parsed as a request:
+        # `_fill_typed` is the user's own typed text (plus Styles picks added since), "" when the wand chose
+        # every card; `_fill_source` is text that names the same cards (the typed text plus the wand's cards).
+        # `_fill_picked` is True when a Styles pick was added to the written prompt since it was written.
+        self._fill_typed = ""
+        self._fill_source = ""
+        self._fill_picked = False
         self._applied_model_id: "Optional[str]" = None      # the profile the numeric controls were last set for
         self._suppress_pick = False
         self.on_triggers_changed: "Optional[Callable[[list], None]]" = None
         self.on_connect_saved: "Optional[Callable[[MusicServer], None]]" = None
         self.on_rescan: "Optional[Callable[[], None]]" = None     # "Check again" on the start-a-model card
         self._built = False
+
+    @property
+    def smooth_fn(self) -> "Optional[Callable[[str], Optional[str]]]":
+        """The LLM smoother. Smooth with AI is usable only when this is set and a chat model answers."""
+        return self._smooth_fn
+
+    @smooth_fn.setter
+    def smooth_fn(self, fn: "Optional[Callable[[str], Optional[str]]]") -> None:
+        self._smooth_fn = fn
+        if self._built:
+            self._apply_smooth_state()
 
     # ── the profile decides what is accepted ────────────────────────────────
 
@@ -4043,9 +4077,21 @@ class MusicParamPanel(CreateParamPanel):
                 self._styles_box.append(btn)
 
     def pick_style(self, item) -> None:
-        """Add a Styles menu item's name to the prompt text; Write the prompt then expands it."""
-        current = self._raw_prompt().rstrip().rstrip(",;").rstrip()   # "jazz," + pick gives "jazz, pick"
-        self._set_prompt_text(f"{current}, {item.label}" if current else item.label)
+        """Add a Styles menu item's name to the prompt text; Write the prompt then expands it.
+
+        Added to a prompt the library wrote, the pick is also added to the text that prompt was written
+        from, so the next Write renders "typed text, pick" and does not parse the written prompt."""
+        new = _append_pick(self._raw_prompt(), item.label)
+        if self._showing_library_text():
+            self._fill_typed = _append_pick(self._fill_typed, item.label)
+            self._fill_source = _append_pick(self._fill_source, item.label)
+            self._fill_picked = True
+            self._last_filled = new
+        self._set_prompt_text(new)
+
+    def _showing_library_text(self) -> bool:
+        """Is the prompt exactly what the library last wrote (plus Styles picks it recorded)?"""
+        return bool(self._last_filled.strip()) and self._prompt_text() == self._last_filled.strip()
 
     def set_prompt_setter(self, fn: "Optional[Callable[[str], None]]") -> None:
         """Write the prompt through `fn` instead of this panel's own box (the counterpart of
@@ -4065,27 +4111,48 @@ class MusicParamPanel(CreateParamPanel):
             self._prompt_entry.set_text(text)
 
     def _smooth_on(self) -> bool:
-        return self._smooth_ok and self._smooth_check.get_active()
+        return self._smooth_ok and self._smooth_fn is not None and self._smooth_check.get_active()
 
     def _library_kwargs(self) -> dict:
         smooth = self._smooth_on()
         return dict(smooth=smooth, smooth_fn=self.smooth_fn if smooth else None, lyrics_fn=self.lyrics_fn)
 
     def _on_wand(self, _btn=None) -> None:
-        """A surprise prompt. Text the user typed (anything other than what the last wand or Write put in)
-        is kept, and the wand adds one layer to it; otherwise the wand starts fresh."""
+        """A surprise prompt. Text the user typed is kept, and the wand adds one layer to it; on a prompt the
+        library wrote, the text it was written from is used (never the written prompt); with neither, the
+        wand starts fresh."""
         typed = self._prompt_text()
-        base = typed if typed and typed != self._last_filled.strip() else None
+        base = (self._fill_typed if self._showing_library_text() else typed) or None
         profile, kw = self._profile, self._library_kwargs()
-        self._run_library(lambda: music_prompts.wand(profile, base=base, **kw))
+        self._run_library(lambda: music_prompts.wand(profile, base=base, **kw),
+                          sources=lambda t: (base or "", music_prompts.wand_source(t, base)))
 
     def _on_write(self, _btn=None) -> None:
-        """Translate the typed prompt: names and styles become sound descriptions, the user's words stay."""
-        typed = self._prompt_text()
-        profile, kw = self._profile, self._library_kwargs()
-        self._run_library(lambda: music_prompts.translate(typed, profile, include_names=False, **kw))
+        """Translate the typed prompt: names and styles become sound descriptions, the user's words stay.
 
-    def _run_library(self, job: "Callable[[], object]") -> None:
+        Write is idempotent. On a prompt the library wrote it changes nothing; when Styles picks were added
+        to it since, it renders the text the prompt was written from plus those picks. A written prompt is
+        never parsed again: its card text holds aliases and marker words that would be read as a request."""
+        typed = self._prompt_text()
+        if self._showing_library_text():
+            if not self._fill_picked:
+                if self._last_translation is not None:
+                    self._show_result(self._last_translation)
+                return
+            source, sources = self._fill_source, (self._fill_typed, self._fill_source)
+        else:
+            source, sources = typed, (typed, typed)
+        profile, kw = self._profile, self._library_kwargs()
+        self._run_library(lambda: music_prompts.translate(source, profile, include_names=False, **kw),
+                          sources=sources)
+
+    def _fill_state(self) -> tuple:
+        return (self._last_filled, self._fill_typed, self._fill_source, self._fill_picked)
+
+    def _set_fill_state(self, state: tuple) -> None:
+        self._last_filled, self._fill_typed, self._fill_source, self._fill_picked = state
+
+    def _run_library(self, job: "Callable[[], object]", sources=("", "")) -> None:
         """Run a library call and show its result. On the GTK thread when it is pure library work (fast);
         on a worker thread when Smooth with AI or a lyrics writer is on, back through GLib.idle_add."""
         # What the result is checked against when it arrives: the prompt text and the model it was written for.
@@ -4096,13 +4163,13 @@ class MusicParamPanel(CreateParamPanel):
             except Exception:  # noqa: BLE001 - a library bug must never cost the user their prompt
                 _log.warning("music prompt library failed", exc_info=True)
                 t = None
-            self._library_done(t, snapshot)
+            self._library_done(t, snapshot, sources)
             return
         self._set_tools_busy(True)
 
         def _done(t) -> None:            # main thread (`_run_in_thread` posts it with GLib.idle_add)
             self._set_tools_busy(False)
-            self._library_done(t, snapshot)
+            self._library_done(t, snapshot, sources)
 
         _run_in_thread(job, _done)
 
@@ -4117,7 +4184,7 @@ class MusicParamPanel(CreateParamPanel):
         p = self._profile
         return None if p is None else p.model_id
 
-    def _library_done(self, t, snapshot: tuple) -> None:
+    def _library_done(self, t, snapshot: tuple, sources=("", "")) -> None:
         prompt_before, profile_before = snapshot
         if t is None:
             self._show_strip(["The style library could not write a prompt. Your text is unchanged."])
@@ -4134,11 +4201,18 @@ class MusicParamPanel(CreateParamPanel):
         if writes_prompt or writes_lyrics:
             # A fresh undo record for every action that may write something, so a lyrics-only result never
             # lands in (or is refused because of) an earlier action's record.
-            self._undo = {"prompt": prompt_before} if writes_prompt else {}
+            # The undo record keeps what the library had written before, so Undo also restores what
+            # the restored text was written from.
+            self._undo = {"prompt": prompt_before, "fill": self._fill_state()} if writes_prompt else {}
             self._undo_btn.set_sensitive(writes_prompt)
         if writes_prompt:
+            try:
+                typed, source = sources(t) if callable(sources) else sources
+            except Exception:  # noqa: BLE001 - a lost source only means the next Write parses the prompt
+                _log.debug("could not record the source of a written prompt", exc_info=True)
+                typed = source = ""
             self._set_prompt_text(t.prompt)
-            self._last_filled = t.prompt
+            self._set_fill_state((t.prompt, typed or "", source or "", False))
         self._show_result(t)
         if writes_lyrics:
             self._offer_lyrics(t.lyrics, self._undo)
@@ -4191,7 +4265,7 @@ class MusicParamPanel(CreateParamPanel):
         if not u:
             return
         self._undo = None
-        self._last_filled = ""
+        self._set_fill_state(u.get("fill") or ("", "", "", False))
         if "prompt" in u:
             self._set_prompt_text(u["prompt"])
         if "lyrics" in u:
@@ -4207,7 +4281,14 @@ class MusicParamPanel(CreateParamPanel):
         if t.added:
             # Card phrases may be whole sentences; drop their end punctuation so "; " joins them cleanly.
             lines.append("Added: " + "; ".join(a.strip().rstrip(".;") for a in t.added if a.strip()))
-        lines.extend(t.notes)
+        notes = list(t.notes)
+        p = self._profile
+        if p is not None and p.has_lyrics and not self._instrumental_offered() and not (t.lyrics or "").strip() \
+                and not self._lyrics_text().strip():
+            # The server refuses a song with no lyrics while the instrumental switch is off, so the
+            # translator's "the piece is instrumental" would be untrue: say what is needed instead.
+            notes = [n for n in notes if "instrumental" not in n.lower()] + [_ADD_LYRICS_NOTE]
+        lines.extend(notes)
         if t.inspired_by:
             lines.append("Inspired by: " + ", ".join(t.inspired_by))
         self._show_strip(lines)
@@ -4223,6 +4304,16 @@ class MusicParamPanel(CreateParamPanel):
     def style_of_text(self, value: str) -> "Optional[str]":
         """The "In the style of" chip's translator, for the model chosen now (RoleZonePanel wires it)."""
         return style_of_text(value, self._profile)
+
+    def join_modifier_text(self, prompt: str, modifier: str) -> str:
+        """The prompt with the Direction pills' text added (CreateView calls this). A tags model's prompt is
+        comma-separated tags, so the pills join with ", "; other models keep the plain space join."""
+        prompt, modifier = (prompt or "").strip(), (modifier or "").strip()
+        if not prompt or not modifier:
+            return prompt or modifier
+        if music_prompts.dialect_for(self._profile) == "tags":
+            return f"{prompt.rstrip(' ,;')}, {modifier}"
+        return f"{prompt} {modifier}"
 
     def set_prompt_getter(self, fn: "Optional[Callable[[], str]]") -> None:
         """Read the prompt from `fn` instead of this panel's own box. RoleZonePanel hides that box
@@ -4405,11 +4496,16 @@ class MusicParamPanel(CreateParamPanel):
             self._apply_llm_state()
 
     def _apply_smooth_state(self) -> None:
-        """Smooth with AI is usable only with a chat model; without one it is off and says why."""
-        self._smooth_check.set_sensitive(self._smooth_ok)
-        if not self._smooth_ok:
+        """Smooth with AI is usable only with a chat model and a smoother; without either it is off and says why."""
+        usable = self._smooth_ok and self._smooth_fn is not None
+        self._smooth_check.set_sensitive(usable)
+        if not usable:
             self._smooth_check.set_active(False)
-        self._smooth_check.set_tooltip_text(_SMOOTH_TIP if self._smooth_ok else _NO_SMOOTH_TIP)
+        if self._smooth_fn is None:
+            tip = _NO_SMOOTHER_TIP
+        else:
+            tip = _SMOOTH_TIP if self._smooth_ok else _NO_SMOOTH_TIP
+        self._smooth_check.set_tooltip_text(tip)
 
     def _apply_llm_state(self) -> None:
         self._apply_smooth_state()

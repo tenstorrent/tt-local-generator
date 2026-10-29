@@ -18,6 +18,9 @@ avoid: [fuzz guitar walls, sparse arrangements]
 vocal: choirs of chanting voices and theatrical call-and-response
 tags: [space funk, horn section, synth bass, theatrical, party groove, clavinet]
 goes_with: [electronic, jazz]
+# "parliament" is an ordinary word ("a folk protest song about parliament"): in a sentence it needs a cue.
+ambiguous: true
+cues: [funk, funky, funkadelic, p-funk, clinton, bootsy, mothership]
 notes: >-
   Wikipedia: Parliament (band) (smoother R&B-based funk, intricate horn and
   vocal arrangements, Horny Horns, Afrofuturist themes); Wikipedia:

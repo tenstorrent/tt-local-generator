@@ -26,12 +26,22 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - `MusicParamPanel` (`create_param_panels.py`): a prompt tools block with Surprise (the wand), Write the prompt, Styles, Undo,
   a Smooth with AI checkbox and a result strip (Added, notes, Inspired by). The "In the style of" chip uses
   `ModifierPills.style_of_fn` to insert the sound description. `collect()` does not read any of these widgets.
-- `tt-ctl music-prompt [text] [--model M] [--dialect D] [--wand] [--seed N] [--include-names]`.
+- `tt-ctl music-prompt [text] [--model M] [--dialect D] [--wand] [--seed N] [--include-names]`. `--include-names` works with
+  `--wand` too; `--seed` without `--wand` exits 2 with a message.
 - `prompt_client._music_library_text`: Inspire for music tries the library first and falls back to the LLM on any failure.
+  Text the library already wrote (`is_library_prompt`: a card's sound is in it) is not translated again.
+- `style_description(value, profile)`: the "In the style of" pill's text, the named cards' sound (tags for a tags model) with
+  no tempo, key or mood. `MusicParamPanel.join_modifier_text` joins pill text to a tags prompt with ", " (CreateView calls it).
+- `wand_source(t, base)`: typed text naming the same cards as a wand result, used by the panel to re-render after a pick.
 
 **Decisions.**
-- Cards describe how something sounds. Artist names live in `inspiration` and in the result strip. A rendered prompt contains a
-  name only when the user asked (`include_names`), or typed it as a `MusicProfile.triggers` phrase.
+- Cards describe how something sounds. Artist names live in `inspiration` and in the result strip (Inspired by). With
+  `include_names` False, the code replaces with its style label every artist card name or alias and every `inspiration` entry
+  it finds in the prompt: matched names, the user's own words, the sung phrase ("Alison Krauss singing about the sea") and
+  card text. A name of two or more words matches in any case; a one-word name ("Faust", "Parliament") only as the card
+  writes it, since in lower case it is an ordinary word. A one-word alias of an `ambiguous` card that did not match (no cue)
+  is left as typed. A `MusicProfile.triggers` phrase stays only when the user typed it. LLM lyrics that add a name by the same
+  rule are refused. Not guaranteed: a name typed in a form the card does not list (misspelt, possessive "Tortoise's").
 - The translation is deterministic. An LLM pass (Smooth with AI) is off by default and is a seam: `smooth_fn` and `lyrics_fn`
   are None until something supplies them.
 - Glue words of recognised structure ("song", "someone is singing a", "on top") are not copied into the prompt. They are listed
@@ -41,6 +51,15 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   lead line (`lead_instrument` on the vocal card) and the lyrics box stays hidden.
 - A card's own `vocal` text is written only when the prompt sings.
 - Typed lyrics are replaced only after a yes. The confirm accepts the literal `True` only.
+- Write the prompt is idempotent. The panel remembers the text it wrote (`_last_filled`) and what it was written from
+  (`_fill_typed`, `_fill_source`, kept in the Undo record too). On an unchanged written prompt Write does nothing; after a
+  Styles pick it renders the source plus the pick; Surprise on a written prompt uses the user's typed text as its base. A
+  written prompt is never parsed as a request (its card text holds aliases and marker words).
+- A card typed twice is described once (per layer and across layers), which also bounds the work for repeated input.
+- With the instrumental switch off, a MiniMax result with no lyrics says "MiniMax writes a song from lyrics. Add lyrics to send
+  this prompt." in the result strip. The wand weights are unchanged and no "[Instrumental]" lyrics are invented.
+- Smooth with AI is enabled only when a chat model answers and `smooth_fn` is set. Nothing sets it yet, so it stays off with
+  the tooltip "not connected yet".
 - Operator review gate: the first 23 cards were reviewed on the sheet and accepted ("these are good for now"), including two
   changes to the starter wording (Tortoise "jazz-inflected drums", bluegrass lead "dobro"). Task 6 then added 26 cards (49 in
   22 families) without a second operator pass.
@@ -64,6 +83,23 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   widget that still had the panel's unmounted root as its parent (a Gtk-CRITICAL); it now detaches first.
 - Task 8: reviewer approved; the implementer's concern about `--include-names` did not reproduce at HEAD.
 
+**What the final review found** (whole branch; fixed in one wave, each with a test seen failing and a mutation check).
+- A card typed twice was described twice ("post-rock, Tortoise, post rock"; "dub with dub"); "dub, " typed 100 times gave a
+  15,000-character prompt in 1.4 s.
+- Write was not idempotent: Write after Surprise or after a Styles pick parsed the written prompt as a request and wrecked it.
+- A card that trimming removed still set the tempo, key, mood, rhythm and production.
+- "post-rock and someone is singing about the sea": the marker took "singing", so the sung topic was lost and no lyrics were
+  written.
+- Name leaks: the sung phrase built from the user's words was never scrubbed; multi-word names were scrubbed only in the
+  card's own case; a Styles pick after "Rainy day." left "Tortoise" unmatched in the prompt; lyrics mentioning a tortoise or a
+  parliament were refused.
+- MiniMax Surprise results mostly had no lyrics and could not be sent, while the note said "the piece is instrumental".
+- Smooth with AI could be ticked with no smoother behind it.
+- The "In the style of" pill inserted a whole rendered prompt (tempo, key, mood), giving two tempos.
+- "parliament" was unambiguous ("a folk protest song about parliament" became p-funk); "bluegrass band" matched the vocal card;
+  a tags-dialect mood kept a full stop inside a tag; `--wand --include-names` and `--seed` without `--wand` were silently
+  ignored.
+
 **Not verified.**
 - No real music has been generated from these prompts. Reviewers have read them. Nobody has listened to a result.
 - The MiniMax caption limit of 1000 characters is unconfirmed (`music_runtime` carries a comment saying so). The soft budget of
@@ -79,7 +115,7 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 **Known gaps (parked minor items).**
 - Parser and translator: `_OWN_GLUE_NOTES` suppresses the glue note by string and not by origin; tempo comes from whichever
   card has one, which may not be the base's; no test for a base card with a tight length limit; "Tortoise-like, but louder"
-  opens with "Louder."; "bluegrass band" matches the vocal card; the glue note can quote a bare "a"; a marker on a layer that
+  opens with "Louder."; the glue note can quote a bare "a"; a marker on a layer that
   renders a clause is missing from both prompt and notes in the tags dialect; a vocal with no card and no topic renders a bare
   "Alongside it, a vocal."; `lead_line` keeps the word "vocal"; Funkadelic's MiniMax caption has "and with" debris; "the tortoise
   crossed the road, post-rock" yields "The post-rock crossed the road."; the card-wide test does not go red under the
@@ -95,8 +131,14 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   pick after a style merges into the base; the result strip can reach about 10 lines; the form minimum width is 796 px against
   the 800 px bound; the "Music" chip is dark on dark when selected (pre-existing); the style-of pill keeps the description for the
   model chosen when it was applied; `from music_prompts import translate` is shadowed by the function.
-- CLI: no tests for `--dialect`, an unknown `--model`, or the example with `--include-names` on MiniMax (where the name does not
-  reach the prompt); `--seed` without `--wand` is ignored; the text output prints notes that name the source artist.
+- CLI: no tests for `--dialect` or an unknown `--model`. The example with `--include-names` on MiniMax does carry the names
+  (the earlier note saying it did not was wrong). The text output prints notes that name the source artist.
+- Inspire: `is_library_prompt` detects caption and generic prompts only (a card's sound text); a tags-dialect prompt is not
+  detected and would be translated again.
+- "In the style of" pills are space-joined among themselves; only the join to a tags prompt uses ", ".
+- Write after a Styles pick on a Surprise result renders the wand's cards from their names (`wand_source`); a seeded wand's
+  exact wording can differ from that re-render.
+- Packaging: `python3-yaml` was missing from the main package's Depends and is now listed in `debian/control`.
 - Merge: `tt-ctl` is also edited on `tt-cli-servers`, so expect a fix-up when both land.
 
 ## Music generation (v0.105.0)

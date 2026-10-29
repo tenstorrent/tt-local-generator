@@ -3140,6 +3140,14 @@ class CreateView(Gtk.Box):
 
         if modifier_text:
             combined = f"{prompt_text} {modifier_text}".strip()
+            # A panel may join its own way (Music: a tags model's prompt is comma-separated).
+            inner = getattr(self._active_panel, "_panel", None)
+            join = getattr(inner, "join_modifier_text", None)
+            if callable(join):
+                try:
+                    combined = join(prompt_text, modifier_text)
+                except Exception:
+                    pass
         else:
             combined = prompt_text
 

@@ -362,3 +362,12 @@ def test_progress_line_delivered_through_the_real_idle_queue(monkeypatch, tmp_pa
     assert obj._create_job_active is False and panel._state == "finished"
     assert any(m == "sampling" for m, _ in seen), seen
     assert all(t == threading.get_ident() for _, t in seen), (seen, threading.get_ident())      # delivered on the main thread, not the worker's
+
+
+def test_style_pill_joins_a_tags_prompt_with_a_comma(monkeypatch):
+    """Final review: Stable Audio prompts are comma tags, so the "In the style of" text joins with ", "."""
+    view = _view(monkeypatch)
+    _pick_music(view)
+    view._prompt_entry.set_text("jazz, slow")
+    view._active_panel.append_modifier_for_test("chicago post-rock, vibraphone")
+    assert view._collect_params()["prompt"] == "jazz, slow, chicago post-rock, vibraphone"

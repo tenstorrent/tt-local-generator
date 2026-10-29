@@ -271,8 +271,10 @@ def _first_sentence(s: str) -> str:
 
 
 def _phrases(text: str) -> list[str]:
-    """A comma/semicolon/'and' list split into its items ("Cool, wistful and unhurried.")."""
-    return [b for b in re.split(r"\s*(?:[,;]|\band\b)\s*", text.strip().rstrip(".")) if b]
+    """A comma/semicolon/'and' list split into its items ("Cool, wistful and unhurried.").
+
+    A full stop between sentences splits too ("Dark. Brooding and slow."), so no item keeps a period."""
+    return [b for b in re.split(r"\s*(?:[,;]|\.\s+|\band\b)\s*", text.strip().rstrip(".")) if b]
 
 
 # A list item that starts with one of these words opens a modifier phrase ("..., with the guitar

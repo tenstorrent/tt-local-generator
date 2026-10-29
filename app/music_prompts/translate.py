@@ -6,6 +6,8 @@ Public API:
     Translation      - frozen dataclass, the result
     translate(text, profile, *, include_names=False, library=None, smooth=False,
               smooth_fn=None, lyrics_fn=None) -> Translation
+    style_description(value, profile) -> str | None   the sound alone, for "In the style of"
+    is_library_prompt(text) -> bool    text already holds a card's written sound
     reload_library() - forget the cached default library (after cards change)
     skeleton(themes) - the lyrics skeleton used without an LLM
 
@@ -33,7 +35,17 @@ parent style's name as its label (`_label`). Unless `include_names=True`:
   and never when the entry is also an alias of an ambiguous card;
 * card text is scrubbed the same way, guarding against a user card that names
   an artist in its `sound`;
+* the sung phrase built from the user's words ("Alison Krauss singing about the
+  sea") is scrubbed the same way;
 * smoothed text and LLM lyrics that add a name are refused.
+"Case-sensitively" applies to one-word names only (Faust, Parliament: "faust" and
+"parliament" are ordinary words). A name of two or more words ("alison krauss")
+matches in any case. The lyrics check follows the same rule, so lyrics about a
+tortoise or a parliament are kept.
+
+A card is described once: when the same card is typed twice, in one layer or in
+two ("dub with dub"), its first appearance renders and later ones add nothing.
+A card that trimming removed sets no tempo, key, mood, rhythm or production.
 A typed "a"/"an" right before a replaced name agrees with the style that
 replaces it ("a Kraftwerk groove" -> "an electropop groove"; `D.fix_article`).
 `inspired_by` always carries the names for the UI.
@@ -57,7 +69,9 @@ Words next to a match form one phrase with it (see `_user_words`), so
 "bluegrass band doing a Tortoise-like thing" keeps "bluegrass band doing a
 post-rock thing". Singing typed in any layer, the base included, makes a vocal;
 with no vocal card the vocal uses the user's words ("a vocal singing about the
-sea") and the sung topic becomes the lyric theme. With no theme at all no
+sea") and the sung topic becomes the lyric theme. When the layer marker took the
+singing word ("post-rock and someone is singing about the sea"), the layer's
+first content phrase is what is sung. With no theme at all no
 skeleton is written and a note asks for lyrics or a vocal style.
 
 When the base layer has no card and exactly one later layer does, that layer
@@ -72,6 +86,7 @@ are not affected.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from dataclasses import dataclass
@@ -168,10 +183,14 @@ def _ambiguous_aliases(lib: Library) -> set[str]:
 
 
 def _name_spans(text: str, names: list[_Name], *, case_sensitive: bool, skip=frozenset()):
-    """Non-overlapping (start, end, _Name) for each name found in text, left to right."""
+    """Non-overlapping (start, end, _Name) for each name found in text, left to right.
+
+    `case_sensitive` applies to one-word names only ("Faust", "Parliament": "faust" and "parliament"
+    are ordinary words). A name of two or more words ("Alison Krauss") matches in any case.
+    """
     toks = [(m.start(), m.end(), m.group()) for m in _WORD.finditer(text)]
-    key = (lambda s: s) if case_sensitive else str.lower
-    words = [key(t[2]) for t in toks]
+    raw = [t[2] for t in toks]
+    low = [w.lower() for w in raw]
     spans = []
     i = 0
     while i < len(toks):
@@ -179,7 +198,8 @@ def _name_spans(text: str, names: list[_Name], *, case_sensitive: bool, skip=fro
             k = len(n.words)
             if normalise_alias(n.text) in skip:
                 continue
-            if tuple(words[i:i + k]) == tuple(key(w) for w in n.words):
+            exact = case_sensitive and k == 1
+            if tuple((raw if exact else low)[i:i + k]) == (n.words if exact else tuple(w.lower() for w in n.words)):
                 spans.append((toks[i][0], toks[i + k - 1][1], n))
                 i += k
                 break
@@ -454,6 +474,65 @@ def translate_cards(base_ids, layer_ids=(), user_text: str = "", profile=None, *
                    typed=bool(user_text.strip()))
 
 
+_SOUND_PROBE = 40   # characters of a card's sound that mark a prompt as written by the library
+
+
+def is_library_prompt(text: str, *, library: Library | None = None) -> bool:
+    """Does `text` already carry a card's written sound (a prompt this library wrote)?
+
+    A cheap check for the caption and generic dialects: the first `_SOUND_PROBE` characters of any
+    card's `sound`, ignoring case, appear in the text. A tags-dialect prompt is not detected.
+    Translating a written prompt again would re-read the card text as a request, so callers skip it.
+    """
+    if not isinstance(text, str) or len(text) < _SOUND_PROBE:
+        return False
+    lib = library if library is not None else _default_library()
+    low = " ".join(text.lower().split())
+    for c in lib.cards.values():
+        probe = " ".join(c.sound.lower().split())[:_SOUND_PROBE]
+        if len(probe) >= _SOUND_PROBE and probe in low:
+            return True
+    return False
+
+
+def style_description(value: str, profile, *, library: Library | None = None,
+                      include_names: bool = False) -> str | None:
+    """The sound of the cards `value` names, for an "In the style of" pill; None when no card matches.
+
+    Only the cards' own sound: the tags dialect gets each card's tags (its style label first when no
+    tag already says it), the other dialects each card's `sound`. No tempo, key, mood or other
+    shared detail, because the pill is added to a prompt that may already carry its own.
+    """
+    lib = library if library is not None else _default_library()
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = parse(value, lib)
+    cards: list[StyleCard] = []
+    for layer in parsed.layers:
+        for m in layer.matches:
+            c = lib.cards.get(m.card_id)
+            if c is not None and c not in cards:
+                cards.append(c)
+    if not cards:
+        return None
+    names = _names(lib)
+
+    def scrub(s: str) -> str:
+        return s if include_names else _scrub(s, names, case_sensitive=True)
+
+    if D.dialect_for(profile) == D.TAGS:
+        tags: list[str] = []
+        for c in cards:
+            label = scrub(_label(c, lib)).lower()
+            own = [scrub(t) for t in c.tags]
+            for t in ([] if any(label in t.lower() for t in own) else [label]) + own:
+                if t and t.lower() not in (x.lower() for x in tags):
+                    tags.append(t)
+        return ", ".join(tags) or None
+    sounds = [scrub(c.sound).strip() for c in cards if c.sound.strip()]
+    return " ".join(D._sentence(s) for s in sounds) or None
+
+
 def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: bool, smooth: bool,
             smooth_fn, lyrics_fn, typed: bool = True) -> Translation:
     """The back half of translate(): a parsed request to a Translation (one rendering path).
@@ -499,7 +578,17 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
     # Cards per layer. When the base has none and exactly one later layer has some, that layer
     # is the base ("very slow, with rain sounds, Tortoise-ish" is a post-rock base).
     layers = list(parsed.layers)
-    layer_cards = [[lib.cards[m.card_id] for m in l.matches if m.card_id in lib.cards] for l in layers]
+    # A card is described once: once per layer and once across layers ("dub with dub", "post-rock,
+    # Tortoise, post rock"). Its first appearance keeps it; later ones add nothing to the prompt.
+    seen_ids: set = set()
+    layer_cards = []
+    for l in layers:
+        cs = []
+        for m in l.matches:
+            if m.card_id in lib.cards and m.card_id not in seen_ids:
+                seen_ids.add(m.card_id)
+                cs.append(lib.cards[m.card_id])
+        layer_cards.append(cs)
     orig_cards = [list(cs) for cs in layer_cards]      # before promotion: "does layer i have a vocal card?"
     promoted = None
     if layer_cards and not layer_cards[0]:
@@ -520,8 +609,33 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
             part, consumed, topic = _sung_part(w, is_glue)
             words.remove(w)
             glue += consumed
+        elif layer.marker and _SING.search(layer.marker) and (
+                w := next((w for w in words if w.layer == i and not w.has_match), None)) is not None:
+            # The marker took the singing word ("and someone is singing about the sea"): the layer's
+            # first content phrase is what is sung.
+            sung_text = w.text.strip(" ,;:.")
+            part = D.Part(kind="vocal", label="", sound="", vocal=f"a vocal singing {sung_text}", sung=sung_text)
+            topic = _TOPIC_LEAD.sub("", sung_text).strip()
+            words.remove(w)
         else:
             part, topic = D.Part(kind="vocal", label="", sound="", vocal="a vocal"), ""
+        if not include_names:
+            # The sung phrase is the user's words: a name in it ("Alison Krauss singing about the sea")
+            # becomes its style like any other typed name.
+            replaced_sung: list = []
+            skip = _ambiguous_aliases(lib)
+
+            def clean(s: str, article: bool = False) -> str:
+                out = _scrub(s, names, case_sensitive=True, skip=skip, replaced=replaced_sung)
+                if out != s and s[:1] != out[:1]:            # it opens with the style that replaced a name
+                    out = D._lc_first(out)
+                    if article:                              # "a bluegrass vocal singing about the sea"
+                        out = f"{D.article_for(out)} {out}"
+                return out
+
+            part = dataclasses.replace(part, vocal=clean(part.vocal, article=True), sung=clean(part.sung))
+            topic = clean(topic)
+            _name_notes(replaced_sung, notes)
         sung[i] = (part, topic)
     has_vocal = bool(vocal_cards) or bool(sung)
 
@@ -565,10 +679,12 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
             if parts:
                 plan_layers.append((layers[i].marker, tuple(parts)))
         sound_cards = [c for c in used if c.kind != "vocal"]
-        primary = [c for c in base_cards if c.kind not in ("vocal", "texture")]
+        # A card trimmed away sets nothing: no tempo, key, mood, rhythm or production.
+        def sound_of(cs):
+            return [c for c in cs if c.kind not in ("vocal", "texture") and c.id not in excluded]
+        primary = sound_of(base_cards)
         if not primary:
-            primary = next(([c for c in cs if c.kind not in ("vocal", "texture")] for cs in layer_cards[1:]
-                            if any(c.kind not in ("vocal", "texture") for c in cs)), [])
+            primary = next((sound_of(cs) for cs in layer_cards[1:] if sound_of(cs)), [])
         tempo_cards = primary + [c for c in used if c not in primary]
         key = next((c.key for c in primary if c.key), "") or next((c.key for c in vocal_cards if c.key), "") \
             or next((c.key for c in used if c.key), "")
@@ -734,7 +850,9 @@ def _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes, skeleton
             log.warning("music lyrics writer failed: %s", exc)
             got = None
         if isinstance(got, str) and got.strip():
-            if include_names or not _name_spans(got, names, case_sensitive=False):
+            # One-word names count only as the card writes them (capitalised): lyrics about a
+            # tortoise or a parliament are not refused. Longer names count in any case.
+            if include_names or not _name_spans(got, names, case_sensitive=True):
                 return got
             notes.append("The written lyrics named an artist, so a skeleton was used instead.")
     if not themes:

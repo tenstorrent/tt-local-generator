@@ -228,13 +228,16 @@ def _music_library_text(seed_text: str) -> "str | None":
     """The music prompt library's answer for Inspire, or None to let the LLM try.
 
     Text the library recognises (any style card used) becomes a dialect-less prompt with no artist
-    names; empty text becomes a wand prompt. Never raises: any failure means "no answer".
+    names; empty text becomes a wand prompt. Text the library already wrote (`is_library_prompt`)
+    is not translated again: the LLM may polish it. Never raises: any failure means "no answer".
     """
     try:
         import music_prompts  # noqa: PLC0415
         text = (seed_text or "").strip()
         if not text:
             return music_prompts.wand(None).prompt or None
+        if music_prompts.is_library_prompt(text):
+            return None              # already written by the library: re-reading its card text would wreck it
         t = music_prompts.translate(text, None)
         return t.prompt if t.used_cards and t.prompt else None
     except Exception:
