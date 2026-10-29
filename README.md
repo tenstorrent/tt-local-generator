@@ -474,6 +474,7 @@ thumbnail sweep and only perform the media-type fold.
 
 - **Context-aware server start** — the Servers ▾ toolbar dropdown launches the right server
   for the active tab (Wan2.2 for Video, FLUX for Image, Wan2.2-Animate for Animate).
+- **Servers menu runs through `tt`** — the Servers ▾ menu and `tt-ctl start|stop|restart|logs|servers` share one layer that starts models with the official `tt` CLI and keeps the app's own start scripts for models it carries in a special form. A server started anywhere (a terminal, another agent, a script) shows up once. Starting a model that already runs uses the running server. Stopping a local server this app did not start asks first (`tt-ctl` takes `--yes-stop-external`). Servers reached by URL through "Connect..." are use-only. On a shared box with gozer, a start that opens chips holds a gozer lease while it runs. The old `tt-ctl` service names still work and print a one-line note on stderr (set `TTLG_NO_DEPRECATION_NOTE=1` to silence it).
 - **Server log panel** — pulsing progress bar and phase label during startup; expand "▸ Log"
   for raw container output.
 - **Job recovery** — ⟳ Recover re-attaches to any server jobs that survived a UI restart.

@@ -1,5 +1,98 @@
 # tt-local-generator — developer notes
 
+## Server control through the tt CLI (v0.106.0)
+
+Prompt (operator): "i want the server start stop wired through the tt local generator CLI and the servers tab at the upper right. we can
+show helpful stuff like this but we can also be the engine that does it ... let's shift to being tt-cli centric where we can. this can be
+a separate PR too from main, not just about music."
+
+Spec: `docs/superpowers/specs/2026-10-28-tt-cli-server-control-design.md`. Wire notes (what `tt` and gozer print, from read-only
+commands): `docs/superpowers/specs/2026-10-28-tt-cli-wire-notes.md`. Plan: `docs/superpowers/plans/2026-10-28-tt-cli-server-control.md`.
+Branch `tt-cli-servers`, cut from `main`. The music PR (#30) is separate.
+
+**Architecture.** Every layer below is GTK-free except the last two UI files.
+- `app/tt_backend.py`: wraps the `tt` CLI (`tt --json model ps`, serve, stop, logs, catalog). It finds the official `tt`, runs serve in its
+  own process group so a cancel kills the whole group, and bounds every call by a deadline.
+- `app/gozer_client.py`: wraps gozer (`acquire`, `wait`, `cancel_ticket`, `find_lease`, `adopt`, `release`, `holders`). `release` takes
+  `reset=`.
+- `app/server_registry.py`: per model, how this app prefers to start it (`tt serve`, or one of our scripts, called a boutique model),
+  plus the chip count and hardware group used by `ready_to_run.plan_switch`. Config lives in `config/` YAML.
+- `app/server_view.py`: the merged list of running servers from `tt model ps`, script-server health checks, discovery and saved remote
+  servers. A server appears once whoever started it. Matching includes the host, so a remote on the same port does not merge into a
+  local row. It also keeps the lease records (`ServerRecords`) and the prune/reap bookkeeping.
+- `app/server_control.py`: `ServerControl`, the one place that starts, stops, restarts and switches servers. It returns typed outcomes
+  (started, already running, declined, cancelled, failed, and so on).
+- `app/server_runtime.py`: builds a real `ServerControl`, registry and view; shared by `tt-ctl` and the GUI.
+- `app/servers_control.py` and `app/server_menu.py`: the Servers menu in the upper right (sections for running, available and held
+  leases; a Stop button on each local row; remote rows are use-only).
+- `app/connect_server_dialog.py`: "Connect..." for any kind of server (URL, label, optional bearer token), saved in the
+  `remote_servers` app setting. `main` has no Connect dialog; the music branch has its own (see below).
+- `tt-ctl`: `start`, `stop`, `restart`, `logs` and `servers` go through `ServerControl`. `servers --json` is new and `servers --all`
+  adds held leases.
+
+**Decisions.**
+- tt-centric, with our scripts as a second backend for models we carry in a special form (patched SkyReels, Wan2.2-Animate, AnimateDiff,
+  the artgen chat servers).
+- Start on a model that already runs starts nothing; the app uses the running server.
+- Stop on a local server this app did not start asks first. `tt-ctl` takes `--yes` to confirm a switch and `--yes-stop-external` to
+  confirm stopping a server someone else started. A server reached only over the network has no Stop.
+- Chip pinning is best effort, and there are two lease flows. Pinnable (the model's chip count and device ids are known): acquire a
+  gozer lease first, start pinned to those chips, then check what came up. Unpinnable: start, find the new container with docker
+  inspect, then `gozer adopt` it; if another party holds the chips, stop the new server.
+- Old-key behaviour of `tt-ctl` (the `server_manager.SERVERS` keys, `all`, `--single-chip`) is preserved exactly: same stdout, exit 0
+  when a script fails, no prompts. An explicit command naming our own script service counts as consent. The only changes are a
+  one-line deprecation note on stderr (silenced by `TTLG_NO_DEPRECATION_NOTE`) and two extra usage flags. Ask-first applies to new paths:
+  `tt` names, bundle ids and discovered servers. `stop_legacy` also removes a recorded lease after a successful stop.
+- The confirm bridge answers True only for the affirmative button, and `ServerControl._confirm` accepts only the literal `True`. A
+  truthy non-bool used to count as yes.
+- Leases of servers that are gone are released with `gozer release --no-reset`. A start that launched nothing also releases without a
+  reset. Releases after a server we stopped keep the reset.
+- Reap (the automatic release of leases whose server is gone) never releases while gozer says a process holds those chips, and fails
+  closed when gozer status fails. A failed `tt model ps` is no information, so nothing is pruned, and a record is pruned only on the second
+  consecutive miss.
+- A lease that cannot be tied to a stopped server is kept as a `<key>#unreapable-<n>` record and shown in the Held leases block of the
+  Servers menu and in `tt-ctl servers --all`, so it stays visible outside the outcome line.
+- The lease `who` is `tt-local-generator:<model key>`, so a lookup after a cancelled wait cannot return another server's lease.
+
+**What review and tests found.**
+- The adoption window (Task 6, four rounds). Another party's container of the same model could be adopted as ours, or stopped, while
+  we waited for chips or booted. Now more than one new row means adopt none; on the pinnable path a row is accepted only if its docker
+  devices lie inside the leased ids; a row is stopped without asking only when proven ours, otherwise the app asks `stop_external`.
+- The foreign-row stop guard: failure and cancel paths used to stop a row that might be someone else's.
+- The strictly-True confirm (above).
+- The legacy compatibility harness (Task 7). A reviewer ran the old and new `tt-ctl` against the same faked `server_manager` in 16
+  scenarios. Early versions changed exit codes, restart output, and stop without a TTY (which would have made `debian/prerm` stop
+  nothing). Fixed with `start_legacy`/`stop_legacy`.
+- The reap/reset window (Task 8). A release resets chips, and a reset under a booting server is harmful. Reaping now checks gozer
+  holders first; reaped, forgotten and nothing-launched releases use `--no-reset`. Two smaller fixes: outcome lines were hidden right
+  after being written, and the open popover rebuilt every 10 s because uptime was in the row signature.
+- The plan said to generalise an existing Connect dialog, but `main` has none, so this branch creates it.
+- `tests/conftest.py` now pins `GDK_BACKEND=x11` under xvfb-run. Before that, a Wayland session could open test windows on the real desktop.
+
+**Not verified.** Nothing below was run on this machine's real servers.
+- No real `tt serve` or stop was run. Only `--dry-run` and read-only `tt` commands were used.
+- No real gozer acquire, adopt or release was run. The gozer client is tested against a fake gozer built from the wire notes.
+- Script-started servers appearing in `tt model ps` is unverified. The boutique start on a gozer box depends on it and on a
+  port-to-container lookup (find the container by published port). That lookup is also unverified. A boutique start on a gozer box
+  may be refused until this is checked live.
+- The real `tt model ps` health values for a booting server are unverified. `ServerControl` treats status `running` with empty health as
+  booting.
+- The Servers menu was exercised only with fake views under xvfb.
+- `Gtk.MessageDialog` deprecation warnings appear in the Servers menu tests (known, left alone).
+
+**Known gaps and follow-ups.**
+- The bottom status-bar popover's Start/Stop and the Create Ready-to-Run gate still use their own script paths. Moving them onto
+  `ServerControl` is a follow-up. The status-bar Stop does not ask first, as before. They now call `ServerControl.forget`, so a lease
+  record does not outlive a server they stopped.
+- The pipeline engine's `_stop_and_reset` is unchanged and unguarded.
+- Accepted residual: on the unpinnable path, a foreign container of the same model that starts after our launch cannot be told apart
+  from ours. A later app Stop of it would not ask.
+- On an unpinnable failed start the app always asks `stop_external` before stopping what it found.
+- Chip count order is dry-run, then registry override, then catalog hardware, else unknown (which warns and asks). `tt` entries
+  without a model type get no capability.
+- Music PR (#30) is separate and has its own Connect dialog. Its "Start a music model" card still shows copy-commands. Replace them
+  with Start buttons and merge the two Connect dialogs after both PRs land. Whichever PR merges second renumbers the version.
+
 ## AnimateDiff runs without ~/tt-metal (v0.103.0)
 
 Prompt: a fresh QB2 with no `~/tt-metal` could not generate a loop, because
