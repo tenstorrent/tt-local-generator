@@ -44,10 +44,9 @@ def cli():
 
 @pytest.fixture(scope="module")
 def main_cli(tmp_path_factory):
-    """tt-ctl exactly as it is on `main`, for byte comparisons."""
+    """tt-ctl as it was on `main` before server control (a committed copy, so CI needs no `main` ref), for byte comparisons."""
     d = tmp_path_factory.mktemp("ttctl_main")
-    src = subprocess.run(["git", "show", "main:tt-ctl"], cwd=ROOT, capture_output=True,
-                         text=True, check=True).stdout
+    src = (ROOT / "tests" / "fixtures" / "tt-ctl-before-server-control").read_text()
     (d / "tt-ctl").write_text(src)
     (d / "app").symlink_to(ROOT / "app")
     (d / "VERSION").write_text((ROOT / "VERSION").read_text())
