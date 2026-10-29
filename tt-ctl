@@ -10,11 +10,22 @@ history.json files that the GUI persists on every mutation.
 Usage:
     tt-ctl status                   Server health, queue depth, history summary
     tt-ctl servers                  Live status of every managed service
+    tt-ctl servers --all            Also list every running model server (tt containers,
+                                    scripts, remote) and held leases
+    tt-ctl servers --json           {"services": [...]}; with --all also "merged",
+                                    "held_leases" and "tt_note"
     tt-ctl start <service>          Start a service (wan2.2 | mochi | flux | animate |
                                     skyreels | artgen-qwen3-8b | prompt-server | all)
+                                    or a tt catalog model name / tt-model bundle id
+                                    (namespace/name). Old keys behave exactly as they
+                                    always did; tt names ask before stopping or
+                                    switching anything. Flags for tt names:
+                                    --yes (switch / unknown-hardware questions)
+                                    --yes-stop-external (also stop a server tt-local-
+                                    generator did not start)
     tt-ctl start --single-chip      Start artgen + prompt-server only
                                     (single Blackhole card or CPU-only)
-    tt-ctl stop  <service>          Stop a service (same keys as start)
+    tt-ctl stop  <service>          Stop a service (same keys and names as start)
     tt-ctl restart <service>        Stop then re-start a service
     tt-ctl queue                    List pending queue items
     tt-ctl queue add "prompt"       Append a prompt to the persistent queue
@@ -307,9 +318,73 @@ def _make_worker_for_item(client: "APIClient", store: "HistoryStore", item: dict
 
 # ── servers ───────────────────────────────────────────────────────────────────
 
+def _service_rows(statuses):
+    """The per-service data the text and JSON output both show."""
+    return [{"key": key, "label": sdef.label, "running": bool(statuses.get(key, False)),
+             "state": "running" if statuses.get(key, False) else "offline"}
+            for key, sdef in sm.SERVERS.items()]
+
+
+def _fmt_uptime(s):
+    if s is None:
+        return "-"
+    s = int(s)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}h{m:02d}m" if h else (f"{m}m{sec:02d}s" if m else f"{sec}s")
+
+
+def _is_held_record(rec):
+    """Same rule as the GUI's server_menu.held_records: a record holding a
+    lease that no current server owns (marked unreapable, or named
+    <key>#unreapable-<n> / <key>#kept-<n>)."""
+    if not str(rec.get("lease_id") or "").strip():
+        return False
+    name = str(rec.get("name") or "")
+    return bool(rec.get("unreapable")) or "#unreapable-" in name or "#kept-" in name
+
+
+def _merged_dict(s):
+    return {"name": s.name, "key": s.key,
+            "source": s.source if s.host_is_local else "remote",
+            "port": s.port, "health": s.health, "owner": s.owner,
+            "uptime_s": s.uptime_s, "url": s.url, "local": s.host_is_local}
+
+
 def cmd_servers(args):
-    """Print live status of every managed service."""
+    """Print live status of every managed service.
+
+    No flag: the original text, unchanged. ``--all`` adds the merged list of
+    everything running (tt model containers, scripts, remote), the held
+    leases, and a note when ``tt`` data is absent. ``--json`` prints
+    ``{"services": [...]}`` and, with ``--all``, ``merged`` and ``held_leases``.
+    """
     statuses = sm.status_all(timeout=2.0)
+    want_all = getattr(args, "all", False)
+    want_json = getattr(args, "json", False)
+    merged = held = None
+    ps_reason = ""
+    if want_all:
+        import server_runtime
+        from server_view import ServerRecords
+        _reg, servers, ps_ok, ps_reason = server_runtime.snapshot_detail(
+            script_health=statuses)
+        merged = [_merged_dict(s) for s in servers]
+        try:
+            held = [{"name": r.get("name"), "lease_id": r.get("lease_id")}
+                    for r in ServerRecords().load() if _is_held_record(r)]
+        except Exception:
+            held = []
+
+    if want_json:
+        out = {"services": _service_rows(statuses)}
+        if want_all:
+            out["merged"] = merged
+            out["held_leases"] = held
+            out["tt_note"] = ps_reason or None
+        print(json.dumps(out, indent=2))
+        return
+
     print(bold("Managed services"))
     for key, sdef in sm.SERVERS.items():
         alive = statuses.get(key, False)
@@ -319,6 +394,119 @@ def cmd_servers(args):
     print()
     print(dim("Start/stop:  tt-ctl start <service>  |  tt-ctl stop <service>"))
     print(dim(f"Services:    {' | '.join(sm.SERVERS)} | all"))
+
+    if want_all:
+        print()
+        print(bold("All running servers"))
+        if ps_reason:
+            print(yellow(f"  tt data unavailable ({ps_reason}); showing script servers only."))
+        if not merged:
+            print(dim("  (none running)"))
+        for m in merged:
+            print(f"  {m['name']:<28s}  {m['source']:<10s}  "
+                  f"{str(m['port'] or '-'):<6s}  {str(m['health'] or '-'):<10s}  "
+                  f"{m['owner']:<9s}  {_fmt_uptime(m['uptime_s']):<8s}  {m['url'] or '-'}")
+        if held:
+            print()
+            print(bold("Held leases"))
+            for h in held:
+                print(f"  {h['name']}  lease {h['lease_id'] or '-'}  "
+                      f"(release by hand once nothing of it runs: gozer release <id>)")
+
+
+# ── start / stop / restart through ServerControl ──────────────────────────────
+
+_DEPRECATION_NOTE = ("note: server commands in tt-ctl are deprecated; "
+                     "use `tt serve` / `tt model stop` or the Servers menu.")
+
+# confirm kind -> the flag that would allow it without a prompt
+_YES_KINDS = ("switch", "unknown_hardware", "unknown_chips", "adopt_unknown")
+
+
+def _deprecation_note():
+    """Once per invocation, to stderr only. TTLG_NO_DEPRECATION_NOTE=1 silences it."""
+    if os.environ.get("TTLG_NO_DEPRECATION_NOTE") == "1":
+        return
+    print(_DEPRECATION_NOTE, file=sys.stderr)
+
+
+def _stdin_is_tty():
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _make_confirm(yes=False, yes_stop_external=False):
+    """The CLI confirm_fn for ServerControl. Returns the literal True or False.
+
+    Yes only when the user types y/yes on a terminal, or a flag covers the
+    question: --yes covers switch / unknown_hardware / unknown_chips /
+    adopt_unknown, never stop_external (that needs --yes-stop-external, since
+    it stops a server someone else started). With no terminal and no flag the
+    answer is no and the output says which flag would allow it.
+    """
+    def confirm(kind, text):
+        if kind == "stop_external":
+            if yes_stop_external:
+                print(dim(f"  --yes-stop-external: {text}"))
+                return True
+            flag = "--yes-stop-external"
+        else:
+            if yes and kind in _YES_KINDS:
+                print(dim(f"  --yes: {text}"))
+                return True
+            flag = "--yes"
+        if not _stdin_is_tty():
+            print(yellow(f"Declined (no terminal): {text}"))
+            print(dim(f"  Re-run with {flag} to allow it."))
+            return False
+        try:
+            answer = input(f"{text} [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return True if answer.strip().lower() in ("y", "yes") else False
+    return confirm
+
+
+def _service_type(value):
+    """argparse ``type=`` for SERVICE: an old key, ``all``, or a name the model
+    registry knows (tt catalog name or tt-model bundle id). Anything else is
+    reported exactly like argparse's own invalid-choice error."""
+    old = sorted(sm.SERVERS.keys()) + [sm.ALL_KEY]
+    if value in old:
+        return value
+    try:
+        import server_registry
+        reg = server_registry.build_registry()
+    except Exception:
+        reg = {}
+    if _registry_entry(reg, value) is not None:
+        return value
+    choices = ", ".join(repr(c) for c in old)
+    raise argparse.ArgumentTypeError(f"invalid choice: {value!r} (choose from {choices})")
+
+
+def _registry_entry(registry, name):
+    """The registry entry for an old key, a catalog name or a bundle id."""
+    if name in registry:
+        return registry[name]
+    for e in registry.values():
+        if name in (e.tt_name, e.name):
+            return e
+    return None
+
+
+def _outcome_failed(kind):
+    return kind not in ("started", "already_running")
+
+
+def _build_cli_control(args, boutique):
+    import server_runtime
+    confirm = _make_confirm(getattr(args, "yes", False),
+                            getattr(args, "yes_stop_external", False))
+    return server_runtime.build_server_control(confirm, boutique=boutique)
 
 
 def _resolve_service_arg(args) -> str:
@@ -331,19 +519,29 @@ def _resolve_service_arg(args) -> str:
     return args.service
 
 
-def cmd_start(args):
-    key = _resolve_service_arg(args)
-    try:
-        sdefs = sm._resolve(key)
-    except KeyError as e:
-        print(red(str(e)))
-        sys.exit(1)
+def _is_old_key(args):
+    """Old-key requests (anything in server_manager.SERVERS, ``all``, --single-chip)
+    keep the legacy behaviour: same stdout lines, same exit codes, no prompts."""
+    if getattr(args, "single_chip", False):
+        return True
+    return args.service in sm.SERVERS or args.service == sm.ALL_KEY
 
+
+def _legacy_control(args, boutique):
+    import server_runtime
+    return server_runtime.build_server_control(lambda k, t: False, boutique=boutique)
+
+
+def _legacy_start(args):
+    """Old `tt-ctl start`, byte for byte: failures print their lines and exit 0."""
+    key = _resolve_service_arg(args)
+    sdefs = sm._resolve(key)
     for sdef in sdefs:
         print(f"Starting {teal(sdef.key)} — {sdef.label}…")
-
-    results = sm.start(key, gui=not args.blocking)
-
+    import server_runtime
+    ctl = _legacy_control(args, server_runtime.RecordingBoutique(
+        blocking=getattr(args, "blocking", False)))
+    results = ctl.start_legacy(key)
     for sdef, result in zip(sdefs, results):
         if result.returncode == 0:
             print(green("✓") + f"  {sdef.key} started")
@@ -357,19 +555,18 @@ def cmd_start(args):
                     print(red(f"     {line}"))
 
 
-def cmd_stop(args):
-    key = _resolve_service_arg(args)
-    try:
-        sdefs = sm._resolve(key)
-    except KeyError as e:
-        print(red(str(e)))
-        sys.exit(1)
+def _legacy_stop_results(args, key, sdefs):
+    import server_runtime
+    ctl = _legacy_control(args, server_runtime.RecordingBoutique())
+    return ctl, ctl.stop_legacy(key, names=[d.key for d in sdefs])
 
+
+def _legacy_stop(args):
+    key = _resolve_service_arg(args)
+    sdefs = sm._resolve(key)
     for sdef in sdefs:
         print(f"Stopping {teal(sdef.key)}…")
-
-    results = sm.stop(key)
-
+    _ctl, results = _legacy_stop_results(args, key, sdefs)
     for sdef, result in zip(sdefs, results):
         if result.returncode == 0:
             print(green("✓") + f"  {sdef.key} stopped")
@@ -380,24 +577,100 @@ def cmd_stop(args):
                     print(red(f"     {line}"))
 
 
-def cmd_restart(args):
+def _legacy_restart(args):
     key = _resolve_service_arg(args)
-    try:
-        sdefs = sm._resolve(key)
-    except KeyError as e:
-        print(red(str(e)))
-        sys.exit(1)
-
+    sdefs = sm._resolve(key)
     print(f"Restarting {teal(key)}…")
-    sm.stop(key)
+    ctl, _ = _legacy_stop_results(args, key, sdefs)
     print(dim("  stopped — starting…"))
-    results = sm.start(key, gui=not args.blocking)
-
+    results = ctl.start_legacy(key, gui=not getattr(args, "blocking", False))
     for sdef, result in zip(sdefs, results):
         if result.returncode == 0:
             print(green("✓") + f"  {sdef.key} restarted")
         else:
             print(red("✗") + f"  {sdef.key} restart failed (exit {result.returncode})")
+
+
+# ── new names (tt catalog names / bundle ids): the strict ServerControl path ──
+
+def _start_new(ctl, boutique, key):
+    """Start one tt-named model; print its lines. True on success."""
+    entry = _registry_entry(ctl.registry(), key)
+    target = entry.key if entry is not None else key
+    outcome = ctl.start(target, on_progress=lambda m: print(dim(f"     {m}"), file=sys.stderr))
+    url = f" ({outcome.url})" if outcome.url else ""
+    if outcome.kind == "started":
+        print(green("✓") + f"  {key} started{url}")
+    elif outcome.kind == "already_running":
+        print(green("✓") + f"  {key} already running{url}")
+    else:
+        print(red("✗") + f"  {key} {outcome.kind.replace('_', ' ')}")
+        if outcome.message:
+            print(red(f"     {outcome.message}") if outcome.kind == "failed"
+                  else dim(f"     {outcome.message}"))
+    return not _outcome_failed(outcome.kind)
+
+
+def _stop_new(ctl, key):
+    """Stop one tt-named model (asks first when the app did not start it)."""
+    import server_runtime
+    registry, servers, _ok = server_runtime.snapshot()
+    entry = _registry_entry(registry, key)
+    ekey = entry.key if entry is not None else key
+    rows = [s for s in servers if s.key == ekey and s.host_is_local]
+    if not rows:
+        print(dim(f"  {key} is not running"))
+        return True
+    ok = True
+    for row in rows:
+        outcome = ctl.stop(row)
+        if outcome.kind == "stopped":
+            print(green("✓") + f"  {key} stopped")
+        else:
+            ok = False
+            print(red("✗") + f"  {key} {outcome.kind.replace('_', ' ')}")
+            print(dim(f"     {outcome.message}"))
+    return ok
+
+
+def _new_control(args):
+    import server_runtime
+    boutique = server_runtime.RecordingBoutique(blocking=getattr(args, "blocking", False))
+    return _build_cli_control(args, boutique), boutique
+
+
+def cmd_start(args):
+    if _is_old_key(args):
+        return _legacy_start(args)
+    key = _resolve_service_arg(args)
+    print(f"Starting {teal(key)} — {key}…")
+    ctl, boutique = _new_control(args)
+    if not _start_new(ctl, boutique, key):
+        sys.exit(1)
+
+
+def cmd_stop(args):
+    if _is_old_key(args):
+        return _legacy_stop(args)
+    key = _resolve_service_arg(args)
+    print(f"Stopping {teal(key)}…")
+    ctl, _b = _new_control(args)
+    if not _stop_new(ctl, key):
+        sys.exit(1)
+
+
+def cmd_restart(args):
+    if _is_old_key(args):
+        return _legacy_restart(args)
+    key = _resolve_service_arg(args)
+    print(f"Restarting {teal(key)}…")
+    ctl, boutique = _new_control(args)
+    if not _stop_new(ctl, key):
+        print(red("✗") + f"  {key} not stopped; not restarting")
+        sys.exit(1)
+    print(dim("  stopped — starting…"))
+    if not _start_new(ctl, boutique, key):
+        sys.exit(1)
 
 
 # ── status ────────────────────────────────────────────────────────────────────
@@ -1146,18 +1419,29 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Server health, queue depth, history summary")
 
     # servers
-    sub.add_parser("servers", help="Live status of every managed service")
+    sv = sub.add_parser("servers", help="Live status of every managed service")
+    sv.add_argument("--all", action="store_true",
+                    help="Also list every running model server (tt containers, scripts, remote)")
+    sv.add_argument("--json", action="store_true",
+                    help='Print {"services": [...]} (plus "merged" with --all)')
 
     # start / stop / restart
     _service_choices = sorted(sm.SERVERS.keys()) + [sm.ALL_KEY]
-    _service_help = " | ".join(_service_choices)
+    _service_help = (" | ".join(_service_choices) +
+                     " | or a tt catalog model name / tt-model bundle id (namespace/name)")
 
     for _verb in ("start", "stop", "restart"):
-        _sp = sub.add_parser(_verb, help=f"{_verb.capitalize()} a managed service")
-        _sp.add_argument("service", nargs="?", choices=_service_choices, metavar="SERVICE",
+        _sp = sub.add_parser(_verb, help=f"{_verb.capitalize()} a managed service or tt model")
+        _sp.add_argument("service", nargs="?", type=_service_type, metavar="SERVICE",
                          help=_service_help)
         _sp.add_argument("--single-chip", action="store_true", dest="single_chip",
-                         help="Start artgen + prompt-server (single Blackhole card or CPU-only)")
+                         help=f"{_verb.capitalize()} artgen + prompt-server "
+                              "(single Blackhole card or CPU-only)")
+        _sp.add_argument("--yes", action="store_true",
+                         help="Answer yes to switch / unknown-hardware / unknown-chips / "
+                              "adopt questions (not to stopping someone else's server)")
+        _sp.add_argument("--yes-stop-external", action="store_true", dest="yes_stop_external",
+                         help="Also allow stopping a server that tt-local-generator did not start")
         if _verb != "stop":
             _sp.add_argument("--blocking", action="store_true",
                              help="Wait for the script to exit (default: --gui mode)")
@@ -1322,6 +1606,9 @@ def main():
     if args.cmd is None:
         parser.print_help()
         return
+
+    if args.cmd in ("start", "stop", "restart", "logs"):
+        _deprecation_note()
 
     dispatch = {
         "status":   cmd_status,

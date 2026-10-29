@@ -1,0 +1,58 @@
+{
+  "chips": [
+    {
+      "bdf": "0000:01:00.0",
+      "board": "0000046131924062",
+      "card": "p300c",
+      "dev_index": 0,
+      "overstayed": false,
+      "pid": 1466136,
+      "pids_holding": [
+        1469516
+      ],
+      "reason": "kernel probe ladder: new default coder (raahemnabeel/qwen3-coder-next, p300) on one board (issue 175)",
+      "state": "HELD-FOREIGN",
+      "who": "claude:orchard-kernel-ladder"
+    },
+    {
+      "bdf": "0000:02:00.0",
+      "board": "0000046131924062",
+      "card": "p300c",
+      "dev_index": 1,
+      "overstayed": false,
+      "pid": 1466136,
+      "pids_holding": [
+        1469516
+      ],
+      "reason": "kernel probe ladder: new default coder (raahemnabeel/qwen3-coder-next, p300) on one board (issue 175)",
+      "state": "HELD-FOREIGN",
+      "who": "claude:orchard-kernel-ladder"
+    },
+    {
+      "bdf": "0000:03:00.0",
+      "board": "0000046131924055",
+      "card": "p300c",
+      "dev_index": 2,
+      "overstayed": false,
+      "pid": null,
+      "pids_holding": [],
+      "reason": null,
+      "state": "FREE",
+      "who": null
+    },
+    {
+      "bdf": "0000:04:00.0",
+      "board": "0000046131924055",
+      "card": "p300c",
+      "dev_index": 3,
+      "overstayed": false,
+      "pid": null,
+      "pids_holding": [],
+      "reason": null,
+      "state": "FREE",
+      "who": null
+    }
+  ],
+  "grain": "board",
+  "queue": []
+}

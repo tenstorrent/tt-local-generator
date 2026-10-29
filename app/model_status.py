@@ -204,6 +204,7 @@ class ModelStatusService:
         port_probe: Optional[Callable[[str], bool]] = None,
         poll_interval: float = 5.0,
         start_timeout: float = 180.0,
+        extra_ready_fn: Optional[Callable[[], "set[str]"]] = None,
     ) -> None:
         # Lazy-default health_fn: import server_manager only when this
         # default is actually invoked, not at __init__ time — so a caller
@@ -221,6 +222,10 @@ class ModelStatusService:
         self._port_probe = port_probe or self._default_port_probe
         self._poll_interval = poll_interval
         self._start_timeout = start_timeout
+        # Optional extra source of READY keys (e.g. servers started from a
+        # terminal with `tt serve`, which no health_fn entry reports). None
+        # keeps the old behaviour exactly.
+        self._extra_ready_fn = extra_ready_fn
 
         # -- internal state --------------------------------------------
         # Last-resolved status per key, refreshed each poll tick (_tick()).
@@ -467,6 +472,16 @@ class ModelStatusService:
             log.debug("detect_fn failed", exc_info=True)
             base, model_id = None, None
 
+        # Keys another source says are READY (see extra_ready_fn). A raising
+        # callable degrades to "no extra keys", the old behaviour.
+        extra_ready: "set[str]" = set()
+        if self._extra_ready_fn is not None:
+            try:
+                extra_ready = set(self._extra_ready_fn() or ())
+            except Exception:
+                log.debug("extra_ready_fn failed", exc_info=True)
+                extra_ready = set()
+
         # `matched` is the single server_manager.SERVERS key (or None) that
         # the detected model id belongs to -- computed once here, used both
         # to gate per-key detect-healthiness below and to populate the
@@ -490,6 +505,14 @@ class ModelStatusService:
             # health_fn entry (see the docstring note above for why this
             # replaced the old blanket "any artgen/prompt key" behavior).
             healthy = health.get(key, False) or (key == matched)
+            if not healthy and key in extra_ready:
+                # An extra key only counts when no OTHER confirmed-healthy key
+                # already answers on its endpoint (shared :8000 / :8002).
+                ep = self._endpoint_of(key)
+                healthy = ep is None or not any(
+                    c != key and (health.get(c, False) or c == matched)
+                    and self._endpoint_of(c) == ep
+                    for c in server_manager.SERVERS)
             port_open = False if healthy else self._safe_port_probe(key)
             per_key[key] = (healthy, port_open)
 

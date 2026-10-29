@@ -74,6 +74,10 @@ DEFAULTS: dict = {
     "dismissed_job_ids": [],        # server job IDs permanently hidden from the Recover Jobs dialog
     # Animate picker — user-chosen disk folder
     "motion_clips_dir": "",         # empty = Disk tab shows only Browse tile
+    # Servers menu — network model servers added with "Connect...":
+    # [{"url": str, "label": str, "token": str}]. The token (optional bearer
+    # token) is stored as plain text here; the UI never displays it.
+    "remote_servers": [],
 }
 # NOTE (v0.93.0 pre-release audit): removed 6 dead keys that nothing consumed —
 # quality_steps (the menu "Quality" radios wrote it but no generation path read

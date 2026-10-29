@@ -165,7 +165,7 @@ def _switch_harness():
     return obj
 
 
-def _run_perform_switch_then(obj, plan, proceed, calls):
+def _run_perform_switch_then(obj, plan, proceed, calls, gozer=False):
     """Runs `_perform_switch_then`, capturing the background-thread `target`
     (via a patched `threading.Thread` that never actually spawns) and then
     invoking it synchronously so its body executes in-test. `GLib.idle_add`
@@ -201,7 +201,8 @@ def _run_perform_switch_then(obj, plan, proceed, calls):
          patch("main_window._sm.stop", side_effect=_stop), \
          patch("main_window._sm.start", side_effect=_start), \
          patch("main_window._sm.is_healthy", side_effect=_healthy), \
-         patch("pipeline_engine._tt_smi_reset", side_effect=_reset):
+         patch("pipeline_engine._tt_smi_reset", side_effect=_reset), \
+         patch("gozer_client.available", return_value=gozer):
         obj._perform_switch_then(plan, proceed)   # must not raise NameError
         assert captured_thread["target"] is not None
         captured_thread["target"]()   # run the "background" body in-thread
@@ -241,3 +242,30 @@ def test_perform_switch_then_no_conflict_skips_stop_and_reset():
         ("is_healthy", "flux"),
     ]
     proceed.assert_called_once()
+
+
+def test_perform_switch_then_never_resets_on_a_gozer_box():
+    """Final review C1: on a box gozer manages, other agents hold leased chips;
+    `tt-smi -r` resets every board. The Create gate skips it and logs why."""
+    import ready_to_run
+
+    obj = _switch_harness()
+    proceed = MagicMock()
+    plan = ready_to_run.SwitchPlan(target="flux", conflict="wan2.2", needs_reset=True)
+    calls = []
+    _run_perform_switch_then(obj, plan, proceed, calls, gozer=True)
+    assert ("reset",) not in calls
+    assert calls == [("stop", "wan2.2"), ("start", "flux"), ("is_healthy", "flux")]
+    logged = " ".join(str(c.args[0]) for c in obj._servers_control.append_server_log.call_args_list)
+    assert "gozer" in logged and "not reset" in logged.lower()
+    proceed.assert_called_once()
+
+
+def test_perform_switch_then_still_resets_without_gozer():
+    import ready_to_run
+
+    obj = _switch_harness()
+    plan = ready_to_run.SwitchPlan(target="flux", conflict="wan2.2", needs_reset=True)
+    calls = []
+    _run_perform_switch_then(obj, plan, MagicMock(), calls, gozer=False)
+    assert ("reset",) in calls

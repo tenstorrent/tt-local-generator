@@ -1,0 +1,23 @@
+# Per-model overrides for the server registry (app/server_registry.py).
+#
+# Keys are registry keys: a SERVERS key (e.g. "flux") or a `tt` catalog model
+# name. Every field is optional:
+#   prefer:         tt | boutique   which backend starts a model that both `tt`
+#                                   and our bin/start_*.sh scripts carry
+#                                   (default: boutique, the script carries our patches)
+#   chips:          int             chip count. Order: the `tt serve --dry-run`
+#                                   plan first, then this override, then the
+#                                   catalog hardware, else unknown (the start
+#                                   warns and asks)
+#   hardware_group: str             group of models that cannot run together
+#                                   (e.g. "media", "artgen")
+#   port:           int             host port the server answers on
+#
+# A missing or malformed file is logged and ignored.
+#
+# Example:
+#   models:
+#     flux:
+#       prefer: tt
+#       chips: 4
+models: {}

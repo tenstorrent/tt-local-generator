@@ -1,0 +1,515 @@
+"""Thin, GUI-free wrapper over the official ``tt`` CLI (``tenstorrent/tt-cli``).
+
+Rules this module keeps (see docs/superpowers/specs/2026-10-28-tt-cli-server-control-design.md):
+
+* Standard library only. No GTK, no requests.
+* No shell invocation. Every argument is its own argv element, so a model name
+  containing spaces or ``;`` stays one argument.
+* Every subprocess has a timeout and ``stdin=DEVNULL``.
+* No public function raises into its caller. Failures come back as a result
+  object (``TtResult``) or an empty value plus a reason string.
+* ``find_tt()`` only accepts a binary whose ``--version`` prints ``tt <digit>...``.
+  Another program called ``tt`` earlier on PATH is skipped, with a warning.
+* Nothing here starts a server unless ``serve()`` is called. ``plan_serve()``
+  always passes ``--dry-run --offline``.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import queue
+import re
+import shutil
+import signal
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Sequence
+
+log = logging.getLogger(__name__)
+
+_VERSION_RE = re.compile(r"^tt \d")
+# How long a terminated serve gets to exit before it is killed.
+_KILL_GRACE_S = 3.0
+# After a cancel/timeout kill, how long serve() keeps draining before it returns.
+_POST_KILL_S = 3.0
+_VERSION_TIMEOUT_S = 10.0
+_DEFAULT_TIMEOUT_S = 30.0
+
+
+# --------------------------------------------------------------------------
+# Result types
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TtServer:
+    """One row of ``tt --json model ps`` -> ``served``. Missing keys become None."""
+    name: str
+    backend: str
+    container: str | None
+    container_id: str | None
+    image: str | None
+    port: int | None
+    base_url: str | None
+    status: str
+    health: str
+    started_at: str | None
+    uptime_s: int | None
+    profile: str | None
+    served_id: str | None
+
+
+@dataclass(frozen=True)
+class TtModel:
+    """One row of ``tt --json model list``.
+
+    Container bundles carry ``installed``. Catalog rows have no ``installed``
+    key at all; ``installed`` is then False, which means "not known to be
+    installed", not "known absent". ``kind`` is None for catalog rows.
+    """
+    name: str
+    kind: str | None
+    engines: tuple[str, ...]
+    hardware: tuple[str, ...]
+    installed: bool
+    backends: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ServePlan:
+    """What ``tt serve <model>`` would run, read from ``--dry-run``."""
+    model: str
+    backend: str | None
+    command: tuple[str, ...]
+    device: str | None
+    port: int | None
+    chips: int | None
+
+
+@dataclass(frozen=True)
+class TtResult:
+    ok: bool
+    reason: str
+    lines: tuple[str, ...] = ()
+
+
+# --------------------------------------------------------------------------
+# Subprocess helpers
+# --------------------------------------------------------------------------
+
+def _kill_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.send_signal(sig)
+        except Exception:
+            pass
+
+
+def _run(argv: Sequence[str], timeout: float = _DEFAULT_TIMEOUT_S,
+         env: dict | None = None) -> tuple[int | None, str, str]:
+    """Run argv to completion. Returns (returncode, stdout, stderr).
+
+    returncode is None when the program could not start or timed out; stderr
+    then holds the reason. Never raises.
+    """
+    try:
+        proc = subprocess.Popen(
+            list(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, errors="replace",
+            start_new_session=True, env=env)
+    except (OSError, ValueError) as exc:
+        return None, "", f"could not start {argv[0]}: {exc}"
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc, signal.SIGKILL)
+        try:
+            proc.communicate(timeout=2)
+        except Exception:
+            pass
+        return None, "", f"timed out after {timeout:g}s"
+    except Exception as exc:  # pragma: no cover - defensive
+        _kill_group(proc, signal.SIGKILL)
+        return None, "", f"failed: {exc}"
+    return proc.returncode, out or "", err or ""
+
+
+# --------------------------------------------------------------------------
+# Locating the official CLI
+# --------------------------------------------------------------------------
+
+_tt_cache: Path | None = None
+_tt_cached = False
+# A "no official tt" answer is cached only until this clock time (None: no
+# expiry, used for a found binary). Injectable clock for tests.
+_tt_cache_until: float | None = None
+_NEGATIVE_CACHE_S = 60.0
+_clock = time.monotonic
+_cache_lock = threading.Lock()
+_catalog_cache: tuple[float, bool, list[TtModel]] | None = None
+
+
+def reset_cache() -> None:
+    """Forget the located binary and the cached catalog (for tests)."""
+    global _tt_cache, _tt_cached, _catalog_cache, _tt_cache_until
+    with _cache_lock:
+        _tt_cache, _tt_cached, _catalog_cache = None, False, None
+        _tt_cache_until = None
+
+
+def _path_candidates() -> list[str]:
+    """Every executable named ``tt`` on PATH, in order (``which -a`` semantics)."""
+    seen: list[str] = []
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d:
+            continue
+        p = os.path.join(d, "tt")
+        if os.path.isfile(p) and os.access(p, os.X_OK) and p not in seen:
+            seen.append(p)
+    return seen
+
+
+def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None:
+    """Return the official ``tt`` binary, or None.
+
+    A found binary is cached until reset_cache(). A definite "no" (every
+    candidate ran and answered, with a non-official version or a non-zero
+    exit, or there is no candidate) is cached for 60 s, so a non-official
+    ``tt`` on PATH is not re-probed (up to 10 s) on every call. A probe that
+    timed out or could not run (OSError) is never cached."""
+    global _tt_cache, _tt_cached, _tt_cache_until
+    with _cache_lock:
+        if _tt_cached and (_tt_cache_until is None or _clock() < _tt_cache_until):
+            return _tt_cache
+    cands = _path_candidates()
+    if not cands:
+        try:
+            w = which("tt")
+        except Exception:
+            w = None
+        if w:
+            cands = [w]
+    found: Path | None = None
+    skipped: list[str] = []
+    definite = True  # False if any probe timed out or failed to run
+    for c in cands:
+        try:
+            rc, out, _err = run([c, "--version"], _VERSION_TIMEOUT_S)
+        except Exception:
+            rc, out = None, ""
+        if rc == 0 and _VERSION_RE.match((out or "").strip()):
+            found = Path(c)
+            break
+        if rc is None:
+            definite = False   # timed out or could not run: no answer
+        skipped.append(c)
+    if found is not None and skipped:
+        log.warning("tt on PATH is shadowed: %s is not the official tt CLI; using %s",
+                    ", ".join(skipped), found)
+    elif found is None and cands:
+        log.warning("no official tt CLI found; rejected: %s", ", ".join(skipped))
+    if found is not None or definite:  # never cache a None caused by a timeout or error
+        with _cache_lock:
+            _tt_cache, _tt_cached = found, True
+            _tt_cache_until = None if found is not None else _clock() + _NEGATIVE_CACHE_S
+    return found
+
+
+def _tt_json(args: Sequence[str], timeout: float) -> tuple[object | None, str]:
+    """Run ``tt --json <args>`` and parse stdout. Returns (data, reason)."""
+    tt = find_tt()
+    if tt is None:
+        return None, "the official tt CLI was not found on PATH"
+    rc, out, err = _run([str(tt), "--json", *args], timeout)
+    if rc is None:
+        return None, f"tt {' '.join(args[:2])} {err}"
+    try:
+        data = json.loads(out)
+    except (ValueError, TypeError):
+        tail = (err or out).strip().splitlines()[-1:] or ["no output"]
+        return None, f"tt exited {rc} without JSON: {tail[0][:200]}"
+    if rc != 0:
+        why = data.get("why") if isinstance(data, dict) else None
+        return None, f"tt exited {rc}: {why or (err.strip().splitlines() or [''])[-1][:200]}"
+    return data, ""
+
+
+def _s(v) -> str | None:
+    return None if v is None else str(v)
+
+
+def _i(v) -> int | None:
+    try:
+        return None if v is None or isinstance(v, bool) else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tup(v) -> tuple[str, ...]:
+    return tuple(str(x) for x in v) if isinstance(v, (list, tuple)) else ()
+
+
+# --------------------------------------------------------------------------
+# ps / catalog / plan
+# --------------------------------------------------------------------------
+
+def ps(timeout: float = 20.0) -> tuple[list[TtServer], str]:
+    """Running servers as ``tt`` sees them. Returns (servers, reason-if-empty-by-failure)."""
+    data, reason = _tt_json(["model", "ps"], timeout)
+    if data is None:
+        return [], reason
+    if not isinstance(data, dict) or not isinstance(data.get("served"), list):
+        return [], "this tt has no 'served' list in `model ps` (older tt?)"
+    rows: list[TtServer] = []
+    for r in data["served"]:
+        if not isinstance(r, dict):
+            continue
+        rows.append(TtServer(
+            name=str(r.get("name") or ""), backend=str(r.get("backend") or ""),
+            container=_s(r.get("container")), container_id=_s(r.get("container_id")),
+            image=_s(r.get("image")), port=_i(r.get("port")),
+            base_url=_s(r.get("base_url")), status=str(r.get("status") or ""),
+            health=str(r.get("health") or ""), started_at=_s(r.get("started_at")),
+            uptime_s=_i(r.get("uptime_s")), profile=_s(r.get("profile")),
+            served_id=_s(r.get("served_id"))))
+    return rows, ""
+
+
+def catalog(ttl: float = 300.0, offline: bool = True) -> list[TtModel]:
+    """Models ``tt`` can serve. Cached for ``ttl`` seconds. [] on any failure."""
+    global _catalog_cache
+    now = time.monotonic()
+    with _cache_lock:
+        c = _catalog_cache
+    if c and c[1] == offline and now - c[0] < ttl:
+        return list(c[2])
+    # --offline is a global flag of tt (`model list` has none of its own).
+    args = (["--offline"] if offline else []) + ["model", "list"]
+    tt = find_tt()
+    if tt is None:
+        return []
+    rc, out, _err = _run([str(tt), "--json", *args], 60.0)
+    try:
+        data = json.loads(out) if rc is not None else None
+    except (ValueError, TypeError):
+        data = None
+    rows = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    models = [TtModel(
+        name=str(r.get("name") or ""), kind=_s(r.get("kind")),
+        engines=_tup(r.get("engines")), hardware=_tup(r.get("hardware")),
+        installed=bool(r.get("installed")), backends=_tup(r.get("backends")))
+        for r in rows if isinstance(r, dict) and r.get("name")]
+    with _cache_lock:
+        _catalog_cache = (now, offline, models)
+    return list(models)
+
+
+def _serve_args(model: str, port: int | None, device: str | None) -> list[str]:
+    a = ["serve", model]
+    if port is not None:
+        a += ["--port", str(int(port))]
+    if device:
+        a += ["--device", device]
+    return a
+
+
+def plan_serve(model: str, *, port: int | None = None,
+               device: str | None = None) -> ServePlan | None:
+    """What ``tt serve`` would do for ``model``. Never starts anything."""
+    data, _reason = _tt_json(_serve_args(model, port, device) + ["--dry-run", "--offline"], 60.0)
+    if not isinstance(data, dict):
+        return None
+    argv = data.get("argv")
+    command = _tup(argv)
+    bundle = data.get("bundle")
+    if isinstance(bundle, dict):  # tt-model bundle shape
+        backend = _s(data.get("backend"))
+        dev = _s(bundle.get("default_profile"))
+        chips = _i(bundle.get("device_count"))
+        p = _i(data.get("port"))
+    else:  # tt-inference-server catalog shape
+        backend = "inference-server"
+        dev = _s(data.get("device_requested"))
+        chips = None
+        p = _i(data.get("port")) or _i(data.get("default_port"))
+    return ServePlan(model=str(data.get("model") or model), backend=backend,
+                     command=command, device=dev, port=p, chips=chips)
+
+
+# --------------------------------------------------------------------------
+# serve / stop / logs
+# --------------------------------------------------------------------------
+
+def serve(model: str, *, port: int | None = None, device: str | None = None,
+          detach: bool = False, on_line: Callable[[str], None] | None = None,
+          cancel: Callable[[], bool] | None = None, env: dict | None = None,
+          timeout: float = 3600.0, extra_args: Sequence[str] = (),
+          plan: ServePlan | None = None) -> TtResult:
+    """Run ``tt serve`` and stream its output to ``on_line``.
+
+    ``tt serve --help`` says ``--detach`` is for bundles only ("return once the
+    container is up instead of following the boot"); a catalog model with
+    ``--detach`` exits 2. So ``detach=True`` adds the flag only when
+    ``plan_serve`` says the model is a tt-model bundle; if the kind is unknown
+    the flag is left off.
+
+    ``extra_args`` are passed through to tt-model after ``--`` (for example
+    ``["--device-id", "0,1"]`` to pin a bundle to leased chips: wire notes,
+    item 1). Only a tt-model bundle accepts them; a catalog model exits 2 with
+    "Unrecognized arguments", so for a KNOWN catalog model they are left off
+    and a warning is logged. When the kind cannot be confirmed (the dry-run
+    failed) serve fails closed and starts nothing: dropping a ``--device-id``
+    pin would start the bundle on chips other than the leased ones.
+
+    ``plan`` is the caller's already-computed ``plan_serve`` result; when it is
+    given, no second dry-run is made.
+
+    ``cancel`` and the deadline are checked on every loop pass. On either, the
+    process group gets SIGTERM, then SIGKILL after a short grace, and serve()
+    returns within a few seconds even if a descendant that left the group still
+    holds the pipe. Killing ``tt`` does not stop a container docker already
+    started; nothing here tries to stop one.
+    """
+    tt = find_tt()
+    if tt is None:
+        return TtResult(False, "the official tt CLI was not found on PATH")
+    argv = [str(tt), "serve", model] + _serve_args(model, port, device)[2:]
+    extra = [str(a) for a in extra_args or ()]
+    if detach or extra:
+        if plan is None:
+            plan = plan_serve(model, port=port, device=device)
+        if extra and plan is None:
+            return TtResult(False, f"could not confirm {model} is a tt-model bundle; "
+                                   "not starting it unpinned")
+        is_bundle = plan is not None and plan.backend == "tt-model"
+        if detach and is_bundle:
+            argv.append("--detach")
+        if extra:
+            if is_bundle:
+                argv += ["--", *extra]
+            else:
+                log.warning("tt serve %s: extra args %s dropped (not a tt-model bundle)",
+                            model, extra)
+    full_env = None if env is None else {**os.environ, **env}
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
+            start_new_session=True, env=full_env)
+    except (OSError, ValueError) as exc:
+        return TtResult(False, f"could not start tt: {exc}")
+
+    q: "queue.Queue[str | None]" = queue.Queue()
+
+    def _pump() -> None:
+        try:
+            for ln in proc.stdout:  # type: ignore[union-attr]
+                q.put(ln.rstrip("\r\n"))
+        except Exception:
+            pass
+        finally:
+            q.put(None)
+
+    threading.Thread(target=_pump, daemon=True).start()
+    lines: list[str] = []
+    deadline = time.monotonic() + timeout
+    stopped = ""
+    give_up = 0.0
+    while True:
+        now = time.monotonic()
+        if not stopped:
+            if cancel is not None:
+                try:
+                    if cancel():
+                        stopped = ("cancelled; a half-booted container may still be "
+                                   "running, check `tt model ps`")
+                except Exception:
+                    pass
+            if not stopped and now > deadline:
+                stopped = (f"timed out after {timeout:g}s; a half-booted container "
+                           "may still be running, check `tt model ps`")
+            if stopped:
+                _terminate(proc)
+                give_up = time.monotonic() + _POST_KILL_S
+        elif time.monotonic() > give_up:
+            # A descendant outside the group may hold the pipe open. Stop reading.
+            try:
+                proc.stdout.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            break
+        try:
+            ln = q.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if ln is None:
+            break
+        lines.append(ln)
+        if on_line is not None:
+            try:
+                on_line(ln)
+            except Exception:
+                log.debug("on_line callback raised", exc_info=True)
+    try:
+        proc.wait(timeout=_KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc, signal.SIGKILL)
+        proc.wait()
+    rc = proc.returncode
+    if stopped:
+        return TtResult(False, stopped, tuple(lines))
+    if rc == 0:
+        return TtResult(True, "", tuple(lines))
+    tail = " | ".join(x for x in lines[-5:] if x.strip())
+    return TtResult(False, f"tt serve exited {rc}: {tail}" if tail else f"tt serve exited {rc}",
+                    tuple(lines))
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """SIGTERM the group, SIGKILL if it is still alive after the grace period."""
+    if proc.poll() is not None:
+        return
+    _kill_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=_KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc, signal.SIGKILL)
+
+
+def stop(names: Sequence[str]) -> TtResult:
+    """``tt model stop <name>...``; each name is its own argv element."""
+    names = [str(n) for n in names]
+    if not names:
+        return TtResult(False, "no server names given")
+    if any(n.startswith("-") for n in names):
+        # `tt model stop --help` documents no `--` separator, so refuse instead.
+        return TtResult(False, "server names may not start with '-'")
+    tt = find_tt()
+    if tt is None:
+        return TtResult(False, "the official tt CLI was not found on PATH")
+    rc, out, err = _run([str(tt), "model", "stop", *names], 300.0)
+    lines = tuple((out + ("\n" + err if err else "")).splitlines())
+    if rc is None:
+        return TtResult(False, f"tt model stop {err}", lines)
+    if rc != 0:
+        tail = [x for x in lines if x.strip()][-1:] or [""]
+        return TtResult(False, f"tt model stop exited {rc}: {tail[0][:200]}", lines)
+    return TtResult(True, "", lines)
+
+
+def logs(name: str, lines: int = 200) -> str:
+    """The last ``lines`` lines of a served model's output, or "" on failure."""
+    tt = find_tt()
+    if tt is None:
+        return ""
+    rc, out, err = _run([str(tt), "model", "logs", str(name), "--tail", str(int(lines))], 30.0)
+    if rc is None:
+        return ""
+    return out if out else err

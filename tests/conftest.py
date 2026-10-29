@@ -1,6 +1,15 @@
+import os
 import sys
 import pytest
 from pathlib import Path
+
+# Under `xvfb-run` on a Wayland desktop, GTK4 ignores DISPLAY and opens real
+# windows on the user's desktop (CLAUDE.md, v0.97.0 verification note). When
+# the run is inside xvfb-run (its XAUTHORITY lives in an xvfb-run temp dir),
+# pin GTK to the Xvfb display before anything imports gi.
+if "xvfb-run" in os.environ.get("XAUTHORITY", ""):
+    os.environ["GDK_BACKEND"] = "x11"
+    os.environ.pop("WAYLAND_DISPLAY", None)
 
 # Add app/ to sys.path for all tests so they can import app modules directly
 # without each test file repeating this boilerplate.

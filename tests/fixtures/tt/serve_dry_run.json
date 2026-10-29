@@ -1,0 +1,43 @@
+{
+  "bundle": {
+    "engine": "vllm-plugin",
+    "image": "tt-model/qwen3-coder-next:0c170421ca1b",
+    "arch": "blackhole",
+    "device_count": 4,
+    "hardware": null,
+    "tool_call_parser": "qwen3_coder",
+    "reasoning_parser": null,
+    "tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 805306368,
+      "l1_small_size": 24576,
+      "fabric_config": "FABRIC_1D"
+    },
+    "port": 8000,
+    "max_model_len": 262144,
+    "tt_metal_version": "0.65.2.dev10056",
+    "weights_repo": "Qwen/Qwen3-Coder-Next",
+    "profiles": [
+      "p300x2",
+      "p150x4",
+      "p300",
+      "p150x2"
+    ],
+    "default_profile": "p300x2"
+  },
+  "backend": "tt-model",
+  "model": "raahemnabeel/qwen3-coder-next",
+  "offline": true,
+  "port": null,
+  "serve_flags": [],
+  "extra_args": [],
+  "installed": true,
+  "argv": [
+    "/home/ttuser/.local/share/tenstorrent/bin/tt-model",
+    "--verbose",
+    "serve",
+    "raahemnabeel/qwen3-coder-next",
+    "--detach",
+    "--local-only"
+  ]
+}

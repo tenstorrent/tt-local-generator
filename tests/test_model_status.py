@@ -343,3 +343,44 @@ def test_ambiguous_shared_port_no_longer_lights_both_image_and_video_segments():
     segments = ss.segment_states(svc.snapshot())
     assert segments["image"] == ms.Status.OFF
     assert segments["video"] == ms.Status.OFF
+
+
+# Task 5: extra_ready_fn -- servers started from a terminal count as READY.
+
+def test_model_status_extra_ready_marks_a_terminal_started_server_ready():
+    svc = ms.ModelStatusService(
+        health_fn=lambda: {}, detect_fn=lambda: (None, None),
+        port_probe=lambda k: False, clock=lambda: 1.0,
+        extra_ready_fn=lambda: {"wan2.2"})
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.READY
+    assert svc.status("flux") == ms.Status.OFF
+
+
+def test_model_status_unchanged_without_extra_ready_fn():
+    svc = ms.ModelStatusService(
+        health_fn=lambda: {}, detect_fn=lambda: (None, None),
+        port_probe=lambda k: False, clock=lambda: 1.0)
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.OFF
+
+
+def test_extra_ready_fn_raising_is_ignored():
+    def boom():
+        raise RuntimeError("x")
+    svc = ms.ModelStatusService(
+        health_fn=lambda: {"flux": True}, detect_fn=lambda: (None, None),
+        port_probe=lambda k: False, clock=lambda: 1.0, extra_ready_fn=boom)
+    svc._tick()
+    assert svc.status("flux") == ms.Status.READY
+    assert svc.status("wan2.2") == ms.Status.OFF
+
+
+def test_extra_ready_does_not_override_a_healthy_key_on_the_same_endpoint():
+    svc = ms.ModelStatusService(
+        health_fn=lambda: {"wan2.2": True}, detect_fn=lambda: (None, None),
+        port_probe=lambda k: False, clock=lambda: 1.0,
+        extra_ready_fn=lambda: {"flux"})
+    svc._tick()
+    assert svc.status("wan2.2") == ms.Status.READY
+    assert svc.status("flux") != ms.Status.READY

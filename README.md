@@ -474,6 +474,7 @@ thumbnail sweep and only perform the media-type fold.
 
 - **Context-aware server start** — the Servers ▾ toolbar dropdown launches the right server
   for the active tab (Wan2.2 for Video, FLUX for Image, Wan2.2-Animate for Animate).
+- **Servers menu** — the Servers ▾ menu and `tt-ctl` start and stop models through the official `tt` CLI, plus the app's own start scripts for models it carries in a special form. Stopping a server this app did not start asks first. Servers added with "Connect..." are for use only.
 - **Server log panel** — pulsing progress bar and phase label during startup; expand "▸ Log"
   for raw container output.
 - **Job recovery** — ⟳ Recover re-attaches to any server jobs that survived a UI restart.
