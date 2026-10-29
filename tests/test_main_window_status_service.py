@@ -83,7 +83,10 @@ def test_on_start_stop_server_resolve_and_note_keys():
     end2 = _SRC.index("\n    def ", start2 + 1)
     body2 = _SRC[start2:end2]
     assert "_server_key_for_script(" in body2
-    assert "self._status_service.note_stopping(server_key)" in body2
+    # Final review I1: the stop goes through the Servers menu, which notes
+    # `note_stopping` itself after a real stop (never for a declined one).
+    assert "menu.stop(server_key, forget_after=True)" in body2
+    assert "self._status_service.note_stopping" not in body2
 
 
 

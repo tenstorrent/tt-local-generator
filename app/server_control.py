@@ -30,9 +30,13 @@ Start flow (``start``; one start per model key at a time, by a per-key lock):
    stopped (``failed``). An unknown hardware group asks
    ``confirm_fn("unknown_hardware", ...)``. A decline starts nothing.
 3. Chip count from ``server_registry.chips_for(entry, tt.plan_serve(...))``.
-   When leases apply and the count is unknown, ask ``confirm_fn("unknown_chips", ...)``.
-   This includes a boutique entry with ``chips=None`` on a gozer machine.
-   All questions are asked before anything is stopped or started.
+   The count only sizes a pinnable acquire, so ``confirm_fn("unknown_chips",
+   ...)`` is asked only when leases apply, the model is of the pinnable kind
+   (a tt-model bundle) and the count is unknown; the start then takes the
+   unpinnable path. An unpinnable start (a catalog model, any boutique
+   script, including a boutique entry with ``chips=None`` on a gozer machine)
+   never asks it: it leases what the container opened. All questions are
+   asked before anything is stopped or started.
 4. An accepted switch stops the incumbent. When ``plan.needs_reset`` and
    there is no gozer on the machine, ``reset_fn()`` runs next (the old
    Ready-to-Run ``tt-smi -r``), but only when no other healthy or booting
@@ -91,7 +95,8 @@ Start flow (``start``; one start per model key at a time, by a per-key lock):
    window (accepted, best effort): a foreign container of the same model that
    starts AFTER our launch, on the unpinnable path, cannot be told apart from
    ours and is adopted and recorded as app-owned.
-7. Record the started server in ``ServerRecords`` with its lease id(s),
+7. Record the started server in ``ServerRecords`` with its lease id(s) and
+   its container id (for a script row, the one found by its published port),
    merged with any lease ids an older record of the same key held, except an
    unreapable one.
 8. On any failure: stop what was started, then release the leases taken by
@@ -155,7 +160,8 @@ Notes for callers (Tasks 7 and 8):
 * A cancel that arrives while a question is open is not re-checked after
   the answer (UX limit): an accepted question goes ahead.
 * ``confirm_fn`` kinds: ``switch``, ``unknown_hardware``, ``unknown_chips``,
-  ``stop_external`` (a Stop of an external server, an unpinnable start whose
+  ``stop_external`` (a Stop of an external server or of an app-owned row
+  whose container id matches no record that has one, an unpinnable start whose
   chips another lease holds, and a failure cleanup of a row not proven ours),
   ``adopt_unknown`` (an unpinnable row older than our launch).
 """
@@ -407,9 +413,14 @@ class _Run:
     # Pinnable path: the leased device ids; a row is proven ours when its
     # container opened only these.
     pin_ids: list[str] | None = None
+    # Unpinnable path: the container id found for run.server when its row had
+    # none (a script row; ``docker ps --filter publish=<port>``). Recorded.
+    found_cid: str | None = None
     # True when run.server was proven ours (pinned and on the leased chips).
     server_proven: bool = False
     launched_at: float | None = None
+    # Caller hook run once, right before the launch (after any chip wait).
+    on_launch: Callable[[], None] | None = None
 
 
 # --------------------------------------------------------------------------
@@ -598,12 +609,16 @@ class ServerControl:
         """Legacy-compatible stop for an OLD key: an explicit command naming a
         script-managed service is consent to stop it. Runs the script's stop,
         never asks ``confirm_fn``, and, when every script exited 0, releases the
-        lease of any record named in ``names`` and removes that record."""
+        lease of any record named in ``names`` and removes that record. A record
+        marked ``unreapable`` is skipped (kept, lease not released): its lease
+        may sit under a container this stop did not reach, and a release resets
+        the chips."""
         results = list(self._boutique.stop(sm_key) or [])
         if results and all(getattr(r, "returncode", 1) == 0 for r in results):
             for name in names:
                 try:
-                    recs = [r for r in self._records.load() if r.get("name") == name]
+                    recs = [r for r in self._records.load()
+                            if r.get("name") == name and not r.get("unreapable")]
                     for rec in recs:
                         failed = [lid for lid in _lease_ids(rec.get("lease_id"))
                                   if not self._gozer.release(lid)]
@@ -622,13 +637,21 @@ class ServerControl:
 
     def start(self, model_key: str, *, port: int | None = None,
               on_progress: Callable[[str], None] | None = None,
-              cancel: Callable[[], bool] | None = None) -> StartOutcome:
+              cancel: Callable[[], bool] | None = None,
+              on_launch: Callable[[], None] | None = None) -> StartOutcome:
         """Start ``model_key``. Blocks; call off the GTK thread. Two starts of
-        one key run one after the other: the second sees the first's server."""
-        with self._key_lock(str(model_key)):
-            return self._start_locked(model_key, port, on_progress, cancel)
+        one key run one after the other: the second sees the first's server.
 
-    def _start_locked(self, model_key, port, on_progress, cancel) -> StartOutcome:
+        ``on_launch()`` (optional) runs once, right before the server is
+        launched: after every question and any chip wait. It is never called
+        when nothing is launched (declined, already running, chips busy). The
+        GUI uses it for ``ModelStatusService.note_starting``. An exception
+        from it is logged and ignored."""
+        with self._key_lock(str(model_key)):
+            return self._start_locked(model_key, port, on_progress, cancel, on_launch)
+
+    def _start_locked(self, model_key, port, on_progress, cancel,
+                      on_launch=None) -> StartOutcome:
         def say(msg: str) -> None:
             if on_progress is not None:
                 try:
@@ -649,7 +672,7 @@ class ServerControl:
                                 f"{model_key} is not a model tt-local-generator knows how to start.",
                                 None)
         name = entry.name
-        run = _Run()
+        run = _Run(on_launch=on_launch)
         try:
             # 1. Running anywhere already?
             early = self._check_running(entry, say, cancelled)
@@ -679,14 +702,18 @@ class ServerControl:
                     tt_plan = None
             chips = server_registry.chips_for(entry, tt_plan)
             leasing = self._lease_active(entry)
-            if leasing and chips is None:
+            # The count only sizes a PINNABLE acquire (a tt-model bundle). The
+            # unpinnable path leases what the container opened after it starts
+            # (adopt), so a missing count there needs no question.
+            pin_kind = (entry.backend == "tt" and tt_plan is not None
+                        and tt_plan.backend == "tt-model")
+            if leasing and chips is None and pin_kind:
                 text = (f"tt-local-generator does not know how many chips {name} needs, so "
                         "it cannot check that enough are free before starting. It will lease "
                         "the chips the server opens after it starts. Start it anyway?")
                 if not self._confirm("unknown_chips", text):
                     return StartOutcome("declined", None, f"{name} was not started.", None)
-            pinnable = (leasing and entry.backend == "tt" and tt_plan is not None
-                        and tt_plan.backend == "tt-model" and bool(chips))
+            pinnable = leasing and pin_kind and bool(chips)
 
             # 4. Act. Anything unexpected undoes what this start did.
             if incumbent:
@@ -873,6 +900,11 @@ class ServerControl:
             return TtResult(False, "tt-local-generator could not read which servers are "
                                    "running, so it did not launch it")
         run.snapshot = {_row_id(s) for s in view if self._is_entry(s, entry)}
+        if run.on_launch is not None:
+            try:
+                run.on_launch()
+            except Exception:
+                log.debug("on_launch raised", exc_info=True)
         run.launched = True
         run.launched_at = self._clock()
         if entry.backend == "tt":
@@ -1091,6 +1123,7 @@ class ServerControl:
         cid = server.container_id
         if not cid and server.port:
             cid = self._container_for_port(server.port)
+            run.found_cid = cid or None
         if not cid:
             return self._abort(entry, registry, run, "failed",
                                f"{name} started on port {server.port}, but tt-local-generator "
@@ -1158,8 +1191,10 @@ class ServerControl:
                     if lid not in ids:
                         ids.append(lid)
         lease = ",".join(ids) or None
-        self._add_record(entry.key, server.port, _short(server.container_id), lease,
-                         replace_same_key=True)
+        # A script row has no container id; record the one found by its port
+        # (the container that was adopted), so ownership is by container.
+        cid = _short(server.container_id) or _short(run.found_cid)
+        self._add_record(entry.key, server.port, cid, lease, replace_same_key=True)
         return StartOutcome("started", server.url,
                             f"{entry.name} started at {server.url}.", lease)
 
@@ -1357,16 +1392,39 @@ class ServerControl:
                 return r
         return None
 
+    def _proven_app_server(self, server: RunningServer) -> bool:
+        """True only when the server's container id matches a record that has
+        a container id (not an unreapable one). ``owner == "app"`` alone is
+        not proof: a record with no container id matches by name and port."""
+        cid = _short(server.container_id)
+        if not cid:
+            return False
+        return any(r.get("container_id") == cid and not r.get("unreapable")
+                   for r in self._records.load())
+
     def stop(self, server: RunningServer) -> StopOutcome:
-        """Stop a server. Blocks; call off the GTK thread. Never raises."""
+        """Stop a server. Blocks; call off the GTK thread. Never raises.
+
+        Stops without asking only a server proven to be the app's (its
+        container id matches a record that has one). Anything else asks
+        ``stop_external`` first, including an ``owner == "app"`` row matched
+        only by name and port."""
         try:
             if not server.host_is_local:
                 return StopOutcome("not_allowed",
                                    f"{server.name} runs on another machine ({server.url}); "
                                    "tt-local-generator only uses it and cannot stop it.")
-            if server.owner != "app":
-                text = (f"{server.name} was not started by tt-local-generator. "
-                        f"{_describe(server)} Someone else may be using it. Stop it?")
+            if not self._proven_app_server(server):
+                if server.owner == "app":
+                    # Owned only through a record with no container id (same
+                    # name and port): a stale record makes any later server of
+                    # that model on that port look like ours.
+                    text = (f"tt-local-generator started {server.name} on this port "
+                            f"earlier; this may be it, or a server someone else started "
+                            f"since. {_describe(server)} Stop it?")
+                else:
+                    text = (f"{server.name} was not started by tt-local-generator. "
+                            f"{_describe(server)} Someone else may be using it. Stop it?")
                 if not self._confirm("stop_external", text):
                     return StopOutcome("declined", f"{server.name} was left running.")
             return self._stop_server(server, self._registry())
@@ -1398,7 +1456,8 @@ class ServerControl:
 
     def restart(self, server_or_key, *, port: int | None = None,
                 on_progress: Callable[[str], None] | None = None,
-                cancel: Callable[[], bool] | None = None) -> StartOutcome:
+                cancel: Callable[[], bool] | None = None,
+                on_launch: Callable[[], None] | None = None) -> StartOutcome:
         """Stop (asking first if the app did not start it), then start. Never raises."""
         try:
             registry = self._registry()
@@ -1422,7 +1481,8 @@ class ServerControl:
                     return StartOutcome("failed", None,
                                         f"{server.name} was stopped but is still listed as "
                                         "running, so it was not started again.", None)
-            return self.start(key, port=port, on_progress=on_progress, cancel=cancel)
+            return self.start(key, port=port, on_progress=on_progress, cancel=cancel,
+                              on_launch=on_launch)
         except Exception as exc:
             log.exception("restart failed")
             return StartOutcome("failed", None, f"Restart failed: {exc}.", None)

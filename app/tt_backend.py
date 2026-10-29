@@ -145,15 +145,21 @@ def _run(argv: Sequence[str], timeout: float = _DEFAULT_TIMEOUT_S,
 
 _tt_cache: Path | None = None
 _tt_cached = False
+# A "no official tt" answer is cached only until this clock time (None: no
+# expiry, used for a found binary). Injectable clock for tests.
+_tt_cache_until: float | None = None
+_NEGATIVE_CACHE_S = 60.0
+_clock = time.monotonic
 _cache_lock = threading.Lock()
 _catalog_cache: tuple[float, bool, list[TtModel]] | None = None
 
 
 def reset_cache() -> None:
     """Forget the located binary and the cached catalog (for tests)."""
-    global _tt_cache, _tt_cached, _catalog_cache
+    global _tt_cache, _tt_cached, _catalog_cache, _tt_cache_until
     with _cache_lock:
         _tt_cache, _tt_cached, _catalog_cache = None, False, None
+        _tt_cache_until = None
 
 
 def _path_candidates() -> list[str]:
@@ -169,10 +175,16 @@ def _path_candidates() -> list[str]:
 
 
 def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None:
-    """Return the official ``tt`` binary, or None. Cached until reset_cache()."""
-    global _tt_cache, _tt_cached
+    """Return the official ``tt`` binary, or None.
+
+    A found binary is cached until reset_cache(). A definite "no" (every
+    candidate ran and answered, with a non-official version or a non-zero
+    exit, or there is no candidate) is cached for 60 s, so a non-official
+    ``tt`` on PATH is not re-probed (up to 10 s) on every call. A probe that
+    timed out or could not run (OSError) is never cached."""
+    global _tt_cache, _tt_cached, _tt_cache_until
     with _cache_lock:
-        if _tt_cached:
+        if _tt_cached and (_tt_cache_until is None or _clock() < _tt_cache_until):
             return _tt_cache
     cands = _path_candidates()
     if not cands:
@@ -193,8 +205,8 @@ def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None
         if rc == 0 and _VERSION_RE.match((out or "").strip()):
             found = Path(c)
             break
-        if rc is None or rc != 0:
-            definite = False
+        if rc is None:
+            definite = False   # timed out or could not run: no answer
         skipped.append(c)
     if found is not None and skipped:
         log.warning("tt on PATH is shadowed: %s is not the official tt CLI; using %s",
@@ -204,6 +216,7 @@ def find_tt(which: Callable = shutil.which, run: Callable = _run) -> Path | None
     if found is not None or definite:  # never cache a None caused by a timeout or error
         with _cache_lock:
             _tt_cache, _tt_cached = found, True
+            _tt_cache_until = None if found is not None else _clock() + _NEGATIVE_CACHE_S
     return found
 
 

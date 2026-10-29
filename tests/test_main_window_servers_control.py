@@ -362,6 +362,8 @@ class _RecControl:
         self.events.ev.append(("control.start", key))
         if self.raises:
             raise RuntimeError("tt exploded")
+        if kw.get("on_launch") is not None:
+            kw["on_launch"]()        # ServerControl calls it right before the launch
         from server_control import StartOutcome
         return StartOutcome(self.kind, "http://127.0.0.1:8000", "msg.", None)
 
@@ -372,6 +374,8 @@ class _RecControl:
 
     def restart(self, s, **kw):
         self.events.ev.append(("control.restart", s))
+        if kw.get("on_launch") is not None:
+            kw["on_launch"]()
         from server_control import StartOutcome
         return StartOutcome("started", "u", "", None)
 
@@ -394,12 +398,14 @@ def _rs(key):
                          container=None, container_id=None, served_id=None, owner="app")
 
 
-def test_start_notes_before_server_control_and_lights_launching():
+def test_start_notes_when_server_control_launches_and_lights_launching():
+    """note_starting comes from ServerControl's on_launch hook (final review
+    m5): after control.start began (any chip wait), not before it."""
     m, w, e = _menu()
     m.start("wan2.2").join(5)
     assert _pump(lambda: ("launching", "wan2.2", False) in e.ev)
     assert e.ev.index(("launching", "wan2.2", True)) < e.ev.index(("note_starting", "wan2.2"))
-    assert e.ev.index(("note_starting", "wan2.2")) < e.ev.index(("control.start", "wan2.2"))
+    assert e.ev.index(("control.start", "wan2.2")) < e.ev.index(("note_starting", "wan2.2"))
     assert ("note_stopping", "wan2.2") not in e.ev
     assert w.launching == [("wan2.2", True), ("wan2.2", False)]
     assert any("wan2.2" in ln for ln in w.log_lines)
@@ -438,21 +444,50 @@ def test_stop_notes_stopping_after_a_stop_and_lights_launching():
     assert w.launching == [("flux", True), ("flux", False)]
 
 
+def test_stop_with_forget_after_forgets_only_after_a_stop():
+    """The status bar's Stop (final review I1): forget the key's record after
+    a real stop, never after a declined one."""
+    for kind, want in (("stopped", True), ("declined", False)):
+        m, w, e = _menu()
+        ctl = m.control()
+        from server_control import StopOutcome
+        ctl.stop = lambda srv, kind=kind: (e.ev.append(("control.stop", srv.key)),
+                                           StopOutcome(kind, "x."))[1]
+        ctl.forget = lambda key: e.ev.append(("forget", key))
+        m._rows_for = lambda k: [_rs("wan2.2")]
+        m.stop("wan2.2", forget_after=True).join(5)
+        assert (("forget", "wan2.2") in e.ev) is want, kind
+        if want:
+            assert e.ev.index(("control.stop", "wan2.2")) < e.ev.index(("forget", "wan2.2"))
+
+
+def test_stop_by_key_with_nothing_running_says_so_and_forgets_nothing():
+    m, w, e = _menu()
+    ctl = m.control()
+    ctl.forget = lambda key: e.ev.append(("forget", key))
+    m._rows_for = lambda k: []
+    m.stop("wan2.2", forget_after=True).join(5)
+    assert _pump(lambda: any("nothing to stop" in ln for ln in w.log_lines))
+    assert ("control.stop", "wan2.2") not in e.ev and ("forget", "wan2.2") not in e.ev
+
+
 def test_restart_notes_starting_and_restarts():
     m, w, e = _menu()
     m.restart("mochi").join(5)
     assert _pump(lambda: ("launching", "mochi", False) in e.ev)
-    assert e.ev.index(("note_starting", "mochi")) < e.ev.index(("control.restart", "mochi"))
+    assert e.ev.index(("control.restart", "mochi")) < e.ev.index(("note_starting", "mochi"))
     assert w.launching == [("mochi", True), ("mochi", False)]
 
 
 def test_direct_stop_paths_forget_the_record_on_their_worker():
-    """The status bar's Stop and the Create switch stop servers outside
-    ServerControl: both drop the menu's record (ServerControl.forget)."""
+    """The status bar's Stop goes through the Servers menu (it asks first for
+    a server the app did not start) and forgets the record after a stop; the
+    Create switch still stops outside ServerControl and forgets the record."""
     stop_body = _SRC[_SRC.index("def _on_stop_server(self) -> None:"):]
     stop_body = stop_body[:stop_body.index("\n    def ")]
-    run = stop_body[stop_body.index("def run():"):]
-    assert "self._server_menu.forget(server_key)" in run
+    assert "menu.stop(server_key, forget_after=True)" in stop_body
+    assert 'getattr(self, "_server_menu", None)' in stop_body
+    assert "Popen" not in stop_body and "--stop" not in stop_body
     sw = _SRC[_SRC.index("def _perform_switch_then(self, plan, proceed) -> None:"):]
     sw = sw[:sw.index("\n    def ")]
     run2 = sw[sw.index("def run() -> None:"):]

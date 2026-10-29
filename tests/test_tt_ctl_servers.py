@@ -456,3 +456,17 @@ def test_new_name_switch_question_needs_yes_and_yes_never_covers_stop_external(e
     env.set_tt({}, ps=[PS_ROW])
     code, out, _ = run("stop", "ns/bundle", "--yes")
     assert code == 1 and "--yes-stop-external" in out
+
+
+def test_servers_all_lists_an_unreapable_record_whatever_its_name(env, run):
+    """Final review m1: `servers --all` shows the same held leases as the GUI
+    (server_menu.held_records): a record marked unreapable in place counts."""
+    env.set_tt({}, ps=[])
+    rec = server_view.ServerRecords()
+    rec.add("flux", 8000, "aaaaaaaaaaaa", "L-88", 1.0, unreapable=True,
+            note="chips are in use by another process")
+    rec.add("plain", 9000, "bbbbbbbbbbbb", "L-99", 1.0)
+    code, out, _ = run("servers", "--all")
+    held = out.split("Held leases")[1]
+    assert "flux" in held and "L-88" in held
+    assert "L-99" not in held

@@ -107,12 +107,31 @@ def stop_outcome_line(name: str, outcome) -> str:
     return f"{name}: {word}. {msg}".rstrip()
 
 
+def _sm_port(sm_key: str):
+    """The port of a SERVERS entry's health URL (the endpoint the app calls)."""
+    import server_manager
+    from urllib.parse import urlparse
+    sdef = server_manager.SERVERS.get(sm_key)
+    try:
+        return urlparse(sdef.health_url).port if sdef is not None else None
+    except ValueError:
+        return None
+
+
 def ready_keys(servers, registry) -> set[str]:
-    """SERVERS keys whose merged-view row is healthy and on this machine.
+    """SERVERS keys whose merged-view row is healthy, on this machine, and on
+    the port the app calls for that key.
 
     A row's key is a registry key; a boutique entry's ``sm_key`` is the
     SERVERS key (a tt-only model has none and is skipped: the status service
-    only knows SERVERS keys)."""
+    only knows SERVERS keys). The port check matters: a row reaches an
+    ``sm_key`` through its tt name (``FLUX.1-schnell`` -> ``flux``), and a
+    server someone started with ``tt serve`` on another port (e.g. :20000)
+    is not the endpoint the app sends ``flux`` jobs to (:8000). Counting it
+    READY would send jobs to the wrong port and let the Create gate plan a
+    switch (stop + reset) around a server that is not on the app's port. Such
+    a row stays visible in the Running section; it just does not make the key
+    READY."""
     import server_manager
     out: set[str] = set()
     for s in servers or []:
@@ -122,10 +141,13 @@ def ready_keys(servers, registry) -> set[str]:
             continue
         e = (registry or {}).get(s.key)
         sm_key = e.sm_key if e is not None else None
+        want_port = e.port if e is not None else None
         if sm_key is None and s.key in server_manager.SERVERS:
             sm_key = s.key
-        if sm_key:
-            out.add(sm_key)
+            want_port = _sm_port(sm_key)
+        if not sm_key or want_port is None or s.port != want_port:
+            continue
+        out.add(sm_key)
     return out
 
 
@@ -352,6 +374,11 @@ class ServerMenu:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._refresh_lock = threading.Lock()
+        # Cancel events of starts/restarts still running; close() sets them so
+        # a closing app aborts a start cleanly (ServerControl cleans up what
+        # it launched and the lease it took).
+        self._cancels: set[threading.Event] = set()
+        self._cancels_lock = threading.Lock()
         # Latest snapshot, replaced whole (read by ready_keys on another thread).
         self._latest: tuple = ({}, [])
 
@@ -391,6 +418,17 @@ class ServerMenu:
         e = reg.get(key)
         return e.name if e is not None else str(key)
 
+    def _track_cancel(self, ev: threading.Event) -> None:
+        with self._cancels_lock:
+            self._cancels.add(ev)
+            closing = self._stop.is_set()
+        if closing:
+            ev.set()
+
+    def _untrack_cancel(self, ev: threading.Event) -> None:
+        with self._cancels_lock:
+            self._cancels.discard(ev)
+
     def _note(self, method: str, key: str) -> None:
         if self._status_service is None:
             return
@@ -410,16 +448,22 @@ class ServerMenu:
         self._sc.append_server_log(f"Starting {name}...")
         self._sc.set_cancel_action(key, f"Cancel start of {name} (stops what was launched)",
                                    cancel_ev.set)
+        self._track_cancel(cancel_ev)
 
         def run():
-            self._note("note_starting", key)
             try:
-                out = self.control().start(key, on_progress=self._log,
-                                           cancel=cancel_ev.is_set)
+                # note_starting only once the launch begins (on_launch), not
+                # before a chip wait that can last an hour: the status
+                # service's start timeout would show ERROR during a normal wait.
+                out = self.control().start(
+                    key, on_progress=self._log, cancel=cancel_ev.is_set,
+                    on_launch=lambda: self._note("note_starting", key))
             except Exception as exc:          # start() should not raise
                 log.exception("start of %s raised", key)
                 from server_control import StartOutcome
                 out = StartOutcome("failed", None, f"{exc}.", None)
+            finally:
+                self._untrack_cancel(cancel_ev)
             self._finish_start(key, name, out)
             self.refresh_now()
 
@@ -436,10 +480,15 @@ class ServerMenu:
         self._post(self._sc.clear_cancel_action, key)
         self._post(self._sc.set_server_launching, key, False)
 
-    def stop(self, server_or_key):
-        """Stop a RunningServer (or, from an old SERVERS row, a key) through
-        ServerControl.stop on a worker. ServerControl asks first for a server
-        the app did not start."""
+    def stop(self, server_or_key, *, forget_after: bool = False):
+        """Stop a RunningServer (or, from an old SERVERS row or the status
+        bar's Stop, a key) through ServerControl.stop on a worker.
+        ServerControl asks first for a server the app did not start. A key
+        with no local row logs "nothing to stop" and runs nothing.
+
+        ``forget_after`` (the status bar's Stop): after a row was actually
+        stopped, also call ``ServerControl.forget(key)`` (the old direct path
+        did; a no or a failure forgets nothing)."""
         key = getattr(server_or_key, "key", server_or_key)
         name = getattr(server_or_key, "name", None) or self._name_for(key)
         self._sc.set_server_launching(key, True)
@@ -450,13 +499,20 @@ class ServerMenu:
                 rows = self._rows_for(server_or_key)
                 if not rows:
                     self._log(f"{name}: not running on this machine; nothing to stop.")
+                stopped = False
                 for srv in rows:
                     out = self.control().stop(srv)
                     if out.kind == "stopped":
+                        stopped = True
                         self._note("note_stopping", key)
                     self._log(stop_outcome_line(srv.name, out))
                     if out.kind != "stopped":
                         self._post(self._sc.keep_log_open)
+                if forget_after and stopped and isinstance(key, str):
+                    try:
+                        self.control().forget(key)
+                    except Exception:
+                        log.exception("forget %s failed", key)
             except Exception as exc:
                 log.exception("stop of %s raised", key)
                 self._log(f"{name}: Stop failed. {exc}.")
@@ -474,15 +530,18 @@ class ServerMenu:
         self._sc.append_server_log(f"Restarting {name}...")
         self._sc.set_cancel_action(key, f"Cancel start of {name} (stops what was launched)",
                                    cancel_ev.set)
+        self._track_cancel(cancel_ev)
 
         def run():
-            self._note("note_starting", key)
             try:
-                out = self.control().restart(server_or_key, on_progress=self._log,
-                                             cancel=cancel_ev.is_set)
+                out = self.control().restart(
+                    server_or_key, on_progress=self._log, cancel=cancel_ev.is_set,
+                    on_launch=lambda: self._note("note_starting", key))
             except Exception as exc:
                 from server_control import StartOutcome
                 out = StartOutcome("failed", None, f"{exc}.", None)
+            finally:
+                self._untrack_cancel(cancel_ev)
             self._finish_start(key, name, out)
             self.refresh_now()
 
@@ -615,7 +674,13 @@ class ServerMenu:
                         live_eps.add((s.key, s.port))
                         live_eps.add((s.name, s.port))
                 for r in records:
+                    # An open port keeps a no-container record live only when
+                    # the script health check of that record's OWN key passed.
+                    # Every media model shares :8000, so a different model
+                    # answering there must not keep a stale record alive (it
+                    # would make a later server of this model look like ours).
                     if (not r.get("container_id") and r.get("port") is not None
+                            and self._own_script_healthy(r, registry, script_health)
                             and _port_open(r.get("port"))):
                         live_eps.add((r.get("name"), r.get("port")))
             try:
@@ -626,6 +691,19 @@ class ServerMenu:
             held = held_records(records)
             self._post(self._sc.set_view, servers, registry, held,
                        "" if ps_ok else (reason or "tt model ps failed"))
+
+    @staticmethod
+    def _own_script_healthy(rec: dict, registry: dict, script_health) -> bool:
+        """True when ``script_health`` says the record's own SERVERS key is up.
+        The record name is a registry key (``<key>#...`` suffixes stripped);
+        its entry's ``sm_key`` is the key the script health check uses."""
+        key = str(rec.get("name") or "").split("#", 1)[0]
+        e = (registry or {}).get(key)
+        sm_key = (e.sm_key if e is not None else None) or key
+        try:
+            return (script_health or {}).get(sm_key) is True
+        except Exception:
+            return False
 
     def ready_keys(self) -> set[str]:
         """SERVERS keys healthy in the latest snapshot. Any thread."""
@@ -652,9 +730,15 @@ class ServerMenu:
             self._thread = self._spawn(self._loop, "servers-refresh")
 
     def close(self) -> None:
-        """Window closing: stop the refresh thread, answer open questions no."""
+        """Window closing: stop the refresh thread, cancel starts still running
+        (ServerControl stops what they launched and releases or records their
+        leases, so no lease is left with no record), answer open questions no."""
         self._stop.set()
         self._wake.set()
+        with self._cancels_lock:
+            pending = list(self._cancels)
+        for ev in pending:
+            ev.set()
         self.confirm.close()
 
     def _join(self, timeout: float = 5.0) -> bool:

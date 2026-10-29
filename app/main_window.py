@@ -9777,7 +9777,11 @@ class MainWindow(Gtk.ApplicationWindow):
     def _perform_switch_then(self, plan, proceed) -> None:
         """Stop any conflicting server (+ tt-smi -r), start `plan.target`, and
         run `proceed` once it's healthy. Reuses server_manager + pipeline_engine's
-        reset + ServersControl's log. All widget updates via GLib.idle_add."""
+        reset + ServersControl's log. All widget updates via GLib.idle_add.
+
+        The reset is skipped when gozer is on the machine (logged): tt-smi -r
+        resets every board, including other agents' leased chips. This path
+        still starts the target with its own script (not ServerControl)."""
         import pipeline_engine
         target = plan.target
         self._servers_control.set_server_launching(target, True)
@@ -9798,9 +9802,20 @@ class MainWindow(Gtk.ApplicationWindow):
                     except Exception:
                         pass
                     if plan.needs_reset:
-                        GLib.idle_add(self._servers_control.append_server_log,
-                                      "Resetting boards (tt-smi -r)…")
-                        pipeline_engine._tt_smi_reset()
+                        # Never a manual tt-smi -r on a box gozer manages:
+                        # it resets EVERY board, including chips other
+                        # agents hold under a lease (the same rule as
+                        # ServerControl._reset_after_switch).
+                        import gozer_client
+                        if gozer_client.available():
+                            GLib.idle_add(
+                                self._servers_control.append_server_log,
+                                "Boards not reset (tt-smi -r): gozer manages the chips "
+                                "on this machine and a reset would hit other leases.")
+                        else:
+                            GLib.idle_add(self._servers_control.append_server_log,
+                                          "Resetting boards (tt-smi -r)…")
+                            pipeline_engine._tt_smi_reset()
                 GLib.idle_add(self._servers_control.append_server_log, f"Starting {target}…")
                 _sm.start(target, gui=True)
                 try:
@@ -10442,21 +10457,26 @@ class MainWindow(Gtk.ApplicationWindow):
         threading.Thread(target=tail, daemon=True).start()
 
     def _on_stop_server(self) -> None:
-        """Run the stop command (via start_wan.sh --stop) in a background thread."""
+        """The status bar's Stop: stop the server for the current medium's
+        model through the Servers menu (``ServerMenu.stop`` ->
+        ``ServerControl.stop`` on a worker thread).
+
+        Before the final review this ran the shared start script's stop for
+        whatever was on :8000 with no question. Now a server the app did not
+        start asks ``stop_external`` first, like the Servers menu's own Stop,
+        and a key with nothing running on this machine is logged as "nothing
+        to stop" and nothing is run. After a real stop the menu drops the
+        app's record of it (``forget_after=True`` -> ``ServerControl.forget``)
+        and notes ``note_stopping``."""
         # Stop any active log tail before clearing the log panel
         if self._log_tail_stop:
             self._log_tail_stop.set()
             self._log_tail_stop = None
-        # Both video and image use the same Docker image, so either script can stop it.
-        script_path = str(Path(__file__).parent.parent / "bin" / "start_wan_qb2.sh")
 
-        # There's no model_source argument here (unlike _on_start_server) since
-        # any script stops the one shared port-8000 container. Resolve "which
-        # server_manager key is presumably running" the same way
-        # _on_start_server would resolve what to *start* for the current
+        # Resolve "which server_manager key is presumably running" the same
+        # way _on_start_server resolves what to *start* for the current
         # medium's source/model selection (SP-3d-3: CreateView, not
-        # ControlPanel), so note_stopping targets the right key rather than
-        # guessing.
+        # ControlPanel).
         server_key = None
         try:
             _stop_source = self._current_medium_source()
@@ -10465,51 +10485,21 @@ class MainWindow(Gtk.ApplicationWindow):
                 (_stop_source, _stop_model_key), ("start_wan.sh", "Wan2.2 video")
             )
             server_key = _server_key_for_script(_stop_script_name)
-            if server_key:
-                self._status_service.note_stopping(server_key)
         except Exception:
-            pass
+            server_key = None
 
-        # See _on_start_server's comment: routes to ServersControl (SP-3b Task
-        # 2) instead of ControlPanel's now-unmounted log/launching widgets.
-        launch_key = server_key or "stop"
-        self._servers_control.set_server_launching(launch_key, True)
-        self._servers_control.append_server_log("Stopping inference server…")
+        menu = getattr(self, "_server_menu", None)
+        if not server_key or menu is None:
+            self._servers_control.append_server_log(
+                "No server for the current model was found; nothing to stop.")
+            self._set_status("Nothing to stop.")
+            return
         self._set_status("Stopping inference server…")
-        # No optimistic segment paint on stop: `note_stopping()` (above) makes
-        # the next snapshot report OFF, and painting a stop as "starting" —
-        # which the retired aggregate `update_starting()` literally did — reads
-        # as the opposite of what is happening.
-        if a := self.lookup_action("recover-jobs"):
-            a.set_enabled(False)
-
-        def run():
-            try:
-                proc = subprocess.Popen(
-                    [script_path, "--stop"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    stdin=subprocess.DEVNULL,
-                )
-                self._server_proc = proc
-                output = proc.communicate()[0]
-                for line in output.splitlines():
-                    GLib.idle_add(self._servers_control.append_server_log, line)
-                GLib.idle_add(self._set_status, "Server stopped.")
-                # Drop the Servers menu's record for it (lease released only
-                # when gozer shows its chips free). This worker thread is
-                # where ServerControl may block.
-                if server_key and getattr(self, "_server_menu", None) is not None:
-                    self._server_menu.forget(server_key)
-            except Exception as e:
-                GLib.idle_add(self._servers_control.append_server_log, f"Error: {e}")
-                GLib.idle_add(self._set_status, f"Server stop error: {e}")
-            finally:
-                self._server_proc = None
-                GLib.idle_add(self._servers_control.set_server_launching, launch_key, False)
-
-        threading.Thread(target=run, daemon=True).start()
+        # ServerMenu.stop resolves the running rows for the key from a fresh
+        # view on its worker, asks first when the app did not start one,
+        # logs "not running on this machine; nothing to stop" when none is
+        # found, and forgets the record after a real stop.
+        menu.stop(server_key, forget_after=True)
 
     # ── Standalone ServersControl callbacks (SP-3b Task 2; Task 8) ─────────────
     #

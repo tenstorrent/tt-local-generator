@@ -279,7 +279,7 @@ def test_find_tt_caches_a_definite_no(tmp_path):
     _install(tmp_path, {}, version="something else")
     assert tb.find_tt() is None
     make_fake_tt(tmp_path / "bin", {"version": "tt 1.2.0"})
-    assert tb.find_tt() is None  # definite answer stays cached until reset_cache
+    assert tb.find_tt() is None  # definite answer stays cached (60 s; see below)
 
 
 def test_stop_rejects_names_that_look_like_options(tmp_path):
@@ -305,3 +305,46 @@ def test_serve_uses_a_passed_plan_without_a_dry_run(tmp_path):
     assert not [c for c in calls(d) if "--dry-run" in c]
     real = [c for c in calls(d) if "--version" not in c]
     assert real[-1][-3:] == ["--", "--device-id", "0,1"]
+
+
+def test_find_tt_caches_a_non_official_tt_that_exits_nonzero_for_60s(tmp_path, monkeypatch):
+    """Final review m4: a non-official `tt` that ran and answered with a
+    non-zero exit is a definite wrong answer: cached for 60 s, not re-probed
+    (up to 10 s) on every call."""
+    _install(tmp_path, {})
+    now = [1000.0]
+    monkeypatch.setattr(tb, "_clock", lambda: now[0])
+    probes = []
+
+    def nonzero(argv, timeout=0):
+        probes.append(argv)
+        return 2, "", "usage: tt-lang ..."
+
+    assert tb.find_tt(run=nonzero) is None
+    assert tb.find_tt(run=nonzero) is None
+    assert len(probes) == 1                       # cached
+    now[0] += 61
+    assert tb.find_tt(run=nonzero) is None
+    assert len(probes) == 2                       # expired after 60 s
+
+
+def test_find_tt_definite_no_expires_after_60s(tmp_path, monkeypatch):
+    _install(tmp_path, {}, version="something else")
+    now = [1000.0]
+    monkeypatch.setattr(tb, "_clock", lambda: now[0])
+    assert tb.find_tt() is None
+    make_fake_tt(tmp_path / "bin", {"version": "tt 1.2.0"})
+    now[0] += 30
+    assert tb.find_tt() is None
+    now[0] += 31
+    assert tb.find_tt() == tmp_path / "bin" / "tt"
+
+
+def test_find_tt_still_does_not_cache_an_oserror(tmp_path):
+    _install(tmp_path, {})
+
+    def boom(argv, timeout=0):
+        raise OSError("exec format error")
+
+    assert tb.find_tt(run=boom) is None
+    assert tb.find_tt() == tmp_path / "bin" / "tt"

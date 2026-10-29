@@ -335,8 +335,13 @@ def _fmt_uptime(s):
 
 
 def _is_held_record(rec):
+    """Same rule as the GUI's server_menu.held_records: a record holding a
+    lease that no current server owns (marked unreapable, or named
+    <key>#unreapable-<n> / <key>#kept-<n>)."""
+    if not str(rec.get("lease_id") or "").strip():
+        return False
     name = str(rec.get("name") or "")
-    return "#unreapable-" in name or "#kept-" in name
+    return bool(rec.get("unreapable")) or "#unreapable-" in name or "#kept-" in name
 
 
 def _merged_dict(s):

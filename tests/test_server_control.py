@@ -50,6 +50,8 @@ REGISTRY = {
     "Media-X": entry("Media-X", tt_name="Media-X", group=None, chips=2),
     # a catalog model with no chip count anywhere
     "Cat-unknown": entry("Cat-unknown", tt_name="Cat-unknown", chips=None),
+    # a tt-model bundle (pinnable kind) whose plan gives no chip count
+    "ns/nochips": entry("ns/nochips", tt_name="ns/nochips"),
 }
 
 PLANS = {
@@ -58,6 +60,7 @@ PLANS = {
     "Wan2.2-T2V": ServePlan("Wan2.2-T2V", "inference-server", (), "p300x2", None, None),
     "Media-X": ServePlan("Media-X", "inference-server", (), "p300x2", None, None),
     "Cat-unknown": ServePlan("Cat-unknown", "inference-server", (), "p300x2", None, None),
+    "ns/nochips": ServePlan("ns/nochips", "tt-model", (), "p300", None, None),
 }
 
 STATUS = {"chips": [
@@ -390,18 +393,21 @@ def test_unknown_hardware_group_accepted_starts(env):
 
 
 def test_unknown_chip_count_warns_and_asks_instead_of_blocking(env):
-    out = env.control().start("Cat-unknown")
+    """A pinnable-kind model (tt-model bundle) with no chip count asks; the
+    count would size its acquire. (Final review I2: an unpinnable start no
+    longer asks; see test_i2_*.)"""
+    out = env.control().start("ns/nochips")
     assert out.kind == "declined"
     assert ("confirm", "unknown_chips") in env.calls
     assert "tt.serve" not in env.names()
     # Accepting goes ahead (unpinnable flow: adopt after start, no acquire).
     env.calls.clear()
     env.confirm_answers = {"unknown_chips": True}
-    env.serve_adds = rs("Cat-unknown", name="Cat-unknown", container_id="abcabcabcabc",
+    env.serve_adds = rs("ns/nochips", name="ns/nochips", container_id="abcabcabcabc",
                         port=20003)
     env.devices = {"abcabcabcabc": ["/dev/tenstorrent/0"]}
     env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",))}
-    out = env.control().start("Cat-unknown")
+    out = env.control().start("ns/nochips")
     assert out.kind == "started", out.message
     assert "gozer.acquire" not in env.names()
 
@@ -997,9 +1003,10 @@ def test_script_server_container_found_by_port_is_adopted(env):
     assert out.kind == "started", out.message
     assert out.lease_id == "A0"
     assert ("docker.devices", "aaaa1111bbbb") in env.calls
-    # ownership of a script row is by endpoint, so its record keeps no container id
+    # Final review C2(b): the record keeps the container id found by the port,
+    # so ownership is by container, not by (name, port) alone.
     rec = env.records.load()[0]
-    assert (rec["name"], rec["port"], rec["container_id"]) == ("flux", 8000, None)
+    assert (rec["name"], rec["port"], rec["container_id"]) == ("flux", 8000, "aaaa1111bbbb")
 
 
 def test_script_server_whose_container_is_unknown_is_stopped_with_the_port_named(env):
@@ -1060,8 +1067,11 @@ def test_stop_survives_an_oserror_from_the_script(env):
     def boom(key):
         raise OSError("bash missing")
     env.boutique.stop = staticmethod(boom)
+    # A script row owned only by (name, port) asks first (final review C2).
+    env.confirm_answers = {"stop_external": True}
     srv = rs("flux", source="script", port=8000, container_id=None, owner="app")
     out = env.control().stop(srv)
+    assert ("confirm", "stop_external") in env.calls
     assert out.kind == "failed" and "bash missing" in out.message
 
 
@@ -1069,6 +1079,7 @@ def test_restart_survives_an_oserror(env):
     def boom(key):
         raise OSError("bash missing")
     env.boutique.stop = staticmethod(boom)
+    env.confirm_answers = {"stop_external": True}
     srv = rs("flux", source="script", port=8000, container_id=None, owner="app")
     out = env.control().restart(srv)
     assert out.kind == "failed"
@@ -1471,8 +1482,10 @@ def test_literal_true_confirms_a_stop(env):
 
 def test_stop_never_releases_a_legacy_unreapable_record(env):
     env.records.add("flux", None, None, "ZOMBIE", 1.0, unreapable=True)
+    env.confirm_answers = {"stop_external": True}
     srv = rs("flux", source="script", port=None, container_id=None, owner="app")
     out = env.control().stop(srv)
+    assert ("confirm", "stop_external") in env.calls
     assert out.kind == "stopped"
     assert "gozer.release" not in env.names()
     assert [r["lease_id"] for r in unreapable(env)] == ["ZOMBIE"]
@@ -1746,3 +1759,136 @@ def test_switch_incumbent_lease_is_released_with_a_reset(env):
         e.gozer_available = False
         e.control().start("wan-old")
         assert e.release_resets == [("L-flux", True)], in_view
+
+
+# --------------------------------------------------------------------------
+# Final-review fixes (C2, I2, m2)
+# --------------------------------------------------------------------------
+
+def _boutique_flux_start_on_gozer(env):
+    """A boutique flux start on a gozer box: the script row has no container
+    id; the container is found by its published port and adopted."""
+    env.gozer_available = True
+    env.boutique_adds = rs("flux", source="script", port=8000, container_id=None)
+    env.port_containers = {8000: "60e0b238c988"}
+    env.devices = {"60e0b238c988": ["/dev/tenstorrent/0"]}
+    env.adopt_results = {"0": Lease("LA", ("0000:01:00.0",))}
+    return env.control().start("flux")
+
+
+def test_c2b_finish_records_the_container_id_found_by_port(env):
+    out = _boutique_flux_start_on_gozer(env)
+    assert out.kind == "started", out.message
+    rec = env.records.load()[0]
+    assert (rec["name"], rec["port"], rec["container_id"]) == ("flux", 8000, "60e0b238c988")
+
+
+def test_c2a_stale_no_container_record_makes_stop_ask_first(env):
+    """The reviewer's scenario: a record (flux, 8000, None) left by an older
+    start makes another party's later flux script row merge as owner="app".
+    Stop must ask before stopping it, and a no stops and releases nothing."""
+    from server_registry import build_registry
+    from server_view import merge
+    env.records.add("flux", 8000, None, "LA", 1.0)
+    rows = merge([], {"flux": True}, [], [], env.records.load(), build_registry(catalog=[]))
+    assert rows[0].owner == "app"          # the merge rule is unchanged
+    env.view = [rows[0]]
+    out = env.control().stop(rows[0])
+    assert out.kind == "declined"
+    assert env.confirms and env.confirms[0][0] == "stop_external"
+    assert "started" in env.confirms[0][1] and "on this port earlier" in env.confirms[0][1]
+    assert "this may be it" in env.confirms[0][1]
+    assert not [n for n in env.names() if n in ("boutique.stop", "tt.stop", "docker.stop",
+                                                "gozer.release")]
+    assert env.records.load()[0]["lease_id"] == "LA"
+
+
+def test_c2a_stale_record_stop_accepted_stops(env):
+    env.records.add("flux", 8000, None, "LA", 1.0)
+    env.confirm_answers = {"stop_external": True}
+    srv = rs("flux", source="script", port=8000, container_id=None, owner="app")
+    env.view = [srv]
+    assert env.control().stop(srv).kind == "stopped"
+    assert ("boutique.stop", "flux") in env.calls
+
+
+def test_c2a_record_with_matching_container_id_stops_without_asking(env):
+    env.records.add("flux", 8000, "60e0b238c988", "LA", 1.0)
+    srv = rs("flux", source="tt", port=8000, container_id="60e0b238c988" + "ab" * 26,
+             owner="app")
+    env.view = [srv]
+    out = env.control().stop(srv)
+    assert out.kind == "stopped"
+    assert "confirm" not in env.names()
+    assert ("gozer.release", "LA") in env.calls
+
+
+def test_c2a_app_owned_row_whose_container_id_no_record_has_asks(env):
+    env.records.add("flux", 8000, "111111111111", "LA", 1.0)
+    srv = rs("flux", source="tt", port=8000, container_id="60e0b238c988", owner="app")
+    assert env.control().stop(srv).kind == "declined"
+    assert ("confirm", "stop_external") in env.calls
+
+
+def test_i2_boutique_start_on_gozer_box_does_not_ask_for_the_chip_count(env):
+    out = _boutique_flux_start_on_gozer(env)
+    assert out.kind == "started", out.message
+    assert "unknown_chips" not in [k for k, _ in env.confirms]
+    assert "gozer.acquire" not in env.names()       # the adopt path
+
+
+def test_i2_unpinnable_catalog_model_with_no_count_does_not_ask(env):
+    env.serve_adds = rs("Cat-unknown", name="Cat-unknown", container_id="abcabcabcabc",
+                        port=20003, uptime_s=1)
+    env.devices = {"abcabcabcabc": ["/dev/tenstorrent/0"]}
+    env.adopt_results = {"0": Lease("A0", ("0000:01:00.0",))}
+    out = env.control().start("Cat-unknown")
+    assert out.kind == "started", out.message
+    assert env.confirms == []
+
+
+def test_i2_pinnable_start_with_no_count_still_asks(env):
+    out = env.control().start("ns/nochips")
+    assert out.kind == "declined"
+    assert ("confirm", "unknown_chips") in env.calls
+    assert "tt.serve" not in env.names() and "gozer.acquire" not in env.names()
+
+
+def test_m2_stop_legacy_never_releases_an_unreapable_in_place_record(env):
+    env.records.add("flux", 8000, None, "ZOMBIE", 1.0, unreapable=True)
+    env.control().stop_legacy("flux", names=["flux"])
+    assert ("boutique.stop", "flux") in env.calls
+    assert "gozer.release" not in env.names()
+    assert [r["lease_id"] for r in env.records.load()] == ["ZOMBIE"]
+
+
+def test_m5_on_launch_fires_right_before_the_launch_after_the_chip_wait(env):
+    env.acquire_result = Queued("T1")
+    env.wait_result = Lease("L1", ("0000:03:00.0", "0000:04:00.0"))
+    env.serve_adds = started_bundle()
+    out = env.control().start("ns/bundle", on_launch=lambda: env.calls.append(("on_launch",)))
+    assert out.kind == "started", out.message
+    assert env.index(("gozer.wait", "T1")) < env.index(("on_launch",))
+    assert env.index(("on_launch",)) < env.names().index("tt.serve")
+    assert env.names().count("on_launch") == 1
+
+
+def test_m5_on_launch_not_called_when_nothing_launches(env):
+    hits = []
+    env.gozer_available = False
+    env.status_map = {"wan-old": "ready"}
+    env.view = [rs("wan-old", source="script", port=8000, container_id=None)]
+    assert env.control().start("flux", on_launch=lambda: hits.append(1)).kind == "declined"
+    env.view = [started_bundle()]
+    assert env.control().start("ns/bundle",
+                               on_launch=lambda: hits.append(1)).kind == "already_running"
+    assert hits == []
+
+
+def test_m5_restart_passes_on_launch_through(env):
+    env.gozer_available = False
+    env.serve_adds = started_cat()
+    hits = []
+    out = env.control().restart("Cat-7B", on_launch=lambda: hits.append(1))
+    assert out.kind == "started", out.message
+    assert hits == [1]

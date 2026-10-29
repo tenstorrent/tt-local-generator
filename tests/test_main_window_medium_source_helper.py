@@ -96,6 +96,7 @@ def _make_mw(monkeypatch, create_view=None):
     obj._hw_statusbar = MagicMock()
     obj.lookup_action = MagicMock(return_value=None)
     obj._log_tail_stop = None
+    obj._server_menu = MagicMock()
     obj._controls = MagicMock()
     obj._controls.get_model_source.side_effect = AssertionError(
         "must not read _controls.get_model_source() — SP-3d-3 uses CreateView"
@@ -479,7 +480,11 @@ def test_on_stop_server_resolves_via_create_view(monkeypatch):
 
     obj._on_stop_server()
 
-    obj._status_service.note_stopping.assert_called_once_with("skyreels")
+    # Final review I1: the status-bar Stop goes through the Servers menu
+    # (ServerControl.stop asks first for a server the app did not start);
+    # note_stopping comes from the menu once something was actually stopped.
+    obj._server_menu.stop.assert_called_once_with("skyreels", forget_after=True)
+    obj._status_service.note_stopping.assert_not_called()
 
 
 def test_on_stop_server_image_medium_resolves_via_create_view(monkeypatch):
@@ -490,7 +495,33 @@ def test_on_stop_server_image_medium_resolves_via_create_view(monkeypatch):
 
     obj._on_stop_server()
 
-    obj._status_service.note_stopping.assert_called_once_with("sdxl")
+    obj._server_menu.stop.assert_called_once_with("sdxl", forget_after=True)
+
+
+def test_on_stop_server_never_runs_a_stop_script_itself(monkeypatch):
+    """The old status-bar Stop ran start_wan_qb2.sh --stop for whatever was on
+    :8000 with no question. It must not start any process of its own now."""
+    import main_window as mw
+    medium = Medium(id="video", label="Video", icon="x", kind="video", source="native")
+    obj = _make_mw(monkeypatch, create_view=_FakeCreateView(
+        active_medium=medium, selected_model_key="wan2.2"))
+    ran = []
+    monkeypatch.setattr(mw.threading, "Thread",
+                        lambda target=None, daemon=None: type(
+                            "T", (), {"start": lambda self: (ran.append(1), target())})())
+    monkeypatch.setattr(mw.subprocess, "Popen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"Popen {a}")))
+    obj._on_stop_server()
+    obj._server_menu.stop.assert_called_once_with("wan2.2", forget_after=True)
+
+
+def test_on_stop_server_with_no_resolvable_server_stops_nothing(monkeypatch):
+    obj = _make_mw(monkeypatch, create_view=None)
+    obj._current_medium_source = MagicMock(side_effect=RuntimeError("no medium"))
+    obj._on_stop_server()
+    obj._server_menu.stop.assert_not_called()
+    logged = " ".join(str(c.args[0]) for c in obj._servers_control.append_server_log.call_args_list)
+    assert "nothing to stop" in logged.lower()
 
 
 # ── Source-level regression guards ──────────────────────────────────────────

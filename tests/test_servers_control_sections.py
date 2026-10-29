@@ -457,7 +457,7 @@ class _FakeControl:
         self.reaps = []
         self.stops = []
 
-    def start(self, key, *, on_progress=None, cancel=None, port=None):
+    def start(self, key, *, on_progress=None, cancel=None, port=None, on_launch=None):
         return self.start_fn(key, cancel)
 
     def stop(self, server):
@@ -567,7 +567,12 @@ def test_restart_notes_the_status_service():
 
     svc = _Svc()
     ctl = _FakeControl()
-    ctl.restart = lambda s, **kw: StartOutcome("failed", None, "x", None)
+
+    def restart(s, **kw):
+        kw["on_launch"]()          # launched, then failed
+        return StartOutcome("failed", None, "x", None)
+
+    ctl.restart = restart
     w, menu = _menu(ctl, status_service=svc)
     menu.restart("flux").join(5)
     assert svc.ev == [("starting", "flux"), ("stopping", "flux")]
@@ -863,3 +868,155 @@ def test_use_on_a_saved_remote_with_a_token_says_the_token_is_not_copied():
                             token_urls_fn=lambda: csd.urls_with_token(st))
     menu.use(rows[0])
     assert "token is not copied" in w._log_text() and TOKEN not in w._log_text()
+
+
+# --------------------------------------------------------------------------
+# Final-review fixes: C1 (port-checked READY), C2(c) (record liveness), m3
+# --------------------------------------------------------------------------
+
+def test_c1_terminal_tt_server_on_another_port_does_not_make_the_key_ready():
+    """The reviewer's scenario: another agent's `tt serve FLUX.1-schnell` on
+    :20000 maps to the SERVERS key `flux` through its tt_name. The app calls
+    flux on :8000, so the key is not READY, and a Create switch to wan2.2 then
+    sees no conflict (no stop, no tt-smi -r)."""
+    import ready_to_run
+    import server_registry
+    from tt_backend import TtModel, TtServer
+    reg = server_registry.build_registry(catalog=[TtModel(
+        "FLUX.1-schnell", "container", ("tt-dit",), ("p300x2",), True, ("tt",))])
+    assert reg["flux"].port == 8000 and reg["flux"].tt_name == "FLUX.1-schnell"
+    row = TtServer("FLUX.1-schnell", "tt", "other-agent-flux", "abcdef123456", None, 20000,
+                   "http://127.0.0.1:20000/v1", "running", "healthy", None, 100, None,
+                   "black-forest-labs/FLUX.1-schnell")
+    servers = merge([row], {}, [], [], [], reg)
+    assert [(s.key, s.port) for s in servers] == [("flux", 20000)]   # still listed
+    assert smenu.ready_keys(servers, reg) == set()
+    svc = ms.ModelStatusService(health_fn=lambda: {}, detect_fn=lambda: (None, None),
+                                port_probe=lambda k: False,
+                                extra_ready_fn=lambda: smenu.ready_keys(servers, reg))
+    svc._tick()
+    assert svc.status("flux") != ms.Status.READY
+    plan = ready_to_run.plan_switch("wan2.2", lambda k: svc.status(k))
+    assert plan.conflict is None and not plan.needs_reset
+    # The same server on the app's own port is READY.
+    row8000 = TtServer("FLUX.1-schnell", "tt", "c", "abcdef123456", None, 8000,
+                       "http://127.0.0.1:8000/v1", "running", "healthy", None, 100, None,
+                       "black-forest-labs/FLUX.1-schnell")
+    assert smenu.ready_keys(merge([row8000], {}, [], [], [], reg), reg) == {"flux"}
+
+
+def test_c1_ready_keys_checks_the_port_without_a_registry_entry_too():
+    p = int(_sm.SERVERS["flux"].health_url.split(":")[2].split("/")[0])
+    assert smenu.ready_keys([rs("flux", port=p + 1)], {}) == set()
+    assert smenu.ready_keys([rs("flux", port=p)], {}) == {"flux"}
+
+
+def _record_liveness(monkeypatch, script_health, port_open=True):
+    """Refresh once with one no-container record (flux, 8000) and no rows;
+    return the live endpoints handed to the reap."""
+    monkeypatch.setattr(smenu, "_port_open", lambda port, *a, **k: port_open)
+    ctl = _FakeControl()
+    _, menu = _menu(ctl, snapshot_fn=lambda s, h: (REG, [], True, ""),
+                    script_health_fn=lambda: script_health,
+                    records_fn=lambda: [{"name": "flux", "port": 8000, "container_id": None,
+                                         "lease_id": "LA", "started_at": 1.0}])
+    menu.refresh_once()
+    return ctl.reaps[-1][1]
+
+
+def test_c2c_another_model_on_the_shared_port_does_not_keep_the_record_alive(monkeypatch):
+    eps = _record_liveness(monkeypatch, {"flux": False, "wan2.2": True})
+    assert ("flux", 8000) not in eps
+
+
+def test_c2c_record_stays_live_when_its_own_script_health_passes(monkeypatch):
+    assert ("flux", 8000) in _record_liveness(monkeypatch, {"flux": True})
+    assert ("flux", 8000) not in _record_liveness(monkeypatch, {"flux": True}, port_open=False)
+
+
+def test_c2c_stale_record_on_a_shared_port_is_reaped(monkeypatch, tmp_path):
+    """End to end with the real reap: the flux record's port answers (wan2.2
+    runs there), flux's own health check fails: two refreshes release it."""
+    from test_server_control import Env
+    env = Env(tmp_path)
+    env.records.add("flux", 8000, None, "LA", 1.0)
+    env.status = {"chips": [{"bdf": "0000:01:00.0", "dev_index": 0, "state": "CLAIMED",
+                             "who": "tt-local-generator:flux"}]}
+    monkeypatch.setattr(smenu, "_port_open", lambda port, *a, **k: True)
+    w, menu, bridge, asked = _menu_with_env(
+        env, snapshot_fn=lambda s, h: (REG, [], True, ""),
+        script_health_fn=lambda: {"flux": False, "wan2.2": True},
+        records_fn=env.records.load)
+    menu.refresh_once()
+    menu.refresh_once()
+    assert env.records.load() == []
+    assert env.release_resets == [("LA", False)]
+
+
+def test_m3_close_cancels_starts_still_running():
+    cancels = {}
+
+    def start(key, cancel):
+        cancels[key] = cancel
+        deadline = time.monotonic() + 5
+        while not cancel() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return StartOutcome("cancelled" if cancel() else "started", "u", "", None)
+
+    w, menu = _menu(_FakeControl(start))
+    t = menu.start("A")
+    assert pump(lambda: "A" in cancels)
+    assert cancels["A"]() is False
+    menu.close()
+    assert cancels["A"]() is True
+    t.join(5)
+    assert not t.is_alive()
+
+
+def test_m3_close_cancels_a_running_restart():
+    seen = {}
+
+    class _C(_FakeControl):
+        def restart(self, s, **kw):
+            seen["cancel"] = kw["cancel"]
+            deadline = time.monotonic() + 5
+            while not kw["cancel"]() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return StartOutcome("cancelled", None, "", None)
+
+    w, menu = _menu(_C())
+    t = menu.restart("A")
+    assert pump(lambda: "cancel" in seen)
+    menu.close()
+    t.join(5)
+    assert seen["cancel"]() is True
+
+
+def test_m5_note_starting_waits_for_the_launch():
+    """note_starting fires only when ServerControl reports the launch begins
+    (on_launch), not before a chip wait that can last an hour."""
+    ev = []
+
+    class _Svc:
+        def note_starting(self, k):
+            ev.append(("starting", k))
+
+        def note_stopping(self, k):
+            ev.append(("stopping", k))
+
+    class _C(_FakeControl):
+        def start(self, key, *, on_progress=None, cancel=None, port=None, on_launch=None):
+            ev.append(("waiting for chips", key))
+            on_launch()
+            ev.append(("launched", key))
+            return StartOutcome("started", "u", "", None)
+
+    w, menu = _menu(_C(), status_service=_Svc())
+    menu.start("flux").join(5)
+    assert ev == [("waiting for chips", "flux"), ("starting", "flux"), ("launched", "flux")]
+    # A start that never launches never notes starting.
+    ev.clear()
+    w2, menu2 = _menu(_FakeControl(lambda k, c: StartOutcome("declined", None, "", None)),
+                      status_service=_Svc())
+    menu2.start("flux").join(5)
+    assert ("starting", "flux") not in ev
