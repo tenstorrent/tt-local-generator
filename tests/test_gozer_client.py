@@ -292,3 +292,13 @@ def test_cached_path_revalidated_when_binary_disappears(tmp_path):
     assert gc.available() is False  # same PATH, binary gone
     make_fake_gozer(d, {"commands": {}})
     assert gc.available() is True   # and it comes back
+
+
+def test_release_passes_no_reset_only_when_asked(tmp_path):
+    d = _install(tmp_path, {"release L-1": _j({"released": True, "message": "ok"})})
+    assert gc.release("L-1") is True
+    assert gc.release("L-1", reset=False) is True
+    rel = [c for c in calls(d) if c and c[0] != "--version" and "release" in c]
+    assert len(rel) == 2
+    assert "--no-reset" not in rel[0]
+    assert "--no-reset" in rel[1] and rel[1][rel[1].index("release") + 1] == "L-1"

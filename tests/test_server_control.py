@@ -87,6 +87,7 @@ class Env:
 
     def __init__(self, tmp_path):
         self.calls = []
+        self.release_resets = []        # (lease_id, reset) per gozer.release
         self.view = []
         self.view_fail = False
         self.records = ServerRecords(tmp_path / "servers.json")
@@ -185,8 +186,9 @@ class Env:
                 return env.find_lease_result
 
             @staticmethod
-            def release(lease_id):
+            def release(lease_id, reset=True):
                 env.calls.append(("gozer.release", lease_id))
+                env.release_resets.append((lease_id, reset))
                 return True
 
             @staticmethod
@@ -1621,3 +1623,68 @@ def test_forget_releases_only_when_the_chips_are_free(env):
     assert ("gozer.release", "L-mochi") in env.calls
     assert [r["name"] for r in env.records.load()] == ["flux"]
     assert ctl.forget("nothing") == "none"
+
+
+# --------------------------------------------------------------------------
+# Task 8 fix round 2: reaped and forgotten leases are released without a reset
+# --------------------------------------------------------------------------
+
+def test_reap_and_forget_release_without_a_reset(env):
+    env.records.add("Cat-7B", 20001, "aaaaaaaaaaaa", "L-cat", 1.0)
+    env.records.add("flux", 8000, None, "L-flux", 1.0)
+    env.status = _status_with_who("tt-local-generator:Cat-7B", held=False)
+    ctl = env.control()
+    ctl.reap_stale_leases(set(), {("flux", 8000)})
+    assert ctl.reap_stale_leases(set(), {("flux", 8000)}) == ["L-cat"]
+    assert ctl.forget("flux") == "released"
+    assert env.release_resets == [("L-cat", False), ("L-flux", False)]
+
+
+def test_a_normal_stop_still_resets(env):
+    env.records.add("ns/bundle", 20000, "60e0b238c988", "L1", 1.0)
+    srv = rs("ns/bundle", name="ns/bundle", port=20000, owner="app")
+    env.view = [srv]
+    assert env.control().stop(srv).kind == "stopped"
+    assert env.release_resets == [("L1", True)]
+
+
+def test_unleased_server_booting_on_reaped_chips_gets_no_reset(env):
+    """The window no guard can see: the artgen record's container is gone, our
+    who rows read CLAIMED with no pids, and a script server (no lease) is
+    booting on those chips without having opened them yet. The lease is
+    released, but with --no-reset, so nothing resets under the booting server."""
+    env.records.add("artgen-qwen3-8b", 8002, "aaaaaaaaaaaa", "L-artgen", 1.0)
+    env.status = _status_with_who("tt-local-generator:artgen-qwen3-8b", held=False)
+    ctl = env.control()
+    booting = {"cccccccccccc"}
+    ctl.reap_stale_leases(booting, set())
+    assert ctl.reap_stale_leases(booting, set()) == ["L-artgen"]
+    assert env.release_resets == [("L-artgen", False)]
+
+
+def test_forget_waits_for_a_running_reap(env):
+    env.records.add("flux", 8000, None, "L-flux", 1.0)
+    env.status = _status_with_who("tt-local-generator:flux", held=False)
+    ctl = env.control()
+    import threading as _th
+    import time as _t
+    ctl._reap_lock.acquire()          # a reap is in its read-modify-write
+    box = {}
+    t = _th.Thread(target=lambda: box.setdefault("r", ctl.forget("flux")), daemon=True)
+    t.start()
+    _t.sleep(0.2)
+    assert t.is_alive() and "r" not in box
+    assert [r["name"] for r in env.records.load()] == ["flux"]
+    ctl._reap_lock.release()
+    t.join(5)
+    assert box["r"] == "released" and env.records.load() == []
+
+
+def test_moved_unreapable_record_keeps_its_note(env):
+    env.records.add("ns/bundle", None, None, "ZOMBIE", 1.0, unreapable=True,
+                    note="chips are in use by another process")
+    env.serve_adds = started_bundle()
+    assert env.control().start("ns/bundle").kind == "started"
+    moved = [r for r in env.records.load() if r.get("lease_id") == "ZOMBIE"]
+    assert moved and moved[0]["name"].startswith("ns/bundle#unreapable-")
+    assert moved[0]["note"] == "chips are in use by another process"

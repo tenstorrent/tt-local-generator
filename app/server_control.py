@@ -135,7 +135,10 @@ Notes for callers (Tasks 7 and 8):
   server stopped outside ServerControl may have left its record while a new
   server boots on those chips), and releases nothing when ``gozer status``
   cannot be read. ``forget(key)`` drops the record of a server stopped by such
-  an outside path, under the same guard.
+  an outside path, under the same guard. Both release with ``reset=False``
+  (``gozer release --no-reset``): the server is gone, and a reset could hit an
+  unleased server booting on those chips before it opens them. A normal
+  ``stop`` of a server the app is stopping still releases with a reset.
 * ``view_fn`` must refresh on each call (not a value cached for a whole poll
   interval), or the health waits slow down to that interval.
 * ``reset_fn`` is MainWindow's existing reset (``pipeline_engine._tt_smi_reset``);
@@ -1179,7 +1182,8 @@ class ServerControl:
         if old is not None and old.get("unreapable"):
             moved = self._free_name(key, names, "unreapable")
             self._records.add(moved, old.get("port"), old.get("container_id"),
-                              old.get("lease_id"), old.get("started_at"), unreapable=True)
+                              old.get("lease_id"), old.get("started_at"), unreapable=True,
+                              note=old.get("note"))
             self._records.remove(key)
             names.add(moved)
             names.discard(key)
@@ -1515,7 +1519,11 @@ class ServerControl:
         released: list[str] = []
         for r in self._records.prune(live_ids, eps):
             for lid in _lease_ids(r.get("lease_id")):
-                if self._gozer.release(lid):
+                # No reset: the server is gone by definition, and a reset could
+                # hit a server that is booting on those chips unleased (a
+                # script server, anything started outside ServerControl) and
+                # has not opened the device yet, which no guard can see.
+                if self._gozer.release(lid, reset=False):
                     released.append(lid)
                 else:
                     log.warning("could not release stale lease %s of %s; gozer reconcile "
@@ -1556,7 +1564,19 @@ class ServerControl:
         no process on the lease's chips; when they are held the record is kept
         and marked unreapable; when gozer cannot be read the record is kept for
         the next reap. Blocks (gozer); call off the GTK thread. Never raises.
-        Returns "none", "released", "kept" or "error"."""
+        Returns "none", "released", "kept" or "error".
+
+        The release runs with ``reset=False`` (the server is stopped; a reset
+        could hit another server booting unleased on those chips). It takes the
+        reap lock, so a concurrent reap cannot write back a record that this
+        call has just removed. A record already marked unreapable is released
+        too when its chips read free: forget is only called right after a stop
+        of that key, and gozer itself refuses a release while a device is open.
+        """
+        with self._reap_lock:
+            return self._forget_locked(key)
+
+    def _forget_locked(self, key: str) -> str:
         try:
             rec = next((r for r in self._records.load() if r.get("name") == key), None)
             if rec is None:
@@ -1576,7 +1596,7 @@ class ServerControl:
                 log.warning("forget %s: %s; lease kept", key, _CHIPS_IN_USE_NOTE)
                 return "kept"
             for lid in ids:
-                if not self._gozer.release(lid):
+                if not self._gozer.release(lid, reset=False):
                     log.warning("forget %s: release of lease %s failed", key, lid)
             self._records.remove(key)
             return "released"

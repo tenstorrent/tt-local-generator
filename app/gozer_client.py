@@ -362,12 +362,18 @@ def find_lease(who: str, history_events: int = 200) -> Lease | None:
     return None
 
 
-def release(lease_id: str) -> bool:
+def release(lease_id: str, reset: bool = True) -> bool:
     """Blocks; call off the GTK thread. ``gozer release <lease>``. True on success.
 
-    WARNING: the real call resets the lease's chips.
+    WARNING: by default the real call resets the lease's chips. ``reset=False``
+    passes ``--no-reset``: gozer still verifies the lease, refuses while a
+    device is open, unlocks the units and wakes the queue, but runs no
+    ``tt-smi -r`` (gozer/keymaster.py ``release(no_reset=True)``). Use it for a
+    lease whose server is already gone, where a reset could hit a server that
+    is booting on those chips and has not opened them yet.
     """
-    data, _rc = _json_call(["release", str(lease_id)], timeout=_RELEASE_TIMEOUT_S)
+    argv = ["release", str(lease_id)] + ([] if reset else ["--no-reset"])
+    data, _rc = _json_call(argv, timeout=_RELEASE_TIMEOUT_S)
     return bool(data and data.get("released") is True)
 
 
