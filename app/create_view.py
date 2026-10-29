@@ -404,6 +404,14 @@ _CSS = b"""
     border-radius: 6px;
     padding: 10px;
 }
+.music-styles-group {
+    color: #4FD1C5;
+    font-weight: bold;
+    margin-top: 6px;
+}
+.music-prompt-result {
+    margin-bottom: 4px;
+}
 .music-start-title {
     color: #4FD1C5;
     font-weight: bold;
@@ -2107,6 +2115,8 @@ class CreateView(Gtk.Box):
             zoned = RoleZonePanel(panel, medium)
             # The top prompt box owns the prompt (the panel's own box is hidden by RoleZonePanel).
             panel.set_prompt_getter(lambda: self._prompt_entry.get_text())
+            # The wand and Write the prompt write back into the same entry.
+            panel.set_prompt_setter(self._prompt_entry.set_text)
             panel.on_connect_saved = self._music_server_connected
             panel.on_rescan = self._music_rescan
             self._panel_host.append(zoned)
