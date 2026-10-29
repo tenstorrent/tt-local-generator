@@ -185,7 +185,10 @@ def test_no_artist_name_in_any_rendered_prompt(tmp_path):
     checked = 0
     for card in lib.cards.values():
         for alias in (card.name, *card.aliases):
-            for text in (f"{alias} song", f"slow drums but {alias} on top"):
+            # An ambiguous one-word alias needs a signal inside a sentence (parse rules); a capital
+            # letter mid-sentence is one, so the second frame capitalises it ("but Swing on top").
+            mid = alias.capitalize() if card.ambiguous and len(alias.split()) == 1 else alias
+            for text in (f"{alias} song", f"slow drums but {mid} on top"):
                 for profile in (MINIMAX, STABLE, None):
                     t = translate(text, profile, library=lib)
                     assert card.id in t.used_cards, (text, t.used_cards)   # not hollow: the card was used
@@ -862,3 +865,19 @@ def test_generic_mood_takes_the_right_article(tmp_path):
 def test_reduplicated_words_count_as_one_for_dedupe():
     assert D.stems("wah-wah guitar") == D.stems("wah guitar")
     assert D.redundant("wah-wah guitar", set(D.stems("wah guitar")))
+
+
+def test_a_filtered_list_is_rebuilt_without_and_with_debris():
+    """Task 5 minor: dropping a middle item must not leave "loud and with the guitar ..."."""
+    text = "Rough, saturated and loud, with the guitar far out front."
+    assert D._filter_list(text, set()) == "rough, saturated and loud, with the guitar far out front"
+    assert D._filter_list(text, set(D.stems("saturated"))) == "rough and loud, with the guitar far out front"
+    assert D._filter_list(text, set(D.stems("rough saturated loud"))) == "with the guitar far out front"
+    assert D._filter_list("Clear and close, with a soft hall reverb.", set(D.stems("clear"))) == \
+        "close, with a soft hall reverb"
+    assert D._filter_list("Cool, wistful and unhurried.", set()) == "cool, wistful and unhurried"
+
+
+def test_funkadelic_production_reads_as_a_sentence(tmp_path):
+    p = translate("Funkadelic-like song", MINIMAX, library=_shipped(tmp_path)).prompt
+    assert "and with" not in p and "loud, with the guitar far out front" in p, p

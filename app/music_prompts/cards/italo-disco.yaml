@@ -1,0 +1,26 @@
+id: italo-disco
+kind: style
+name: Italo disco
+aliases: [italo-disco music, italo, italodisco]
+family: dance
+inspiration: [Giorgio Moroder]
+sound: >-
+  Glittering 1980s Italian dance pop made with synthesizers and drum machines,
+  driven by an arpeggiated synth bass, bright melodic hooks and a
+  four-on-the-floor beat.
+instruments: [analog synthesizers, arpeggiated synth bass, drum machine, electronic toms, synth brass, string pads]
+rhythm: A four-on-the-floor disco beat with an octave-bouncing bass.
+harmony: Simple minor-key chord loops under catchy synth melodies.
+mood: Glamorous, wistful, euphoric and romantic.
+production: Glossy, reverb-washed synths and crisp, mechanical drums.
+tempo_bpm: [110, 130]
+avoid: [acoustic guitars, live rock drumming]
+vocal: heavily accented English pop vocals, sometimes through a vocoder
+tags: [italo disco, arpeggiated bass, drum machine, synth hooks, four on the floor, 1980s]
+goes_with: [electronic, pop, chip, funk]
+notes: >-
+  Wikipedia: Italo disco (electronic drums, drum machines, catchy melodies,
+  vocoders, heavily accented English lyrics, search summary); Bandcamp Daily: A
+  10 song Italo-disco starter kit (bright arpeggios, slinky synth basslines,
+  tinfoil drum machines, search summary); NSS Magazine: Italo disco feature
+  (vocoder and drum machine, search summary)

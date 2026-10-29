@@ -259,9 +259,23 @@ def _phrases(text: str) -> list[str]:
     return [b for b in re.split(r"\s*(?:[,;]|\band\b)\s*", text.strip().rstrip(".")) if b]
 
 
+# A list item that starts with one of these words modifies the list ("..., with the guitar
+# far out front"); it is not one more item, so it never takes the "and".
+_LINKERS = frozenset("with without in on at from under over through for of like to as by into "
+                     "behind beneath against".split())
+
+
 def _filter_list(text: str, kept: set) -> str:
-    """The items of a list field that add something new, rejoined ("" when none do)."""
-    return _and([_lc_first(p) for p in _phrases(text) if not redundant(p, kept)])
+    """The items of a list field that add something new, rejoined ("" when none do).
+
+    The sentence is rebuilt after filtering: plain items are joined with commas and a final
+    "and", and a trailing modifier ("with the guitar far out front") follows after a comma.
+    Joining the survivors blindly would write "rough, loud and with the guitar far out front".
+    """
+    items = [_lc_first(p) for p in _phrases(text) if not redundant(p, kept)]
+    plain = [i for i in items if i.split()[0].lower() not in _LINKERS]
+    tails = [i for i in items if i.split()[0].lower() in _LINKERS]
+    return ", ".join(x for x in (_and(plain), *tails) if x)
 
 
 def _contains(longer: list[str], shorter: list[str]) -> bool:

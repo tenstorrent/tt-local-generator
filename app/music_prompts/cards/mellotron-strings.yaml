@@ -1,0 +1,23 @@
+id: mellotron-strings
+kind: instrument
+name: Mellotron strings
+aliases: [mellotron, mellotron string section, tape strings]
+family: psych
+inspiration: [The Moody Blues, King Crimson]
+sound: >-
+  Slightly wobbly, hollow string-section chords from a tape-replay keyboard,
+  with the warm, haunted sound of late-1960s and 1970s rock.
+instruments: [mellotron]
+rhythm: Long held chords that swell into each change.
+harmony: Slow, sustained minor and major chords, often in dramatic progressions.
+mood: Haunted, wistful, grand and nostalgic.
+production: Slight tape wobble over a warm midrange.
+avoid: [crisp modern string samples, a full live orchestra]
+tags: [mellotron, tape strings, wobbly, vintage keys, haunted, 1970s prog]
+goes_with: [post-rock, rock, folk, electronic]
+notes: >-
+  Wikipedia: Mellotron (an electro-mechanical keyboard that plays back tape
+  recordings of real instruments, common in 1970s progressive rock, search
+  summary); Reverb: The sounds of life at your fingers, the origins of the
+  Mellotron (search summary); Mellotron: A Mellotron history (descended from
+  the Chamberlin, search summary)

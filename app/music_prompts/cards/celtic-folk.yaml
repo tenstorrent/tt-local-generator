@@ -1,0 +1,27 @@
+id: celtic-folk
+kind: style
+name: Celtic folk
+aliases: [celtic, celtic music, irish folk, irish traditional music, irish trad, scottish folk, jigs and reels]
+family: folk
+inspiration: [The Chieftains, Planxty, The Bothy Band]
+sound: >-
+  Lively Irish and Scottish dance tunes, jigs and reels on fiddle, tin whistle,
+  flute and pipes, ornamented with quick rolls and cuts over guitar or bouzouki
+  and a frame drum.
+instruments: [fiddle, tin whistle, wooden flute, uilleann pipes, bodhrán, bouzouki, acoustic guitar, button accordion]
+rhythm: Bouncing jigs in 6/8 and driving reels in 4/4, played in sets.
+harmony: Modal melodies, often Dorian or Mixolydian, over open chords and drones.
+mood: Lively, warm, nostalgic and spirited.
+production: Close and acoustic, with the feel of a live session.
+tempo_bpm: [100, 130]
+avoid: [drum machine beats, synth bass]
+tags: [celtic folk, jigs and reels, fiddle, tin whistle, uilleann pipes, bodhrán]
+goes_with: [post-rock, scene, jam, americana, ambient]
+ambiguous: true
+cues: [music, folk, fiddle, tune, tunes, jig, jigs, reel, reels, song, band, session, style, pipes, whistle, trad]
+notes: >-
+  USC Scalar, Music in Global America: Traditional music and folk music of
+  Ireland (jigs, reels, hornpipes, fiddle, whistle, flute, uilleann pipes, the
+  bodhrán as a twentieth-century addition, search summary); IrishCentral: Irish
+  traditional music (search summary); Melodigging: Irish folk (modal tunes,
+  ornaments, DADGAD guitar, search summary)

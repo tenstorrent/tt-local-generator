@@ -1,0 +1,25 @@
+id: appalachian-old-time
+kind: style
+name: Appalachian old-time
+aliases: [old-time music, old time music, old-time string band, appalachian string band, appalachian music, appalachian fiddle, clawhammer banjo]
+family: americana
+inspiration: [Tommy Jarrell, Gid Tanner and His Skillet Lickers]
+sound: >-
+  Rough, rhythmic Appalachian string-band dance music, with a fiddle leading the
+  tune and a clawhammer banjo, guitar and bass all playing it together, rarely
+  stopping for solos.
+instruments: [fiddle, open-back clawhammer banjo, acoustic guitar, upright bass]
+rhythm: A steady, driving beat for square dancing, the whole band on the tune at once.
+harmony: Simple major-key and modal tunes with ringing drone strings and two or three chords.
+mood: Rowdy, earthy, joyful and timeless.
+production: Raw, unpolished and played live in one room.
+tempo_bpm: [100, 135]
+avoid: [long solo breaks, slick studio polish]
+tags: [old-time, clawhammer banjo, fiddle tune, string band, appalachian, square dance]
+goes_with: [folk, jam, scene, post-rock]
+notes: >-
+  Wikipedia: Old-time music (fiddle-led string bands playing for dances, breaks
+  rarely taken, search summary); Native Ground: Bluegrass music and old-time
+  music, what's the difference (clawhammer banjo, the fiddle as boss, search
+  summary); Chris Coyier: Bluegrass is not old time (all instruments play
+  together, search summary)

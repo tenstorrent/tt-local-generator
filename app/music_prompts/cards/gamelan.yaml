@@ -1,0 +1,25 @@
+id: gamelan
+kind: style
+name: Gamelan
+aliases: [javanese gamelan, balinese gamelan, gamelan music, gamelan orchestra]
+family: world
+inspiration: []
+sound: >-
+  Shimmering Indonesian ensemble music of bronze metallophones and gongs, with
+  interlocking patterns over a slow core melody and cycles marked by the deep
+  stroke of a great gong.
+instruments: [bronze metallophones, kettle gongs, hanging gongs, kendang drums, bamboo flute, wooden xylophone]
+rhythm: Cyclic, with gongs marking each cycle and the drummer leading changes of tempo.
+harmony: Five-note slendro or seven-note pelog tunings, unlike Western scales, with no chord changes.
+mood: Shimmering, meditative, ceremonial and bright.
+production: Ringing bronze tones with beating overtones in an open hall.
+tempo_bpm: [60, 120]
+avoid: [western chord progressions, a drum kit backbeat]
+tags: [gamelan, bronze metallophones, gongs, interlocking patterns, pelog scale, shimmering]
+goes_with: [ambient, post-rock, electronic, chamber]
+clashes_with: [folk, jazz, bagpipes-on-the-beach-at-sunset, accordion-in-the-moonlight]
+notes: >-
+  Britannica: Gamelan (search summary); New World Encyclopedia: Gamelan
+  (metallophones, gong cycles that punctuate the music, search summary);
+  Wikipedia: Music of Java (slendro and pelog tunings, gong ageng ending each
+  cycle, search summary)

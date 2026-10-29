@@ -121,10 +121,11 @@ Picks two or three cards from different `family` values that do not appear in ea
 ## 5. The operator's example, as accepted
 
 Input: "tortoise-like song but someone is singing a bluegrass song on top".
-MiniMax caption: "Patient post-rock in the Chicago tradition: interlocking clean electric guitars and vibraphone, dub-weighted bass, loose brushed drums, slow-building crescendos, warm analog room sound.
+MiniMax caption: "Patient post-rock in the Chicago tradition: interlocking clean electric guitars and vibraphone, dub-weighted bass, loose, jazz-inflected drums, slow-building crescendos, warm analog room sound.
 Over it, a bluegrass vocal: high lonesome lead with tight close harmony, plain-spoken and a little twang, dry and forward in the mix. Around 90 bpm." plus a lyrics draft about a long road home.
-Stable Audio: "post-rock, interlocking clean guitars, vibraphone, dub bass, brushed drums, slow build, plaintive pedal steel carrying a high-lonesome melody, warm analog, 90 bpm, major key", with a note that the model cannot sing.
+Stable Audio: "post-rock, interlocking clean guitars, vibraphone, dub bass, jazz-inflected drums, slow build, plaintive dobro carrying a high-lonesome melody, warm analog, 90 bpm, major key", with a note that the model cannot sing.
 These are fixtures for the golden tests; the wording is the builder's within these meanings.
+(Operator approved 2026-10-28: "loose, jazz-inflected drums" in place of "brushed drums", and "dobro" in place of "pedal steel", following the reviewed Tortoise and bluegrass vocal cards.)
 
 ## 6. Constraints
 

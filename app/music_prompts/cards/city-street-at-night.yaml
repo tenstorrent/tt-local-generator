@@ -1,0 +1,22 @@
+id: city-street-at-night
+kind: scene
+name: City street at night
+aliases: [city streets at night, city at night, night city street, late-night city street, a city street at night]
+family: scene
+inspiration: []
+sound: >-
+  A city street at night, with the low hum of distant traffic, tyres hissing
+  on wet pavement, a far-off siren and footsteps echoing between tall
+  buildings.
+instruments: [distant traffic, wet tyres, far-off siren, footsteps]
+rhythm: No pulse; passing cars swell and fade.
+mood: Lonely, moody, restless and nocturnal.
+production: A wide stereo field recording with the echo of buildings.
+avoid: [birdsong, a countryside hush]
+tags: [city street at night, distant traffic, wet pavement, far-off siren, urban ambience, nocturnal]
+goes_with: [downtempo, jazz, dance]
+notes: >-
+  Freesound: night street recordings by klankbeeld (far, low-level highway
+  traffic between tall buildings, search summary); A Sound Effect: city
+  environment sound libraries (traffic on a wet boulevard, sirens, search
+  summary). The scene itself is a free setting.

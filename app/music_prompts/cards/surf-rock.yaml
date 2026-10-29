@@ -1,0 +1,25 @@
+id: surf-rock
+kind: style
+name: Surf rock
+aliases: [surf music, surf guitar, surf-rock music]
+family: rock
+inspiration: [Dick Dale, The Ventures, The Chantays]
+sound: >-
+  Twangy, reverb-drenched electric guitar played with rapid tremolo picking,
+  riding a driving early-1960s beat with bright, splashy drums and a thumping
+  bass.
+instruments: [lead electric guitar, rhythm guitar, bass guitar, drum kit, organ]
+rhythm: Fast, driving straight eighths with busy snare and tom fills.
+harmony: Simple rock and roll chord changes and minor-key melodies, sometimes with an exotic, modal tinge.
+mood: Bright, wild, sunny and reckless.
+production: Wet spring reverb on the guitar, a live and punchy room sound.
+tempo_bpm: [140, 180]
+avoid: [modern compressed mastering, synthesizer leads]
+tags: [surf rock, spring reverb, tremolo picking, twangy guitar, driving drums, 1960s]
+goes_with: [soundtrack, pop, scene, psych]
+notes: >-
+  Wikipedia: Surf music (wet spring reverb, rapid tremolo picking, early 1960s,
+  search summary); Guitar World: How to play surf music on guitar (the
+  tremolo-picking slide, bright bridge pickup, search summary); Guitar Command:
+  Surf guitar history, players and techniques (Fender amp spring reverb, search
+  summary)

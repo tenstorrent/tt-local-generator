@@ -65,6 +65,15 @@ MORE_ALIASES = {
     "electropop": "electropop", "jam band": "jam-band", "Grateful Dead": "grateful-dead-songbook",
     "moonlit accordion": "accordion-in-the-moonlight", "bag pipes": "bagpipes-on-the-beach-at-sunset",
     "bagpipes on the beach": "bagpipes-on-the-beach-at-sunset", "Sea and Cake": "the-sea-and-cake",
+    # second batch (Task 6)
+    "dub reggae": "dub", "shoegaze": "shoegaze", "math rock": "math-rock", "afrobeat": "afrobeat",
+    "bossa nova": "bossa-nova", "surf rock": "surf-rock", "spaghetti western": "spaghetti-western",
+    "gamelan": "gamelan", "irish folk": "celtic-folk", "old-time music": "appalachian-old-time",
+    "drone music": "ambient-drone", "vaporwave": "vaporwave", "italo disco": "italo-disco", "trip-hop": "trip-hop",
+    "hyperpop": "hyperpop", "big band": "big-band-swing", "gospel choir": "gospel-choir",
+    "mellotron": "mellotron-strings", "theremin": "theremin", "steelpan": "steel-drums", "concert harp": "harp",
+    "four cellos": "cello-quartet", "rain on a tin roof": "rain-on-a-tin-roof", "lighthouse at dusk": "lighthouse-at-dusk",
+    "city street at night": "city-street-at-night", "cassette hiss": "tape-hiss",
 }
 # Card kinds that may leave out a tempo (spec 4.2: scenes and instruments may omit it).
 TEMPO_OPTIONAL_KINDS = {"scene", "instrument", "texture", "vocal"}
@@ -244,6 +253,7 @@ def _shows(card, prompt, lib):
 
 
 def test_wand_on_the_shipped_library_is_varied(lib):
+    # The larger checks (50 and 60 seeds, every family) live in test_music_variety.py.
     mm = {wand(MINIMAX, seed=s, library=lib).prompt for s in range(1, 31)}
     sa = [wand(STABLE, seed=s, library=lib) for s in range(1, 31)]
     assert len(mm) >= 10, len(mm)

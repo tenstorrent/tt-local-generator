@@ -1,0 +1,25 @@
+id: steel-drums
+kind: instrument
+name: Steel drums
+aliases: [steel drum, steelpan, steel pan, steel pans, steel band, steelband, tenor pan]
+family: world
+inspiration: []
+sound: >-
+  Bright, ringing melodies on tuned steel pans from Trinidad and Tobago, with
+  quick rolled notes and a sunny, chiming shimmer over a lilting Caribbean
+  groove.
+instruments: [tenor pan, double tenor pans, cello pans, bass pans]
+rhythm: Lilting calypso and soca grooves, with fast rolls on long notes.
+harmony: Major-key melodies and countermelodies spread across the pan section.
+mood: Sunny, joyful, festive and carefree.
+production: Bright, open-air and lively.
+tempo_bpm: [100, 130]
+avoid: [minor-key gloom, a heavy rock drum kit]
+tags: [steel drums, steelpan, calypso, caribbean, bright, chiming]
+goes_with: [reggae, pop, latin, chip, funk]
+notes: >-
+  Wesleyan University Virtual Instrument Museum: Steel band and Double tenor
+  pan (the tenor pan carries the melody, search summary); Horniman Museum: Steel
+  pans, sets of gongs with divided surfaces (made from oil drums, search
+  summary); Trinidad and Tobago Ministry of Tourism, Culture and the Arts: World
+  Steelpan Day brief (the national instrument, search summary)

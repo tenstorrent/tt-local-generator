@@ -1,0 +1,27 @@
+id: dub
+kind: style
+name: Dub
+aliases: [dub reggae, dub music, dub version, roots dub]
+family: reggae
+inspiration: [King Tubby, Lee Perry, Augustus Pablo]
+sound: >-
+  Reggae stripped down to heavy drum and bass, with the other instruments
+  dropping in and out of the mix and trailing long tape echo and spring reverb.
+instruments: [bass guitar, drum kit, offbeat rhythm guitar, organ, melodica, tape echo, spring reverb]
+rhythm: A slow, heavy one-drop groove, with guitar and organ chopping on the offbeats.
+harmony: One or two minor chords repeated, the bass line carrying the tune.
+mood: Deep, hypnotic, spacious and heavy.
+production: Heavy sub bass, sudden mutes, long echo throws and wide spring reverb.
+tempo_bpm: [65, 90]
+avoid: [busy guitar solos, bright pop polish]
+vocal: fragments of a reggae vocal that drift in and out, swallowed by echo
+tags: [dub, reggae, heavy bass, tape echo, spring reverb, one drop]
+goes_with: [post-rock, electronic, downtempo, jazz]
+ambiguous: true
+cues: [reggae, bass, riddim, echo, mix, music, track, record, style, version, sound system, song, album]
+notes: >-
+  Wikipedia: Dub music (a reggae subgenre from late-1960s Jamaica, stripped
+  drum-and-bass riddims, echo and reverb, instruments dropping in and out,
+  search summary); Textura: King Tubby, The Roots of Dub review (search
+  summary); Afropop Worldwide: interview with Michael Veal (reverb holds the
+  fragments together, search summary)

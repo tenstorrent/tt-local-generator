@@ -1,0 +1,25 @@
+id: shoegaze
+kind: style
+name: Shoegaze
+aliases: [shoe gaze, shoegazer, shoegazing, nugaze]
+family: rock
+inspiration: [My Bloody Valentine, Slowdive, Cocteau Twins]
+sound: >-
+  Dense walls of loud, effect-drenched guitars, blurred by reverb, delay and
+  fuzz into a shimmering haze over steady drums, the melody half lost in the
+  noise.
+instruments: [layered electric guitars, fuzz pedals, whammy-bar bends, bass guitar, drum kit, synth pads]
+rhythm: Steady, mid-tempo rock drumming under washes of guitar.
+harmony: Simple, sweet pop chords smeared into drones by bent pitch and long sustain.
+mood: Dreamy, blissful, hazy and loud.
+production: Guitars piled in layers, everything soaked in reverb, a soft-focus blur over the whole mix.
+tempo_bpm: [80, 130]
+avoid: [crisp dry studio sound, flashy guitar solos]
+vocal: breathy, airy vocals buried deep in the mix, more texture than words
+tags: [shoegaze, wall of guitars, reverb haze, fuzz, dreamy, wash]
+goes_with: [post-rock, psych, electronic, ambient]
+notes: >-
+  Wikipedia: Shoegaze (British indie rock of the late 1980s, layered
+  effects-laden guitars, buried vocals, glide guitar, search summary);
+  Soundtrap: What is shoegaze music (reverb, delay, chorus, distortion and
+  tremolo, a wall of sound, search summary)

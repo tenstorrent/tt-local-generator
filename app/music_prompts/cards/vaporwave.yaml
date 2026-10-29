@@ -1,0 +1,25 @@
+id: vaporwave
+kind: style
+name: Vaporwave
+aliases: [vapor wave, vapourwave]
+family: downtempo
+inspiration: [Macintosh Plus, Floral Shoppe, Chuck Person, Eccojams]
+sound: >-
+  Slowed-down, looped fragments of 1980s and 1990s smooth jazz, mall muzak and
+  soft funk, pitched low and bathed in reverb, with a dreamy, slightly
+  unsettling glow.
+instruments: [sampled smooth jazz saxophone, electric piano, slap bass, gated drum loops, synth pads]
+rhythm: Slow, looping and repetitive, with chopped samples that stutter and repeat.
+harmony: Lush major-seventh chords from old easy-listening records, looped.
+mood: Nostalgic, dreamy, ironic and melancholic.
+production: Pitched-down samples, heavy reverb and a faded, worn-out sheen.
+tempo_bpm: [60, 100]
+avoid: [a live band sound, acoustic folk instruments]
+vocal: slowed-down, warped fragments of 1980s pop vocals
+tags: [vaporwave, slowed samples, smooth jazz loops, heavy reverb, 1980s nostalgia, mall music]
+goes_with: [electronic, pop, funk, chip]
+notes: >-
+  Wikipedia: Vaporwave (slowed, chopped and screwed samples of smooth jazz,
+  elevator music, R&B and lounge from the 1980s and 1990s, repetition and heavy
+  reverb, search summary); Future Proof Music School: What is vaporwave (search
+  summary); Orphiq: What is vaporwave (search summary)

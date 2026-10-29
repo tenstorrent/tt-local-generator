@@ -1,0 +1,24 @@
+id: ambient-drone
+kind: style
+name: Ambient drone
+aliases: [drone music, drone ambient, ambient drone music, ambient music, drone piece]
+family: ambient
+inspiration: [La Monte Young, Éliane Radigue, Stars of the Lid]
+sound: >-
+  Long, sustained tones and slowly shifting layers of overtones with no beat at
+  all, changing so gradually that the music seems to hang in the air.
+instruments: [synth drones, bowed strings, organ, tape loops, sine waves]
+rhythm: No pulse; changes unfold over minutes.
+harmony: One sustained chord or interval, its overtones beating against each other.
+mood: Meditative, vast, still and slow.
+production: Wide, deep reverb and long fades with no sharp attacks.
+tempo_bpm: [40, 60]
+avoid: [a drum kit backbeat, catchy hooks]
+tags: [drone, ambient, sustained tones, slowly evolving, overtones, beatless]
+goes_with: [post-rock, electronic, world, chamber, scene]
+notes: >-
+  Wikipedia: Drone music (the sustained tone branch of minimalism, long pieces
+  with slight harmonic change, search summary); Boing Boing: Music
+  appreciation, drone (search summary); Thom Holmes: Electronic drone music
+  (sine waves, Moog modules and long sustained tones in Young's work, search
+  summary)

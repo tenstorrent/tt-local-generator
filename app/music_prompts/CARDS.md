@@ -27,7 +27,7 @@ Artist cards also require `parent`.
 | `kind` | `style`, `artist`, `scene`, `instrument`, `vocal`, `texture` or `era`. |
 | `name` | Display name. It is also matched as an alias. |
 | `aliases` | Other names and phrases that should find this card. |
-| `family` | Cluster tag the wand uses to mix different families. The shipped set uses `post-rock`, `jazz`, `funk`, `electronic`, `psych`, `jam`, `chip`, `folk`, `pop` and `scene`. An artist card uses its parent style's family. |
+| `family` | Cluster tag the wand uses to mix different families. The shipped set uses `post-rock`, `jazz`, `funk`, `electronic`, `psych`, `jam`, `chip`, `folk`, `pop`, `scene`, `reggae`, `rock`, `world`, `latin`, `soundtrack`, `americana`, `ambient`, `downtempo`, `dance`, `gospel`, `chamber` and `texture`. The wand never pairs two main picks of one family, so a new card in an existing family mixes less often. An artist card uses its parent style's family. |
 | `inspiration` | Artists and records the card draws on. Shown in the UI, never put in a prompt by default. |
 | `sound` | One to three plain sentences. Never names an artist. Start with an ordinary word: a caption may print it after the style name ("Post-rock: mostly instrumental rock ..."), which lowercases the first letter. |
 | `instruments`, `rhythm`, `harmony`, `mood`, `production` | Short plain descriptions. |

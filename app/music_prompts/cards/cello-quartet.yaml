@@ -1,0 +1,26 @@
+id: cello-quartet
+kind: style
+name: Cello quartet
+aliases: [cello ensemble, four cellos, cellos, cello quartet music]
+family: chamber
+inspiration: [Heitor Villa-Lobos, Bachianas Brasileiras]
+sound: >-
+  Four cellos playing as one warm, dark ensemble, a lyrical melody up high over
+  inner harmonies and a bowed or plucked bass line, from hushed chorale to
+  driving rhythm.
+instruments: [four cellos, bowed cello, pizzicato cello]
+rhythm: From slow, sustained chorales to driving, rhythmic ostinatos.
+harmony: Close, rich chamber harmony across the whole range, from deep bass to high melody.
+mood: Warm, earnest, dramatic and tender.
+production: Close-miked, woody and resonant in a small hall.
+tempo_bpm: [60, 120]
+avoid: [distorted electric guitars, a drum machine beat]
+tags: [cello quartet, warm strings, chamber music, pizzicato, bowed bass, lyrical]
+goes_with: [post-rock, folk, soundtrack, ambient, scene]
+notes: >-
+  The Strad: The cello is the only instrument that encompasses the entire range
+  of the human voice, Simon Parkin on arranging for cello ensemble (bass to high
+  soprano register, chorale textures, doubling pizzicato); Hollywood Bowl:
+  William Tell Overture for seven cellos (cellos as a unified ensemble with all
+  four voice ranges, search summary); Hal Leonard: Bachianas Brasileiras No. 5,
+  score and four cello parts (search summary)
