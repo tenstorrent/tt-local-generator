@@ -3771,14 +3771,15 @@ class MusicParamPanel(CreateParamPanel):
         self._undo: "Optional[dict]" = None  # {"prompt": text before, "lyrics": text before (when replaced)}
         self._last_translation = None        # the music_prompts.Translation shown in the result strip
         self._last_filled = ""               # the prompt text the last wand or Write the prompt put in
-        # What the library wrote `_last_filled` from, so a written prompt is never parsed as a request:
-        # `_fill_typed` is the user's own typed text (plus Styles picks added since), "" when the wand chose
-        # every card; `_fill_source` is text that names the same cards (the typed text plus the wand's cards).
+        # What the library wrote `_last_filled` from, so a recognised written prompt is not parsed as a request.
+        # Both are tuples of parts, each parsed on its own (`music_prompts.translate_parts`): `_fill_typed` is
+        # the user's own typed text (plus Styles picks added since), () when the wand chose every card;
+        # `_fill_source` names the same cards (the typed parts plus a part with the wand's cards).
         # `_fill_picked` is True when a Styles pick was added to the written prompt since it was written.
         # `_fill_ctx` is what it was written for: the model, Smooth on or off, a lyrics writer or not
         # (`_write_context`). Write re-renders when any of them changed.
-        self._fill_typed = ""
-        self._fill_source = ""
+        self._fill_typed: tuple = ()
+        self._fill_source: tuple = ()
         self._fill_picked = False
         self._fill_ctx: tuple = ()
         self._applied_model_id: "Optional[str]" = None      # the profile the numeric controls were last set for
@@ -4082,27 +4083,40 @@ class MusicParamPanel(CreateParamPanel):
     def pick_style(self, item) -> None:
         """Add a Styles menu item's name to the prompt text; Write the prompt then expands it.
 
-        Added to a prompt the library wrote, the pick is also added to the text that prompt was written
-        from, so the next Write renders "typed text, pick" and does not parse the written prompt."""
+        Added to an unchanged written prompt, the pick becomes a part of the text that prompt was written
+        from, so the next Write renders "typed text, pick" and does not parse the written prompt. Added
+        after words the user put after a written prompt, it is part of those added words, which the next
+        Write renders as their own part (see `_library_edit`), so it needs no record of its own."""
         new = _append_pick(self._raw_prompt(), item.label)
-        if self._library_edit() == "":
-            self._fill_typed = _append_pick(self._fill_typed, item.label)
-            self._fill_source = _append_pick(self._fill_source, item.label)
+        if self._library_edit() == ("", ""):
+            self._fill_typed += (item.label,)
+            self._fill_source += (item.label,)
             self._fill_picked = True
             self._last_filled = new
         self._set_prompt_text(new)
 
-    def _library_edit(self) -> "Optional[str]":
+    def _library_edit(self) -> "Optional[tuple]":
         """How the prompt differs from what the library last wrote (plus Styles picks it recorded).
 
-        "" when it is exactly that text; the words the user added when the written text is still in the
-        prompt whole ("<written>, slower" gives "slower"); None when the written text cannot be found (the
-        prompt is the user's own, or a written prompt edited inside, which is then read as typed)."""
+        `(before, after)`: the words the user added before and after the written text. ("", "") when the
+        prompt is exactly the written text. The written text is recognised only as the whole prompt, as its
+        start followed by a separator (", ", ";" or a space: "<written>, slower"), or as its end preceded by
+        one ("faster, <written>"). None otherwise: the written text inside other words, twice, or inside a
+        longer word ("rain" in "rainy") means the prompt is the user's own and is translated as typed."""
         written = self._last_filled.strip()
         text = self._prompt_text()
-        if not written or written not in text:
+        if not written:
             return None
-        return text.replace(written, " ", 1).strip(" \t\n,;.!?")
+        if text == written:
+            return ("", "")
+        if text.count(written) != 1:
+            return None
+        seps = (",", ";", " ")
+        if text.startswith(written) and text[len(written)].startswith(seps):
+            return ("", text[len(written):].strip(" \t\n,;"))
+        if text.endswith(written) and text[-len(written) - 1].startswith(seps):
+            return (text[:-len(written)].strip(" \t\n,;"), "")
+        return None
 
     def _write_context(self) -> tuple:
         """What a written prompt depends on besides its text: the model, Smooth with AI, a lyrics writer."""
@@ -4137,14 +4151,20 @@ class MusicParamPanel(CreateParamPanel):
         library wrote, the text it was written from is used (never the written prompt); with neither, the
         wand starts fresh."""
         typed = self._prompt_text()
-        extra = self._library_edit()
-        if extra is None:
-            base = typed or None
+        edit = self._library_edit()
+        if edit is None:
+            base = (typed,) if typed else ()
         else:                       # a written prompt (perhaps with words added): its source, never its text
-            base = (_append_pick(self._fill_typed, extra) if extra else self._fill_typed) or None
+            base = self._with_edit(self._fill_typed, edit)
         profile, kw = self._profile, self._library_kwargs()
-        self._run_library(lambda: music_prompts.wand(profile, base=base, **kw),
-                          sources=lambda t: (base or "", music_prompts.wand_source(t, base)))
+        self._run_library(lambda: music_prompts.wand(profile, base=base or None, **kw),
+                          sources=lambda t: (base, music_prompts.wand_source(t, base or None)))
+
+    @staticmethod
+    def _with_edit(parts: tuple, edit: tuple) -> tuple:
+        """`parts` with the user's added words around them, each added run its own part."""
+        before, after = edit
+        return tuple(p for p in ((before,) + tuple(parts) + (after,)) if p and p.strip())
 
     def _on_write(self, _btn=None) -> None:
         """Translate the typed prompt: names and styles become sound descriptions, the user's words stay.
@@ -4155,20 +4175,26 @@ class MusicParamPanel(CreateParamPanel):
         whose text can still be found is not parsed again: its card text holds aliases and marker words that
         would be read as a request. A written prompt edited inside is translated as typed (known gap)."""
         typed = self._prompt_text()
-        extra = self._library_edit()
-        if extra is None:
-            source, sources = typed, (typed, typed)
+        edit = self._library_edit()
+        if edit is None:
+            source = (typed,) if typed else ()
+            sources = (source, source)
         else:
-            if not extra and not self._fill_picked and self._fill_ctx == self._write_context():
+            if edit == ("", "") and not self._fill_picked and self._fill_ctx == self._write_context():
                 if self._last_translation is not None:
                     self._show_result(self._last_translation)
                 return
-            src = _append_pick(self._fill_source, extra) if extra else self._fill_source
-            own = _append_pick(self._fill_typed, extra) if extra else self._fill_typed
-            source, sources = src, (own, src)
+            # The source and the added words are parsed as separate parts, so a name that matched alone
+            # ("Tortoise") still matches with words added after it.
+            source = self._with_edit(self._fill_source, edit)
+            sources = (self._with_edit(self._fill_typed, edit), source)
         profile, kw = self._profile, self._library_kwargs()
-        self._run_library(lambda: music_prompts.translate(source, profile, include_names=False, **kw),
-                          sources=sources)
+        if len(source) <= 1:
+            text = source[0] if source else ""
+            job = lambda: music_prompts.translate(text, profile, include_names=False, **kw)  # noqa: E731
+        else:
+            job = lambda: music_prompts.translate_parts(source, profile, include_names=False, **kw)  # noqa: E731
+        self._run_library(job, sources=sources)
 
     def _fill_state(self) -> tuple:
         return (self._last_filled, self._fill_typed, self._fill_source, self._fill_picked, self._fill_ctx)
@@ -4176,11 +4202,12 @@ class MusicParamPanel(CreateParamPanel):
     def _set_fill_state(self, state: tuple) -> None:
         self._last_filled, self._fill_typed, self._fill_source, self._fill_picked, self._fill_ctx = state
 
-    def _run_library(self, job: "Callable[[], object]", sources=("", "")) -> None:
+    def _run_library(self, job: "Callable[[], object]", sources=((), ())) -> None:
         """Run a library call and show its result. On the GTK thread when it is pure library work (fast);
         on a worker thread when Smooth with AI or a lyrics writer is on, back through GLib.idle_add."""
-        # What the result is checked against when it arrives: the prompt text and the model it was written for.
-        snapshot = (self._raw_prompt(), self._profile_key())
+        # What the result is checked against when it arrives: the prompt text and the model it was written for,
+        # and the context it was asked for (recorded now: Smooth may be unticked while a smoothed run is out).
+        snapshot = (self._raw_prompt(), self._profile_key(), self._write_context())
         if not (self._smooth_on() or self.lyrics_fn is not None):
             try:
                 t = job()
@@ -4208,8 +4235,8 @@ class MusicParamPanel(CreateParamPanel):
         p = self._profile
         return None if p is None else p.model_id
 
-    def _library_done(self, t, snapshot: tuple, sources=("", "")) -> None:
-        prompt_before, profile_before = snapshot
+    def _library_done(self, t, snapshot: tuple, sources=((), ())) -> None:
+        prompt_before, profile_before, ctx = snapshot
         if t is None:
             self._show_strip(["The style library could not write a prompt. Your text is unchanged."])
             return
@@ -4234,9 +4261,9 @@ class MusicParamPanel(CreateParamPanel):
                 typed, source = sources(t) if callable(sources) else sources
             except Exception:  # noqa: BLE001 - a lost source only means the next Write parses the prompt
                 _log.debug("could not record the source of a written prompt", exc_info=True)
-                typed = source = ""
+                typed = source = ()
             self._set_prompt_text(t.prompt)
-            self._set_fill_state((t.prompt, typed or "", source or "", False, self._write_context()))
+            self._set_fill_state((t.prompt, tuple(typed or ()), tuple(source or ()), False, ctx))
         self._show_result(t)
         if writes_lyrics:
             self._offer_lyrics(t.lyrics, self._undo)
@@ -4289,7 +4316,7 @@ class MusicParamPanel(CreateParamPanel):
         if not u:
             return
         self._undo = None
-        self._set_fill_state(u.get("fill") or ("", "", "", False, ()))
+        self._set_fill_state(u.get("fill") or ("", (), (), False, ()))
         if "prompt" in u:
             self._set_prompt_text(u["prompt"])
         if "lyrics" in u:

@@ -10,7 +10,7 @@ GTK-free; imports only the standard library, PyYAML and `music_runtime` (for
 from .cards import Library, StyleCard, load_library, validate_card
 from .dialects import dialect_for
 from .menu import MenuGroup, MenuItem, menu_tree
-from .translate import Translation, is_library_prompt, reload_library, style_description, translate
+from .translate import Translation, is_library_prompt, reload_library, style_description, translate, translate_parts
 from .wand import wand, wand_source
 
-__all__ = ["Library", "MenuGroup", "MenuItem", "StyleCard", "Translation", "dialect_for", "is_library_prompt", "load_library", "menu_tree", "reload_library", "style_description", "translate", "validate_card", "wand", "wand_source"]
+__all__ = ["Library", "MenuGroup", "MenuItem", "StyleCard", "Translation", "dialect_for", "is_library_prompt", "load_library", "menu_tree", "reload_library", "style_description", "translate", "translate_parts", "validate_card", "wand", "wand_source"]

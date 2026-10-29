@@ -465,7 +465,7 @@ def test_write_after_a_styles_pick_rerenders_from_the_typed_text(model_hint):
     p._write_btn.emit("clicked")
     p.pick_style(_item("tortoise"))
     p._write_btn.emit("clicked")
-    want = music_prompts.translate("a rainy afternoon with surf rock, Tortoise", _server(model_hint).profile)
+    want = music_prompts.translate_parts(("a rainy afternoon with surf rock", "Tortoise"), _server(model_hint).profile)
     assert top.text == want.prompt
     assert "tortoise" not in top.text.lower()
 
@@ -479,7 +479,7 @@ def test_write_after_surprise_and_a_pick_keeps_the_surprise_cards(model_hint):
     p.pick_style(_item("tortoise"))
     p._write_btn.emit("clicked")
     # The surprise's cards plus the pick, rendered from names: the written prompt is not parsed.
-    want = music_prompts.translate(music_prompts.wand_source(surprise) + ", Tortoise", _server(model_hint).profile)
+    want = music_prompts.translate_parts(music_prompts.wand_source(surprise) + ("Tortoise",), _server(model_hint).profile)
     assert top.text == want.prompt
     assert set(surprise.used_cards) <= set(p._last_translation.used_cards)
 
@@ -491,7 +491,7 @@ def test_surprise_on_a_written_prompt_uses_the_typed_text(monkeypatch):
     real = music_prompts.wand
     monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: (seen.append(k.get("base")), real(*a, **k))[1])
     p._wand_btn.emit("clicked")
-    assert seen == ["a rainy afternoon"]
+    assert seen == [("a rainy afternoon",)]
 
 
 def test_write_translates_text_the_user_changed():
@@ -612,7 +612,7 @@ def test_surprise_after_an_edited_surprise_does_not_use_the_written_text(monkeyp
     real = music_prompts.wand
     monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: (seen.append(k.get("base")), real(*a, **k))[1])
     p._wand_btn.emit("clicked")
-    assert seen == ["slower"]
+    assert seen == [("slower",)]
 
 
 def test_write_after_an_edited_surprise_renders_the_source_plus_the_edit():
@@ -621,5 +621,61 @@ def test_write_after_an_edited_surprise_renders_the_source_plus_the_edit():
     surprise = p._last_translation
     top.text = top.text + ", slower"
     p._write_btn.emit("clicked")
-    want = music_prompts.translate(music_prompts.wand_source(surprise) + ", slower", _server("stable-audio").profile)
+    want = music_prompts.translate_parts(music_prompts.wand_source(surprise) + ("slower",), _server("stable-audio").profile)
     assert top.text == want.prompt
+
+
+# ── fix wave 3 ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("model_hint", ["fiona-crapple", "stable-audio", None])
+@pytest.mark.parametrize("name", ["Tortoise", "Parliament"])
+def test_words_added_to_a_written_name_never_let_the_name_through(model_hint, name):
+    p, top = _panel(model_hint, text=name)
+    p.confirm_replace_lyrics = lambda m: False
+    p._write_btn.emit("clicked")
+    top.text = top.text + ", slower"
+    p._write_btn.emit("clicked")
+    assert name not in top.text and "slower" in top.text.lower(), top.text
+    p._wand_btn.emit("clicked")
+    assert name not in top.text, top.text
+
+
+@pytest.mark.parametrize("first, then", [
+    ("rain", "rainy afternoon, Tortoise"),
+    ("jazz", "acid jazz with Tortoise"),
+    ("Tortoise", "faster, {w}, slower"),
+    ("Tortoise", "{w}, {w}"),
+])
+def test_written_text_inside_other_text_is_read_as_typed(first, then):
+    p, top = _panel("stable-audio", text=first)
+    p._write_btn.emit("clicked")
+    top.text = then.format(w=top.text)
+    typed = top.text
+    p._write_btn.emit("clicked")
+    assert top.text == music_prompts.translate(typed, _server("stable-audio").profile).prompt
+
+
+def test_written_text_with_words_before_it_is_still_recognised():
+    p, top = _panel("stable-audio", text="Tortoise")
+    p._write_btn.emit("clicked")
+    top.text = "faster, " + top.text
+    p._write_btn.emit("clicked")
+    assert "Tortoise" not in top.text and "faster" in top.text
+    assert top.text == music_prompts.translate_parts(("faster", "Tortoise"), _server("stable-audio").profile).prompt
+
+
+def test_context_is_recorded_when_the_write_is_asked_for(monkeypatch):
+    calls = []
+    real = music_prompts.translate
+    monkeypatch.setattr(music_prompts, "translate", lambda *a, **k: (calls.append(k.get("smooth")), real(*a, **k))[1])
+    p, top = _panel("stable-audio", text="Tortoise")
+    p.set_llm_available(True)
+    p.smooth_fn = lambda text: text
+    p._smooth_check.set_active(True)
+    p._write_btn.emit("clicked")                    # smoothed: runs on a worker thread
+    p._smooth_check.set_active(False)               # untick while it runs
+    _wait_for(lambda: p._write_btn.get_sensitive() and bool(top.sets))
+    assert calls == [True]
+    p._write_btn.emit("clicked")                    # written with Smooth on, now off: render again
+    assert calls == [True, False]

@@ -38,10 +38,10 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - Cards describe how something sounds. Artist names live in `inspiration` and in the result strip (Inspired by). With
   `include_names` False, the code replaces with its style label every artist card name or alias and every `inspiration` entry
   it finds in the prompt: matched names, the user's own words, the sung phrase ("Alison Krauss singing about the sea") and
-  card text. A name of two or more words with an uncommon word ("alison krauss", "fela kuti") matches in any case. A
-  one-word name ("Faust", "Parliament") and a name made only of common words ("Massive Attack", "The Meters", "My Bloody
-  Valentine"; the stoplist is `translate._COMMON_WORDS`) match only as the card writes them, since in lower case they are
-  ordinary words or phrases. A one-word alias of an `ambiguous` card that did not match (no cue)
+  card text. Every name of two or more words matches in any case ("alison krauss", "yellow magic orchestra"), except
+  the names in `translate._ORDINARY_PHRASE_NAMES` ("Massive Attack", "The Meters", "My Bloody Valentine", "One Bedroom"
+  and nine more; a test pins the set). Those, and one-word names ("Faust", "Parliament"), match only as the card writes
+  them, since in lower case they are ordinary words or phrases. A one-word alias of an `ambiguous` card that did not match (no cue)
   is left as typed. A `MusicProfile.triggers` phrase stays only when the user typed it. LLM lyrics that add a name by the same
   rule are refused. Not guaranteed: a name typed in a form the card does not list (misspelt, possessive "Tortoise's").
 - The translation is deterministic. An LLM pass (Smooth with AI) is off by default and is a seam: `smooth_fn` and `lyrics_fn`
@@ -56,11 +56,15 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - Write the prompt is idempotent. The panel remembers the text it wrote (`_last_filled`), what it was written from
   (`_fill_typed`, `_fill_source`) and what for (`_fill_ctx`: the model, Smooth on or off, a lyrics writer or not), all kept
   in the Undo record too. Write on an unchanged written prompt with the same context does nothing. When the context changed
-  (another model, Smooth toggled), it renders `_fill_source` again, so a declined lyrics offer can come back. When the
-  written text is still in the prompt whole and the user added words or a Styles pick around it ("<written>, slower"), Write
-  renders the source plus the additions, and Surprise uses the user's typed text plus the additions as its base. Only then
-  is a written prompt kept from being parsed as a request. A written prompt edited inside (words changed within the written
-  text) can no longer be found, so it is translated as typed and its card text is read as a request (known gap).
+  (another model, Smooth toggled), it renders `_fill_source` again, so a declined lyrics offer can come back. The context is
+  recorded when the Write or Surprise is asked for, so unticking Smooth during a smoothed run still counts as a change.
+  The written text is recognised only as the whole prompt, as its start followed by ", ", ";" or a space ("<written>,
+  slower"), or as its end after one ("faster, <written>"). Then Write renders the source and the added words as separate
+  parts (`translate_parts`: each part parsed on its own), so a name that matched alone ("Tortoise") still matches with
+  words added after it, and Surprise uses the user's typed parts plus the added words as its base. A Styles pick after
+  added words is part of those words. Anything else (the written text inside other words, twice, inside a longer word
+  such as "rain" in "rainy", or edited inside) is the user's own request and is translated as typed; if it still holds
+  written card text, that text is read as a request (known gap).
 - A card typed twice is described once (per layer and across layers), which also bounds the work for repeated input.
 - With the instrumental switch off, a MiniMax result with no lyrics says "MiniMax writes a song from lyrics. Add lyrics to send
   this prompt." in the result strip. The wand weights are unchanged and no "[Instrumental]" lyrics are invented.
@@ -106,6 +110,11 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   "post-rock apartment", "the meters running out" became "funk running out"); the marker branch took any phrase as the sung
   topic ("singing, very slow" gave the lyric "Very slow"); a repeated vocal card added a second generic vocal; the article
   check compared first letters; the "In the style of" pill kept inspiration-only names as typed.
+- Third round: "Tortoise", Write, then ", slower" and Write gave "Tortoise, slower" (the source and the added words were
+  parsed as one sentence, where the name had no cue); written text was found as a plain substring ("rain" inside "rainy");
+  the common-word stoplist let 17 real names leak in lower case (it was inverted into a pinned exception list); the
+  context was recorded when the result arrived; `_sung_topic` dropped non-English and noun-phrase topics and treated
+  "lonely", "holy" and "fly" as direction words.
 - The "In the style of" pill inserted a whole rendered prompt (tempo, key, mood), giving two tempos.
 - "parliament" was unambiguous ("a folk protest song about parliament" became p-funk); "bluegrass band" matched the vocal card;
   a tags-dialect mood kept a full stop inside a tag; `--wand --include-names` and `--seed` without `--wand` were silently

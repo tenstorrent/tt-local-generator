@@ -6,6 +6,7 @@ Public API:
     Translation      - frozen dataclass, the result
     translate(text, profile, *, include_names=False, library=None, smooth=False,
               smooth_fn=None, lyrics_fn=None) -> Translation
+    translate_parts(parts, profile, ...) -> Translation   each part parsed on its own, rendered as one
     style_description(value, profile) -> str | None   the sound alone, for "In the style of"
     is_library_prompt(text) -> bool    text already holds a card's written sound
     reload_library() - forget the cached default library (after cards change)
@@ -159,24 +160,18 @@ class _Name:
     any_case: bool = False   # matched in any case (see _distinctive)
 
 
-# Common English words. A name made only of these ("Massive Attack", "The Meters", "My Bloody Valentine",
-# "American Beauty", "Blue Lines") is also an ordinary phrase, so it is matched only as the card writes it.
-# A name with any other word ("Alison Krauss", "Fela Kuti") is matched in any case. Kept small: add a word when
-# a shipped name made of ordinary words would otherwise mangle a sentence.
-_COMMON_WORDS = frozenset("""
-a an the and or of to from in on at by for with like under vs never will now my his her one two ii 70 100
-american beauty blue lines massive attack bloody valentine bedroom meters dead grateful songbook songs song band
-brothers king count duke dream tangerine computer world connection nation groove clock jump plus music falling
-earth jewels sky surface giant golden sound join inn man machine moody blues human league pet shop boys stars
-lid day stood still good bad ugly fistful dollars family stone sea cake express trans europe panic widespread
-yellow magic orchestra singers fawn ventures floral maggot brain mode twins millions living die black emperor
-you person chuck dale chieftains placebo syndrome africa mothership vessyl cook
-""".split())
+# Names that are also ordinary phrases ("a massive attack of drums", "the meters running out", "a one bedroom
+# apartment"). They match only as the card writes them. Every other name of two or more words matches in any case.
+# Adding a name here is a visible decision: a test pins this set.
+_ORDINARY_PHRASE_NAMES = frozenset({
+    "massive attack", "the meters", "my bloody valentine", "american beauty", "blue lines", "one bedroom",
+    "computer world", "widespread panic", "the fawn", "the ventures", "a fistful of dollars",
+    "the good the bad and the ugly", "the day the earth stood still"})
 
 
 def _distinctive(words) -> bool:
-    """A name of two or more words with at least one uncommon word: matched in any case."""
-    return len(words) > 1 and any(w.lower() not in _COMMON_WORDS for w in words)
+    """A name of two or more words that is not an ordinary phrase: matched in any case."""
+    return len(words) > 1 and " ".join(words).lower() not in _ORDINARY_PHRASE_NAMES
 
 
 def _label(card: StyleCard, lib: Library) -> str:
@@ -208,8 +203,8 @@ def _name_spans(text: str, names: list[_Name], *, case_sensitive: bool, skip=fro
     """Non-overlapping (start, end, _Name) for each name found in text, left to right.
 
     `case_sensitive` applies to one-word names ("Faust", "Parliament": "faust" and "parliament" are
-    ordinary words) and to names made only of common words ("Massive Attack", "The Meters"). A name of
-    two or more words with an uncommon word ("Alison Krauss") matches in any case (`_distinctive`).
+    ordinary words) and to the ordinary-phrase names in `_ORDINARY_PHRASE_NAMES` ("Massive Attack").
+    Every other name of two or more words ("Alison Krauss") matches in any case (`_distinctive`).
     """
     toks = [(m.start(), m.end(), m.group()) for m in _WORD.finditer(text)]
     raw = [t[2] for t in toks]
@@ -275,28 +270,30 @@ def _name_notes(replaced, notes: list[str]) -> None:
 _SING = re.compile(r"\b(singing|sings|sing|sang|sung)\b", re.I)
 _TOPIC_LEAD = re.compile(r"^(about|of|for|to|on)\s+", re.I)
 # How something is sung ("softly", "very slow"): these words describe the voice and are never the sung topic.
+# An explicit list: "lonely", "holy" and "fly" end in -ly and are words of a topic.
 _DIRECTION_WORDS = frozenset("""slow slowly soft softly very quiet quietly loud loudly fast gently gentle sweet sweetly
-sad sadly high low really quite so too tender tenderly warm warmly faint faintly hushed calm calmly""".split())
+sad sadly high low really quite so too tender tenderly warm warmly faint faintly hushed calm calmly clear clearly
+proudly boldly brightly darkly""".split())
 _TOPIC_WORDS = frozenset("about of on for to like".split())
-_DETERMINERS = frozenset("a an the my our your his her their some this that these those".split())
 
 
 def _sung_topic(phrase: str) -> str:
-    """What is sung in a phrase after "singing": "softly about the sea" -> "the sea", "the blues" -> "the blues".
+    """What is sung in a phrase after "singing": "softly about the sea" -> "the sea", "über die Liebe" -> itself.
 
-    Leading direction words (slow, softly, very, words ending in -ly) describe the voice. After them the
-    phrase is a topic only when it starts with a topic lead (about, of, on, for, to, like: the lead is
-    dropped) or a determiner (a noun phrase). Anything else ("very slow", "loud") has no topic: ""."""
+    Leading direction words (`_DIRECTION_WORDS`) describe the voice. Whatever follows them is the topic, with a
+    leading English topic lead (about, of, on, for, to, like) dropped: a noun phrase ("lonely songs of the
+    night"), another language ("sobre el mar"), a preposition ("in Spanish about love") or an emoji all count.
+    Only direction words ("very slow") leave no topic: ""."""
     words = phrase.strip(" ,;:.").split()
     i = 0
-    while i < len(words) and (words[i].lower() in _DIRECTION_WORDS or words[i].lower().endswith("ly")):
+    while i < len(words) and words[i].lower().strip(",;:.") in _DIRECTION_WORDS:
         i += 1
     rest = words[i:]
     if rest and rest[0].lower() in _TOPIC_WORDS:
-        return " ".join(rest[1:])
-    if rest and rest[0].lower() in _DETERMINERS:
-        return " ".join(rest)
-    return ""
+        rest = rest[1:]
+    return " ".join(rest)
+
+
 _HYPHENS = "-‐‑‒–—―−"
 _FORM = re.compile(r"^(?P<pre>like\s+)?(?P<core>.*?)(?P<suf>\s*[" + _HYPHENS + r"]\s*(?:like|ish|style)|\s+style)?$",
                    re.I | re.S)
@@ -470,6 +467,54 @@ def translate(text: str, profile, *, include_names: bool = False, library: Libra
                    smooth=smooth, smooth_fn=smooth_fn, lyrics_fn=lyrics_fn)
 
 
+def _as_parts(x) -> tuple[str, ...]:
+    """A text or a sequence of texts as a tuple of non-empty parts."""
+    if isinstance(x, str):
+        x = (x,)
+    return tuple(p for p in (x or ()) if isinstance(p, str) and p.strip())
+
+
+def parse_parts(parts, lib: Library) -> Parsed:
+    """Parse each part on its own and join the results as one request ("part one, part two").
+
+    Each part is read exactly as it would be alone, so a name that matches alone ("Tortoise") still
+    matches when words are added after it. A later part's own base becomes a layer with no marker
+    (an empty base, "with Dub", is dropped and its layers keep their markers).
+    """
+    text = ""
+    layers: list[Layer] = []
+    leftover: list[str] = []
+    dropped: list[str] = []
+    for part in _as_parts(parts):
+        if text:
+            text += ", "
+        off = len(text)
+        text += part
+        pp = parse(part, lib)
+        for j, l in enumerate(pp.layers):
+            if layers and j == 0 and not l.text and not l.matches:
+                continue
+            ms = tuple(dataclasses.replace(m, start=m.start + off, end=m.end + off) for m in l.matches)
+            layers.append(Layer("layer" if layers else "base", l.text, ms, l.marker if layers else None, l.vocal))
+        leftover += pp.leftover
+        dropped += pp.dropped
+    return Parsed(text, tuple(layers), tuple(leftover), tuple(dropped))
+
+
+def translate_parts(parts, profile, *, include_names: bool = False, library: Library | None = None,
+                    smooth: bool = False, smooth_fn=None, lyrics_fn=None) -> Translation:
+    """`translate` for a request in parts (a written prompt's source plus words added to it): each part
+    is parsed on its own (`parse_parts`), then rendered as one request."""
+    lib = library if library is not None else _default_library()
+    ps = _as_parts(parts)
+    if len(ps) <= 1:
+        return translate(ps[0] if ps else "", profile, include_names=include_names, library=lib, smooth=smooth,
+                         smooth_fn=smooth_fn, lyrics_fn=lyrics_fn)
+    parsed = parse_parts(ps, lib)
+    return _render(parsed.text, parsed, profile, lib, include_names=include_names, smooth=smooth,
+                   smooth_fn=smooth_fn, lyrics_fn=lyrics_fn)
+
+
 def translate_cards(base_ids, layer_ids=(), user_text: str = "", profile=None, *,
                     include_names: bool = False, library: Library | None = None,
                     smooth: bool = False, smooth_fn=None, lyrics_fn=None) -> Translation:
@@ -484,8 +529,9 @@ def translate_cards(base_ids, layer_ids=(), user_text: str = "", profile=None, *
     are not in the library are skipped.
     """
     lib = library if library is not None else _default_library()
-    user_text = user_text if isinstance(user_text, str) else ""
-    parsed = parse(user_text, lib) if user_text.strip() else Parsed(user_text, (), (), ())
+    user_parts = _as_parts(user_text)          # a text, or parts (see parse_parts)
+    user_text = ", ".join(user_parts)
+    parsed = parse_parts(user_parts, lib) if user_parts else Parsed(user_text, (), (), ())
     text, layers = parsed.text, list(parsed.layers)
 
     def add(marker, ids):

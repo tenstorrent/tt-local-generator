@@ -277,3 +277,50 @@ def test_style_description_for_an_inspiration_only_name(tmp_path, value):
     for p in PROFILES:
         d = T.style_description(value, p, library=lib)
         assert d and value.lower() not in d.lower(), (value, d)
+
+
+# ── fix wave 3 ──────────────────────────────────────────────────────────────
+
+ORDINARY_PHRASE_NAMES = {
+    "massive attack", "the meters", "my bloody valentine", "american beauty", "blue lines", "one bedroom",
+    "computer world", "widespread panic", "the fawn", "the ventures", "a fistful of dollars",
+    "the good the bad and the ugly", "the day the earth stood still"}
+
+
+def test_ordinary_phrase_exception_list_is_pinned():
+    assert T._ORDINARY_PHRASE_NAMES == frozenset(ORDINARY_PHRASE_NAMES)
+    assert not hasattr(T, "_COMMON_WORDS")
+
+
+def test_every_other_multiword_name_is_scrubbed_in_lowercase(tmp_path):
+    lib = _shipped(tmp_path)
+    bad = []
+    for n in T._names(lib):
+        if len(n.words) < 2:
+            continue
+        low = " ".join(n.words).lower()
+        if low in ORDINARY_PHRASE_NAMES:
+            continue
+        t = translate(f"surf rock, a tribute to {n.text.lower()}", MINIMAX, library=lib)
+        if low in " ".join(_WORDS.findall(t.prompt.lower())):
+            bad.append((n.text, t.prompt[:120]))
+    assert not bad, bad
+
+
+_WORDS = re.compile(r"[^\W_]+")
+
+
+@pytest.mark.parametrize("text, topic", [
+    ("post-rock and someone is singing über die Liebe", "über die liebe"),
+    ("post-rock and someone is singing sobre el mar", "sobre el mar"),
+    ("post-rock and someone is singing 🌊 about the sea", "the sea"),
+    ("post-rock and someone is singing in Spanish about love", "love"),
+    ("post-rock and someone is singing lonely songs of the night", "lonely songs of the night"),
+    ("post-rock and someone is singing holy holy holy", "holy holy holy"),
+    ("post-rock and someone is singing fly me to the moon", "fly me to the moon"),
+    ("post-rock and someone is singing softly about the sea", "the sea"),
+])
+def test_sung_topics_beyond_english_leads(tmp_path, text, topic):
+    t = translate(text, MINIMAX, library=_shipped(tmp_path))
+    assert t.lyrics and topic in t.lyrics.lower(), (text, t.lyrics)
+    assert "softly" not in t.lyrics.lower()
