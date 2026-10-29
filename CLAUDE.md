@@ -53,6 +53,24 @@ Branch `tt-cli-servers`, cut from `main`. The music PR (#30) is separate.
 - A lease that cannot be tied to a stopped server is kept as a `<key>#unreapable-<n>` record and shown in the Held leases block of the
   Servers menu and in `tt-ctl servers --all`, so it stays visible outside the outcome line.
 - The lease `who` is `tt-local-generator:<model key>`, so a lookup after a cancelled wait cannot return another server's lease.
+- On a box without gozer, an accepted switch skips the chip reset while another local server runs or boots, and the outcome message
+  says so.
+- A "no" to the `chips_held` question leaves the new server running with no lease and no record. The message names the container and
+  says not to release the other lease while it runs.
+- The Cancel button shows for the whole start, and a cancel stops what that start launched. Closing the window cancels starts still
+  running.
+- A server's SERVERS key is READY (status bar, Create dots, the Create gate) only when its row is on the port the app calls for that
+  key (`ModelEntry.port`). A `tt serve` of FLUX.1-schnell on :20000 is listed under Running but does not make `flux` READY.
+- Stop asks `stop_external` unless the server's container id matches a record that has a container id. A record with no container id
+  (matched by name and port) is not proof: the question says "tt-local-generator started <model> on this port earlier; this may be
+  it". A boutique start records the container id found by its published port. A no-container record stays live only while that
+  record's own script health check passes, so another model on the shared :8000 does not keep it alive.
+- The chip count is asked for (`unknown_chips`) only on the pinnable path, where it sizes the acquire. An unpinnable start (catalog
+  models, every boutique script) leases what the container opened and does not ask.
+- `ModelStatusService.note_starting` is called when ServerControl launches (`on_launch`), after any chip wait, so a normal hour-long
+  wait does not time out to ERROR.
+- `find_tt` caches a "no official tt" answer for 60 s (also a non-official `tt` that exits non-zero); a timeout or OSError is not
+  cached. A found binary stays cached.
 
 **What review and tests found.**
 - The adoption window (Task 6, four rounds). Another party's container of the same model could be adopted as ours, or stopped, while
@@ -67,9 +85,19 @@ Branch `tt-cli-servers`, cut from `main`. The music PR (#30) is separate.
   holders first; reaped, forgotten and nothing-launched releases use `--no-reset`. Two smaller fixes: outcome lines were hidden right
   after being written, and the open popover rebuilt every 10 s because uptime was in the row signature.
 - The plan said to generalise an existing Connect dialog, but `main` has none, so this branch creates it.
+- The final whole-branch review found two critical paths to another agent's chips. A terminal `tt serve` on another port made a
+  SERVERS key READY, so the Create gate could plan a switch, stop that server and run `tt-smi -r` over every board. A stale record
+  with no container id made a later server of the same model "app"-owned, so Stop stopped it without asking. Both are fixed (port
+  check, gozer-aware gate, container-id ownership), and the status-bar Stop now asks too. Each fix has a test seen failing on the
+  old code and a mutation check (`.superpowers/sdd/2026-10-28-tt-cli-server-control/final-fix-report.md`).
 - `tests/conftest.py` now pins `GDK_BACKEND=x11` under xvfb-run. Before that, a Wayland session could open test windows on the real desktop.
 
-**Not verified.** Nothing below was run on this machine's real servers.
+**Not verified.** Everything below was checked only with fakes (tests, a fake `tt`, a fake gozer), never against this machine's real
+servers. Read-only commands (`tt --json model ps`, `tt serve --dry-run`, `gozer status --json`, docker ps/inspect) were run for real.
+- `tt-ctl servers --all` was run read-only and lists the tt server (raahemnabeel/qwen3-coder-next) and the prompt server as external.
+  The Stop question was not exercised against them.
+- A live boutique Start under gozer on this QB2: the container-by-port lookup, whether the script container appears in
+  `tt model ps`, and how many questions the user sees. Needs real hardware and the operator's go-ahead.
 - No real `tt serve` or stop was run. Only `--dry-run` and read-only `tt` commands were used.
 - No real gozer acquire, adopt or release was run. The gozer client is tested against a fake gozer built from the wire notes.
 - Script-started servers appearing in `tt model ps` is unverified. The boutique start on a gozer box depends on it and on a
@@ -81,10 +109,15 @@ Branch `tt-cli-servers`, cut from `main`. The music PR (#30) is separate.
 - `Gtk.MessageDialog` deprecation warnings appear in the Servers menu tests (known, left alone).
 
 **Known gaps and follow-ups.**
-- The bottom status-bar popover's Start/Stop and the Create Ready-to-Run gate still use their own script paths. Moving them onto
-  `ServerControl` is a follow-up. The status-bar Stop does not ask first, as before. They now call `ServerControl.forget`, so a lease
-  record does not outlive a server they stopped.
+- The status-bar Stop goes through `ServerMenu.stop(key, forget_after=True)`: a server the app did not start asks first, no running
+  server logs "nothing to stop", and after a real stop the record is dropped (`ServerControl.forget`). The status-bar Start and the
+  Create Ready-to-Run gate still have their own script start paths (follow-up). The Create gate calls `self._server_menu.forget` after
+  its stop and skips `tt-smi -r` when gozer is on the machine (it would reset other agents' leased chips); without gozer it still
+  resets as before.
 - The pipeline engine's `_stop_and_reset` is unchanged and unguarded.
+- A boutique record now carries the container id found by port, so its reap needs that container in `tt model ps`. If script
+  containers do not appear there (unverified), the reap's gozer holder check keeps the lease and marks the record unreapable
+  while the server holds the chips; it does not release under a running server.
 - Accepted residual: on the unpinnable path, a foreign container of the same model that starts after our launch cannot be told apart
   from ours. A later app Stop of it would not ask.
 - On an unpinnable failed start the app always asks `stop_external` before stopping what it found.
