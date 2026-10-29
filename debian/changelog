@@ -1,3 +1,22 @@
+tt-local-generator (0.106.0) noble; urgency=medium
+
+  * feat(servers): start, stop and list model servers through the tt CLI.
+    - New Servers menu sections: Running (including models started in a terminal, with
+      a "not started here" tag), Ready to start, Available, Remote (use only) and Held
+      leases. Stop asks first for a server the app did not start.
+    - A server started with `tt serve` shows as running everywhere: the menu, `tt-ctl
+      servers --all` and the status bar, when it is on the port the app uses.
+    - Starts take a gozer lease when gozer is installed. Leases of servers that are gone
+      are released without a chip reset. Nothing resets chips while gozer shows a process
+      holding them.
+    - tt-ctl start/stop/restart/logs accept tt model names and bundle ids, print a
+      deprecation note on stderr (silence with TTLG_NO_DEPRECATION_NOTE=1), and keep
+      their old behaviour for the existing service keys.
+    - New generic Connect dialog for adding a server by URL (optional bearer token).
+    - A live boutique start under gozer has not been checked on real hardware.
+
+ -- Taylor Singletary <tsingletary@tenstorrent.com>  Wed, 28 Oct 2026 20:00:00 -0700
+
 tt-local-generator (0.104.4) noble; urgency=medium
 
   * fix(animatediff): follow-ups from josh's re-review of PR #29.
