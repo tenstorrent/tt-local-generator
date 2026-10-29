@@ -1688,3 +1688,61 @@ def test_moved_unreapable_record_keeps_its_note(env):
     moved = [r for r in env.records.load() if r.get("lease_id") == "ZOMBIE"]
     assert moved and moved[0]["name"].startswith("ns/bundle#unreapable-")
     assert moved[0]["note"] == "chips are in use by another process"
+
+
+# --------------------------------------------------------------------------
+# Task 8 fix round 3: a start that launched nothing releases without a reset
+# --------------------------------------------------------------------------
+
+def test_model_found_running_during_the_queue_wait_releases_without_a_reset(env):
+    env.acquire_result = Queued("T1")
+    env.wait_result = Lease("L2", ("0000:01:00.0", "0000:02:00.0"))
+    env.wait_hook = lambda: env.view.append(
+        rs("ns/bundle", name="ns/bundle", port=20000, container_id="eeeeeeeeeeee"))
+    out = env.control().start("ns/bundle")
+    assert out.kind == "already_running"
+    assert "tt.serve" not in env.names()
+    assert env.release_resets == [("L2", False)]
+
+
+def test_failed_start_that_launched_nothing_releases_without_a_reset(env):
+    env.acquire_result = Lease("L1", ("0000:99:00.0",))    # unknown chip: no device id
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert "tt.serve" not in env.names()
+    assert env.release_resets == [("L1", False)]
+    assert "not touched" in out.message and "resets the chips" not in out.message
+
+
+def test_failed_start_whose_server_was_stopped_still_resets(env):
+    env.serve_result = TtResult(False, "tt serve exited 1", ("error: out of memory",))
+    out = env.control().start("ns/bundle")
+    assert out.kind == "failed"
+    assert ("tt.stop", ("ns/bundle",)) in env.calls
+    assert env.release_resets == [("L1", True)]
+
+
+def test_consumed_ticket_lease_is_released_without_a_reset(env):
+    env.acquire_result = Queued("T1")
+    env.wait_result = None
+    env.cancel_ticket_result = False
+    env.find_lease_result = Lease("L9", ("0000:03:00.0",))
+    assert env.control().start("ns/bundle", cancel=lambda: True).kind == "cancelled"
+    assert env.release_resets == [("L9", False)]
+
+
+def test_switch_incumbent_lease_is_released_with_a_reset(env):
+    """Both incumbent paths: a row in the view (stopped through _stop_server)
+    and one only the status lookup sees (stopped by its entry)."""
+    for in_view in (True, False):
+        e = Env(env.records.path.parent / f"v{in_view}")
+        e.records.add("flux", 8000, None, "L-flux", 1.0)
+        e.view = ([rs("flux", name="flux", source="script", port=8000, container_id=None,
+                      owner="app")] if in_view else [])
+        e.status_map = {"flux": "ready"}
+        e.confirm_answers = {"switch": True}
+        e.boutique_adds = rs("wan-old", name="wan-old", source="script", port=8000,
+                             container_id=None, uptime_s=1)
+        e.gozer_available = False
+        e.control().start("wan-old")
+        assert e.release_resets == [("L-flux", True)], in_view

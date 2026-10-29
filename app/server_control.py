@@ -568,9 +568,13 @@ class ServerControl:
                     "config/server_overrides.yaml); it runs on its own fixed chips.")
         return ""
 
-    def _release_all(self, ids: Sequence[str]) -> None:
+    def _release_all(self, ids: Sequence[str], *, reset: bool) -> None:
+        """Release leases. ``reset`` has no default: every caller decides.
+        True after this app stopped a server it launched on those chips (they
+        may hold its stale state). False when nothing was launched on them: a
+        reset could hit an unleased server booting there."""
         for lid in ids:
-            if not self._gozer.release(lid):
+            if not self._gozer.release(lid, reset=reset):
                 log.warning("release of lease %s failed", lid)
 
     def registry(self) -> dict:
@@ -822,7 +826,8 @@ class ServerControl:
             return f"stopping {inc.name} failed ({res.reason}).{_tail(res.lines)}"
         for r in self._records.load():
             if r.get("name") == key and not r.get("unreapable"):
-                self._release_all(_lease_ids(r.get("lease_id")))
+                # We just stopped the incumbent that ran on these chips.
+                self._release_all(_lease_ids(r.get("lease_id")), reset=True)
                 self._records.remove(key)
         return ""
 
@@ -931,7 +936,8 @@ class ServerControl:
             log.warning("find_lease(%s) returned %s, which a recorded server holds; "
                         "not releasing it", who, lease.id)
             return
-        self._gozer.release(lease.id)
+        # A consumed ticket's lease: nothing was launched on those chips.
+        self._gozer.release(lease.id, reset=False)
 
     def _start_pinnable(self, entry, registry, chips, tt_plan, port, run, say, cancel,
                         cancelled):
@@ -961,7 +967,8 @@ class ServerControl:
         # The model may have been started elsewhere while we waited for chips.
         again = self._check_running(entry, say, cancelled)
         if again is not None:
-            self._release_all(run.lease_ids)
+            # Running elsewhere: this start launched nothing on the leased chips.
+            self._release_all(run.lease_ids, reset=False)
             return again
         ids = self._dev_indices(got.chips)
         if not ids:
@@ -1235,9 +1242,11 @@ class ServerControl:
         server = run.server
         lines = tuple(lines)
         if not run.launched:
-            self._release_all(run.lease_ids)
+            # Nothing was launched: release without touching the chips.
+            self._release_all(run.lease_ids, reset=False)
             if run.lease_ids:
-                message += " Its chip lease was released (gozer resets the chips)."
+                message += (" Its chip lease was released; the chips were not touched "
+                            "(nothing was started on them).")
             return StartOutcome(kind, None, message + _tail(lines), None)
         if server is None:
             new = self._new_rows(entry, run)
@@ -1276,7 +1285,8 @@ class ServerControl:
         else:
             res = TtResult(False, "no way known to stop it")
         if res.ok:
-            self._release_all(run.lease_ids)
+            # We stopped what this start launched: reset its chips.
+            self._release_all(run.lease_ids, reset=True)
             message += " What was started has been stopped."
             if run.lease_ids:
                 message += " Its chip lease was released (gozer resets the chips)."
