@@ -106,7 +106,7 @@ def test_wand_button_fills_the_prompt_via_the_setter():
     assert p.collect()["prompt"] == top.text.strip()
 
 
-def test_wand_on_stable_audio_profile_leaves_lyrics_alone_and_shows_no_vocal():
+def test_wand_on_stable_audio_profile_leaves_lyrics_alone_and_shows_no_vocal(monkeypatch):
     lib = music_prompts.load_library()
     p, top = _panel("stable-audio")
     p._lyrics_buffer.set_text("my own words")
@@ -118,6 +118,20 @@ def test_wand_on_stable_audio_profile_leaves_lyrics_alone_and_shows_no_vocal():
         # The strip may list a card's "avoid" entries ("emotive vocal runs"); it never reports a vocal layer.
         assert "cannot sing" not in _strip(p) and "lead line" not in _strip(p)
         assert p._lyrics_text() == "my own words"
+
+    # Even a result that carries lyrics never reaches the lyrics box of a model without lyrics,
+    # whether the box is full (and the user would say yes) or empty.
+    monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: _fake(prompt="ambient pads", lyrics="[Verse]\nla"))
+    p.confirm_replace_lyrics = lambda msg: True
+    p._wand_btn.emit("clicked")
+    assert p._lyrics_text() == "my own words"
+    p._lyrics_buffer.set_text("")
+    p._wand_btn.emit("clicked")
+    assert p._lyrics_text() == ""
+
+
+def _fake(prompt="", lyrics=None):
+    return music_prompts.Translation(prompt, lyrics, (), (), (), "caption+lyrics", ())
 
 
 # ── Write the prompt ───────────────────────────────────────────────────────
@@ -169,6 +183,34 @@ def test_lyrics_not_overwritten_when_the_user_has_typed_some_without_confirmatio
     assert "[Verse]" in p._lyrics_text()
 
 
+def test_lyrics_only_write_is_undoable_without_touching_an_earlier_prompt(monkeypatch):
+    p, top = _panel("fiona-crapple", text="Tortoise")
+    p._write_btn.emit("clicked")
+    written = top.text
+    assert written != "Tortoise"
+    p._lyrics_buffer.set_text("mine")
+    monkeypatch.setattr(music_prompts, "translate", lambda *a, **k: _fake(prompt="", lyrics="[Verse]\nnew"))
+    p.confirm_replace_lyrics = lambda msg: True
+    p._write_btn.emit("clicked")
+    assert p._lyrics_text() == "[Verse]\nnew"
+    assert p._undo_btn.get_sensitive()
+    p._undo_btn.emit("clicked")
+    assert p._lyrics_text() == "mine"
+    assert top.text == written                     # the earlier Write is not undone with it
+
+
+def test_result_dropped_when_the_model_changed_during_the_run():
+    p, top = _panel("stable-audio", text="Tortoise")
+    p.set_llm_available(True)
+    p.smooth_fn = lambda text: text
+    p._smooth_check.set_active(True)
+    p._write_btn.emit("clicked")
+    p.set_server(_server("fiona-crapple"))          # before the worker's result is handled
+    _wait_for(lambda: p._write_btn.get_sensitive())
+    assert top.sets == []
+    assert "model changed" in _strip(p)
+
+
 def test_result_strip_shows_added_phrases_notes_and_inspired_by_names_but_prompt_has_none():
     p, top = _panel("stable-audio", text="Tortoise")
     p._write_btn.emit("clicked")
@@ -209,11 +251,19 @@ def test_picking_a_style_inserts_its_name_for_the_next_translate():
     assert picked in p._last_translation.used_cards
 
 
+def test_picking_a_style_after_a_trailing_comma_does_not_double_it():
+    p, top = _panel("stable-audio", text="jazz, ")
+    item = next(i for g in music_prompts.menu_tree() for i in g.items if i.card_id == "tortoise")
+    p.pick_style(item)
+    assert top.text == f"jazz, {item.label}"
+
+
 def test_style_buttons_insert_through_a_click():
     p, top = _panel("stable-audio")
     btn = next(w for w in _descendants(p._styles_box) if isinstance(w, Gtk.Button))
     btn.emit("clicked")
-    assert top.text.strip()
+    label = btn.get_label().removeprefix("inspired by ")
+    assert label and label in top.text
 
 
 # ── Smooth with AI ─────────────────────────────────────────────────────────

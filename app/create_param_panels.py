@@ -3441,6 +3441,7 @@ _NO_SMOOTH_TIP = ("Smooth with AI needs a chat model. Start one (for example wit
                   "then pick Music again.")
 _REPLACE_LYRICS_MSG = "Replace the lyrics you typed with the lyrics written for this prompt?"
 _PROMPT_CHANGED_NOTE = "The prompt changed while it was being written, so the result was not used."
+_MODEL_CHANGED_NOTE = "The music model changed while the prompt was being written, so the result was not used."
 
 
 def style_of_text(value: str, profile) -> "Optional[str]":
@@ -4043,8 +4044,8 @@ class MusicParamPanel(CreateParamPanel):
 
     def pick_style(self, item) -> None:
         """Add a Styles menu item's name to the prompt text; Write the prompt then expands it."""
-        current = self._raw_prompt().rstrip()
-        self._set_prompt_text(f"{current}, {item.label}" if current.strip() else item.label)
+        current = self._raw_prompt().rstrip().rstrip(",;").rstrip()   # "jazz," + pick gives "jazz, pick"
+        self._set_prompt_text(f"{current}, {item.label}" if current else item.label)
 
     def set_prompt_setter(self, fn: "Optional[Callable[[str], None]]") -> None:
         """Write the prompt through `fn` instead of this panel's own box (the counterpart of
@@ -4087,7 +4088,8 @@ class MusicParamPanel(CreateParamPanel):
     def _run_library(self, job: "Callable[[], object]") -> None:
         """Run a library call and show its result. On the GTK thread when it is pure library work (fast);
         on a worker thread when Smooth with AI or a lyrics writer is on, back through GLib.idle_add."""
-        snapshot = self._raw_prompt()
+        # What the result is checked against when it arrives: the prompt text and the model it was written for.
+        snapshot = (self._raw_prompt(), self._profile_key())
         if not (self._smooth_on() or self.lyrics_fn is not None):
             try:
                 t = job()
@@ -4107,25 +4109,38 @@ class MusicParamPanel(CreateParamPanel):
     def _set_tools_busy(self, busy: bool) -> None:
         for w in (self._wand_btn, self._write_btn):
             w.set_sensitive(not busy)
-        self._undo_btn.set_sensitive(not busy and self._undo is not None)
+        self._undo_btn.set_sensitive(not busy and bool(self._undo))
         if busy:
             self._show_strip(["Writing the prompt..."])
 
-    def _library_done(self, t, prompt_before: str) -> None:
+    def _profile_key(self):
+        p = self._profile
+        return None if p is None else p.model_id
+
+    def _library_done(self, t, snapshot: tuple) -> None:
+        prompt_before, profile_before = snapshot
         if t is None:
             self._show_strip(["The style library could not write a prompt. Your text is unchanged."])
             return
         if self._raw_prompt() != prompt_before:
             self._show_strip([_PROMPT_CHANGED_NOTE])
             return
+        if self._profile_key() != profile_before:
+            self._show_strip([_MODEL_CHANGED_NOTE])
+            return
         self._last_translation = t
-        if t.prompt.strip():
-            self._undo = {"prompt": prompt_before}
+        writes_prompt = bool(t.prompt.strip())
+        writes_lyrics = bool(t.lyrics and t.lyrics.strip() and "lyrics" in self._accepted())
+        if writes_prompt or writes_lyrics:
+            # A fresh undo record for every action that may write something, so a lyrics-only result never
+            # lands in (or is refused because of) an earlier action's record.
+            self._undo = {"prompt": prompt_before} if writes_prompt else {}
+            self._undo_btn.set_sensitive(writes_prompt)
+        if writes_prompt:
             self._set_prompt_text(t.prompt)
             self._last_filled = t.prompt
-            self._undo_btn.set_sensitive(True)
         self._show_result(t)
-        if t.lyrics and t.lyrics.strip() and "lyrics" in self._accepted():
+        if writes_lyrics:
             self._offer_lyrics(t.lyrics, self._undo)
 
     def _offer_lyrics(self, lyrics: str, undo: "Optional[dict]") -> None:
@@ -4168,15 +4183,17 @@ class MusicParamPanel(CreateParamPanel):
     def _replace_lyrics(self, lyrics: str, undo: "Optional[dict]") -> None:
         if undo is not None:
             undo["lyrics"] = self._lyrics_text()
+            self._undo_btn.set_sensitive(True)
         self._lyrics_buffer.set_text(lyrics)
 
     def _on_undo(self, _btn=None) -> None:
         u = self._undo
-        if u is None:
+        if not u:
             return
         self._undo = None
         self._last_filled = ""
-        self._set_prompt_text(u["prompt"])
+        if "prompt" in u:
+            self._set_prompt_text(u["prompt"])
         if "lyrics" in u:
             self._lyrics_buffer.set_text(u["lyrics"])
         self._undo_btn.set_sensitive(False)
