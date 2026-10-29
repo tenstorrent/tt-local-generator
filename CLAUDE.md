@@ -1,5 +1,104 @@
 # tt-local-generator — developer notes
 
+## Music prompt library (v0.107.0)
+
+Prompts (operator, 2026-10-28): "let's start working on a musical prompt generation library. Everyone loves all kinds of
+music..."; "click the magic wand and get some combination of musical aspects you've never heard before"; "descriptions of
+their sound, keep the names as inspiration. the goal is to get someone able to type what they want or select from menus or
+chiclets what they want and we do the job of translating it to a great prompt". The test sentence is "tortoise-like song but
+someone is singing a bluegrass song on top". Spec: `docs/superpowers/specs/2026-10-28-music-prompt-library-design.md`. Card
+review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. Branch `music-prompts`, stacked on `generate_music`
+(the music generation work above), built in nine reviewed tasks. The version bump is its own commit after the final review.
+
+**Architecture.** `app/music_prompts/` is GTK-free.
+- `cards.py`: `StyleCard` and `Library`. Loads `cards/*.yaml` (shipped) and `~/.config/tt-local-generator/music_styles/*.yaml`
+  (user cards; the same `id` replaces a shipped card). A bad card is logged and skipped. `CARDS.md` documents every field.
+- `parse.py`: finds card names and aliases in typed text and splits the sentence into layers ("X but Y on top"). It keeps what
+  the user typed: `Parsed.dropped` holds marker words, and a round-trip test checks that no alphanumeric character is lost.
+- `dialects.py`: renders cards for one model family. `caption+lyrics` (MiniMax: soft budget 450 characters, hard 1000), `tags`
+  (Stable Audio: about 250 characters, hard 2000, a cap of about 12 tags) and `generic` (about 300).
+- `translate.py`: `translate(text, profile, include_names=False, smooth=..., ...)` returns a `Translation` (prompt, lyrics,
+  notes, `used_cards`, `added`, `inspired_by`, `instrumental`, `seed_used`).
+- `wand.py`: the Surprise button. It picks a base card, then a layer by kind (style 45, scene 25, instrument 15, texture 10,
+  vocal 5), avoids `clashes_with`, and re-renders without its last pick until every pick renders. Seeded.
+- `menu.py`: `menu_tree()` for the Styles menu.
+- `music_runtime.MusicProfile` gained `dialect` and `max_chars`. Both have defaults, so positional construction still works.
+- `MusicParamPanel` (`create_param_panels.py`): a prompt tools block with Surprise (the wand), Write the prompt, Styles, Undo,
+  a Smooth with AI checkbox and a result strip (Added, notes, Inspired by). The "In the style of" chip uses
+  `ModifierPills.style_of_fn` to insert the sound description. `collect()` does not read any of these widgets.
+- `tt-ctl music-prompt [text] [--model M] [--dialect D] [--wand] [--seed N] [--include-names]`.
+- `prompt_client._music_library_text`: Inspire for music tries the library first and falls back to the LLM on any failure.
+
+**Decisions.**
+- Cards describe how something sounds. Artist names live in `inspiration` and in the result strip. A rendered prompt contains a
+  name only when the user asked (`include_names`), or typed it as a `MusicProfile.triggers` phrase.
+- The translation is deterministic. An LLM pass (Smooth with AI) is off by default and is a seam: `smooth_fn` and `lyrics_fn`
+  are None until something supplies them.
+- Glue words of recognised structure ("song", "someone is singing a", "on top") are not copied into the prompt. They are listed
+  in the notes, so nothing the user typed disappears without a mention.
+- `avoid` entries go to the notes ("Not asked for: ...") and never into a prompt, because music models tend to hear "no X" as "X".
+- `Translation.instrumental` means the rendered prompt asks for no singing. Stable Audio cannot sing, so a vocal layer becomes a
+  lead line (`lead_instrument` on the vocal card) and the lyrics box stays hidden.
+- A card's own `vocal` text is written only when the prompt sings.
+- Typed lyrics are replaced only after a yes. The confirm accepts the literal `True` only.
+- Operator review gate: the first 23 cards were reviewed on the sheet and accepted ("these are good for now"), including two
+  changes to the starter wording (Tortoise "jazz-inflected drums", bluegrass lead "dobro"). Task 6 then added 26 cards (49 in
+  22 families) without a second operator pass.
+
+**What review found.** Each fix has a test seen failing on the old code.
+- Task 1: shipped cards pointed `clashes_with` at a name that did not exist, so loading logged warnings on shipped data.
+- Task 2: marker words and punctuation were unrecoverable; unicode hyphens did not match; a capital after a full stop counted
+  as mid-sentence. Fixed with `Parsed.dropped` and the round-trip test.
+- Task 3 (three rounds): glue words from the parser reached every dialect (Stable Audio was told someone sings while the vocal
+  became a lead line); the caption was a dump of every card field (855 characters, repeats); `instrumental` was a copy of
+  `lyrics is None`; fragments such as "Band doing a, thing." appeared around a match; singing typed in the base layer was
+  ignored; promoting a layer left a phantom second "a vocal" clause and lost marker words.
+- Task 4: wand fuzz over 300 seeds was clean.
+- Task 5: Stable Audio wand prompts with 3 or 4 cards lost every layer (the tags dialect merged them into one clause that the
+  budget dropped whole); voice descriptions leaked into instrumental and Stable Audio prompts; bare "Tortoise" passed through
+  as the prompt with the artist name.
+- Task 6: the MiniMax wand reported cards it had not rendered (59 of 60 seeds). `used_cards`, `added` and `inspired_by` now list
+  rendered cards only and the drop note names the trimmed ones. Ambient drone printed "around 43 bpm" next to a beatless
+  description. Scenes are the operator's own examples, so they are first-class wand picks and trimmed last among layers.
+- Task 7: Undo did not cover a lyrics-only write. The server hint never showed in Create because `header_widgets()` appended a
+  widget that still had the panel's unmounted root as its parent (a Gtk-CRITICAL); it now detaches first.
+- Task 8: reviewer approved; the implementer's concern about `--include-names` did not reproduce at HEAD.
+
+**Not verified.**
+- No real music has been generated from these prompts. Reviewers have read them. Nobody has listened to a result.
+- The MiniMax caption limit of 1000 characters is unconfirmed (`music_runtime` carries a comment saying so). The soft budget of
+  450 is a guess from the spec.
+- Card descriptions went through the operator's sheet for the first 23 cards only. The other 26 had the controller's pass. Second
+  sources for most of them are search summaries.
+- Smooth with AI is a seam only. Nothing supplies `smooth_fn` or `lyrics_fn`.
+- Inspire for music uses the generic dialect and ignores the panel's model, so MiniMax users get no lyrics from it.
+- On MiniMax the wand lands on 2 cards most of the time, because the 450-character budget trims later picks.
+- The real `Gtk.AlertDialog` replace-lyrics path is untested (tests use the sync seam).
+- The panel was checked under xvfb only, with screenshots in the task 7 report.
+
+**Known gaps (parked minor items).**
+- Parser and translator: `_OWN_GLUE_NOTES` suppresses the glue note by string and not by origin; tempo comes from whichever
+  card has one, which may not be the base's; no test for a base card with a tight length limit; "Tortoise-like, but louder"
+  opens with "Louder."; "bluegrass band" matches the vocal card; the glue note can quote a bare "a"; a marker on a layer that
+  renders a clause is missing from both prompt and notes in the tags dialect; a vocal with no card and no topic renders a bare
+  "Alongside it, a vocal."; `lead_line` keeps the word "vocal"; Funkadelic's MiniMax caption has "and with" debris; "the tortoise
+  crossed the road, post-rock" yields "The post-rock crossed the road."; the card-wide test does not go red under the
+  merge-by-kind mutation (the translate unit test does).
+- Wand: `dialects.py` scene shortening in the tags dialect adds a period and then drops it (one wasted pass); `Clause.priority`
+  is typed int but holds 1.5; `typed_in` uses a substring match; the generic dialect mostly yields one card; some mixes
+  (dub with accordion waltz) are odd; a 3 or 4 card Stable Audio wand always drops mood, tempo and rhythm (the note says so).
+- Cards: `_filter_list` can garble a list that contains a "with ..." series; the cello-quartet inspiration (Bachianas
+  Brasileiras) is written for eight cellos; the "drone piece" alias yields "drone piece piece"; incoherent mixes such as
+  ambient-drone with afrobeat need more `clashes_with`; "Changes since the first sheet" omits the p-funk and Yume Bitsu
+  production edits; jam-band's second source reviews one album.
+- Panel: declining a lyrics-only replace clears the earlier prompt's Undo record (no test); styles join with ", "; a styles
+  pick after a style merges into the base; the result strip can reach about 10 lines; the form minimum width is 796 px against
+  the 800 px bound; the "Music" chip is dark on dark when selected (pre-existing); the style-of pill keeps the description for the
+  model chosen when it was applied; `from music_prompts import translate` is shadowed by the function.
+- CLI: no tests for `--dialect`, an unknown `--model`, or the example with `--include-names` on MiniMax (where the name does not
+  reach the prompt); `--seed` without `--wand` is ignored; the text output prints notes that name the source artist.
+- Merge: `tt-ctl` is also edited on `tt-cli-servers`, so expect a fix-up when both land.
+
 ## Music generation (v0.105.0)
 
 The Create chip row shows Music right after Video and Image (`_VISUAL_TEXTUAL_ORDER` in `create_mediums.py`). `default_mediums()` and `discover_mediums()` still return it last; only the display sort moves it.

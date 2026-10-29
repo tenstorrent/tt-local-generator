@@ -84,6 +84,13 @@ add lyrics if the model sings. The panel finds music servers on this machine (Mi
 or you can connect one by URL, and it shows only the controls the chosen model supports. A finished song
 plays in the result panel with its waveform, and it is saved to the Library under **Audio**.
 
+The Music panel also writes the prompt for you. Type what you want ("tortoise-like song but someone is singing a bluegrass
+song on top"), pick from the **Styles** menu, or press **Surprise** for a combination you have not heard before. **Write the
+prompt** turns it into a description of the sound, shaped for the chosen model (a caption plus lyrics for MiniMax, a tag list
+for Stable Audio). Artist names stay out of the prompt and appear as "Inspired by". Add your own styles as YAML in
+`~/.config/tt-local-generator/music_styles/` (see `app/music_prompts/CARDS.md`), or try it from a terminal with
+`tt-ctl music-prompt "..." --model minimax` and `tt-ctl music-prompt --wand`.
+
 ---
 
 ## Generative Art
