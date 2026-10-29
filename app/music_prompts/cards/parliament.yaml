@@ -6,19 +6,22 @@ family: funk
 parent: p-funk
 inspiration: [Parliament, Mothership Connection, Funkentelechy vs. the Placebo Syndrome, George Clinton]
 sound: >-
-  Polished, horn-driven space funk with tight brass riffs, bubbling synthesizer
-  bass lines and choirs of chanting voices, staged like a party aboard a
-  spaceship.
+  Polished, horn-driven space funk with tight brass riffs and bubbling
+  synthesizer bass lines, staged like a party aboard a spaceship.
 instruments: [horn section, Moog synth bass, electric bass, clavinet, organ, rhythm guitar, drum kit]
 rhythm: Mid-tempo, heavy funk on the one with horn punches on the off-beats.
-harmony: Dominant and minor seventh vamps with gospel-style vocal harmony.
+harmony: Dominant and minor seventh vamps with gospel turns.
 mood: Theatrical, cosmic, joyful and cheeky.
-production: Polished 1970s funk sound, horns and voices stacked wide, synth bass upfront.
+production: Polished 1970s funk sound, horns stacked wide, synth bass upfront.
 tempo_bpm: [95, 115]
 avoid: [fuzz guitar walls, sparse arrangements]
-tags: [space funk, horn section, synth bass, group chants, theatrical, party groove]
+vocal: choirs of chanting voices and theatrical call-and-response
+tags: [space funk, horn section, synth bass, theatrical, party groove, clavinet]
 goes_with: [electronic, jazz]
 notes: >-
-  Wikipedia: Parliament (band) (smoother R&B-based funk, intricate horn and vocal
-  arrangements, Horny Horns, Afrofuturist themes); Wikipedia: Parliament-Funkadelic
-  (Worrell's Moog synth bass on "Flash Light")
+  Wikipedia: Parliament (band) (smoother R&B-based funk, intricate horn and
+  vocal arrangements, Horny Horns, Afrofuturist themes); Wikipedia:
+  Parliament-Funkadelic (Worrell's Moog synth bass on Flash Light);
+  Sputnikmusic: Parliament, Mothership Connection review (horns, Worrell's
+  synths, chants, search summary); Albumism: Mothership Connection turns 45
+  (search summary)

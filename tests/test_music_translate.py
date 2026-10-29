@@ -645,7 +645,8 @@ def test_lead_line_without_a_lead_instrument_names_the_vocal_style(tmp_path):
     lib = _lib(tmp_path, _card("slowcore", name="Slowcore"),
                _card("croon", kind="vocal", name="Crooner vocal", aliases=["crooner"], vocal="a warm low croon"))
     t = translate("slowcore but a crooner on top", STABLE, library=lib)
-    assert "lead line phrased like a crooner vocal" in t.prompt
+    assert "lead line carrying a crooner melody" in t.prompt
+    assert "vocal" not in t.prompt.lower()      # a model that cannot sing is never handed a voice word
     assert "warm low croon" not in t.prompt
 
 
@@ -780,3 +781,84 @@ def test_skeleton_note_names_the_users_topic_for_a_cardless_vocal(tmp_path):
     assert not any("vocal style's themes" in n for n in t.notes)
     card = translate(EXAMPLE, MINIMAX, library=lib)
     assert any("vocal style's themes" in n for n in card.notes)
+
+
+# ── fix round 1 of Task 5: layers in tags, card voices, articles ─────────────
+
+def _layered(tmp_path):
+    return _lib(tmp_path,
+                _card("base", name="Basecore", family="a", sound="Base sound.", tempo_bpm=[90, 110],
+                      tags=[f"basetag{i}" for i in range(6)]),
+                *[_card(f"l{k}", name=f"Layer{k}core", family=f"f{k}", sound=f"Layer {k} sound.",
+                        tags=[f"l{k}tag{i}" for i in range(6)]) for k in range(1, 4)])
+
+
+def test_tags_keep_each_layer_card_as_its_own_clause(tmp_path):
+    lib = _layered(tmp_path)
+    t = translate("basecore with layer1core with layer2core with layer3core", STABLE, library=lib)
+    for k in (1, 2, 3):
+        assert f"layer{k}core" in t.prompt, (k, t.prompt)
+        assert f"l{k}tag2" in t.prompt and f"l{k}tag3" not in t.prompt      # a layer card keeps its first 3 tags
+    # trimming drops the last layer first
+    clauses, _ = D.compose(D.Plan(user_words=(), base=(D.Part("sound", "Basecore", "x", tags=("b1", "b2")),),
+                                  layers=tuple((None, (D.Part("sound", f"L{k}", "x", tags=(f"t{k}a", f"t{k}b")),))
+                                               for k in (1, 2, 3))), "tags")
+    layer_clauses = [c.text for c in clauses if c.kind == "layer"]
+    assert len(layer_clauses) == 3
+    kept, _ = D.trim(clauses, "tags", 1000, budget=len(D._join(clauses, "tags")) - 5)
+    assert "l3" not in D._join(kept, "tags") and "l1" in D._join(kept, "tags")
+
+
+def test_soft_budget_drop_is_named_in_a_note(tmp_path):
+    clauses = [D.clause("base", "base words here"), D.clause("detail", "a detail that will not fit")]
+    prompt, notes = render(clauses, "caption+lyrics", 1000, budget=20)
+    assert prompt == "Base words here." and any(n.startswith("Left out to fit the length:") for n in notes)
+
+
+def _voiced(tmp_path):
+    return _lib(tmp_path,
+                _card("robo", name="Robopop", sound="Exact machine pop.", tempo_bpm=[100, 120],
+                      tags=["robot pop"], vocal="deadpan half-spoken vocals through a vocoder"),
+                _card("choir", kind="vocal", name="Choir vocal", aliases=["choir"], vocal="a hushed choir",
+                      lyric_themes=["the sea"]))
+
+
+def test_a_cards_voice_is_described_only_when_the_prompt_sings(tmp_path):
+    lib = _voiced(tmp_path)
+    for text, profile in (("robopop", MINIMAX), ("robopop", STABLE), ("robopop", None),
+                          ("instrumental robopop", MINIMAX), ("instrumental robopop but a choir on top", MINIMAX)):
+        t = translate(text, profile, library=lib)
+        assert "deadpan" not in t.prompt and "vocoder" not in t.prompt, (text, t.dialect, t.prompt)
+        assert t.instrumental
+    sung = translate("robopop but a choir on top", MINIMAX, library=lib)
+    assert "deadpan half-spoken vocals through a vocoder" in sung.prompt.lower() and not sung.instrumental
+    assert sung.prompt.lower().index("exact machine pop") < sung.prompt.lower().index("deadpan")
+    gen = translate("robopop but someone is singing about the sea on top", None, library=lib)
+    assert "deadpan" in gen.prompt and not gen.instrumental
+    assert "deadpan" not in translate("robopop but a choir on top", STABLE, library=lib).prompt
+
+
+def test_a_typed_article_agrees_with_the_style_that_replaces_a_name(tmp_path):
+    lib = _lib(tmp_path, _card("electropop", name="Electropop", sound="Machine pop."),
+               _card("kw", kind="artist", parent="electropop", name="Kraftwerk", sound="Exact pop."),
+               _card("rock", name="Rock", sound="Loud.", inspiration=["Kraftwerk Jr"]))
+    for profile in (MINIMAX, STABLE, None):
+        p = translate("a Kraftwerk groove", profile, library=lib).prompt
+        assert "an electropop groove" in p.lower() and "a electropop" not in p.lower(), (profile, p)
+        assert "An electropop groove" in translate("A Kraftwerk groove", profile, library=lib).prompt or profile is STABLE
+
+
+def test_article_helper():
+    assert [D.article_for(w) for w in ("eerie", "electropop", "groovy", "8-bit", "hour", "unicorn", "one", "Usual")] == \
+        ["an", "an", "a", "an", "an", "a", "a", "a"]
+
+
+def test_generic_mood_takes_the_right_article(tmp_path):
+    lib = _lib(tmp_path, _card("e", name="Eeriecore", sound="Strange.", mood="Eerie and cold.", tempo_bpm=[80, 90]))
+    p = translate("eeriecore", None, library=lib).prompt
+    assert "an eerie and cold mood" in p and "a eerie" not in p
+
+
+def test_reduplicated_words_count_as_one_for_dedupe():
+    assert D.stems("wah-wah guitar") == D.stems("wah guitar")
+    assert D.redundant("wah-wah guitar", set(D.stems("wah guitar")))

@@ -34,6 +34,8 @@ parent style's name as its label (`_label`). Unless `include_names=True`:
 * card text is scrubbed the same way, guarding against a user card that names
   an artist in its `sound`;
 * smoothed text and LLM lyrics that add a name are refused.
+A typed "a"/"an" right before a replaced name agrees with the style that
+replaces it ("a Kraftwerk groove" -> "an electropop groove"; `D.fix_article`).
 `inspired_by` always carries the names for the UI.
 
 `avoid` never reaches the prompt; it is listed in `notes` ("Not asked for:").
@@ -207,9 +209,11 @@ def _scrub(text: str, names: list[_Name], *, case_sensitive: bool, skip=frozense
     """Replace each name with its style label; record (name, label) pairs in `replaced`."""
     out, last = [], 0
     for s, e, n in _name_spans(text, names, case_sensitive=case_sensitive, skip=skip):
-        out.append(text[last:s])
         label = n.label
-        out.append(label[:1].upper() + label[1:] if _starts_sentence(text, s) else D._lc_first(label))
+        label = label[:1].upper() + label[1:] if _starts_sentence(text, s) else D._lc_first(label)
+        out.append(text[last:s])
+        out[:] = [D.fix_article("".join(out), label)]      # "a Kraftwerk groove" -> "an electropop groove"
+        out.append(label)
         if replaced is not None:
             replaced.append((text[s:e], n.label))
         last = e
@@ -321,8 +325,13 @@ def _user_words(text: str, parsed: Parsed, lib: Library, names, include_names: b
             out, last = [], run[0][0]
             for a, b, kind, obj in run:
                 out.append(text[last:a])
-                out.append(_match_words(obj, lib.cards[obj.card_id], lib, names, include_names, text)
-                           if kind == "m" else text[a:b])
+                if kind == "m":
+                    shown = _match_words(obj, lib.cards[obj.card_id], lib, names, include_names, text)
+                    if shown != obj.text:               # a replaced name: a typed "a"/"an" agrees with it
+                        out[:] = [D.fix_article("".join(out), shown)]
+                    out.append(shown)
+                else:
+                    out.append(text[a:b])
                 last = b
             content.append(_Words("".join(out).strip().strip(",;:").strip(), layer_of(run[0][0]), True))
             continue
@@ -576,6 +585,10 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
                 inspired.append(n)
 
     can_sing = bool(getattr(profile, "has_lyrics", False))
+    # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
+    # or the vocal became a lead line (tags for a model that cannot sing). A card's own voice
+    # (`vocal` on a style or artist card) is described only when the prompt sings.
+    instrumental = instrumental_asked or not has_vocal or (dialect == D.TAGS and not can_sing)
     plan = D.Plan(
         user_words=tuple(content),
         # the style's sound first, a vocal card in the base after it
@@ -591,6 +604,7 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
         key=scrub(key),
         can_sing=can_sing,
         instrumental=instrumental_asked,
+        voices=not instrumental,
     )
     clauses, compose_notes = D.compose(plan, dialect)
     kept, trim_notes = D.trim(clauses, dialect, limit)
@@ -624,9 +638,6 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
             lyrics = _lyrics(vocal_text, themes, lyrics_fn, names, include_names, notes,
                              SKELETON_NOTE if card else SKELETON_TOPIC_NOTE)
 
-    # The rendered prompt asks for no singing: an instrumental was asked for, nothing sings,
-    # or the vocal became a lead line (tags for a model that cannot sing).
-    instrumental = instrumental_asked or not has_vocal or (dialect == D.TAGS and not can_sing)
     return Translation(prompt, lyrics, tuple(dict.fromkeys(notes)), tuple(inspired),
                        tuple(c.id for c in used), dialect, added, instrumental)
 

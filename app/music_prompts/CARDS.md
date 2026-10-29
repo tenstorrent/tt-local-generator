@@ -34,12 +34,12 @@ Artist cards also require `parent`.
 | `tempo_bpm` | `[low, high]` whole numbers (floats and booleans are rejected), with 0 < low <= high. Styles need it; scenes and instruments may omit it. |
 | `avoid` | Things to leave out. Shown in the notes, never written into a prompt. |
 | `lyric_themes` | Topics a sung layer can be about (vocal cards, singing styles). |
-| `vocal` | How the voice sounds, for vocal cards. |
+| `vocal` | How the voice sounds. On a vocal card it is the vocal layer. On a style or artist card whose voice defines it (Kraftwerk, P-funk) it is written only when the prompt sings, as its own clause after the sound; an instrumental prompt never shows it. |
 | `key` | The key, only when it is true of the style (`major key`, `D minor`). Optional; most cards leave it empty. Used in tag and caption prompts; the base card's key wins, else a vocal card's. |
-| `lead_instrument` | Vocal cards: the instrument that carries the melody when the model cannot sing (Stable Audio). Optional; without it the prompt says "plaintive lead line phrased like a <style> vocal". The bluegrass vocal card uses `dobro` (the resonator guitar of bluegrass; pedal steel is a country instrument). |
+| `lead_instrument` | Vocal cards: the instrument that carries the melody when the model cannot sing (Stable Audio). Optional; the prompt says "plaintive <lead_instrument> lead line carrying a <style> melody", or "plaintive lead line carrying a <style> melody" without one. The bluegrass vocal card uses `dobro` (the resonator guitar of bluegrass; pedal steel is a country instrument). |
 | `tags` | Short tag forms for tag-style prompts. |
 | `goes_with`, `clashes_with` | Card ids or family names the wand favours or avoids. An entry that names nothing is logged and kept as a plain family tag. |
-| `ambiguous` | True when the name is also an ordinary word (Tortoise). The parser then needs a cue word or a capital letter. |
+| `ambiguous` | True when the name is also an ordinary word (Tortoise). In a sentence the parser then needs a cue word, a form word or a capital letter. The name typed on its own ("Tortoise", "Tortoise style") or next to another matched card still matches. |
 | `cues` | Words that confirm an ambiguous card when they appear within five words. |
 | `parent` | For `artist` cards, the `id` of the style card it points to. |
 | `notes` | Sources (two or more) or the single word `unverified`. |
@@ -77,9 +77,12 @@ runs of spaces collapsed. "Post-Rock", "post_rock" and "post  rock" are one key.
 - A caption prints `Style name: <sound>`, so do not start `sound` with a label
   and a colon of its own. When `sound` already contains the card's name (the
   scene cards do), the label is not repeated.
-- Describe a voice only when it defines the style (P-funk chants, Kraftwerk's
-  deadpan vocals). Never write "instrumental": the request or the dialect
-  decides that.
+- Keep `sound`, `tags` and `instruments` about the instrumental sound. A voice
+  that defines the style (P-funk chants, Kraftwerk's deadpan vocals) goes in
+  `vocal`, which is shown only when the prompt sings.
+  `tests/test_music_shipped_cards.py` scans every instrumental prompt for voice
+  words (vocal, voice, singing, choir, chant, vocoder, spoken, lyrics). Never
+  write "instrumental": the request or the dialect decides that.
 - `avoid` entries are matched as plain text by tests. Make them specific, such
   as "a full rock drum kit"; a bare "drums" collides with words other cards use.
 
@@ -92,8 +95,11 @@ runs of spaces collapsed. "Post-Rock", "post_rock" and "post  rock" are one key.
 3. Instruments, era and tempo range are right for the style; anything you are
    unsure of is listed in the review sheet.
 4. `notes` names two sources you actually read, or says `unverified`.
-5. `goes_with` and `clashes_with` name ids or families that exist (the loader
+5. `notes` sources each read "Publisher: title" (or are a URL), separated by
+   semicolons, with at least two different publishers. Keep semicolons out of
+   the parenthetical remarks.
+6. `goes_with` and `clashes_with` name ids or families that exist (the loader
    logs a warning otherwise, and `tests/test_music_shipped_cards.py` fails).
-6. Render `"<name>-like song"` in all three dialects and read every output:
+7. Render `"<name>-like song"` in all three dialects and read every output:
    no repeated words, no debris, no artist name.
-7. Run `/usr/bin/python3 -m pytest tests/test_music_cards.py tests/test_music_shipped_cards.py -q`.
+8. Run `/usr/bin/python3 -m pytest tests/test_music_cards.py tests/test_music_shipped_cards.py -q`.

@@ -393,3 +393,24 @@ def test_more_singing_words_make_a_vocal_layer(tmp_path, word):
     assert p.layers[1].vocal
     base = parse(f"a {word} about rain, jazz", lib)
     assert base.layers[0].vocal
+
+
+# ── fix round 1 of Task 5: a bare ambiguous name is still a request for it ───
+
+@pytest.mark.parametrize("text", ["Tortoise", "tortoise", "Tortoise!", "Tortoise style", "Tortoise please",
+                                  "some Tortoise", "  tortoise.  "])
+def test_a_bare_ambiguous_name_matches_when_it_is_the_whole_request(tmp_path, text):
+    p = parse(text, _tortoise(tmp_path))
+    assert _ids(p.layers[0]) == ["tortoise"], text
+
+
+def test_a_bare_ambiguous_name_matches_next_to_another_card(tmp_path):
+    p = parse("post-rock, tortoise", _tortoise(tmp_path))
+    assert [i for l in p.layers for i in _ids(l)] == ["post-rock", "tortoise"]
+
+
+@pytest.mark.parametrize("text", ["the tortoise crossed the road", "A tortoise is slow. Tortoise soup is a dish.",
+                                  "a slow tortoise on the path", "Tortoise crossed the road"])
+def test_an_ambiguous_word_in_a_sentence_still_does_not_match(tmp_path, text):
+    p = parse(text, _tortoise(tmp_path))
+    assert all(not l.matches for l in p.layers), text

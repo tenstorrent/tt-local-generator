@@ -27,6 +27,13 @@ Rules (spec 4.3 and section 10):
   A bare "X style" is not a signal by itself. An alias inside a longer alias
   needs no signal because the longer alias is what matches. Aliases of two or
   more words are specific enough to skip the check.
+* An ambiguous name with no signal still matches when the text is plainly a
+  request for it (`_bare_request`): the name is the whole text, ignoring
+  punctuation ("Tortoise", "Tortoise!"); the text is the name plus only
+  stopwords, glue and form words ("Tortoise style", "some Tortoise", "Tortoise
+  please"); or another card already matched in the text ("post-rock,
+  tortoise"). A sentence with other words in it ("the tortoise crossed the
+  road") still needs a signal.
 * Two cards can share an alias. `Match.card_id` is the first card in card
   order (cards.py keeps that order) and `Match.alternatives` lists the others.
 * Layer markers split the text. Words inside a matched alias are never marker
@@ -54,6 +61,7 @@ import re
 from dataclasses import dataclass
 
 from .cards import Library
+from .dialects import GLUE_WORDS, STOPWORDS
 
 LAYER_MARKERS: tuple[str, ...] = (
     "but", "over", "on top", "with", "plus", "and someone is singing",
@@ -66,6 +74,8 @@ _TOKEN = re.compile(r"[^\W_]+")
 _HYPHENS = "-‐‑‒–—―−"
 _HYPHEN_GAP = re.compile(r"\s*[" + _HYPHENS + r"]\s*")
 _SENTENCE_END = ".!?…\n"
+# Words that leave a text a bare request for a name ("Tortoise please", "some Tortoise").
+_REQUEST_GLUE = GLUE_WORDS | STOPWORDS | frozenset({"please", "ish", "style", "like"})
 
 
 @dataclass(frozen=True)
@@ -146,8 +156,12 @@ def _starts_sentence(text: str, toks: list[Tok], i: int) -> bool:
     return any(c in gap for c in _SENTENCE_END)
 
 
-def _find_matches(text: str, toks: list[Tok], library: Library) -> tuple[list[Match], list[bool]]:
-    """Longest-alias matches, left to right. Returns (matches, covered flags)."""
+def _find_matches(text: str, toks: list[Tok], library: Library,
+                  relaxed: bool = False) -> tuple[list[Match], list[bool]]:
+    """Longest-alias matches, left to right. Returns (matches, covered flags).
+
+    `relaxed` lets an ambiguous single-word alias match with no signal (see `_bare_request`).
+    """
     n = len(toks)
     norm = [t[2] for t in toks]
     index, longest = _alias_index(library)
@@ -190,7 +204,7 @@ def _find_matches(text: str, toks: list[Tok], library: Library) -> tuple[list[Ma
                 if not card.ambiguous or ln > 1:
                     ok.append(cid)
                     takes_bare = True
-                elif pre or suf_h or capital or _has_cue(
+                elif relaxed or pre or suf_h or capital or _has_cue(
                         norm, max(0, i - _CUE_WINDOW), i, cues_of(cid)) or _has_cue(
                         norm, end, min(n, end + _CUE_WINDOW), cues_of(cid)):
                     ok.append(cid)
@@ -326,11 +340,36 @@ def _leftover(text, toks, covered, matches, markers) -> tuple[str, ...]:
     return tuple(p for _, p in found)
 
 
+def _ambiguous_spans(toks: list[Tok], library: Library) -> list[int]:
+    """Token positions holding a single-word alias of an ambiguous card."""
+    out = []
+    for i, t in enumerate(toks):
+        for cid in library.by_alias.get(t[2], ()):
+            card = library.cards.get(cid)
+            if card is not None and card.ambiguous:
+                out.append(i)
+                break
+    return out
+
+
+def _bare_request(toks: list[Tok], library: Library, matches: list[Match], covered: list[bool]) -> bool:
+    """Is an unmatched ambiguous name plainly what the text asks for? (module docstring)"""
+    amb = [i for i in _ambiguous_spans(toks, library) if not covered[i]]
+    if not amb:
+        return False
+    if matches:
+        return True
+    rest = [t[2] for i, t in enumerate(toks) if i not in amb]
+    return all(w in _REQUEST_GLUE for w in rest)
+
+
 def parse(text: str, library: Library) -> Parsed:
     toks = _tokenise(text)
     if not toks:
         return Parsed(text, (), (), ())
     matches, covered = _find_matches(text, toks, library)
+    if _bare_request(toks, library, matches, covered):
+        matches, covered = _find_matches(text, toks, library, relaxed=True)
     markers = _find_markers(toks, covered)
     layers, dropped = _split_layers(text, toks, library, matches, markers)
     return Parsed(text, tuple(layers), _leftover(text, toks, covered, matches, markers), tuple(dropped))

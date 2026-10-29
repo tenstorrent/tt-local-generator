@@ -129,13 +129,34 @@ def test_artist_cards_have_parents_that_exist_and_are_styles(lib):
 
 # ── sources and honesty of card text ─────────────────────────────────────────
 
+_SOURCE = re.compile(r"^\s*(?P<url>https?://\S+)\s*$|^\s*(?P<publisher>[^:;()]+?)\s*:\s*\S.*$", re.S)
+
+
+def _publishers(notes):
+    """Publishers of a `notes` source list ("Wikipedia: Funk; PopMatters: review"), or None if one is malformed."""
+    out = []
+    for src in (s for s in notes.split(";") if s.strip()):
+        m = _SOURCE.match(src)
+        if not m:
+            return None
+        out.append((m.group("publisher") or m.group("url").split("/")[2]).strip().lower())
+    return out
+
+
 def test_every_shipped_card_has_two_sources_or_is_marked_unverified(lib):
     for c in lib.cards.values():
         notes = c.notes.strip()
         if notes == "unverified":
             continue
-        sources = [s for s in notes.split(";") if s.strip()]
-        assert len(sources) >= 2, (c.id, notes)
+        pubs = _publishers(notes)
+        assert pubs is not None, (c.id, "each source must read 'Publisher: title' or be a URL", notes)
+        assert len(set(pubs)) >= 2, (c.id, "two distinct publishers needed", pubs)
+
+
+def test_the_sources_check_rejects_weak_notes():
+    assert _publishers("Wikipedia: Funk; Wikipedia: Parliament") == ["wikipedia", "wikipedia"]
+    assert _publishers("Wikipedia: Funk; some reviews I saw") is None
+    assert _publishers("Wikipedia: Funk; https://example.org/funk") == ["wikipedia", "example.org"]
 
 
 def test_no_card_sound_contains_an_artist_or_inspiration_name(lib):
@@ -215,8 +236,50 @@ def test_the_example_sentence_still_translates(lib):
     assert "vibraphone" in gen and "bluegrass vocal" in gen
 
 
+def _shows(card, prompt, lib):
+    """Does a tags prompt carry at least one tag (or the label) of this card?"""
+    label = lib.card(card.parent).name if card.kind == "artist" else card.name
+    p = prompt.lower()
+    return any(t.lower() in p for t in (label, *card.tags))
+
+
 def test_wand_on_the_shipped_library_is_varied(lib):
     mm = {wand(MINIMAX, seed=s, library=lib).prompt for s in range(1, 31)}
-    sa = {wand(STABLE, seed=s, library=lib).prompt for s in range(1, 31)}
+    sa = [wand(STABLE, seed=s, library=lib) for s in range(1, 31)]
     assert len(mm) >= 10, len(mm)
-    assert len(sa) >= 6, len(sa)
+    assert len({t.prompt for t in sa}) >= 6
+    for s, t in enumerate(sa, start=1):
+        missing = [cid for cid in t.used_cards if not _shows(lib.card(cid), t.prompt, lib)]
+        assert not missing, (s, missing, t.prompt)
+
+
+VOICE_WORDS = re.compile(r"\b(vocals?|voices?|singing|sung|choirs?|chants?|vocoder|harmony vocals|spoken|lyrics)\b", re.I)
+
+
+def _typed_name(c):
+    """A name for the card with no voice word in it, so only card text can bring one in."""
+    return next(n for n in (c.name, *c.aliases) if not VOICE_WORDS.search(n))
+
+
+def test_no_voice_words_in_any_instrumental_prompt(lib):
+    for c in lib.cards.values():
+        name = _typed_name(c)
+        for text, profile in ((f"{name}-like song", STABLE), (f"instrumental {name}-like piece", MINIMAX),
+                              (f"{name}-like song", MINIMAX)):
+            t = translate(text, profile, library=lib)
+            if not t.instrumental:                      # a vocal card on MiniMax sings: that is not this test
+                continue
+            assert not VOICE_WORDS.search(t.prompt), (c.id, t.dialect, VOICE_WORDS.search(t.prompt).group(), t.prompt)
+    # the voice-defined cards keep their voice for a prompt that sings
+    sung = translate("Kraftwerk-like but someone is singing about trains on top", MINIMAX, library=lib)
+    assert "vocoder" in sung.prompt.lower() and not sung.instrumental
+
+
+def test_bare_artist_names_are_matched_and_never_reach_the_prompt(lib):
+    for text in ("Tortoise", "Tortoise style", "Tortoise!", "tortoise"):
+        for _, profile in PROFILES:
+            t = translate(text, profile, library=lib)
+            assert t.used_cards == ("tortoise",), (text, t.used_cards)
+            assert not _contains_name(t.prompt, "Tortoise"), (text, t.prompt)
+    for text in ("the tortoise crossed the road", "A tortoise is slow. Tortoise soup is a dish."):
+        assert translate(text, MINIMAX, library=lib).used_cards == ()
