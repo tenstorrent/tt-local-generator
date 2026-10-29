@@ -1,4 +1,5 @@
 """audio_thumb.make_waveform_thumbnail: a real PNG from a real decode, None on anything unreadable."""
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ def _tone(path, fmt="flac"):
     return path
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg to make the tone")
 def test_waveform_thumbnail_is_nonblank_for_a_tone(tmp_path):
     src = _tone(tmp_path / "t.flac")
     out = audio_thumb.make_waveform_thumbnail(str(src), str(tmp_path / "t.png"))
@@ -42,7 +44,8 @@ def test_waveform_returns_none_for_missing_file_and_never_raises(tmp_path):
 
 
 def test_waveform_returns_none_when_ffmpeg_is_absent(tmp_path, monkeypatch):
-    src = _tone(tmp_path / "t.flac")
+    src = tmp_path / "t.flac"
+    src.write_bytes(b"x" * 64)          # the decoder is faked to raise, so the content does not matter
     monkeypatch.setattr(audio_thumb.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("ffmpeg")))
     assert audio_thumb.make_waveform_thumbnail(str(src), str(tmp_path / "o.png")) is None
 

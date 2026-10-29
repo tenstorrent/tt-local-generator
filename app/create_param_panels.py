@@ -4387,7 +4387,7 @@ class MusicParamPanel(CreateParamPanel):
         label = Gtk.Label(label=self._LABELS[key])
         label.add_css_class("image-param-label")
         label.set_xalign(0.0)
-        label.set_size_request(120, -1)
+        label.set_size_request(88, -1)
         row.append(label)
         return row
 
