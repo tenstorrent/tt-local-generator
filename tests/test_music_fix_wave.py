@@ -217,3 +217,63 @@ def test_cli_seed_without_wand_exits_two(capsys):
         tt_ctl.cmd_music_prompt(tt_ctl._build_parser().parse_args(["music-prompt", "jazz", "--seed", "3"]))
     assert e.value.code == 2
     assert "--seed" in capsys.readouterr().err
+
+
+# ── fix wave 2 ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("phrase", ["a one bedroom apartment", "the meters running out", "american beauty and blue lines",
+                                    "a massive attack of drums", "my bloody valentine"])
+def test_ordinary_phrases_that_spell_a_title_pass_through(tmp_path, phrase):
+    lib = _shipped(tmp_path)
+    for p in PROFILES:
+        t = translate(f"a jazz ballad about {phrase}", p, library=lib)
+        assert phrase in t.prompt.lower(), (phrase, t.prompt)
+
+
+@pytest.mark.parametrize("name", ["alison krauss", "alice coltrane", "fela kuti"])
+def test_lowercase_distinctive_names_are_still_scrubbed(tmp_path, name):
+    t = translate(f"surf rock, a tribute to {name}", MINIMAX, library=_shipped(tmp_path))
+    assert name not in t.prompt.lower(), t.prompt
+
+
+def test_title_case_common_word_names_are_still_scrubbed(tmp_path):
+    t = translate("surf rock, a tribute to Massive Attack and My Bloody Valentine", MINIMAX, library=_shipped(tmp_path))
+    assert "Massive Attack" not in t.prompt and "Bloody Valentine" not in t.prompt, t.prompt
+
+
+@pytest.mark.parametrize("text, lyric", [
+    ("post-rock and someone is singing about the sea", "The sea"),
+    ("post-rock and someone is singing softly about the sea", "The sea"),
+])
+def test_marker_topic_skips_direction_words(tmp_path, text, lyric):
+    t = translate(text, MINIMAX, library=_shipped(tmp_path))
+    assert t.lyrics and t.lyrics.splitlines()[1] == lyric, t.lyrics
+    assert "softly" not in (t.lyrics or "").lower()
+
+
+def test_marker_does_not_take_a_direction_after_a_comma(tmp_path):
+    t = translate("post-rock and someone is singing, very slow", MINIMAX, library=_shipped(tmp_path))
+    assert "very slow" not in (t.lyrics or "").lower()
+    assert "very slow" in t.prompt.lower()
+    assert "singing very slow" not in t.prompt.lower()          # a direction, not something sung
+
+
+@pytest.mark.parametrize("text", ["gospel choir, and someone is singing gospel",
+                                  "bluegrass song and someone is singing a bluegrass song"])
+def test_a_repeated_vocal_card_makes_no_second_generic_vocal(tmp_path, text):
+    t = translate(text, MINIMAX, library=_shipped(tmp_path))
+    assert "a vocal." not in t.prompt and "it, a vocal" not in t.prompt, t.prompt
+
+
+def test_article_before_a_style_that_replaced_a_name(tmp_path):
+    t = translate("post-rock, Bill Monroe singing about the sea", MINIMAX, library=_shipped(tmp_path))
+    assert "a bluegrass vocal singing about the sea" in t.prompt, t.prompt
+
+
+@pytest.mark.parametrize("value", ["Massive Attack", "alison krauss"])
+def test_style_description_for_an_inspiration_only_name(tmp_path, value):
+    lib = _shipped(tmp_path)
+    for p in PROFILES:
+        d = T.style_description(value, p, library=lib)
+        assert d and value.lower() not in d.lower(), (value, d)

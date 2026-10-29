@@ -38,8 +38,10 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - Cards describe how something sounds. Artist names live in `inspiration` and in the result strip (Inspired by). With
   `include_names` False, the code replaces with its style label every artist card name or alias and every `inspiration` entry
   it finds in the prompt: matched names, the user's own words, the sung phrase ("Alison Krauss singing about the sea") and
-  card text. A name of two or more words matches in any case; a one-word name ("Faust", "Parliament") only as the card
-  writes it, since in lower case it is an ordinary word. A one-word alias of an `ambiguous` card that did not match (no cue)
+  card text. A name of two or more words with an uncommon word ("alison krauss", "fela kuti") matches in any case. A
+  one-word name ("Faust", "Parliament") and a name made only of common words ("Massive Attack", "The Meters", "My Bloody
+  Valentine"; the stoplist is `translate._COMMON_WORDS`) match only as the card writes them, since in lower case they are
+  ordinary words or phrases. A one-word alias of an `ambiguous` card that did not match (no cue)
   is left as typed. A `MusicProfile.triggers` phrase stays only when the user typed it. LLM lyrics that add a name by the same
   rule are refused. Not guaranteed: a name typed in a form the card does not list (misspelt, possessive "Tortoise's").
 - The translation is deterministic. An LLM pass (Smooth with AI) is off by default and is a seam: `smooth_fn` and `lyrics_fn`
@@ -51,10 +53,14 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   lead line (`lead_instrument` on the vocal card) and the lyrics box stays hidden.
 - A card's own `vocal` text is written only when the prompt sings.
 - Typed lyrics are replaced only after a yes. The confirm accepts the literal `True` only.
-- Write the prompt is idempotent. The panel remembers the text it wrote (`_last_filled`) and what it was written from
-  (`_fill_typed`, `_fill_source`, kept in the Undo record too). On an unchanged written prompt Write does nothing; after a
-  Styles pick it renders the source plus the pick; Surprise on a written prompt uses the user's typed text as its base. A
-  written prompt is never parsed as a request (its card text holds aliases and marker words).
+- Write the prompt is idempotent. The panel remembers the text it wrote (`_last_filled`), what it was written from
+  (`_fill_typed`, `_fill_source`) and what for (`_fill_ctx`: the model, Smooth on or off, a lyrics writer or not), all kept
+  in the Undo record too. Write on an unchanged written prompt with the same context does nothing. When the context changed
+  (another model, Smooth toggled), it renders `_fill_source` again, so a declined lyrics offer can come back. When the
+  written text is still in the prompt whole and the user added words or a Styles pick around it ("<written>, slower"), Write
+  renders the source plus the additions, and Surprise uses the user's typed text plus the additions as its base. Only then
+  is a written prompt kept from being parsed as a request. A written prompt edited inside (words changed within the written
+  text) can no longer be found, so it is translated as typed and its card text is read as a request (known gap).
 - A card typed twice is described once (per layer and across layers), which also bounds the work for repeated input.
 - With the instrumental switch off, a MiniMax result with no lyrics says "MiniMax writes a song from lyrics. Add lyrics to send
   this prompt." in the result strip. The wand weights are unchanged and no "[Instrumental]" lyrics are invented.
@@ -95,6 +101,11 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
   parliament were refused.
 - MiniMax Surprise results mostly had no lyrics and could not be sent, while the note said "the piece is instrumental".
 - Smooth with AI could be ticked with no smoother behind it.
+- Second round (scoped re-review): Write could not re-render after a model switch; Surprise after an edited Surprise passed
+  the written text as its base; multi-word names in any case mangled ordinary phrases ("a one bedroom apartment" became
+  "post-rock apartment", "the meters running out" became "funk running out"); the marker branch took any phrase as the sung
+  topic ("singing, very slow" gave the lyric "Very slow"); a repeated vocal card added a second generic vocal; the article
+  check compared first letters; the "In the style of" pill kept inspiration-only names as typed.
 - The "In the style of" pill inserted a whole rendered prompt (tempo, key, mood), giving two tempos.
 - "parliament" was unambiguous ("a folk protest song about parliament" became p-funk); "bluegrass band" matched the vocal card;
   a tags-dialect mood kept a full stop inside a tag; `--wand --include-names` and `--seed` without `--wand` were silently
@@ -136,6 +147,14 @@ review sheet: `docs/superpowers/specs/2026-10-28-music-prompt-cards-review.md`. 
 - Inspire: `is_library_prompt` detects caption and generic prompts only (a card's sound text); a tags-dialect prompt is not
   detected and would be translated again.
 - "In the style of" pills are space-joined among themselves; only the join to a tags prompt uses ", ".
+- Ruling (final review): the "In the style of" chip inserts only the named cards' sound (tags for a tags model), with no
+  tempo, key or mood; spec section 10 "Chips" says so. A name listed only as inspiration ("Massive Attack", "alison krauss")
+  uses the sound of the card that lists it. A common-word name typed in lower case ("massive attack") matches nothing and
+  keeps its literal text, so it reaches the prompt.
+- Singing with no topic ("post-rock and someone is singing, very slow") renders "Over it, a vocal." and asks for lyrics or a
+  vocal style; the direction words stay in the prompt as the user's words.
+- A one-word name such as "Faust" can both stay in the prompt as typed (lower case, an ordinary word) and appear in a note
+  about another occurrence; notes about a name and its kept form can read as contradictory.
 - Write after a Styles pick on a Surprise result renders the wand's cards from their names (`wand_source`); a seeded wand's
   exact wording can differ from that re-render.
 - Packaging: `python3-yaml` was missing from the main package's Depends and is now listed in `debian/control`.

@@ -549,13 +549,14 @@ def test_minimax_with_no_lyrics_asks_for_lyrics(monkeypatch):
 def test_minimax_surprise_without_lyrics_says_so(monkeypatch):
     monkeypatch.setattr(cpp, "INSTRUMENTAL_SWITCH_CONFIRMED", False)
     p, top = _panel("fiona-crapple")
-    for _ in range(8):
-        p._lyrics_buffer.set_text("")
-        p._wand_btn.emit("clicked")
-        t = p._last_translation
-        if not t.lyrics:
-            assert "Add lyrics to send this prompt" in _strip(p)
-            assert "the piece is instrumental" not in _strip(p)
+    no_lyrics = music_prompts.Translation(
+        "Dub: reggae stripped down.", None,
+        ("No singing was asked for, so no lyrics were written; the piece is instrumental.",), (), ("dub",),
+        "caption+lyrics", (), True)
+    monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: no_lyrics)
+    p._wand_btn.emit("clicked")
+    assert "MiniMax writes a song from lyrics. Add lyrics to send this prompt." in _strip(p)
+    assert "the piece is instrumental" not in _strip(p)
 
 
 def test_smooth_needs_a_smoother_as_well_as_a_chat_model():
@@ -575,3 +576,50 @@ def test_style_of_text_has_no_tempo_or_mood(model_hint):
     d = cpp.style_of_text("Tortoise", profile)
     assert d and "bpm" not in d and "mood" not in d.lower() and "tortoise" not in d.lower()
     assert cpp.style_of_text("Zorblax Q", profile) is None
+
+
+# ── fix wave 2 ─────────────────────────────────────────────────────────────
+
+
+def test_write_after_a_model_switch_renders_for_the_new_model():
+    p, top = _panel("fiona-crapple", text="Tortoise")
+    p.confirm_replace_lyrics = lambda m: False
+    p._write_btn.emit("clicked")
+    p.set_server(_server("stable-audio"))
+    p._write_btn.emit("clicked")
+    assert top.text == music_prompts.translate("Tortoise", _server("stable-audio").profile).prompt
+
+
+def test_lyrics_offered_again_after_a_model_change():
+    p, top = _panel("fiona-crapple", text=EXAMPLE)
+    asked = []
+    p.confirm_replace_lyrics = lambda m: (asked.append(m), False)[1]
+    p._lyrics_buffer.set_text("mine")
+    p._write_btn.emit("clicked")
+    assert len(asked) == 1
+    p._write_btn.emit("clicked")                    # same model, same text: nothing to do
+    assert len(asked) == 1
+    p.set_server(_server("minimax"))
+    p._write_btn.emit("clicked")
+    assert len(asked) == 2
+
+
+def test_surprise_after_an_edited_surprise_does_not_use_the_written_text(monkeypatch):
+    p, top = _panel("stable-audio")
+    p._wand_btn.emit("clicked")
+    top.text = top.text + ", slower"
+    seen = []
+    real = music_prompts.wand
+    monkeypatch.setattr(music_prompts, "wand", lambda *a, **k: (seen.append(k.get("base")), real(*a, **k))[1])
+    p._wand_btn.emit("clicked")
+    assert seen == ["slower"]
+
+
+def test_write_after_an_edited_surprise_renders_the_source_plus_the_edit():
+    p, top = _panel("stable-audio")
+    p._wand_btn.emit("clicked")
+    surprise = p._last_translation
+    top.text = top.text + ", slower"
+    p._write_btn.emit("clicked")
+    want = music_prompts.translate(music_prompts.wand_source(surprise) + ", slower", _server("stable-audio").profile)
+    assert top.text == want.prompt

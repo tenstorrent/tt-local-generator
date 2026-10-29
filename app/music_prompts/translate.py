@@ -155,6 +155,28 @@ class _Name:
     words: tuple[str, ...]   # as the card writes them
     text: str
     label: str               # the style shown instead
+    card_id: str = ""        # the card that lists the name
+    any_case: bool = False   # matched in any case (see _distinctive)
+
+
+# Common English words. A name made only of these ("Massive Attack", "The Meters", "My Bloody Valentine",
+# "American Beauty", "Blue Lines") is also an ordinary phrase, so it is matched only as the card writes it.
+# A name with any other word ("Alison Krauss", "Fela Kuti") is matched in any case. Kept small: add a word when
+# a shipped name made of ordinary words would otherwise mangle a sentence.
+_COMMON_WORDS = frozenset("""
+a an the and or of to from in on at by for with like under vs never will now my his her one two ii 70 100
+american beauty blue lines massive attack bloody valentine bedroom meters dead grateful songbook songs song band
+brothers king count duke dream tangerine computer world connection nation groove clock jump plus music falling
+earth jewels sky surface giant golden sound join inn man machine moody blues human league pet shop boys stars
+lid day stood still good bad ugly fistful dollars family stone sea cake express trans europe panic widespread
+yellow magic orchestra singers fawn ventures floral maggot brain mode twins millions living die black emperor
+you person chuck dale chieftains placebo syndrome africa mothership vessyl cook
+""".split())
+
+
+def _distinctive(words) -> bool:
+    """A name of two or more words with at least one uncommon word: matched in any case."""
+    return len(words) > 1 and any(w.lower() not in _COMMON_WORDS for w in words)
 
 
 def _label(card: StyleCard, lib: Library) -> str:
@@ -174,7 +196,7 @@ def _names(lib: Library) -> list[_Name]:
         for e in entries:
             w = tuple(_WORD.findall(e))
             if w and w not in out:
-                out[w] = _Name(w, e, label)
+                out[w] = _Name(w, e, label, c.id, _distinctive(w))
     return sorted(out.values(), key=lambda n: -len(n.words))
 
 
@@ -185,8 +207,9 @@ def _ambiguous_aliases(lib: Library) -> set[str]:
 def _name_spans(text: str, names: list[_Name], *, case_sensitive: bool, skip=frozenset()):
     """Non-overlapping (start, end, _Name) for each name found in text, left to right.
 
-    `case_sensitive` applies to one-word names only ("Faust", "Parliament": "faust" and "parliament"
-    are ordinary words). A name of two or more words ("Alison Krauss") matches in any case.
+    `case_sensitive` applies to one-word names ("Faust", "Parliament": "faust" and "parliament" are
+    ordinary words) and to names made only of common words ("Massive Attack", "The Meters"). A name of
+    two or more words with an uncommon word ("Alison Krauss") matches in any case (`_distinctive`).
     """
     toks = [(m.start(), m.end(), m.group()) for m in _WORD.finditer(text)]
     raw = [t[2] for t in toks]
@@ -198,7 +221,7 @@ def _name_spans(text: str, names: list[_Name], *, case_sensitive: bool, skip=fro
             k = len(n.words)
             if normalise_alias(n.text) in skip:
                 continue
-            exact = case_sensitive and k == 1
+            exact = case_sensitive and not n.any_case
             if tuple((raw if exact else low)[i:i + k]) == (n.words if exact else tuple(w.lower() for w in n.words)):
                 spans.append((toks[i][0], toks[i + k - 1][1], n))
                 i += k
@@ -251,6 +274,29 @@ def _name_notes(replaced, notes: list[str]) -> None:
 
 _SING = re.compile(r"\b(singing|sings|sing|sang|sung)\b", re.I)
 _TOPIC_LEAD = re.compile(r"^(about|of|for|to|on)\s+", re.I)
+# How something is sung ("softly", "very slow"): these words describe the voice and are never the sung topic.
+_DIRECTION_WORDS = frozenset("""slow slowly soft softly very quiet quietly loud loudly fast gently gentle sweet sweetly
+sad sadly high low really quite so too tender tenderly warm warmly faint faintly hushed calm calmly""".split())
+_TOPIC_WORDS = frozenset("about of on for to like".split())
+_DETERMINERS = frozenset("a an the my our your his her their some this that these those".split())
+
+
+def _sung_topic(phrase: str) -> str:
+    """What is sung in a phrase after "singing": "softly about the sea" -> "the sea", "the blues" -> "the blues".
+
+    Leading direction words (slow, softly, very, words ending in -ly) describe the voice. After them the
+    phrase is a topic only when it starts with a topic lead (about, of, on, for, to, like: the lead is
+    dropped) or a determiner (a noun phrase). Anything else ("very slow", "loud") has no topic: ""."""
+    words = phrase.strip(" ,;:.").split()
+    i = 0
+    while i < len(words) and (words[i].lower() in _DIRECTION_WORDS or words[i].lower().endswith("ly")):
+        i += 1
+    rest = words[i:]
+    if rest and rest[0].lower() in _TOPIC_WORDS:
+        return " ".join(rest[1:])
+    if rest and rest[0].lower() in _DETERMINERS:
+        return " ".join(rest)
+    return ""
 _HYPHENS = "-‐‑‒–—―−"
 _FORM = re.compile(r"^(?P<pre>like\s+)?(?P<core>.*?)(?P<suf>\s*[" + _HYPHENS + r"]\s*(?:like|ish|style)|\s+style)?$",
                    re.I | re.S)
@@ -376,7 +422,7 @@ def _sung_part(words: _Words, is_glue) -> tuple[D.Part, list[str], str]:
     else:
         desc = "a vocal singing" + (f" {after}" if after else "")
         glue = [before] if before else []
-    topic = _TOPIC_LEAD.sub("", after).strip()
+    topic = _sung_topic(after)
     return D.Part(kind="vocal", label="", sound="", vocal=desc, sung=after), glue, topic
 
 
@@ -513,9 +559,16 @@ def style_description(value: str, profile, *, library: Library | None = None,
             c = lib.cards.get(m.card_id)
             if c is not None and c not in cards:
                 cards.append(c)
+    names = _names(lib)
+    if not cards:
+        # A name the library knows only as inspiration ("Massive Attack", "alison krauss"): the card that
+        # lists it describes its sound.
+        for _, _, n in _name_spans(value, names, case_sensitive=True, skip=_ambiguous_aliases(lib)):
+            c = lib.cards.get(n.card_id)
+            if c is not None and c not in cards:
+                cards.append(c)
     if not cards:
         return None
-    names = _names(lib)
 
     def scrub(s: str) -> str:
         return s if include_names else _scrub(s, names, case_sensitive=True)
@@ -580,6 +633,8 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
     layers = list(parsed.layers)
     # A card is described once: once per layer and once across layers ("dub with dub", "post-rock,
     # Tortoise, post rock"). Its first appearance keeps it; later ones add nothing to the prompt.
+    # before dedupe and promotion: "does layer i have a vocal card?"
+    orig_cards = [[lib.cards[m.card_id] for m in l.matches if m.card_id in lib.cards] for l in layers]
     seen_ids: set = set()
     layer_cards = []
     for l in layers:
@@ -589,7 +644,6 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
                 seen_ids.add(m.card_id)
                 cs.append(lib.cards[m.card_id])
         layer_cards.append(cs)
-    orig_cards = [list(cs) for cs in layer_cards]      # before promotion: "does layer i have a vocal card?"
     promoted = None
     if layer_cards and not layer_cards[0]:
         with_cards = [i for i in range(1, len(layers)) if layer_cards[i]]
@@ -610,12 +664,15 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
             words.remove(w)
             glue += consumed
         elif layer.marker and _SING.search(layer.marker) and (
-                w := next((w for w in words if w.layer == i and not w.has_match), None)) is not None:
-            # The marker took the singing word ("and someone is singing about the sea"): the layer's
-            # first content phrase is what is sung.
+                w := next((w for w in words if w.layer == i and not w.has_match), None)) is not None \
+                and layer.text.startswith(w.text) and _sung_topic(w.text):
+            # The marker took the singing word ("and someone is singing about the sea"). The layer's first
+            # content phrase is what is sung only when it follows the marker directly (no comma or full
+            # stop) and names a topic ("about the sea", "softly about the sea", "the blues"). A direction
+            # ("singing, very slow") stays a direction.
             sung_text = w.text.strip(" ,;:.")
             part = D.Part(kind="vocal", label="", sound="", vocal=f"a vocal singing {sung_text}", sung=sung_text)
-            topic = _TOPIC_LEAD.sub("", sung_text).strip()
+            topic = _sung_topic(sung_text)
             words.remove(w)
         else:
             part, topic = D.Part(kind="vocal", label="", sound="", vocal="a vocal"), ""
@@ -626,8 +683,9 @@ def _render(text: str, parsed: Parsed, profile, lib: Library, *, include_names: 
             skip = _ambiguous_aliases(lib)
 
             def clean(s: str, article: bool = False) -> str:
+                spans = _name_spans(s, names, case_sensitive=True, skip=skip)
                 out = _scrub(s, names, case_sensitive=True, skip=skip, replaced=replaced_sung)
-                if out != s and s[:1] != out[:1]:            # it opens with the style that replaced a name
+                if spans and spans[0][0] == len(s) - len(s.lstrip()):   # it opens with a replaced name
                     out = D._lc_first(out)
                     if article:                              # "a bluegrass vocal singing about the sea"
                         out = f"{D.article_for(out)} {out}"
